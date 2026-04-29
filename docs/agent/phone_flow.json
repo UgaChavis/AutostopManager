@@ -1,0 +1,19 @@
+{
+  "goal": "Allow ChatGPT Android to add manager memory through MCP while existing CRM tools remain responsible for CRM operations.",
+  "preferred_endpoint_strategy": "Expose manager memory tools alongside AutoStop CRM MCP tools when deploying the shared connector.",
+  "memory_tools": {
+    "remember": "Store general long-term memory.",
+    "recall": "Search long-term memory.",
+    "add_manager_task": "Create non-CRM manager task.",
+    "today_context": "Read manager context for the day.",
+    "manager_journal": "Append decision/action history."
+  },
+  "crm_tools_not_replaced": [
+    "bootstrap_context",
+    "get_board_context",
+    "review_board",
+    "search_cards",
+    "get_card_context",
+    "list_repair_orders"
+  ]
+}

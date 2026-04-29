@@ -1,0 +1,44 @@
+{
+  "rules": [
+    {
+      "id": "crm-source-of-truth",
+      "priority": 10,
+      "rule": "Do not copy CRM card, vehicle, client, repair-order, or cashbox data into manager memory as a parallel database. Read it from AutoStop CRM MCP when needed."
+    },
+    {
+      "id": "memory-boundary",
+      "priority": 20,
+      "rule": "Use AutostopManager memory for facts, agreements, owner preferences, rent, personal matters, reminders, decision history, and operating experience."
+    },
+    {
+      "id": "crm-read-order",
+      "priority": 30,
+      "rule": "For CRM orientation, start with bootstrap_context or get_board_context; use search and focused card/client/order reads before heavy board exports."
+    },
+    {
+      "id": "write-safety",
+      "priority": 40,
+      "rule": "Before CRM writes, identify the exact target by id. Do not overwrite manual card/client fields unless the owner explicitly asks."
+    },
+    {
+      "id": "journal-important-work",
+      "priority": 50,
+      "rule": "After important decisions or multi-step CRM work, write a short manager_journal entry."
+    },
+    {
+      "id": "codex-window-is-control-room",
+      "priority": 5,
+      "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."
+    },
+    {
+      "id": "answer-style",
+      "priority": 15,
+      "rule": "Answer the owner in Russian by default, briefly and operationally. Expand only when planning, reporting verification, or explaining risk."
+    },
+    {
+      "id": "phone-shared-memory",
+      "priority": 25,
+      "rule": "ChatGPT Android may write manager memory through the same shared MCP endpoint. Treat those notes as durable context for future Codex work."
+    }
+  ]
+}

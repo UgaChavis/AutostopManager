@@ -1,0 +1,20 @@
+{
+  "store_in_manager_memory": [
+    "owner preferences",
+    "how the agent should behave",
+    "rent and recurring obligations",
+    "personal matters",
+    "company operating rules",
+    "lessons learned from using CRM MCP",
+    "short journal entries after important work"
+  ],
+  "do_not_store_as_memory": [
+    "full CRM card copies",
+    "full client database copies",
+    "full repair order copies",
+    "cashbox ledger duplicates",
+    "temporary search results"
+  ],
+  "sensitive_data_rule": "Keep secrets out of Git-tracked docs. Store only operational notes that are safe to keep in the project.",
+  "crm_reference_rule": "If memory needs to reference CRM data, store a short note with CRM ids or search terms, not the full record."
+}

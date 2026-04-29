@@ -1,0 +1,62 @@
+{
+  "purpose": "Machine-readable catalog of existing AutoStop CRM MCP commands used by the manager agent.",
+  "source_of_truth": "AutoStop CRM MCP connector",
+  "crm_is_source_of_truth_for": [
+    "cards",
+    "clients",
+    "vehicles",
+    "repair_orders",
+    "cashboxes",
+    "board_columns",
+    "archives"
+  ],
+  "startup_tools": [
+    "bootstrap_context",
+    "get_board_context",
+    "review_board"
+  ],
+  "focused_read_tools": [
+    "search_cards",
+    "get_card",
+    "get_card_context",
+    "search_clients",
+    "get_client",
+    "get_client_stats",
+    "suggest_clients_for_card",
+    "list_repair_orders",
+    "get_repair_order",
+    "get_repair_order_text",
+    "list_overdue_cards"
+  ],
+  "write_tools": [
+    "create_card",
+    "update_card",
+    "set_card_deadline",
+    "move_card",
+    "mark_card_ready",
+    "archive_card",
+    "restore_card",
+    "create_client",
+    "update_client",
+    "link_card_to_client",
+    "upsert_client_vehicle",
+    "update_repair_order",
+    "set_repair_order_status",
+    "replace_repair_order_works",
+    "replace_repair_order_materials",
+    "create_cash_transaction"
+  ],
+  "heavy_tools_use_rarely": [
+    "get_gpt_wall",
+    "get_board_content",
+    "get_board_snapshot",
+    "get_board_events"
+  ],
+  "manager_memory_tools": [
+    "remember",
+    "recall",
+    "add_manager_task",
+    "today_context",
+    "manager_journal"
+  ]
+}

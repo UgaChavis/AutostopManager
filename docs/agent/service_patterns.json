@@ -1,0 +1,40 @@
+{
+  "observed_board": {
+    "columns": [
+      "Входящие/Ожидают распределения",
+      "Машины в ремзоне",
+      "Запись на ремонт",
+      "В работе по мастерам",
+      "КПП",
+      "Снабжение",
+      "Заказы запчастей",
+      "Информация",
+      "Готовые автомобили"
+    ],
+    "common_vehicle_examples": [
+      "Mercedes-Benz G350 CDI",
+      "Mercedes-Benz C200",
+      "BMW 3 / 523I / 318I / M5",
+      "Toyota Land Cruiser 80 / 200 / Prado",
+      "Volkswagen Amarok",
+      "Subaru XV",
+      "Lexus",
+      "ГАЗ 2217 Соболь"
+    ],
+    "common_work_examples": [
+      "ТО",
+      "течь антифриза или масла",
+      "тормозные колодки",
+      "ступичные подшипники",
+      "шиномонтаж",
+      "диагностика запуска",
+      "заказ фильтров и запчастей"
+    ]
+  },
+  "manager_behavior": [
+    "Use CRM MCP for live service state.",
+    "Use memory for owner-level context and recurring obligations.",
+    "Prefer short operational summaries over full board dumps.",
+    "Record lessons learned as manager rules when they will improve future navigation."
+  ]
+}

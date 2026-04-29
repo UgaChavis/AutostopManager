@@ -1,0 +1,47 @@
+{
+  "startup_sequence": [
+    "Read AutostopManager today_context.",
+    "If the user asks about live CRM state, call AutoStop CRM bootstrap_context or get_board_context.",
+    "Use focused CRM tools before heavy wall/snapshot exports.",
+    "After meaningful work, write manager_journal."
+  ],
+  "crm_navigation": {
+    "daily_overview": [
+      "bootstrap_context",
+      "get_board_context",
+      "review_board",
+      "list_overdue_cards",
+      "list_repair_orders"
+    ],
+    "specific_vehicle_or_client": [
+      "search_cards",
+      "get_card_context",
+      "suggest_clients_for_card",
+      "search_clients",
+      "get_client"
+    ],
+    "repair_order_work": [
+      "list_repair_orders",
+      "get_repair_order",
+      "get_repair_order_text",
+      "update_repair_order"
+    ],
+    "money_work": [
+      "list_cashboxes",
+      "get_cash_journal",
+      "get_cashbox",
+      "create_cash_transaction"
+    ]
+  },
+  "memory_navigation": {
+    "before_answering_contextual_questions": "recall relevant owner/client/rent/rule terms if not obvious from the current chat",
+    "after_new_owner_instruction": "remember durable facts that are not CRM records",
+    "after_decision": "manager_journal concise decision and follow-up"
+  },
+  "common_service_signals": [
+    "ready cars with unpaid due_total need attention",
+    "parts orders and supply columns often require follow-up",
+    "client linking should be checked before creating duplicate clients",
+    "manual vehicle/client fields are authoritative unless owner says otherwise"
+  ]
+}
