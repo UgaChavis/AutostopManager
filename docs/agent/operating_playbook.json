@@ -1,47 +1,213 @@
 {
   "startup_sequence": [
     "Read AutostopManager today_context.",
-    "If the user asks about live CRM state, call AutoStop CRM bootstrap_context or get_board_context.",
+    "If the current task involves email, inspect Gmail inbox state and relevant threads.",
+    "If the user asks about live CRM state, call AutoStop CRM get_connector_identity, get_runtime_status, bootstrap_context, or get_board_context.",
+    "If the owner says 'Приберись', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, inspect docs/agent/board_cleanup_autopilot_playbook.md and run the board-cleanup autopilot behavior.",
+    "If the owner provides new files or asks to expand the knowledge base, inspect docs/agent/knowledge_intake_playbook.md before storing anything in memory.",
+    "If the task involves vehicle identification or VIN/chassis decoding, inspect docs/agent/vehicle_identity_playbook.md before parts search.",
+    "If the task involves original catalog numbers from VIN or chassis number, inspect docs/agent/vin_oem_lookup_playbook.md and docs/agent/vin_oem_sources.json before searching marketplaces.",
+    "If the task involves oils, operating fluids, fill capacities, or ТО planning, inspect docs/agent/fluid_maintenance_playbook.md and use recommend_fluid_maintenance_sources before giving capacity/spec facts.",
+    "If the task involves repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor, ADAS, SRS, HV, immobilizer, or programming, inspect docs/agent/automotive_repair_source_playbook.md and route through docs/agent/automotive_sources before giving technical facts.",
+    "If the task involves Krasnoyarsk workshop management, procurement, staff load, customer flow, finance control, or daily CRM control, inspect docs/agent/krasnoyarsk_service_management_playbook.md and use recommend_service_management_actions.",
     "Use focused CRM tools before heavy wall/snapshot exports.",
     "After meaningful work, write manager_journal."
   ],
   "crm_navigation": {
+    "connector_and_runtime": [
+      "get_connector_identity",
+      "ping_connector",
+      "get_runtime_status",
+      "bootstrap_context"
+    ],
     "daily_overview": [
       "bootstrap_context",
       "get_board_context",
       "review_board",
+      "get_gpt_wall",
+      "get_board_snapshot",
+      "get_board_content",
+      "get_board_events",
       "list_overdue_cards",
       "list_repair_orders"
     ],
-    "specific_vehicle_or_client": [
+    "card_and_repair_context": [
       "search_cards",
       "get_card_context",
-      "suggest_clients_for_card",
+      "get_card",
+      "get_card_log"
+    ],
+    "client_work": [
+      "list_clients",
       "search_clients",
-      "get_client"
+      "get_client",
+      "get_client_stats",
+      "create_client",
+      "update_client",
+      "delete_client",
+      "link_card_to_client",
+      "upsert_client_vehicle",
+      "delete_client_vehicle",
+      "unlink_card_from_client",
+      "suggest_clients_for_card"
+    ],
+    "shared_file_work": [
+      "list_shared_files",
+      "get_shared_file_info",
+      "download_shared_file",
+      "upload_shared_file",
+      "update_shared_file_position",
+      "delete_shared_file"
+    ],
+    "agent_runtime": [
+      "agent_status",
+      "agent_runs",
+      "agent_actions",
+      "agent_tasks",
+      "agent_scheduled_tasks",
+      "agent_enqueue_task",
+      "save_agent_scheduled_task",
+      "pause_agent_scheduled_task",
+      "resume_agent_scheduled_task",
+      "run_agent_scheduled_task",
+      "delete_agent_scheduled_task"
     ],
     "repair_order_work": [
       "list_repair_orders",
       "get_repair_order",
       "get_repair_order_text",
-      "update_repair_order"
+      "update_repair_order",
+      "set_repair_order_status",
+      "replace_repair_order_works",
+      "replace_repair_order_materials",
+      "autofill_repair_order"
     ],
     "money_work": [
       "list_cashboxes",
       "get_cash_journal",
       "get_cashbox",
-      "create_cash_transaction"
+      "create_cash_transaction",
+      "create_cashbox",
+      "delete_cashbox"
+    ],
+    "board_writes": [
+      "create_card",
+      "update_card",
+      "set_card_deadline",
+      "set_card_indicator",
+      "move_card",
+      "bulk_move_cards",
+      "archive_card",
+      "restore_card",
+      "create_column",
+      "rename_column",
+      "delete_column",
+      "create_sticky",
+      "update_sticky",
+      "move_sticky",
+      "delete_sticky",
+      "update_board_settings"
+    ],
+    "board_enrichment": [
+      "set_card_ai_autofill",
+      "autofill_vehicle_data"
+    ],
+    "vehicle_identity": [
+      "Classify the raw identifier first: ISO VIN, Japanese chassis/frame number, or market-specific body/model code.",
+      "Use the market-appropriate path: official manufacturer pages, inspection-certificate lookups, recall portals, and EPC data when available.",
+      "Record the stable outputs only: market, model family, engine, transmission, plant or build window, and explicit uncertainty.",
+      "Hand off to parts_search only after the vehicle identity is stable."
+    ],
+    "vin_oem_lookup": [
+      "Classify the identifier first and choose the source by market.",
+      "Use NHTSA vPIC first for ISO VINs.",
+      "Use manufacturer frame-number or EPC paths for Japan-market chassis numbers.",
+      "Prefer explicit OEM or supersession data over inferred trim guesses."
+    ],
+    "automotive_repair_sources": [
+      "Collect VIN/chassis, year, make, model, trim, engine, transmission, market, mileage, complaint, and scan results before technical recommendations.",
+      "Use OEM service information first, then official recalls/government data, then licensed professional databases, then standards, then Bosch/Springer references, then internal confirmed cases.",
+      "Use recommend_automotive_sources or source-route to select sources by brand and data type.",
+      "Do not provide torque, fluids, pinouts, ADAS, SRS, HV, immobilizer, programming, labor, or original-price facts without source-backed verification."
+    ],
+    "fluid_maintenance": [
+      "Collect VIN/chassis, market, year, make, model, engine code, transmission code, drivetrain, exact unit, and service operation.",
+      "Use docs/agent/fluid_maintenance_playbook.md and recommend_fluid_maintenance_sources before giving oil, fluid, approval, or capacity facts.",
+      "Separate oil-only, oil-and-filter, drain/refill, dry fill, pan removal, cooler-line drain, and level-check temperature/procedure.",
+      "Use lubricant selectors only as product cross-check after OEM or licensed source verification."
+    ],
+    "parts_search": [
+      "Normalize the part identity from the card or owner message: OEM number, model, year, side, axle, and condition.",
+      "Search Drom first with exact OEM, then exact OEM plus Красноярск, then model and description variants.",
+      "Search ZZap next for price comparison, seller coverage, and replacements; switch to Красноярск and use all/new/used modes plus 'все замены'.",
+      "Search Avito after ZZap with exact OEM and model, but treat it as a direct-site manual search because external snippets are not always reliable.",
+      "If exact hits are sparse, broaden to platform, generation, and functional description, then rank exact OEM, local sellers, and confirmed replacements highest."
+    ],
+    "service_management": [
+      "Use recommend_service_management_actions to classify the management area before acting.",
+      "Read live board state from AutoStopCRM MCP; do not rely on copied counts or stale snapshots.",
+      "Treat technician columns as load signals and procurement columns as blocker queues.",
+      "For parts blockers, route through VIN/OEM, Drom, ZZap, Avito, Emex, Exist, Autodoc, and local Krasnoyarsk suppliers depending on urgency.",
+      "For staff decisions, compare CRM load, sold hours, blocked hours, rework notes, and current market salary/vacancy sources.",
+      "For finance decisions, read repair orders and cashboxes from CRM; store only follow-up decisions in memory."
+    ],
+    "board_cleanup_autopilot": [
+      "Trigger on owner phrases: Приберись, прибери доску, обслужи доску, актуализируй доску, or routine board cleanup.",
+      "Use docs/agent/board_cleanup_autopilot_playbook.md as the canonical procedure.",
+      "Operate as full autopilot: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, move cards, and archive completed cards when safe.",
+      "Preserve user data: never delete works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
+      "Keep card notes short; use concise AI: notes for questions, next actions, OEM/price/source conclusions, payment blockers, and stale-card questions.",
+      "Ask the owner in chat only for destructive actions beyond archive, unresolved money conflicts, client-sensitive decisions, or safety-critical technical uncertainty.",
+      "End with a brief report: checked, updated, moved, archived, VIN/OEM/parts work, unresolved blockers, and risks."
+    ],
+    "email_work": [
+      "list_labels",
+      "search_email_ids",
+      "read_email",
+      "read_email_thread",
+      "batch_read_email_threads",
+      "archive_emails",
+      "delete_emails",
+      "batch_modify_email",
+      "forward_emails",
+      "bulk_label_matching_emails"
     ]
   },
   "memory_navigation": {
-    "before_answering_contextual_questions": "recall relevant owner/client/rent/rule terms if not obvious from the current chat",
-    "after_new_owner_instruction": "remember durable facts that are not CRM records",
+    "before_answering_contextual_questions": "recall relevant owner/client/rent/rule/email terms if not obvious from the current chat",
+    "after_new_owner_instruction": "remember durable facts that are not CRM records or raw email copies and record MCP surface changes that affect future work",
+    "after_file_intake": "store only durable conclusions from the file, update the relevant playbook or catalog, and journal the change",
     "after_decision": "manager_journal concise decision and follow-up"
+  },
+  "knowledge_intake": {
+    "accepted_inputs": [
+      "md",
+      "txt",
+      "json",
+      "jsonl",
+      "csv",
+      "xlsx",
+      "pdf",
+      "docx",
+      "image_scans"
+    ],
+    "workflow": [
+      "classify file source and license",
+      "extract durable conclusions and routing rules",
+      "update playbooks or catalogs",
+      "write only reusable memory",
+      "add manager_journal"
+    ]
   },
   "common_service_signals": [
     "ready cars with unpaid due_total need attention",
     "parts orders and supply columns often require follow-up",
     "client linking should be checked before creating duplicate clients",
-    "manual vehicle/client fields are authoritative unless owner says otherwise"
+    "manual vehicle/client fields are authoritative unless owner says otherwise",
+    "gmail threads often contain follow-up requests, approvals, and deadlines that should be turned into tasks or reminders",
+    "new CRM MCP commands should be reflected in the local catalog before future sessions depend on them",
+    "new manager MCP commands or knowledge-intake rules should be reflected in the local memory catalog before future sessions depend on them",
+    "Krasnoyarsk service-management work should be routed through the dedicated playbook and source catalog before ad hoc decisions",
+    "The owner's board-cleanup command grants autopilot authority but not permission to delete user-entered CRM evidence"
   ]
 }

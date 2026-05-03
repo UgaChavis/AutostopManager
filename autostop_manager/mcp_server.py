@@ -10,8 +10,9 @@ def build_server() -> FastMCP:
     server = FastMCP(
         name="AutostopManager",
         instructions=(
-            "Headless manager memory for AutoStop CRM. "
-            "Use these tools only for long-term manager memory. "
+            "Headless manager memory and source-routing layer for AutoStop CRM. "
+            "Use these tools only for durable non-CRM memory, routing rules, and knowledge intake. "
+            "When new files are supplied, extract durable conclusions and update the relevant playbooks or catalogs; do not store raw dumps. "
             "Use the existing AutoStop CRM MCP tools for cards, clients, vehicles, repair orders, cashboxes, and board state."
         ),
         host=get_mcp_host(),

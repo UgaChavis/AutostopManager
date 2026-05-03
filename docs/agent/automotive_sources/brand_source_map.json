@@ -1,0 +1,1409 @@
+{
+  "Multi-brand": [
+    {
+      "source_id": "bosch_automotive_electrics_electronics",
+      "name": "Bosch Automotive Electrics and Automotive Electronics",
+      "category": "book",
+      "access": "paid_book",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://link.springer.com/book/10.1007/978-3-658-01784-2"
+    },
+    {
+      "source_id": "bosch_automotive_handbook_11",
+      "name": "Bosch Automotive Handbook, 11th edition",
+      "category": "book",
+      "access": "paid_book",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://www.bosch-classic.com/de/en/services/technical-literature/"
+    },
+    {
+      "source_id": "bosch_diesel_engine_management",
+      "name": "Diesel Engine Management: Systems and Components",
+      "category": "book",
+      "access": "paid_book",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://link.springer.com/book/10.1007/978-3-658-03981-3"
+    },
+    {
+      "source_id": "bosch_gasoline_engine_management",
+      "name": "Gasoline Engine Management: Systems and Components",
+      "category": "book",
+      "access": "paid_book",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://link.springer.com/book/10.1007/978-3-658-03964-6"
+    },
+    {
+      "source_id": "bosch_professional_series",
+      "name": "Bosch Professional Automotive Information series",
+      "category": "book_series",
+      "access": "paid_books",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://link.springer.com/series/11721/books"
+    },
+    {
+      "source_id": "alldata_pro",
+      "name": "ALLDATA Repair Professional",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.alldata.com/us/en/oem-repair-information-provider"
+    },
+    {
+      "source_id": "autodata_cars_vans",
+      "name": "Autodata for Cars & Vans",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.autodata-group.com/global/"
+    },
+    {
+      "source_id": "bosch_esitronic",
+      "name": "Bosch ESI[tronic]",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.boschaftermarket.com/gb/en/diagnostics/ecu-diagnosis/esitronic/"
+    },
+    {
+      "source_id": "mitchell_prodemand",
+      "name": "Mitchell 1 ProDemand",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.prodemand.com/"
+    },
+    {
+      "source_id": "tecalliance_tecdoc",
+      "name": "TecAlliance TecDoc / Repair Data",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.tecalliance.net/"
+    },
+    {
+      "source_id": "bosch_automotive_mechatronics",
+      "name": "Automotive Mechatronics",
+      "category": "book",
+      "access": "paid_book",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://link.springer.com/book/10.1007/978-3-658-03975-2"
+    },
+    {
+      "source_id": "sae_books",
+      "name": "SAE International Automotive Books",
+      "category": "book_catalog",
+      "access": "paid_books",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://www.sae.org/publications/books"
+    },
+    {
+      "source_id": "icar_rts",
+      "name": "I-CAR Repairability Technical Support (RTS)",
+      "category": "collision_repair_reference",
+      "access": "free_and_paid_training",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "link_or_license_dependent",
+      "url": "https://rts.i-car.com/"
+    },
+    {
+      "source_id": "epcdata",
+      "name": "OEM Electronic Parts Catalogs via manufacturer portals",
+      "category": "parts_catalog",
+      "access": "paid_or_free_varies",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "license_dependent",
+      "url": "various_official_oem_epc_portals"
+    },
+    {
+      "source_id": "haynespro",
+      "name": "HaynesPro WorkshopData",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.infopro-digital-automotive.com/haynespro/"
+    },
+    {
+      "source_id": "identifix_direct_hit",
+      "name": "Identifix Direct-Hit",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.identifix.com/"
+    },
+    {
+      "source_id": "motor_tsbs",
+      "name": "MOTOR Technical Service Bulletins",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.motor.com/products-services/data-products/technical-service-bulletins/"
+    },
+    {
+      "source_id": "iso_14229_uds",
+      "name": "ISO 14229-1 Unified Diagnostic Services",
+      "category": "standard",
+      "access": "paid_standard",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://www.iso.org/standard/72439.html"
+    },
+    {
+      "source_id": "iso_15031_obd",
+      "name": "ISO 15031 Road Vehicles OBD",
+      "category": "standard",
+      "access": "paid_standard",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://www.iso.org/standard/64636.html"
+    },
+    {
+      "source_id": "iso_15765_docan",
+      "name": "ISO 15765 Diagnostics on CAN",
+      "category": "standard",
+      "access": "paid_standard",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://www.iso.org/search.html?q=ISO%2015765"
+    },
+    {
+      "source_id": "sae_j1979_2",
+      "name": "SAE J1979-2 OBDonUDS",
+      "category": "standard",
+      "access": "paid_standard",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://www.sae.org/standards/j1979-2_202104-e-e-diagnostic-test-modes-obdonuds"
+    },
+    {
+      "source_id": "sae_diagnostic_committee",
+      "name": "SAE Vehicle E/E System Diagnostic Standards Committee",
+      "category": "standards_directory",
+      "access": "mostly_paid_standards",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://standardsworks.sae.org/standards-committees/vehicle-e-e-system-diagnostic-standards-committee"
+    },
+    {
+      "source_id": "ebsco_auto_repair_source",
+      "name": "Auto Repair Source",
+      "category": "professional_database",
+      "access": "library_or_commercial_license",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "commercial_or_library_license_required",
+      "url": "https://about.ebsco.com/products/research-databases/auto-repair-source"
+    },
+    {
+      "source_id": "bosch_training",
+      "name": "Bosch Automotive Training",
+      "category": "training",
+      "access": "free_and_paid_varies",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "license_dependent",
+      "url": "https://www.boschaftermarket.com/"
+    },
+    {
+      "source_id": "ase_training",
+      "name": "ASE Certification and Study Resources",
+      "category": "training_certification",
+      "access": "free_and_paid",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "official_free_or_paid_training",
+      "url": "https://www.ase.com/"
+    },
+    {
+      "source_id": "ase_education_foundation",
+      "name": "ASE Education Foundation",
+      "category": "training_certification",
+      "access": "free_public_resources",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.aseeducationfoundation.org/"
+    },
+    {
+      "source_id": "icar_training",
+      "name": "I-CAR Training",
+      "category": "training_certification",
+      "access": "paid_training",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "paid_training_license_required",
+      "url": "https://www.i-car.com/"
+    },
+    {
+      "source_id": "iso_26262",
+      "name": "ISO 26262 Road Vehicles Functional Safety",
+      "category": "standard",
+      "access": "paid_standard",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://www.iso.org/search.html?q=ISO%2026262"
+    },
+    {
+      "source_id": "iso_21434",
+      "name": "ISO/SAE 21434 Road Vehicles Cybersecurity Engineering",
+      "category": "standard",
+      "access": "paid_standard",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "standards_purchase_required",
+      "url": "https://www.iso.org/search.html?q=ISO%2FSAE%2021434"
+    }
+  ],
+  "Chevrolet": [
+    {
+      "source_id": "gm_acdelco_tds",
+      "name": "ACDelco Technical Delivery System (TDS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.acdelcotds.com/"
+    }
+  ],
+  "GMC": [
+    {
+      "source_id": "gm_acdelco_tds",
+      "name": "ACDelco Technical Delivery System (TDS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.acdelcotds.com/"
+    }
+  ],
+  "Cadillac": [
+    {
+      "source_id": "gm_acdelco_tds",
+      "name": "ACDelco Technical Delivery System (TDS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.acdelcotds.com/"
+    }
+  ],
+  "Buick": [
+    {
+      "source_id": "gm_acdelco_tds",
+      "name": "ACDelco Technical Delivery System (TDS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.acdelcotds.com/"
+    }
+  ],
+  "Holden legacy": [
+    {
+      "source_id": "gm_acdelco_tds",
+      "name": "ACDelco Technical Delivery System (TDS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.acdelcotds.com/"
+    }
+  ],
+  "Opel legacy where covered": [
+    {
+      "source_id": "gm_acdelco_tds",
+      "name": "ACDelco Technical Delivery System (TDS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.acdelcotds.com/"
+    }
+  ],
+  "Audi": [
+    {
+      "source_id": "audi_erwin_na",
+      "name": "Audi erWin North America",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://erwin.audiusa.com/"
+    },
+    {
+      "source_id": "erwin_eu_group",
+      "name": "erWin Store Europe",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://volkswagen.erwin-store.com/"
+    }
+  ],
+  "BMW": [
+    {
+      "source_id": "bmw_aos",
+      "name": "BMW Group Aftersales Online System (AOS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://aos.bmwgroup.com/"
+    },
+    {
+      "source_id": "bmw_tis_na",
+      "name": "BMW Technical Information System",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://bmwtechinfo.bmwgroup.com/"
+    }
+  ],
+  "MINI": [
+    {
+      "source_id": "bmw_aos",
+      "name": "BMW Group Aftersales Online System (AOS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://aos.bmwgroup.com/"
+    },
+    {
+      "source_id": "bmw_tis_na",
+      "name": "BMW Technical Information System",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://bmwtechinfo.bmwgroup.com/"
+    }
+  ],
+  "Rolls-Royce where applicable": [
+    {
+      "source_id": "bmw_aos",
+      "name": "BMW Group Aftersales Online System (AOS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://aos.bmwgroup.com/"
+    }
+  ],
+  "Honda": [
+    {
+      "source_id": "honda_serviceexpress",
+      "name": "Honda ServiceExpress",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://techinfo.honda.com/"
+    },
+    {
+      "source_id": "honda_owner_manuals",
+      "name": "Honda Owner Manuals",
+      "category": "oem_owner_info",
+      "access": "free",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://mygarage.honda.com/s/manuals-search"
+    }
+  ],
+  "Acura": [
+    {
+      "source_id": "honda_serviceexpress",
+      "name": "Honda ServiceExpress",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://techinfo.honda.com/"
+    }
+  ],
+  "Hyundai": [
+    {
+      "source_id": "hyundai_techinfo",
+      "name": "Hyundai Service Website",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.hyundaitechinfo.com/"
+    },
+    {
+      "source_id": "hyundai_oem_parts",
+      "name": "Hyundai Genuine Parts resources",
+      "category": "parts_catalog",
+      "access": "free_browse",
+      "priority_score_1_5": 1,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.hyundai.com/worldwide/en/brand-journal/mobility-solution/genuine-parts"
+    }
+  ],
+  "Jaguar": [
+    {
+      "source_id": "jlr_topix",
+      "name": "JLR TOPIx",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://topix.jlrext.com/"
+    }
+  ],
+  "Land Rover": [
+    {
+      "source_id": "jlr_topix",
+      "name": "JLR TOPIx",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://topix.jlrext.com/"
+    }
+  ],
+  "Range Rover": [
+    {
+      "source_id": "jlr_topix",
+      "name": "JLR TOPIx",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://topix.jlrext.com/"
+    }
+  ],
+  "Kia": [
+    {
+      "source_id": "kia_kgis",
+      "name": "Kia Global Information System (KGIS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://kiatechinfo.snapon.com/"
+    },
+    {
+      "source_id": "kia_owner_manuals",
+      "name": "Kia Digital Owner Manuals",
+      "category": "oem_owner_info",
+      "access": "free",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://ownersmanual.kia.com/"
+    }
+  ],
+  "Mazda": [
+    {
+      "source_id": "mazda_serviceinfo",
+      "name": "Mazda Service Info",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mazdaserviceinfo.com/"
+    },
+    {
+      "source_id": "mazda_manuals_au",
+      "name": "Mazda Manuals Australia",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://mazdamanuals.com.au/"
+    }
+  ],
+  "Mercedes-Benz": [
+    {
+      "source_id": "mercedes_startekinfo",
+      "name": "Mercedes-Benz StarTekInfo",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.startekinfo.com/"
+    }
+  ],
+  "Mercedes-Benz Vans": [
+    {
+      "source_id": "mercedes_startekinfo",
+      "name": "Mercedes-Benz StarTekInfo",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.startekinfo.com/"
+    }
+  ],
+  "Ford": [
+    {
+      "source_id": "ford_motorcraft_service",
+      "name": "Motorcraft Service",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.motorcraftservice.com/"
+    },
+    {
+      "source_id": "ford_owner_manuals",
+      "name": "Ford Owner Manuals",
+      "category": "oem_owner_info",
+      "access": "free",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.ford.com/support/owner-manuals/"
+    }
+  ],
+  "Lincoln": [
+    {
+      "source_id": "ford_motorcraft_service",
+      "name": "Motorcraft Service",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.motorcraftservice.com/"
+    },
+    {
+      "source_id": "ford_owner_manuals",
+      "name": "Ford Owner Manuals",
+      "category": "oem_owner_info",
+      "access": "free",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.ford.com/support/owner-manuals/"
+    }
+  ],
+  "Mercury": [
+    {
+      "source_id": "ford_motorcraft_service",
+      "name": "Motorcraft Service",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.motorcraftservice.com/"
+    }
+  ],
+  "Nissan": [
+    {
+      "source_id": "nissan_techinfo",
+      "name": "Nissan Publications / TechInfo",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.nissan-techinfo.com/"
+    },
+    {
+      "source_id": "nissan_owner_manuals",
+      "name": "Nissan Owner Manuals & Guides",
+      "category": "oem_owner_info",
+      "access": "free",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.nissanusa.com/owners/manuals-guides.html"
+    }
+  ],
+  "Infiniti": [
+    {
+      "source_id": "nissan_techinfo",
+      "name": "Nissan Publications / TechInfo",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.nissan-techinfo.com/"
+    }
+  ],
+  "Subaru": [
+    {
+      "source_id": "subaru_stis",
+      "name": "Subaru Technical Information System (STIS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://techinfo.subaru.com/"
+    },
+    {
+      "source_id": "subaru_eu_repairinfo",
+      "name": "Subaru Europe Tech-info",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.subaru-repairinfo.com/"
+    }
+  ],
+  "Toyota": [
+    {
+      "source_id": "toyota_tis_na",
+      "name": "Toyota Technical Information System (TIS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_with_some_free_emergency_guides",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://techinfo.toyota.com/"
+    },
+    {
+      "source_id": "toyota_manuals_au",
+      "name": "Toyota Service Information & Repair Manuals Australia",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_or_link_only",
+      "url": "https://toyotamanuals.com.au/"
+    },
+    {
+      "source_id": "toyota_epc_parts",
+      "name": "Toyota Parts and Service / EPC resources",
+      "category": "parts_catalog",
+      "access": "free_browse_or_dealer",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://parts.toyota.com/"
+    }
+  ],
+  "Lexus": [
+    {
+      "source_id": "toyota_tis_na",
+      "name": "Toyota Technical Information System (TIS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_with_some_free_emergency_guides",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://techinfo.toyota.com/"
+    }
+  ],
+  "Scion": [
+    {
+      "source_id": "toyota_tis_na",
+      "name": "Toyota Technical Information System (TIS)",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_with_some_free_emergency_guides",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://techinfo.toyota.com/"
+    }
+  ],
+  "Volkswagen": [
+    {
+      "source_id": "vw_erwin_na",
+      "name": "Volkswagen erWin North America",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://erwin.vw.com/"
+    },
+    {
+      "source_id": "erwin_eu_group",
+      "name": "erWin Store Europe",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://volkswagen.erwin-store.com/"
+    }
+  ],
+  "All makes sold in U.S. where data exists": [
+    {
+      "source_id": "nhtsa_datasets_apis",
+      "name": "NHTSA Datasets and APIs",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://www.nhtsa.gov/nhtsa-datasets-and-apis"
+    }
+  ],
+  "All makes where TSBs exist": [
+    {
+      "source_id": "nhtsa_tsbs_recent_zips",
+      "name": "NHTSA Manufacturer Communications / TSB Received ZIPs",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip"
+    },
+    {
+      "source_id": "nhtsa_tsbs_flat",
+      "name": "NHTSA Technical Service Bulletins System Flat File",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+    }
+  ],
+  "All makes where recalls exist": [
+    {
+      "source_id": "nhtsa_recalls_flat",
+      "name": "NHTSA Recalls Flat File",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip"
+    }
+  ],
+  "All makes where VIN/manufacturer submissions exist": [
+    {
+      "source_id": "nhtsa_vpic_api",
+      "name": "NHTSA vPIC Vehicle API",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "open_api_allowed_rate_limited",
+      "url": "https://vpic.nhtsa.dot.gov/api/"
+    }
+  ],
+  "Multi-brand light-duty vehicles": [
+    {
+      "source_id": "motor_truspeed_repair",
+      "name": "MOTOR TruSpeed Repair",
+      "category": "professional_database",
+      "access": "paid_commercial_license",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.motor.com/products-services/software-applications/motor-truspeed-repair/"
+    }
+  ],
+  "Many OEMs": [
+    {
+      "source_id": "nastf_oem_matrix",
+      "name": "NASTF OEM Service Information Resources",
+      "category": "industry_directory",
+      "access": "free_registration_or_membership",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "link_directory_allowed",
+      "url": "https://wp.nastf.org/"
+    },
+    {
+      "source_id": "partslink24",
+      "name": "Partslink24",
+      "category": "parts_catalog",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "commercial_license_required",
+      "url": "https://www.partslink24.com/"
+    }
+  ],
+  "Citroën": [
+    {
+      "source_id": "citroen_servicebox",
+      "name": "Citroën Service Box",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://service.citroen.com/"
+    }
+  ],
+  "Genesis": [
+    {
+      "source_id": "genesis_techinfo",
+      "name": "Genesis Service Website",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.genesistechinfo.com/"
+    }
+  ],
+  "Mitsubishi": [
+    {
+      "source_id": "mitsubishi_techinfo",
+      "name": "Mitsubishi Motors Service Information Retrieval",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://mitsubishitechinfo.com/"
+    }
+  ],
+  "Chrysler": [
+    {
+      "source_id": "mopar_techauthority",
+      "name": "Mopar TechAuthority",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_or_purchase",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.techauthority.com/"
+    },
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    },
+    {
+      "source_id": "mopar_parts",
+      "name": "Mopar Parts",
+      "category": "parts_catalog",
+      "access": "free_browse_purchase",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://store.mopar.com/"
+    }
+  ],
+  "Dodge": [
+    {
+      "source_id": "mopar_techauthority",
+      "name": "Mopar TechAuthority",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_or_purchase",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.techauthority.com/"
+    },
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    },
+    {
+      "source_id": "mopar_parts",
+      "name": "Mopar Parts",
+      "category": "parts_catalog",
+      "access": "free_browse_purchase",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://store.mopar.com/"
+    }
+  ],
+  "Jeep": [
+    {
+      "source_id": "mopar_techauthority",
+      "name": "Mopar TechAuthority",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_or_purchase",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.techauthority.com/"
+    },
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    },
+    {
+      "source_id": "mopar_eu_technical_area",
+      "name": "Mopar EU Technical Area",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mopar.eu/eu/en/mopar/technical-area"
+    },
+    {
+      "source_id": "mopar_parts",
+      "name": "Mopar Parts",
+      "category": "parts_catalog",
+      "access": "free_browse_purchase",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://store.mopar.com/"
+    }
+  ],
+  "Ram": [
+    {
+      "source_id": "mopar_techauthority",
+      "name": "Mopar TechAuthority",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_or_purchase",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.techauthority.com/"
+    },
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    },
+    {
+      "source_id": "mopar_parts",
+      "name": "Mopar Parts",
+      "category": "parts_catalog",
+      "access": "free_browse_purchase",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://store.mopar.com/"
+    }
+  ],
+  "Fiat": [
+    {
+      "source_id": "mopar_techauthority",
+      "name": "Mopar TechAuthority",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_or_purchase",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.techauthority.com/"
+    },
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    },
+    {
+      "source_id": "mopar_eu_technical_area",
+      "name": "Mopar EU Technical Area",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mopar.eu/eu/en/mopar/technical-area"
+    },
+    {
+      "source_id": "mopar_parts",
+      "name": "Mopar Parts",
+      "category": "parts_catalog",
+      "access": "free_browse_purchase",
+      "priority_score_1_5": 2,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://store.mopar.com/"
+    }
+  ],
+  "Renault": [
+    {
+      "source_id": "renault_newdialogys",
+      "name": "New Dialogys",
+      "category": "oem_service_portal",
+      "access": "paid_login",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://newdialogys.renault.com/"
+    },
+    {
+      "source_id": "renault_asos",
+      "name": "Renault ASOS / New Dialogys Documentation",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://asos.renault.com/offers/documentation"
+    }
+  ],
+  "Dacia": [
+    {
+      "source_id": "renault_newdialogys",
+      "name": "New Dialogys",
+      "category": "oem_service_portal",
+      "access": "paid_login",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://newdialogys.renault.com/"
+    },
+    {
+      "source_id": "renault_asos",
+      "name": "Renault ASOS / New Dialogys Documentation",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://asos.renault.com/offers/documentation"
+    }
+  ],
+  "Alpine": [
+    {
+      "source_id": "renault_newdialogys",
+      "name": "New Dialogys",
+      "category": "oem_service_portal",
+      "access": "paid_login",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://newdialogys.renault.com/"
+    },
+    {
+      "source_id": "renault_asos",
+      "name": "Renault ASOS / New Dialogys Documentation",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://asos.renault.com/offers/documentation"
+    }
+  ],
+  "Peugeot": [
+    {
+      "source_id": "peugeot_servicebox",
+      "name": "Peugeot Service Box",
+      "category": "oem_service_portal",
+      "access": "mixed_free_paid",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://public.servicebox.peugeot.com/"
+    }
+  ],
+  "Porsche": [
+    {
+      "source_id": "porsche_tsi",
+      "name": "Porsche Technical Service Information / PIWIS TSI",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.porsche.com/usa/accessoriesandservice/porscheservice/additionalinformation/independentworkshops/"
+    }
+  ],
+  "Alfa Romeo": [
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    },
+    {
+      "source_id": "mopar_eu_technical_area",
+      "name": "Mopar EU Technical Area",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mopar.eu/eu/en/mopar/technical-area"
+    }
+  ],
+  "Maserati where applicable": [
+    {
+      "source_id": "stellantis_iop",
+      "name": "Stellantis Independent Operator Portal",
+      "category": "oem_service_portal",
+      "access": "registration_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.stellantisiop.com/"
+    }
+  ],
+  "Tesla": [
+    {
+      "source_id": "tesla_service_manuals",
+      "name": "Tesla Service Manuals",
+      "category": "oem_service_portal",
+      "access": "free_public_pages_or_login_for_some_items",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_check_terms_before_crawling",
+      "url": "https://service.tesla.com/docs/"
+    }
+  ],
+  "Volvo": [
+    {
+      "source_id": "volvo_tis",
+      "name": "Volvo Cars Technical Information Shop",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://tis.volvocars.biz/"
+    },
+    {
+      "source_id": "volvo_bookstore",
+      "name": "Volvo Car Bookstore / TechInfo",
+      "category": "oem_training_publications",
+      "access": "paid_purchase",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "book_purchase_required",
+      "url": "https://www.volvotechinfo.com/"
+    }
+  ],
+  "Polestar": [
+    {
+      "source_id": "volvo_tis",
+      "name": "Volvo Cars Technical Information Shop",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://tis.volvocars.biz/"
+    }
+  ],
+  "SEAT": [
+    {
+      "source_id": "erwin_eu_group",
+      "name": "erWin Store Europe",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://volkswagen.erwin-store.com/"
+    }
+  ],
+  "Škoda": [
+    {
+      "source_id": "erwin_eu_group",
+      "name": "erWin Store Europe",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://volkswagen.erwin-store.com/"
+    }
+  ],
+  "Passenger cars and light trucks 1984-present": [
+    {
+      "source_id": "epa_fueleconomy",
+      "name": "FuelEconomy.gov Vehicles CSV",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://fueleconomy.gov/feg/epadata/vehicles.csv.zip"
+    }
+  ],
+  "All makes where complaints exist": [
+    {
+      "source_id": "nhtsa_complaints_flat",
+      "name": "NHTSA Complaints Flat Files",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://static.nhtsa.gov/odi/ffdd/cmpl/FLAT_CMPL.zip"
+    }
+  ],
+  "Vehicles, tires, child seats": [
+    {
+      "source_id": "transport_canada_recalls",
+      "name": "Transport Canada Vehicle Recalls Database",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://open.canada.ca/data/en/dataset/1ec92326-47ef-4110-b7ca-959fab03f96d"
+    }
+  ],
+  "Vehicles/equipment recalled in UK": [
+    {
+      "source_id": "uk_dvsa_recalls_csv",
+      "name": "UK DVSA Vehicle Recalls CSV",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://www.check-vehicle-recalls.service.gov.uk/documents/RecallsFile.csv"
+    }
+  ],
+  "Isuzu": [
+    {
+      "source_id": "isuzu_rmi",
+      "name": "Isuzu RMI",
+      "category": "oem_service_portal",
+      "access": "paid_or_registration",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://rmi.isuzu.co.jp/introduction"
+    }
+  ],
+  "Lancia": [
+    {
+      "source_id": "mopar_eu_technical_area",
+      "name": "Mopar EU Technical Area",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mopar.eu/eu/en/mopar/technical-area"
+    }
+  ],
+  "Fiat Professional": [
+    {
+      "source_id": "mopar_eu_technical_area",
+      "name": "Mopar EU Technical Area",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mopar.eu/eu/en/mopar/technical-area"
+    }
+  ],
+  "Abarth": [
+    {
+      "source_id": "mopar_eu_technical_area",
+      "name": "Mopar EU Technical Area",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.mopar.eu/eu/en/mopar/technical-area"
+    }
+  ],
+  "Opel": [
+    {
+      "source_id": "opel_gme_infotech",
+      "name": "Opel / Vauxhall GME InfoTech",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.texa.com/passthru/opel/"
+    }
+  ],
+  "Vauxhall": [
+    {
+      "source_id": "opel_gme_infotech",
+      "name": "Opel / Vauxhall GME InfoTech",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.texa.com/passthru/opel/"
+    }
+  ],
+  "Saab": [
+    {
+      "source_id": "opel_gme_infotech",
+      "name": "Opel / Vauxhall GME InfoTech",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.texa.com/passthru/opel/"
+    }
+  ],
+  "Chevrolet Europe": [
+    {
+      "source_id": "opel_gme_infotech",
+      "name": "Opel / Vauxhall GME InfoTech",
+      "category": "oem_service_portal",
+      "access": "paid_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.texa.com/passthru/opel/"
+    }
+  ],
+  "Vehicles and engines in EPA datasets": [
+    {
+      "source_id": "epa_compliance_fuel_economy",
+      "name": "EPA Compliance and Fuel Economy Data",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://www.epa.gov/compliance-and-fuel-economy-data"
+    }
+  ],
+  "Passenger vehicles and non-food products with alerts": [
+    {
+      "source_id": "eu_safety_gate",
+      "name": "EU Safety Gate / RAPEX",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "link_or_api_where_available",
+      "url": "https://ec.europa.eu/safety-gate-alerts/"
+    }
+  ],
+  "Vehicles affected by German KBA recalls": [
+    {
+      "source_id": "germany_kba_recalls",
+      "name": "KBA Recall Database",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "link_only_unless_bulk_access_available",
+      "url": "https://www.kba-online.de/rrdb/buerger/"
+    }
+  ],
+  "All crash-tested makes/models": [
+    {
+      "source_id": "nhtsa_safety_ratings",
+      "name": "NHTSA SaferCar Safety Ratings CSV",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "https://static.nhtsa.gov/nhtsa/downloads/Safercar/Safercar_data.csv"
+    }
+  ],
+  "Multi-brand, 30,000+ vehicles claimed by provider": [
+    {
+      "source_id": "alldata_diy",
+      "name": "ALLDATA DIY",
+      "category": "professional_database",
+      "access": "paid_single_vehicle",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.alldata.com/diy-us/en"
+    }
+  ],
+  "Most years/makes/models claimed by provider": [
+    {
+      "source_id": "chiltonlibrary",
+      "name": "ChiltonLibrary",
+      "category": "professional_database",
+      "access": "library_or_institution_subscription",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "commercial_or_library_license_required",
+      "url": "https://www.gale.com/product-catalog/220508"
+    }
+  ],
+  "Bosch equipment/products": [
+    {
+      "source_id": "bosch_download_center",
+      "name": "Bosch Automotive Download Center",
+      "category": "technical_documents",
+      "access": "free_or_registration",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "official_free_download_check_terms",
+      "url": "https://www.downloads.bosch-automotive.com/en/media-library"
+    }
+  ],
+  "Bosch systems": [
+    {
+      "source_id": "bosch_training",
+      "name": "Bosch Automotive Training",
+      "category": "training",
+      "access": "free_and_paid_varies",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "license_dependent",
+      "url": "https://www.boschaftermarket.com/"
+    }
+  ],
+  "Rivian": [
+    {
+      "source_id": "rivian_service",
+      "name": "Rivian Service / Support",
+      "category": "oem_owner_info",
+      "access": "free_support_pages",
+      "priority_score_1_5": 1,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://rivian.com/support"
+    }
+  ]
+}

@@ -1,0 +1,226 @@
+{
+  "generated_on": "2026-05-03",
+  "city": "Красноярск",
+  "purpose": "Operational source routing for AutoStop/Автоспорт service management in Krasnoyarsk.",
+  "sources": [
+    {
+      "source_id": "drom_parts",
+      "name": "Drom Parts",
+      "category": "marketplace_parts",
+      "city_focus": "Красноярск",
+      "url": "https://baza.drom.ru/krasnoyarsk/sell_spare_parts/",
+      "use_for": ["used_parts", "contract_parts", "local_exact_oem_search", "urgent_pickup"],
+      "verification": "Search exact OEM, compressed OEM, model plus part name, and inspect seller city/photos."
+    },
+    {
+      "source_id": "zzap",
+      "name": "ZZap",
+      "category": "parts_price_comparison",
+      "city_focus": "Красноярск",
+      "url": "https://www.zzap.ru/",
+      "use_for": ["new_parts", "replacement_numbers", "price_benchmark", "seller_comparison"],
+      "verification": "Use exact OEM first, city filter where available, and all replacements view for analogs."
+    },
+    {
+      "source_id": "avito_parts",
+      "name": "Avito Parts",
+      "category": "marketplace_parts",
+      "city_focus": "Красноярск",
+      "url": "https://www.avito.ru/krasnoyarsk/zapchasti_i_aksessuary",
+      "use_for": ["used_parts", "urgent_local_pickup", "rare_parts"],
+      "verification": "Treat as manual direct-site search; verify photos, article, seller, and return terms."
+    },
+    {
+      "source_id": "emex",
+      "name": "Emex",
+      "category": "new_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://emex.ru/",
+      "use_for": ["new_parts", "oem_parts", "analogs", "delivery_price_benchmark"],
+      "verification": "Use account-specific city and delivery terms; compare exact article and analogs."
+    },
+    {
+      "source_id": "exist",
+      "name": "Exist",
+      "category": "new_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://www.exist.ru/",
+      "use_for": ["oem_parts", "catalog_cross_check", "new_parts"],
+      "verification": "Use VIN/catalog route first, then compare exact article price and delivery."
+    },
+    {
+      "source_id": "autodoc",
+      "name": "Autodoc",
+      "category": "new_parts_supplier",
+      "city_focus": "Россия",
+      "url": "https://www.autodoc.ru/",
+      "use_for": ["new_parts", "brand_cross_check", "price_benchmark"],
+      "verification": "Use as secondary supplier and cross-check; confirm city delivery and returns."
+    },
+    {
+      "source_id": "metro_avtodom",
+      "name": "Метро-Автодом",
+      "category": "local_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://www.metro-avtodom.ru/",
+      "use_for": ["local_stock", "same_day_call", "common_parts"],
+      "verification": "Call or check current stock; public site claims large local inventory."
+    },
+    {
+      "source_id": "krasdetal",
+      "name": "КрасDеталь",
+      "category": "local_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://krasdetal.orgs.biz/",
+      "use_for": ["vin_parts_selection", "local_delivery", "import_vehicle_parts"],
+      "verification": "Use for VIN-based inquiry and local availability; confirm part number in writing."
+    },
+    {
+      "source_id": "porshenkras",
+      "name": "Porshenkras",
+      "category": "local_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://porshenkras.ru/",
+      "use_for": ["local_stock", "europe_japan_korea_us_parts", "common_parts"],
+      "verification": "Use for local stock checks; confirm article and return terms."
+    },
+    {
+      "source_id": "avtopostavka",
+      "name": "Автопоставка",
+      "category": "contract_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://avtopostavka.ru/",
+      "use_for": ["contract_parts", "japan_vehicle_parts", "local_stock"],
+      "verification": "Use for used/contract Japanese parts; verify donor, condition, and warranty."
+    },
+    {
+      "source_id": "hh_ru",
+      "name": "hh.ru",
+      "category": "recruitment_salary_market",
+      "city_focus": "Красноярск",
+      "url": "https://krasnoyarsk.hh.ru/",
+      "use_for": ["vacancy_market", "candidate_pipeline", "salary_benchmark"],
+      "verification": "Use live vacancy search; do not store candidate personal data in memory."
+    },
+    {
+      "source_id": "superjob",
+      "name": "SuperJob",
+      "category": "salary_market",
+      "city_focus": "Красноярск",
+      "url": "https://www.superjob.ru/",
+      "use_for": ["salary_benchmark", "role_requirements", "management_market_context"],
+      "verification": "Use as market context, not as payroll source of truth."
+    },
+    {
+      "source_id": "dreamjob_salary",
+      "name": "Dream Job Salary",
+      "category": "salary_market",
+      "city_focus": "Красноярск",
+      "url": "https://dreamjob.ru/salary/avtomehanik/city-krasnoyarsk",
+      "use_for": ["mechanic_salary_benchmark", "market_context"],
+      "verification": "Use as public benchmark only; compare with hh.ru and internal output."
+    },
+    {
+      "source_id": "finder_salary",
+      "name": "Finder Salary",
+      "category": "salary_market",
+      "city_focus": "Красноярск",
+      "url": "https://finder.work/salaries/avtoslesar_avtomobiley/krasnoiarsk",
+      "use_for": ["mechanic_salary_benchmark", "market_context"],
+      "verification": "Use as public benchmark only; compare with current vacancy data."
+    }
+  ],
+  "areas": {
+    "daily_control": {
+      "source_ids": [],
+      "required_context": ["crm_board_state"],
+      "crm_tools": ["today_context", "bootstrap_context", "get_board_context", "list_overdue_cards", "list_repair_orders"],
+      "actions": [
+        "Check overdue cards and expired deadlines.",
+        "Check ready cars with unpaid due amounts.",
+        "Check parts-order and supply columns for blockers.",
+        "Journal important decisions and follow-ups."
+      ],
+      "kpis": ["overdue cards", "ready unpaid cars", "blocked parts orders", "stale active cards"],
+      "memory_rules": ["Store durable operating rule only, not board snapshots."]
+    },
+    "parts_procurement": {
+      "source_ids": ["drom_parts", "zzap", "avito_parts", "emex", "exist", "autodoc", "metro_avtodom", "krasdetal", "porshenkras", "avtopostavka"],
+      "required_context": ["vehicle", "part_number", "part_name", "urgency"],
+      "crm_tools": ["get_card_context", "get_repair_order", "update_card", "update_repair_order", "manager_journal"],
+      "actions": [
+        "Normalize OEM, compressed OEM, vehicle, side, axle, and condition.",
+        "Search Drom first for exact local offers.",
+        "Use ZZap for price and replacement comparison.",
+        "Use Emex/Exist/Autodoc for new/OEM benchmark.",
+        "Call local Krasnoyarsk suppliers when same-day pickup matters."
+      ],
+      "kpis": ["exact OEM hit rate", "local pickup availability", "delivery days", "return risk", "total landed cost"],
+      "memory_rules": ["Remember chosen supplier and reusable search heuristic only."]
+    },
+    "repair_triage": {
+      "source_ids": [],
+      "required_context": ["vin_or_chassis", "complaint", "dtc_or_scan", "engine", "transmission", "mileage"],
+      "crm_tools": ["get_card_context", "get_card_log", "recommend_automotive_sources", "update_card", "manager_journal"],
+      "actions": [
+        "Extract complaint and vehicle identity from CRM.",
+        "Route source-sensitive facts through the repair source catalog.",
+        "Build a technician diagnostic checklist before pricing parts.",
+        "Mark missing data explicitly in the card."
+      ],
+      "kpis": ["diagnosis waiting time", "first-check completion", "parts-before-diagnosis risk", "rework signal"],
+      "memory_rules": ["Remember only durable diagnostic patterns confirmed by the shop."]
+    },
+    "staff_management": {
+      "source_ids": ["hh_ru", "superjob", "dreamjob_salary", "finder_salary"],
+      "required_context": ["role", "current_load", "output_or_hours", "quality_signal"],
+      "crm_tools": ["get_board_context", "list_repair_orders", "get_card_log", "manager_journal", "add_manager_task"],
+      "actions": [
+        "Compare active card load by technician or column.",
+        "Track blocked cars separately from productive repair time.",
+        "Use market salary sources only as context.",
+        "Create follow-up tasks for hiring, training, or performance conversations."
+      ],
+      "kpis": ["выработка per technician", "sold hours", "blocked hours", "rework count", "stale cards by assignee"],
+      "memory_rules": ["Do not store candidate personal data; store hiring rules and role requirements."]
+    },
+    "customer_flow": {
+      "source_ids": [],
+      "required_context": ["card_id", "client_contact", "next_action", "approval_status"],
+      "crm_tools": ["get_card_context", "update_card", "set_card_deadline", "manager_journal"],
+      "actions": [
+        "Make the next action visible in the card description or title.",
+        "Separate estimate requested, prepared, approved, declined, and needs-data states.",
+        "Set follow-up deadlines for client approvals and pickups."
+      ],
+      "kpis": ["approval wait time", "pickup delay", "unanswered client requests", "visible next action coverage"],
+      "memory_rules": ["Store only reusable communication rules, not full client records."]
+    },
+    "finance_control": {
+      "source_ids": [],
+      "required_context": ["repair_orders", "cashbox", "payment_status"],
+      "crm_tools": ["list_cashboxes", "get_cashbox", "get_cash_journal", "list_repair_orders", "manager_journal"],
+      "actions": [
+        "Find ready cars with unpaid due totals.",
+        "Find orders with materials and no works.",
+        "Find cashbox transactions needing reconciliation.",
+        "Create owner-level tasks for unresolved payment blockers."
+      ],
+      "kpis": ["unpaid ready total", "materials without labor", "cashbox mismatch count", "overdue receivables"],
+      "memory_rules": ["Do not duplicate cashbox ledger in memory."]
+    },
+    "knowledge_intake": {
+      "source_ids": [],
+      "required_context": ["file_path", "source_type", "license_status", "target_playbook"],
+      "crm_tools": ["remember", "manager_journal"],
+      "actions": [
+        "Classify source and license.",
+        "Extract durable conclusions only.",
+        "Update the relevant playbook or source catalog.",
+        "Journal the update."
+      ],
+      "kpis": ["files classified", "playbooks updated", "unsafe content rejected"],
+      "memory_rules": ["Never store raw manuals, full tables, or temporary search results."]
+    }
+  }
+}

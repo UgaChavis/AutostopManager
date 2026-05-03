@@ -1,62 +1,151 @@
 {
-  "purpose": "Machine-readable catalog of existing AutoStop CRM MCP commands used by the manager agent.",
-  "source_of_truth": "AutoStop CRM MCP connector",
-  "crm_is_source_of_truth_for": [
-    "cards",
-    "clients",
-    "vehicles",
-    "repair_orders",
-    "cashboxes",
-    "board_columns",
-    "archives"
+  "purpose": "Machine-readable summary of the current AutoStop CRM MCP surface used by the manager agent.",
+  "source_of_truth_repo": "UgaChavis/AutostopCRM-V1",
+  "source_branch": "autostopCRM",
+  "source_documents": [
+    "MCP_GUIDE.md",
+    "CHATGPT_CONNECTOR_SETUP.md",
+    "GPT_AGENT_09_MCP_COMMAND_CATALOG.md",
+    "GPT_AGENT_10_MCP_OPERATION_FLOWS.md",
+    "src/minimal_kanban/mcp/server.py",
+    "src/minimal_kanban/mcp/main.py",
+    "src/minimal_kanban/mcp/runtime.py",
+    "src/minimal_kanban/mcp/auth.py"
   ],
-  "startup_tools": [
-    "bootstrap_context",
-    "get_board_context",
-    "review_board"
-  ],
-  "focused_read_tools": [
-    "search_cards",
-    "get_card",
-    "get_card_context",
-    "search_clients",
-    "get_client",
-    "get_client_stats",
-    "suggest_clients_for_card",
-    "list_repair_orders",
-    "get_repair_order",
-    "get_repair_order_text",
-    "list_overdue_cards"
-  ],
-  "write_tools": [
-    "create_card",
-    "update_card",
-    "set_card_deadline",
-    "move_card",
-    "mark_card_ready",
-    "archive_card",
-    "restore_card",
-    "create_client",
-    "update_client",
-    "link_card_to_client",
-    "upsert_client_vehicle",
-    "update_repair_order",
-    "set_repair_order_status",
-    "replace_repair_order_works",
-    "replace_repair_order_materials",
-    "create_cash_transaction"
-  ],
-  "heavy_tools_use_rarely": [
-    "get_gpt_wall",
-    "get_board_content",
-    "get_board_snapshot",
-    "get_board_events"
-  ],
-  "manager_memory_tools": [
-    "remember",
-    "recall",
-    "add_manager_task",
-    "today_context",
-    "manager_journal"
+  "connector_modes": {
+    "streamable_http": true,
+    "oauth_embedded": true,
+    "bearer_token": true,
+    "public_https_url_required_for_chatgpt": true,
+    "responses_api_direct_authorization": true
+  },
+  "configuration_surface": {
+    "mcp": [
+      "MINIMAL_KANBAN_MCP_HOST",
+      "MINIMAL_KANBAN_MCP_PORT",
+      "MINIMAL_KANBAN_MCP_PATH",
+      "MINIMAL_KANBAN_MCP_PUBLIC_BASE_URL",
+      "MINIMAL_KANBAN_MCP_PUBLIC_ENDPOINT_URL",
+      "MINIMAL_KANBAN_MCP_BEARER_TOKEN",
+      "MINIMAL_KANBAN_MCP_ALLOWED_HOSTS",
+      "MINIMAL_KANBAN_MCP_ALLOWED_ORIGINS"
+    ],
+    "board_api": [
+      "MINIMAL_KANBAN_BOARD_API_URL",
+      "MINIMAL_KANBAN_API_BASE_URL",
+      "MINIMAL_KANBAN_API_HOST",
+      "MINIMAL_KANBAN_API_PORT",
+      "MINIMAL_KANBAN_API_BEARER_TOKEN"
+    ]
+  },
+  "tool_families": {
+    "bootstrap_and_runtime": [
+      "get_connector_identity",
+      "ping_connector",
+      "bootstrap_context",
+      "get_runtime_status"
+    ],
+    "agent_runtime_and_tasks": [
+      "agent_status",
+      "agent_runs",
+      "agent_actions",
+      "agent_tasks",
+      "agent_scheduled_tasks",
+      "agent_enqueue_task",
+      "save_agent_scheduled_task",
+      "delete_agent_scheduled_task",
+      "pause_agent_scheduled_task",
+      "resume_agent_scheduled_task",
+      "run_agent_scheduled_task",
+      "set_card_ai_autofill"
+    ],
+    "board_read": [
+      "list_columns",
+      "get_cards",
+      "get_card",
+      "get_card_context",
+      "get_board_snapshot",
+      "get_board_context",
+      "review_board",
+      "get_board_content",
+      "get_board_events",
+      "get_gpt_wall",
+      "get_card_log",
+      "list_archived_cards",
+      "search_cards",
+      "list_overdue_cards"
+    ],
+    "shared_files": [
+      "list_shared_files",
+      "get_shared_file_info",
+      "download_shared_file",
+      "upload_shared_file",
+      "update_shared_file_position",
+      "delete_shared_file"
+    ],
+    "client_directory": [
+      "list_clients",
+      "search_clients",
+      "get_client",
+      "get_client_stats",
+      "create_client",
+      "update_client",
+      "delete_client"
+    ],
+    "client_vehicle_linking": [
+      "link_card_to_client",
+      "upsert_client_vehicle",
+      "delete_client_vehicle",
+      "unlink_card_from_client",
+      "suggest_clients_for_card"
+    ],
+    "board_structure_and_notes": [
+      "create_column",
+      "rename_column",
+      "delete_column",
+      "create_sticky",
+      "update_sticky",
+      "move_sticky",
+      "delete_sticky"
+    ],
+    "card_and_board_write": [
+      "autofill_vehicle_data",
+      "create_card",
+      "update_card",
+      "mark_card_ready",
+      "set_card_deadline",
+      "set_card_indicator",
+      "move_card",
+      "bulk_move_cards",
+      "archive_card",
+      "restore_card",
+      "update_board_settings"
+    ],
+    "repair_order": [
+      "list_repair_orders",
+      "get_repair_order",
+      "get_repair_order_text",
+      "update_repair_order",
+      "set_repair_order_status",
+      "replace_repair_order_works",
+      "replace_repair_order_materials",
+      "autofill_repair_order"
+    ],
+    "cashbox": [
+      "list_cashboxes",
+      "get_cashbox",
+      "create_cashbox",
+      "delete_cashbox",
+      "create_cash_transaction"
+    ]
+  },
+  "operation_notes": [
+    "Always use bootstrap_context first unless the task is strictly diagnostics.",
+    "Use get_connector_identity and get_runtime_status when connector availability or auth behavior may have changed.",
+    "Write by ids only after the board and target record are confirmed.",
+    "Use shared_files tools for attachments or shared documents instead of copying file content into notes.",
+    "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
+    "Treat the autostopCRM branch in the CRM repo as canonical for new MCP commands and connector behavior.",
+    "Refresh this catalog whenever the CRM repo adds, renames, or deprecates tools."
   ]
 }

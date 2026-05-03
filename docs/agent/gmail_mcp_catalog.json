@@ -1,0 +1,38 @@
+{
+  "purpose": "Machine-readable catalog of Gmail MCP commands used by the manager agent.",
+  "source_of_truth": "Gmail MCP connector",
+  "gmail_is_source_of_truth_for": [
+    "inbox_messages",
+    "threads",
+    "labels",
+    "attachments",
+    "sent_mail_history"
+  ],
+  "startup_tools": [
+    "list_labels",
+    "search_email_ids",
+    "read_email",
+    "read_email_thread",
+    "batch_read_email_threads"
+  ],
+  "focused_workflows": [
+    "inbox triage",
+    "message search",
+    "thread reading",
+    "reply drafting",
+    "forwarding",
+    "label cleanup"
+  ],
+  "write_tools": [
+    "archive_emails",
+    "delete_emails",
+    "batch_modify_email",
+    "forward_emails",
+    "bulk_label_matching_emails"
+  ],
+  "manager_memory_guidance": [
+    "remember durable facts, decisions, approvals, deadlines, and follow-ups from email",
+    "do not store full email bodies unless they are part of a concise operating note",
+    "prefer the message or thread that contains the latest decision when summarizing"
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "generated_on": "2026-05-03",
+  "note": "Open/public endpoints only. Review current terms and availability before production ingestion.",
+  "endpoints": [
+    {
+      "id": "nhtsa_safercar_csv",
+      "name": "NHTSA Safercar CSV",
+      "url": "https://static.nhtsa.gov/nhtsa/downloads/Safercar/Safercar_data.csv",
+      "format": "csv",
+      "license_or_access": "public",
+      "data_types": [
+        "safety_ratings",
+        "vehicle_metadata"
+      ],
+      "refresh": "check_weekly"
+    },
+    {
+      "id": "nhtsa_recalls_post_2010",
+      "name": "NHTSA Recalls Flat File POST 2010",
+      "url": "https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip",
+      "format": "zip",
+      "license_or_access": "public",
+      "data_types": [
+        "recalls"
+      ],
+      "refresh": "daily_or_weekly"
+    },
+    {
+      "id": "nhtsa_complaints_all",
+      "name": "NHTSA Complaints Flat File",
+      "url": "https://static.nhtsa.gov/odi/ffdd/cmpl/FLAT_CMPL.zip",
+      "format": "zip",
+      "license_or_access": "public",
+      "data_types": [
+        "complaints"
+      ],
+      "refresh": "daily_or_weekly"
+    },
+    {
+      "id": "nhtsa_tsbs_flat",
+      "name": "NHTSA TSB Flat File",
+      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip",
+      "format": "zip",
+      "license_or_access": "public",
+      "data_types": [
+        "technical_service_bulletins",
+        "manufacturer_communications"
+      ],
+      "refresh": "daily_or_weekly"
+    },
+    {
+      "id": "nhtsa_tsbs_2025_2026",
+      "name": "NHTSA TSB Received 2025-2026",
+      "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip",
+      "format": "zip",
+      "license_or_access": "public",
+      "data_types": [
+        "technical_service_bulletins",
+        "manufacturer_communications"
+      ],
+      "refresh": "daily_or_weekly"
+    },
+    {
+      "id": "nhtsa_vpic_decodevinvalues",
+      "name": "NHTSA vPIC DecodeVinValues API",
+      "url_template": "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/{VIN}?format=json",
+      "format": "json_api",
+      "license_or_access": "public_api",
+      "data_types": [
+        "vin_decode",
+        "vehicle_specs"
+      ],
+      "refresh": "on_request"
+    },
+    {
+      "id": "epa_fueleconomy_vehicles",
+      "name": "EPA FuelEconomy.gov Vehicle CSV",
+      "url": "https://fueleconomy.gov/feg/epadata/vehicles.csv.zip",
+      "format": "zip_csv",
+      "license_or_access": "public",
+      "data_types": [
+        "fuel_economy",
+        "vehicle_attributes"
+      ],
+      "refresh": "monthly_or_model_year_release"
+    },
+    {
+      "id": "uk_dvsa_recalls_csv",
+      "name": "UK DVSA Vehicle Recalls CSV",
+      "url": "https://www.check-vehicle-recalls.service.gov.uk/documents/RecallsFile.csv",
+      "format": "csv",
+      "license_or_access": "public",
+      "data_types": [
+        "recalls"
+      ],
+      "refresh": "weekly_or_monthly"
+    }
+  ]
+}

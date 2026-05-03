@@ -1,0 +1,116 @@
+{
+  "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
+  "source_of_truth": "autostop_manager.mcp_server",
+  "memory_is_source_of_truth_for": [
+    "owner preferences",
+    "agreements and recurring rules",
+    "decision history",
+    "manager operating experience",
+    "durable follow-ups",
+    "short journal entries",
+    "routing rules distilled from approved source files"
+  ],
+  "crm_is_source_of_truth_for": [
+    "cards",
+    "clients",
+    "vehicles",
+    "repair orders",
+    "payments",
+    "cashboxes",
+    "board state"
+  ],
+  "startup_tools": [
+    "today_context",
+    "recall",
+    "remember",
+    "add_manager_task",
+    "manager_journal"
+  ],
+  "routing_tools": [
+    "lookup_original_parts",
+    "recommend_automotive_sources",
+    "recommend_fluid_maintenance_sources",
+    "recommend_service_management_actions"
+  ],
+  "tool_contracts": {
+    "remember": "Store long-term manager memory that does not belong in AutoStop CRM cards; prefer distilled conclusions over raw source copies.",
+    "recall": "Search memory before assuming owner context is unknown.",
+    "add_manager_task": "Create a durable task that is not a CRM card or repair order.",
+    "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
+    "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
+    "lookup_original_parts": "Classify VIN, chassis, or market code and return a source-aware OEM lookup route.",
+    "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
+    "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
+    "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake."
+  },
+  "natural_language_commands": {
+    "Приберись": {
+      "aliases": [
+        "прибери доску",
+        "обслужи доску",
+        "актуализируй доску",
+        "проведи уборку доски",
+        "проверь доску"
+      ],
+      "playbook": "docs/agent/board_cleanup_autopilot_playbook.md",
+      "authority": "full board-management autopilot with strict preservation of user-entered CRM data",
+      "allowed_actions": [
+        "read live CRM board state",
+        "update cards",
+        "add concise AI notes",
+        "enrich vehicle profiles",
+        "source VIN/OEM/parts data",
+        "set tags, indicators, and deadlines",
+        "move cards",
+        "archive completed cards when safe"
+      ],
+      "protected_data": [
+        "repair-order works",
+        "repair-order materials",
+        "prices",
+        "payments",
+        "cashbox records",
+        "files",
+        "client contacts",
+        "VIN/chassis/license data",
+        "manual diagnostics",
+        "historical notes"
+      ]
+    }
+  },
+  "knowledge_intake": {
+    "accepted_inputs": [
+      "md",
+      "txt",
+      "json",
+      "jsonl",
+      "csv",
+      "xlsx",
+      "pdf",
+      "docx",
+      "image_scans"
+    ],
+    "workflow": [
+      "classify source and license",
+      "extract durable conclusions",
+      "update playbooks or source catalogs",
+      "store only reusable memory",
+      "journal the change"
+    ],
+    "do_not_store": [
+      "full manuals",
+      "full tables",
+      "raw OCR dumps",
+      "temporary search results",
+      "licensed content without permission"
+    ]
+  },
+  "memory_guidance": [
+    "keep only durable conclusions from new files",
+    "store source routes, not copied databases",
+    "refresh the relevant catalog when the MCP surface changes",
+    "treat the owner's Приберись command as docs/agent/board_cleanup_autopilot_playbook.md",
+    "route management, procurement, staff, customer, and finance work through docs/agent/krasnoyarsk_service_management_playbook.md",
+    "prefer explicit uncertainty over invented completeness"
+  ]
+}

@@ -120,6 +120,7 @@ class ManagerMemoryStore:
             return {"ok": False, "error": "manager_rules.json not found", "inserted": 0}
         payload = json.loads(rules_path.read_text(encoding="utf-8"))
         inserted = 0
+        updated = 0
         now = _now()
         with self.connect() as conn:
             for rule in payload.get("rules", []):
@@ -127,11 +128,29 @@ class ManagerMemoryStore:
                 text = str(rule.get("rule") or "").strip()
                 if not title or not text:
                     continue
+                scope = str(rule.get("scope") or "general")
+                priority = int(rule.get("priority") or 100)
+                source = "docs/agent/manager_rules.json"
                 exists = conn.execute(
-                    "SELECT id FROM manager_rules WHERE title = ? LIMIT 1",
+                    "SELECT id, rule, scope, priority, source FROM manager_rules WHERE title = ? LIMIT 1",
                     (title,),
                 ).fetchone()
                 if exists:
+                    if (
+                        exists["rule"] != text
+                        or exists["scope"] != scope
+                        or int(exists["priority"]) != priority
+                        or exists["source"] != source
+                    ):
+                        conn.execute(
+                            """
+                            UPDATE manager_rules
+                            SET rule = ?, scope = ?, priority = ?, source = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (text, scope, priority, source, now, exists["id"]),
+                        )
+                        updated += 1
                     continue
                 conn.execute(
                     """
@@ -141,15 +160,15 @@ class ManagerMemoryStore:
                     (
                         title,
                         text,
-                        str(rule.get("scope") or "general"),
-                        int(rule.get("priority") or 100),
-                        "docs/agent/manager_rules.json",
+                        scope,
+                        priority,
+                        source,
                         now,
                         now,
                     ),
                 )
                 inserted += 1
-        return {"ok": True, "inserted": inserted}
+        return {"ok": True, "inserted": inserted, "updated": updated}
 
     def remember(
         self,

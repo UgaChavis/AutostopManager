@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import json
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+from .config import PROJECT_ROOT
+
+CATALOG_DIR = PROJECT_ROOT / "docs" / "agent" / "automotive_sources"
+SOURCE_CATALOG_PATH = CATALOG_DIR / "automotive_repair_sources_catalog.json"
+BRAND_SOURCE_MAP_PATH = CATALOG_DIR / "brand_source_map.json"
+DATA_TYPE_SOURCE_MAP_PATH = CATALOG_DIR / "data_type_source_map.json"
+OPEN_DATASET_ENDPOINTS_PATH = CATALOG_DIR / "open_dataset_endpoints.json"
+
+_LICENSED_STATUSES = {
+    "licensed_subscription_required",
+    "commercial_license_required",
+    "commercial_or_library_license_required",
+    "book_purchase_required",
+    "standards_purchase_required",
+    "paid_training_license_required",
+}
+
+_SAFETY_CRITICAL_DATA_TYPES = {
+    "adas",
+    "adas_safety_features",
+    "brake",
+    "brakes",
+    "calibration",
+    "diagnostics_reprogramming",
+    "electrical_diagrams",
+    "fuel_system",
+    "hv",
+    "hybrid_drive",
+    "immobilizer_codes",
+    "pcm_programming",
+    "programming",
+    "srs",
+    "steering",
+    "suspension",
+    "wiring_diagrams",
+}
+
+
+def _normalize_key(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _read_json(path: Path, fallback: Any) -> Any:
+    if not path.exists():
+        return fallback
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+@lru_cache(maxsize=1)
+def load_source_catalog() -> dict[str, Any]:
+    return _read_json(SOURCE_CATALOG_PATH, {"sources": [], "source_count": 0})
+
+
+@lru_cache(maxsize=1)
+def load_brand_source_map() -> dict[str, list[dict[str, Any]]]:
+    return _read_json(BRAND_SOURCE_MAP_PATH, {})
+
+
+@lru_cache(maxsize=1)
+def load_data_type_source_map() -> dict[str, list[dict[str, Any]]]:
+    return _read_json(DATA_TYPE_SOURCE_MAP_PATH, {})
+
+
+@lru_cache(maxsize=1)
+def load_open_dataset_endpoints() -> dict[str, Any]:
+    return _read_json(OPEN_DATASET_ENDPOINTS_PATH, {"endpoints": []})
+
+
+def _source_id(source: dict[str, Any]) -> str:
+    return str(source.get("source_id") or source.get("id") or "").strip()
+
+
+def _source_index() -> dict[str, dict[str, Any]]:
+    return {_source_id(source): source for source in load_source_catalog().get("sources", []) if _source_id(source)}
+
+
+def _find_map_values(mapping: dict[str, list[dict[str, Any]]], query: str | None) -> tuple[str | None, list[dict[str, Any]]]:
+    if not query:
+        return None, []
+    normalized = _normalize_key(query)
+    for key, values in mapping.items():
+        if _normalize_key(key) == normalized:
+            return key, values
+    for key, values in mapping.items():
+        key_normalized = _normalize_key(key)
+        if normalized and (normalized in key_normalized or key_normalized in normalized):
+            return key, values
+    return None, []
+
+
+def _is_licensed(source: dict[str, Any]) -> bool:
+    status = str(source.get("legal_ingestion_status") or "").strip()
+    access = str(source.get("access") or "").strip()
+    return status in _LICENSED_STATUSES or access.startswith("paid")
+
+
+def _citation_shape(source: dict[str, Any]) -> dict[str, str]:
+    return {
+        "source_id": _source_id(source),
+        "source_url": str(source.get("url") or ""),
+        "document_type": str(source.get("category") or source.get("source_type") or ""),
+        "license_status": str(source.get("legal_ingestion_status") or ""),
+    }
+
+
+def _score_source(source: dict[str, Any], *, brand_match: bool, data_type_match: bool) -> int:
+    score = int(source.get("priority_score_1_5") or 0) * 10
+    if brand_match:
+        score += 8
+    if data_type_match:
+        score += 8
+    if source.get("category") == "oem_service_portal":
+        score += 4
+    if source.get("category") == "open_government_data":
+        score += 2
+    if bool(source.get("forum_or_unofficial")):
+        score -= 50
+    return score
+
+
+def recommend_automotive_sources(
+    *,
+    brand: str | None = None,
+    data_type: str | None = None,
+    include_licensed: bool = True,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Return source routes for a repair question without copying source content."""
+    brand_key, brand_sources = _find_map_values(load_brand_source_map(), brand)
+    data_type_key, data_type_sources = _find_map_values(load_data_type_source_map(), data_type)
+    catalog = _source_index()
+
+    by_id: dict[str, dict[str, Any]] = {}
+    brand_ids = {_source_id(source) for source in brand_sources if _source_id(source)}
+    data_type_ids = {_source_id(source) for source in data_type_sources if _source_id(source)}
+    for source in [*brand_sources, *data_type_sources]:
+        source_id = _source_id(source)
+        if not source_id:
+            continue
+        merged = dict(catalog.get(source_id, {}))
+        merged.update(source)
+        if not include_licensed and _is_licensed(merged):
+            continue
+        by_id[source_id] = merged
+
+    if not by_id and not brand and not data_type:
+        for source in load_source_catalog().get("sources", []):
+            if include_licensed or not _is_licensed(source):
+                by_id[_source_id(source)] = source
+
+    rows: list[dict[str, Any]] = []
+    for source_id, source in by_id.items():
+        brand_match = source_id in brand_ids
+        data_type_match = source_id in data_type_ids
+        rows.append(
+            {
+                "source_id": source_id,
+                "name": source.get("name", ""),
+                "category": source.get("category", ""),
+                "access": source.get("access", ""),
+                "legal_ingestion_status": source.get("legal_ingestion_status", ""),
+                "priority_score_1_5": source.get("priority_score_1_5", 0),
+                "recommended_ingestion_route": source.get("recommended_ingestion_route", ""),
+                "url": source.get("url", ""),
+                "brand_match": brand_match,
+                "data_type_match": data_type_match,
+                "requires_license": _is_licensed(source),
+                "citation": _citation_shape(source),
+                "_score": _score_source(source, brand_match=brand_match, data_type_match=data_type_match),
+            }
+        )
+    rows.sort(key=lambda item: (-int(item.pop("_score")), str(item["source_id"])))
+
+    warnings: list[str] = []
+    if brand and not brand_key:
+        warnings.append(f"No exact brand route found for {brand}; use multi-brand and official sources.")
+    if data_type and not data_type_key:
+        warnings.append(f"No exact data-type route found for {data_type}; use repair source playbook.")
+    if _normalize_key(data_type) in _SAFETY_CRITICAL_DATA_TYPES:
+        warnings.append("Safety-critical route: use OEM or licensed professional sources only.")
+
+    endpoints = []
+    if data_type and _normalize_key(data_type) in {"recalls", "technical_service_bulletins", "tsb", "vin_decode"}:
+        endpoints = load_open_dataset_endpoints().get("endpoints", [])
+
+    return {
+        "ok": True,
+        "brand": brand,
+        "matched_brand_key": brand_key,
+        "data_type": data_type,
+        "matched_data_type_key": data_type_key,
+        "include_licensed": include_licensed,
+        "sources": rows[: max(1, min(limit, 50))],
+        "open_dataset_endpoints": endpoints,
+        "warnings": warnings,
+        "rules": [
+            "Use OEM service information first for VIN-specific repair facts.",
+            "Do not copy paid manuals, standards, wiring diagrams, or professional database records without license.",
+            "Carry source_id, source_url, document_type, and license_status with technical facts.",
+        ],
+    }
+

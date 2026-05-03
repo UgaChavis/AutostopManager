@@ -1,0 +1,142 @@
+{
+  "version": 2,
+  "purpose": "Machine-readable source registry for VIN, chassis, and OEM lookup routing.",
+  "sources": [
+    {
+      "name": "NHTSA vPIC API",
+      "kind": "api",
+      "authority": "official",
+      "inputs": ["vin"],
+      "url": "https://vpic.nhtsa.dot.gov/api/Home/Index",
+      "notes": "Primary VIN decode source for regulated vehicles. Supports decode and manufacturer data."
+    },
+    {
+      "name": "NHTSA vPIC Home",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["vin"],
+      "url": "https://vpic.nhtsa.dot.gov/",
+      "notes": "Official home for VIN decoding, MID, and downloadable standalone datasets."
+    },
+    {
+      "name": "Toyota Japan EPC Help",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["vin", "frame_number", "model_name", "catalog_code"],
+      "url": "https://spsepchtr.mx.toyota.co.jp/kN0k/CONTENTS/HELP/V2D00_E4.PDF",
+      "notes": "Documents Toyota Japan catalog inputs including VIN and frame number search flow."
+    },
+    {
+      "name": "Toyota Recall Search",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["chassis_number"],
+      "url": "https://www.toyota.co.jp/recall-search/dc/en/search/",
+      "notes": "Useful for Japan-market chassis-number confirmation."
+    },
+    {
+      "name": "Honda EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["frame_number", "vin"],
+      "url": "https://honda.epc-data.com/",
+      "notes": "Public Honda catalog mirror with frame-number search entry and catalog navigation."
+    },
+    {
+      "name": "Honda Recall Lookup",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["vin"],
+      "url": "https://owners.honda.com/service-maintenance/recalls/",
+      "notes": "Recall lookup only, but useful as a source-of-truth check when Honda VIN routing is needed."
+    },
+    {
+      "name": "Nissan EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["frame_number", "vin"],
+      "url": "https://nissan.epc-data.com/",
+      "notes": "Public Nissan catalog mirror with frame-number search entry and catalog navigation."
+    },
+    {
+      "name": "Nissan Recall Search",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["chassis_number", "vin"],
+      "url": "https://www.nissan.co.jp/RECALL/search_en.html",
+      "notes": "Official Japanese recall lookup that accepts chassis or vehicle-number style searches."
+    },
+    {
+      "name": "Mazda Recall Search",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["chassis_number", "vin"],
+      "url": "https://www2.mazda.co.jp/service/recall/",
+      "notes": "Official Mazda recall lookup for Japan-market confirmation."
+    },
+    {
+      "name": "Subaru Recall Search",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["chassis_number", "vin"],
+      "url": "https://recall.subaru.co.jp/lqsb/",
+      "notes": "Official Subaru recall lookup for Japan-market confirmation."
+    },
+    {
+      "name": "Subaru EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["frame_number", "vin"],
+      "url": "https://subaru.epc-data.com/",
+      "notes": "Public Subaru catalog mirror with frame-number search entry and catalog navigation."
+    },
+    {
+      "name": "partslink24 Mobile",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["vin"],
+      "url": "https://www.partslink24.com/partlink24mobile_en/index.html",
+      "notes": "VIN-scan entry and genuine parts access for participating brands; useful when dealership-grade catalog access is available."
+    },
+    {
+      "name": "partslink24 Product Info",
+      "kind": "portal",
+      "authority": "official",
+      "inputs": ["vin"],
+      "url": "https://www.partslink24.com/pl24connectLounge/html/en/product.html",
+      "notes": "Explains VIN access and original parts access for authorized dealers."
+    },
+    {
+      "name": "Toyota EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["frame_number", "vin"],
+      "url": "https://toyota.epc-data.com/",
+      "notes": "Public Toyota catalog mirror with frame-number search entry."
+    },
+    {
+      "name": "Hyundai EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["vin"],
+      "url": "https://hyundai.epc-data.com/",
+      "notes": "Public Hyundai catalog mirror with VIN search entry."
+    },
+    {
+      "name": "Kia EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["vin"],
+      "url": "https://kia.epc-data.com/",
+      "notes": "Public Kia catalog mirror with VIN search entry."
+    },
+    {
+      "name": "Renault EPC Mirror",
+      "kind": "mirror",
+      "authority": "public",
+      "inputs": ["vin"],
+      "url": "https://renault.epc-data.com/",
+      "notes": "Public Renault catalog mirror with model and VIN-oriented catalog navigation."
+    }
+  ]
+}
