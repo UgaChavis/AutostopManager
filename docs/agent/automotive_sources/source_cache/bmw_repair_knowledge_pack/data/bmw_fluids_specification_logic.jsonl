@@ -1,0 +1,4 @@
+{"term":"BMW Longlife engine oil","system":"engine_oil","notes_ru":"Выбор масла подтверждать по VIN, рынку, двигателю, допуску Longlife и текущей доступности продукта; pack дает маршрут, не финальный объем."}
+{"term":"ZF 8HP service fluid","system":"automatic_transmission","notes_ru":"Для 8HP использовать код коробки, температуру уровня, комплект ZF и официальную ZF/BMW процедуру."}
+{"term":"xDrive transfer case oil","system":"transfer_case","notes_ru":"Перед заменой фиксировать жалобу, VTG faults, калибровку, состояние шин и VIN-зависимую спецификацию масла."}
+{"term":"brake fluid","system":"brake_system","notes_ru":"Интервал и спецификацию подтверждать по BMW service data; после работ учитывать DSC/ABS процедуры прокачки."}

@@ -1,0 +1,5 @@
+{"abbreviation":"IHKA","system":"climate_control","meaning":"Integrated Heating and Air Conditioning","notes_ru":"Климат-контроль, заслонки, вентиляторы и датчики температуры; по fault memory проверять ISTA test plan и бюллетени."}
+{"abbreviation":"IBS","system":"power_management","meaning":"Intelligent Battery Sensor","notes_ru":"Критичен для диагностики просадки питания, утечек тока и некорректного сна блоков."}
+{"abbreviation":"BDC","system":"body_domain_controller","meaning":"Body Domain Controller","notes_ru":"Кузовной доменный контроллер; для F15/N63 сверять специализированный skill и официальные схемы."}
+{"abbreviation":"VTG","system":"xdrive_transfer_case","meaning":"Transfer case control/function","notes_ru":"Для xDrive shudder фиксировать шины, DSC wheel speeds, ошибки VTG, историю масла и калибровку."}
+{"abbreviation":"EGS","system":"transmission_control","meaning":"Electronic transmission control","notes_ru":"Для ZF 6HP/8HP использовать VIN, код коробки, уровень масла и ISTA/ZF источники."}

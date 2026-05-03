@@ -1,0 +1,4 @@
+{"code":"P0300","system":"engine_misfire","notes_ru":"Generic random/multiple misfire; для BMW нужен BMW fault memory, цилиндровые счетчики, топливо, зажигание, компрессия и ISTA план."}
+{"code":"P0171/P0174","system":"fuel_trim","notes_ru":"Generic lean mixture entry point; проверять подсос, MAF/MAP, топливо, crankcase ventilation и BMW-specific faults."}
+{"code":"P0420/P0430","system":"catalyst_efficiency","notes_ru":"Не менять катализатор без проверки пропусков, смеси, датчиков кислорода, утечек выпуска и readiness data."}
+{"code":"U-codes","system":"network_communication","notes_ru":"Для BMW сетевых ошибок фиксировать модуль, шину, питание, wake/sleep, gateway и официальную схему."}

@@ -1,0 +1,4 @@
+{"transmission":"ZF 6HP","system":"automatic_transmission","notes_ru":"Проверять код коробки, уровень ATF по температуре, адаптации, EGS faults и официальный ZF/BMW источник."}
+{"transmission":"ZF 8HP","system":"automatic_transmission","notes_ru":"Для 8HP использовать ZF service information, VIN-контекст, температуру уровня и комплект применимости."}
+{"transmission":"EGS","system":"transmission_control","notes_ru":"Модуль управления коробкой; fault memory читать с BMW module context, не только generic P-codes."}
+{"transmission":"VTG/xDrive","system":"transfer_case","notes_ru":"Связано с DSC wheel speeds, шинами, маслом раздатки и калибровкой; оценивать как систему."}

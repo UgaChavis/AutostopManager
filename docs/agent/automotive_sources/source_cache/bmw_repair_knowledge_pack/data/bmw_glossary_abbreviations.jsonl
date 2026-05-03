@@ -1,0 +1,5 @@
+{"term":"ISTA","abbreviation":"ISTA","meaning":"Integrated Service Technical Application","notes_ru":"Основной маршрут диагностики, test plans, программирования и сервисных функций BMW."}
+{"term":"AIR","abbreviation":"AIR","meaning":"Aftersales Information Research","notes_ru":"Источник послепродажной информации BMW; использовать VIN/модель/процедуру."}
+{"term":"I-level","abbreviation":"I-level","meaning":"Integration level","notes_ru":"Уровень интеграции ПО; важен для программных ошибок, campaign/SIB и мер программирования."}
+{"term":"AOS","abbreviation":"AOS","meaning":"BMW Aftersales Online System","notes_ru":"Официальный платный маршрут ремонтной информации BMW в доступных регионах."}
+{"term":"ETK","abbreviation":"ETK","meaning":"BMW electronic parts catalog","notes_ru":"Каталог деталей; применимость деталей подтверждать по VIN."}

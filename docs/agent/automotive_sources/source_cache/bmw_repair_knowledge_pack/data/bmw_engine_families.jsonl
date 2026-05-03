@@ -1,0 +1,4 @@
+{"engine":"N63","system":"gasoline_v8_turbo","notes_ru":"По F15/N63 использовать отдельный локальный skill; типовые темы: питание, пропуски, форсунки, охлаждение, масло, DME/BDC взаимодействие."}
+{"engine":"N55","system":"gasoline_i6_turbo","notes_ru":"Диагностировать по жалобе, fault memory, топливу, наддуву, VANOS/Valvetronic и официальным источникам."}
+{"engine":"B48/B58","system":"modular_gasoline","notes_ru":"Уточнять рынок, модель, год, I-level и историю обслуживания; финальные процедуры только по VIN-источникам BMW."}
+{"engine":"N57/B57","system":"diesel_i6","notes_ru":"Для дизеля проверять DDE fault memory, EGR/DPF/SCR, топливо, давление, сервисные кампании и официальные бюллетени."}

@@ -1,0 +1,3 @@
+{"chassis":"E-series","body_code":"E","scope":"Legacy BMW chassis families before F/G-series.","notes_ru":"Использовать как ориентир поколения; точную модель и комплектацию проверять по VIN через BMW ETK/AIR/ISTA."}
+{"chassis":"F-series","body_code":"F","scope":"BMW F-series vehicles including F15/F16 generation systems.","notes_ru":"Для F15/N63 сначала открывать специализированный skill bmw-f15-n63, затем этот общий BMW pack."}
+{"chassis":"G-series","body_code":"G","scope":"BMW G-series vehicles with newer integration-level and software bulletin dependencies.","notes_ru":"При программных ошибках важны I-level, ISTA test plan и сервисные бюллетени."}
