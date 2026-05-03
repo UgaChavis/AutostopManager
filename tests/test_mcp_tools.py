@@ -78,3 +78,29 @@ def test_recommend_service_management_actions_tool_is_registered(tmp_path):
     assert result["ok"] is True
     assert result["area"] == "parts_procurement"
     assert any(source["source_id"] == "drom_parts" for source in result["sources"])
+
+
+def test_knowledge_base_tools_are_registered(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    assert "sync_knowledge_base" in server.tools
+    assert "probe_knowledge_base" in server.tools
+    assert "search_knowledge_base" in server.tools
+    assert "audit_knowledge_base" in server.tools
+
+    sync_result = server.tools["sync_knowledge_base"]()
+    assert sync_result["ok"] is True
+
+    probe_result = server.tools["probe_knowledge_base"]("Toyota Yaris GR clutch", limit=3)
+    assert probe_result["ok"] is True
+    assert probe_result["best_domain"] == "toyota_gr_yaris"
+
+    search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="bmw_f15_n63", limit=5)
+    assert search_result["ok"] is True
+    assert search_result["items"]
+
+    audit_result = server.tools["audit_knowledge_base"]()
+    assert audit_result["ok"] is True

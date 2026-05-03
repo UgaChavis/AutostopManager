@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "purpose": "Model-specific source routes that override broad brand/data-type routing when the model is known.",
+  "models": {
+    "toyota_gr_yaris_gxpa16": {
+      "triggers": [
+        "Toyota GR Yaris",
+        "Yaris GR",
+        "GRMN Yaris",
+        "GXPA16",
+        "G16E-GTS",
+        "GR-FOUR",
+        "EA67F",
+        "UC80F"
+      ],
+      "playbook": "docs/agent/toyota_gr_yaris_playbook.md",
+      "skill": "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
+      "identity_requirements": [
+        "VIN or Japan frame/chassis number",
+        "market",
+        "production month",
+        "grade",
+        "engine code",
+        "transmission type/code",
+        "LSD/front-rear diff package",
+        "sub-radiator where relevant"
+      ],
+      "source_order": [
+        "toyota_tech_eu",
+        "toyota_tis_na",
+        "toyota_manuals_au",
+        "toyota_jp_owner_manuals",
+        "toyota_jp_recall",
+        "toyota_dealer_epc",
+        "nengun_toyota_gr_yaris_gxpa16",
+        "amayama_toyota_catalog",
+        "megazip_toyota_catalog",
+        "partsouq_toyota_catalog",
+        "7zap_toyota_catalog"
+      ],
+      "rules": [
+        "Do not confuse true GR Yaris GXPA16/G16E-GTS with normal Yaris, Yaris Cross, or Yaris GR Sport.",
+        "Use public Toyota owner manual data only for preliminary owner-level maintenance facts.",
+        "Use Toyota official/licensed document-level verification for torque, wiring, TSB procedure, calibration, SRS, ADAS, and final OEM fitment.",
+        "Treat public EPC catalogs and forum/PDF clues as cross-checks until Toyota EPC/dealer confirms by VIN/frame."
+      ]
+    }
+  }
+}

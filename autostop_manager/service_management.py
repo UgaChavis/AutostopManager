@@ -62,9 +62,11 @@ def _sources_for_area(area_config: dict[str, Any], city: str, limit: int) -> lis
             continue
         source["_score"] = 0
         source["_position"] = position
-        if str(source.get("city_focus") or "").casefold() == city.casefold():
+        city_focus = str(source.get("city_focus") or "").casefold()
+        requested_city = city.casefold()
+        if city_focus == requested_city or requested_city in city_focus:
             source["_score"] += 10
-        if str(source.get("city_focus") or "").casefold() == "россия":
+        if city_focus == "россия" or "россия" in city_focus:
             source["_score"] += 3
         rows.append(source)
     rows.sort(key=lambda source: (-int(source.get("_score", 0)), int(source.get("_position", 0))))

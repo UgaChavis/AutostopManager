@@ -144,6 +144,8 @@ def recommend_automotive_sources(
     by_id: dict[str, dict[str, Any]] = {}
     brand_ids = {_source_id(source) for source in brand_sources if _source_id(source)}
     data_type_ids = {_source_id(source) for source in data_type_sources if _source_id(source)}
+    brand_order = {_source_id(source): index for index, source in enumerate(brand_sources) if _source_id(source)}
+    data_type_order = {_source_id(source): index for index, source in enumerate(data_type_sources) if _source_id(source)}
     for source in [*brand_sources, *data_type_sources]:
         source_id = _source_id(source)
         if not source_id:
@@ -178,9 +180,13 @@ def recommend_automotive_sources(
                 "requires_license": _is_licensed(source),
                 "citation": _citation_shape(source),
                 "_score": _score_source(source, brand_match=brand_match, data_type_match=data_type_match),
+                "_order": min(brand_order.get(source_id, 10_000), data_type_order.get(source_id, 10_000)),
             }
         )
-    rows.sort(key=lambda item: (-int(item.pop("_score")), str(item["source_id"])))
+    rows.sort(key=lambda item: (-int(item["_score"]), int(item["_order"]), str(item["source_id"])))
+    for item in rows:
+        item.pop("_score", None)
+        item.pop("_order", None)
 
     warnings: list[str] = []
     if brand and not brand_key:
@@ -210,4 +216,3 @@ def recommend_automotive_sources(
             "Carry source_id, source_url, document_type, and license_status with technical facts.",
         ],
     }
-

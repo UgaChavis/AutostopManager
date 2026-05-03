@@ -48,6 +48,36 @@ Use sources in this order:
 Do not treat forums, pirated manuals, random PDFs, or unclear aggregators as
 technical sources.
 
+## Transmission-Specific Route
+
+For gearbox, clutch, or transmission-fluid questions, start with
+`docs/agent/transmission_playbook.md`.
+
+Required first-pass routing:
+
+1. exact VIN or chassis number
+2. market / region
+3. exact transmission code or family
+4. exact symptom and operating condition
+5. `recommend_automotive_sources(data_type="transmission")`
+
+Prefer the exact OEM service document, then transmission-manufacturer
+documentation, then component-supplier documentation. For transmission work,
+generic AT / CVT / DCT / MT labels are not enough to confirm applicability.
+
+## Model-Specific Overrides
+
+Use model-specific playbooks before broad brand routing when one exists:
+
+- Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS:
+  `docs/agent/toyota_gr_yaris_playbook.md`
+
+For Toyota GR Yaris, official Toyota-Tech/TIS/Toyota Manuals AU/dealer EPC
+routes take priority for repair procedures, TSBs, wiring, torque specs,
+calibrations, and final OEM part fitment. Public Toyota owner manuals can be
+used for owner-level maintenance data, but VIN/frame, market, production date,
+transmission, LSD, and grade still control final applicability.
+
 ## Do Not Invent
 
 Never invent:

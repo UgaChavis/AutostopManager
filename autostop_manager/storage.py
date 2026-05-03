@@ -110,6 +110,61 @@ class ManagerMemoryStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS knowledge_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    domain TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    document_type TEXT NOT NULL DEFAULT 'file',
+                    use_when_json TEXT NOT NULL DEFAULT '[]',
+                    content_hash TEXT NOT NULL DEFAULT '',
+                    indexed_at TEXT NOT NULL,
+                    UNIQUE(domain, path)
+                );
+
+                CREATE TABLE IF NOT EXISTS knowledge_route_cards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    domain TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL DEFAULT '',
+                    use_when_json TEXT NOT NULL DEFAULT '[]',
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
+                    keywords_json TEXT NOT NULL DEFAULT '[]',
+                    questions_json TEXT NOT NULL DEFAULT '[]',
+                    source_of_truth_json TEXT NOT NULL DEFAULT '[]',
+                    primary_files_json TEXT NOT NULL DEFAULT '[]',
+                    required_context_json TEXT NOT NULL DEFAULT '[]',
+                    search_text TEXT NOT NULL DEFAULT '',
+                    content_hash TEXT NOT NULL DEFAULT '',
+                    indexed_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS knowledge_sections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id INTEGER NOT NULL,
+                    domain TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    heading TEXT NOT NULL DEFAULT '',
+                    level INTEGER NOT NULL DEFAULT 0,
+                    ordinal INTEGER NOT NULL DEFAULT 0,
+                    content TEXT NOT NULL DEFAULT '',
+                    preview TEXT NOT NULL DEFAULT '',
+                    search_text TEXT NOT NULL DEFAULT '',
+                    indexed_at TEXT NOT NULL,
+                    FOREIGN KEY(document_id) REFERENCES knowledge_documents(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_documents_domain
+                    ON knowledge_documents(domain);
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_sections_domain
+                    ON knowledge_sections(domain);
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_sections_search
+                    ON knowledge_sections(search_text);
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_route_cards_search
+                    ON knowledge_route_cards(search_text);
                 """
             )
 

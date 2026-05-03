@@ -33,6 +33,10 @@ Refresh this model with `get_board_context` when the board changes.
 
 ## Procurement
 
+For закупочная цена, local availability, or repair-order materials pricing,
+use `procurement_pricing_playbook.md` before filling the ЗН. Keep procurement,
+retail, and client sell prices separate.
+
 Use this order:
 
 1. Normalize vehicle identity and part identity from CRM.

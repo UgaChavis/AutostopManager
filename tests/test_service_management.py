@@ -14,6 +14,7 @@ def test_parts_procurement_plan_prioritizes_krasnoyarsk_sources():
         part_number="90311-89014",
         vehicle="Lexus RX200T",
         urgency="today",
+        limit=20,
     )
 
     assert result["ok"] is True
@@ -21,6 +22,8 @@ def test_parts_procurement_plan_prioritizes_krasnoyarsk_sources():
     assert result["city"] == "Красноярск"
     assert result["sources"]
     assert any(source["source_id"] == "drom_parts" for source in result["sources"])
+    assert any(source["source_id"] == "rossko" for source in result["sources"])
+    assert any(source["source_id"] == "autoeuro_api" for source in result["sources"])
     assert any(source["city_focus"] == "Красноярск" for source in result["sources"])
     assert "part_number" not in result["missing_context"]
 

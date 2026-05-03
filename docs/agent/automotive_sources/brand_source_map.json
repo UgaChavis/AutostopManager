@@ -658,6 +658,15 @@
       "url": "https://techinfo.toyota.com/"
     },
     {
+      "source_id": "toyota_tech_eu",
+      "name": "Toyota-Tech Europe",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_with_some_free_information",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.toyota-tech.eu/"
+    },
+    {
       "source_id": "toyota_manuals_au",
       "name": "Toyota Service Information & Repair Manuals Australia",
       "category": "oem_service_portal",
@@ -667,6 +676,24 @@
       "url": "https://toyotamanuals.com.au/"
     },
     {
+      "source_id": "toyota_jp_owner_manuals",
+      "name": "Toyota Japan Owner Manuals",
+      "category": "owner_manuals",
+      "access": "free_public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://manual.toyota.jp/"
+    },
+    {
+      "source_id": "toyota_jp_recall",
+      "name": "Toyota Japan Recall Information",
+      "category": "recalls",
+      "access": "free_public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://toyota.jp/recall/"
+    },
+    {
       "source_id": "toyota_epc_parts",
       "name": "Toyota Parts and Service / EPC resources",
       "category": "parts_catalog",
@@ -674,6 +701,15 @@
       "priority_score_1_5": 2,
       "legal_ingestion_status": "official_free_browse_link_only",
       "url": "https://parts.toyota.com/"
+    },
+    {
+      "source_id": "nengun_toyota_gr_yaris_gxpa16",
+      "name": "Nengun Toyota GR Yaris GXPA16 OEM catalog route",
+      "category": "parts_catalog_cross_check",
+      "access": "free_browse_commercial_seller",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "link_only_cross_check",
+      "url": "https://www.nengun.com/oem/toyota/gr-yaris-rc-gxpa16"
     }
   ],
   "Lexus": [

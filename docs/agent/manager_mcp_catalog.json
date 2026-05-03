@@ -30,7 +30,11 @@
     "lookup_original_parts",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
-    "recommend_service_management_actions"
+    "recommend_service_management_actions",
+    "sync_knowledge_base",
+    "probe_knowledge_base",
+    "search_knowledge_base",
+    "audit_knowledge_base"
   ],
   "tool_contracts": {
     "remember": "Store long-term manager memory that does not belong in AutoStop CRM cards; prefer distilled conclusions over raw source copies.",
@@ -38,6 +42,10 @@
     "add_manager_task": "Create a durable task that is not a CRM card or repair order.",
     "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
+    "sync_knowledge_base": "Refresh the SQLite index of docs/agent/knowledge_map.json routes, playbooks, source catalogs, and model-specific skills.",
+    "probe_knowledge_base": "Cheaply test whether local knowledge exists for a vehicle, model, system, brand, fluid, diagnostic, parts, CRM, or source-intake task; if has_knowledge=true, open open_first/source_of_truth first.",
+    "search_knowledge_base": "Search indexed knowledge sections after probing; optionally filter by domain such as fluids, automotive_repair, bmw_repair, bmw_f15_n63, toyota_gr_yaris, or vehicle_identity_and_oem.",
+    "audit_knowledge_base": "Check knowledge_map.json, route-card metadata, mapped files, and SQLite index counts after source intake or route edits.",
     "lookup_original_parts": "Classify VIN, chassis, or market code and return a source-aware OEM lookup route.",
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
@@ -79,6 +87,8 @@
     }
   },
   "knowledge_intake": {
+    "entrypoint": "docs/agent/knowledge_base_index.md",
+    "machine_map": "docs/agent/knowledge_map.json",
     "accepted_inputs": [
       "md",
       "txt",
@@ -91,9 +101,14 @@
       "image_scans"
     ],
     "workflow": [
+      "inspect docs/agent/knowledge_base_index.md and docs/agent/knowledge_map.json",
+      "use probe_knowledge_base before broad file reads",
       "classify source and license",
       "extract durable conclusions",
       "update playbooks or source catalogs",
+      "update index/map routes when adding durable knowledge",
+      "run sync_knowledge_base after durable docs/catalog/skill changes",
+      "run audit_knowledge_base after route-card or source changes",
       "store only reusable memory",
       "journal the change"
     ],

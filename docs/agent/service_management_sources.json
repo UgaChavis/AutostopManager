@@ -19,7 +19,115 @@
       "city_focus": "Красноярск",
       "url": "https://www.zzap.ru/",
       "use_for": ["new_parts", "replacement_numbers", "price_benchmark", "seller_comparison"],
-      "verification": "Use exact OEM first, city filter where available, and all replacements view for analogs."
+      "verification": "Use exact OEM first, city filter where available, and all replacements view for analogs. Treat API as partner-by-request until contract is confirmed."
+    },
+    {
+      "source_id": "rossko",
+      "name": "ROSSKO / Росско",
+      "category": "wholesale_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://rossko.ru/contacts/magaziny-avtozapchastei-krasnoyarsk-2400000100000/18019/",
+      "use_for": ["new_parts", "consumables", "local_stock", "procurement_price", "same_day_or_next_day"],
+      "verification": "High-priority source when AutoStop account/API keys are available; confirm warehouse, pickup, price type, and return terms."
+    },
+    {
+      "source_id": "armtek",
+      "name": "ARMTEK / Армтек",
+      "category": "wholesale_parts_supplier",
+      "city_focus": "Россия",
+      "url": "https://etp.armtek.ru/",
+      "use_for": ["new_parts", "b2b_procurement", "stock_and_delivery_check", "price_benchmark"],
+      "verification": "Use only account-approved ETP/API or exported price list; confirm Krasnoyarsk logistics and return terms."
+    },
+    {
+      "source_id": "autopiter",
+      "name": "Autopiter / Автопитер",
+      "category": "federal_parts_supplier",
+      "city_focus": "Россия",
+      "url": "https://autopiter.ru/",
+      "use_for": ["new_parts", "oem_parts", "analogs", "russia_order", "procurement_price"],
+      "verification": "Use for Russia-wide закупка and supplier comparison; wholesale/API access requires registration and account approval."
+    },
+    {
+      "source_id": "autoeuro_api",
+      "name": "AutoEuro API / АвтоЕвро",
+      "category": "supplier_api",
+      "city_focus": "Россия",
+      "url": "https://api.autoeuro.ru/doc/v2",
+      "use_for": ["new_parts", "price_and_stock_confirmation", "order_creation", "order_status"],
+      "verification": "Use after API activation only; good candidate for normalized price, stock, delivery, and order-status checks."
+    },
+    {
+      "source_id": "partsapi",
+      "name": "PARTSAPI.RU",
+      "category": "catalog_fitment_api",
+      "city_focus": "Россия",
+      "url": "https://partsapi.ru/",
+      "use_for": ["tecdoc_crosses", "vin_decode", "applicability", "oem_or_analog_identification"],
+      "verification": "Use for fitment and cross-reference enrichment, not as закупочная цена unless a connected supplier price is confirmed."
+    },
+    {
+      "source_id": "umapi",
+      "name": "UMAPI",
+      "category": "catalog_and_price_list_platform",
+      "city_focus": "Россия",
+      "url": "https://umapi.ru/",
+      "use_for": ["catalog_data", "price_list_exchange", "supplier_data_integration"],
+      "verification": "Evaluate for supplier price-list exchange and catalog enrichment; confirm connected suppliers before using prices."
+    },
+    {
+      "source_id": "mikado",
+      "name": "Mikado Webservice",
+      "category": "supplier_api_docs",
+      "city_focus": "Россия",
+      "url": "https://mikado-parts.ru/ws1/Docs",
+      "use_for": ["parts_search", "price_and_stock_check", "supplier_benchmark"],
+      "verification": "Use as an additional API candidate after commercial access is confirmed."
+    },
+    {
+      "source_id": "auto_sputnik",
+      "name": "AutoSputnik / Автоспутник API",
+      "category": "supplier_api",
+      "city_focus": "Россия",
+      "url": "https://api.auto-sputnik.ru/?act=api_search",
+      "use_for": ["parts_search", "price", "stock", "lead_time", "return_terms"],
+      "verification": "Use after supplier login and current API endpoint are confirmed; legacy docs mention migration."
+    },
+    {
+      "source_id": "apec_api",
+      "name": "APEC API",
+      "category": "supplier_api",
+      "city_focus": "Россия / импорт",
+      "url": "https://api.apecauto.com/",
+      "use_for": ["spare_parts_pricing", "delivery_days", "quantity_available", "order_creation", "order_status"],
+      "verification": "Use as import/Russia-order benchmark if commercial account and delivery route are relevant."
+    },
+    {
+      "source_id": "autopoisk",
+      "name": "AUTOPOISK",
+      "category": "catalog_and_supplier_data_platform",
+      "city_focus": "Россия",
+      "url": "https://autopoisk.su/ru",
+      "use_for": ["vin_identification", "catalogs", "crosses", "supplier_statistics", "repair_information"],
+      "verification": "Use for professional catalog/cross/OEM enrichment and supplier-market context, not direct закупка until connected supplier prices are verified."
+    },
+    {
+      "source_id": "fifth_gear_krasnoyarsk",
+      "name": "Пятая передача",
+      "category": "local_parts_and_fluids_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://xn--80atblfjdfd2l.xn--80aaaoea1ebkq6dxec.xn--p1ai/",
+      "use_for": ["local_fluids", "maintenance_parts", "vin_inquiry", "same_day_check"],
+      "verification": "Use for Krasnoyarsk fluids and common service materials; confirm live stock and package size."
+    },
+    {
+      "source_id": "liqui_moly_krasnoyarsk",
+      "name": "Liqui Moly Красноярск",
+      "category": "local_fluids_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://liqui-moly24.ru/",
+      "use_for": ["fluids", "additives", "maintenance_consumables", "local_stock"],
+      "verification": "Use as local fluids benchmark only when OEM approval/spec and package size are clear."
     },
     {
       "source_id": "avito_parts",
@@ -145,14 +253,16 @@
       "memory_rules": ["Store durable operating rule only, not board snapshots."]
     },
     "parts_procurement": {
-      "source_ids": ["drom_parts", "zzap", "avito_parts", "emex", "exist", "autodoc", "metro_avtodom", "krasdetal", "porshenkras", "avtopostavka"],
+      "source_ids": ["rossko", "armtek", "autopiter", "autoeuro_api", "emex", "exist", "autodoc", "zzap", "partsapi", "umapi", "mikado", "auto_sputnik", "apec_api", "autopoisk", "fifth_gear_krasnoyarsk", "liqui_moly_krasnoyarsk", "drom_parts", "avito_parts", "metro_avtodom", "krasdetal", "porshenkras", "avtopostavka"],
       "required_context": ["vehicle", "part_number", "part_name", "urgency"],
       "crm_tools": ["get_card_context", "get_repair_order", "update_card", "update_repair_order", "manager_journal"],
       "actions": [
         "Normalize OEM, compressed OEM, vehicle, side, axle, and condition.",
-        "Search Drom first for exact local offers.",
-        "Use ZZap for price and replacement comparison.",
-        "Use Emex/Exist/Autodoc for new/OEM benchmark.",
+        "Check contracted supplier/API/price-list routes first when available: ROSSKO, Armtek, Autopiter, AutoEuro, Emex, Exist, Autodoc.",
+        "Use ZZap for price and replacement comparison, then PartsAPI/UMAPI/AUTOPOISK only for catalog/cross enrichment unless supplier price is connected.",
+        "Use AutoSputnik/APEC/Mikado as additional supplier API candidates after account and delivery terms are confirmed.",
+        "Use Drom and Avito for used, contract, rare, or urgent local offers.",
+        "Use Krasnoyarsk fluids/local suppliers for same-day consumables.",
         "Call local Krasnoyarsk suppliers when same-day pickup matters."
       ],
       "kpis": ["exact OEM hit rate", "local pickup availability", "delivery days", "return risk", "total landed cost"],

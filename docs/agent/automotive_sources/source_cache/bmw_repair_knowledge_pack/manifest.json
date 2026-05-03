@@ -1,0 +1,160 @@
+{
+  "name": "bmw_repair_knowledge_pack",
+  "created_utc": "2026-05-03T10:32:46Z",
+  "description_ru": "Справочные материалы по ремонту BMW: диагностика, DTC, двигатели, трансмиссия, xDrive, кузовная электроника, HV, жидкости.",
+  "file_count": 39,
+  "files": [
+    {
+      "path": "README_ru.md",
+      "size_bytes": 2155
+    },
+    {
+      "path": "data/bmw_chassis_codes.csv",
+      "size_bytes": 3496
+    },
+    {
+      "path": "data/bmw_chassis_codes.jsonl",
+      "size_bytes": 5313
+    },
+    {
+      "path": "data/bmw_control_units_glossary.csv",
+      "size_bytes": 2107
+    },
+    {
+      "path": "data/bmw_control_units_glossary.jsonl",
+      "size_bytes": 2963
+    },
+    {
+      "path": "data/bmw_engine_families.csv",
+      "size_bytes": 3559
+    },
+    {
+      "path": "data/bmw_engine_families.jsonl",
+      "size_bytes": 4293
+    },
+    {
+      "path": "data/bmw_fault_memory_public_examples.csv",
+      "size_bytes": 1756
+    },
+    {
+      "path": "data/bmw_fault_memory_public_examples.jsonl",
+      "size_bytes": 2370
+    },
+    {
+      "path": "data/bmw_fluids_specification_logic.csv",
+      "size_bytes": 1913
+    },
+    {
+      "path": "data/bmw_fluids_specification_logic.jsonl",
+      "size_bytes": 2335
+    },
+    {
+      "path": "data/bmw_glossary_abbreviations.csv",
+      "size_bytes": 3151
+    },
+    {
+      "path": "data/bmw_glossary_abbreviations.jsonl",
+      "size_bytes": 4215
+    },
+    {
+      "path": "data/bmw_symptom_diagnostic_index.csv",
+      "size_bytes": 5047
+    },
+    {
+      "path": "data/bmw_symptom_diagnostic_index.jsonl",
+      "size_bytes": 5735
+    },
+    {
+      "path": "data/bmw_transmission_families.csv",
+      "size_bytes": 1848
+    },
+    {
+      "path": "data/bmw_transmission_families.jsonl",
+      "size_bytes": 2156
+    },
+    {
+      "path": "data/generic_obd2_dtc_high_value.csv",
+      "size_bytes": 3178
+    },
+    {
+      "path": "data/generic_obd2_dtc_high_value.jsonl",
+      "size_bytes": 4540
+    },
+    {
+      "path": "data/public_sources_bmw_zf_nhtsa.csv",
+      "size_bytes": 7362
+    },
+    {
+      "path": "data/public_sources_bmw_zf_nhtsa.jsonl",
+      "size_bytes": 8900
+    },
+    {
+      "path": "html/index.html",
+      "size_bytes": 2531
+    },
+    {
+      "path": "markdown/bmw_01_diagnostics_architecture_ru.md",
+      "size_bytes": 12201
+    },
+    {
+      "path": "markdown/bmw_02_fault_codes_dtc_catalog_ru.md",
+      "size_bytes": 10562
+    },
+    {
+      "path": "markdown/bmw_03_engines_common_service_topics_ru.md",
+      "size_bytes": 10120
+    },
+    {
+      "path": "markdown/bmw_04_transmission_xdrive_driveline_ru.md",
+      "size_bytes": 11596
+    },
+    {
+      "path": "markdown/bmw_05_chassis_brakes_steering_ru.md",
+      "size_bytes": 6133
+    },
+    {
+      "path": "markdown/bmw_06_body_electrical_networks_ru.md",
+      "size_bytes": 8147
+    },
+    {
+      "path": "markdown/bmw_07_hybrid_electric_high_voltage_ru.md",
+      "size_bytes": 6489
+    },
+    {
+      "path": "markdown/bmw_08_service_fluids_maintenance_ru.md",
+      "size_bytes": 7736
+    },
+    {
+      "path": "pdf/bmw_01_diagnostics_architecture_ru.pdf",
+      "size_bytes": 60219
+    },
+    {
+      "path": "pdf/bmw_02_fault_codes_dtc_catalog_ru.pdf",
+      "size_bytes": 60285
+    },
+    {
+      "path": "pdf/bmw_03_engines_common_service_topics_ru.pdf",
+      "size_bytes": 57254
+    },
+    {
+      "path": "pdf/bmw_04_transmission_xdrive_driveline_ru.pdf",
+      "size_bytes": 59908
+    },
+    {
+      "path": "pdf/bmw_05_chassis_brakes_steering_ru.pdf",
+      "size_bytes": 54599
+    },
+    {
+      "path": "pdf/bmw_06_body_electrical_networks_ru.pdf",
+      "size_bytes": 57038
+    },
+    {
+      "path": "pdf/bmw_07_hybrid_electric_high_voltage_ru.pdf",
+      "size_bytes": 54859
+    },
+    {
+      "path": "pdf/bmw_08_service_fluids_maintenance_ru.pdf",
+      "size_bytes": 56607
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 {
   "startup_sequence": [
     "Read AutostopManager today_context.",
+    "If the task involves local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first; open source_of_truth/open_first when has_knowledge=true; use sync_knowledge_base and audit_knowledge_base if docs/catalogs/skills changed.",
     "If the current task involves email, inspect Gmail inbox state and relevant threads.",
     "If the user asks about live CRM state, call AutoStop CRM get_connector_identity, get_runtime_status, bootstrap_context, or get_board_context.",
     "If the owner says 'Приберись', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, inspect docs/agent/board_cleanup_autopilot_playbook.md and run the board-cleanup autopilot behavior.",
@@ -8,11 +9,36 @@
     "If the task involves vehicle identification or VIN/chassis decoding, inspect docs/agent/vehicle_identity_playbook.md before parts search.",
     "If the task involves original catalog numbers from VIN or chassis number, inspect docs/agent/vin_oem_lookup_playbook.md and docs/agent/vin_oem_sources.json before searching marketplaces.",
     "If the task involves oils, operating fluids, fill capacities, or ТО planning, inspect docs/agent/fluid_maintenance_playbook.md and use recommend_fluid_maintenance_sources before giving capacity/spec facts.",
+    "If the task involves gearbox or transmission diagnosis, clutch adaptation, or transmission-fluid service, inspect docs/agent/transmission_playbook.md before giving any gearbox fact.",
+    "If the task involves Toyota GR Yaris, Yaris GR, GXPA16, G16E-GTS, GR-FOUR, 6MT EA67F, 8AT UC80F, clutch, fluids, recalls, TSBs, or OEM parts, probe the knowledge base and inspect docs/agent/toyota_gr_yaris_playbook.md or C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md before giving repair, fluid, TSB, recall, or OEM part facts.",
+    "If the task involves general BMW repair, diagnostics, DTC/fault memory, body electronics, xDrive, ZF transmission, HV, or BMW fluids, probe the knowledge base, then inspect docs/agent/bmw_repair_playbook.md before broad BMW source search.",
     "If the task involves repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor, ADAS, SRS, HV, immobilizer, or programming, inspect docs/agent/automotive_repair_source_playbook.md and route through docs/agent/automotive_sources before giving technical facts.",
+    "If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, F15 electrical/electronics, injector bulletins, misfires, oil consumption, or cooling, use C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md.",
     "If the task involves Krasnoyarsk workshop management, procurement, staff load, customer flow, finance control, or daily CRM control, inspect docs/agent/krasnoyarsk_service_management_playbook.md and use recommend_service_management_actions.",
     "Use focused CRM tools before heavy wall/snapshot exports.",
     "After meaningful work, write manager_journal."
   ],
+  "knowledge_navigation": {
+    "entrypoint": "docs/agent/knowledge_base_index.md",
+    "machine_map": "docs/agent/knowledge_map.json",
+    "intake_playbook": "docs/agent/knowledge_intake_playbook.md",
+    "rules": [
+      "Use probe_knowledge_base as the cheap first pass for vehicle, brand, system, fluid, diagnostic, parts, CRM, or local-knowledge questions.",
+      "If probe_knowledge_base returns has_knowledge=true, open open_first/source_of_truth before broad file search.",
+      "Use search_knowledge_base only after probing, preferably constrained to the returned best_domain.",
+      "Run sync_knowledge_base after durable docs/catalog/skill changes.",
+      "Run audit_knowledge_base after source intake or route-card edits.",
+      "Update both the Markdown index and JSON map when adding a durable playbook, source catalog, or model-specific skill.",
+      "Keep raw manuals, copied licensed data, CRM snapshots, and temporary search results out of durable memory.",
+      "Use dedicated Codex skills for substantial model-specific corpora."
+    ],
+    "model_specific_routes": {
+      "BMW X5 F15 xDrive50i N63TU": {
+        "skill": "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
+        "source_override": "docs/agent/automotive_sources/model_source_overrides.json"
+      }
+    }
+  },
   "crm_navigation": {
     "connector_and_runtime": [
       "get_connector_identity",
@@ -130,6 +156,20 @@
       "Use recommend_automotive_sources or source-route to select sources by brand and data type.",
       "Do not provide torque, fluids, pinouts, ADAS, SRS, HV, immobilizer, programming, labor, or original-price facts without source-backed verification."
     ],
+    "bmw_repair": [
+      "Use probe_knowledge_base before broad BMW file reads; when best_domain is bmw_repair, open docs/agent/bmw_repair_playbook.md first.",
+      "Use docs/agent/bmw_repair_playbook.md and docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/ as owner-provided route/index material.",
+      "Switch to a model-specific skill such as bmw-f15-n63 when model/engine/chassis matches.",
+      "Collect VIN/chassis, market, year/model/chassis code, engine code, transmission code, mileage, complaint, and BMW fault memory with module names.",
+      "Verify final repair procedures, wiring, torque, coding/programming, campaigns, and fluid capacities through BMW ISTA/AIR/ETK/AOS/TIS, official BMW owner/recall data, BMW/NHTSA SIBs, or ZF official data."
+    ],
+    "toyota_gr_yaris": [
+      "Use probe_knowledge_base before general Toyota routing; when best_domain is toyota_gr_yaris, open docs/agent/toyota_gr_yaris_playbook.md or C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md first.",
+      "Confirm the vehicle is true GR Yaris GXPA16/G16E-GTS, not normal Yaris, Yaris Cross, or Yaris GR Sport.",
+      "Collect VIN or Japan frame number, market, production month, grade, transmission, LSD/front-rear diff package, sub-radiator, mileage, DTCs, and complaint.",
+      "Use Toyota-Tech Europe, Toyota TIS where market-covered, Toyota Manuals AU, Toyota owner manual pages, official recall portals, and dealer EPC before public catalog or forum clues.",
+      "Treat public EPC catalogs such as Nengun, Amayama, MegaZip, PartSouq, and 7zap as cross-checks until Toyota EPC/dealer confirms fitment by VIN/frame."
+    ],
     "fluid_maintenance": [
       "Collect VIN/chassis, market, year, make, model, engine code, transmission code, drivetrain, exact unit, and service operation.",
       "Use docs/agent/fluid_maintenance_playbook.md and recommend_fluid_maintenance_sources before giving oil, fluid, approval, or capacity facts.",
@@ -208,6 +248,7 @@
     "new CRM MCP commands should be reflected in the local catalog before future sessions depend on them",
     "new manager MCP commands or knowledge-intake rules should be reflected in the local memory catalog before future sessions depend on them",
     "Krasnoyarsk service-management work should be routed through the dedicated playbook and source catalog before ad hoc decisions",
-    "The owner's board-cleanup command grants autopilot authority but not permission to delete user-entered CRM evidence"
+    "The owner's board-cleanup command grants autopilot authority but not permission to delete user-entered CRM evidence",
+    "Toyota GR Yaris requests should use the dedicated GXPA16/G16E-GTS playbook before general Toyota or marketplace routing"
   ]
 }

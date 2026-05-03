@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 from .fluid_maintenance import build_fluid_maintenance_plan
+from .knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
 from .service_management import build_service_management_plan
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -127,6 +128,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init", help="Initialize SQLite storage")
     sub.add_parser("seed-rules", help="Seed default manager rules from docs")
+
+    sub.add_parser("knowledge-sync", help="Index the local knowledge map into SQLite")
+
+    knowledge_probe = sub.add_parser(
+        "knowledge-probe",
+        help="Quickly check whether local knowledge exists and return the first source-of-truth route",
+    )
+    knowledge_probe.add_argument("query")
+    knowledge_probe.add_argument("--limit", type=int, default=5)
+
+    knowledge_search = sub.add_parser("knowledge-search", help="Search indexed local knowledge routes and sections")
+    knowledge_search.add_argument("query")
+    knowledge_search.add_argument("--domain", default=None)
+    knowledge_search.add_argument("--limit", type=int, default=10)
+
+    sub.add_parser("knowledge-audit", help="Audit the local knowledge map, route cards, files, and SQLite index")
     return parser
 
 
@@ -140,6 +157,14 @@ def main(argv: list[str] | None = None) -> int:
         _print_json({"ok": True, "db_path": str(store.path), "seed_rules": seed_result})
     elif args.command == "seed-rules":
         _print_json(store.seed_default_rules())
+    elif args.command == "knowledge-sync":
+        _print_json(sync_knowledge_base(store))
+    elif args.command == "knowledge-probe":
+        _print_json(probe_knowledge_base(store, args.query, limit=args.limit))
+    elif args.command == "knowledge-search":
+        _print_json(search_knowledge_base(store, args.query, domain=args.domain, limit=args.limit))
+    elif args.command == "knowledge-audit":
+        _print_json(audit_knowledge_base(store))
     elif args.command == "remember":
         _print_json(
             store.remember(

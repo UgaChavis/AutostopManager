@@ -16,6 +16,8 @@ The agent may independently:
 - read all active board/card/repair-order/cashbox context needed for cleanup
 - update card title, vehicle, description, tags, deadline, indicator, and
   vehicle profile
+- rewrite the top of the public card description as a clean external summary
+  visible on the board
 - move cards between columns when the next operational state is clear
 - archive completed cards when the car is ready/done, payment/order status is
   settled enough, and no visible blocker remains
@@ -85,6 +87,35 @@ Classify every relevant active card into one current blocker:
 - `ready`: work appears complete and pickup/closure is next
 - `archive`: card appears finished and can be archived
 - `unclear`: data conflict; leave a short question in the card
+
+### 1a. Public Card Summary
+
+The public `description` must start with a readable external summary. The board
+preview shows about five lines, so those lines should explain the card at a
+glance.
+
+Use this order when enough data exists:
+
+```text
+<vehicle / plate / VIN if useful>
+Задача: <main job or request>
+Статус: <current operational state>
+Оплата/запчасти: <due total, paid state, ordered/arrived part, or blocker>
+Следующий шаг: <one concrete action>
+```
+
+If the card is incomplete:
+
+```text
+Авто: не указано
+Задача: уточнить обращение клиента
+Статус: не хватает данных
+Нужно: VIN/госномер/телефон/список работ
+Следующий шаг: связаться с клиентом
+```
+
+Preserve useful old description text below the summary under `Подробности:`
+instead of deleting it. Do not put long AI reasoning into the public summary.
 
 ### 2. Vehicle Identity
 
@@ -183,6 +214,8 @@ Before every CRM write:
 - preserve existing user-entered content
 - make the smallest useful update
 - keep card text short
+- when touching `description`, keep the first five visible lines as the
+  external summary: vehicle, task, status, payment/parts, next step
 - avoid multiple noisy notes when one structured update is enough
 - do not rewrite a card just for style if it already reads clearly
 

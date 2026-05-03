@@ -108,6 +108,28 @@
       ]
     },
     {
+      "source_id": "toyota_gr_yaris_jp_2024_maintenance",
+      "name": "Toyota Japan GR Yaris Maintenance Data",
+      "url": "https://manual.toyota.jp/gr_yaris/2408/cv/ja_JP/contents/vhch08se010401.php",
+      "markets": [
+        "JP"
+      ],
+      "models": [
+        "GR Yaris",
+        "GXPA16"
+      ],
+      "best_for": [
+        "engine oil capacity",
+        "G16E-GTS oil spec",
+        "8AT fluid reference capacity",
+        "manual transmission oil",
+        "transfer oil",
+        "rear differential oil",
+        "brake and clutch fluid"
+      ],
+      "notes": "Use as public owner-level preliminary data for 2024+ Japan-market GXPA16 only; verify VIN/frame, year, market, grade, transmission, LSD, and sub-radiator before final repair-order decisions."
+    },
+    {
       "source_id": "ford_owner_manuals",
       "name": "Ford Owner Manuals",
       "url": "https://www.ford.com/support/owner-manuals/",

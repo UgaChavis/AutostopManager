@@ -12,6 +12,10 @@ Use ZZap when the owner wants to:
 - find sellers by city, region, rating, or delivery terms
 - verify whether a part is in stock now or only under order
 
+If the result will be written into a repair order as закупочная цена, also use
+`docs/agent/procurement_pricing_playbook.md` so unit/package totals are
+calculated correctly.
+
 ## Core Rule
 
 ZZap is an OEM-first search system. Treat the exact part number as the best
@@ -123,4 +127,3 @@ Live checks showed:
   family.
 - The official help pages confirm that region, filters, and replacement views
   are the right way to narrow the search.
-

@@ -2,7 +2,7 @@
   "package": "automotive_repair_knowledge_pack",
   "generated_on": "2026-05-03",
   "description": "Legal catalog of authoritative automotive repair knowledge sources for CRM/agent ingestion. Proprietary sources are indexed as acquisition targets, not copied content.",
-  "source_count": 90,
+  "source_count": 94,
   "sources": [
     {
       "id": "bosch_automotive_electrics_electronics",
@@ -538,6 +538,36 @@
       "recommended_ingestion_route": "Subscribe; export/index only content allowed by subscription terms. Use links/citations per document.",
       "notes": "Core OEM source for Toyota/Lexus/Scion.",
       "evidence_url": "https://techinfo.toyota.com/",
+      "last_verified": "2026-05-03",
+      "forum_or_unofficial": false
+    },
+    {
+      "id": "toyota_tech_eu",
+      "name": "Toyota-Tech Europe",
+      "publisher": "Toyota Motor Europe",
+      "category": "oem_service_portal",
+      "source_type": "subscription_portal",
+      "url": "https://www.toyota-tech.eu/",
+      "regions": [
+        "Europe"
+      ],
+      "brands": [
+        "Toyota",
+        "Lexus"
+      ],
+      "data_types": [
+        "repair_manuals",
+        "wiring_diagrams",
+        "technical_service_bulletins",
+        "ecu_calibrations",
+        "maintenance_data"
+      ],
+      "access": "paid_subscription_with_some_free_information",
+      "legal_ingestion_status": "licensed_subscription_required",
+      "priority_score_1_5": 5,
+      "recommended_ingestion_route": "Use as official Toyota Europe route; search by VIN, model code, document type, and bulletin ID. Link/cite only unless licensed.",
+      "notes": "Primary official route for Europe-market GR Yaris repair, TSB, wiring, and calibration information.",
+      "evidence_url": "https://www.toyota-tech.eu/getFamiliar.aspx",
       "last_verified": "2026-05-03",
       "forum_or_unofficial": false
     },
@@ -1970,6 +2000,61 @@
       "forum_or_unofficial": false
     },
     {
+      "id": "toyota_jp_owner_manuals",
+      "name": "Toyota Japan Owner Manuals",
+      "publisher": "Toyota Motor Corporation",
+      "category": "owner_manuals",
+      "source_type": "web_manual",
+      "url": "https://manual.toyota.jp/",
+      "regions": [
+        "Japan"
+      ],
+      "brands": [
+        "Toyota"
+      ],
+      "data_types": [
+        "owners_manuals",
+        "maintenance_data",
+        "fluid_capacities",
+        "owner_level_specs"
+      ],
+      "access": "free_public",
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "priority_score_1_5": 4,
+      "recommended_ingestion_route": "Use for public owner-level maintenance data; store source routes and short durable facts only.",
+      "notes": "Useful for Japan-market Toyota imports including GR Yaris GXPA16.",
+      "evidence_url": "https://manual.toyota.jp/gr_yaris/2408/cv/ja_JP/contents/vhch08se010401.php",
+      "last_verified": "2026-05-03",
+      "forum_or_unofficial": false
+    },
+    {
+      "id": "toyota_jp_recall",
+      "name": "Toyota Japan Recall Information",
+      "publisher": "Toyota Motor Corporation",
+      "category": "recalls",
+      "source_type": "recall_portal",
+      "url": "https://toyota.jp/recall/",
+      "regions": [
+        "Japan"
+      ],
+      "brands": [
+        "Toyota"
+      ],
+      "data_types": [
+        "recalls",
+        "service_campaigns",
+        "frame_number_lookup"
+      ],
+      "access": "free_public",
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "priority_score_1_5": 5,
+      "recommended_ingestion_route": "Use recall pages plus frame-number lookup; verify applicability by exact frame number or dealer.",
+      "notes": "Primary official recall route for Japan-market Toyota frame numbers.",
+      "evidence_url": "https://www.toyota.co.jp/recall-search/dc/search",
+      "last_verified": "2026-05-03",
+      "forum_or_unofficial": false
+    },
+    {
       "id": "volvo_bookstore",
       "name": "Volvo Car Bookstore / TechInfo",
       "publisher": "Volvo Cars",
@@ -2500,6 +2585,34 @@
       "evidence_url": "https://parts.toyota.com/",
       "last_verified": "2026-05-03",
       "forum_or_unofficial": false
+    },
+    {
+      "id": "nengun_toyota_gr_yaris_gxpa16",
+      "name": "Nengun Toyota GR Yaris GXPA16 OEM Catalog Route",
+      "publisher": "Nengun Performance",
+      "category": "parts_catalog",
+      "source_type": "commercial_oem_parts_catalog_cross_check",
+      "url": "https://www.nengun.com/oem/toyota/gr-yaris-rc-gxpa16",
+      "regions": [
+        "Japan",
+        "Global shipping"
+      ],
+      "brands": [
+        "Toyota"
+      ],
+      "data_types": [
+        "parts_catalog",
+        "part_numbers",
+        "fitment_clues"
+      ],
+      "access": "free_browse_commercial_seller",
+      "legal_ingestion_status": "link_only_cross_check",
+      "priority_score_1_5": 3,
+      "recommended_ingestion_route": "Use as public JDM GXPA16 part-number clue; verify final fitment through Toyota EPC/dealer by VIN or frame.",
+      "notes": "Useful public route for GR Yaris GXPA16 JDM catalog browsing, not a final authority.",
+      "evidence_url": "https://www.nengun.com/oem/toyota/gr-yaris-rc-gxpa16",
+      "last_verified": "2026-05-03",
+      "forum_or_unofficial": true
     },
     {
       "id": "iso_26262",

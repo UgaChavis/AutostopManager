@@ -21,6 +21,21 @@
       "rule": "If a new file changes the supported commands, source routing, or source catalog, update the relevant playbook or catalog first and append a manager_journal entry."
     },
     {
+      "id": "knowledge-index-entrypoint",
+      "priority": 22,
+      "rule": "For local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first. If has_knowledge=true, open open_first/source_of_truth before broad file reads; if more detail is needed, use search_knowledge_base inside the returned domain. If docs, catalogs, or skills changed, run sync_knowledge_base and audit_knowledge_base."
+    },
+    {
+      "id": "knowledge-route-card-maintenance",
+      "priority": 22,
+      "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize BMW, Toyota GR Yaris, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
+    },
+    {
+      "id": "model-specific-knowledge-route",
+      "priority": 22,
+      "rule": "When a vehicle/model-specific corpus becomes substantial, store it as a focused Codex skill and add a route in docs/agent/automotive_sources/model_source_overrides.json, docs/agent/knowledge_base_index.md, and docs/agent/knowledge_map.json."
+    },
+    {
       "id": "github-publication-privacy",
       "priority": 23,
       "rule": "When saving or syncing AutostopManager to GitHub, commit code, tests, docs, and source-routing catalogs only. Do not commit data/ runtime artifacts, SQLite databases, CRM snapshots, client contacts, payments, VIN/license snapshots, or repair-order dumps."
@@ -46,9 +61,29 @@
       "rule": "For repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, consult docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts."
     },
     {
+      "id": "bmw-f15-n63-route",
+      "priority": 31,
+      "rule": "For BMW X5 F15 xDrive50i, N63TU/N63T, BDC/gateway/network faults, F15 electrical/electronics, MEVD17.2.8, injector bulletins, misfires, oil consumption, or cooling faults, use C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md and verify VIN-specific facts through BMW ISTA/AIR/ETK or official BMW sources."
+    },
+    {
+      "id": "bmw-general-repair-route",
+      "priority": 31,
+      "rule": "For general BMW repair, diagnostics, BMW fault memory, DTC, body electronics, xDrive, ZF transmission, HV, or BMW fluids when no more specific model skill matches, use search_knowledge_base with domain=\"bmw_repair\" and docs/agent/bmw_repair_playbook.md. Treat the owner-provided BMW repair pack as route/index material; verify final VIN-specific service facts through BMW ISTA/AIR/ETK/AOS/TIS, official BMW owner/recall data, BMW/NHTSA SIBs, or ZF official data."
+    },
+    {
       "id": "fluid-maintenance-workflow",
       "priority": 31,
       "rule": "For oils, operating fluids, fill capacities, and ТО fluid planning, consult docs/agent/fluid_maintenance_playbook.md and use recommend_fluid_maintenance_sources or maintenance-fluids. Collect VIN/chassis, market, year, brand, model, engine code, transmission code, drivetrain, exact unit, and service operation before confirming capacity or specification."
+    },
+    {
+      "id": "toyota-gr-yaris-workflow",
+      "priority": 31,
+      "rule": "For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS work, load docs/agent/toyota_gr_yaris_playbook.md or C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md before answering. Verify VIN or Japan frame number, market, production month, grade, transmission, LSD/diff package, and sub-radiator before final repair, fluid, recall, TSB, or OEM part conclusions."
+    },
+    {
+      "id": "transmission-workflow",
+      "priority": 31,
+      "rule": "For gearbox, clutch, CVT, DCT, AMT, or heavy-duty transmission work, consult docs/agent/transmission_playbook.md first and use recommend_automotive_sources with data_type=\"transmission\" before confirming fluid, adaptation, torque, or repair facts."
     },
     {
       "id": "fluid-capacity-no-invention",
@@ -134,6 +169,11 @@
       "id": "board-cleanup-note-style",
       "priority": 19,
       "rule": "During board cleanup, write very short card notes. Prefer one concise 'AI:' line with a next action, question, OEM/price/source conclusion, payment blocker, or stale-card status. Do not make people read long explanations inside cards."
+    },
+    {
+      "id": "board-cleanup-public-summary",
+      "priority": 19,
+      "rule": "During board cleanup, keep the public card description preview useful. The first five visible lines should be an external summary: vehicle, task, status, payment or parts state, and one next step. Preserve useful old description text below the summary instead of deleting it."
     },
     {
       "id": "phone-shared-memory",

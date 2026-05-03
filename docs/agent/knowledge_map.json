@@ -1,0 +1,746 @@
+{
+  "purpose": "Machine-readable navigation map for AutostopManager knowledge files.",
+  "entrypoint": "docs/agent/knowledge_base_index.md",
+  "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_base_index.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
+  "domains": {
+    "startup_and_identity": {
+      "title": "Manager startup, identity, and operating rules",
+      "use_when": [
+        "starting a manager-agent session",
+        "checking answer style or memory boundaries",
+        "updating command routing"
+      ],
+      "aliases": [
+        "startup",
+        "agent identity",
+        "manager rules",
+        "rules",
+        "инструкции менеджера",
+        "правила агента",
+        "операционный режим"
+      ],
+      "keywords": [
+        "today_context",
+        "memory boundary",
+        "answer style",
+        "routing"
+      ],
+      "questions": [
+        "как должен начинать работу менеджер",
+        "какие правила ответа и памяти действуют",
+        "какой файл открыть первым для инструкций агента"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/autostop_manager_skill.md",
+        "docs/agent/manager_rules.json",
+        "docs/agent/operating_playbook.json"
+      ],
+      "primary_files": [
+        "docs/agent/autostop_manager_skill.md",
+        "docs/agent/manager_rules.json",
+        "docs/agent/operating_playbook.json",
+        "docs/agent/manager_identity.json",
+        "docs/agent/memory_policy.json"
+      ]
+    },
+    "knowledge_intake": {
+      "title": "Knowledge intake, indexing, and source organization",
+      "use_when": [
+        "owner provides files, links, PDFs, catalogs, notes, scans, spreadsheets",
+        "owner asks to save or expand the knowledge base",
+        "source routing or durable instructions need to be updated"
+      ],
+      "aliases": [
+        "knowledge base",
+        "knowledge intake",
+        "kb",
+        "база знаний",
+        "индексация",
+        "добавить документы",
+        "разложить документы",
+        "структурировать базу"
+      ],
+      "keywords": [
+        "knowledge-probe",
+        "knowledge-search",
+        "knowledge-sync",
+        "source routing",
+        "source of truth",
+        "license"
+      ],
+      "questions": [
+        "как добавить новый документ в базу знаний",
+        "как проверить что база знаний проиндексирована",
+        "куда положить новый источник"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/knowledge_intake_playbook.md",
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_map.json"
+      ],
+      "primary_files": [
+        "docs/agent/knowledge_intake_playbook.md",
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_map.json",
+        "docs/agent/automotive_sources/ingestion_tasks.jsonl"
+      ],
+      "do_not_store": [
+        "raw manuals",
+        "full spreadsheets",
+        "copied licensed database records",
+        "temporary search results",
+        "CRM snapshots"
+      ]
+    },
+    "automotive_repair": {
+      "title": "General automotive repair source routing",
+      "use_when": [
+        "diagnostics",
+        "TSBs and recalls",
+        "wiring and electrical",
+        "repair procedures",
+        "torque, fluids, labor, ADAS, SRS, HV, immobilizer, programming"
+      ],
+      "aliases": [
+        "auto repair",
+        "diagnostics",
+        "repair manuals",
+        "service information",
+        "диагностика",
+        "ремонт",
+        "ошибка",
+        "ошибки",
+        "электрика",
+        "схемы",
+        "TSB",
+        "recall"
+      ],
+      "keywords": [
+        "DTC",
+        "fault code",
+        "wiring",
+        "torque",
+        "labor",
+        "ADAS",
+        "SRS",
+        "HV",
+        "programming"
+      ],
+      "questions": [
+        "где искать техническую информацию по ремонту",
+        "какой источник использовать для ошибки или схемы",
+        "как проверить TSB recall wiring torque fluids"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/automotive_repair_source_playbook.md",
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
+        "docs/agent/automotive_sources/brand_source_map.json",
+        "docs/agent/automotive_sources/data_type_source_map.json"
+      ],
+      "primary_files": [
+        "docs/agent/automotive_repair_source_playbook.md",
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
+        "docs/agent/automotive_sources/brand_source_map.json",
+        "docs/agent/automotive_sources/data_type_source_map.json",
+        "docs/agent/automotive_sources/model_source_overrides.json",
+        "docs/agent/automotive_sources/open_dataset_endpoints.json",
+        "docs/agent/bmw_repair_playbook.md",
+        "docs/agent/toyota_gr_yaris_playbook.md"
+      ],
+      "required_context": [
+        "VIN or chassis",
+        "market",
+        "year/make/model",
+        "engine code",
+        "transmission code",
+        "mileage",
+        "complaint",
+        "scan results"
+      ]
+    },
+    "bmw_repair": {
+      "title": "BMW general repair, diagnostics, and system routing",
+      "use_when": [
+        "BMW general repair",
+        "BMW diagnostics",
+        "BMW DTC and fault memory",
+        "BMW ISTA AIR TIS source routing",
+        "BMW control units and body electronics",
+        "BMW xDrive and ZF transmission",
+        "BMW fluids and maintenance",
+        "BMW hybrid electric high voltage"
+      ],
+      "aliases": [
+        "BMW",
+        "БМВ",
+        "ISTA",
+        "AIR",
+        "TIS",
+        "AOS",
+        "fault memory",
+        "DTC",
+        "xDrive",
+        "ZF",
+        "IBS",
+        "IHKA",
+        "body electronics",
+        "раздатка",
+        "пинки",
+        "электрика BMW",
+        "ошибки BMW"
+      ],
+      "keywords": [
+        "diagnostics architecture",
+        "control units",
+        "fault memory",
+        "driveline",
+        "transmission",
+        "chassis",
+        "brakes",
+        "steering",
+        "Longlife",
+        "high voltage"
+      ],
+      "questions": [
+        "есть ли локальная информация по ремонту BMW",
+        "где искать ошибку BMW fault memory",
+        "где смотреть xDrive ZF IHKA IBS BMW",
+        "какой BMW документ открыть первым"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/bmw_repair_playbook.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json"
+      ],
+      "primary_files": [
+        "docs/agent/bmw_repair_playbook.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_01_diagnostics_architecture_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_02_fault_codes_dtc_catalog_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_03_engines_common_service_topics_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_04_transmission_xdrive_driveline_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_05_chassis_brakes_steering_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_06_body_electrical_networks_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_07_hybrid_electric_high_voltage_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_08_service_fluids_maintenance_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_chassis_codes.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_control_units_glossary.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_engine_families.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_fault_memory_public_examples.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_fluids_specification_logic.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_glossary_abbreviations.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_symptom_diagnostic_index.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_transmission_families.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/generic_obd2_dtc_high_value.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/public_sources_bmw_zf_nhtsa.jsonl"
+      ],
+      "required_context": [
+        "VIN or chassis",
+        "market",
+        "year/model/chassis code",
+        "engine code",
+        "transmission code",
+        "mileage",
+        "complaint",
+        "BMW fault memory with module names"
+      ]
+    },
+    "toyota_gr_yaris": {
+      "title": "Toyota GR Yaris model-specific repair route",
+      "use_when": [
+        "Toyota GR Yaris",
+        "Yaris GR",
+        "GRMN Yaris",
+        "GXPA16",
+        "G16E-GTS",
+        "GR-FOUR",
+        "6MT EA67F",
+        "8AT UC80F",
+        "GR Yaris fluids, recalls, TSBs, OEM parts, diagnostics"
+      ],
+      "aliases": [
+        "Toyota GR Yaris",
+        "Yaris GR",
+        "GR Yaris",
+        "Тойота Ярис GR",
+        "GRMN Yaris",
+        "GXPA16",
+        "G16E-GTS",
+        "G16E",
+        "GR-FOUR",
+        "EA67F",
+        "UC80F",
+        "сцепление GR Yaris",
+        "clutch GR Yaris"
+      ],
+      "keywords": [
+        "clutch",
+        "сцепление",
+        "AWD",
+        "LSD",
+        "differential",
+        "transfer",
+        "manual transmission",
+        "8AT",
+        "fluids",
+        "recalls",
+        "TSB",
+        "OEM parts"
+      ],
+      "questions": [
+        "какое сцепление искать для Toyota GR Yaris",
+        "есть ли локальная база по GR Yaris",
+        "где смотреть G16E-GTS GXPA16 GR-FOUR",
+        "какой документ открыть для Toyota Yaris GR"
+      ],
+      "skill_path": "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
+      "source_of_truth_files": [
+        "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
+        "docs/agent/toyota_gr_yaris_playbook.md",
+        "C:/Users/User/.codex/skills/toyota-gr-yaris/references/source-routes.md"
+      ],
+      "primary_files": [
+        "docs/agent/toyota_gr_yaris_playbook.md",
+        "C:/Users/User/.codex/skills/toyota-gr-yaris/references/source-routes.md",
+        "docs/agent/automotive_sources/model_source_overrides.json",
+        "docs/agent/automotive_sources/fluid_maintenance_sources.json"
+      ],
+      "required_context": [
+        "VIN or Japan frame number",
+        "market",
+        "production month",
+        "grade",
+        "engine code",
+        "transmission code",
+        "LSD/front-rear diff package",
+        "sub-radiator where relevant",
+        "mileage, DTCs, complaint"
+      ]
+    },
+    "bmw_f15_n63": {
+      "title": "BMW X5 F15 xDrive50i N63TU focused repair route",
+      "use_when": [
+        "BMW X5 F15 xDrive50i",
+        "N63TU or N63T",
+        "BDC, gateway, CAN, FlexRay, DME, MEVD17.2.8",
+        "F15 electrical/electronics, misfire, injectors, coolant, oil consumption"
+      ],
+      "aliases": [
+        "BMW X5 F15",
+        "X5 F15",
+        "F15",
+        "E15",
+        "BMW E15",
+        "N63",
+        "N63TU",
+        "N63T",
+        "xDrive50i",
+        "MEVD17.2.8",
+        "BDC",
+        "FlexRay",
+        "электрика F15",
+        "электроника F15",
+        "мотор N63"
+      ],
+      "keywords": [
+        "DME",
+        "gateway",
+        "CAN",
+        "electrical",
+        "electronics",
+        "misfire",
+        "injectors",
+        "coolant",
+        "oil consumption",
+        "drivetrain malfunction"
+      ],
+      "questions": [
+        "есть ли локальная информация по BMW X5 F15 N63",
+        "где смотреть электрику BMW F15",
+        "что открыть для N63TU misfire injector oil consumption",
+        "куда идти при ошибках BDC MEVD FlexRay"
+      ],
+      "skill_path": "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
+      "source_of_truth_files": [
+        "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/source-index.md",
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/electrical-electronics.md"
+      ],
+      "primary_files": [
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/source-index.md",
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/vehicle-basics.md",
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/electrical-electronics.md",
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/n63tu-powertrain.md",
+        "C:/Users/User/.codex/skills/bmw-f15-n63/references/faults-tsbs.md"
+      ]
+    },
+    "fluids": {
+      "title": "Oils, operating fluids, fill capacities, and maintenance quantities",
+      "use_when": [
+        "oil",
+        "operating fluids",
+        "fill capacities",
+        "ТО service quantities"
+      ],
+      "aliases": [
+        "fluids",
+        "fluid maintenance",
+        "oil",
+        "engine oil",
+        "ATF",
+        "CVT fluid",
+        "DCT fluid",
+        "gear oil",
+        "coolant",
+        "brake fluid",
+        "масло",
+        "моторное масло",
+        "жидкости",
+        "заправочные объемы",
+        "ТО"
+      ],
+      "keywords": [
+        "capacity",
+        "fill",
+        "approval",
+        "viscosity",
+        "drain refill",
+        "dry fill",
+        "oil filter",
+        "lubricant selector"
+      ],
+      "questions": [
+        "какое масло заливать",
+        "какой заправочный объем",
+        "какая спецификация жидкости",
+        "как проверить fluid capacity"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/fluid_maintenance_playbook.md",
+        "docs/agent/automotive_sources/fluid_maintenance_sources.json"
+      ],
+      "primary_files": [
+        "docs/agent/fluid_maintenance_playbook.md",
+        "docs/agent/automotive_sources/fluid_maintenance_sources.json"
+      ]
+    },
+    "transmission": {
+      "title": "Transmission, gearbox, clutch, and adaptation route",
+      "use_when": [
+        "automatic transmission",
+        "CVT",
+        "DCT",
+        "AMT",
+        "manual gearbox",
+        "clutch adaptation",
+        "transmission-fluid service"
+      ],
+      "aliases": [
+        "transmission",
+        "gearbox",
+        "automatic transmission",
+        "manual gearbox",
+        "CVT",
+        "DCT",
+        "AMT",
+        "clutch",
+        "коробка",
+        "АКПП",
+        "МКПП",
+        "вариатор",
+        "сцепление",
+        "адаптация сцепления"
+      ],
+      "keywords": [
+        "fluid service",
+        "adaptation",
+        "torque converter",
+        "mechatronics",
+        "shift quality",
+        "drain refill"
+      ],
+      "questions": [
+        "как диагностировать коробку",
+        "какое масло в трансмиссию",
+        "как выбрать сцепление или проверить адаптацию",
+        "какой источник открыть по АКПП CVT DCT"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/transmission_playbook.md",
+        "docs/agent/automotive_sources/data_type_source_map.json"
+      ],
+      "primary_files": [
+        "docs/agent/transmission_playbook.md",
+        "docs/agent/automotive_sources/data_type_source_map.json"
+      ]
+    },
+    "vehicle_identity_and_oem": {
+      "title": "Vehicle identity, VIN/frame decode, and OEM part route",
+      "use_when": [
+        "VIN decode",
+        "Japanese chassis/frame number",
+        "OEM part number lookup",
+        "market-specific vehicle identity"
+      ],
+      "aliases": [
+        "VIN",
+        "frame number",
+        "chassis number",
+        "OEM",
+        "EPC",
+        "catalog",
+        "vehicle identity",
+        "вин",
+        "номер кузова",
+        "номер рамы",
+        "кузов",
+        "каталог",
+        "оригинальный номер"
+      ],
+      "keywords": [
+        "vPIC",
+        "Japan frame",
+        "market",
+        "trim",
+        "option",
+        "part number",
+        "fitment"
+      ],
+      "questions": [
+        "как расшифровать VIN или номер кузова",
+        "где искать оригинальный номер детали",
+        "как определить рынок и комплектацию"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/vehicle_identity_playbook.md",
+        "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/vin_oem_sources.json"
+      ],
+      "primary_files": [
+        "docs/agent/vehicle_identity_playbook.md",
+        "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/vin_oem_sources.json"
+      ]
+    },
+    "parts_sourcing": {
+      "title": "Parts sourcing, Drom, ZZap, Avito, and supplier routing",
+      "use_when": [
+        "Drom",
+        "ZZap",
+        "Avito",
+        "supplier search",
+        "replacement comparison",
+        "procurement pricing",
+        "Krasnoyarsk availability"
+      ],
+      "aliases": [
+        "parts sourcing",
+        "Drom",
+        "ZZap",
+        "Avito",
+        "supplier",
+        "replacement",
+        "selected part",
+        "price basis",
+        "OEM reference",
+        "supplier API",
+        "parts API",
+        "запчасти",
+        "поставщик",
+        "закупка",
+        "закупочная цена",
+        "наличие",
+        "цена материалов",
+        "стоимость запчастей",
+        "Красноярск",
+        "Росско",
+        "Роска",
+        "Роско",
+        "ROSSKO",
+        "Armtek",
+        "Autopiter",
+        "AutoEuro",
+        "AutoSputnik",
+        "APEC",
+        "AUTOPOISK",
+        "дром",
+        "ззап",
+        "авито",
+        "аналог",
+        "замена",
+        "выбранная деталь",
+        "выбранный артикул",
+        "оригинал или заменитель",
+        "цена непонятна"
+      ],
+      "keywords": [
+        "OEM number",
+        "fitment",
+        "Krasnoyarsk",
+        "used parts",
+        "new parts",
+        "seller",
+        "price comparison",
+        "procurement price",
+        "local availability",
+        "package price",
+        "unit price",
+        "repair order materials",
+        "selected part",
+        "OEM reference",
+        "price basis",
+        "supplier API",
+        "price-list export",
+        "ROSSKO",
+        "Armtek",
+        "Autopiter",
+        "AutoEuro",
+        "AutoSputnik",
+        "APEC",
+        "AUTOPOISK"
+      ],
+      "questions": [
+        "где искать запчасть",
+        "как сравнить цену Drom ZZap Avito",
+        "как искать аналог по OEM номеру",
+        "какой источник открыть для поставщика",
+        "как определить закупочную цену в Красноярске",
+        "где проверить стоимость запчастей через Росско или API",
+        "какие поставщики и API использовать для закупки",
+        "как подключать прайс-листы поставщиков",
+        "как не перепутать цену литра упаковки и строки ЗН",
+        "как проставить материалы в заказ-наряде по закупке",
+        "как отделить оригинальный номер от выбранного заменителя",
+        "как понять за какую деталь указана цена в заказ-наряде",
+        "как оформить ЗН чтобы было ясно что именно покупаем"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json",
+        "docs/agent/parts_search_playbook.md",
+        "docs/agent/zzap_search_playbook.md",
+        "docs/agent/service_management_sources.json"
+      ],
+      "primary_files": [
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json",
+        "docs/agent/parts_search_playbook.md",
+        "docs/agent/zzap_search_playbook.md",
+        "docs/agent/service_management_sources.json"
+      ]
+    },
+    "service_management": {
+      "title": "Krasnoyarsk workshop service management route",
+      "use_when": [
+        "daily CRM control",
+        "Krasnoyarsk workshop decisions",
+        "procurement blockers",
+        "staff load",
+        "customer flow",
+        "finance control",
+        "procurement pricing"
+      ],
+      "aliases": [
+        "service management",
+        "workshop management",
+        "AutoStop CRM",
+        "Krasnoyarsk",
+        "Красноярск",
+        "сервис",
+        "управление сервисом",
+        "приберись",
+        "доска",
+        "загрузка мастеров",
+        "финансы",
+        "клиенты",
+        "закупочная цена",
+        "цена материалов",
+        "наличие Красноярск"
+      ],
+      "keywords": [
+        "procurement",
+        "staff load",
+        "customer flow",
+        "cashbox",
+        "repair order",
+        "board cleanup",
+        "blocked cards",
+        "materials total",
+        "local supplier"
+      ],
+      "questions": [
+        "как управлять сервисом сегодня",
+        "что делать с закупкой или блокером",
+        "как прибраться на доске",
+        "где смотреть финансы и загрузку",
+        "как проверить закупочную стоимость материалов"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json",
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
+        "docs/agent/service_management_sources.json",
+        "docs/agent/board_cleanup_autopilot_playbook.md"
+      ],
+      "primary_files": [
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json",
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
+        "docs/agent/service_management_sources.json",
+        "docs/agent/service_patterns.json",
+        "docs/agent/board_cleanup_autopilot_playbook.md",
+        "docs/agent/phone_flow.json"
+      ]
+    },
+    "deployment": {
+      "title": "Local MCP startup, server deployment, and private data boundary",
+      "use_when": [
+        "local MCP startup",
+        "server deployment",
+        "publishing",
+        "private data boundary"
+      ],
+      "aliases": [
+        "deployment",
+        "MCP startup",
+        "server",
+        "publish",
+        "GitHub",
+        "запуск MCP",
+        "деплой",
+        "публикация",
+        "приватные данные"
+      ],
+      "keywords": [
+        "local server",
+        "environment",
+        "privacy",
+        "runtime artifacts",
+        "SQLite"
+      ],
+      "questions": [
+        "как запустить MCP локально",
+        "что можно публиковать в GitHub",
+        "какие данные нельзя коммитить"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/deployment_runbook.md",
+        "README.md"
+      ],
+      "primary_files": [
+        "docs/agent/deployment_runbook.md",
+        "README.md"
+      ]
+    }
+  },
+  "search_patterns": {
+    "bmw_repair": "rg -n \"BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
+    "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent C:/Users/User/.codex/skills/bmw-f15-n63",
+    "toyota_gr_yaris": "rg -n \"GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F\" docs/agent C:/Users/User/.codex/skills/toyota-gr-yaris",
+    "vin_oem": "rg -n \"VIN|OEM|frame|chassis|кузов|каталог\" docs/agent",
+    "fluids": "rg -n \"fluid|oil|capacity|масло|жидк|заправ\" docs/agent",
+    "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",
+    "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent"
+  }
+}

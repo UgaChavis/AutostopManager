@@ -504,6 +504,15 @@
       "url": "https://techinfo.toyota.com/"
     },
     {
+      "source_id": "toyota_tech_eu",
+      "name": "Toyota-Tech Europe",
+      "category": "oem_service_portal",
+      "access": "paid_subscription_with_some_free_information",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "licensed_subscription_required",
+      "url": "https://www.toyota-tech.eu/"
+    },
+    {
       "source_id": "vw_erwin_na",
       "name": "Volkswagen erWin North America",
       "category": "oem_service_portal",
@@ -973,6 +982,15 @@
       "priority_score_1_5": 5,
       "legal_ingestion_status": "open_download_allowed",
       "url": "https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip"
+    },
+    {
+      "source_id": "toyota_jp_recall",
+      "name": "Toyota Japan Recall Information",
+      "category": "recalls",
+      "access": "free_public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://toyota.jp/recall/"
     },
     {
       "source_id": "mitsubishi_techinfo",
@@ -2257,6 +2275,15 @@
       "priority_score_1_5": 5,
       "legal_ingestion_status": "commercial_license_required",
       "url": "https://www.motor.com/products-services/software-applications/motor-truspeed-repair/"
+    },
+    {
+      "source_id": "toyota_gr_yaris_jp_2024_maintenance",
+      "name": "Toyota Japan GR Yaris Maintenance Data",
+      "category": "owner_manuals",
+      "access": "free_public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://manual.toyota.jp/gr_yaris/2408/cv/ja_JP/contents/vhch08se010401.php"
     }
   ],
   "component_locations": [
@@ -2357,6 +2384,15 @@
       "priority_score_1_5": 2,
       "legal_ingestion_status": "official_free_browse_link_only",
       "url": "https://parts.toyota.com/"
+    },
+    {
+      "source_id": "nengun_toyota_gr_yaris_gxpa16",
+      "name": "Nengun Toyota GR Yaris GXPA16 OEM catalog route",
+      "category": "parts_catalog",
+      "access": "free_browse_commercial_seller",
+      "priority_score_1_5": 3,
+      "legal_ingestion_status": "link_only_cross_check",
+      "url": "https://www.nengun.com/oem/toyota/gr-yaris-rc-gxpa16"
     }
   ],
   "repair_data": [
@@ -2870,6 +2906,276 @@
     }
   ],
   "transmission": [
+    {
+      "source_id": "ZF_OIL_CHANGE_PC",
+      "name": "How to Change the Transmission Oil on a Passenger Car",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://aftermarket.zf.com/us/aftermarket-portal/for-workshops/useful-tips/transmission/transmission-oil-change-for-passenger-cars/"
+    },
+    {
+      "source_id": "ZF_8HP_OIL_CHANGE_KIT",
+      "name": "Service Information: Oil change kit for ZF 8HP automatic transmission",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://aftermarket.zf.com/app/controller/ti/download/Binary/c6f6d6c4-a254-11ef-a30a-00505690da53.pdf"
+    },
+    {
+      "source_id": "ZF_5HP_6HP_OIL_CHANGE_KIT",
+      "name": "Service Information: Oil change kit for ZF 5HP/6HP automatic transmission",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://aftermarket.zf.com/app/controller/ti/download/Binary/5a709c41-c80e-11ed-a2f4-00505690da53.pdf"
+    },
+    {
+      "source_id": "ZF_TE_ML_11",
+      "name": "List of lubricants TE-ML 11",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://aftermarket.zf.com/lubricants/en/te-ml_11-en.pdf"
+    },
+    {
+      "source_id": "ZF_LIFEGUARDFLUID_9",
+      "name": "ZF LifeguardFluid 9 data sheet",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://aftermarket.zf.com/lubricants-datasheets/lifeguardfluid-9/pdb_zf-lgf9_20191025_eng.pdf"
+    },
+    {
+      "source_id": "ZF_POWERLINE_MAINTENANCE",
+      "name": "PowerLine Maintenance Guide",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.zf.com/products/media/automotive/cv/literature_downloads_wna/truck_solutions/PowerLine_Maintenance_Guide.pdf"
+    },
+    {
+      "source_id": "EATON_TRSM0996",
+      "name": "Eaton Fuller heavy duty transmission service manual TRSM0996",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/vehicle-transmissions/service-manuals/eaton-trsm-0996-transmission-service-manual-en-us.pdf"
+    },
+    {
+      "source_id": "EATON_TRSM2400",
+      "name": "Eaton Fuller HD FR/FRO Transmissions Service Manual TRSM2400",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/vehicle-transmissions/fr-series-manual/eaton-fuller-hd-fr-fro-transmissions-service-manual-trsm2400-en-us.pdf"
+    },
+    {
+      "source_id": "EATON_TRSM0110",
+      "name": "Fuller Mid-Range Transmissions TRSM0110",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/vehicle-transmissions/medium-duty-manual/fuller-5-%26-6-speed-transmissions/TRSM0110_0711.pdf"
+    },
+    {
+      "source_id": "EATON_TRSM0130",
+      "name": "Fuller Mid-Range Transmissions TRSM0130",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/vehicle-transmissions/service-manuals/eaton-fuller-trsm-0130-mid-range-transmission-service-manual-en-us.pdf"
+    },
+    {
+      "source_id": "EATON_GEN3_TROUBLESHOOTING",
+      "name": "Eaton Gen III Automated Transmissions Troubleshooting Guide TRTS0930",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/vehicle-transmissions/troubleshooting-guides/eaton-gen-3-autoshift-ultrashift-automated-transmission-troubleshooting-guide-trts-0930-en-us.pdf"
+    },
+    {
+      "source_id": "EATON_LUBRICATION_TCMT0021",
+      "name": "Eaton Lubrication Manual TCMT0021",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/lubricants/eaton-lubricants-product-specification-manual-tcmt0021.pdf"
+    },
+    {
+      "source_id": "EATON_SERVICERANGER4",
+      "name": "ServiceRanger 4 User Guide TCMT0072",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/service-tools/serviceranger4/eaton-serviceranger-4-user-guide-tcmt0072-en-us.pdf"
+    },
+    {
+      "source_id": "EATON_ADVANTAGE_CLUTCH_CAL",
+      "name": "Advantage Automated Clutch Calibration User Guide",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.eaton.com/content/dam/eaton/products/transmissions/service-tools/serviceranger4/advantage-automated-clutch-calibration-user-guide-srsl0700.pdf"
+    },
+    {
+      "source_id": "ALLISON_SERVICE_TOOLS_INFO",
+      "name": "Service Tools + Information",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.allisontransmission.com/aftermarket-and-channel/parts-and-service/service-tools--information"
+    },
+    {
+      "source_id": "ALLISON_PUBLICATIONS",
+      "name": "Publications",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.allisontransmission.com/aftermarket-and-channel/parts-and-service/service-tools--information/publications"
+    },
+    {
+      "source_id": "ALLISON_TRAINING",
+      "name": "Training",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.allisontransmission.com/aftermarket-and-channel/parts-and-service/service-tools--information/training"
+    },
+    {
+      "source_id": "ALLISON_DIAGNOSTICS_TOOLS",
+      "name": "Electronic Diagnostics + Essential Tools",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.allisontransmission.com/aftermarket-and-channel/parts-and-service/service-tools--information/electronic-diagnostics--service-tools"
+    },
+    {
+      "source_id": "AISIN_AT_CVT_MT",
+      "name": "AT, CVT, MT product page",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.aisin.com/en/product/mobility/ats-cvts-mts/"
+    },
+    {
+      "source_id": "AISIN_PRODUCT_CATALOG",
+      "name": "Products and Services Lineup",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.aisin.com/en/pdf/catalog_product.pdf"
+    },
+    {
+      "source_id": "JATCO_PRODUCT_INFO",
+      "name": "Product Information",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.jatco.co.jp/english/products/"
+    },
+    {
+      "source_id": "JATCO_CVT_AT",
+      "name": "CVT/AT product lineup",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.jatco.co.jp/english/products/cvtat/"
+    },
+    {
+      "source_id": "JATCO_PRODUCT_PROFILE",
+      "name": "JATCO Product Profile",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.jatco.co.jp/wp-jatco/wp-content/themes/JATCO/assets/document/jatco_products_e.pdf"
+    },
+    {
+      "source_id": "JATCO_TECH_REVIEW_2020",
+      "name": "JATCO Technical Review 2020",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.jatco.co.jp/wp-jatco/wp-content/themes/JATCO/assets/document/review/english/2020/JTR20_EN.pdf"
+    },
+    {
+      "source_id": "VALEO_TRANS_SYSTEMS_828065",
+      "name": "Transmission Systems - 828065",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.valeoservice.com/en-com/techassist/technical-library/technical-documents/transmission-systems-828065"
+    },
+    {
+      "source_id": "VALEO_DDC_CALIBRATION_855101",
+      "name": "Valeo Dual Dry Clutch - Actuator Calibration - 855101",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.valeoservice.com/en-com/techassist/technical-library/technical-documents/valeo-dual-dry-clutch-actuator-calibration-855101"
+    },
+    {
+      "source_id": "VALEO_DDC_ASSEMBLY",
+      "name": "Removing and Installing DDC Assembly - DDCT-01 - DDCT-02",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.valeoservice.com/en-com/techassist/technical-library/technical-documents/removing-and-installing-ddc-assembly-and-transmission-ddct-01-ddct-02"
+    },
+    {
+      "source_id": "VALEO_CLUTCH_HYDRAULICS",
+      "name": "Replacement of Clutch Hydraulic Components",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.valeoservice.com/en-com/techassist/technical-library/technical-documents/replacement-clutch-hydraulic-components"
+    },
+    {
+      "source_id": "SCHAEFFLER_DOUBLE_CLUTCH_PAPER",
+      "name": "Double clutch - Wet or dry, that is the question",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.schaeffler.com/remotemedien/media/_shared_media/08_media_library/01_publications/schaeffler_2/symposia_1/downloads_11/09_Double_clutch.pdf"
+    },
+    {
+      "source_id": "BORGWARNER_DCT_AFTERMARKET",
+      "name": "BorgWarner aftermarket dual-clutch product family release",
+      "category": "oem_service_portal",
+      "access": "public",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "url": "https://www.borgwarner.com/docs/default-source/press-release-downloads/borgwarner-presents-new-products-for-the-aftermarket-at-automechanika-frankfurt-2022.pdf?sfvrsn=dde2e93d_4"
+    },
     {
       "source_id": "epa_fueleconomy",
       "name": "FuelEconomy.gov Vehicles CSV",

@@ -21,6 +21,10 @@ before starting marketplace search. If the owner wants original catalog
 numbers rather than marketplace candidates, route through
 `docs/agent/vin_oem_lookup_playbook.md` first.
 
+If the owner asks for закупочная цена, local availability, repair-order
+materials pricing, or cost correction, load
+`docs/agent/procurement_pricing_playbook.md` before writing prices.
+
 ## Information To Collect First
 
 Before searching, extract:

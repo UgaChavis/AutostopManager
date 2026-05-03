@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .fluid_maintenance import build_fluid_maintenance_plan
+from .knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
 from .service_management import build_service_management_plan
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -73,6 +74,53 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         return memory.journal(event, source=source, tags=tags)
+
+    @server.tool(
+        name="sync_knowledge_base",
+        description=(
+            "Index docs/agent/knowledge_map.json, routed playbooks, source catalogs, and model-specific skills into SQLite "
+            "so the manager can navigate local knowledge without reading every file."
+        ),
+    )
+    def sync_knowledge_base_tool() -> dict[str, Any]:
+        return sync_knowledge_base(memory)
+
+    @server.tool(
+        name="probe_knowledge_base",
+        description=(
+            "Cheaply check whether the local knowledge base has relevant knowledge for a vehicle, brand, model, system, or task. "
+            "Use this before broad search or full document reads; if has_knowledge is true, open the returned source_of_truth/open_first route first."
+        ),
+    )
+    def probe_knowledge_base_tool(
+        query: str,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        return probe_knowledge_base(memory, query, limit=limit)
+
+    @server.tool(
+        name="search_knowledge_base",
+        description=(
+            "Search the indexed AutostopManager knowledge base by query and optional domain. "
+            "Use before broad file reads for diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge."
+        ),
+    )
+    def search_knowledge_base_tool(
+        query: str,
+        domain: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return search_knowledge_base(memory, query, domain=domain, limit=limit)
+
+    @server.tool(
+        name="audit_knowledge_base",
+        description=(
+            "Audit docs/agent/knowledge_map.json, compact route cards, mapped source files, and SQLite index counts. "
+            "Use after knowledge intake or when local knowledge routing looks stale."
+        ),
+    )
+    def audit_knowledge_base_tool() -> dict[str, Any]:
+        return audit_knowledge_base(memory)
 
     @server.tool(
         name="lookup_original_parts",

@@ -60,3 +60,20 @@ def test_cli_parser_has_core_commands():
     assert args.command == "service-plan"
     assert args.area == "parts"
     assert args.part_number == "90311-89014"
+
+    args = parser.parse_args(["knowledge-sync"])
+    assert args.command == "knowledge-sync"
+
+    args = parser.parse_args(["knowledge-search", "BMW F15 N63", "--domain", "bmw_f15_n63", "--limit", "5"])
+    assert args.command == "knowledge-search"
+    assert args.query == "BMW F15 N63"
+    assert args.domain == "bmw_f15_n63"
+    assert args.limit == 5
+
+    args = parser.parse_args(["knowledge-probe", "Toyota Yaris GR clutch", "--limit", "3"])
+    assert args.command == "knowledge-probe"
+    assert args.query == "Toyota Yaris GR clutch"
+    assert args.limit == 3
+
+    args = parser.parse_args(["knowledge-audit"])
+    assert args.command == "knowledge-audit"

@@ -21,6 +21,16 @@ maintenance interval, or any fill capacity.
 6. If source-backed data is unavailable, say:
    `Требуется проверка по OEM-сервисной информации для конкретного VIN.`
 
+For AT, CVT, DCT, AMT, and heavy-duty gearbox fluids, also consult
+`docs/agent/transmission_playbook.md` before confirming the exact fluid,
+capacity, or level-check procedure.
+
+For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS, also consult
+`docs/agent/toyota_gr_yaris_playbook.md`. The Toyota Japan public owner manual
+has useful preliminary capacities for 2024+ Japan-market GXPA16, but the final
+answer still needs VIN/frame, market, production date, transmission, LSD,
+sub-radiator, and grade verification.
+
 ## Required Distinctions
 
 Do not collapse these values into one number:

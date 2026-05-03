@@ -6,40 +6,60 @@ and as the working layer for Gmail inbox triage.
 ## Startup Routine
 
 1. Read manager memory with `today_context`.
-2. If the user asks about CRM state, use the existing AutoStop CRM MCP connector.
-3. If the user asks about email or inbox state, use the connected Gmail MCP
+2. If the user asks to search, expand, structure, or use the local knowledge
+   base, use `probe_knowledge_base` first. If `has_knowledge=true`, open
+   `open_first` / `source_of_truth`, then use `search_knowledge_base` inside
+   the returned domain only when more detail is needed. If the index may be
+   stale after file changes, run `sync_knowledge_base`, then probe again.
+3. If the user asks about CRM state, use the existing AutoStop CRM MCP connector.
+4. If the user asks about email or inbox state, use the connected Gmail MCP
    tools first.
-4. If CRM tool availability looks stale, check `get_connector_identity` or
+5. If CRM tool availability looks stale, check `get_connector_identity` or
    `get_runtime_status` before assuming the connector is broken.
-5. Start CRM reads with `bootstrap_context`, `get_board_context`, or `review_board`.
-6. Use focused CRM reads before heavy exports.
-7. If the owner says `Приберись`, `прибери доску`, `обслужи доску`,
+6. Start CRM reads with `bootstrap_context`, `get_board_context`, or `review_board`.
+7. Use focused CRM reads before heavy exports.
+8. If the owner says `Приберись`, `прибери доску`, `обслужи доску`,
    `актуализируй доску`, or asks for a routine board cleanup, follow
    `docs/agent/board_cleanup_autopilot_playbook.md`. Treat this as owner
    permission for full board-management autopilot with data-preservation rules.
-8. If the task involves vehicle identification or VIN/chassis decoding, follow
+9. If the task involves vehicle identification or VIN/chassis decoding, follow
    `docs/agent/vehicle_identity_playbook.md` first, then
    `docs/agent/vin_oem_lookup_playbook.md` for OEM routing.
-9. If the task involves oils, operating fluids, fill capacities, maintenance
+10. If the task involves oils, operating fluids, fill capacities, maintenance
    service quantities, or ТО fluid planning, follow
    `docs/agent/fluid_maintenance_playbook.md` and use
    `recommend_fluid_maintenance_sources` before giving any capacity/spec.
-10. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
+11. If the task involves gearbox or transmission diagnosis, clutch
+   adaptation, or transmission-fluid service, follow
+   `docs/agent/transmission_playbook.md` first.
+12. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
+   GR-FOUR, GRMN Yaris, 6MT EA67F, or 8AT UC80F, follow
+   `docs/agent/toyota_gr_yaris_playbook.md` or the local skill at
+   `C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md` before answering.
+13. If the task involves general BMW repair, diagnostics, BMW fault memory,
+    xDrive, ZF transmission, BMW body electronics, BMW HV, or BMW fluids and no
+    more specific model skill already matches, search domain `bmw_repair` and
+    use `docs/agent/bmw_repair_playbook.md`.
+14. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
    wiring, fluids, torque specs, labor time, ADAS, SRS, HV, or programming,
    follow `docs/agent/automotive_repair_source_playbook.md` and use
    `docs/agent/automotive_sources/` for source routing before giving a
    technical fact.
-11. If the owner provides new files or asks to expand the knowledge base,
+15. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
+    F15 electrical/electronics, injectors, drivetrain malfunction, misfires,
+    oil consumption, or cooling, use the local skill at
+    `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md` before answering.
+16. If the owner provides new files or asks to expand the knowledge base,
     follow `docs/agent/knowledge_intake_playbook.md`, classify the source, and
     store only durable conclusions in memory.
-12. If the task involves workshop management in Krasnoyarsk, parts procurement
-   blockers, staff load, customer flow, finance control, or daily CRM control,
-   follow `docs/agent/krasnoyarsk_service_management_playbook.md` and use
-   `recommend_service_management_actions`.
-13. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
-   improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
-   price comparison and replacement checks.
-14. Write only durable non-CRM context into AutostopManager memory.
+17. If the task involves workshop management in Krasnoyarsk, parts procurement
+    blockers, staff load, customer flow, finance control, or daily CRM control,
+    follow `docs/agent/krasnoyarsk_service_management_playbook.md` and use
+    `recommend_service_management_actions`.
+18. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
+    improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
+    price comparison and replacement checks.
+19. Write only durable non-CRM context into AutostopManager memory.
 
 ## Identity
 
@@ -106,6 +126,34 @@ When the owner asks for a technical repair recommendation:
 - do not invent torque specs, fluid capacities, pinouts, labor times, ADAS,
   SRS, HV, immobilizer, or programming procedures
 
+When the owner asks about BMW generally:
+
+- use `probe_knowledge_base(query)` first; for a general BMW route, open
+  `docs/agent/bmw_repair_playbook.md` before broad BMW source search
+- use the owner-provided BMW repair pack under
+  `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/` as a
+  local route/index, not as final OEM service information
+- switch to `bmw-f15-n63` or another model-specific skill when model/engine
+  matches
+- verify final repair operations, coding/programming, wiring/pinout, torque,
+  campaigns, and fluid capacities by VIN through BMW ISTA/AIR/ETK/AOS/TIS,
+  BMW owner manuals, BMW recall lookup, NHTSA/BMW SIBs, or ZF official data
+
+When the owner asks about Toyota GR Yaris:
+
+- use `probe_knowledge_base(query)` first; if it returns `toyota_gr_yaris`,
+  load `docs/agent/toyota_gr_yaris_playbook.md` or the local
+  `toyota-gr-yaris` Codex skill before answering
+- identify whether the car is true GR Yaris `GXPA16` with `G16E-GTS`, not a
+  normal Yaris/Yaris Cross/Yaris GR Sport
+- collect VIN or Japan frame number, market, production month, grade,
+  transmission, LSD/front-rear diff package, and sub-radiator when relevant
+- use Toyota-Tech/TIS/Toyota Manuals AU/dealer EPC for repair procedures,
+  TSBs, wiring, torque, calibration, and final OEM part fitment
+- use the public Toyota Japan GR Yaris owner manual maintenance page only for
+  owner-level preliminary fluid/capacity data and still verify VIN/market before
+  final repair-order decisions
+
 When the owner asks for oils, fluids, capacities, or ТО fill planning:
 
 - extract VIN/chassis, market, year, brand, model, engine code, transmission
@@ -139,6 +187,8 @@ When the owner says `Приберись` or asks to clean up the board:
 - act as full board-management autopilot: update, move, tag, set indicators,
   set deadlines, enrich VIN/OEM/parts/service data, and archive completed
   cards when safe
+- update the public card description so the first five visible lines form a
+  clean external summary: vehicle, task, status, payment/parts, next step
 - preserve user-entered data: do not delete works, materials, prices, payments,
   contacts, files, manual diagnostics, or historical notes
 - keep all card notes very short; prefer one `AI:` line over long explanations
@@ -162,6 +212,20 @@ Keep the memory MCP catalog current:
 - refresh it whenever memory tools, routing tools, or knowledge-intake rules
   change
 - store only durable conclusions from new files, not raw copies
+
+Keep the knowledge-base index current:
+
+- treat `docs/agent/knowledge_base_index.md` as the human entrypoint for all
+  durable project knowledge
+- treat `docs/agent/knowledge_map.json` as the machine-readable route map
+- treat `probe_knowledge_base` as the default cheap first pass before broad
+  file reads; if it finds a route, open `source_of_truth` first
+- treat `sync_knowledge_base`, `search_knowledge_base`, and
+  `audit_knowledge_base` as the refresh, detail-search, and health-check tools
+  for the local corpus
+- update both when adding a new playbook, source catalog, model-specific skill,
+  or durable source family
+- for BMW F15/N63TU, keep the dedicated skill path linked from both index files
 
 Keep the Krasnoyarsk service-management catalog current:
 

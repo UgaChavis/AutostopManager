@@ -16,7 +16,8 @@ or email work that should survive between Codex sessions and ChatGPT mobile
 usage.
 
 For new files and knowledge expansion, use
-`docs/agent/knowledge_intake_playbook.md` and keep the tool surface summaries
+`docs/agent/knowledge_base_index.md` first, then
+`docs/agent/knowledge_intake_playbook.md`, and keep the tool surface summaries
 in `docs/agent/manager_mcp_catalog.json` and `docs/agent/crm_mcp_catalog.json`
 up to date.
 
@@ -26,6 +27,12 @@ up to date.
 - local access: `python -m autostop_manager.cli ...`
 - MCP access: `python -m autostop_manager.mcp_server`
 - docs for agents: `docs/agent/`
+- knowledge-base entrypoint: `docs/agent/knowledge_base_index.md`
+- knowledge-base machine map: `docs/agent/knowledge_map.json`
+- knowledge-base SQLite sync: `python -m autostop_manager.cli knowledge-sync`
+- knowledge-base probe: `python -m autostop_manager.cli knowledge-probe "BMW X5 F15 N63 электрика"`
+- knowledge-base search: `python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"`
+- knowledge-base audit: `python -m autostop_manager.cli knowledge-audit`
 - repair source routing: use `docs/agent/automotive_repair_source_playbook.md`
   and `docs/agent/automotive_sources/` before technical repair, TSB, recall,
   diagnostics, labor, fluid, torque, wiring, ADAS, SRS, or HV recommendations
@@ -54,6 +61,10 @@ up to date.
 - parts search: use `docs/agent/parts_search_playbook.md` and
   `docs/agent/zzap_search_playbook.md` for Drom, ZZap, Avito sourcing in
   Krasnoyarsk and nearby regions
+- BMW X5 F15/N63TU: use the dedicated local skill at
+  `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md` before F15/N63
+  diagnostics, wiring/electronics orientation, BDC/gateway issues, injector
+  bulletins, misfires, oil consumption, or cooling analysis
 - CRM MCP sync: keep `docs/agent/crm_mcp_catalog.json` aligned with the
   current `autostopCRM` branch in `UgaChavis/AutostopCRM-V1`
 - manager MCP sync: keep `docs/agent/manager_mcp_catalog.json` aligned with
@@ -75,6 +86,9 @@ python -m autostop_manager.cli source-route --brand Toyota --data-type repair_ma
 python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia
 python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
 python -m autostop_manager.cli service-plan --area персонал --role автослесарь --city Красноярск
+python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
+python -m autostop_manager.cli knowledge-search "8013FE IHKA" --domain bmw_repair
+python -m autostop_manager.cli knowledge-audit
 ```
 
 ## MCP Tools
@@ -90,10 +104,21 @@ The manager memory tools are intentionally separate from CRM operations:
 - `recommend_automotive_sources`
 - `recommend_fluid_maintenance_sources`
 - `recommend_service_management_actions`
+- `sync_knowledge_base`
+- `probe_knowledge_base`
+- `search_knowledge_base`
+- `audit_knowledge_base`
 
 When the owner provides new files, treat them as source material, not memory.
 Extract durable rules, update the relevant playbook or catalog, then store
 only the reusable conclusion in memory.
+
+Before broad local file reads, use the indexed knowledge-base tools:
+`probe_knowledge_base` first, `search_knowledge_base` inside the returned domain
+when more detail is needed, `sync_knowledge_base` after source/catalog changes,
+and `audit_knowledge_base` after intake. The goal is to find the right
+playbook, source catalog, or model-specific skill first, then read only that
+narrow file.
 
 AutoStop CRM operations still use the existing AutoStop CRM MCP tools such as
 `bootstrap_context`, `get_board_context`, `review_board`, `search_cards`,
