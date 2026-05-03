@@ -1,0 +1,26 @@
+{
+  "notice": "Synthetic training data only - not for vehicle use",
+  "project": "SYNTH_DME",
+  "calibration_items": [
+    {
+      "name": "ENG_TEMP_LIMIT",
+      "type": "scalar",
+      "unit": "degC",
+      "value": 108.0
+    },
+    {
+      "name": "SYNTH_TORQUE_LIMIT_CURVE",
+      "type": "curve",
+      "x_axis": "rpm",
+      "unit": "Nm",
+      "values": [
+        120,
+        180,
+        220,
+        230,
+        220
+      ]
+    }
+  ],
+  "integrity": "example-only-no-checksum"
+}

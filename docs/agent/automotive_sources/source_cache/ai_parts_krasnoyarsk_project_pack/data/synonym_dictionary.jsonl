@@ -1,0 +1,14 @@
+{"term": "граната", "normalized": "ШРУС", "full": "шарнир равных угловых скоростей", "category": "suspension_driveline"}
+{"term": "лямбда", "normalized": "датчик кислорода", "full": "oxygen sensor", "category": "engine_management"}
+{"term": "расходомер", "normalized": "MAF", "full": "Mass Air Flow sensor — датчик массового расхода воздуха", "category": "engine_management"}
+{"term": "мозги", "normalized": "ECU", "full": "Electronic Control Unit — электронный блок управления", "category": "electronics"}
+{"term": "бублик", "normalized": "гидротрансформатор", "full": "torque converter", "category": "transmission"}
+{"term": "коробка", "normalized": "коробка передач", "full": "transmission", "category": "powertrain"}
+{"term": "раздатка", "normalized": "раздаточная коробка", "full": "transfer case", "category": "powertrain"}
+{"term": "ступица", "normalized": "ступичный узел", "full": "wheel hub assembly", "category": "suspension_brakes"}
+{"term": "телевизор", "normalized": "передняя панель кузова", "full": "front panel/radiator support", "category": "body"}
+{"term": "порог", "normalized": "порог кузова", "full": "rocker panel/sill", "category": "body"}
+{"term": "фара лед", "normalized": "фара LED", "full": "светодиодная фара", "category": "body"}
+{"term": "сажевик", "normalized": "DPF", "full": "Diesel Particulate Filter — сажевый фильтр", "category": "exhaust"}
+{"term": "егр", "normalized": "EGR", "full": "Exhaust Gas Recirculation — рециркуляция отработавших газов", "category": "exhaust"}
+{"term": "тнвд", "normalized": "ТНВД", "full": "топливный насос высокого давления", "category": "diesel"}

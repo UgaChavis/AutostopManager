@@ -1,0 +1,13 @@
+source_id,name,type,access_mode,primary_use,automation_level,notes,official_url
+forum_auto,Forum-Auto,b2b_api,contract_api,price_stock_delivery,high_if_contract_allows,"REST/JSON and SOAP/XML docs; listGoods returns price, quantity, warehouse, delivery timing.",https://api.forum-auto.ru/
+zzap,ZZap,aggregator_api,api_key,price_statistics_region_lookup_article_search,limited_by_rules,Use statistics and allowed searches. Do not use for mass dumping or monitoring of current offers if prohibited.,https://api.zzap.pro/
+laximo,Laximo,catalog_api,contract_api,vin_oem_replacements_fitment,high_if_licensed,"Use for identification, not stock.",https://www.laximo.com/
+tecdoc,TecDoc,catalog_api,contract_api,aftermarket_fitment_crosses,high_if_licensed,Use for analogs and applicability.,https://www.tecalliance.net/
+twogis,2GIS,organization_directory_api,api_key_subscription,local_seller_discovery,medium,"Find organizations, addresses, phones, categories; not stock.",https://docs.2gis.com/
+yandex_maps_orgs,Yandex Maps organizations,organization_directory_api,api_key_subscription,local_seller_discovery,medium,Find organizations and reference data; not stock.,https://yandex.ru/maps-api/
+avito_manual,Avito,marketplace_manual_or_official_api,manual_or_official_api,used_contract_body_rare_parts,manual_safe_mode,"Generate search phrases, then manual review or official API only. No unauthorized scraping.",https://developers.avito.ru/
+drom_manual,Drom/FarPost,marketplace_manual_or_official_api,manual_or_official_api,used_contract_jdm_parts_aggregates,manual_safe_mode,"Generate search phrases, manual review or authorized tools only.",https://baza.drom.ru/
+dellin,Деловые Линии,logistics_api,api_key,delivery_price_time,high_if_key,Use calculator for total cost.,https://dev.dellin.ru/
+cdek,СДЭК,logistics_api,api_key,delivery_price_time_tracking,high_if_key,Use official API portal.,https://api-docs.cdek.ru/
+russian_post,Почта России,logistics_api,api_key,delivery_price_time_tracking,high_if_key,Use official API for tariff and tracking.,https://otpravka.pochta.ru/
+local_registry,Internal Krasnoyarsk seller registry,internal,internal,trusted_contacts_feedback,high,"Build from calls, successful orders, maps, marketplaces.",

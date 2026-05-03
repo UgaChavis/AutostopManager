@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SearchReport",
+  "type": "object",
+  "required": [
+    "request_id",
+    "summary",
+    "recommendations"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "fitment_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "market_stats": {
+      "type": "object"
+    },
+    "recommendations": {
+      "type": "object",
+      "properties": {
+        "best_fast": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "best_price": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "best_balanced": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "offers_ranked": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "must_verify_before_order": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

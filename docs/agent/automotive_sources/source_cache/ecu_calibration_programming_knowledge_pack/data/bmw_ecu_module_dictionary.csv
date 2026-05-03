@@ -1,0 +1,16 @@
+module,domain,ru_name,repair_context
+DME,engine gasoline,бензиновый двигатель,"программирование, кодирование, адаптации двигателя"
+DDE,engine diesel,дизельный двигатель,"EGR, DPF, SCR, форсунки, наддув, программирование"
+EGS,transmission,АКПП,"адаптации, связь с DME/DDE, software compatibility"
+DSC,chassis,тормоза/стабилизация,"датчики скорости, steering angle, coding"
+EPS,steering,рулевое управление,"калибровка угла/момента, coding"
+VTG,drivetrain,раздаточная коробка xDrive,"калибровка, шины, масло, адаптация"
+FEM,body,передний электронный модуль,gateway/body/coding functions
+BDC,body,контроллер домена кузова,body/gateway/access coding
+CAS/EWS,access,доступ/иммобилайзер,официальная синхронизация и coding
+ZGM/ZGW,gateway,центральный шлюз,"маршрутизация CAN/Ethernet, programming plan"
+KOMBI,body,комбинация приборов,"coding, service info display"
+HU,infotainment,головное устройство,"Ethernet, coding, software"
+FRM,body,модуль пространства ног,"свет, кузовные функции, coding"
+JBE,body,распределительная электроника,питание и кузовные сети
+EKPS,fuel,топливный насос,"управление насосом, DTC, coding"

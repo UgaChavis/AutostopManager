@@ -1,0 +1,26 @@
+version: 1
+brands:
+  BMW:
+    aliases: ["BMW", "БМВ", "Original BMW", "Bayerische Motoren Werke"]
+  MINI:
+    aliases: ["MINI", "Mini Cooper", "Мини"]
+  ZF:
+    aliases: ["ZF", "ZF Parts", "ZF Friedrichshafen", "Sachs", "Lemforder"]
+  VAG:
+    aliases: ["VAG", "VW", "Volkswagen", "Audi", "Skoda", "Seat"]
+  TOYOTA:
+    aliases: ["Toyota", "Тойота", "Lexus", "Лексус"]
+  NISSAN:
+    aliases: ["Nissan", "Ниссан", "Infiniti", "Инфинити"]
+  HYUNDAI_KIA:
+    aliases: ["Hyundai", "Kia", "Хендай", "Киа", "Mobis"]
+  MERCEDES:
+    aliases: ["Mercedes", "Mercedes-Benz", "MB", "Мерседес"]
+  BOSCH:
+    aliases: ["Bosch", "Бош"]
+  DENSO:
+    aliases: ["Denso", "Денсо"]
+  VALEO:
+    aliases: ["Valeo", "Валео"]
+  AISIN:
+    aliases: ["Aisin", "Aisin Seiki", "Айсин"]

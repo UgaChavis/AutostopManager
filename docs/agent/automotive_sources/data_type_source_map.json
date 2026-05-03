@@ -2907,6 +2907,42 @@
   ],
   "transmission": [
     {
+      "source_id": "vw_erwin_na",
+      "name": "Volkswagen erWin USA",
+      "category": "oem_service_portal",
+      "access": "paid_time_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_paid_access_link_only",
+      "url": "https://erwin.vw.com/"
+    },
+    {
+      "source_id": "audi_erwin_na",
+      "name": "Audi erWin USA",
+      "category": "oem_service_portal",
+      "access": "paid_time_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_paid_access_link_only",
+      "url": "https://erwin.audiusa.com/"
+    },
+    {
+      "source_id": "erwin_eu_group",
+      "name": "Volkswagen Group erWin Europe portal",
+      "category": "oem_service_portal",
+      "access": "paid_time_subscription",
+      "priority_score_1_5": 5,
+      "legal_ingestion_status": "official_paid_access_link_only",
+      "url": "https://volkswagen.erwin-store.com/"
+    },
+    {
+      "source_id": "nhtsa_tsbs_flat",
+      "name": "NHTSA manufacturer communications / TSB flat data",
+      "category": "open_government_data",
+      "access": "free",
+      "priority_score_1_5": 4,
+      "legal_ingestion_status": "open_download_allowed",
+      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+    },
+    {
       "source_id": "ZF_OIL_CHANGE_PC",
       "name": "How to Change the Transmission Oil on a Passenger Car",
       "category": "oem_service_portal",

@@ -1,0 +1,175 @@
+{
+  "package": "dsg_transmission_knowledge_sources",
+  "generated_on": "2026-05-03",
+  "purpose": "Public and official source registry for Volkswagen Group DSG / Audi S tronic software update, mechatronic, basic settings, and diagnostic routing.",
+  "legal_boundary": "Store durable routing notes and source URLs only. Do not copy OEM manuals, paid erWin/Elsa content, flash files, ODIS datasets, SVM action files, or forum procedures into the knowledge base.",
+  "sources": [
+    {
+      "id": "vw_erwin_svm_pdf_usa",
+      "name": "Volkswagen erWin USA - Software Version Management (SVM) testing/adapting software guide",
+      "publisher": "Volkswagen / erWin",
+      "source_type": "official_service_portal_document",
+      "url": "https://erwin.vw.com/erwin/usa/volkswagen/files/VWSVM.pdf",
+      "trust_level": 5,
+      "use_for": [
+        "SVM route orientation",
+        "ODIS/adapting software vocabulary",
+        "official update workflow boundary"
+      ],
+      "do_not_use_for": [
+        "VIN-specific DSG update eligibility",
+        "offline flash-file selection",
+        "non-OEM tuning"
+      ],
+      "notes": "Use as an official SVM route reference; still verify each repair by VIN in the current OEM service system.",
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "vw_nhtsa_dsg_basic_settings_370903tt",
+      "name": "Volkswagen Technical Tip 37-09-03TT - Direct Shift Gearbox (DSG) Basic Settings",
+      "publisher": "Volkswagen of America via NHTSA",
+      "source_type": "public_manufacturer_communication",
+      "url": "https://static.nhtsa.gov/odi/tsbs/2017/MC-10157303-9999.pdf",
+      "trust_level": 5,
+      "use_for": [
+        "basic settings are diagnostic, not routine",
+        "ODIS Guided Functions route",
+        "temperature/fault-code/idle preconditions",
+        "post-basic-settings selector cycling and road-test concept"
+      ],
+      "notes": "Public copy of VW communication; current procedure and applicability still come from OEM service information.",
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "vw_nhtsa_37k7_tcm_software_update",
+      "name": "Volkswagen 37K7 Update - TCM Software Update",
+      "publisher": "Volkswagen Group of America via NHTSA",
+      "source_type": "public_manufacturer_communication",
+      "url": "https://static.nhtsa.gov/odi/tsbs/2017/MC-10125595-9999.pdf",
+      "trust_level": 5,
+      "use_for": [
+        "TCM update discipline",
+        "battery charger and voltage requirements",
+        "hardwired diagnostic connection",
+        "SVM process completion and documentation"
+      ],
+      "notes": "Transmission update example. Use the safety/process rules; do not generalize the campaign to other vehicles.",
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "audi_nhtsa_0b5_s_tronic_drivability_2027363",
+      "name": "Audi TSB 2027363/3 - Drivability concerns, S tronic transmission (DTC P1724)",
+      "publisher": "Audi of America via NHTSA",
+      "source_type": "public_manufacturer_communication",
+      "url": "https://static.nhtsa.gov/odi/tsbs/2014/MC-10212689-9999.pdf",
+      "trust_level": 5,
+      "use_for": [
+        "0B5 S tronic shift-quality complaint example",
+        "SVM update route for transmission software",
+        "post-update basic setting/adaptation drive trigger"
+      ],
+      "notes": "Applies only to the models/software levels listed in the TSB; use as a routing pattern.",
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "audi_nhtsa_0b5_j743_bump_rattle_2039267",
+      "name": "Audi TSB 2039267/1 - 0B5 bump after stop or rattle at idle, update J743 software",
+      "publisher": "Audi of America via NHTSA",
+      "source_type": "public_manufacturer_communication",
+      "url": "https://static.nhtsa.gov/odi/tsbs/2014/MC-10226489-9999.pdf",
+      "trust_level": 5,
+      "use_for": [
+        "J743 mechatronic-control-module update example",
+        "0B5 S tronic symptom-to-software route",
+        "SVM action-code discipline"
+      ],
+      "notes": "Do not reuse the listed software levels outside matching VIN/model/transmission context.",
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "audi_nhtsa_0b5_after_mechatronic_2041242",
+      "name": "Audi TSB 2041242/2 - after mechatronic/gearbox replacement, start request issue",
+      "publisher": "Audi of America via NHTSA",
+      "source_type": "public_manufacturer_communication",
+      "url": "https://static.nhtsa.gov/odi/tsbs/2017/MC-10120795-9999.pdf",
+      "trust_level": 5,
+      "use_for": [
+        "mechatronic replacement software-level risk",
+        "J217 TCM update route",
+        "SVM action-code and post-replacement diagnosis"
+      ],
+      "notes": "Good example of why used/replaced mechatronics need software/version verification.",
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "vw_official_dsg_technology_au",
+      "name": "Volkswagen Australia - DSG Transmission technology page",
+      "publisher": "Volkswagen Australia",
+      "source_type": "official_public_technology_page",
+      "url": "https://www.volkswagen.com.au/en/brand-experience/technology/engines/dsg-transmission.html",
+      "trust_level": 4,
+      "use_for": [
+        "plain-language DSG operating theory",
+        "control-unit input vocabulary",
+        "dual-clutch concept explanation"
+      ],
+      "do_not_use_for": [
+        "repair procedure",
+        "fluid capacity",
+        "software update eligibility"
+      ],
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "vw_official_7speed_dsg_2008_pdf",
+      "name": "Volkswagen official 7-speed DSG technology PDF",
+      "publisher": "Volkswagen",
+      "source_type": "official_public_technology_pdf",
+      "url": "https://uploads.vw-mms.de/system/production/files/vwn/003/768/file/e451eac3067123ff305d27a85f3e7eb73dd1ee6f/DSG_the_intelligent_automatic_gearbox_from_Volkswagen_2008_en.pdf?1530367024=",
+      "trust_level": 4,
+      "use_for": [
+        "dry 7-speed DSG theory",
+        "dry versus wet clutch distinction",
+        "mechatronic concept and oil-circuit distinction"
+      ],
+      "do_not_use_for": [
+        "current repair procedure",
+        "current parts fitment",
+        "current software updates"
+      ],
+      "last_verified": "2026-05-03"
+    },
+    {
+      "id": "nhtsa_tsb_public_datasets",
+      "name": "NHTSA public manufacturer communications and TSB datasets",
+      "publisher": "NHTSA",
+      "source_type": "open_government_dataset",
+      "url": "https://www.nhtsa.gov/nhtsa-datasets-and-apis",
+      "trust_level": 4,
+      "use_for": [
+        "public TSB discovery",
+        "recall/campaign cross-check",
+        "manufacturer communication evidence"
+      ],
+      "notes": "Use NHTSA as public access to manufacturer communications; current repair applicability still belongs to OEM service information.",
+      "last_verified": "2026-05-03"
+    }
+  ],
+  "routing_rules": [
+    {
+      "when": "DSG/S tronic software update, мехатроник, J217, J743, ODIS, SVM, basic settings, DQ/DL family query",
+      "open_first": "docs/agent/dsg_transmission_playbook.md",
+      "then": "docs/agent/automotive_sources/dsg_transmission_sources.json"
+    },
+    {
+      "when": "generic gearbox or fluid query without VAG DSG terms",
+      "open_first": "docs/agent/transmission_playbook.md",
+      "then": "docs/agent/automotive_sources/data_type_source_map.json"
+    },
+    {
+      "when": "used DSG gearbox, mechatronic, clutch, flywheel, or contract aggregate search in Krasnoyarsk",
+      "open_first": "docs/agent/ai_parts_krasnoyarsk_playbook.md",
+      "then": "docs/agent/dsg_transmission_playbook.md"
+    }
+  ]
+}

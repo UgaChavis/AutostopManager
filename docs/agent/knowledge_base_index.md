@@ -20,6 +20,10 @@ Use these commands when working locally:
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-probe "BMW X5 кузов E15 мотор N63 электрика"
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
+python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
+python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
+python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
+python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 python -m autostop_manager.cli knowledge-search "engine oil capacity" --domain fluids
 python -m autostop_manager.cli knowledge-search "BMW xDrive shudder transfer case" --domain bmw_repair
 python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"
@@ -52,6 +56,7 @@ is the second pass.
 - `autostop_manager_skill.md` - agent startup routine, role, memory boundaries, and canonical behavior.
 - `manager_rules.json` - durable operating rules with priorities.
 - `operating_playbook.json` - machine-readable startup and routing map.
+- `knowledge_shelves.md` - shelf map, file placement rules, route-card contract, and maintenance checklist.
 - `manager_mcp_catalog.json` - local AutostopManager MCP tool surface.
 - `crm_mcp_catalog.json` - AutoStop CRM connector tool surface.
 - `gmail_mcp_catalog.json` - Gmail connector tool surface.
@@ -60,6 +65,7 @@ is the second pass.
 ## Knowledge Intake
 
 - `knowledge_intake_playbook.md` - required workflow for new files, links, PDFs, spreadsheets, scans, catalogs, and owner notes.
+- `knowledge_shelves.md` - where durable knowledge belongs, how route cards are marked, and how source packs should be signed.
 - `automotive_sources/ingestion_tasks.jsonl` - pending/source-ingestion actions.
 - `automotive_sources/db_schema.sql` - proposed future repair knowledge database schema.
 
@@ -76,9 +82,39 @@ Use intake when the owner says: "обнови базу знаний", "сохр�
 - `fluid_maintenance_playbook.md` - oils, fluids, approvals, fill capacities, and service-fill workflow.
 - `automotive_sources/fluid_maintenance_sources.json` - source routing for fluids and capacities.
 - `transmission_playbook.md` - gearbox/CVT/DCT/AMT/clutch/transmission-fluid diagnostics and service workflow.
+- `dsg_transmission_playbook.md` - Volkswagen Group DSG / Audi S tronic route for DQ/DL families, mechatronic modules, ODIS/SVM software updates, basic settings, adaptation, and used-unit sourcing risks.
+- `automotive_sources/dsg_transmission_sources.json` - official/public DSG/S tronic source registry: erWin/SVM, VW/Audi NHTSA TSBs, and VW technology references.
+- `ecu_calibration_programming_playbook.md` - ECU programming, calibration, coding, adaptation, UDS/OBD, file formats, BMW programming workflow, KOMBI/instrument-cluster, and "стрелковка" route.
+- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - owner-provided ECU calibration/programming reference pack with Markdown/PDF/data/source indexes and synthetic examples.
 - `bmw_repair_playbook.md` - general BMW diagnostics, DTC, chassis, body electronics, xDrive, ZF transmission, HV, and fluids route.
 - `automotive_sources/source_cache/bmw_repair_knowledge_pack/` - owner-provided BMW repair reference pack with Markdown/PDF/data indexes.
 - `toyota_gr_yaris_playbook.md` - Toyota GR Yaris / GXPA16 / G16E-GTS model-specific repair, fluids, recalls, TSB, and OEM parts routing.
+
+DSG / S tronic route:
+
+- `docs/agent/dsg_transmission_playbook.md`
+- `docs/agent/automotive_sources/dsg_transmission_sources.json`
+- `docs/agent/transmission_playbook.md`
+
+For Volkswagen/Audi/Skoda/SEAT DSG or Audi S tronic requests, search
+`transmission` first and open `dsg_transmission_playbook.md` before giving
+software, adaptation, mechatronic, fluid, or parts-fitment guidance. Treat OEM
+ODIS/SVM/TPI/TSB software updates as VIN/software-level-specific repair actions,
+separate from TCU tuning/remap. For DQ200/DQ250/DQ381/DQ500/DL501/DL382 or
+0AM/0CW/02E/0D9/0GC/0BH/0BT/0DL/0B5/0CK/0CL, require transmission code,
+TCM/J743/J217 hardware/software numbers, DTCs, battery/power condition, and
+service history before final recommendations.
+
+ECU calibration/programming pack:
+
+- `docs/agent/ecu_calibration_programming_playbook.md`
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/README.md`
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/`
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/`
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/`
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/examples/`
+
+For ECU programming, calibration formats, UDS/OBD/J2534, flash recovery, BMW ISTA/I-level/VO/FA, or "стрелковка" / KOMBI / instrument-cluster questions, search `ecu_calibration_programming` first. Treat cluster/needle requests as legal coding/adaptation diagnostics only; if the request touches odometer, VIN, EEPROM/NVM dump cloning, immobilizer, security bypass, or emissions delete, route to official/legal service procedure and do not provide bypass steps.
 
 General BMW repair pack:
 
@@ -120,6 +156,25 @@ fluid, recall, and OEM part facts through Toyota official or licensed sources.
 - `zzap_search_playbook.md` - ZZap price comparison, replacements, and local-region checks.
 - `procurement_pricing_playbook.md` - закупочная цена, Красноярск-first availability, selected-part vs OEM-reference separation, package/unit math, and CRM material-total rules.
 - `procurement_price_sources.json` - supplier/API catalog for ROSSKO/Роска, Armtek, Autopiter, AutoEuro, ZZap, AutoSputnik, APEC, PartsAPI, UMAPI, AUTOPOISK, Mikado, local Krasnoyarsk sources, access modes, and quote fields.
+- `ai_parts_krasnoyarsk_playbook.md` - AI parts search, local Красноярск vendor discovery, offer scoring, seller-call confirmation, schemas, source registry, OpenAPI, and high-risk parts such as рулевая рейка.
+- `automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/` - owner-provided AI Parts Search Krasnoyarsk/Russia project pack with docs, prompts, schemas, configs, data, code skeleton, and OpenAPI draft.
+
+AI parts Красноярск project pack:
+
+- `docs/agent/ai_parts_krasnoyarsk_playbook.md`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/openapi/`
+
+For spare-parts search, steering rack / рулевая рейка, used/contract parts,
+seller discovery, call confirmation, offer scoring, API integration, or local
+Красноярск availability questions, search `parts_sourcing` first. Do not treat
+marketplace listings or supplier-site stock text as confirmed availability
+without API/cabinet/phone/message confirmation.
 
 ## Service Management
 
@@ -143,8 +198,11 @@ Use these queries before broad browsing:
 ```powershell
 rg -n "BMW|F15|N63|BDC|MEVD|misfire|форсун" docs/agent C:/Users/User/.codex/skills/bmw-f15-n63
 rg -n "BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack
+rg -n "ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack
 rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent C:/Users/User/.codex/skills/toyota-gr-yaris
 rg -n "VIN|OEM|frame|chassis|кузов|каталог" docs/agent
+rg -n "DSG|S tronic|DQ200|DQ250|DQ381|DQ500|DL501|DL382|0AM|0CW|02E|0B5|мехатрон|J217|J743|ODIS|SVM|basic settings|адаптац" docs/agent/dsg_transmission_playbook.md docs/agent/automotive_sources/dsg_transmission_sources.json docs/agent/transmission_playbook.md
+rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|source_registry|parts search gateway" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
 rg -n "Приберись|cleanup|archive|preserve|board" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent

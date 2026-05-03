@@ -218,6 +218,8 @@ Keep the knowledge-base index current:
 - treat `docs/agent/knowledge_base_index.md` as the human entrypoint for all
   durable project knowledge
 - treat `docs/agent/knowledge_map.json` as the machine-readable route map
+- treat `docs/agent/knowledge_shelves.md` as the shelf map for file placement,
+  route-card markup, source-pack signing, and maintenance commands
 - treat `probe_knowledge_base` as the default cheap first pass before broad
   file reads; if it finds a route, open `source_of_truth` first
 - treat `sync_knowledge_base`, `search_knowledge_base`, and

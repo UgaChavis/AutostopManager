@@ -29,6 +29,7 @@ up to date.
 - docs for agents: `docs/agent/`
 - knowledge-base entrypoint: `docs/agent/knowledge_base_index.md`
 - knowledge-base machine map: `docs/agent/knowledge_map.json`
+- knowledge-base shelf map: `docs/agent/knowledge_shelves.md`
 - knowledge-base SQLite sync: `python -m autostop_manager.cli knowledge-sync`
 - knowledge-base probe: `python -m autostop_manager.cli knowledge-probe "BMW X5 F15 N63 электрика"`
 - knowledge-base search: `python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"`
@@ -39,6 +40,17 @@ up to date.
 - fluid maintenance routing: use `docs/agent/fluid_maintenance_playbook.md`
   and `docs/agent/automotive_sources/fluid_maintenance_sources.json` before
   oil, operating-fluid, fill-capacity, or ТО service recommendations
+- transmission routing: use `docs/agent/transmission_playbook.md`; for VAG DSG,
+  S tronic, DQ200/DQ250/DQ381/DQ500/DL501, ODIS, SVM, mechatronic, basic
+  settings, or adaptation questions, open
+  `docs/agent/dsg_transmission_playbook.md` and
+  `docs/agent/automotive_sources/dsg_transmission_sources.json`
+- ECU programming routing: use
+  `docs/agent/ecu_calibration_programming_playbook.md` and the owner-provided
+  `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/`
+  for ECU flashing, coding, calibration, UDS/OBD, BMW KOMBI, instrument cluster,
+  and "стрелковка" questions; keep odometer, immobilizer, security bypass, and
+  emissions-delete requests on official/legal service routes only
 - service management routing: use
   `docs/agent/krasnoyarsk_service_management_playbook.md` and
   `docs/agent/service_management_sources.json` before workshop-management
@@ -61,6 +73,10 @@ up to date.
 - parts search: use `docs/agent/parts_search_playbook.md` and
   `docs/agent/zzap_search_playbook.md` for Drom, ZZap, Avito sourcing in
   Krasnoyarsk and nearby regions
+- AI parts search: use `docs/agent/ai_parts_krasnoyarsk_playbook.md` and
+  `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/`
+  for Krasnoyarsk vendor discovery, steering-rack/contract-part risk checks,
+  offer scoring, seller-call confirmation, schemas, configs, and OpenAPI drafts
 - BMW X5 F15/N63TU: use the dedicated local skill at
   `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md` before F15/N63
   diagnostics, wiring/electronics orientation, BDC/gateway issues, injector
@@ -81,13 +97,22 @@ python -m autostop_manager.cli task "Проверить просроченные
 python -m autostop_manager.cli remind "Напомнить про аренду" --due 2026-05-04T10:00:00+07:00
 python -m autostop_manager.cli today
 python -m autostop_manager.cli journal "Проверил доску CRM, готовые машины требуют оплаты"
+python -m autostop_manager.cli init
+python -m autostop_manager.cli seed-rules
 python -m autostop_manager.cli lookup-oem 1HGCM82633A004352 --model-year 2003
 python -m autostop_manager.cli source-route --brand Toyota --data-type repair_manuals
 python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia
 python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
 python -m autostop_manager.cli service-plan --area персонал --role автослесарь --city Красноярск
+python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
+python -m autostop_manager.cli knowledge-probe "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM"
+python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
+python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
 python -m autostop_manager.cli knowledge-search "8013FE IHKA" --domain bmw_repair
+python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
+python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
+python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 python -m autostop_manager.cli knowledge-audit
 ```
 
@@ -129,9 +154,22 @@ message handling. Keep raw email content out of manager memory unless it
 represents a durable fact, decision, task, or reminder.
 
 Parts sourcing uses the dedicated playbook in
-`docs/agent/parts_search_playbook.md` plus the ZZap-specific playbook in
-`docs/agent/zzap_search_playbook.md`. Keep only the chosen part, seller, and
-reusable search heuristic in memory.
+`docs/agent/ai_parts_krasnoyarsk_playbook.md`, the general playbook in
+`docs/agent/parts_search_playbook.md`, and the ZZap-specific playbook in
+`docs/agent/zzap_search_playbook.md`. Keep only the chosen part, seller,
+confirmation status, and reusable search heuristic in memory.
+
+Transmission questions use `docs/agent/transmission_playbook.md`; VAG DSG and
+Audi S tronic questions use `docs/agent/dsg_transmission_playbook.md` plus
+`docs/agent/automotive_sources/dsg_transmission_sources.json` before software,
+adaptation, mechatronic, fluid, or used-unit guidance.
+
+ECU programming, calibration, coding, BMW KOMBI, instrument-cluster, and
+"стрелковка" questions use
+`docs/agent/ecu_calibration_programming_playbook.md` and the local ECU
+knowledge pack. Keep unsafe requests such as odometer tampering, immobilizer or
+security bypass, EEPROM/NVM cloning, and emissions deletes out of procedural
+answers; route them to official/legal service procedures only.
 
 Vehicle identity uses the dedicated playbook in
 `docs/agent/vehicle_identity_playbook.md`. Keep the stable routing rule in

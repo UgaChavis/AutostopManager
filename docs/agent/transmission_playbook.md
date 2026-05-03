@@ -59,6 +59,31 @@ Use these families as the first non-OEM routing layer:
 Use `recommend_automotive_sources(data_type="transmission")` for the first
 source route pass, then narrow by brand and exact unit.
 
+## VAG DSG / Audi S Tronic Route
+
+For Volkswagen Group DSG or Audi S tronic questions, open
+`docs/agent/dsg_transmission_playbook.md` before giving software, adaptation,
+fluid, mechatronic, or parts-fitment guidance.
+
+DSG/S tronic trigger terms include:
+
+- DSG, S tronic, DQ200, DQ250, DQ381, DQ380, DQ500, DL501, DL382
+- 0AM, 0CW, 02E, 0D9, 0GC, 0BH, 0BT, 0DL, 0B5, 0CK, 0CL
+- мехатроник, mechatronic, TCM, J217, J743, ODIS, SVM, Software Version
+  Management, basic settings, adaptation
+
+Rules:
+
+- Treat OEM software updates as VIN/software-level-specific repair actions,
+  not generic performance improvements.
+- Separate OEM ODIS/SVM/TPI/TSB updates from TCU tuning/remap requests.
+- Basic settings and clutch adaptation are diagnostic/service procedures, not
+  routine resets.
+- Dry-clutch DQ200 and wet-clutch DQ250/DQ381/DQ500/DL501 routes differ for
+  oil, clutch, service, and failure logic.
+- For used mechatronic or gearbox sourcing, require transmission code,
+  hardware/software numbers, old part suffix, donor details, and coding status.
+
 ## Diagnostic Workflow
 
 1. Record the complaint verbatim.

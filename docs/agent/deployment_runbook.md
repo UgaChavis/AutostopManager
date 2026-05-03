@@ -25,6 +25,8 @@ Do not commit or push:
 Run before publishing:
 
 ```powershell
+python -m autostop_manager.cli knowledge-sync
+python -m autostop_manager.cli knowledge-audit
 python -m pytest -q
 ```
 
@@ -33,7 +35,28 @@ Optional manual checks:
 ```powershell
 python -m autostop_manager.cli today
 python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
+python -m autostop_manager.cli knowledge-probe "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM"
+python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
+python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
+python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 ```
+
+## GitHub Publish Checklist
+
+Use this order when the owner asks to clean up, update docs, publish to GitHub,
+and deploy:
+
+1. Update `README.md`, `docs/agent/knowledge_base_index.md`,
+   `docs/agent/knowledge_shelves.md`, playbooks, source catalogs, and tests for
+   any new commands or route cards.
+2. Run `python -m autostop_manager.cli knowledge-sync`.
+3. Run `python -m autostop_manager.cli knowledge-audit` and confirm
+   `missing_files=[]` and `warnings=[]`.
+4. Run `python -m pytest -q`.
+5. Check `git status --short --ignored` and confirm `data/`, caches, SQLite
+   files, runtime snapshots, credentials, and CRM evidence are not staged.
+6. Commit only code, tests, documentation, and safe owner-provided source packs.
+7. Push the current branch to GitHub.
 
 ## Local MCP Server
 
@@ -66,6 +89,10 @@ A real server deployment needs one explicit target:
 Do not invent deployment credentials or push private runtime data to make a
 deployment appear complete.
 
+If the target or credential path is not available in the repo, environment, or
+owner message, stop after the GitHub push and report the server deployment as
+blocked by missing target details.
+
 ## Server Smoke Check
 
 After deployment, verify:
@@ -73,5 +100,8 @@ After deployment, verify:
 - service process is running
 - MCP endpoint answers on configured host/port/path
 - `today_context` works
+- `probe_knowledge_base` works for a known new route such as DSG, ECU/KOMBI, or
+  Krasnoyarsk parts sourcing
+- `audit_knowledge_base` returns no missing files or warnings
 - `recommend_service_management_actions` works
 - logs do not contain secrets or CRM dumps

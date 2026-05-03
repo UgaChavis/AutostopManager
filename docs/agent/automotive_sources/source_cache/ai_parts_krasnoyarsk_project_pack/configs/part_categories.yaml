@@ -1,0 +1,32 @@
+version: 1
+categories:
+  consumables:
+    examples: ["фильтр", "свеча", "колодки", "ремень", "ролик", "масло"]
+    vin_sensitive: low
+    used_allowed_default: false
+    critical_checks: ["двигатель", "год", "OEM/кросс"]
+  suspension_brakes:
+    examples: ["рычаг", "стойка", "ступица", "суппорт", "амортизатор", "сайлентблок"]
+    vin_sensitive: medium
+    used_allowed_default: false
+    critical_checks: ["сторона", "ось", "кузов", "комплектация"]
+  body:
+    examples: ["крыло", "капот", "дверь", "бампер", "фара", "фонарь"]
+    vin_sensitive: medium
+    used_allowed_default: true
+    critical_checks: ["кузов", "рестайлинг", "сторона", "цвет", "крепления"]
+  powertrain:
+    examples: ["двигатель", "коробка", "редуктор", "раздатка", "турбина"]
+    vin_sensitive: high
+    used_allowed_default: true
+    critical_checks: ["маркировка", "код агрегата", "пробег", "гарантия", "видео"]
+  electronics:
+    examples: ["ЭБУ", "блок", "ABS", "FRM", "FEM", "BDC", "CAS", "TCU"]
+    vin_sensitive: high
+    used_allowed_default: conditional
+    critical_checks: ["аппаратный номер", "программная версия", "кодирование", "возврат"]
+  cooling_ac:
+    examples: ["радиатор", "компрессор кондиционера", "вентилятор", "интеркулер"]
+    vin_sensitive: medium
+    used_allowed_default: conditional
+    critical_checks: ["двигатель", "коробка", "пакет охлаждения", "размер", "патрубки"]

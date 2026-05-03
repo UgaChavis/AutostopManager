@@ -1,0 +1,14 @@
+{
+  "notice": "Synthetic MDF/MF4 metadata example only",
+  "channels": [
+    "time_s",
+    "engine_speed_rpm",
+    "coolant_temp_degC",
+    "egr_command_pct",
+    "egr_actual_pct",
+    "dpf_diff_pressure_kPa",
+    "nox_upstream_ppm",
+    "nox_downstream_ppm"
+  ],
+  "use": "Teach which channels to log for emissions diagnostics; no real vehicle data included."
+}

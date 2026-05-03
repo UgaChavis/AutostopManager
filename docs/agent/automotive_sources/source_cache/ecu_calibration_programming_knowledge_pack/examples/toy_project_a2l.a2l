@@ -1,0 +1,26 @@
+ASAP2_VERSION 1 71
+/begin PROJECT ECU_TRAINING_PROJECT "Synthetic A2L for training only"
+  /begin MODULE SYNTH_DME "No real ECU"
+    /begin MOD_COMMON "common"
+      BYTE_ORDER MSB_LAST
+    /end MOD_COMMON
+
+    /begin COMPU_METHOD TEMP_SCALE "raw * 0.1 - 40" LINEAR "%6.1" "degC"
+      COEFFS_LINEAR 0.1 -40
+    /end COMPU_METHOD
+
+    /begin RECORD_LAYOUT UWORD_CM
+      FNC_VALUES 1 UWORD ROW_DIR DIRECT
+    /end RECORD_LAYOUT
+
+    /begin MEASUREMENT COOLANT_TEMP_RAW "Synthetic coolant temp"
+      UWORD TEMP_SCALE 0 0 0 200
+      ECU_ADDRESS 0x00001000
+    /end MEASUREMENT
+
+    /begin CHARACTERISTIC ENG_TEMP_LIMIT "Synthetic temp limit"
+      VALUE 0x00001234 UWORD_CM 0 200 degC
+      COMPU_METHOD TEMP_SCALE
+    /end CHARACTERISTIC
+  /end MODULE
+/end PROJECT

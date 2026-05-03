@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PartRequest",
+  "type": "object",
+  "required": [
+    "request_id",
+    "vehicle",
+    "part",
+    "constraints"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "vehicle": {
+      "type": "object",
+      "required": [
+        "make",
+        "model"
+      ],
+      "properties": {
+        "make": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1950,
+          "maximum": 2100
+        },
+        "vin_or_frame": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transmission_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drive": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "fwd",
+            "rwd",
+            "awd",
+            "4wd",
+            null
+          ]
+        },
+        "production_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "part": {
+      "type": "object",
+      "required": [
+        "name_raw"
+      ],
+      "properties": {
+        "name_raw": {
+          "type": "string"
+        },
+        "name_normalized": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oem_number": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "article_candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "brand_candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "side": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "left",
+            "right",
+            "front",
+            "rear",
+            "front_left",
+            "front_right",
+            "rear_left",
+            "rear_right",
+            "not_applicable",
+            null
+          ]
+        },
+        "position": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "condition_allowed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "new",
+              "used",
+              "contract",
+              "rebuilt",
+              "any"
+            ]
+          }
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "default": "Красноярск"
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "urgency": {
+          "type": "string",
+          "enum": [
+            "today",
+            "tomorrow",
+            "2_3_days",
+            "week",
+            "planned",
+            "unknown"
+          ]
+        },
+        "max_budget_rub": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delivery_allowed": {
+          "type": "boolean"
+        },
+        "preferred_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

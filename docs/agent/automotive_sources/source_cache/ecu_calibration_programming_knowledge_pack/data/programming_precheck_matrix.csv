@@ -1,0 +1,11 @@
+item,required_status,reason
+VIN identified,must pass,Неверный VIN приводит к неправильному пакету
+Full pre-scan saved,must pass,Без pre-scan теряется исходный контекст
+Battery support connected,must pass,Падение напряжения может повредить flash
+VCI compatible,must pass,Нужен CAN/DoIP/J2534/ICOM по требованиям OEM
+Network faults absent,must pass or diagnose first,Сетевые ошибки могут сорвать запись
+Official package source,must pass,Случайные файлы не допускаются
+Hardware number match,must pass,Несовпадение указывает на риск несовместимости
+Coding plan available,must pass,После flash блок может требовать coding
+Adaptation plan available,should pass,Иначе жалоба может остаться
+Customer complaint documented,should pass,Нужна проверка результата

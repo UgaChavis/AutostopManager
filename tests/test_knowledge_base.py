@@ -82,6 +82,57 @@ def test_search_routes_russian_bmw_driveline_query_to_bmw_repair(tmp_path):
     assert all(item["domain"] == "bmw_repair" for item in result["items"][:3])
 
 
+def test_probe_routes_dsg_software_update_to_transmission(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM", limit=5)
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "transmission"
+    assert any("dsg_transmission_playbook" in path for path in result["source_of_truth"])
+
+
+def test_search_finds_dsg_mechatronic_software_update_guidance(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = search_knowledge_base(
+        store,
+        "DQ200 мехатроник basic settings software update SVM ODIS",
+        domain="transmission",
+        limit=8,
+    )
+
+    assert result["ok"] is True
+    assert any("dsg_transmission" in item["path"] for item in result["items"])
+
+
+def test_probe_routes_cluster_needle_coding_to_ecu_programming_pack(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "стрелковка KOMBI BMW приборка coding", limit=5)
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "ecu_calibration_programming"
+    assert any("ecu_calibration_programming_knowledge_pack" in path for path in result["source_of_truth"])
+
+
+def test_search_finds_ecu_programming_pack_kombi_content(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = search_knowledge_base(store, "KOMBI coding комбинация приборов", domain="ecu_calibration_programming", limit=5)
+
+    assert result["ok"] is True
+    assert result["items"]
+    assert result["items"][0]["domain"] == "ecu_calibration_programming"
+    assert any("ecu_calibration_programming_knowledge_pack" in item["path"] for item in result["items"])
+
+
 def test_probe_routes_bmw_f15_n63_even_with_owner_body_code_typo(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
@@ -141,6 +192,45 @@ def test_probe_routes_unclear_oem_replacement_price_to_parts_sourcing(tmp_path):
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
     assert any("procurement_pricing_playbook" in path for path in result["routes"][0]["source_of_truth"])
+
+
+def test_probe_routes_steering_rack_parts_request_to_ai_parts_pack(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "найти рулевую рейку в Красноярске цена наличие контрактная")
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "parts_sourcing"
+    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["source_of_truth"])
+
+
+def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "систематизируй базу знаний разметка полки инструкции")
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "knowledge_intake"
+    assert any("knowledge_shelves.md" in path for path in result["source_of_truth"])
+
+
+def test_search_finds_ai_parts_pack_for_local_vendor_scoring(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = search_knowledge_base(
+        store,
+        "рейка Красноярск vendor discovery offer scoring call confirmation",
+        domain="parts_sourcing",
+        limit=8,
+    )
+
+    assert result["ok"] is True
+    assert any("ai_parts_krasnoyarsk_project_pack" in item["path"] for item in result["items"])
 
 
 def test_probe_returns_low_confidence_for_unknown_vehicle_corpus(tmp_path):

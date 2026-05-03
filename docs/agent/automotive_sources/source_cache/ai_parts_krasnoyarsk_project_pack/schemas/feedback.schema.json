@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrderFeedback",
+  "type": "object",
+  "required": [
+    "request_id",
+    "offer_id",
+    "ordered",
+    "fitment_ok"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "offer_id": {
+      "type": "string"
+    },
+    "ordered": {
+      "type": "boolean"
+    },
+    "order_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "received_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "installed": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "fitment_ok": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "delay_days": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "return_needed": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "return_successful": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "seller_rating_delta": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}
