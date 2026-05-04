@@ -24,7 +24,7 @@ def test_search_finds_model_specific_route_after_sync(tmp_path):
     assert result["ok"] is True
     assert result["items"]
     assert result["items"][0]["domain"] == "bmw_f15_n63"
-    assert "bmw-f15-n63" in result["items"][0]["path"].replace("\\", "/")
+    assert result["items"][0]["path"] == "knowledge_map:bmw_f15_n63"
 
 
 def test_search_can_filter_by_domain(tmp_path):
@@ -143,7 +143,19 @@ def test_probe_routes_bmw_f15_n63_even_with_owner_body_code_typo(tmp_path):
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "bmw_f15_n63"
     assert result["routes"][0]["open_first"]
-    assert any("bmw-f15-n63" in path.replace("\\", "/") for path in result["routes"][0]["source_of_truth"])
+    assert any("bmw_repair" in path.replace("\\", "/") for path in result["routes"][0]["source_of_truth"])
+
+
+def test_probe_routes_priberis_to_board_cleanup_autopilot(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "Приберись уборка доски CRM board cleanup autopilot")
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "board_cleanup_autopilot"
+    assert result["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
 
 
 def test_probe_routes_toyota_gr_yaris_clutch_to_model_skill(tmp_path):

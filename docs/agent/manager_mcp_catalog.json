@@ -62,6 +62,7 @@
       ],
       "playbook": "docs/agent/board_cleanup_autopilot_playbook.md",
       "authority": "full board-management autopilot with strict preservation of user-entered CRM data",
+      "automation_behavior": "When scheduled hourly, run as an incremental control pass: inspect live CRM state, prioritize blockers and stale cards, write only meaningful deltas, avoid duplicate AI notes, and skip writes if CRM/MCP health or target identity is uncertain.",
       "allowed_actions": [
         "read live CRM board state",
         "update cards",

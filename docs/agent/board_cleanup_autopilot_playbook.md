@@ -28,6 +28,28 @@ The agent may independently:
 - clean wording, spelling, formatting, and duplicated text while preserving the
   user's meaning
 
+## Automation Mode
+
+When `Приберись` runs on a schedule, treat it as an incremental control pass,
+not a reason to rewrite the whole board every hour.
+
+Hourly automation should:
+
+- read current memory and live CRM state first
+- prioritize red/overdue/stale cards, ready cars, payment blockers, parts
+  blockers, and cards with missing critical identity data
+- write only meaningful deltas
+- avoid repeating the same `AI:` note if the card already contains the same
+  question or conclusion
+- avoid resetting deadlines every hour unless the operational state changed
+- avoid style-only rewrites on cards that are already clear
+- stop without writes if CRM/MCP status is unhealthy or target card identity is
+  uncertain
+
+Hourly automation may still update, move, tag, set indicators, set deadlines,
+or archive when the usual safety rules below are satisfied. The final report
+should be compact: checked, changed, archived, blockers, and any risks.
+
 ## Data Preservation Rules
 
 Treat user-entered data as valuable workshop evidence.

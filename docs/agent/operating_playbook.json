@@ -196,6 +196,7 @@
       "Trigger on owner phrases: Приберись, прибери доску, обслужи доску, актуализируй доску, or routine board cleanup.",
       "Use docs/agent/board_cleanup_autopilot_playbook.md as the canonical procedure.",
       "Operate as full autopilot: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, move cards, and archive completed cards when safe.",
+      "In hourly automation mode, treat cleanup as incremental: prioritize blockers, write only meaningful deltas, avoid duplicate AI notes, and skip writes when CRM/MCP health is uncertain.",
       "Preserve user data: never delete works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
       "Keep card notes short; use concise AI: notes for questions, next actions, OEM/price/source conclusions, payment blockers, and stale-card questions.",
       "Ask the owner in chat only for destructive actions beyond archive, unresolved money conflicts, client-sensitive decisions, or safety-critical technical uncertainty.",

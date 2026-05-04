@@ -58,7 +58,8 @@ up to date.
   finance control, daily CRM control, or new knowledge intake
 - board cleanup autopilot: when the owner says `Приберись`, use
   `docs/agent/board_cleanup_autopilot_playbook.md` as the standing procedure
-  for a full CRM board cleanup with strict preservation of user-entered data
+  for a full CRM board cleanup with strict preservation of user-entered data;
+  scheduled runs are incremental and must avoid duplicate/noisy writes
 - deployment/runbook: use `docs/agent/deployment_runbook.md`; publish code,
   tests, and playbooks, but keep runtime CRM snapshots and SQLite databases out
   of GitHub

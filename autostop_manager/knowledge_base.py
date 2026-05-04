@@ -719,6 +719,8 @@ def _domain_hints(query: str) -> dict[str, int]:
         hints["bmw_f15_n63"] = max(hints.get("bmw_f15_n63", 0), 18)
     if any(word in lowered for word in ["toyota", "тойота", "yaris gr", "gr yaris", "ярис", "gxpa16", "g16e"]):
         hints["toyota_gr_yaris"] = max(hints.get("toyota_gr_yaris", 0), 18)
+    if any(word in lowered for word in ["приберись", "прибери доску", "обслужи доску", "актуализируй доску", "cleanup"]):
+        hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)
     return hints
 
 

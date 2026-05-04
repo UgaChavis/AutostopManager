@@ -480,15 +480,13 @@
         "где смотреть G16E-GTS GXPA16 GR-FOUR",
         "какой документ открыть для Toyota Yaris GR"
       ],
-      "skill_path": "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
       "source_of_truth_files": [
-        "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
         "docs/agent/toyota_gr_yaris_playbook.md",
-        "C:/Users/User/.codex/skills/toyota-gr-yaris/references/source-routes.md"
+        "docs/agent/automotive_sources/model_source_overrides.json",
+        "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ],
       "primary_files": [
         "docs/agent/toyota_gr_yaris_playbook.md",
-        "C:/Users/User/.codex/skills/toyota-gr-yaris/references/source-routes.md",
         "docs/agent/automotive_sources/model_source_overrides.json",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ],
@@ -547,18 +545,18 @@
         "что открыть для N63TU misfire injector oil consumption",
         "куда идти при ошибках BDC MEVD FlexRay"
       ],
-      "skill_path": "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
       "source_of_truth_files": [
-        "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/source-index.md",
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/electrical-electronics.md"
+        "docs/agent/bmw_repair_playbook.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json"
       ],
       "primary_files": [
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/source-index.md",
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/vehicle-basics.md",
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/electrical-electronics.md",
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/n63tu-powertrain.md",
-        "C:/Users/User/.codex/skills/bmw-f15-n63/references/faults-tsbs.md"
+        "docs/agent/bmw_repair_playbook.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_01_diagnostics_architecture_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_03_engines_common_service_topics_ru.md",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_06_body_electrical_networks_ru.md"
       ]
     },
     "fluids": {
@@ -996,6 +994,64 @@
         "docs/agent/parts_search_playbook.md",
         "docs/agent/zzap_search_playbook.md",
         "docs/agent/service_management_sources.json"
+      ]
+    },
+    "board_cleanup_autopilot": {
+      "title": "Board cleanup autopilot: Приберись",
+      "use_when": [
+        "owner says Приберись",
+        "owner says прибери доску",
+        "owner says обслужи доску",
+        "owner says актуализируй доску",
+        "routine CRM board cleanup",
+        "hourly board cleanup automation"
+      ],
+      "aliases": [
+        "Приберись",
+        "прибери доску",
+        "обслужи доску",
+        "актуализируй доску",
+        "проведи уборку доски",
+        "проверь доску",
+        "board cleanup",
+        "cleanup autopilot",
+        "CRM cleanup",
+        "ежечасная уборка"
+      ],
+      "keywords": [
+        "board_cleanup_autopilot",
+        "active cards",
+        "CRM board",
+        "archive",
+        "preserve data",
+        "AI note",
+        "deadline",
+        "indicator",
+        "tag",
+        "payment blocker",
+        "parts blocker",
+        "stale cards",
+        "automation"
+      ],
+      "questions": [
+        "что делать когда владелец сказал Приберись",
+        "как агент должен убирать CRM доску",
+        "какие CRM правки разрешены автопилоту",
+        "как запускать уборку доски каждый час",
+        "что нельзя удалять при уборке доски"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/board_cleanup_autopilot_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/operating_playbook.json",
+        "docs/agent/manager_rules.json"
+      ],
+      "primary_files": [
+        "docs/agent/board_cleanup_autopilot_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/operating_playbook.json",
+        "docs/agent/manager_rules.json",
+        "docs/agent/krasnoyarsk_service_management_playbook.md"
       ]
     },
     "service_management": {
