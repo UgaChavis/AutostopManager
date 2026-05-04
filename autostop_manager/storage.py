@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,47 @@ def _decode_json(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return fallback
+
+
+def _tokens(value: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(r"[\w\-]+", value.casefold(), flags=re.UNICODE)))
+
+
+def _matches_filter(value: str | None, expected: str | None) -> bool:
+    if not expected:
+        return True
+    return str(value or "").casefold() == expected.casefold()
+
+
+def _matches_tags(item_tags: list[str] | None, expected: list[str] | None) -> bool:
+    if not expected:
+        return True
+    normalized = {tag.casefold() for tag in (item_tags or [])}
+    return all(tag.casefold() in normalized for tag in expected)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(float(value), 1.0))
+
+
+def _add_topic(topics: dict[str, dict[str, Any]], name: str, item: dict[str, Any], examples_limit: int) -> None:
+    key = name.strip()
+    if not key:
+        return
+    topic = topics.setdefault(key, {"count": 0, "examples": []})
+    topic["count"] += 1
+    if len(topic["examples"]) < examples_limit:
+        topic["examples"].append(
+            {
+                "kind": item.get("kind"),
+                "id": item.get("id"),
+                "title": item.get("title") or item.get("content") or item.get("event") or item.get("rule") or "",
+            }
+        )
+
+
+def _sort_topic_map(topics: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return dict(sorted(topics.items(), key=lambda entry: (-int(entry[1]["count"]), entry[0].casefold())))
 
 
 @dataclass(frozen=True)
@@ -66,6 +108,23 @@ class ManagerMemoryStore:
                     tags_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS lessons (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL,
+                    applies_to TEXT NOT NULL DEFAULT 'general',
+                    signal TEXT NOT NULL DEFAULT 'manager_observation',
+                    recommendation TEXT NOT NULL DEFAULT '',
+                    avoid TEXT NOT NULL DEFAULT '',
+                    importance REAL NOT NULL DEFAULT 0.5,
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    source TEXT NOT NULL DEFAULT 'codex',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_used_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -234,6 +293,7 @@ class ManagerMemoryStore:
         category: str = "general",
         source: str = "codex",
         tags: list[str] | None = None,
+        confidence: float = 1.0,
     ) -> dict[str, Any]:
         self.initialize()
         now = _now()
@@ -242,10 +302,10 @@ class ManagerMemoryStore:
             if table == "facts":
                 cursor = conn.execute(
                     """
-                    INSERT INTO facts (content, category, source, tags_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO facts (content, category, source, confidence, tags_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (content, category, source, _json_list(tags), now, now),
+                    (content, category, source, float(confidence), _json_list(tags), now, now),
                 )
             else:
                 cursor = conn.execute(
@@ -255,7 +315,63 @@ class ManagerMemoryStore:
                     """,
                     (title, content, category, source, _json_list(tags), now, now),
                 )
-        return {"ok": True, "kind": table[:-1], "id": cursor.lastrowid, "created_at": now}
+        result = {"ok": True, "kind": table[:-1], "id": cursor.lastrowid, "created_at": now}
+        if table == "facts":
+            result["confidence"] = float(confidence)
+        return result
+
+    def learn_from_feedback(
+        self,
+        content: str,
+        *,
+        title: str = "",
+        applies_to: str = "general",
+        signal: str = "manager_observation",
+        recommendation: str = "",
+        avoid: str = "",
+        importance: float = 0.5,
+        confidence: float = 0.7,
+        source: str = "codex",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        now = _now()
+        importance = _clamp01(importance)
+        confidence = _clamp01(confidence)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO lessons (
+                    title, content, applies_to, signal, recommendation, avoid,
+                    importance, confidence, source, tags_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    title,
+                    content,
+                    applies_to,
+                    signal,
+                    recommendation,
+                    avoid,
+                    importance,
+                    confidence,
+                    source,
+                    _json_list(tags),
+                    now,
+                    now,
+                ),
+            )
+        return {
+            "ok": True,
+            "kind": "lesson",
+            "id": cursor.lastrowid,
+            "created_at": now,
+            "applies_to": applies_to,
+            "signal": signal,
+            "importance": importance,
+            "confidence": confidence,
+        }
 
     def add_task(
         self,
@@ -309,36 +425,249 @@ class ManagerMemoryStore:
             )
         return {"ok": True, "id": cursor.lastrowid, "created_at": now}
 
-    def recall(self, query: str = "", *, limit: int = 20) -> dict[str, Any]:
+    def recall(
+        self,
+        query: str = "",
+        *,
+        limit: int = 20,
+        kind: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
         self.initialize()
         limit = max(1, min(limit, 100))
-        pattern = f"%{query.strip()}%" if query.strip() else "%"
+        query = query.strip()
+        query_tokens = _tokens(query)
         results: list[dict[str, Any]] = []
         with self.connect() as conn:
             searches = [
-                ("note", "notes", "title || ' ' || content || ' ' || category", "updated_at"),
-                ("fact", "facts", "content || ' ' || category", "updated_at"),
-                ("task", "tasks", "title || ' ' || details || ' ' || status", "updated_at"),
-                ("reminder", "reminders", "title || ' ' || details || ' ' || status", "updated_at"),
-                ("journal", "journal", "event || ' ' || source", "created_at"),
-                ("rule", "manager_rules", "title || ' ' || rule || ' ' || scope", "updated_at"),
+                ("note", "notes", "updated_at"),
+                ("fact", "facts", "updated_at"),
+                ("task", "tasks", "updated_at"),
+                ("reminder", "reminders", "updated_at"),
+                ("journal", "journal", "created_at"),
+                ("rule", "manager_rules", "updated_at"),
+                ("lesson", "lessons", "updated_at"),
             ]
-            for kind, table, haystack, order_column in searches:
+            for row_kind, table, order_column in searches:
+                if kind and row_kind != kind:
+                    continue
                 rows = conn.execute(
                     f"""
                     SELECT *, ? AS kind FROM {table}
-                    WHERE {haystack} LIKE ?
                     ORDER BY {order_column} DESC
                     LIMIT ?
                     """,
-                    (kind, pattern, limit),
+                    (row_kind, max(limit * 10, 100)),
                 ).fetchall()
-                results.extend(self._row_to_dict(row) for row in rows)
-        results.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
-        return {"ok": True, "query": query, "items": results[:limit], "total_returned": min(len(results), limit)}
+                for row in rows:
+                    item = self._row_to_dict(row)
+                    if not _matches_filter(item.get("category"), category):
+                        continue
+                    if not _matches_tags(item.get("tags", []), tags):
+                        continue
+                    score, matched_fields = self._score_memory_item(item, query, query_tokens)
+                    if query_tokens and score <= 0:
+                        continue
+                    item["score"] = score
+                    item["matched_fields"] = matched_fields
+                    results.append(item)
+        results.sort(
+            key=lambda item: (
+                int(item.get("score") or 0),
+                item.get("updated_at") or item.get("created_at") or "",
+            ),
+            reverse=True,
+        )
+        return {
+            "ok": True,
+            "query": query,
+            "filters": {"kind": kind, "category": category, "tags": tags or []},
+            "items": results[:limit],
+            "total_returned": min(len(results), limit),
+            "total_matches": len(results),
+        }
+
+    def recall_lessons(
+        self,
+        query: str = "",
+        *,
+        limit: int = 20,
+        applies_to: str | None = None,
+        signal: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        limit = max(1, min(limit, 100))
+        query = query.strip()
+        query_tokens = _tokens(query)
+        results: list[dict[str, Any]] = []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *, 'lesson' AS kind FROM lessons
+                ORDER BY importance DESC, confidence DESC, updated_at DESC
+                LIMIT ?
+                """,
+                (max(limit * 10, 100),),
+            ).fetchall()
+            for row in rows:
+                item = self._row_to_dict(row)
+                if not _matches_filter(item.get("applies_to"), applies_to):
+                    continue
+                if not _matches_filter(item.get("signal"), signal):
+                    continue
+                if not _matches_tags(item.get("tags", []), tags):
+                    continue
+                score, matched_fields = self._score_memory_item(item, query, query_tokens)
+                if query_tokens and score <= 0:
+                    continue
+                item["score"] = score
+                item["matched_fields"] = matched_fields
+                results.append(item)
+        results.sort(
+            key=lambda item: (
+                int(item.get("score") or 0),
+                float(item.get("importance") or 0),
+                float(item.get("confidence") or 0),
+                item.get("updated_at") or "",
+            ),
+            reverse=True,
+        )
+        return {
+            "ok": True,
+            "query": query,
+            "filters": {"applies_to": applies_to, "signal": signal, "tags": tags or []},
+            "items": results[:limit],
+            "total_returned": min(len(results), limit),
+            "total_matches": len(results),
+        }
+
+    def memory_map(self) -> dict[str, Any]:
+        self.initialize()
+        sections = {
+            "notes": self._section_summary("notes", "updated_at"),
+            "facts": self._section_summary("facts", "updated_at"),
+            "lessons": self._section_summary("lessons", "updated_at"),
+            "tasks": self._section_summary("tasks", "updated_at", where="status = 'open'"),
+            "reminders": self._section_summary("reminders", "updated_at", where="status = 'open'"),
+            "journal": self._section_summary("journal", "created_at"),
+            "rules": self._section_summary("manager_rules", "updated_at"),
+        }
+        return {
+            "ok": True,
+            "generated_at": _now(),
+            "sections": sections,
+            "recommended_flow": [
+                "today_context",
+                "memory_context_for",
+                "recall_lessons",
+                "learn_from_feedback after strong owner/result signals",
+                "memory_gaps during memory review",
+            ],
+        }
+
+    def memory_topics(self, *, examples_limit: int = 3) -> dict[str, Any]:
+        self.initialize()
+        categories: dict[str, dict[str, Any]] = {}
+        tags: dict[str, dict[str, Any]] = {}
+        with self.connect() as conn:
+            rows: list[dict[str, Any]] = []
+            for table, kind in [
+                ("notes", "note"),
+                ("facts", "fact"),
+                ("tasks", "task"),
+                ("reminders", "reminder"),
+                ("journal", "journal"),
+                ("lessons", "lesson"),
+                ("manager_rules", "rule"),
+            ]:
+                order_column = "created_at" if table == "journal" else "updated_at"
+                rows.extend(
+                    self._row_to_dict(row)
+                    for row in conn.execute(
+                        f"SELECT *, ? AS kind FROM {table} ORDER BY {order_column} DESC LIMIT 200",
+                        (kind,),
+                    ).fetchall()
+                )
+        for item in rows:
+            category = str(item.get("category") or item.get("applies_to") or item.get("scope") or "").strip()
+            if category:
+                _add_topic(categories, category, item, examples_limit)
+            for tag in item.get("tags") or []:
+                _add_topic(tags, str(tag), item, examples_limit)
+        return {
+            "ok": True,
+            "generated_at": _now(),
+            "categories": _sort_topic_map(categories),
+            "tags": _sort_topic_map(tags),
+        }
+
+    def memory_context_for(self, task: str, *, limit: int = 5) -> dict[str, Any]:
+        self.initialize()
+        task = task.strip()
+        limit = max(1, min(limit, 20))
+        lessons = self.recall_lessons(task, limit=limit)["items"]
+        if not lessons:
+            lessons = self.recall_lessons("", limit=min(limit, 3))["items"]
+
+        recalled = self.recall(task, limit=limit * 3)["items"]
+        preferences_or_facts = [
+            item
+            for item in recalled
+            if item.get("kind") in {"fact", "note", "rule"} and item.get("kind") != "lesson"
+        ][:limit]
+        if not preferences_or_facts:
+            preferences_or_facts = self.recall("", limit=limit, kind="fact")["items"]
+
+        return {
+            "ok": True,
+            "query": task,
+            "generated_at": _now(),
+            "lessons": lessons[:limit],
+            "preferences_or_facts": preferences_or_facts[:limit],
+            "source_boundaries": [
+                "CRM is source of truth for cards, clients, vehicles, repair orders, payments, and cashboxes.",
+                "Manager memory stores style, owner preferences, durable lessons, and operating context only.",
+                "Use memory as context for judgment, not as a rigid text template.",
+            ],
+            "suggested_use": [
+                "Read lessons and preferences before writing CRM/email/customer-facing text.",
+                "Check live CRM data before making factual statements about board state or money.",
+                "After strong praise, criticism, success, or failure, write a concise lesson.",
+            ],
+        }
+
+    def memory_gaps(self) -> dict[str, Any]:
+        self.initialize()
+        sections = {
+            "notes": self._count_rows("notes"),
+            "facts": self._count_rows("facts"),
+            "lessons": self._count_rows("lessons"),
+            "tasks": self._count_rows("tasks", where="status = 'open'"),
+            "reminders": self._count_rows("reminders", where="status = 'open'"),
+            "journal": self._count_rows("journal"),
+            "rules": self._count_rows("manager_rules"),
+        }
+        empty_sections = {name: count for name, count in sections.items() if count == 0}
+        sparse_sections = {name: count for name, count in sections.items() if 0 < count < 2}
+        return {
+            "ok": True,
+            "generated_at": _now(),
+            "empty_sections": empty_sections,
+            "sparse_sections": sparse_sections,
+            "conflicts": [],
+            "review_prompts": [
+                "Add lessons after strong owner feedback or clearly successful/failed work.",
+                "Keep CRM facts in CRM; store only reusable operating conclusions in memory.",
+                "Review sparse topics before relying on memory for style-sensitive work.",
+            ],
+        }
 
     def today_context(self, *, limit: int = 20) -> dict[str, Any]:
         self.initialize()
+        if self._manager_rule_count() == 0:
+            self.seed_default_rules()
         now = _now()
         limit = max(1, min(limit, 100))
         with self.connect() as conn:
@@ -395,6 +724,15 @@ class ManagerMemoryStore:
                 "get_card_context",
                 "list_repair_orders",
             ],
+            "memory_use_order": [
+                "today_context",
+                "memory_context_for before context-sensitive CRM/Gmail/writing tasks",
+                "recall owner/style/rule terms when the request depends on prior preferences",
+                "recall_lessons for similar prior successes or failures",
+                "probe_knowledge_base for local knowledge routing",
+                "learn_from_feedback after strong praise, criticism, success, or failure",
+                "manager_journal after important decisions",
+            ],
         }
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -402,3 +740,116 @@ class ManagerMemoryStore:
         if "tags_json" in item:
             item["tags"] = _decode_json(item.pop("tags_json"), [])
         return item
+
+    def _manager_rule_count(self) -> int:
+        with self.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM manager_rules").fetchone()
+        return int(row["count"] or 0)
+
+    def _count_rows(self, table: str, *, where: str | None = None) -> int:
+        query = f"SELECT COUNT(*) AS count FROM {table}"
+        if where:
+            query += f" WHERE {where}"
+        with self.connect() as conn:
+            row = conn.execute(query).fetchone()
+        return int(row["count"] or 0)
+
+    def _section_summary(self, table: str, order_column: str, *, where: str | None = None) -> dict[str, Any]:
+        query = f"SELECT COUNT(*) AS count, MAX({order_column}) AS last_updated FROM {table}"
+        if where:
+            query += f" WHERE {where}"
+        with self.connect() as conn:
+            row = conn.execute(query).fetchone()
+        return {"count": int(row["count"] or 0), "last_updated": row["last_updated"]}
+
+    def _score_memory_item(self, item: dict[str, Any], query: str, tokens: list[str]) -> tuple[int, list[str]]:
+        if not tokens:
+            return 0, []
+        fields = self._memory_search_fields(item)
+        score = 0
+        matched_fields: list[str] = []
+        normalized_query = query.casefold()
+        for field, raw_value in fields.items():
+            value = raw_value.casefold()
+            if not value:
+                continue
+            field_score = 0
+            if normalized_query and normalized_query in value:
+                field_score += 20
+            for token in tokens:
+                if token in value:
+                    field_score += self._memory_field_weight(field)
+            if field_score:
+                score += field_score
+                matched_fields.append(field)
+        return score, matched_fields
+
+    def _memory_search_fields(self, item: dict[str, Any]) -> dict[str, str]:
+        tags = " ".join(str(tag) for tag in (item.get("tags") or []))
+        kind = item.get("kind")
+        if kind == "note":
+            return {
+                "title": str(item.get("title") or ""),
+                "content": str(item.get("content") or ""),
+                "category": str(item.get("category") or ""),
+                "source": str(item.get("source") or ""),
+                "tags": tags,
+            }
+        if kind == "fact":
+            return {
+                "content": str(item.get("content") or ""),
+                "category": str(item.get("category") or ""),
+                "source": str(item.get("source") or ""),
+                "tags": tags,
+            }
+        if kind == "lesson":
+            return {
+                "title": str(item.get("title") or ""),
+                "content": str(item.get("content") or ""),
+                "applies_to": str(item.get("applies_to") or ""),
+                "signal": str(item.get("signal") or ""),
+                "recommendation": str(item.get("recommendation") or ""),
+                "avoid": str(item.get("avoid") or ""),
+                "source": str(item.get("source") or ""),
+                "tags": tags,
+            }
+        if kind in {"task", "reminder"}:
+            return {
+                "title": str(item.get("title") or ""),
+                "details": str(item.get("details") or ""),
+                "status": str(item.get("status") or ""),
+                "source": str(item.get("source") or ""),
+                "tags": tags,
+            }
+        if kind == "journal":
+            return {
+                "event": str(item.get("event") or ""),
+                "source": str(item.get("source") or ""),
+                "tags": tags,
+            }
+        if kind == "rule":
+            return {
+                "title": str(item.get("title") or ""),
+                "rule": str(item.get("rule") or ""),
+                "scope": str(item.get("scope") or ""),
+                "source": str(item.get("source") or ""),
+            }
+        return {key: str(value or "") for key, value in item.items()}
+
+    def _memory_field_weight(self, field: str) -> int:
+        return {
+            "title": 8,
+            "tags": 7,
+            "category": 5,
+            "rule": 5,
+            "content": 4,
+            "details": 4,
+            "event": 4,
+            "recommendation": 6,
+            "avoid": 5,
+            "applies_to": 5,
+            "signal": 3,
+            "scope": 3,
+            "status": 2,
+            "source": 1,
+        }.get(field, 1)

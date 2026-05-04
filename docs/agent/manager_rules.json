@@ -181,6 +181,21 @@
       "rule": "ChatGPT Android may write manager memory through the same shared MCP endpoint. Treat those notes as durable context for future Codex work."
     },
     {
+      "id": "memory-context-recall",
+      "priority": 26,
+      "rule": "Before context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated workflow decisions, build context with memory_context_for, then use recall or recall_lessons for more detail. Use the result as context, not as a rigid template."
+    },
+    {
+      "id": "memory-feedback-learning",
+      "priority": 27,
+      "rule": "When the owner praises, criticizes, says to do something differently, or when a result is clearly successful or clearly poor, store a concise reusable lesson with learn_from_feedback. Do not copy CRM records, Gmail threads, or full event logs into memory."
+    },
+    {
+      "id": "memory-navigation-review",
+      "priority": 27,
+      "rule": "Use memory_map, memory_topics, and memory_gaps when reviewing what the manager knows, finding weak areas, or checking whether memory has enough context for a style-sensitive or repeated workflow."
+    },
+    {
       "id": "email-source-of-truth",
       "priority": 28,
       "rule": "Do not copy full Gmail threads into manager memory. Store only durable facts, decisions, tasks, reminders, or operating notes extracted from the email."

@@ -27,6 +27,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         category: str = "general",
         source: str = "chatgpt",
         tags: list[str] | None = None,
+        confidence: float = 1.0,
     ) -> dict[str, Any]:
         return memory.remember(
             content,
@@ -35,14 +36,100 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             category=category,
             source=source,
             tags=tags,
+            confidence=confidence,
         )
 
     @server.tool(
         name="recall",
-        description="Search the manager long-term memory. Use this before assuming owner context is unknown.",
+        description=(
+            "Search the manager long-term memory with relevance scoring and optional kind/category/tag filters. "
+            "Use this before assuming owner context, style preferences, operating lessons, or durable rules are unknown."
+        ),
     )
-    def recall(query: str = "", limit: int = 20) -> dict[str, Any]:
-        return memory.recall(query, limit=limit)
+    def recall(
+        query: str = "",
+        limit: int = 20,
+        kind: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return memory.recall(query, limit=limit, kind=kind, category=category, tags=tags)
+
+    @server.tool(
+        name="learn_from_feedback",
+        description=(
+            "Store a concise reusable lesson when owner feedback, praise, criticism, clear success, or clear failure "
+            "should improve future manager behavior. Store the lesson, not CRM/Gmail/raw event copies."
+        ),
+    )
+    def learn_from_feedback(
+        content: str,
+        title: str = "",
+        applies_to: str = "general",
+        signal: str = "manager_observation",
+        recommendation: str = "",
+        avoid: str = "",
+        importance: float = 0.5,
+        confidence: float = 0.7,
+        source: str = "chatgpt",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return memory.learn_from_feedback(
+            content,
+            title=title,
+            applies_to=applies_to,
+            signal=signal,
+            recommendation=recommendation,
+            avoid=avoid,
+            importance=importance,
+            confidence=confidence,
+            source=source,
+            tags=tags,
+        )
+
+    @server.tool(
+        name="recall_lessons",
+        description="Search reusable manager lessons by task text, applies_to, signal, and tags before similar work.",
+    )
+    def recall_lessons(
+        query: str = "",
+        limit: int = 20,
+        applies_to: str | None = None,
+        signal: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return memory.recall_lessons(query, limit=limit, applies_to=applies_to, signal=signal, tags=tags)
+
+    @server.tool(
+        name="memory_map",
+        description="Return compact counts and sections for manager memory so the agent can navigate memory before broad recall.",
+    )
+    def memory_map() -> dict[str, Any]:
+        return memory.memory_map()
+
+    @server.tool(
+        name="memory_topics",
+        description="Return memory categories and tags with counts and examples for navigation and review.",
+    )
+    def memory_topics(examples_limit: int = 3) -> dict[str, Any]:
+        return memory.memory_topics(examples_limit=examples_limit)
+
+    @server.tool(
+        name="memory_context_for",
+        description=(
+            "Build compact memory context for a task: relevant preferences, rules, lessons, source boundaries, and suggested use. "
+            "Use as context for judgment, not as a rigid text template."
+        ),
+    )
+    def memory_context_for(task: str, limit: int = 5) -> dict[str, Any]:
+        return memory.memory_context_for(task, limit=limit)
+
+    @server.tool(
+        name="memory_gaps",
+        description="Return sparse or empty memory areas and review prompts without copying CRM or Gmail data.",
+    )
+    def memory_gaps() -> dict[str, Any]:
+        return memory.memory_gaps()
 
     @server.tool(
         name="add_manager_task",

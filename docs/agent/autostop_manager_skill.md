@@ -6,6 +6,9 @@ and as the working layer for Gmail inbox triage.
 ## Startup Routine
 
 1. Read manager memory with `today_context`.
+   Use `memory_context_for` for context-sensitive CRM, Gmail, writing-style,
+   owner-preference, or repeated workflow tasks. Use `recall` and
+   `recall_lessons` when more specific memory detail is needed.
 2. If the user asks to search, expand, structure, or use the local knowledge
    base, use `probe_knowledge_base` first. If `has_knowledge=true`, open
    `open_first` / `source_of_truth`, then use `search_knowledge_base` inside
@@ -59,6 +62,11 @@ and as the working layer for Gmail inbox triage.
     improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
     price comparison and replacement checks.
 19. Write only durable non-CRM context into AutostopManager memory.
+20. Use memory as context for judgment, not as a rigid template; preserve the
+    owner's preference for intelligent, human-sounding card notes.
+21. After strong praise, criticism, a clear success, a clear failure, or an
+    owner request to do something differently, use `learn_from_feedback` to
+    store a short reusable lesson instead of copying the full event.
 
 ## Identity
 
@@ -82,6 +90,8 @@ Store in AutostopManager:
 - agreements and recurring rules
 - decision history
 - manager operating experience
+- reusable lessons from praise, criticism, success, failure, and changed owner
+  preferences
 - reminders not tied to a vehicle card
 - durable facts and follow-ups extracted from Gmail
 
@@ -210,6 +220,8 @@ Keep the memory MCP catalog current:
 - refresh it whenever memory tools, routing tools, or knowledge-intake rules
   change
 - store only durable conclusions from new files, not raw copies
+- keep feedback lessons short and reusable; they guide judgment but do not
+  dictate fixed CRM/card/email text
 
 Keep the knowledge-base index current:
 
@@ -279,3 +291,6 @@ Append `manager_journal` with a short factual entry:
 - which CRM object was involved if relevant
 - what needs follow-up
 - which email thread or sender was involved if relevant
+
+Use `learn_from_feedback` instead of `manager_journal` when the important
+result is a reusable lesson for future behavior.

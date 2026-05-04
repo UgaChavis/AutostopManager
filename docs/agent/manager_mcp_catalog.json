@@ -2,7 +2,7 @@
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
   "last_verified": "2026-05-04",
-  "tool_count": 13,
+  "tool_count": 19,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -26,7 +26,13 @@
   "startup_tools": [
     "today_context",
     "recall",
+    "memory_context_for",
+    "recall_lessons",
     "remember",
+    "learn_from_feedback",
+    "memory_map",
+    "memory_topics",
+    "memory_gaps",
     "add_manager_task",
     "manager_journal"
   ],
@@ -43,6 +49,12 @@
   "all_tools": [
     "remember",
     "recall",
+    "learn_from_feedback",
+    "recall_lessons",
+    "memory_map",
+    "memory_topics",
+    "memory_context_for",
+    "memory_gaps",
     "add_manager_task",
     "today_context",
     "manager_journal",
@@ -56,8 +68,14 @@
     "recommend_service_management_actions"
   ],
   "tool_contracts": {
-    "remember": "Store long-term manager memory that does not belong in AutoStop CRM cards; prefer distilled conclusions over raw source copies.",
-    "recall": "Search memory before assuming owner context is unknown.",
+    "remember": "Store long-term manager memory that does not belong in AutoStop CRM cards; prefer distilled conclusions over raw source copies; facts may carry confidence.",
+    "recall": "Search memory with relevance scoring and optional kind/category/tag filters before assuming owner context, style preferences, operating lessons, or durable rules are unknown.",
+    "learn_from_feedback": "Store a concise reusable lesson after strong owner feedback, praise, criticism, clear success, or clear failure; store the lesson, not raw CRM/Gmail/event copies.",
+    "recall_lessons": "Search reusable manager lessons by query, applies_to, signal, and tags before similar work.",
+    "memory_map": "Return compact counts and sections for manager memory so the agent can navigate memory before broad recall.",
+    "memory_topics": "Return memory categories and tags with counts and examples for navigation and review.",
+    "memory_context_for": "Build compact memory context for a task: relevant preferences, rules, lessons, source boundaries, and suggested use; treat as context, not a template.",
+    "memory_gaps": "Return sparse or empty memory areas and review prompts without copying CRM or Gmail data.",
     "add_manager_task": "Create a durable task that is not a CRM card or repair order.",
     "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
@@ -142,6 +160,10 @@
   },
   "memory_guidance": [
     "keep only durable conclusions from new files",
+    "use memory_context_for before context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated workflow decisions",
+    "recall owner preferences, style rules, and operating lessons before context-sensitive CRM or email work",
+    "use learn_from_feedback after strong praise, criticism, success, failure, or owner instruction to do something differently",
+    "store lessons as short reusable guidance, not full event copies or rigid output templates",
     "store source routes, not copied databases",
     "refresh the relevant catalog when the MCP surface changes",
     "treat the owner's Приберись command as docs/agent/board_cleanup_autopilot_playbook.md",

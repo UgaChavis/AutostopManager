@@ -1,6 +1,6 @@
 {
   "startup_sequence": [
-    "Read AutostopManager today_context.",
+    "Read AutostopManager today_context, then use memory_context_for when the task depends on owner preferences, writing style, prior lessons, Gmail context, CRM cleanup behavior, or repeated workflow decisions.",
     "If the task involves local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first; open source_of_truth/open_first when has_knowledge=true; use sync_knowledge_base and audit_knowledge_base if docs/catalogs/skills changed.",
     "If the current task involves email, inspect Gmail inbox state and relevant threads.",
     "If the user asks about live CRM state, call AutoStop CRM get_connector_identity, get_runtime_status, bootstrap_context, or get_board_context.",
@@ -17,7 +17,7 @@
     "If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, F15 electrical/electronics, injector bulletins, misfires, oil consumption, or cooling, use docs/agent/bmw_repair_playbook.md and the indexed BMW repair source cache.",
     "If the task involves Krasnoyarsk workshop management, procurement, staff load, customer flow, finance control, or daily CRM control, inspect docs/agent/krasnoyarsk_service_management_playbook.md and use recommend_service_management_actions.",
     "Use focused CRM tools before heavy wall/snapshot exports.",
-    "After meaningful work, write manager_journal."
+    "After meaningful work, write manager_journal; when the important result is a reusable lesson from praise, criticism, clear success, clear failure, or an owner request to do something differently, use learn_from_feedback."
   ],
   "knowledge_navigation": {
     "entrypoint": "docs/agent/knowledge_base_index.md",
@@ -216,8 +216,10 @@
     ]
   },
   "memory_navigation": {
-    "before_answering_contextual_questions": "recall relevant owner/client/rent/rule/email terms if not obvious from the current chat",
+    "before_answering_contextual_questions": "use memory_context_for first, then recall or recall_lessons for more specific owner/client/rent/rule/email terms if not obvious from the current chat",
     "after_new_owner_instruction": "remember durable facts that are not CRM records or raw email copies and record MCP surface changes that affect future work",
+    "after_feedback_or_result_signal": "use learn_from_feedback when praise, criticism, clear success, clear failure, or a request to do something differently creates a reusable lesson",
+    "navigation_review": "use memory_map, memory_topics, and memory_gaps to understand what the manager knows and where memory is weak",
     "after_file_intake": "store only durable conclusions from the file, update the relevant playbook or catalog, and journal the change",
     "after_decision": "manager_journal concise decision and follow-up"
   },

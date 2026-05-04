@@ -8,8 +8,8 @@
   "last_verified": "2026-05-04",
   "tool_counts": {
     "crm_base_tools": 71,
-    "optional_autostop_manager_tools": 13,
-    "production_tools_with_manager_mounted": 84
+    "optional_autostop_manager_tools": 19,
+    "production_tools_with_manager_mounted": 90
   },
   "source_documents": [
     "README.md",
@@ -144,6 +144,12 @@
     "optional_manager_memory_and_routing": [
       "remember",
       "recall",
+      "learn_from_feedback",
+      "recall_lessons",
+      "memory_map",
+      "memory_topics",
+      "memory_context_for",
+      "memory_gaps",
       "add_manager_task",
       "today_context",
       "manager_journal",
@@ -206,14 +212,20 @@
     "list_repair_orders",
     "list_shared_files",
     "lookup_original_parts",
+    "learn_from_feedback",
     "manager_journal",
     "mark_card_ready",
+    "memory_context_for",
+    "memory_gaps",
+    "memory_map",
+    "memory_topics",
     "move_card",
     "move_sticky",
     "ping_connector",
     "probe_knowledge_base",
     "read_card_attachment",
     "recall",
+    "recall_lessons",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
     "recommend_service_management_actions",
@@ -255,7 +267,7 @@
     "Use shared_files tools for shared documents and card attachment tools for card-local attachments; do not paste file bytes into notes unless required.",
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use set_card_board_summary only after reading the target card and keep it under 5 non-empty lines.",
-    "Use today_context/recall/remember only for durable non-CRM manager memory.",
+    "Use today_context/memory_context_for/recall/remember/learn_from_feedback only for durable non-CRM manager memory and lessons.",
     "Treat the autostopcrm-v1 branch in the CRM repo as canonical for new MCP commands and connector behavior.",
     "Refresh this catalog whenever the CRM repo or AutostopManager MCP tool surface changes."
   ]

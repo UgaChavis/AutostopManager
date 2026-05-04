@@ -10,10 +10,10 @@ repair orders, and cashbox data.
 Gmail remains the source of truth for inbox messages, threads, and email
 attachments.
 
-AutostopManager stores only manager memory: facts, notes, tasks, reminders,
-journal entries, operating rules, and durable conclusions extracted from CRM
-or email work that should survive between Codex sessions and ChatGPT mobile
-usage.
+AutostopManager stores only manager memory: facts, notes, lessons, tasks,
+reminders, journal entries, operating rules, and durable conclusions extracted
+from CRM or email work that should survive between Codex sessions and ChatGPT
+mobile usage.
 
 For new files and knowledge expansion, use
 `docs/agent/knowledge_base_index.md` first, then
@@ -92,8 +92,14 @@ up to date.
 ## CLI Examples
 
 ```powershell
-python -m autostop_manager.cli remember "Аренда бокса оплачивается до 5 числа" --kind fact --tags аренда
-python -m autostop_manager.cli recall аренда
+python -m autostop_manager.cli remember "Аренда бокса оплачивается до 5 числа" --kind fact --tags аренда --confidence 0.9
+python -m autostop_manager.cli recall аренда --kind fact --tags аренда
+python -m autostop_manager.cli learn "В карточках писать живым языком и коротко" --applies-to crm_cleanup --signal owner_correction --recommendation "Одна строка: статус, следующий шаг или вопрос" --avoid "Длинный сухой AI-шаблон" --importance 0.9 --confidence 1.0 --tags карточки,стиль
+python -m autostop_manager.cli lessons "живым языком" --applies-to crm_cleanup --tags стиль
+python -m autostop_manager.cli memory-context "уборка CRM карточек"
+python -m autostop_manager.cli memory-map
+python -m autostop_manager.cli memory-topics
+python -m autostop_manager.cli memory-gaps
 python -m autostop_manager.cli task "Проверить просроченные машины утром" --due 2026-04-30
 python -m autostop_manager.cli remind "Напомнить про аренду" --due 2026-05-04T10:00:00+07:00
 python -m autostop_manager.cli today
@@ -123,6 +129,12 @@ The manager memory tools are intentionally separate from CRM operations:
 
 - `remember`
 - `recall`
+- `learn_from_feedback`
+- `recall_lessons`
+- `memory_map`
+- `memory_topics`
+- `memory_context_for`
+- `memory_gaps`
 - `add_manager_task`
 - `today_context`
 - `manager_journal`

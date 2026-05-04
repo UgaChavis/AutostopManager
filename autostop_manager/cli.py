@@ -37,10 +37,43 @@ def build_parser() -> argparse.ArgumentParser:
     remember.add_argument("--category", default="general")
     remember.add_argument("--source", default="codex")
     remember.add_argument("--tags", default="")
+    remember.add_argument("--confidence", type=float, default=1.0)
 
     recall = sub.add_parser("recall", help="Search manager memory")
     recall.add_argument("query", nargs="?", default="")
     recall.add_argument("--limit", type=int, default=20)
+    recall.add_argument("--kind", choices=["note", "fact", "lesson", "task", "reminder", "journal", "rule"], default=None)
+    recall.add_argument("--category", default=None)
+    recall.add_argument("--tags", default="")
+
+    learn = sub.add_parser("learn", help="Store a reusable lesson from feedback, praise, failure, or success")
+    learn.add_argument("content")
+    learn.add_argument("--title", default="")
+    learn.add_argument("--applies-to", dest="applies_to", default="general")
+    learn.add_argument("--signal", default="manager_observation")
+    learn.add_argument("--recommendation", default="")
+    learn.add_argument("--avoid", default="")
+    learn.add_argument("--importance", type=float, default=0.5)
+    learn.add_argument("--confidence", type=float, default=0.7)
+    learn.add_argument("--source", default="codex")
+    learn.add_argument("--tags", default="")
+
+    lessons = sub.add_parser("lessons", help="Search reusable manager lessons")
+    lessons.add_argument("query", nargs="?", default="")
+    lessons.add_argument("--limit", type=int, default=20)
+    lessons.add_argument("--applies-to", dest="applies_to", default=None)
+    lessons.add_argument("--signal", default=None)
+    lessons.add_argument("--tags", default="")
+
+    sub.add_parser("memory-map", help="Show memory sections and counts")
+    memory_topics = sub.add_parser("memory-topics", help="Show memory categories and tags")
+    memory_topics.add_argument("--examples-limit", type=int, default=3)
+
+    memory_context = sub.add_parser("memory-context", help="Build compact memory context for a task")
+    memory_context.add_argument("task")
+    memory_context.add_argument("--limit", type=int, default=5)
+
+    sub.add_parser("memory-gaps", help="Show sparse or empty memory areas")
 
     task = sub.add_parser("task", help="Add a manager task")
     task.add_argument("title")
@@ -174,10 +207,52 @@ def main(argv: list[str] | None = None) -> int:
                 category=args.category,
                 source=args.source,
                 tags=_tags(args.tags),
+                confidence=args.confidence,
             )
         )
     elif args.command == "recall":
-        _print_json(store.recall(args.query, limit=args.limit))
+        _print_json(
+            store.recall(
+                args.query,
+                limit=args.limit,
+                kind=args.kind,
+                category=args.category,
+                tags=_tags(args.tags),
+            )
+        )
+    elif args.command == "learn":
+        _print_json(
+            store.learn_from_feedback(
+                args.content,
+                title=args.title,
+                applies_to=args.applies_to,
+                signal=args.signal,
+                recommendation=args.recommendation,
+                avoid=args.avoid,
+                importance=args.importance,
+                confidence=args.confidence,
+                source=args.source,
+                tags=_tags(args.tags),
+            )
+        )
+    elif args.command == "lessons":
+        _print_json(
+            store.recall_lessons(
+                args.query,
+                limit=args.limit,
+                applies_to=args.applies_to,
+                signal=args.signal,
+                tags=_tags(args.tags),
+            )
+        )
+    elif args.command == "memory-map":
+        _print_json(store.memory_map())
+    elif args.command == "memory-topics":
+        _print_json(store.memory_topics(examples_limit=args.examples_limit))
+    elif args.command == "memory-context":
+        _print_json(store.memory_context_for(args.task, limit=args.limit))
+    elif args.command == "memory-gaps":
+        _print_json(store.memory_gaps())
     elif args.command == "task":
         _print_json(
             store.add_task(
