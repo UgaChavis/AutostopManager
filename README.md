@@ -78,12 +78,12 @@ up to date.
   `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/`
   for Krasnoyarsk vendor discovery, steering-rack/contract-part risk checks,
   offer scoring, seller-call confirmation, schemas, configs, and OpenAPI drafts
-- BMW X5 F15/N63TU: use the dedicated local skill at
-  `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md` before F15/N63
+- BMW X5 F15/N63TU: use the indexed BMW route in
+  `docs/agent/bmw_repair_playbook.md` and the BMW source cache before F15/N63
   diagnostics, wiring/electronics orientation, BDC/gateway issues, injector
   bulletins, misfires, oil consumption, or cooling analysis
 - CRM MCP sync: keep `docs/agent/crm_mcp_catalog.json` aligned with the
-  current `autostopCRM` branch in `UgaChavis/AutostopCRM-V1`
+  current `autostopcrm-v1` branch in `UgaChavis/AutostopCRM-V1`
 - manager MCP sync: keep `docs/agent/manager_mcp_catalog.json` aligned with
   the local AutostopManager MCP surface and memory workflow
 - current CRM connector mode: streamable HTTP with optional embedded OAuth
@@ -188,9 +188,9 @@ prices, payments, files, contacts, and diagnostics.
 The canonical MCP surface for AutoStop CRM lives in the CRM repository:
 
 - repository: `UgaChavis/AutostopCRM-V1`
-- active development branch: `autostopCRM`
+- active development branch: `autostopcrm-v1`
 - connector docs: `MCP_GUIDE.md`, `CHATGPT_CONNECTOR_SETUP.md`,
-  `GPT_AGENT_09_MCP_COMMAND_CATALOG.md`, `GPT_AGENT_10_MCP_OPERATION_FLOWS.md`
+  `CODEX_PROJECT_MAP.md`
 - runtime files: `src/minimal_kanban/mcp/server.py`, `src/minimal_kanban/mcp/main.py`,
   `src/minimal_kanban/mcp/runtime.py`, `src/minimal_kanban/mcp/auth.py`
 

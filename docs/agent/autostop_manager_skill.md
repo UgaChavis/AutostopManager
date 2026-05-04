@@ -34,8 +34,7 @@ and as the working layer for Gmail inbox triage.
    `docs/agent/transmission_playbook.md` first.
 12. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
    GR-FOUR, GRMN Yaris, 6MT EA67F, or 8AT UC80F, follow
-   `docs/agent/toyota_gr_yaris_playbook.md` or the local skill at
-   `C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md` before answering.
+   `docs/agent/toyota_gr_yaris_playbook.md` before answering.
 13. If the task involves general BMW repair, diagnostics, BMW fault memory,
     xDrive, ZF transmission, BMW body electronics, BMW HV, or BMW fluids and no
     more specific model skill already matches, search domain `bmw_repair` and
@@ -47,8 +46,8 @@ and as the working layer for Gmail inbox triage.
    technical fact.
 15. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
     F15 electrical/electronics, injectors, drivetrain malfunction, misfires,
-    oil consumption, or cooling, use the local skill at
-    `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md` before answering.
+    oil consumption, or cooling, use `docs/agent/bmw_repair_playbook.md` and
+    the indexed BMW repair source cache before answering.
 16. If the owner provides new files or asks to expand the knowledge base,
     follow `docs/agent/knowledge_intake_playbook.md`, classify the source, and
     store only durable conclusions in memory.
@@ -142,8 +141,7 @@ When the owner asks about BMW generally:
 When the owner asks about Toyota GR Yaris:
 
 - use `probe_knowledge_base(query)` first; if it returns `toyota_gr_yaris`,
-  load `docs/agent/toyota_gr_yaris_playbook.md` or the local
-  `toyota-gr-yaris` Codex skill before answering
+  load `docs/agent/toyota_gr_yaris_playbook.md` before answering
 - identify whether the car is true GR Yaris `GXPA16` with `G16E-GTS`, not a
   normal Yaris/Yaris Cross/Yaris GR Sport
 - collect VIN or Japan frame number, market, production month, grade,
@@ -203,7 +201,7 @@ Keep the CRM MCP catalog current:
   connector surface
 - refresh it from the canonical CRM repo whenever the connector adds, renames,
   or deprecates tools
-- prefer the canonical branch `autostopCRM` in `UgaChavis/AutostopCRM-V1`
+- prefer the canonical branch `autostopcrm-v1` in `UgaChavis/AutostopCRM-V1`
 
 Keep the memory MCP catalog current:
 
@@ -227,7 +225,7 @@ Keep the knowledge-base index current:
   for the local corpus
 - update both when adding a new playbook, source catalog, model-specific skill,
   or durable source family
-- for BMW F15/N63TU, keep the dedicated skill path linked from both index files
+- for BMW F15/N63TU, keep the dedicated BMW route linked from both index files
 
 Keep the Krasnoyarsk service-management catalog current:
 

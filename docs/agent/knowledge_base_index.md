@@ -124,26 +124,23 @@ General BMW repair pack:
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/`
 
 For generic BMW diagnostics, DTC/fault memory, xDrive, ZF transmission,
-electronics, HV, or fluids questions, search `bmw_repair` first; then switch to
-a model-specific skill such as `bmw-f15-n63` when the vehicle matches.
+electronics, HV, or fluids questions, search `bmw_repair` first; then narrow to
+the BMW F15/N63 route when the vehicle matches.
 
-BMW X5 F15/N63TU has a dedicated Codex skill:
+BMW X5 F15/N63TU route:
 
-- `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md`
-- `C:/Users/User/.codex/skills/bmw-f15-n63/references/source-index.md`
-- `C:/Users/User/.codex/skills/bmw-f15-n63/references/electrical-electronics.md`
-- `C:/Users/User/.codex/skills/bmw-f15-n63/references/n63tu-powertrain.md`
-- `C:/Users/User/.codex/skills/bmw-f15-n63/references/faults-tsbs.md`
+- `docs/agent/bmw_repair_playbook.md`
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md`
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/`
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/`
 
-For BMW F15/N63 requests, load the skill first, then route safety-critical or VIN-specific facts through ISTA/AIR/ETK or BMW official sources.
+For BMW F15/N63 requests, load the BMW route first, then route safety-critical or VIN-specific facts through ISTA/AIR/ETK or BMW official sources.
 
-Toyota GR Yaris has a dedicated Codex skill:
+Toyota GR Yaris route:
 
-- `C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md`
-- `C:/Users/User/.codex/skills/toyota-gr-yaris/references/source-routes.md`
 - `docs/agent/toyota_gr_yaris_playbook.md`
 
-For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the skill or
+For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the
 playbook first, then verify VIN/frame-specific repair, TSB, wiring, torque,
 fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
@@ -196,10 +193,10 @@ without API/cabinet/phone/message confirmation.
 Use these queries before broad browsing:
 
 ```powershell
-rg -n "BMW|F15|N63|BDC|MEVD|misfire|форсун" docs/agent C:/Users/User/.codex/skills/bmw-f15-n63
+rg -n "BMW|F15|N63|BDC|MEVD|misfire|форсун" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack
 rg -n "BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack
 rg -n "ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack
-rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent C:/Users/User/.codex/skills/toyota-gr-yaris
+rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent/toyota_gr_yaris_playbook.md docs/agent/automotive_sources
 rg -n "VIN|OEM|frame|chassis|кузов|каталог" docs/agent
 rg -n "DSG|S tronic|DQ200|DQ250|DQ381|DQ500|DL501|DL382|0AM|0CW|02E|0B5|мехатрон|J217|J743|ODIS|SVM|basic settings|адаптац" docs/agent/dsg_transmission_playbook.md docs/agent/automotive_sources/dsg_transmission_sources.json docs/agent/transmission_playbook.md
 rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|source_registry|parts search gateway" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack

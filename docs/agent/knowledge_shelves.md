@@ -28,8 +28,8 @@ decide whether the reusable route belongs in the intake flow.
 | General repair sources | `automotive_repair` | `docs/agent/automotive_repair_source_playbook.md` | diagnostic source hierarchy, TSB/recall/wiring/torque/labor routes |
 | ECU programming | `ecu_calibration_programming` | `docs/agent/ecu_calibration_programming_playbook.md` | ECU flashing, coding, calibration formats, UDS/J2534, BMW KOMBI/legal limits |
 | BMW general repair | `bmw_repair` | `docs/agent/bmw_repair_playbook.md` | BMW diagnostics, DTC, xDrive, ZF, body electronics, HV, fluids |
-| BMW F15/N63TU | `bmw_f15_n63` | `C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md` | BMW X5 F15/F16 xDrive50i N63TU model-specific diagnostics |
-| Toyota GR Yaris | `toyota_gr_yaris` | `C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md` | GXPA16/G16E-GTS, GR-FOUR, EA67F, model-specific repair and fluids |
+| BMW F15/N63TU | `bmw_f15_n63` | `docs/agent/bmw_repair_playbook.md` | BMW X5 F15/F16 xDrive50i N63TU model-specific diagnostics |
+| Toyota GR Yaris | `toyota_gr_yaris` | `docs/agent/toyota_gr_yaris_playbook.md` | GXPA16/G16E-GTS, GR-FOUR, EA67F, model-specific repair and fluids |
 | Fluids | `fluids` | `docs/agent/fluid_maintenance_playbook.md` | oils, operating fluids, approvals, fill capacities, maintenance quantities |
 | Transmissions | `transmission` | `docs/agent/transmission_playbook.md` | gearbox/CVT/DCT/AMT/clutch symptoms, adaptation, service routing |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` | VIN/frame classification, OEM lookup, catalog routing |
@@ -50,8 +50,8 @@ Use these locations consistently:
   guidance.
 - `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
   owner-provided packs that should not be duplicated into memory.
-- `C:/Users/User/.codex/skills/<topic>/` - focused trigger skills for large,
-  model-specific corpora that should auto-load in future sessions.
+- `C:/Users/9860606/.codex/skills/<topic>/` - optional focused trigger skills
+  for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
   material that should usually stay out of Git.
 

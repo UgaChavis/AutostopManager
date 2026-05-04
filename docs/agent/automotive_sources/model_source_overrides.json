@@ -14,7 +14,6 @@
         "UC80F"
       ],
       "playbook": "docs/agent/toyota_gr_yaris_playbook.md",
-      "skill": "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
       "identity_requirements": [
         "VIN or Japan frame/chassis number",
         "market",

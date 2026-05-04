@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from autostop_manager.mcp_tools import register_manager_memory_tools
 from autostop_manager.storage import ManagerMemoryStore
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FakeServer:
@@ -104,3 +110,25 @@ def test_knowledge_base_tools_are_registered(tmp_path):
 
     audit_result = server.tools["audit_knowledge_base"]()
     assert audit_result["ok"] is True
+
+
+def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
+    assert catalog["tool_count"] == len(server.tools) == 13
+    assert set(catalog["all_tools"]) == set(server.tools)
+
+
+def test_crm_mcp_catalog_counts_are_current():
+    catalog = json.loads((ROOT / "docs/agent/crm_mcp_catalog.json").read_text(encoding="utf-8"))
+
+    assert catalog["source_branch"] == "autostopcrm-v1"
+    assert catalog["tool_counts"]["crm_base_tools"] == 71
+    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 13
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 84
+    assert len(catalog["live_tools_verified"]) == 84
+    assert "cleanup_card_content" in catalog["not_mcp_runtime_tools"]

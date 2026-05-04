@@ -11,10 +11,10 @@
     "If the task involves oils, operating fluids, fill capacities, or ТО planning, inspect docs/agent/fluid_maintenance_playbook.md and use recommend_fluid_maintenance_sources before giving capacity/spec facts.",
     "If the task involves gearbox or transmission diagnosis, clutch adaptation, or transmission-fluid service, inspect docs/agent/transmission_playbook.md before giving any gearbox fact.",
     "If the task involves Volkswagen Group DSG, Audi S tronic, DQ200, DQ250, DQ381, DQ500, DL501, DL382, mechatronic/J217/J743, ODIS/SVM software update, or DSG basic settings/adaptation, inspect docs/agent/dsg_transmission_playbook.md and docs/agent/automotive_sources/dsg_transmission_sources.json before giving software, adaptation, mechatronic, fluid, or parts-fitment facts.",
-    "If the task involves Toyota GR Yaris, Yaris GR, GXPA16, G16E-GTS, GR-FOUR, 6MT EA67F, 8AT UC80F, clutch, fluids, recalls, TSBs, or OEM parts, probe the knowledge base and inspect docs/agent/toyota_gr_yaris_playbook.md or C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md before giving repair, fluid, TSB, recall, or OEM part facts.",
+    "If the task involves Toyota GR Yaris, Yaris GR, GXPA16, G16E-GTS, GR-FOUR, 6MT EA67F, 8AT UC80F, clutch, fluids, recalls, TSBs, or OEM parts, probe the knowledge base and inspect docs/agent/toyota_gr_yaris_playbook.md before giving repair, fluid, TSB, recall, or OEM part facts.",
     "If the task involves general BMW repair, diagnostics, DTC/fault memory, body electronics, xDrive, ZF transmission, HV, or BMW fluids, probe the knowledge base, then inspect docs/agent/bmw_repair_playbook.md before broad BMW source search.",
     "If the task involves repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor, ADAS, SRS, HV, immobilizer, or programming, inspect docs/agent/automotive_repair_source_playbook.md and route through docs/agent/automotive_sources before giving technical facts.",
-    "If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, F15 electrical/electronics, injector bulletins, misfires, oil consumption, or cooling, use C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md.",
+    "If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, F15 electrical/electronics, injector bulletins, misfires, oil consumption, or cooling, use docs/agent/bmw_repair_playbook.md and the indexed BMW repair source cache.",
     "If the task involves Krasnoyarsk workshop management, procurement, staff load, customer flow, finance control, or daily CRM control, inspect docs/agent/krasnoyarsk_service_management_playbook.md and use recommend_service_management_actions.",
     "Use focused CRM tools before heavy wall/snapshot exports.",
     "After meaningful work, write manager_journal."
@@ -35,7 +35,7 @@
     ],
     "model_specific_routes": {
       "BMW X5 F15 xDrive50i N63TU": {
-        "skill": "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
+        "playbook": "docs/agent/bmw_repair_playbook.md",
         "source_override": "docs/agent/automotive_sources/model_source_overrides.json"
       }
     }
@@ -160,12 +160,12 @@
     "bmw_repair": [
       "Use probe_knowledge_base before broad BMW file reads; when best_domain is bmw_repair, open docs/agent/bmw_repair_playbook.md first.",
       "Use docs/agent/bmw_repair_playbook.md and docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/ as owner-provided route/index material.",
-      "Switch to a model-specific skill such as bmw-f15-n63 when model/engine/chassis matches.",
+      "Switch to the BMW F15/N63 route when model/engine/chassis matches.",
       "Collect VIN/chassis, market, year/model/chassis code, engine code, transmission code, mileage, complaint, and BMW fault memory with module names.",
       "Verify final repair procedures, wiring, torque, coding/programming, campaigns, and fluid capacities through BMW ISTA/AIR/ETK/AOS/TIS, official BMW owner/recall data, BMW/NHTSA SIBs, or ZF official data."
     ],
     "toyota_gr_yaris": [
-      "Use probe_knowledge_base before general Toyota routing; when best_domain is toyota_gr_yaris, open docs/agent/toyota_gr_yaris_playbook.md or C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md first.",
+      "Use probe_knowledge_base before general Toyota routing; when best_domain is toyota_gr_yaris, open docs/agent/toyota_gr_yaris_playbook.md first.",
       "Confirm the vehicle is true GR Yaris GXPA16/G16E-GTS, not normal Yaris, Yaris Cross, or Yaris GR Sport.",
       "Collect VIN or Japan frame number, market, production month, grade, transmission, LSD/front-rear diff package, sub-radiator, mileage, DTCs, and complaint.",
       "Use Toyota-Tech Europe, Toyota TIS where market-covered, Toyota Manuals AU, Toyota owner manual pages, official recall portals, and dealer EPC before public catalog or forum clues.",

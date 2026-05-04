@@ -1,6 +1,10 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
-  "source_of_truth": "autostop_manager.mcp_server",
+  "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
+  "last_verified": "2026-05-04",
+  "tool_count": 13,
+  "exposed_directly_by": "python -m autostop_manager.mcp_server",
+  "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
     "owner preferences",
     "agreements and recurring rules",
@@ -35,6 +39,21 @@
     "probe_knowledge_base",
     "search_knowledge_base",
     "audit_knowledge_base"
+  ],
+  "all_tools": [
+    "remember",
+    "recall",
+    "add_manager_task",
+    "today_context",
+    "manager_journal",
+    "sync_knowledge_base",
+    "probe_knowledge_base",
+    "search_knowledge_base",
+    "audit_knowledge_base",
+    "lookup_original_parts",
+    "recommend_automotive_sources",
+    "recommend_fluid_maintenance_sources",
+    "recommend_service_management_actions"
   ],
   "tool_contracts": {
     "remember": "Store long-term manager memory that does not belong in AutoStop CRM cards; prefer distilled conclusions over raw source copies.",
@@ -126,6 +145,7 @@
     "store source routes, not copied databases",
     "refresh the relevant catalog when the MCP surface changes",
     "treat the owner's Приберись command as docs/agent/board_cleanup_autopilot_playbook.md",
+    "phone ChatGPT access uses the same CRM MCP endpoint when AutostopManager is mounted on the server",
     "route management, procurement, staff, customer, and finance work through docs/agent/krasnoyarsk_service_management_playbook.md",
     "prefer explicit uncertainty over invented completeness"
   ]

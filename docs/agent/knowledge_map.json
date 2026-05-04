@@ -1161,8 +1161,8 @@
   "search_patterns": {
     "ecu_calibration_programming": "rg -n \"ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив\" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack",
     "bmw_repair": "rg -n \"BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
-    "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent C:/Users/User/.codex/skills/bmw-f15-n63",
-    "toyota_gr_yaris": "rg -n \"GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F\" docs/agent C:/Users/User/.codex/skills/toyota-gr-yaris",
+    "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
+    "toyota_gr_yaris": "rg -n \"GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F\" docs/agent/toyota_gr_yaris_playbook.md docs/agent/automotive_sources",
     "vin_oem": "rg -n \"VIN|OEM|frame|chassis|кузов|каталог\" docs/agent",
     "fluids": "rg -n \"fluid|oil|capacity|масло|жидк|заправ\" docs/agent",
     "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",

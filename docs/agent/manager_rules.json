@@ -63,7 +63,7 @@
     {
       "id": "bmw-f15-n63-route",
       "priority": 31,
-      "rule": "For BMW X5 F15 xDrive50i, N63TU/N63T, BDC/gateway/network faults, F15 electrical/electronics, MEVD17.2.8, injector bulletins, misfires, oil consumption, or cooling faults, use C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md and verify VIN-specific facts through BMW ISTA/AIR/ETK or official BMW sources."
+      "rule": "For BMW X5 F15 xDrive50i, N63TU/N63T, BDC/gateway/network faults, F15 electrical/electronics, MEVD17.2.8, injector bulletins, misfires, oil consumption, or cooling faults, use docs/agent/bmw_repair_playbook.md and the indexed BMW repair source cache, then verify VIN-specific facts through BMW ISTA/AIR/ETK or official BMW sources."
     },
     {
       "id": "bmw-general-repair-route",
@@ -78,7 +78,7 @@
     {
       "id": "toyota-gr-yaris-workflow",
       "priority": 31,
-      "rule": "For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS work, load docs/agent/toyota_gr_yaris_playbook.md or C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md before answering. Verify VIN or Japan frame number, market, production month, grade, transmission, LSD/diff package, and sub-radiator before final repair, fluid, recall, TSB, or OEM part conclusions."
+      "rule": "For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS work, load docs/agent/toyota_gr_yaris_playbook.md before answering. Verify VIN or Japan frame number, market, production month, grade, transmission, LSD/diff package, and sub-radiator before final repair, fluid, recall, TSB, or OEM part conclusions."
     },
     {
       "id": "transmission-workflow",
@@ -108,7 +108,7 @@
     {
       "id": "crm-mcp-sync",
       "priority": 32,
-      "rule": "Treat the CRM repository's autostopCRM branch and its MCP docs as canonical for command names, auth behavior, and connector setup. Refresh the local MCP catalog when that source changes."
+      "rule": "Treat the CRM repository's autostopcrm-v1 branch and its MCP docs as canonical for command names, auth behavior, and connector setup. Refresh the local MCP catalog when that source changes."
     },
     {
       "id": "memory-mcp-sync",
