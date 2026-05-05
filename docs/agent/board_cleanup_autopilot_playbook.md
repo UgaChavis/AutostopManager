@@ -9,7 +9,8 @@ agent when working through the existing AutoStop CRM MCP tools.
 
 ## Default Authority
 
-`Приберись` means full board-management autopilot.
+`Приберись` means board-management autopilot, with visible card location left
+under human control during routine cleanup.
 
 The agent may independently:
 
@@ -18,9 +19,11 @@ The agent may independently:
   vehicle profile
 - rewrite the top of the public card description as a clean external summary
   visible on the board
-- move cards between columns when the next operational state is clear
-- archive completed cards when the car is ready/done, payment/order status is
-  settled enough, and no visible blocker remains
+- recommend a target column in the card description or final report when the
+  next operational state is clear
+- recommend archive candidates in the card description or final report when the
+  car is ready/done, payment/order status is settled enough, and no visible
+  blocker remains
 - add short questions or recommendations inside the card instead of asking the
   owner in chat
 - fill VIN/chassis-derived vehicle fields when source confidence is adequate
@@ -46,9 +49,11 @@ Hourly automation should:
 - stop without writes if CRM/MCP status is unhealthy or target card identity is
   uncertain
 
-Hourly automation may still update, move, tag, set indicators, set deadlines,
-or archive when the usual safety rules below are satisfied. The final report
-should be compact: checked, changed, archived, blockers, and any risks.
+Hourly automation may still update descriptions, tags, indicators, deadlines,
+and safe vehicle fields when the usual safety rules below are satisfied. It
+must not move cards between columns or auto-archive cards unless the owner
+explicitly asks for one exact target. The final report should be compact:
+checked, changed, moved=0, archived=0, blockers, and any risks.
 
 ## Data Preservation Rules
 
@@ -107,7 +112,8 @@ Classify every relevant active card into one current blocker:
   attention
 - `queue`: car is waiting for technician, bay, or appointment date
 - `ready`: work appears complete and pickup/closure is next
-- `archive`: card appears finished and can be archived
+- `archive_candidate`: card appears finished and can be recommended for human
+  archive
 - `unclear`: data conflict; leave a short question in the card
 
 ### 1a. Public Card Summary
@@ -205,7 +211,8 @@ For ready/done cards:
 - read repair-order status and due totals
 - check payment status before archive
 - if unpaid or unclear, keep visible and mark payment blocker
-- if paid/settled and no blockers remain, archive is allowed
+- if paid/settled and no blockers remain, leave a short archive recommendation
+  instead of archiving automatically
 
 Preferred note format:
 
@@ -268,17 +275,20 @@ Indicator:
 - yellow: waiting for parts/client/diagnosis but next action is known
 - green: ready/clear/no blocker
 
-## Column Movement Heuristics
+## Column Movement Policy
 
-Move only when the current state is clear:
+Routine cleanup must not move cards between columns. If the current state is
+clear, write the recommended destination as a short manager note instead:
 
 - needs supplier action -> `Снабжение` or `Заказы запчастей`
 - appointment/intake planned -> `Запись на ремонт`
 - assigned work -> relevant technician/work column
 - finished but pickup/payment remains -> `Готовые автомобили`
-- finished, settled, no blocker -> archive
+- finished, settled, no blocker -> recommend archive
 
-If current state is unclear, do not move; add a short `AI:` question.
+If current state is unclear, add a short `AI:` question. Use `move_card`,
+`bulk_move_cards`, `mark_card_ready`, or `archive_card` only when the owner
+explicitly asks for one exact card.
 
 ## Final Report
 
@@ -286,8 +296,9 @@ Report to the owner briefly:
 
 - cards checked
 - cards updated
-- cards moved
-- cards archived
+- cards moved (`0` during routine automation)
+- cards archived (`0` during routine automation)
+- recommended moves or archive candidates, if any
 - VIN/OEM/parts work done
 - blockers that still need human decision
 - risks or data gaps

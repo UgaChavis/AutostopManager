@@ -158,12 +158,12 @@
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants full board-management autonomy: read active CRM context, update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, move cards, and archive completed cards when safe."
+      "rule": "The board_cleanup_autopilot command grants board-management autonomy for live CRM reads, card descriptions, short manager notes, tags, deadlines, indicators, and safe vehicle-profile enrichment. It must not move cards between columns or auto-archive cards during routine cleanup; use move_card, bulk_move_cards, mark_card_ready, archive_card, or equivalent state/column relocation only when the owner explicitly asks for one exact target."
     },
     {
       "id": "board-cleanup-data-preservation",
       "priority": 18,
-      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Edits may clean spelling, formatting, duplication, and structure while preserving meaning."
+      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer additive description edits: add a short manager block or question while preserving existing text below it."
     },
     {
       "id": "board-cleanup-note-style",
