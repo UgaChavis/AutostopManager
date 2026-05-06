@@ -3,3 +3,23 @@
 {"abbreviation":"BDC","system":"body_domain_controller","meaning":"Body Domain Controller","notes_ru":"Кузовной доменный контроллер; для F15/N63 сверять специализированный skill и официальные схемы."}
 {"abbreviation":"VTG","system":"xdrive_transfer_case","meaning":"Transfer case control/function","notes_ru":"Для xDrive shudder фиксировать шины, DSC wheel speeds, ошибки VTG, историю масла и калибровку."}
 {"abbreviation":"EGS","system":"transmission_control","meaning":"Electronic transmission control","notes_ru":"Для ZF 6HP/8HP использовать VIN, код коробки, уровень масла и ISTA/ZF источники."}
+{"abbr": "DME", "full": "Digital Motor Electronics", "ru": "цифровая электроника бензинового двигателя", "domain": "powertrain"}
+{"abbr": "DDE", "full": "Digital Diesel Electronics", "ru": "цифровая электроника дизельного двигателя", "domain": "powertrain"}
+{"abbr": "EGS", "full": "Electronic Gearbox System", "ru": "электронная система коробки передач", "domain": "transmission"}
+{"abbr": "VTG", "full": "Verteilergetriebe / Transfer Case control", "ru": "блок раздаточной коробки", "domain": "driveline"}
+{"abbr": "DSC", "full": "Dynamic Stability Control", "ru": "динамический контроль устойчивости", "domain": "chassis"}
+{"abbr": "EPS", "full": "Electric Power Steering", "ru": "электрический усилитель рулевого управления", "domain": "chassis"}
+{"abbr": "CAS", "full": "Car Access System", "ru": "система доступа автомобиля", "domain": "body"}
+{"abbr": "FEM", "full": "Front Electronic Module", "ru": "передний электронный модуль", "domain": "body"}
+{"abbr": "BDC", "full": "Body Domain Controller", "ru": "контроллер домена кузова", "domain": "body"}
+{"abbr": "FRM", "full": "Footwell Module", "ru": "модуль пространства ног", "domain": "body"}
+{"abbr": "JBE", "full": "Junction Box Electronics", "ru": "электроника распределительного блока", "domain": "body"}
+{"abbr": "IHKA", "full": "Integrated Heating and Air Conditioning", "ru": "интегрированная система отопления и кондиционирования", "domain": "body/climate"}
+{"abbr": "KOMBI", "full": "Instrument Cluster", "ru": "комбинация приборов", "domain": "body"}
+{"abbr": "ZGM", "full": "Central Gateway Module", "ru": "центральный шлюз", "domain": "network"}
+{"abbr": "IBS", "full": "Intelligent Battery Sensor", "ru": "интеллектуальный датчик аккумулятора", "domain": "power management"}
+{"abbr": "ACSM", "full": "Advanced Crash Safety Module", "ru": "расширенный модуль безопасности при аварии", "domain": "safety"}
+{"abbr": "SME", "full": "Storage Management Electronics", "ru": "электроника управления высоковольтной батареей", "domain": "high voltage"}
+{"abbr": "EME", "full": "Electric Machine Electronics", "ru": "электроника электрической машины", "domain": "high voltage"}
+{"abbr": "KLE", "full": "Convenience Charging Electronics", "ru": "электроника зарядки", "domain": "high voltage"}
+{"abbr": "CCU", "full": "Combined Charging Unit", "ru": "объединенный блок зарядки", "domain": "high voltage"}

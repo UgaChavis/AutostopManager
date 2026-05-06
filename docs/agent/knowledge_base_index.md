@@ -22,8 +22,12 @@ python -m autostop_manager.cli knowledge-probe "BMW X5 кузов E15 мотор
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
 python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
 python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
+python -m autostop_manager.cli knowledge-probe "сделать счет или КП в PDF Word Excel и проверить оформление"
+python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения черновики"
 python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
 python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
+python -m autostop_manager.cli knowledge-search "счет акт КП НДС реквизиты render audit" --domain business_documents
+python -m autostop_manager.cli knowledge-search "search_emails labels drafts attachments write safety" --domain gmail_operations
 python -m autostop_manager.cli knowledge-search "engine oil capacity" --domain fluids
 python -m autostop_manager.cli knowledge-search "BMW xDrive shudder transfer case" --domain bmw_repair
 python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"
@@ -33,10 +37,16 @@ python -m autostop_manager.cli knowledge-audit
 
 Use these MCP tools when working through the manager:
 
+- `prepare_manager_context` - combine command routes, relevant memory/rules,
+  knowledge routing, missing required context, and next actions.
 - `sync_knowledge_base` - refresh the SQLite index after docs/catalog/skill changes.
 - `probe_knowledge_base` - cheaply decide whether local knowledge exists and which source-of-truth file to open first.
 - `search_knowledge_base` - find the right route before reading full files.
 - `audit_knowledge_base` - verify route cards, mapped files, and index counts after source intake.
+- `audit_knowledge_annotations` - verify compact sidecar annotations used for
+  fast file-level routing before broad section reads.
+- `audit_skill_registry` - verify linked local Codex skills exist and are
+  mapped to knowledge domains.
 
 ## Route Cards
 
@@ -59,8 +69,16 @@ is the second pass.
 - `knowledge_shelves.md` - shelf map, file placement rules, route-card contract, and maintenance checklist.
 - `manager_mcp_catalog.json` - local AutostopManager MCP tool surface.
 - `crm_mcp_catalog.json` - AutoStop CRM connector tool surface.
-- `gmail_mcp_catalog.json` - Gmail connector tool surface.
+- `gmail_workflow_playbook.md` - Gmail workflow, read/write safety, query
+  patterns, attachment caveats, and memory boundaries.
+- `gmail_mcp_catalog.json` - Gmail connector tool surface and 2026-05-05
+  read-only audit notes.
 - `memory_policy.json` - memory storage boundaries and retention behavior.
+- `command_routes.json` - canonical natural-language owner command aliases,
+  open-first files, memory queries, and next actions.
+- `knowledge_annotations.jsonl` - compact file-level annotations with domain,
+  summary, keywords, source type, refresh cadence, safety flags, and related
+  skills for fast routing.
 
 ## Knowledge Intake
 
@@ -68,6 +86,11 @@ is the second pass.
 - `knowledge_shelves.md` - where durable knowledge belongs, how route cards are marked, and how source packs should be signed.
 - `automotive_sources/ingestion_tasks.jsonl` - pending/source-ingestion actions.
 - `automotive_sources/db_schema.sql` - proposed future repair knowledge database schema.
+- `business_identity_playbook.md` - private route for current ИП/AutoStop
+  requisites and freshness sorting of owner business documents.
+- `business_document_quality_playbook.md` - route for high-quality PDF/DOCX/XLSX
+  business documents, invoices, acts, КП, totals, НДС wording, render QA, and
+  audit before delivery or CRM upload.
 
 Use intake when the owner says: "обнови базу знаний", "сохрани себе", "дополни инструкции", "запомни источник", "структурируй материалы", or provides files/links.
 
@@ -144,6 +167,15 @@ For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the
 playbook first, then verify VIN/frame-specific repair, TSB, wiring, torque,
 fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
+Fluid maintenance has a dedicated Codex skill:
+
+- `C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md`
+- `docs/agent/fluid_maintenance_playbook.md`
+- `docs/agent/automotive_sources/fluid_maintenance_sources.json`
+
+For oil, fluid, approval, and fill-capacity requests, load the skill first,
+then verify exact vehicle/unit data through OEM or licensed service sources.
+
 ## Vehicle Identity and OEM Parts
 
 - `vehicle_identity_playbook.md` - classify VIN, Japanese frame/chassis number, Korean VIN, and market-specific codes.
@@ -158,6 +190,7 @@ fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
 AI parts Красноярск project pack:
 
+- `C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md`
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/`
@@ -172,6 +205,51 @@ seller discovery, call confirmation, offer scoring, API integration, or local
 Красноярск availability questions, search `parts_sourcing` first. Do not treat
 marketplace listings or supplier-site stock text as confirmed availability
 without API/cabinet/phone/message confirmation.
+
+## Business Identity
+
+- `business_identity_playbook.md` - private local route for current ИП
+  requisites, company-card data, AutoStop commercial-offer identity, and
+  document freshness decisions.
+- `data/private_knowledge/business_identity_current.json` - private current
+  facts selected from the newest reliable documents. This file is local runtime
+  knowledge and must not be committed.
+- `data/private_knowledge/business_documents_inventory.json` - private
+  filesystem inventory of `C:/Users/User/Мой диск/ДОКУМЕНТЫ`, with dates,
+  hashes, and topic flags.
+
+For ИП / реквизиты / карточка предприятия / ИП Гришкявичус or Гришкевичус
+requests, search `business_identity` first and use the private current JSON.
+Before external use, verify exact banking/legal wording against the original
+source document if formatting matters.
+
+## Business Documents
+
+- `business_document_quality_playbook.md` - AutoStop route for PDF/DOCX/XLSX
+  invoices, acts, КП, receipts, requisites sheets, accounting-style documents,
+  and printable forms.
+- `C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md` - local
+  Codex skill with the mandatory document-quality gate.
+
+For счет / акт / КП / бухгалтерский документ / PDF / Word / Excel requests,
+search `business_documents` first. Use `business_identity` only for current
+private company facts, then render-inspect the final artifact and run the
+business-document audit script before saying the file is ready.
+
+## Gmail Operations
+
+- `gmail_workflow_playbook.md` - operational route for Gmail search, inbox
+  triage, labels, drafts, attachments, thread reading, write safety, and memory
+  extraction.
+- `gmail_mcp_catalog.json` - current discovered Gmail connector command catalog
+  with read-only test status and mutating-command safety flags.
+
+For Gmail / почта / входящие / письма / ярлыки / черновики / вложения requests,
+search `gmail_operations` first. Use `_list_labels` before label-specific work,
+`_search_emails` for normal search, and `_read_email_thread` before drafting,
+forwarding, tasking, or saving email-derived decisions. Do not send, archive,
+delete, label, create/update drafts, or bulk-modify Gmail without explicit owner
+approval for the exact action.
 
 ## Service Management
 
@@ -200,6 +278,8 @@ rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent/toyota_gr_y
 rg -n "VIN|OEM|frame|chassis|кузов|каталог" docs/agent
 rg -n "DSG|S tronic|DQ200|DQ250|DQ381|DQ500|DL501|DL382|0AM|0CW|02E|0B5|мехатрон|J217|J743|ODIS|SVM|basic settings|адаптац" docs/agent/dsg_transmission_playbook.md docs/agent/automotive_sources/dsg_transmission_sources.json docs/agent/transmission_playbook.md
 rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|source_registry|parts search gateway" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack
+rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|карточка предприятия|ОГРНИП|ИНН|ОКВЭД" docs/agent/business_identity_playbook.md data/private_knowledge
+rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment" docs/agent
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
 rg -n "Приберись|cleanup|archive|preserve|board" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent
@@ -214,4 +294,6 @@ When adding or reorganizing knowledge:
 3. Link: add the new route to this index and `knowledge_map.json`.
 4. Validate: parse changed JSON and run relevant tests or skill validation.
 5. Sync: run `sync_knowledge_base` or `python -m autostop_manager.cli knowledge-sync`.
-6. Journal: record important source intake or rule changes through `manager_journal` when the MCP tool is available.
+6. Audit: run `audit_knowledge_base`, `audit_knowledge_annotations`, and
+   `audit_skill_registry` when routes, annotations, or skills changed.
+7. Journal: record important source intake or rule changes through `manager_journal` when the MCP tool is available.

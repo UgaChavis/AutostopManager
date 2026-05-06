@@ -1,11 +1,12 @@
 {
   "startup_sequence": [
-    "Read AutostopManager today_context, then use memory_context_for when the task depends on owner preferences, writing style, prior lessons, Gmail context, CRM cleanup behavior, or repeated workflow decisions.",
-    "If the task involves local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first; open source_of_truth/open_first when has_knowledge=true; use sync_knowledge_base and audit_knowledge_base if docs/catalogs/skills changed.",
+    "Read task-specific context with prepare_manager_context for non-trivial requests; use today_context for broad daily overview, and use memory_context_for when the task depends on owner preferences, writing style, prior lessons, Gmail context, CRM cleanup behavior, or repeated workflow decisions.",
+    "If the task involves local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first; open source_of_truth/open_first when has_knowledge=true; use compact annotations before broad source-pack reads; use sync_knowledge_base, audit_knowledge_base, and audit_knowledge_annotations if docs/catalogs/skills/annotations changed.",
     "If the current task involves email, inspect Gmail inbox state and relevant threads.",
     "If the user asks about live CRM state, call AutoStop CRM get_connector_identity, get_runtime_status, bootstrap_context, or get_board_context.",
-    "If the owner says 'Приберись', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, inspect docs/agent/board_cleanup_autopilot_playbook.md and run the board-cleanup autopilot behavior.",
+    "If the owner says 'Приберись', 'прибейсь', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, inspect docs/agent/board_cleanup_autopilot_playbook.md and run the board-cleanup autopilot behavior without moving cards between columns.",
     "If the owner provides new files or asks to expand the knowledge base, inspect docs/agent/knowledge_intake_playbook.md before storing anything in memory.",
+    "If the task involves ИП requisites, company-card data, AutoStop business identity, ИП Гришкявичус/Гришкевичус, or sorting old versus current owner business documents, inspect docs/agent/business_identity_playbook.md and use the private business_identity route.",
     "If the task involves vehicle identification or VIN/chassis decoding, inspect docs/agent/vehicle_identity_playbook.md before parts search.",
     "If the task involves original catalog numbers from VIN or chassis number, inspect docs/agent/vin_oem_lookup_playbook.md and docs/agent/vin_oem_sources.json before searching marketplaces.",
     "If the task involves oils, operating fluids, fill capacities, or ТО planning, inspect docs/agent/fluid_maintenance_playbook.md and use recommend_fluid_maintenance_sources before giving capacity/spec facts.",
@@ -19,19 +20,67 @@
     "Use focused CRM tools before heavy wall/snapshot exports.",
     "After meaningful work, write manager_journal; when the important result is a reusable lesson from praise, criticism, clear success, clear failure, or an owner request to do something differently, use learn_from_feedback."
   ],
+  "context_navigation": {
+    "tool": "prepare_manager_context",
+    "purpose": "Combine command routes, relevant memory/rules, knowledge routing, missing required context, and next actions before acting.",
+    "command_routes": "docs/agent/command_routes.json",
+    "skill_audit": "audit_skill_registry"
+  },
+  "run_ledger": {
+    "tools": [
+      "start_manager_run",
+      "record_manager_run_event",
+      "finish_manager_run",
+      "list_manager_runs"
+    ],
+    "use_when": [
+      "board cleanup autopilot",
+      "parts procurement",
+      "finance control",
+      "knowledge intake",
+      "multi-step CRM work"
+    ],
+    "rule": "Record planned actions, skipped writes, risks, writes, and verification evidence; store only durable summaries in manager memory."
+  },
+  "memory_quality": {
+    "tools": [
+      "audit_memory",
+      "curate_memory"
+    ],
+    "rule": "Use audit_memory before memory cleanup or when recall quality is weak; use curate_memory only for non-destructive duplicate archiving and keep source records out of normal recall with archived_at rather than deleting them.",
+    "ranking_fields": [
+      "importance",
+      "confidence",
+      "expires_at",
+      "supersedes_id",
+      "sensitivity",
+      "last_used_at",
+      "archived_at",
+      "tags"
+    ]
+  },
   "knowledge_navigation": {
     "entrypoint": "docs/agent/knowledge_base_index.md",
     "machine_map": "docs/agent/knowledge_map.json",
+    "annotation_index": "docs/agent/knowledge_annotations.jsonl",
     "intake_playbook": "docs/agent/knowledge_intake_playbook.md",
     "rules": [
       "Use probe_knowledge_base as the cheap first pass for vehicle, brand, system, fluid, diagnostic, parts, CRM, or local-knowledge questions.",
+      "Use compact annotations to identify the narrow file or skill before reading large source packs.",
       "If probe_knowledge_base returns has_knowledge=true, open open_first/source_of_truth before broad file search.",
       "Use search_knowledge_base only after probing, preferably constrained to the returned best_domain.",
       "Run sync_knowledge_base after durable docs/catalog/skill changes.",
       "Run audit_knowledge_base after source intake or route-card edits.",
+      "Run audit_knowledge_annotations after compact annotation edits.",
       "Update both the Markdown index and JSON map when adding a durable playbook, source catalog, or model-specific skill.",
       "Keep raw manuals, copied licensed data, CRM snapshots, and temporary search results out of durable memory.",
       "Use dedicated Codex skills for substantial model-specific corpora."
+    ],
+    "private_business_identity": [
+      "Search business_identity first for ИП, реквизиты, карточка предприятия, AutoStop business identity, or ИП Гришкявичус/Гришкевичус questions.",
+      "Use data/private_knowledge/business_identity_current.json for current facts and data/private_knowledge/business_documents_inventory.json for date-sorted source inventory.",
+      "Do not copy private bank/contact details into Git-tracked docs or public summaries.",
+      "Verify exact banking/legal wording against the original source document before external use."
     ],
     "model_specific_routes": {
       "BMW X5 F15 xDrive50i N63TU": {
@@ -193,26 +242,37 @@
       "For finance decisions, read repair orders and cashboxes from CRM; store only follow-up decisions in memory."
     ],
     "board_cleanup_autopilot": [
-      "Trigger on owner phrases: Приберись, прибери доску, обслужи доску, актуализируй доску, or routine board cleanup.",
+      "Trigger on owner phrases: Приберись, прибейсь, прибери доску, обслужи доску, актуализируй доску, or routine board cleanup.",
       "Use docs/agent/board_cleanup_autopilot_playbook.md as the canonical procedure.",
-      "Operate as full autopilot: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, move cards, and archive completed cards when safe.",
       "In hourly automation mode, treat cleanup as incremental: prioritize blockers, write only meaningful deltas, avoid duplicate AI notes, and skip writes when CRM/MCP health is uncertain.",
+      "Operate as full autopilot: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, and archive completed cards when safe.",
+      "Do not move cards between columns during board-cleanup autopilot unless the owner gives a separate explicit move command.",
       "Preserve user data: never delete works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
       "Keep card notes short; use concise AI: notes for questions, next actions, OEM/price/source conclusions, payment blockers, and stale-card questions.",
       "Ask the owner in chat only for destructive actions beyond archive, unresolved money conflicts, client-sensitive decisions, or safety-critical technical uncertainty.",
-      "End with a brief report: checked, updated, moved, archived, VIN/OEM/parts work, unresolved blockers, and risks."
+      "End with a brief report: checked, updated, archived, left in current columns by rule, VIN/OEM/parts work, unresolved blockers, and risks."
     ],
     "email_work": [
-      "list_labels",
-      "search_email_ids",
-      "read_email",
-      "read_email_thread",
-      "batch_read_email_threads",
-      "archive_emails",
-      "delete_emails",
-      "batch_modify_email",
-      "forward_emails",
-      "bulk_label_matching_emails"
+      "open docs/agent/gmail_workflow_playbook.md for Gmail tasks",
+      "read-only: _list_labels",
+      "read-only: _search_emails",
+      "read-only: _search_email_ids",
+      "read-only: _batch_read_email",
+      "read-only: _read_email_thread",
+      "read-only: _batch_read_email_threads",
+      "read-only: _list_drafts",
+      "read-only: _read_attachment",
+      "mutating with explicit owner instruction only: _create_label",
+      "mutating with explicit owner instruction only: _apply_labels_to_emails",
+      "mutating with explicit owner instruction only: _batch_modify_email",
+      "mutating with explicit owner instruction only: _bulk_label_matching_emails",
+      "mutating with explicit owner instruction only: _archive_emails",
+      "mutating with explicit owner instruction only: _delete_emails",
+      "mutating with explicit owner instruction only: _create_draft",
+      "mutating with explicit owner instruction only: _update_draft",
+      "sending with explicit owner final approval only: _send_draft",
+      "sending with explicit owner final approval only: _send_email",
+      "sending with explicit owner final approval only: _forward_emails"
     ]
   },
   "memory_navigation": {

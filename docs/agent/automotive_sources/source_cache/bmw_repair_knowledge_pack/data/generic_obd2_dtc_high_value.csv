@@ -1,0 +1,20 @@
+﻿code,system,definition_en,bmw_diagnostic_context_ru
+P0100,Powertrain,Mass or Volume Air Flow Circuit,"MAF, питание датчика, подсос воздуха, загрязнение, проводка."
+P0101,Powertrain,Mass or Volume Air Flow Circuit Range/Performance,MAF против расчетной нагрузки; сравнить коррекции топлива и дым-тест впуска.
+P0112,Powertrain,Intake Air Temperature Sensor Circuit Low,"Датчик температуры впуска, проводка, короткое на массу."
+P0113,Powertrain,Intake Air Temperature Sensor Circuit High,"Обрыв датчика температуры впуска, питание/сигнал."
+P0128,Powertrain,Coolant Thermostat Below Regulating Temperature,"Термостат, температура ОЖ, электрическое управление термостатом."
+P0171,Powertrain,System Too Lean Bank 1,"Подсос воздуха, PCV, низкое давление топлива, MAF, форсунки."
+P0174,Powertrain,System Too Lean Bank 2,То же для второго банка на рядных/ V-двигателях с двумя банками датчиков.
+P0300,Powertrain,Random/Multiple Cylinder Misfire Detected,"Катушки, свечи, форсунки, компрессия, давление топлива, подсос воздуха."
+P0301,Powertrain,Cylinder 1 Misfire Detected,Сравнить катушку/свечу/форсунку цилиндра 1 перестановкой и тестом компрессии.
+P0420,Powertrain,Catalyst System Efficiency Below Threshold Bank 1,"Катализатор, задний кислородный датчик, пропуски, топливная смесь."
+P0430,Powertrain,Catalyst System Efficiency Below Threshold Bank 2,Аналогично для банка 2.
+P0597,Powertrain,Thermostat Heater Control Circuit Open,Часто связан с электрически управляемым термостатом на BMW; проверить разъем и управление DME.
+P0700,Powertrain,Transmission Control System,Общий индикатор; читать EGS для детального кода.
+P0715,Powertrain,Input/Turbine Speed Sensor Circuit,"Датчик входной скорости внутри коробки, мехатроник, проводка."
+P0720,Powertrain,Output Speed Sensor Circuit,"Датчик выходной скорости, EGS, проводка, механическая проблема."
+P0730,Powertrain,Incorrect Gear Ratio,"Пробуксовка, давление ATF, износ фрикционов, гидроблок."
+P0741,Powertrain,Torque Converter Clutch Circuit Performance or Stuck Off,"Блокировка гидротрансформатора, гидроблок, ATF, мехатроник."
+U0100,Network,Lost Communication With ECM/PCM,"Питание DME/DDE, PT-CAN, шлюз, вода, масса."
+U0121,Network,Lost Communication With ABS Control Module,"Питание DSC, связь, датчики, шлюз."

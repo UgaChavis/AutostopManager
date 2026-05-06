@@ -1,0 +1,7 @@
+﻿system,specification_logic_ru,risk_ru,verification_source
+engine oil,"Допуск BMW Longlife выбирается по двигателю, рынку и экологии: LL-01, LL-04, LL-12 FE, LL-17 FE+ и др.","Неверная зольность/вязкость может повредить катализатор, DPF, турбину или ухудшить VANOS.",BMW_OWNER_MANUALS_USA / ISTA/AIR by VIN
+ZF 8HP ATF,ZF LifeguardFluid 8/9 или OE-approved fluid по конкретной модификации; уровень по температуре и процедуре.,Неверное масло или уровень вызывает плохие переключения и риск отказа.,ZF_8HP_OIL_CHANGE_50130_EN_2024 / ZF_LIFEGUARDFLUID_8_PDS_2021
+ZF 5HP/6HP ATF,ZF LifeguardFluid 5/6/8 по модификации и таблице ZF.,Добавки запрещены в сервисной информации ZF; уровень должен быть точным.,ZF_5HP_6HP_OIL_CHANGE_50145_EN_2023
+xDrive transfer case oil,Масло раздаточной коробки выбирается по VTG и VIN; после обслуживания может требоваться калибровка.,Неверное масло/износ шин вызывает рывки и износ муфты.,NHTSA_BMW_SIB_27_02_20_XDRIVE_2025 / ISTA
+brake fluid,DOT 4 или низковязкая DOT 4 по модели и DSC.,Влага снижает температуру кипения; неправильная прокачка оставляет воздух в DSC.,Owner manual / ISTA by VIN
+coolant,"BMW-approved coolant, правильное смешивание и процедура удаления воздуха.","Перегрев, коррозия, кавитация, ошибки помпы/термостата.",Owner manual / ISTA by VIN

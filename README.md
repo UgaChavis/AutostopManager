@@ -30,10 +30,19 @@ up to date.
 - knowledge-base entrypoint: `docs/agent/knowledge_base_index.md`
 - knowledge-base machine map: `docs/agent/knowledge_map.json`
 - knowledge-base shelf map: `docs/agent/knowledge_shelves.md`
+- knowledge-base annotation index: `docs/agent/knowledge_annotations.jsonl`
+- private business identity route: `docs/agent/business_identity_playbook.md`
+  with local private facts under `data/private_knowledge/`
 - knowledge-base SQLite sync: `python -m autostop_manager.cli knowledge-sync`
 - knowledge-base probe: `python -m autostop_manager.cli knowledge-probe "BMW X5 F15 N63 электрика"`
 - knowledge-base search: `python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"`
 - knowledge-base audit: `python -m autostop_manager.cli knowledge-audit`
+- knowledge annotation audit: `python -m autostop_manager.cli annotations-audit`
+- memory quality audit: `python -m autostop_manager.cli memory-audit`
+- memory curation: `python -m autostop_manager.cli memory-curate --apply`
+- task-specific context: `python -m autostop_manager.cli prepare-context "прибейсь" --intent board_cleanup`
+- skill registry audit: `python -m autostop_manager.cli skills-audit`
+- operation ledger: `python -m autostop_manager.cli run-start "Приберись" --intent board_cleanup --dry-run`
 - repair source routing: use `docs/agent/automotive_repair_source_playbook.md`
   and `docs/agent/automotive_sources/` before technical repair, TSB, recall,
   diagnostics, labor, fluid, torque, wiring, ADAS, SRS, or HV recommendations
@@ -116,11 +125,15 @@ python -m autostop_manager.cli knowledge-probe "подобрать сцепле�
 python -m autostop_manager.cli knowledge-probe "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM"
 python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
 python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
+python -m autostop_manager.cli knowledge-probe "актуальные реквизиты ИП Гришкявичус"
 python -m autostop_manager.cli knowledge-search "8013FE IHKA" --domain bmw_repair
 python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
 python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 python -m autostop_manager.cli knowledge-audit
+python -m autostop_manager.cli annotations-audit
+python -m autostop_manager.cli memory-audit
+python -m autostop_manager.cli memory-curate --apply
 ```
 
 ## MCP Tools
@@ -138,6 +151,7 @@ The manager memory tools are intentionally separate from CRM operations:
 - `add_manager_task`
 - `today_context`
 - `manager_journal`
+- `prepare_manager_context`
 - `lookup_original_parts`
 - `recommend_automotive_sources`
 - `recommend_fluid_maintenance_sources`
@@ -146,17 +160,37 @@ The manager memory tools are intentionally separate from CRM operations:
 - `probe_knowledge_base`
 - `search_knowledge_base`
 - `audit_knowledge_base`
+- `audit_knowledge_annotations`
+- `audit_skill_registry`
+- `audit_memory`
+- `curate_memory`
+- `start_manager_run`
+- `record_manager_run_event`
+- `finish_manager_run`
+- `list_manager_runs`
 
 When the owner provides new files, treat them as source material, not memory.
 Extract durable rules, update the relevant playbook or catalog, then store
 only the reusable conclusion in memory.
 
-Before broad local file reads, use the indexed knowledge-base tools:
-`probe_knowledge_base` first, `search_knowledge_base` inside the returned domain
-when more detail is needed, `sync_knowledge_base` after source/catalog changes,
-and `audit_knowledge_base` after intake. The goal is to find the right
-playbook, source catalog, or model-specific skill first, then read only that
-narrow file.
+Before broad local file reads, use `prepare_manager_context` for non-trivial
+tasks, then the indexed knowledge-base tools: `probe_knowledge_base` first,
+`search_knowledge_base` inside the returned domain when more detail is needed,
+`sync_knowledge_base` after source/catalog/annotation changes,
+`audit_knowledge_base` and `audit_knowledge_annotations` after intake. The goal
+is to find the right command route, compact annotation, playbook, source
+catalog, or model-specific skill first, then read only that narrow file.
+
+For long-term memory quality, use `memory-audit` before cleanup and
+`memory-curate --apply` only for non-destructive duplicate archiving. Memory
+records may carry `importance`, `confidence`, `expires_at`, `supersedes_id`,
+`sensitivity`, `last_used_at`, and `archived_at`; these fields guide recall
+ranking and help keep obsolete memories out of normal context.
+
+For autopilot, procurement, finance, knowledge intake, and other multi-step CRM
+work, use the manager run ledger: start a run, record planned actions/skips/
+risks/writes, finish it with verification evidence, and journal only the
+durable summary.
 
 AutoStop CRM operations still use the existing AutoStop CRM MCP tools such as
 `bootstrap_context`, `get_board_context`, `review_board`, `search_cards`,
@@ -189,11 +223,19 @@ Vehicle identity uses the dedicated playbook in
 memory: classify the identifier first, then choose the market-appropriate
 decode path, then hand off to parts sourcing if needed.
 
-The owner's natural command `Приберись` means board-cleanup autopilot. Use
-`docs/agent/board_cleanup_autopilot_playbook.md`: read the live CRM board,
-classify blockers, enrich VIN/OEM/parts/service data, update short card notes,
-move/tag/mark/archive when safe, and preserve user-entered works, materials,
-prices, payments, files, contacts, and diagnostics.
+Private ИП / AutoStop business identity uses
+`docs/agent/business_identity_playbook.md` plus local files under
+`data/private_knowledge/`. Use that route for current requisites, company-card
+data, ИП Гришкявичус/Гришкевичус, and old-versus-current business document
+sorting. Keep private bank/contact details out of Git-tracked docs and verify
+exact wording from the source document before external use.
+
+The owner's natural commands `Приберись` and `прибейсь` mean board-cleanup
+autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
+CRM board, classify blockers, enrich VIN/OEM/parts/service data, update short
+card notes, tag/mark/archive when safe, leave cards in their current columns,
+and preserve user-entered works, materials, prices, payments, files, contacts,
+and diagnostics.
 
 ## CRM MCP Sync
 

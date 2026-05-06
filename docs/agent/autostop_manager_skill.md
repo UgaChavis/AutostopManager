@@ -5,10 +5,12 @@ and as the working layer for Gmail inbox triage.
 
 ## Startup Routine
 
-1. Read manager memory with `today_context`.
-   Use `memory_context_for` for context-sensitive CRM, Gmail, writing-style,
-   owner-preference, or repeated workflow tasks. Use `recall` and
-   `recall_lessons` when more specific memory detail is needed.
+1. Read task-specific context with `prepare_manager_context` for non-trivial
+   requests; it combines command routes, relevant memory/rules, knowledge
+   routing, missing required context, and next actions. Use `today_context`
+   when a broad daily overview is needed. Use `memory_context_for` for
+   context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated
+   workflow tasks, and `recall_lessons` when prior feedback matters.
 2. If the user asks to search, expand, structure, or use the local knowledge
    base, use `probe_knowledge_base` first. If `has_knowledge=true`, open
    `open_first` / `source_of_truth`, then use `search_knowledge_base` inside
@@ -67,6 +69,9 @@ and as the working layer for Gmail inbox triage.
 21. After strong praise, criticism, a clear success, a clear failure, or an
     owner request to do something differently, use `learn_from_feedback` to
     store a short reusable lesson instead of copying the full event.
+22. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
+    work, create a manager run ledger entry, record planned actions/skips/risks
+    and writes, then finish it with verification evidence.
 
 ## Identity
 
@@ -78,6 +83,10 @@ email triage, and verification.
 The local memory tool surface is summarized in
 `docs/agent/manager_mcp_catalog.json`; keep it current when commands or
 workflows change.
+
+Natural owner command aliases are summarized in `docs/agent/command_routes.json`.
+Keep it current when `Приберись`, `прибейсь`, or another standing command
+changes behavior.
 
 Default answer style: Russian, short, operational, and direct.
 
@@ -188,13 +197,15 @@ When the owner asks to manage the service, staff, money, or daily workflow:
 - for finance, use CRM repair orders and cashboxes as source of truth; never
   duplicate the cashbox ledger into memory
 
-When the owner says `Приберись` or asks to clean up the board:
+When the owner says `Приберись`, `прибейсь`, or asks to clean up the board:
 
 - use `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
   procedure
-- act as full board-management autopilot: update, move, tag, set indicators,
-  set deadlines, enrich VIN/OEM/parts/service data, and archive completed
-  cards when safe
+- act as full board-management autopilot: update, tag, set indicators, set
+  deadlines, enrich VIN/OEM/parts/service data, and archive completed cards
+  when safe
+- do not move cards between columns during this command unless the owner gives
+  a separate explicit move command with the target card and target column
 - update the public card description so the first five visible lines form a
   clean external summary: vehicle, task, status, payment/parts, next step
 - preserve user-entered data: do not delete works, materials, prices, payments,
@@ -228,6 +239,8 @@ Keep the knowledge-base index current:
 - treat `docs/agent/knowledge_base_index.md` as the human entrypoint for all
   durable project knowledge
 - treat `docs/agent/knowledge_map.json` as the machine-readable route map
+- treat `docs/agent/knowledge_annotations.jsonl` as the compact sidecar index
+  for fast file-level annotations, route confidence, and "when to open" hints
 - treat `docs/agent/knowledge_shelves.md` as the shelf map for file placement,
   route-card markup, source-pack signing, and maintenance commands
 - treat `probe_knowledge_base` as the default cheap first pass before broad
@@ -235,6 +248,10 @@ Keep the knowledge-base index current:
 - treat `sync_knowledge_base`, `search_knowledge_base`, and
   `audit_knowledge_base` as the refresh, detail-search, and health-check tools
   for the local corpus
+- treat `audit_knowledge_annotations` as the health-check for compact
+  annotations after knowledge-map or source-pack changes
+- treat `audit_skill_registry` as the health-check for model-specific and
+  Autostop-focused Codex skills linked from `knowledge_map.json`
 - update both when adding a new playbook, source catalog, model-specific skill,
   or durable source family
 - for BMW F15/N63TU, keep the dedicated BMW route linked from both index files
@@ -252,11 +269,32 @@ Keep the Krasnoyarsk service-management catalog current:
 Keep the board-cleanup autopilot playbook current:
 
 - treat `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
-  meaning of the owner's command `Приберись`
-- update it when the owner changes autonomy, archive, note style, column
-  movement, or data-preservation rules
+  meaning of the owner's commands `Приберись` and `прибейсь`
+- update it when the owner changes autonomy, archive, note style, card-movement
+  boundary, or data-preservation rules
 - never convert the playbook into a parallel CRM database; it is only behavior
   guidance
+
+Keep the manager run ledger useful:
+
+- use `start_manager_run` before autopilot, procurement, finance, knowledge
+  intake, or multi-step CRM work
+- record planned actions, skipped writes, risks, actual writes, and verification
+  through `record_manager_run_event`
+- close the run with `finish_manager_run`, including counts or verification
+  evidence such as `cards_moved=0` for board cleanup
+- use `list_manager_runs` to inspect recent operational history before assuming
+  what happened in a previous session
+
+Keep manager memory curated:
+
+- use `audit_memory` before memory cleanup or when recall quality looks weak
+- use `curate_memory(apply=true)` only for non-destructive duplicate archiving;
+  do not delete source records just because they are redundant
+- prefer memories with clear `importance`, `confidence`, `expires_at`,
+  `supersedes_id`, `sensitivity`, and tags when storing durable conclusions
+- let `last_used_at` show which memories are actively useful; stale unused
+  memories should be audited before being trusted
 
 Keep the parts-search playbook current:
 

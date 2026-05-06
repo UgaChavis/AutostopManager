@@ -1,0 +1,32 @@
+﻿term,expanded,ru
+AOS,Aftersales Online System,послепродажная онлайн-система BMW
+ISTA,Integrated Service Technical Application,интегрированное сервисно-техническое приложение BMW
+AIR,Aftersales Information Research,послепродажная информационно-справочная система BMW
+TIS,Technical Information System,техническая информационная система
+OBD II,On-Board Diagnostics II,бортовая диагностика второго поколения
+DTC,Diagnostic Trouble Code,диагностический код неисправности
+MIL,Malfunction Indicator Lamp,контрольная лампа неисправности двигателя/системы выбросов
+VIN,Vehicle Identification Number,идентификационный номер автомобиля
+I-level,Integration Level,уровень программной интеграции автомобиля
+ATF,Automatic Transmission Fluid,жидкость автоматической коробки передач
+DCT,Dual-Clutch Transmission,коробка передач с двумя сцеплениями
+VANOS,Variable Nockenwellensteuerung,система изменения фаз газораспределения BMW
+Valvetronic,BMW variable valve lift system,система изменения подъема клапанов BMW
+EGR,Exhaust Gas Recirculation,рециркуляция отработавших газов
+DPF,Diesel Particulate Filter,сажевый фильтр дизельного двигателя
+SCR,Selective Catalytic Reduction,селективное каталитическое восстановление NOx
+NOx,Nitrogen Oxides,оксиды азота
+HPFP,High Pressure Fuel Pump,топливный насос высокого давления
+MAF,Mass Air Flow,датчик массового расхода воздуха
+MAP,Manifold Absolute Pressure,датчик абсолютного давления во впускном коллекторе
+PCV,Positive Crankcase Ventilation,вентиляция картера
+DSC,Dynamic Stability Control,динамический контроль устойчивости
+ABS,Anti-lock Braking System,антиблокировочная система тормозов
+EPS,Electric Power Steering,электрический усилитель рулевого управления
+HV,High Voltage,высокое напряжение
+PHEV,Plug-in Hybrid Electric Vehicle,подключаемый гибридный автомобиль
+EVSE,Electric Vehicle Supply Equipment,зарядное оборудование для электромобиля
+CAN,Controller Area Network,сеть контроллеров
+LIN,Local Interconnect Network,локальная межсоединительная сеть
+MOST,Media Oriented System Transport,мультимедийная оптическая сеть
+DoIP,Diagnostic over Internet Protocol,диагностика по интернет-протоколу

@@ -23,5 +23,15 @@
   ],
   "sensitive_data_rule": "Keep secrets out of Git-tracked docs. Store only operational notes that are safe to keep in the project.",
   "crm_reference_rule": "If memory needs to reference CRM data, store a short note with CRM ids or search terms, not the full record.",
-  "file_intake_rule": "If a new file changes a durable rule, extract the rule, update the relevant playbook or catalog, and keep the raw file out of memory."
+  "file_intake_rule": "If a new file changes a durable rule, extract the rule, update the relevant playbook or catalog, and keep the raw file out of memory.",
+  "quality_fields": [
+    "importance",
+    "confidence",
+    "expires_at",
+    "supersedes_id",
+    "sensitivity",
+    "last_used_at",
+    "archived_at"
+  ],
+  "curation_rule": "Use audit_memory before memory cleanup. Use curate_memory for non-destructive duplicate archiving; do not delete source memory records during routine curation."
 }

@@ -1,3 +1,29 @@
 {"chassis":"E-series","body_code":"E","scope":"Legacy BMW chassis families before F/G-series.","notes_ru":"Использовать как ориентир поколения; точную модель и комплектацию проверять по VIN через BMW ETK/AIR/ISTA."}
 {"chassis":"F-series","body_code":"F","scope":"BMW F-series vehicles including F15/F16 generation systems.","notes_ru":"Для F15/N63 сначала открывать специализированный skill bmw-f15-n63, затем этот общий BMW pack."}
 {"chassis":"G-series","body_code":"G","scope":"BMW G-series vehicles with newer integration-level and software bulletin dependencies.","notes_ru":"При программных ошибках важны I-level, ISTA test plan и сервисные бюллетени."}
+{"code": "E30", "series": "3 Series", "generation_years": "1982-1994", "body": "sedan/coupe/convertible/touring", "notes_ru": "Классическая E-серия; ремонтные данные зависят от двигателя M10/M20/M40/M42/S14."}
+{"code": "E36", "series": "3 Series", "generation_years": "1990-2000", "body": "sedan/coupe/convertible/touring/compact", "notes_ru": "OBD I/OBD II переходный период по рынку и году."}
+{"code": "E46", "series": "3 Series", "generation_years": "1998-2006", "body": "sedan/coupe/convertible/touring/compact", "notes_ru": "M52TU/M54/M56/N42/N46/M57 в зависимости от рынка."}
+{"code": "E90/E91/E92/E93", "series": "3 Series", "generation_years": "2005-2013", "body": "sedan/touring/coupe/convertible", "notes_ru": "N46/N52/N53/N54/N55/N47/M57/N57; много различий по рынку."}
+{"code": "F30/F31/F34", "series": "3 Series", "generation_years": "2011-2019", "body": "sedan/touring/gran turismo", "notes_ru": "N13/N20/N26/N47/N57/B38/B48/B58; ZF 8HP на многих версиях."}
+{"code": "G20/G21", "series": "3 Series", "generation_years": "2018-present", "body": "sedan/touring", "notes_ru": "B48/B58/B47/B57/PHEV; BDC и Ethernet/DoIP на многих версиях."}
+{"code": "E39", "series": "5 Series", "generation_years": "1995-2004", "body": "sedan/touring", "notes_ru": "M52/M54/M57/M62; механика и ZF/GM автоматы."}
+{"code": "E60/E61", "series": "5 Series", "generation_years": "2003-2010", "body": "sedan/touring", "notes_ru": "Сложная электронная архитектура, CCC/MOST, активные системы шасси на части машин."}
+{"code": "F10/F11/F07", "series": "5 Series", "generation_years": "2009-2017", "body": "sedan/touring/gran turismo", "notes_ru": "N20/N47/N52/N53/N55/N57/N63; ZF 8HP, xDrive на части версий."}
+{"code": "G30/G31", "series": "5 Series", "generation_years": "2016-2024", "body": "sedan/touring", "notes_ru": "B-серии двигателей, BDC, гибридные версии, продвинутая диагностика ISTA."}
+{"code": "G60/G61", "series": "5 Series", "generation_years": "2023-present", "body": "sedan/touring", "notes_ru": "Современная электронная платформа, гибридные и электрические исполнения по рынку."}
+{"code": "E53", "series": "X5", "generation_years": "1999-2006", "body": "SUV", "notes_ru": "Ранний X5; M54/M57/M62/N62; раздаточные коробки и пневмоподвеска."}
+{"code": "E70", "series": "X5", "generation_years": "2006-2013", "body": "SUV", "notes_ru": "xDrive, дизельные и V8 версии, активное шасси на части комплектаций."}
+{"code": "F15/F85", "series": "X5/X5 M", "generation_years": "2013-2018", "body": "SUV", "notes_ru": "ZF 8HP, N55/N57/N63/S63, гибрид F15 PHEV."}
+{"code": "G05", "series": "X5", "generation_years": "2018-present", "body": "SUV", "notes_ru": "B58/N63/B57/PHEV, BDC, современные ADAS и сетевые системы."}
+{"code": "E83", "series": "X3", "generation_years": "2003-2010", "body": "SUV", "notes_ru": "Ранний xDrive, M54/N52/M57/N47."}
+{"code": "F25", "series": "X3", "generation_years": "2010-2017", "body": "SUV", "notes_ru": "N20/N52/N55/N47/N57, ZF 8HP, xDrive."}
+{"code": "G01", "series": "X3", "generation_years": "2017-2024", "body": "SUV", "notes_ru": "B48/B58/B47/B57, ZF 8HP, PHEV на части рынков."}
+{"code": "G45", "series": "X3", "generation_years": "2024-present", "body": "SUV", "notes_ru": "Новая G-платформа, программная диагностика по I-level критична."}
+{"code": "E65/E66", "series": "7 Series", "generation_years": "2001-2008", "body": "sedan", "notes_ru": "Ранняя сложная шина/электроника, N62/N73, пневмо/активные системы."}
+{"code": "F01/F02", "series": "7 Series", "generation_years": "2008-2015", "body": "sedan", "notes_ru": "N54/N55/N57/N63/N74, ZF 6HP/8HP, активное шасси."}
+{"code": "G11/G12", "series": "7 Series", "generation_years": "2015-2022", "body": "sedan", "notes_ru": "BDC, B58/N63/B57/PHEV, продвинутые системы помощи."}
+{"code": "G70", "series": "7 Series/i7", "generation_years": "2022-present", "body": "sedan", "notes_ru": "Современная платформа, включая электрические версии и высоковольтные системы."}
+{"code": "I01", "series": "i3", "generation_years": "2013-2022", "body": "electric hatchback", "notes_ru": "Электромобиль/Range Extender, HV SME/EME, 12-вольтовая сеть важна."}
+{"code": "I12/I15", "series": "i8", "generation_years": "2014-2020", "body": "plug-in hybrid coupe/roadster", "notes_ru": "PHEV, HV-система, электрический привод передней оси на части режимов."}
+{"code": "I20", "series": "iX", "generation_years": "2021-present", "body": "electric SUV", "notes_ru": "Современная высоковольтная и программная архитектура."}

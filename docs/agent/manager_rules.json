@@ -16,14 +16,29 @@
       "rule": "When the owner provides new files, classify the source and license first, then extract only durable conclusions or routing rules. Do not store raw manuals, full spreadsheets, OCR dumps, or copied databases in memory."
     },
     {
+      "id": "manager-context-entrypoint",
+      "priority": 21,
+      "rule": "For non-trivial owner requests, use prepare_manager_context to combine command routes, relevant memory/rules, knowledge routing, missing required context, and next actions before acting."
+    },
+    {
       "id": "knowledge-catalog-sync",
       "priority": 22,
       "rule": "If a new file changes the supported commands, source routing, or source catalog, update the relevant playbook or catalog first and append a manager_journal entry."
     },
     {
+      "id": "command-route-sync",
+      "priority": 22,
+      "rule": "Treat docs/agent/command_routes.json as the canonical route map for natural owner commands such as Приберись and прибейсь; update it when command aliases, open-first files, or allowed actions change."
+    },
+    {
       "id": "knowledge-index-entrypoint",
       "priority": 22,
       "rule": "For local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first. If has_knowledge=true, open open_first/source_of_truth before broad file reads; if more detail is needed, use search_knowledge_base inside the returned domain. If docs, catalogs, or skills changed, run sync_knowledge_base and audit_knowledge_base."
+    },
+    {
+      "id": "knowledge-annotation-index",
+      "priority": 22,
+      "rule": "Treat docs/agent/knowledge_annotations.jsonl as the compact file-level annotation index. Update it when durable files, source packs, routes, or skills need better fast routing, and run audit_knowledge_annotations after changes."
     },
     {
       "id": "knowledge-route-card-maintenance",
@@ -39,6 +54,26 @@
       "id": "github-publication-privacy",
       "priority": 23,
       "rule": "When saving or syncing AutostopManager to GitHub, commit code, tests, docs, and source-routing catalogs only. Do not commit data/ runtime artifacts, SQLite databases, CRM snapshots, client contacts, payments, VIN/license snapshots, or repair-order dumps."
+    },
+    {
+      "id": "manager-run-ledger",
+      "priority": 24,
+      "rule": "For autopilot, procurement, finance, knowledge-intake, or multi-step CRM work, create a manager run ledger entry, record planned actions/skips/risks/writes, finish it with verification evidence, and store only the operational summary in memory."
+    },
+    {
+      "id": "business-identity-private-route",
+      "priority": 24,
+      "rule": "For ИП реквизиты, карточка предприятия, AutoStop business identity, or ИП Гришкявичус/Гришкевичус questions, use docs/agent/business_identity_playbook.md and private files under data/private_knowledge. Do not copy private bank/contact details into Git-tracked docs or public summaries."
+    },
+    {
+      "id": "business-document-quality-gate",
+      "priority": 24,
+      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md and C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run."
+    },
+    {
+      "id": "memory-curator",
+      "priority": 24,
+      "rule": "Use audit_memory before memory cleanup or when recall quality looks weak. Use curate_memory only for non-destructive duplicate archiving; do not delete source memory records during routine curation."
     },
     {
       "id": "crm-read-order",
@@ -128,7 +163,17 @@
     {
       "id": "gmail-read-order",
       "priority": 35,
-      "rule": "For inbox work, inspect Gmail labels or search first, then open the relevant message or thread before drafting replies, tasks, reminders, or follow-ups."
+      "rule": "For Gmail or inbox work, use docs/agent/gmail_workflow_playbook.md: inspect labels or search first, then open the relevant message or thread before drafting replies, tasks, reminders, or follow-ups."
+    },
+    {
+      "id": "gmail-write-safety",
+      "priority": 36,
+      "rule": "Do not send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail unless the owner explicitly asks for that exact mailbox-changing action. Preview targets before bulk operations."
+    },
+    {
+      "id": "gmail-attachment-quality-gate",
+      "priority": 36,
+      "rule": "For Gmail attachments, read attachment metadata first. If a PDF/DOCX/XLSX, invoice, act, КП, or requisites document affects output quality, route through the business-document quality gate instead of trusting connector-parsed text."
     },
     {
       "id": "write-safety",
@@ -153,12 +198,17 @@
     {
       "id": "board-cleanup-autopilot-trigger",
       "priority": 16,
-      "rule": "When the owner says 'Приберись', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md."
+      "rule": "When the owner says 'Приберись', 'прибейсь', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md."
     },
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants board-management autonomy for live CRM reads, card descriptions, short manager notes, tags, deadlines, indicators, and safe vehicle-profile enrichment. It must not move cards between columns or auto-archive cards during routine cleanup; use move_card, bulk_move_cards, mark_card_ready, archive_card, or equivalent state/column relocation only when the owner explicitly asks for one exact target."
+      "rule": "The board_cleanup_autopilot command grants full board-management autonomy to read active CRM context, update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, and archive completed cards when safe, but it does not allow moving cards between columns."
+    },
+    {
+      "id": "board-cleanup-no-card-movement",
+      "priority": 17,
+      "rule": "During board cleanup, do not move cards between columns. Leave every card in its current column unless the owner gives a separate explicit move command with the target card and target column."
     },
     {
       "id": "board-cleanup-data-preservation",

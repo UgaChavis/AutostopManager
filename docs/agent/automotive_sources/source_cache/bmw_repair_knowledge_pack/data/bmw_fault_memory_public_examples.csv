@@ -1,0 +1,7 @@
+﻿code,control_unit,description_en,source_id,models_from_source,diagnostic_meaning_ru
+8013FE,IHKA,Software run time error,NHTSA_BMW_SIB_64_13_25_IHKA_8013FE_2026,"G05,G06,G07,G09,G20,G22,G23,G26,G29",Публичный бюллетень связывает с программным обеспечением IHKA и I-level; замена IHKA не должна выполняться только из-за этого кода.
+8013A3,IHKA,"Electric auxiliary heater (high voltage): OBD temperature sensor, coolant below operating range",NHTSA_BMW_SIB_12_21_16_IHKA_8013A3_2016,"I01,I12",Пример климат/HV кода; подтверждать по VIN и ISTA.
+02010A,ACSM,Coding: coding data not qualified,NHTSA_BMW_SIB_61_01_26_BCP_SECURE_ELEMENT_2026,"F74,G05 LCI,G06 LCI,G07 LCI,G45,G60,G70,I20,U10,U11",В публичном бюллетене связан с ошибкой Secure Element BCP и кодированием.
+02390A,VIP,"VIP control unit: coding data not released, signature",NHTSA_BMW_SIB_61_01_26_BCP_SECURE_ELEMENT_2026,"F74,G05 LCI,G06 LCI,G07 LCI,G45,G60,G70,I20,U10,U11",Ошибки подписи/релиза кодировочных данных.
+02290A,IB/DSC,"DSC control unit: coding data not released, signature",NHTSA_BMW_SIB_61_01_26_BCP_SECURE_ELEMENT_2026,"F74,G05 LCI,G06 LCI,G07 LCI,G45,G60,G70,I20,U10,U11",Не сводить к замене DSC без проверки программного бюллетеня и I-level.
+020D0A,HKFM,HKFM: coding data are not qualified,NHTSA_BMW_SIB_61_01_26_BCP_SECURE_ELEMENT_2026,"F74,G05 LCI,G06 LCI,G07 LCI,G45,G60,G70,I20,U10,U11",Пример ошибки кодировочных данных модуля задней крышки/багажника.

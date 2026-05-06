@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,41 @@ from .storage import ManagerMemoryStore, _json_list, _now
 
 
 KNOWLEDGE_MAP_PATH = PROJECT_ROOT / "docs" / "agent" / "knowledge_map.json"
+COMMAND_ROUTES_PATH = PROJECT_ROOT / "docs" / "agent" / "command_routes.json"
+KNOWLEDGE_ANNOTATIONS_PATH = PROJECT_ROOT / "docs" / "agent" / "knowledge_annotations.jsonl"
 MAX_SECTION_CHARS = 12000
 MAX_PREVIEW_CHARS = 420
+
+STOPWORDS = {
+    "а",
+    "без",
+    "в",
+    "во",
+    "для",
+    "и",
+    "или",
+    "как",
+    "к",
+    "ко",
+    "на",
+    "не",
+    "но",
+    "о",
+    "об",
+    "от",
+    "по",
+    "про",
+    "с",
+    "со",
+    "у",
+    "что",
+    "the",
+    "and",
+    "or",
+    "for",
+    "with",
+    "without",
+}
 
 
 @dataclass(frozen=True)
@@ -51,8 +85,10 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
     documents_indexed = 0
     sections_indexed = 0
     route_cards_indexed = 0
+    annotations_indexed = 0
 
     with memory.connect() as conn:
+        conn.execute("DELETE FROM knowledge_annotations")
         conn.execute("DELETE FROM knowledge_sections")
         conn.execute("DELETE FROM knowledge_documents")
         conn.execute("DELETE FROM knowledge_route_cards")
@@ -123,12 +159,15 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                     indexed_at=now,
                 )
 
+        annotations_indexed = _insert_annotations(conn, indexed_at=now)
+
     return {
         "ok": True,
         "map_path": str(KNOWLEDGE_MAP_PATH),
         "route_cards_indexed": route_cards_indexed,
         "documents_indexed": documents_indexed,
         "sections_indexed": sections_indexed,
+        "annotations_indexed": annotations_indexed,
         "domains": sorted(domains.keys()),
         "missing_files": missing,
         "indexed_at": now,
@@ -149,7 +188,13 @@ def probe_knowledge_base(
         sync_knowledge_base(memory)
 
     tokens = _tokens(query)
+    command_route = find_command_route(query)
     domain_hints = _domain_hints(query)
+    if command_route:
+        domain_hints[str(command_route.get("domain") or "")] = max(
+            domain_hints.get(str(command_route.get("domain") or ""), 0),
+            int(command_route.get("score") or 0),
+        )
     with memory.connect() as conn:
         rows = conn.execute(
             """
@@ -168,22 +213,41 @@ def probe_knowledge_base(
             FROM knowledge_route_cards
             """
         ).fetchall()
+        annotation_rows = conn.execute(
+            """
+            SELECT domain, path, title, summary, use_when_json, keywords_json, questions_json, search_text
+            FROM knowledge_annotations
+            """
+        ).fetchall()
+
+    annotations_by_domain: dict[str, list[dict[str, Any]]] = {}
+    for row in annotation_rows:
+        annotation = dict(row)
+        annotations_by_domain.setdefault(str(annotation.get("domain") or ""), []).append(annotation)
 
     routes: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        item["annotation_text"] = "\n".join(
+            str(annotation.get("search_text") or "") for annotation in annotations_by_domain.get(str(item["domain"]), [])
+        )
         score, matching_terms = _score_route_card(item, tokens, query, domain_hints=domain_hints)
         if tokens and score <= 0:
             continue
         source_of_truth = json.loads(item["source_of_truth_json"] or "[]")
         primary_files = json.loads(item["primary_files_json"] or "[]")
+        open_first = (source_of_truth or primary_files or [""])[0]
+        if command_route and item["domain"] == command_route.get("domain") and command_route.get("open_first"):
+            open_first = str(command_route["open_first"])
+            if open_first not in source_of_truth:
+                source_of_truth = [open_first, *source_of_truth]
         route = {
             "domain": item["domain"],
             "title": item["title"],
             "score": score,
             "confidence": _confidence(score),
             "matching_terms": matching_terms,
-            "open_first": (source_of_truth or primary_files or [""])[0],
+            "open_first": open_first,
             "source_of_truth": source_of_truth,
             "primary_files": primary_files,
             "required_context": json.loads(item["required_context_json"] or "[]"),
@@ -206,6 +270,7 @@ def probe_knowledge_base(
         "best_domain": best["domain"] if best else None,
         "open_first": best["open_first"] if best else None,
         "source_of_truth": best["source_of_truth"] if best else [],
+        "command_route": command_route,
         "routes": routes,
         "next_action": "open_source_of_truth" if has_knowledge else "route_external_sources",
         "needs_broad_search": not has_knowledge,
@@ -250,6 +315,7 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         route_cards_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0)
         documents_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()["count"] or 0)
         sections_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections").fetchone()["count"] or 0)
+        annotations_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()["count"] or 0)
 
     warnings: list[str] = []
     if route_cards_indexed != len(domains):
@@ -260,8 +326,12 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         warnings.append("some domains do not declare aliases")
     if missing_files:
         warnings.append("some mapped files are missing")
+    if KNOWLEDGE_ANNOTATIONS_PATH.exists() and annotations_indexed == 0:
+        warnings.append("knowledge_annotations.jsonl exists but no annotations are indexed")
 
     ok = not missing_files and route_cards_indexed == len(domains) and documents_indexed > 0 and sections_indexed > 0
+    if KNOWLEDGE_ANNOTATIONS_PATH.exists():
+        ok = ok and annotations_indexed > 0
     return {
         "ok": ok,
         "map_path": str(KNOWLEDGE_MAP_PATH),
@@ -269,9 +339,47 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         "route_cards_indexed": route_cards_indexed,
         "documents_indexed": documents_indexed,
         "sections_indexed": sections_indexed,
+        "annotations_indexed": annotations_indexed,
         "missing_files": missing_files,
         "domains_without_source_of_truth": domains_without_source_of_truth,
         "domains_without_aliases": domains_without_aliases,
+        "warnings": warnings,
+        "checked_at": _now(),
+    }
+
+
+def audit_knowledge_annotations(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
+    memory = store or ManagerMemoryStore()
+    memory.initialize()
+    if _annotation_count(memory) == 0:
+        sync_knowledge_base(memory)
+
+    payload = _load_knowledge_map()
+    domains = set((payload.get("domains") or {}).keys())
+    with memory.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT domain, COUNT(*) AS count
+            FROM knowledge_annotations
+            GROUP BY domain
+            ORDER BY domain ASC
+            """
+        ).fetchall()
+    by_domain = {str(row["domain"]): int(row["count"] or 0) for row in rows}
+    missing_domains = sorted(domain for domain in domains if by_domain.get(domain, 0) == 0)
+    unknown_domains = sorted(domain for domain in by_domain if domain not in domains)
+    warnings: list[str] = []
+    if missing_domains:
+        warnings.append("some knowledge_map domains have no compact annotation")
+    if unknown_domains:
+        warnings.append("some annotations reference unknown domains")
+    return {
+        "ok": not warnings and sum(by_domain.values()) > 0,
+        "path": str(KNOWLEDGE_ANNOTATIONS_PATH),
+        "annotations_indexed": sum(by_domain.values()),
+        "domains": by_domain,
+        "missing_domains": missing_domains,
+        "unknown_domains": unknown_domains,
         "warnings": warnings,
         "checked_at": _now(),
     }
@@ -320,6 +428,27 @@ def search_knowledge_base(
             """,
             params,
         ).fetchall()
+        annotation_where = "WHERE domain = ?" if domain else ""
+        annotation_params: list[Any] = [domain] if domain else []
+        annotation_rows = conn.execute(
+            f"""
+            SELECT
+                domain,
+                path,
+                title,
+                summary,
+                use_when_json,
+                keywords_json,
+                questions_json,
+                source_type,
+                trust_level,
+                search_text,
+                indexed_at
+            FROM knowledge_annotations
+            {annotation_where}
+            """,
+            annotation_params,
+        ).fetchall()
 
     ranked: list[dict[str, Any]] = []
     for row in rows:
@@ -338,12 +467,43 @@ def search_knowledge_base(
                 "level": item["level"],
                 "preview": item["preview"],
                 "use_when": use_when,
-                "score": score,
+                "score": score + (12 if item["document_type"] == "domain_route" else 0),
                 "indexed_at": item["indexed_at"],
             }
         )
 
-    ranked.sort(key=lambda value: (value["score"], value["document_type"] == "domain_route"), reverse=True)
+    for row in annotation_rows:
+        item = dict(row)
+        score = _score(item, tokens, query, domain_hints=domain_hints)
+        if tokens and score <= 0:
+            continue
+        use_when = json.loads(item.get("use_when_json") or "[]")
+        ranked.append(
+            {
+                "domain": item["domain"],
+                "path": item["path"],
+                "title": item["title"],
+                "document_type": "annotation",
+                "heading": item["title"],
+                "level": 0,
+                "preview": item["summary"],
+                "use_when": use_when,
+                "score": score + 10,
+                "indexed_at": item["indexed_at"],
+            }
+        )
+
+    ranked.sort(
+        key=lambda value: (
+            value["score"],
+            2
+            if value["document_type"] == "domain_route"
+            else 1
+            if value["document_type"] == "annotation"
+            else 0,
+        ),
+        reverse=True,
+    )
     return {
         "ok": True,
         "query": query,
@@ -366,8 +526,56 @@ def _route_card_count(memory: ManagerMemoryStore) -> int:
     return int(row["count"] or 0)
 
 
+def _annotation_count(memory: ManagerMemoryStore) -> int:
+    with memory.connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()
+    return int(row["count"] or 0)
+
+
 def _load_knowledge_map() -> dict[str, Any]:
     return json.loads(KNOWLEDGE_MAP_PATH.read_text(encoding="utf-8-sig"))
+
+
+@lru_cache(maxsize=1)
+def _load_command_routes() -> dict[str, Any]:
+    if not COMMAND_ROUTES_PATH.exists():
+        return {"routes": []}
+    return json.loads(COMMAND_ROUTES_PATH.read_text(encoding="utf-8-sig"))
+
+
+def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
+    lowered = (query or "").casefold()
+    normalized_intent = (intent or "").casefold()
+    best: dict[str, Any] | None = None
+    best_score = 0
+    for raw_route in _load_command_routes().get("routes", []):
+        route = dict(raw_route)
+        score = 0
+        matching_terms: list[str] = []
+        if normalized_intent and normalized_intent == str(route.get("intent") or "").casefold():
+            score += 40
+            matching_terms.append(str(route.get("intent")))
+        for alias in route.get("aliases", []):
+            text = str(alias).casefold()
+            if not text:
+                continue
+            if lowered == text:
+                score += 100
+                matching_terms.append(str(alias))
+            elif text in lowered:
+                score += 70
+                matching_terms.append(str(alias))
+        for keyword in route.get("keywords", []):
+            text = str(keyword).casefold()
+            if text and text in lowered:
+                score += 15
+                matching_terms.append(str(keyword))
+        if score > best_score:
+            route["score"] = score
+            route["matching_terms"] = list(dict.fromkeys(matching_terms))
+            best = route
+            best_score = score
+    return best if best_score >= 30 else None
 
 
 def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
@@ -657,6 +865,102 @@ def _insert_sections(
     return count
 
 
+def _insert_annotations(conn: Any, *, indexed_at: str) -> int:
+    count = 0
+    for annotation in _load_annotations():
+        annotation_id = str(annotation.get("annotation_id") or "").strip()
+        domain = str(annotation.get("domain") or "").strip()
+        path = str(annotation.get("path") or "").strip()
+        if not annotation_id or not domain or not path:
+            continue
+        title = str(annotation.get("title") or "").strip()
+        summary = str(annotation.get("summary") or "").strip()
+        use_when = _unique_strings([str(item) for item in annotation.get("use_when", [])])
+        keywords = _unique_strings([str(item) for item in annotation.get("keywords", [])])
+        questions = _unique_strings([str(item) for item in annotation.get("questions", [])])
+        safety_flags = _unique_strings([str(item) for item in annotation.get("safety_flags", [])])
+        related_skills = _unique_strings([str(item) for item in annotation.get("related_skills", [])])
+        source_type = str(annotation.get("source_type") or "").strip()
+        trust_level = str(annotation.get("trust_level") or "").strip()
+        refresh_cadence = str(annotation.get("refresh_cadence") or "").strip()
+        search_text = "\n".join(
+            [
+                annotation_id,
+                domain,
+                path,
+                title,
+                summary,
+                source_type,
+                trust_level,
+                refresh_cadence,
+                *use_when,
+                *keywords,
+                *questions,
+                *safety_flags,
+                *related_skills,
+            ]
+        ).lower()
+        conn.execute(
+            """
+            INSERT INTO knowledge_annotations
+                (
+                    annotation_id,
+                    domain,
+                    path,
+                    title,
+                    summary,
+                    use_when_json,
+                    keywords_json,
+                    questions_json,
+                    source_type,
+                    trust_level,
+                    refresh_cadence,
+                    safety_flags_json,
+                    related_skills_json,
+                    search_text,
+                    indexed_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                annotation_id,
+                domain,
+                path,
+                title,
+                summary,
+                _json_list(use_when),
+                _json_list(keywords),
+                _json_list(questions),
+                source_type,
+                trust_level,
+                refresh_cadence,
+                _json_list(safety_flags),
+                _json_list(related_skills),
+                search_text,
+                indexed_at,
+            ),
+        )
+        count += 1
+    return count
+
+
+def _load_annotations() -> list[dict[str, Any]]:
+    if not KNOWLEDGE_ANNOTATIONS_PATH.exists():
+        return []
+    annotations: list[dict[str, Any]] = []
+    for line in KNOWLEDGE_ANNOTATIONS_PATH.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            annotations.append(payload)
+    return annotations
+
+
 def _clip(value: str) -> str:
     value = value.strip()
     return value[:MAX_SECTION_CHARS]
@@ -694,10 +998,24 @@ def _tokens(query: str) -> list[str]:
         "диагностика": ["diagnostics", "diagnosis", "repair"],
         "ошибка": ["dtc", "fault", "diagnostics"],
         "ошибки": ["dtc", "fault", "diagnostics"],
+        "память": ["memory", "recall"],
+        "воспоминание": ["memory", "recall"],
+        "воспоминания": ["memory", "recall"],
+        "индексация": ["indexing", "index"],
+        "индексацию": ["индексация", "indexing", "index"],
+        "аннотация": ["annotation", "annotations"],
+        "аннотации": ["аннотация", "annotation", "annotations"],
+        "разметка": ["annotation", "metadata", "indexing"],
+        "знаний": ["знания", "knowledge"],
+        "качество": ["quality"],
+        "устаревшие": ["stale", "expired"],
+        "дубли": ["duplicates", "duplicate"],
     }
     tokens: list[str] = []
     for token in re.findall(r"[\w\-]+", query.lower(), flags=re.UNICODE):
         if len(token) < 2:
+            continue
+        if token in STOPWORDS:
             continue
         tokens.append(token)
         tokens.extend(aliases.get(token, []))
@@ -731,7 +1049,8 @@ def _score_route_card(
     *,
     domain_hints: dict[str, int],
 ) -> tuple[int, list[str]]:
-    haystack = str(item.get("search_text") or "").lower()
+    annotation_text = str(item.get("annotation_text") or "").lower()
+    haystack = "\n".join([str(item.get("search_text") or ""), annotation_text]).lower()
     domain = str(item.get("domain") or "").lower()
     title = str(item.get("title") or "").lower()
     aliases = " ".join(json.loads(item.get("aliases_json") or "[]")).lower()
@@ -757,6 +1076,8 @@ def _score_route_card(
             token_score += 4
         if token in source_paths:
             token_score += 3
+        if token in annotation_text:
+            token_score += 8
         occurrences = haystack.count(token)
         if occurrences:
             token_score += min(occurrences, 4)

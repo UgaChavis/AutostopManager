@@ -110,6 +110,10 @@ def test_knowledge_base_tools_are_registered(tmp_path):
 
     audit_result = server.tools["audit_knowledge_base"]()
     assert audit_result["ok"] is True
+    assert "audit_knowledge_annotations" in server.tools
+    annotation_result = server.tools["audit_knowledge_annotations"]()
+    assert annotation_result["ok"] is True
+    assert annotation_result["annotations_indexed"] > 0
 
 
 def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
@@ -119,8 +123,56 @@ def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     register_manager_memory_tools(server, store)
 
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    assert catalog["tool_count"] == len(server.tools) == 19
+    assert catalog["tool_count"] == len(server.tools)
     assert set(catalog["all_tools"]) == set(server.tools)
+
+
+def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    assert "prepare_manager_context" in server.tools
+    context = server.tools["prepare_manager_context"]("прибейсь", intent="board_cleanup", limit=5)
+    assert context["ok"] is True
+    assert context["command_route"]["command_id"] == "board_cleanup_autopilot"
+
+    assert "audit_skill_registry" in server.tools
+    skills = server.tools["audit_skill_registry"]()
+    assert skills["ok"] is True
+
+    assert "start_manager_run" in server.tools
+    assert "record_manager_run_event" in server.tools
+    assert "finish_manager_run" in server.tools
+    assert "list_manager_runs" in server.tools
+
+    started = server.tools["start_manager_run"](intent="board_cleanup", query="Приберись", dry_run=True)
+    server.tools["record_manager_run_event"](started["id"], event_type="planned_action", message="No card moves")
+    server.tools["finish_manager_run"](started["id"], status="completed", verification={"cards_moved": 0})
+    runs = server.tools["list_manager_runs"](limit=3, include_events=True)
+
+    assert runs["items"][0]["id"] == started["id"]
+    assert runs["items"][0]["events"]
+
+
+def test_memory_curator_tools_are_registered(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.remember("Duplicate operational memory", tags=["ops"])
+    store.remember("Duplicate operational memory", tags=["ops"])
+
+    register_manager_memory_tools(server, store)
+
+    assert "audit_memory" in server.tools
+    audit = server.tools["audit_memory"]()
+    assert audit["ok"] is True
+    assert audit["duplicates"]
+
+    assert "curate_memory" in server.tools
+    curated = server.tools["curate_memory"](apply=True)
+    assert curated["ok"] is True
+    assert curated["archived_duplicates"]
 
 
 def test_memory_tools_support_relevance_filters_and_confidence(tmp_path):

@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-05-04",
-  "tool_count": 19,
+  "last_verified": "2026-05-06",
+  "tool_count": 28,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -25,6 +25,7 @@
   ],
   "startup_tools": [
     "today_context",
+    "prepare_manager_context",
     "recall",
     "memory_context_for",
     "recall_lessons",
@@ -44,7 +45,19 @@
     "sync_knowledge_base",
     "probe_knowledge_base",
     "search_knowledge_base",
-    "audit_knowledge_base"
+    "audit_knowledge_base",
+    "audit_knowledge_annotations",
+    "audit_skill_registry"
+  ],
+  "memory_quality_tools": [
+    "audit_memory",
+    "curate_memory"
+  ],
+  "operation_tools": [
+    "start_manager_run",
+    "record_manager_run_event",
+    "finish_manager_run",
+    "list_manager_runs"
   ],
   "all_tools": [
     "remember",
@@ -57,11 +70,20 @@
     "memory_gaps",
     "add_manager_task",
     "today_context",
+    "prepare_manager_context",
     "manager_journal",
     "sync_knowledge_base",
     "probe_knowledge_base",
     "search_knowledge_base",
     "audit_knowledge_base",
+    "audit_knowledge_annotations",
+    "audit_skill_registry",
+    "audit_memory",
+    "curate_memory",
+    "start_manager_run",
+    "record_manager_run_event",
+    "finish_manager_run",
+    "list_manager_runs",
     "lookup_original_parts",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
@@ -78,11 +100,20 @@
     "memory_gaps": "Return sparse or empty memory areas and review prompts without copying CRM or Gmail data.",
     "add_manager_task": "Create a durable task that is not a CRM card or repair order.",
     "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
+    "prepare_manager_context": "Combine owner command routes, relevant memory/rules, knowledge routing, missing required context, and next actions for a specific request.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
     "sync_knowledge_base": "Refresh the SQLite index of docs/agent/knowledge_map.json routes, playbooks, source catalogs, and model-specific skills.",
     "probe_knowledge_base": "Cheaply test whether local knowledge exists for a vehicle, model, system, brand, fluid, diagnostic, parts, CRM, or source-intake task; if has_knowledge=true, open open_first/source_of_truth first.",
     "search_knowledge_base": "Search indexed knowledge sections after probing; optionally filter by domain such as fluids, automotive_repair, bmw_repair, bmw_f15_n63, toyota_gr_yaris, or vehicle_identity_and_oem.",
     "audit_knowledge_base": "Check knowledge_map.json, route-card metadata, mapped files, and SQLite index counts after source intake or route edits.",
+    "audit_knowledge_annotations": "Check docs/agent/knowledge_annotations.jsonl compact file-level annotations and their domain coverage.",
+    "audit_skill_registry": "Check local Codex skill files linked from knowledge_map.json and report missing or unlinked skills.",
+    "audit_memory": "Check long-term manager memory for duplicate, expired, and superseded note/fact records before cleanup.",
+    "curate_memory": "Non-destructively curate manager memory; with apply=true, archive duplicate note/fact copies instead of deleting source records.",
+    "start_manager_run": "Start an auditable run for autopilot, procurement, finance, CRM, or knowledge work.",
+    "record_manager_run_event": "Record planned actions, writes, skips, risks, and verification events for a manager run.",
+    "finish_manager_run": "Close a manager run with status, summary, and verification evidence.",
+    "list_manager_runs": "List recent manager runs and optionally include their events.",
     "lookup_original_parts": "Classify VIN, chassis, or market code and return a source-aware OEM lookup route.",
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
@@ -91,6 +122,7 @@
   "natural_language_commands": {
     "Приберись": {
       "aliases": [
+        "прибейсь",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
@@ -107,8 +139,10 @@
         "enrich vehicle profiles",
         "source VIN/OEM/parts data",
         "set tags, indicators, and deadlines",
-        "move cards",
         "archive completed cards when safe"
+      ],
+      "forbidden_actions": [
+        "move cards between columns unless the owner gives a separate explicit move command"
       ],
       "protected_data": [
         "repair-order works",
@@ -127,6 +161,7 @@
   "knowledge_intake": {
     "entrypoint": "docs/agent/knowledge_base_index.md",
     "machine_map": "docs/agent/knowledge_map.json",
+    "annotation_index": "docs/agent/knowledge_annotations.jsonl",
     "accepted_inputs": [
       "md",
       "txt",
@@ -145,8 +180,10 @@
       "extract durable conclusions",
       "update playbooks or source catalogs",
       "update index/map routes when adding durable knowledge",
+      "update compact annotations when a file should be found by fast routing",
       "run sync_knowledge_base after durable docs/catalog/skill changes",
       "run audit_knowledge_base after route-card or source changes",
+      "run audit_knowledge_annotations after annotation changes",
       "store only reusable memory",
       "journal the change"
     ],
@@ -158,6 +195,26 @@
       "licensed content without permission"
     ]
   },
+  "command_routes": {
+    "source_of_truth": "docs/agent/command_routes.json",
+    "rule": "Natural owner command aliases must map to an intent, domain, open_first file, memory queries, and next actions before broad knowledge search."
+  },
+  "run_ledger": {
+    "source_of_truth": "SQLite manager_runs and manager_run_events tables",
+    "use_when": [
+      "board-cleanup autopilot",
+      "parts procurement",
+      "finance control",
+      "knowledge intake",
+      "multi-step CRM work"
+    ],
+    "minimum_events": [
+      "planned_action",
+      "write_done or skipped",
+      "risk when present",
+      "verification"
+    ]
+  },
   "memory_guidance": [
     "keep only durable conclusions from new files",
     "use memory_context_for before context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated workflow decisions",
@@ -165,10 +222,14 @@
     "use learn_from_feedback after strong praise, criticism, success, failure, or owner instruction to do something differently",
     "store lessons as short reusable guidance, not full event copies or rigid output templates",
     "store source routes, not copied databases",
+    "use importance, confidence, expires_at, supersedes_id, sensitivity, and tags when storing durable memory",
+    "run audit_memory when recall quality looks weak or before memory cleanup",
+    "use curate_memory apply=true only for non-destructive duplicate archiving",
     "refresh the relevant catalog when the MCP surface changes",
     "treat the owner's Приберись command as docs/agent/board_cleanup_autopilot_playbook.md",
     "phone ChatGPT access uses the same CRM MCP endpoint when AutostopManager is mounted on the server",
     "route management, procurement, staff, customer, and finance work through docs/agent/krasnoyarsk_service_management_playbook.md",
+    "route private ИП/AutoStop business identity and requisites through docs/agent/business_identity_playbook.md and data/private_knowledge",
     "prefer explicit uncertainty over invented completeness"
   ]
 }

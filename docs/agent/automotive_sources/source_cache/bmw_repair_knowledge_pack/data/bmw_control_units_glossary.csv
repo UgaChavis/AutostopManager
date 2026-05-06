@@ -1,0 +1,21 @@
+﻿abbr,full,ru,domain
+DME,Digital Motor Electronics,цифровая электроника бензинового двигателя,powertrain
+DDE,Digital Diesel Electronics,цифровая электроника дизельного двигателя,powertrain
+EGS,Electronic Gearbox System,электронная система коробки передач,transmission
+VTG,Verteilergetriebe / Transfer Case control,блок раздаточной коробки,driveline
+DSC,Dynamic Stability Control,динамический контроль устойчивости,chassis
+EPS,Electric Power Steering,электрический усилитель рулевого управления,chassis
+CAS,Car Access System,система доступа автомобиля,body
+FEM,Front Electronic Module,передний электронный модуль,body
+BDC,Body Domain Controller,контроллер домена кузова,body
+FRM,Footwell Module,модуль пространства ног,body
+JBE,Junction Box Electronics,электроника распределительного блока,body
+IHKA,Integrated Heating and Air Conditioning,интегрированная система отопления и кондиционирования,body/climate
+KOMBI,Instrument Cluster,комбинация приборов,body
+ZGM,Central Gateway Module,центральный шлюз,network
+IBS,Intelligent Battery Sensor,интеллектуальный датчик аккумулятора,power management
+ACSM,Advanced Crash Safety Module,расширенный модуль безопасности при аварии,safety
+SME,Storage Management Electronics,электроника управления высоковольтной батареей,high voltage
+EME,Electric Machine Electronics,электроника электрической машины,high voltage
+KLE,Convenience Charging Electronics,электроника зарядки,high voltage
+CCU,Combined Charging Unit,объединенный блок зарядки,high voltage

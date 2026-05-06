@@ -5,9 +5,18 @@ import json
 import sys
 from typing import Any
 
+from .context import prepare_manager_context
 from .fluid_maintenance import build_fluid_maintenance_plan
-from .knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from .knowledge_base import (
+    audit_knowledge_annotations,
+    audit_knowledge_base,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
+from .memory_curator import audit_memory, curate_memory
 from .service_management import build_service_management_plan
+from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .vin_lookup import lookup_original_parts
@@ -26,6 +35,16 @@ def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _json_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+    return value if isinstance(value, dict) else {"value": value}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-manager", description="AutoStop manager memory CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -37,7 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     remember.add_argument("--category", default="general")
     remember.add_argument("--source", default="codex")
     remember.add_argument("--tags", default="")
+    remember.add_argument("--importance", type=float, default=0.5)
     remember.add_argument("--confidence", type=float, default=1.0)
+    remember.add_argument("--expires-at", default=None)
+    remember.add_argument("--supersedes-id", type=int, default=None)
+    remember.add_argument("--sensitivity", default="normal")
 
     recall = sub.add_parser("recall", help="Search manager memory")
     recall.add_argument("query", nargs="?", default="")
@@ -96,6 +119,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     today = sub.add_parser("today", help="Return today's manager context")
     today.add_argument("--limit", type=int, default=20)
+
+    prepare_context = sub.add_parser(
+        "prepare-context",
+        help="Prepare task-specific manager context from memory, rules, command routes, and knowledge base",
+    )
+    prepare_context.add_argument("query")
+    prepare_context.add_argument("--intent", default=None)
+    prepare_context.add_argument("--limit", type=int, default=10)
 
     lookup = sub.add_parser("lookup-oem", help="Classify a VIN or frame number and return OEM lookup routing")
     lookup.add_argument("identifier")
@@ -177,6 +208,40 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_search.add_argument("--limit", type=int, default=10)
 
     sub.add_parser("knowledge-audit", help="Audit the local knowledge map, route cards, files, and SQLite index")
+
+    sub.add_parser("annotations-audit", help="Audit compact knowledge annotations used for fast routing")
+
+    sub.add_parser("skills-audit", help="Audit local Codex skill files linked to knowledge routes")
+
+    sub.add_parser("memory-audit", help="Audit long-term memory for duplicates, expired items, and superseded items")
+
+    memory_curate = sub.add_parser("memory-curate", help="Curate long-term memory without deleting source records")
+    memory_curate.add_argument("--apply", action="store_true")
+
+    run_start = sub.add_parser("run-start", help="Start an auditable manager operation run")
+    run_start.add_argument("query")
+    run_start.add_argument("--intent", default="")
+    run_start.add_argument("--dry-run", action="store_true", dest="dry_run")
+    run_start.add_argument("--source", default="codex")
+    run_start.add_argument("--metadata", default="")
+
+    run_event = sub.add_parser("run-event", help="Record a manager run event")
+    run_event.add_argument("run_id", type=int)
+    run_event.add_argument("--type", dest="event_type", required=True)
+    run_event.add_argument("--message", default="")
+    run_event.add_argument("--target-type", default="")
+    run_event.add_argument("--target-id", default="")
+    run_event.add_argument("--payload", default="")
+
+    run_finish = sub.add_parser("run-finish", help="Finish a manager operation run")
+    run_finish.add_argument("run_id", type=int)
+    run_finish.add_argument("--status", default="completed")
+    run_finish.add_argument("--summary", default="")
+    run_finish.add_argument("--verification", default="")
+
+    run_list = sub.add_parser("run-list", help="List manager operation runs")
+    run_list.add_argument("--limit", type=int, default=20)
+    run_list.add_argument("--events", action="store_true")
     return parser
 
 
@@ -198,6 +263,46 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(search_knowledge_base(store, args.query, domain=args.domain, limit=args.limit))
     elif args.command == "knowledge-audit":
         _print_json(audit_knowledge_base(store))
+    elif args.command == "annotations-audit":
+        _print_json(audit_knowledge_annotations(store))
+    elif args.command == "skills-audit":
+        _print_json(audit_skill_registry())
+    elif args.command == "memory-audit":
+        _print_json(audit_memory(store))
+    elif args.command == "memory-curate":
+        _print_json(curate_memory(store, apply=args.apply))
+    elif args.command == "run-start":
+        _print_json(
+            store.start_manager_run(
+                intent=args.intent,
+                query=args.query,
+                dry_run=args.dry_run,
+                source=args.source,
+                metadata=_json_object(args.metadata),
+            )
+        )
+    elif args.command == "run-event":
+        _print_json(
+            store.record_manager_run_event(
+                args.run_id,
+                event_type=args.event_type,
+                message=args.message,
+                target_type=args.target_type,
+                target_id=args.target_id,
+                payload=_json_object(args.payload),
+            )
+        )
+    elif args.command == "run-finish":
+        _print_json(
+            store.finish_manager_run(
+                args.run_id,
+                status=args.status,
+                summary=args.summary,
+                verification=_json_object(args.verification),
+            )
+        )
+    elif args.command == "run-list":
+        _print_json(store.list_manager_runs(limit=args.limit, include_events=args.events))
     elif args.command == "remember":
         _print_json(
             store.remember(
@@ -207,7 +312,11 @@ def main(argv: list[str] | None = None) -> int:
                 category=args.category,
                 source=args.source,
                 tags=_tags(args.tags),
+                importance=args.importance,
                 confidence=args.confidence,
+                expires_at=args.expires_at,
+                supersedes_id=args.supersedes_id,
+                sensitivity=args.sensitivity,
             )
         )
     elif args.command == "recall":
@@ -277,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(store.journal(args.event, source=args.source, tags=_tags(args.tags)))
     elif args.command == "today":
         _print_json(store.today_context(limit=args.limit))
+    elif args.command == "prepare-context":
+        _print_json(prepare_manager_context(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "lookup-oem":
         _print_json(lookup_original_parts(args.identifier, model_year=args.model_year, make_hint=args.make))
     elif args.command == "source-route":

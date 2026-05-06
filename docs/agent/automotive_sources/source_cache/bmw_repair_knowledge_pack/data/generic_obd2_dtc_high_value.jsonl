@@ -2,3 +2,22 @@
 {"code":"P0171/P0174","system":"fuel_trim","notes_ru":"Generic lean mixture entry point; проверять подсос, MAF/MAP, топливо, crankcase ventilation и BMW-specific faults."}
 {"code":"P0420/P0430","system":"catalyst_efficiency","notes_ru":"Не менять катализатор без проверки пропусков, смеси, датчиков кислорода, утечек выпуска и readiness data."}
 {"code":"U-codes","system":"network_communication","notes_ru":"Для BMW сетевых ошибок фиксировать модуль, шину, питание, wake/sleep, gateway и официальную схему."}
+{"code": "P0100", "system": "Powertrain", "definition_en": "Mass or Volume Air Flow Circuit", "bmw_diagnostic_context_ru": "MAF, питание датчика, подсос воздуха, загрязнение, проводка."}
+{"code": "P0101", "system": "Powertrain", "definition_en": "Mass or Volume Air Flow Circuit Range/Performance", "bmw_diagnostic_context_ru": "MAF против расчетной нагрузки; сравнить коррекции топлива и дым-тест впуска."}
+{"code": "P0112", "system": "Powertrain", "definition_en": "Intake Air Temperature Sensor Circuit Low", "bmw_diagnostic_context_ru": "Датчик температуры впуска, проводка, короткое на массу."}
+{"code": "P0113", "system": "Powertrain", "definition_en": "Intake Air Temperature Sensor Circuit High", "bmw_diagnostic_context_ru": "Обрыв датчика температуры впуска, питание/сигнал."}
+{"code": "P0128", "system": "Powertrain", "definition_en": "Coolant Thermostat Below Regulating Temperature", "bmw_diagnostic_context_ru": "Термостат, температура ОЖ, электрическое управление термостатом."}
+{"code": "P0171", "system": "Powertrain", "definition_en": "System Too Lean Bank 1", "bmw_diagnostic_context_ru": "Подсос воздуха, PCV, низкое давление топлива, MAF, форсунки."}
+{"code": "P0174", "system": "Powertrain", "definition_en": "System Too Lean Bank 2", "bmw_diagnostic_context_ru": "То же для второго банка на рядных/ V-двигателях с двумя банками датчиков."}
+{"code": "P0300", "system": "Powertrain", "definition_en": "Random/Multiple Cylinder Misfire Detected", "bmw_diagnostic_context_ru": "Катушки, свечи, форсунки, компрессия, давление топлива, подсос воздуха."}
+{"code": "P0301", "system": "Powertrain", "definition_en": "Cylinder 1 Misfire Detected", "bmw_diagnostic_context_ru": "Сравнить катушку/свечу/форсунку цилиндра 1 перестановкой и тестом компрессии."}
+{"code": "P0420", "system": "Powertrain", "definition_en": "Catalyst System Efficiency Below Threshold Bank 1", "bmw_diagnostic_context_ru": "Катализатор, задний кислородный датчик, пропуски, топливная смесь."}
+{"code": "P0430", "system": "Powertrain", "definition_en": "Catalyst System Efficiency Below Threshold Bank 2", "bmw_diagnostic_context_ru": "Аналогично для банка 2."}
+{"code": "P0597", "system": "Powertrain", "definition_en": "Thermostat Heater Control Circuit Open", "bmw_diagnostic_context_ru": "Часто связан с электрически управляемым термостатом на BMW; проверить разъем и управление DME."}
+{"code": "P0700", "system": "Powertrain", "definition_en": "Transmission Control System", "bmw_diagnostic_context_ru": "Общий индикатор; читать EGS для детального кода."}
+{"code": "P0715", "system": "Powertrain", "definition_en": "Input/Turbine Speed Sensor Circuit", "bmw_diagnostic_context_ru": "Датчик входной скорости внутри коробки, мехатроник, проводка."}
+{"code": "P0720", "system": "Powertrain", "definition_en": "Output Speed Sensor Circuit", "bmw_diagnostic_context_ru": "Датчик выходной скорости, EGS, проводка, механическая проблема."}
+{"code": "P0730", "system": "Powertrain", "definition_en": "Incorrect Gear Ratio", "bmw_diagnostic_context_ru": "Пробуксовка, давление ATF, износ фрикционов, гидроблок."}
+{"code": "P0741", "system": "Powertrain", "definition_en": "Torque Converter Clutch Circuit Performance or Stuck Off", "bmw_diagnostic_context_ru": "Блокировка гидротрансформатора, гидроблок, ATF, мехатроник."}
+{"code": "U0100", "system": "Network", "definition_en": "Lost Communication With ECM/PCM", "bmw_diagnostic_context_ru": "Питание DME/DDE, PT-CAN, шлюз, вода, масса."}
+{"code": "U0121", "system": "Network", "definition_en": "Lost Communication With ABS Control Module", "bmw_diagnostic_context_ru": "Питание DSC, связь, датчики, шлюз."}

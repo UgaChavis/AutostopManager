@@ -15,30 +15,55 @@
         "agent identity",
         "manager rules",
         "rules",
+        "prepare manager context",
+        "command routes",
+        "run ledger",
+        "skill registry",
+        "memory curator",
+        "memory audit",
         "инструкции менеджера",
         "правила агента",
-        "операционный режим"
+        "операционный режим",
+        "долговременная память",
+        "качество памяти",
+        "устаревшие воспоминания",
+        "журнал запусков"
       ],
       "keywords": [
         "today_context",
+        "prepare_manager_context",
         "memory boundary",
+        "command_routes",
+        "manager_runs",
+        "audit_memory",
+        "curate_memory",
+        "skills-audit",
         "answer style",
         "routing"
       ],
       "questions": [
         "как должен начинать работу менеджер",
         "какие правила ответа и памяти действуют",
-        "какой файл открыть первым для инструкций агента"
+        "какой файл открыть первым для инструкций агента",
+        "как подготовить контекст перед задачей",
+        "как проверить локальные навыки",
+        "как проверить качество памяти",
+        "как найти дубли и устаревшие воспоминания",
+        "как журналировать автопилот или закупку"
       ],
       "source_of_truth_files": [
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
-        "docs/agent/operating_playbook.json"
+        "docs/agent/operating_playbook.json",
+        "docs/agent/command_routes.json",
+        "docs/agent/manager_mcp_catalog.json"
       ],
       "primary_files": [
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
         "docs/agent/operating_playbook.json",
+        "docs/agent/command_routes.json",
+        "docs/agent/manager_mcp_catalog.json",
         "docs/agent/manager_identity.json",
         "docs/agent/memory_policy.json"
       ]
@@ -49,6 +74,7 @@
         "owner provides files, links, PDFs, catalogs, notes, scans, spreadsheets",
         "owner asks to save or expand the knowledge base",
         "owner asks to systematize, mark up, label, or reorganize the knowledge base",
+        "owner asks to optimize documentation, remove stale files, find documentation bugs, or do final file hygiene",
         "source routing or durable instructions need to be updated"
       ],
       "aliases": [
@@ -63,26 +89,47 @@
         "карта полок",
         "структуризация",
         "систематизация",
+        "аннотации",
+        "аннотировать",
+        "разметка знаний",
+        "качество знаний",
+        "оптимизация индекса",
         "добавить документы",
         "разложить документы",
         "подписать документы",
         "обложить инструкциями",
-        "структурировать базу"
+        "структурировать базу",
+        "оптимизация документации",
+        "финальная доводка",
+        "доводка приложения",
+        "очистка мусора",
+        "мусорные файлы",
+        "старые документы",
+        "битые ссылки"
       ],
       "keywords": [
         "knowledge-probe",
         "knowledge-search",
         "knowledge-sync",
         "knowledge-audit",
+        "annotations-audit",
+        "knowledge_annotations",
         "knowledge shelves",
         "route card",
+        "annotation index",
         "source pack",
         "source routing",
         "source of truth",
         "license",
         "taxonomy",
         "placement",
-        "naming"
+        "naming",
+        "gitignore",
+        "file size",
+        "cleanup",
+        "broken links",
+        "placeholders",
+        "stale docs"
       ],
       "questions": [
         "как добавить новый документ в базу знаний",
@@ -90,19 +137,26 @@
         "куда положить новый источник",
         "как разложить базу знаний по полкам",
         "как подписать и разметить файлы базы знаний",
+        "как аннотировать файлы базы знаний",
+        "как улучшить индексацию и качество знаний",
+        "как оптимизировать документацию и убрать мусорные файлы",
+        "как найти старые документы и битые ссылки",
+        "как довести документацию приложения перед финальной версией",
         "какие правила именования и маршрутизации использовать"
       ],
       "source_of_truth_files": [
         "docs/agent/knowledge_intake_playbook.md",
         "docs/agent/knowledge_shelves.md",
         "docs/agent/knowledge_base_index.md",
-        "docs/agent/knowledge_map.json"
+        "docs/agent/knowledge_map.json",
+        "docs/agent/knowledge_annotations.jsonl"
       ],
       "primary_files": [
         "docs/agent/knowledge_intake_playbook.md",
         "docs/agent/knowledge_shelves.md",
         "docs/agent/knowledge_base_index.md",
         "docs/agent/knowledge_map.json",
+        "docs/agent/knowledge_annotations.jsonl",
         "docs/agent/automotive_sources/ingestion_tasks.jsonl"
       ],
       "do_not_store": [
@@ -111,6 +165,242 @@
         "copied licensed database records",
         "temporary search results",
         "CRM snapshots"
+      ]
+    },
+    "business_identity": {
+      "title": "Private business identity, ИП requisites, and current company-card route",
+      "use_when": [
+        "owner asks for current ИП requisites or company card data",
+        "owner asks about ИП Гришкявичус or Гришкевичус",
+        "owner asks which business documents are current versus old",
+        "quotes, invoices, tender responses, or document drafts need current AutoStop business identity facts"
+      ],
+      "aliases": [
+        "business identity",
+        "company card",
+        "enterprise card",
+        "requisites",
+        "private business documents",
+        "ИП",
+        "реквизиты ИП",
+        "карточка предприятия",
+        "карточка ИП",
+        "ИП Гришкявичус",
+        "ИП Гришкевичус",
+        "Гришкявичус",
+        "Гришкевичус",
+        "АвтоСтоп реквизиты",
+        "документы ИП",
+        "актуальные реквизиты",
+        "ОГРНИП",
+        "ИНН",
+        "ОКВЭД"
+      ],
+      "keywords": [
+        "business_identity_current",
+        "business_documents_inventory",
+        "private_knowledge",
+        "INN",
+        "OGRNIP",
+        "OKVED",
+        "bank",
+        "account",
+        "address",
+        "phone",
+        "email",
+        "commercial offer",
+        "tender response",
+        "Карточка предприятия",
+        "КП НОВОЕ",
+        "выписка ЕГРИП",
+        "доверенность",
+        "договор аренды"
+      ],
+      "questions": [
+        "какие актуальные реквизиты моего ИП",
+        "что известно про ИП Гришкявичус",
+        "какая карточка предприятия самая свежая",
+        "какие документы ИП старые а какие актуальные",
+        "какой файл открыть для реквизитов АвтоСтоп",
+        "где взять текущие контакты для коммерческого предложения"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/business_identity_playbook.md",
+        "data/private_knowledge/business_identity_current.json",
+        "data/private_knowledge/business_documents_inventory.json"
+      ],
+      "primary_files": [
+        "docs/agent/business_identity_playbook.md",
+        "data/private_knowledge/business_identity_current.json",
+        "data/private_knowledge/business_documents_inventory.json"
+      ],
+      "required_context": [
+        "intended external use",
+        "whether exact banking/legal wording must be verified from source file"
+      ]
+    },
+    "business_documents": {
+      "title": "AutoStop business document quality, PDF/DOCX/XLSX, invoices, acts, and КП",
+      "use_when": [
+        "owner asks to create, edit, polish, or upload a business document",
+        "PDF, Word, or Excel output must be print-ready or professionally formatted",
+        "invoices, acts, commercial proposals, receipts, requisites sheets, or accounting-style documents need verification",
+        "document totals, НДС wording, signatures, реквизиты, page breaks, or CRM Files upload quality matter"
+      ],
+      "aliases": [
+        "business documents",
+        "document quality",
+        "PDF",
+        "Word",
+        "Excel",
+        "DOCX",
+        "XLSX",
+        "счет",
+        "счёт",
+        "акт",
+        "КП",
+        "коммерческое предложение",
+        "бухгалтерские документы",
+        "печатная форма",
+        "реквизиты",
+        "счет-фактура",
+        "УПД",
+        "таблица",
+        "форма PDF"
+      ],
+      "keywords": [
+        "autostop-business-documents",
+        "audit_business_document",
+        "render_docx",
+        "render_pdf",
+        "artifact-tool",
+        "invoice",
+        "act",
+        "proposal",
+        "totals",
+        "VAT",
+        "НДС",
+        "signature",
+        "stamp",
+        "page break",
+        "print-ready",
+        "CRM Files"
+      ],
+      "questions": [
+        "как сделать качественный счет",
+        "как проверить акт или КП перед отправкой",
+        "как оформить PDF Word Excel документ без кривой верстки",
+        "какой скилл использовать для бухгалтерского документа",
+        "как проверить суммы и НДС в документе",
+        "как подготовить документ для загрузки в CRM Files"
+      ],
+      "skill_path": "C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md",
+      "source_of_truth_files": [
+        "C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md",
+        "docs/agent/business_document_quality_playbook.md",
+        "docs/agent/business_identity_playbook.md"
+      ],
+      "primary_files": [
+        "C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md",
+        "C:/Users/User/.codex/skills/autostop-business-documents/references/business-document-checklist.md",
+        "C:/Users/User/.codex/skills/autostop-business-documents/references/layout-quality-gate.md",
+        "C:/Users/User/.codex/skills/autostop-business-documents/references/money-and-formula-checks.md",
+        "docs/agent/business_document_quality_playbook.md",
+        "docs/agent/business_identity_playbook.md"
+      ],
+      "required_context": [
+        "document type and final/draft/template status",
+        "output format: PDF, DOCX, XLSX, or CRM upload",
+        "source of реквизиты and counterparty facts",
+        "line items, prices, quantities, discounts, НДС status",
+        "whether regulated/tax-form current rules must be verified"
+      ]
+    },
+    "gmail_operations": {
+      "title": "Gmail connector operations, inbox triage, drafts, attachments, and write safety",
+      "use_when": [
+        "owner asks to inspect Gmail or email",
+        "owner asks to test or improve the Gmail connector",
+        "inbox triage, message search, labels, drafts, or attachments are involved",
+        "email-derived tasks, reminders, decisions, approvals, or follow-ups may need durable memory"
+      ],
+      "aliases": [
+        "Gmail",
+        "gmail connector",
+        "email",
+        "mail",
+        "inbox",
+        "почта",
+        "джимейл",
+        "гмейл",
+        "ящик",
+        "входящие",
+        "письма",
+        "письмо",
+        "цепочка",
+        "тред",
+        "ярлыки",
+        "черновики",
+        "вложения",
+        "attachment",
+        "drafts",
+        "labels",
+        "send email",
+        "отправить письмо",
+        "ответить на письмо",
+        "архивировать письмо",
+        "удалить письмо"
+      ],
+      "keywords": [
+        "_search_emails",
+        "_search_email_ids",
+        "_list_labels",
+        "_read_email_thread",
+        "_batch_read_email",
+        "_batch_read_email_threads",
+        "_list_drafts",
+        "_read_attachment",
+        "_send_email",
+        "_send_draft",
+        "_create_draft",
+        "_forward_emails",
+        "_archive_emails",
+        "_delete_emails",
+        "_bulk_label_matching_emails",
+        "has:attachment",
+        "newer_than",
+        "label:",
+        "next_page_token",
+        "mojibake",
+        "private thread",
+        "email source of truth"
+      ],
+      "questions": [
+        "как работать с Gmail connector",
+        "какие команды Gmail доступны",
+        "как проверить почту или входящие",
+        "как искать письма по ярлыку или вложению",
+        "как читать цепочку перед ответом",
+        "как безопасно создать черновик или отправить письмо",
+        "как не сохранить приватную переписку в память",
+        "что делать если тело письма декодировалось кракозябрами"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/gmail_workflow_playbook.md",
+        "docs/agent/gmail_mcp_catalog.json",
+        "docs/agent/manager_rules.json"
+      ],
+      "primary_files": [
+        "docs/agent/gmail_workflow_playbook.md",
+        "docs/agent/gmail_mcp_catalog.json",
+        "docs/agent/manager_rules.json",
+        "docs/agent/operating_playbook.json"
+      ],
+      "required_context": [
+        "whether the owner asks for read-only inspection or an actual mailbox mutation",
+        "search target: sender, subject, label, date window, attachment type, or thread",
+        "for any send/forward/draft action: exact recipients, subject, body intent, attachments, and final approval",
+        "whether email-derived facts should become durable memory, task, reminder, or only a temporary report"
       ]
     },
     "automotive_repair": {
@@ -434,6 +724,7 @@
     },
     "toyota_gr_yaris": {
       "title": "Toyota GR Yaris model-specific repair route",
+      "skill_path": "C:/Users/User/.codex/skills/toyota-gr-yaris/SKILL.md",
       "use_when": [
         "Toyota GR Yaris",
         "Yaris GR",
@@ -504,6 +795,7 @@
     },
     "bmw_f15_n63": {
       "title": "BMW X5 F15 xDrive50i N63TU focused repair route",
+      "skill_path": "C:/Users/User/.codex/skills/bmw-f15-n63/SKILL.md",
       "use_when": [
         "BMW X5 F15 xDrive50i",
         "N63TU or N63T",
@@ -600,11 +892,14 @@
         "какая спецификация жидкости",
         "как проверить fluid capacity"
       ],
+      "skill_path": "C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md",
       "source_of_truth_files": [
+        "C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md",
         "docs/agent/fluid_maintenance_playbook.md",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ],
       "primary_files": [
+        "C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md",
         "docs/agent/fluid_maintenance_playbook.md",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ]
@@ -918,7 +1213,9 @@
         "как вести локальную базу продавцов Красноярска",
         "какие схемы и OpenAPI использовать для parts search gateway"
       ],
+      "skill_path": "C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md",
       "source_of_truth_files": [
+        "C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md",
         "docs/agent/ai_parts_krasnoyarsk_playbook.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
@@ -929,6 +1226,7 @@
         "docs/agent/service_management_sources.json"
       ],
       "primary_files": [
+        "C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md",
         "docs/agent/ai_parts_krasnoyarsk_playbook.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/PROJECT_BOOTSTRAP_FOR_CODEX.md",
@@ -1166,6 +1464,8 @@
     "vin_oem": "rg -n \"VIN|OEM|frame|chassis|кузов|каталог\" docs/agent",
     "fluids": "rg -n \"fluid|oil|capacity|масло|жидк|заправ\" docs/agent",
     "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",
+    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent C:/Users/User/.codex/skills/autostop-business-documents",
+    "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent"
   }
 }

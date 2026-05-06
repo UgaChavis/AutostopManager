@@ -1,38 +1,188 @@
 {
-  "purpose": "Machine-readable catalog of Gmail MCP commands used by the manager agent.",
-  "source_of_truth": "Gmail MCP connector",
+  "purpose": "Machine-readable catalog of Gmail connector commands used by the manager agent.",
+  "source_of_truth": "Connected Gmail app connector, discovered through tool_search on 2026-05-05.",
   "gmail_is_source_of_truth_for": [
     "inbox_messages",
     "threads",
     "labels",
+    "drafts",
     "attachments",
     "sent_mail_history"
   ],
-  "startup_tools": [
-    "list_labels",
-    "search_email_ids",
-    "read_email",
-    "read_email_thread",
-    "batch_read_email_threads"
+  "read_only_tools": [
+    {
+      "tool": "mcp__codex_apps__gmail._list_labels",
+      "use_for": "Label names, label IDs, inbox/unread/draft counts, and user-label discovery.",
+      "tested_2026_05_05": "ok",
+      "notes": [
+        "Use this before label-specific searches or label mutations.",
+        "For user labels, capture the Gmail label ID because search tags expect IDs."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._search_emails",
+      "use_for": "Primary Gmail search with summaries, labels, attachment metadata, display URLs, and pagination.",
+      "tested_2026_05_05": "ok",
+      "notes": [
+        "Preferred first search tool when content summaries are useful.",
+        "Gmail query syntax and tags filtering both worked.",
+        "Pagination with next_page_token worked."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._search_email_ids",
+      "use_for": "Message-ID retrieval for later batch reads or explicit write operations.",
+      "tested_2026_05_05": "ok",
+      "notes": [
+        "Use only when IDs are needed; list_labels is better for counts."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._batch_read_email",
+      "use_for": "Read multiple exact messages by Gmail message ID.",
+      "tested_2026_05_05": "ok",
+      "notes": [
+        "Can return large newsletter bodies and tracking-heavy HTML/text.",
+        "Summarize; do not store or quote raw private bodies in manager memory."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._read_email_thread",
+      "use_for": "Read one complete conversation before drafting, replying, forwarding, tasking, or making a decision.",
+      "tested_2026_05_05": "ok",
+      "notes": [
+        "Use id_type=message when starting from a search result message ID."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._batch_read_email_threads",
+      "use_for": "Read several conversations by message or thread IDs for triage and comparison.",
+      "tested_2026_05_05": "ok_with_caveat",
+      "notes": [
+        "One Russian supplier body decoded as mojibake while subject and snippet remained readable.",
+        "When body decoding is suspicious, rely on snippet, metadata, attachment files, or ask to inspect in Gmail."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._list_drafts",
+      "use_for": "Find existing drafts without changing or sending them.",
+      "tested_2026_05_05": "ok",
+      "notes": [
+        "Good for draft review selection; do not update or send without explicit owner approval."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._read_attachment",
+      "use_for": "Fetch an attachment by message ID plus attachment ID or filename.",
+      "tested_2026_05_05": "ok_with_caveat",
+      "notes": [
+        "Returned file metadata and file_uri for a PDF attachment.",
+        "Parsed PDF text can be garbled when source encoding or embedded text is poor; use the PDF/document quality workflow for final extraction or formatting decisions."
+      ]
+    }
   ],
-  "focused_workflows": [
-    "inbox triage",
-    "message search",
-    "thread reading",
-    "reply drafting",
-    "forwarding",
-    "label cleanup"
+  "mutating_tools": [
+    {
+      "tool": "mcp__codex_apps__gmail._create_label",
+      "risk": "mailbox_structure_change",
+      "requires_explicit_owner_instruction": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._apply_labels_to_emails",
+      "risk": "message_label_change",
+      "requires_explicit_owner_instruction": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._batch_modify_email",
+      "risk": "message_label_change",
+      "requires_explicit_owner_instruction": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._bulk_label_matching_emails",
+      "risk": "large_server_side_mailbox_change",
+      "requires_explicit_owner_instruction": true,
+      "requires_query_preview": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._archive_emails",
+      "risk": "removes_INBOX_label",
+      "requires_explicit_owner_instruction": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._delete_emails",
+      "risk": "moves_messages_to_trash",
+      "requires_explicit_owner_instruction": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._create_draft",
+      "risk": "creates_visible_draft",
+      "requires_explicit_owner_instruction": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._update_draft",
+      "risk": "edits_existing_draft",
+      "requires_explicit_owner_instruction": true,
+      "notes": [
+        "Drafts with attachments are not editable through this action."
+      ]
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._send_draft",
+      "risk": "sends_email",
+      "requires_explicit_owner_instruction": true,
+      "requires_final_review": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._send_email",
+      "risk": "sends_email",
+      "requires_explicit_owner_instruction": true,
+      "requires_final_review": true
+    },
+    {
+      "tool": "mcp__codex_apps__gmail._forward_emails",
+      "risk": "sends_forwarded_private_content",
+      "requires_explicit_owner_instruction": true,
+      "requires_recipient_confirmation": true
+    }
   ],
-  "write_tools": [
-    "archive_emails",
-    "delete_emails",
-    "batch_modify_email",
-    "forward_emails",
-    "bulk_label_matching_emails"
+  "safe_default_workflows": [
+    "list labels for counts and label IDs",
+    "search summaries with narrow Gmail query syntax",
+    "read the exact message or thread before summarizing or drafting",
+    "read attachments only when the owner asks or the task requires the attachment",
+    "extract only durable decisions, deadlines, tasks, approvals, and operating notes into manager memory",
+    "do not store full email bodies, raw threads, private attachments, or one-off newsletters in manager memory"
   ],
-  "manager_memory_guidance": [
-    "remember durable facts, decisions, approvals, deadlines, and follow-ups from email",
-    "do not store full email bodies unless they are part of a concise operating note",
-    "prefer the message or thread that contains the latest decision when summarizing"
-  ]
+  "known_connector_limits": [
+    "some Russian or supplier message bodies may decode as mojibake",
+    "newsletter and marketing messages can return very large, noisy bodies",
+    "has:attachment may surface inline images or calendar-style noise, so inspect attachment metadata before reading files",
+    "PDF attachment parsed text may be garbled; use PDF/document rendering or local extraction for final document work"
+  ],
+  "last_read_only_audit": {
+    "date": "2026-05-05",
+    "tested": [
+      "_list_labels",
+      "_search_emails",
+      "_search_email_ids",
+      "_batch_read_email",
+      "_read_email_thread",
+      "_batch_read_email_threads",
+      "_list_drafts",
+      "_read_attachment"
+    ],
+    "not_executed_for_safety": [
+      "_create_label",
+      "_apply_labels_to_emails",
+      "_batch_modify_email",
+      "_bulk_label_matching_emails",
+      "_archive_emails",
+      "_delete_emails",
+      "_create_draft",
+      "_update_draft",
+      "_send_draft",
+      "_send_email",
+      "_forward_emails"
+    ]
+  }
 }

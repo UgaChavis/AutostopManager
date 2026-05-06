@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from .context import prepare_manager_context
 from .fluid_maintenance import build_fluid_maintenance_plan
-from .knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from .knowledge_base import (
+    audit_knowledge_annotations,
+    audit_knowledge_base,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
+from .memory_curator import audit_memory, curate_memory
 from .service_management import build_service_management_plan
+from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .vin_lookup import lookup_original_parts
@@ -27,7 +36,11 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         category: str = "general",
         source: str = "chatgpt",
         tags: list[str] | None = None,
+        importance: float = 0.5,
         confidence: float = 1.0,
+        expires_at: str | None = None,
+        supersedes_id: int | None = None,
+        sensitivity: str = "normal",
     ) -> dict[str, Any]:
         return memory.remember(
             content,
@@ -36,7 +49,11 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             category=category,
             source=source,
             tags=tags,
+            importance=importance,
             confidence=confidence,
+            expires_at=expires_at,
+            supersedes_id=supersedes_id,
+            sensitivity=sensitivity,
         )
 
     @server.tool(
@@ -152,6 +169,20 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return memory.today_context(limit=limit)
 
     @server.tool(
+        name="prepare_manager_context",
+        description=(
+            "Prepare task-specific context by combining owner command routes, relevant memory/rules, "
+            "knowledge-base routing, missing required context, and next actions."
+        ),
+    )
+    def prepare_manager_context_tool(
+        query: str,
+        intent: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return prepare_manager_context(memory, query, intent=intent, limit=limit)
+
+    @server.tool(
         name="manager_journal",
         description="Append a short manager journal entry after important decisions, source changes, file intake, or CRM work.",
     )
@@ -208,6 +239,93 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     )
     def audit_knowledge_base_tool() -> dict[str, Any]:
         return audit_knowledge_base(memory)
+
+    @server.tool(
+        name="audit_knowledge_annotations",
+        description="Audit compact knowledge annotations that improve fast routing before broad section reads.",
+    )
+    def audit_knowledge_annotations_tool() -> dict[str, Any]:
+        return audit_knowledge_annotations(memory)
+
+    @server.tool(
+        name="audit_skill_registry",
+        description="Audit local Codex skills linked from AutostopManager knowledge routes.",
+    )
+    def audit_skill_registry_tool() -> dict[str, Any]:
+        return audit_skill_registry()
+
+    @server.tool(
+        name="audit_memory",
+        description="Audit long-term manager memory for duplicate, expired, and superseded memories.",
+    )
+    def audit_memory_tool() -> dict[str, Any]:
+        return audit_memory(memory)
+
+    @server.tool(
+        name="curate_memory",
+        description="Non-destructively curate long-term memory. With apply=true, archive duplicate note/fact copies.",
+    )
+    def curate_memory_tool(apply: bool = False) -> dict[str, Any]:
+        return curate_memory(memory, apply=apply)
+
+    @server.tool(
+        name="start_manager_run",
+        description="Start an auditable manager operation run for autopilot, procurement, finance, or knowledge work.",
+    )
+    def start_manager_run_tool(
+        intent: str,
+        query: str = "",
+        dry_run: bool = False,
+        source: str = "chatgpt",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return memory.start_manager_run(
+            intent=intent,
+            query=query,
+            dry_run=dry_run,
+            source=source,
+            metadata=metadata,
+        )
+
+    @server.tool(
+        name="record_manager_run_event",
+        description="Record a planned action, write, skip, risk, or verification event for a manager operation run.",
+    )
+    def record_manager_run_event_tool(
+        run_id: int,
+        event_type: str,
+        message: str = "",
+        target_type: str = "",
+        target_id: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return memory.record_manager_run_event(
+            run_id,
+            event_type=event_type,
+            message=message,
+            target_type=target_type,
+            target_id=target_id,
+            payload=payload,
+        )
+
+    @server.tool(
+        name="finish_manager_run",
+        description="Finish a manager operation run with final status, summary, and verification evidence.",
+    )
+    def finish_manager_run_tool(
+        run_id: int,
+        status: str = "completed",
+        summary: str = "",
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return memory.finish_manager_run(run_id, status=status, summary=summary, verification=verification)
+
+    @server.tool(
+        name="list_manager_runs",
+        description="List recent manager operation runs and optionally include their events.",
+    )
+    def list_manager_runs_tool(limit: int = 20, include_events: bool = False) -> dict[str, Any]:
+        return memory.list_manager_runs(limit=limit, include_events=include_events)
 
     @server.tool(
         name="lookup_original_parts",

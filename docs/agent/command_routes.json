@@ -1,0 +1,77 @@
+{
+  "purpose": "Canonical natural-language owner command routes for AutostopManager.",
+  "routes": [
+    {
+      "command_id": "board_cleanup_autopilot",
+      "intent": "board_cleanup",
+      "domain": "board_cleanup_autopilot",
+      "open_first": "docs/agent/board_cleanup_autopilot_playbook.md",
+      "aliases": [
+        "Приберись",
+        "прибейсь",
+        "прибери доску",
+        "обслужи доску",
+        "актуализируй доску",
+        "проведи уборку доски",
+        "проверь доску"
+      ],
+      "keywords": [
+        "доска",
+        "уборка",
+        "карточки",
+        "актуализируй",
+        "архив",
+        "готовые",
+        "без оплаты",
+        "просроченные"
+      ],
+      "memory_queries": [
+        "board-cleanup",
+        "Приберись",
+        "прибейсь",
+        "board-cleanup-no-card-movement"
+      ],
+      "next_actions": [
+        "read live CRM board state",
+        "classify blockers",
+        "update summaries, tags, indicators, deadlines, and concise AI notes",
+        "leave cards in their current columns",
+        "archive completed cards only when safe"
+      ]
+    },
+    {
+      "command_id": "daily_ready_unpaid_check",
+      "intent": "daily_control",
+      "domain": "service_management",
+      "open_first": "docs/agent/krasnoyarsk_service_management_playbook.md",
+      "aliases": [
+        "проверь просроченные машины",
+        "готовые без оплаты",
+        "готовые машины без оплаты",
+        "вечером проверь готовые",
+        "проверь готовые автомобили"
+      ],
+      "keywords": [
+        "просроченные",
+        "готовые",
+        "без оплаты",
+        "долг",
+        "касса",
+        "оплата",
+        "ready unpaid"
+      ],
+      "memory_queries": [
+        "daily_control",
+        "payment",
+        "ready unpaid cars",
+        "service-management"
+      ],
+      "next_actions": [
+        "read live CRM board state",
+        "check ready cars and due totals",
+        "classify payment blockers",
+        "create short follow-up notes or manager tasks"
+      ]
+    }
+  ]
+}

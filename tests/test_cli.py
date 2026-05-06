@@ -126,3 +126,45 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(["memory-gaps"])
     assert args.command == "memory-gaps"
+
+    args = parser.parse_args(["annotations-audit"])
+    assert args.command == "annotations-audit"
+
+    args = parser.parse_args(["memory-audit"])
+    assert args.command == "memory-audit"
+
+    args = parser.parse_args(["memory-curate", "--apply"])
+    assert args.command == "memory-curate"
+    assert args.apply is True
+
+    args = parser.parse_args(["prepare-context", "прибейсь", "--intent", "board_cleanup", "--limit", "5"])
+    assert args.command == "prepare-context"
+    assert args.query == "прибейсь"
+    assert args.intent == "board_cleanup"
+    assert args.limit == 5
+
+    args = parser.parse_args(["skills-audit"])
+    assert args.command == "skills-audit"
+
+    args = parser.parse_args(["run-start", "Приберись", "--intent", "board_cleanup", "--dry-run"])
+    assert args.command == "run-start"
+    assert args.query == "Приберись"
+    assert args.intent == "board_cleanup"
+    assert args.dry_run is True
+
+    args = parser.parse_args(["run-event", "1", "--type", "planned_action", "--message", "test"])
+    assert args.command == "run-event"
+    assert args.run_id == 1
+    assert args.event_type == "planned_action"
+    assert args.message == "test"
+
+    args = parser.parse_args(["run-finish", "1", "--status", "completed", "--summary", "done"])
+    assert args.command == "run-finish"
+    assert args.run_id == 1
+    assert args.status == "completed"
+    assert args.summary == "done"
+
+    args = parser.parse_args(["run-list", "--limit", "3", "--events"])
+    assert args.command == "run-list"
+    assert args.limit == 3
+    assert args.events is True

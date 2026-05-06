@@ -1,8 +1,8 @@
 # Board Cleanup Autopilot Playbook
 
 Purpose: define the standard behavior when the owner says `Приберись`,
-`прибери доску`, `обслужи доску`, `актуализируй доску`, or asks for a routine
-board cleanup.
+`прибейсь`, `прибери доску`, `обслужи доску`, `актуализируй доску`, or asks
+for a routine board cleanup.
 
 This is not a separate product feature. It is an operating instruction for the
 agent when working through the existing AutoStop CRM MCP tools.
@@ -19,11 +19,8 @@ The agent may independently:
   vehicle profile
 - rewrite the top of the public card description as a clean external summary
   visible on the board
-- recommend a target column in the card description or final report when the
-  next operational state is clear
-- recommend archive candidates in the card description or final report when the
-  car is ready/done, payment/order status is settled enough, and no visible
-  blocker remains
+- archive completed cards when the car is ready/done, payment/order status is
+  settled enough, and no visible blocker remains
 - add short questions or recommendations inside the card instead of asking the
   owner in chat
 - fill VIN/chassis-derived vehicle fields when source confidence is adequate
@@ -50,10 +47,10 @@ Hourly automation should:
   uncertain
 
 Hourly automation may still update descriptions, tags, indicators, deadlines,
-and safe vehicle fields when the usual safety rules below are satisfied. It
-must not move cards between columns or auto-archive cards unless the owner
+safe vehicle fields, and archive completed cards when the usual safety rules
+below are satisfied. It must not move cards between columns unless the owner
 explicitly asks for one exact target. The final report should be compact:
-checked, changed, moved=0, archived=0, blockers, and any risks.
+checked, changed, moved=0, archived, blockers, and any risks.
 
 ## Data Preservation Rules
 
@@ -247,6 +244,8 @@ Before every CRM write:
   external summary: vehicle, task, status, payment/parts, next step
 - avoid multiple noisy notes when one structured update is enough
 - do not rewrite a card just for style if it already reads clearly
+- do not move cards between columns during `Приберись` / `прибейсь`; leave the
+  current column as-is unless the owner gives a separate explicit move command
 
 Use the card itself for operational questions. Ask the owner in chat only when:
 
@@ -275,20 +274,21 @@ Indicator:
 - yellow: waiting for parts/client/diagnosis but next action is known
 - green: ready/clear/no blocker
 
-## Column Movement Policy
+## Column Movement Boundary
 
-Routine cleanup must not move cards between columns. If the current state is
-clear, write the recommended destination as a short manager note instead:
+Do not move cards between columns during board-cleanup autopilot, even when the
+next operational state looks clear. Use non-moving updates instead:
 
-- needs supplier action -> `Снабжение` or `Заказы запчастей`
-- appointment/intake planned -> `Запись на ремонт`
-- assigned work -> relevant technician/work column
-- finished but pickup/payment remains -> `Готовые автомобили`
-- finished, settled, no blocker -> recommend archive
+- tags
+- indicators
+- deadlines
+- public summary
+- short `AI:` note
+- vehicle-profile enrichment
+- archive completed cards when safe
 
-If current state is unclear, add a short `AI:` question. Use `move_card`,
-`bulk_move_cards`, `mark_card_ready`, or `archive_card` only when the owner
-explicitly asks for one exact card.
+Move a card only when the owner gives a separate explicit command with the
+target card and target column.
 
 ## Final Report
 
@@ -296,9 +296,8 @@ Report to the owner briefly:
 
 - cards checked
 - cards updated
-- cards moved (`0` during routine automation)
-- cards archived (`0` during routine automation)
-- recommended moves or archive candidates, if any
+- cards archived
+- cards left in their current columns by rule
 - VIN/OEM/parts work done
 - blockers that still need human decision
 - risks or data gaps

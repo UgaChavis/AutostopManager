@@ -10,11 +10,18 @@ Use this loop before broad file reads:
 
 1. Run `probe_knowledge_base` with the owner's natural request.
 2. Open the returned `open_first` file when `has_knowledge=true`.
-3. Use `search_knowledge_base --domain <best_domain>` only when the first file
+3. Use compact annotations from `docs/agent/knowledge_annotations.jsonl` to
+   confirm file-level fit before broad source-pack reads.
+4. Use `search_knowledge_base --domain <best_domain>` only when the first file
    does not answer the task.
-4. Read raw source packs only after the route card and source-of-truth file.
-5. After adding or changing durable knowledge, run `knowledge-sync`, then
-   `knowledge-audit`.
+5. Read raw source packs only after the route card and source-of-truth file.
+6. After adding or changing durable knowledge, run `knowledge-sync`, then
+   `knowledge-audit` and `annotations-audit`.
+
+For non-trivial operational tasks, run `prepare_manager_context` first. It
+applies command routes such as `Приберись` / `прибейсь`, relevant memory/rules,
+knowledge routing, missing required context, and next actions before broad file
+reads.
 
 If `has_knowledge=false`, use external/OEM/current sources for the answer, then
 decide whether the reusable route belongs in the intake flow.
@@ -33,6 +40,9 @@ decide whether the reusable route belongs in the intake flow.
 | Fluids | `fluids` | `docs/agent/fluid_maintenance_playbook.md` | oils, operating fluids, approvals, fill capacities, maintenance quantities |
 | Transmissions | `transmission` | `docs/agent/transmission_playbook.md` | gearbox/CVT/DCT/AMT/clutch symptoms, adaptation, service routing |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` | VIN/frame classification, OEM lookup, catalog routing |
+| Business identity | `business_identity` | `docs/agent/business_identity_playbook.md` | private ИП/AutoStop requisites, company-card data, business document freshness |
+| Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` | PDF/DOCX/XLSX invoices, acts, КП, requisites sheets, accounting-style files, render/audit gates |
+| Gmail operations | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail inbox search, labels, drafts, attachments, thread reads, write safety, email-derived memory |
 | Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` | Krasnoyarsk parts search, ZZap/Drom/Avito, procurement price, offer scoring |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | workshop triage, staff, finance, customer flow, board cleanup |
 | Deployment | `deployment` | `docs/agent/deployment_runbook.md` | local MCP startup, server publishing, GitHub/private-data boundary |
@@ -43,7 +53,11 @@ Use these locations consistently:
 
 - `docs/agent/knowledge_base_index.md` - human entrypoint and short route list.
 - `docs/agent/knowledge_map.json` - machine route cards for probe/search.
+- `docs/agent/knowledge_annotations.jsonl` - compact file-level summaries,
+  query terms, source type, refresh cadence, and safety flags for fast routing.
 - `docs/agent/knowledge_shelves.md` - shelf map and placement rules.
+- `docs/agent/command_routes.json` - natural owner command aliases and
+  open-first route overrides.
 - `docs/agent/*_playbook.md` - task workflow or domain operating procedure.
 - `docs/agent/*_sources.json` - curated source catalogs and routing metadata.
 - `docs/agent/automotive_sources/*` - automotive source catalogs and ingestion
@@ -54,6 +68,9 @@ Use these locations consistently:
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
   material that should usually stay out of Git.
+- `data/private_knowledge/` - local private knowledge such as current business
+  requisites or document inventories that must be indexed locally but not
+  committed.
 
 Do not move existing source packs just to make the tree prettier. Add route
 metadata and README/MANIFEST coverage first; move files only when a source is
@@ -88,6 +105,18 @@ Every durable domain in `knowledge_map.json` should include:
 Keep route cards compact. Put detailed procedure in playbooks and source packs,
 not in `knowledge_map.json`.
 
+## Annotation Contract
+
+Every durable file-level annotation in `knowledge_annotations.jsonl` should
+include:
+
+- `annotation_id` - stable id for the file or route.
+- `domain` and `path` - where the annotation belongs and what it describes.
+- `summary` and `use_when` - why the file should be opened.
+- `keywords` and `questions` - owner phrasing and technical terms for routing.
+- `source_type`, `trust_level`, `refresh_cadence`, and `safety_flags` - quality
+  and maintenance metadata.
+
 ## Source Pack Contract
 
 A source pack should have at least:
@@ -118,16 +147,22 @@ When new knowledge arrives:
 3. Place raw files in the smallest relevant existing shelf.
 4. Extract durable rules into the relevant playbook/catalog.
 5. Add or update `knowledge_map.json` route-card fields.
-6. Link the route from `knowledge_base_index.md` when a human should see it.
-7. Run `python -m autostop_manager.cli knowledge-sync`.
-8. Run `python -m autostop_manager.cli knowledge-audit`.
-9. Add a focused test when the route should be recognized from owner phrasing.
+6. Add or update `knowledge_annotations.jsonl` when the file should be found by
+   compact routing.
+7. Link the route from `knowledge_base_index.md` when a human should see it.
+8. Run `python -m autostop_manager.cli knowledge-sync`.
+9. Run `python -m autostop_manager.cli knowledge-audit`.
+10. Run `python -m autostop_manager.cli annotations-audit`.
+11. Run `python -m autostop_manager.cli skills-audit` when a skill route changed.
+12. Add a focused test when the route should be recognized from owner phrasing.
 
 ## Safety Boundaries
 
 - Do not store full manuals, copied licensed databases, full spreadsheets, CRM
   snapshots, raw email threads, or temporary marketplace search results in
   manager memory.
+- Do not move private business requisites from `data/private_knowledge/` into
+  Git-tracked docs. Public docs should contain only routes and safety rules.
 - For licensed/restricted sources, store only source routes and durable
   conclusions that are safe to reuse.
 - For automotive repair, programming, immobilizer, SRS, HV, pinout, torque, or
@@ -141,6 +176,7 @@ When new knowledge arrives:
 ```powershell
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-audit
+python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli knowledge-probe "структурируй базу знаний разметка полки"
 python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 python -m pytest tests/test_knowledge_base.py -q
