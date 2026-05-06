@@ -268,3 +268,60 @@ def test_audit_reports_route_cards_and_no_missing_files_after_sync(tmp_path):
     assert result["documents_indexed"] > 0
     assert result["sections_indexed"] > 0
     assert result["missing_files"] == []
+
+
+def test_reference_files_are_audited_but_not_fully_indexed(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    audit = audit_knowledge_base(store)
+    result = search_knowledge_base(store, "data_type_source_map", domain="transmission", limit=20)
+
+    assert audit["ok"] is True
+    assert audit["missing_files"] == []
+    assert not any(item["path"].endswith("data_type_source_map.json") for item in result["items"])
+
+
+def test_parts_sourcing_reference_pack_files_stay_linked_without_index_noise(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    audit = audit_knowledge_base(store)
+    probe = probe_knowledge_base(store, "parts search gateway OpenAPI offer schema")
+    result = search_knowledge_base(store, "parts search gateway OpenAPI offer schema", domain="parts_sourcing", limit=20)
+
+    assert audit["ok"] is True
+    assert audit["missing_files"] == []
+    assert probe["best_domain"] == "parts_sourcing"
+    assert any(item.endswith("parts_search_gateway.openapi.yaml") for item in probe["reference_files"])
+    assert not any(item["path"].endswith("parts_search_gateway.openapi.yaml") for item in result["items"])
+
+
+def test_bmw_reference_catalogs_stay_linked_without_hiding_fault_examples(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    probe = probe_knowledge_base(store, "BMW public sources NHTSA ZF source catalog")
+    catalog_result = search_knowledge_base(store, "public_sources_bmw_zf_nhtsa", domain="bmw_repair", limit=20)
+    fault_result = search_knowledge_base(store, "8013FE IHKA", domain="bmw_repair", limit=5)
+
+    assert probe["best_domain"] == "bmw_repair"
+    assert any(item.endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in probe["reference_files"])
+    assert not any(item["path"].endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in catalog_result["items"])
+    assert fault_result["items"][0]["document_type"] == "jsonl"
+    assert "8013FE" in fault_result["items"][0]["heading"]
+
+
+def test_ecu_reference_glossary_stays_linked_without_hiding_format_docs(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    probe = probe_knowledge_base(store, "A2L ODX DCM glossary ECU")
+    glossary_result = search_knowledge_base(store, "glossary_ecu_programming", domain="ecu_calibration_programming", limit=20)
+    format_result = search_knowledge_base(store, "A2L DCM ODX calibration format", domain="ecu_calibration_programming", limit=10)
+
+    assert probe["best_domain"] == "ecu_calibration_programming"
+    assert any(item.endswith("glossary_ecu_programming.jsonl") for item in probe["reference_files"])
+    assert not any(item["path"].endswith("glossary_ecu_programming.jsonl") for item in glossary_result["items"])
+    assert format_result["items"][0]["domain"] == "ecu_calibration_programming"
+    assert any("md/03_file_formats_ru.md" in item["path"] for item in format_result["items"])

@@ -17,10 +17,11 @@ The agent may independently:
 - read all active board/card/repair-order/cashbox context needed for cleanup
 - update card title, vehicle, description, tags, deadline, indicator, and
   vehicle profile
-- rewrite the top of the public card description as a clean external summary
-  visible on the board
-- archive completed cards when the car is ready/done, payment/order status is
-  settled enough, and no visible blocker remains
+- rewrite the public card description into a clean detailed working note
+- update the hidden `board_summary` through `set_card_board_summary` so the
+  board tile shows a four-or-five-line operator preview
+- leave archive recommendations in the card/report when a card appears
+  completed; do not archive automatically during routine cleanup
 - add short questions or recommendations inside the card instead of asking the
   owner in chat
 - fill VIN/chassis-derived vehicle fields when source confidence is adequate
@@ -46,11 +47,12 @@ Hourly automation should:
 - stop without writes if CRM/MCP status is unhealthy or target card identity is
   uncertain
 
-Hourly automation may still update descriptions, tags, indicators, deadlines,
-safe vehicle fields, and archive completed cards when the usual safety rules
-below are satisfied. It must not move cards between columns unless the owner
-explicitly asks for one exact target. The final report should be compact:
-checked, changed, moved=0, archived, blockers, and any risks.
+Hourly automation may still update descriptions, board summaries, tags,
+indicators, deadlines, and safe vehicle fields when the usual safety rules below
+are satisfied. It must not move cards between columns or archive cards unless
+the owner explicitly asks for one exact target/action. The final report should
+be compact: checked, changed, moved=0, archived=0 unless explicitly requested,
+archive recommendations, blockers, and any risks.
 
 ## Data Preservation Rules
 
@@ -113,34 +115,41 @@ Classify every relevant active card into one current blocker:
   archive
 - `unclear`: data conflict; leave a short question in the card
 
-### 1a. Public Card Summary
+### 1a. Card Description And Board Preview
 
-The public `description` must start with a readable external summary. The board
-preview shows about five lines, so those lines should explain the card at a
-glance.
+The public `description` and hidden `board_summary` are different fields with
+different jobs.
 
-Use this order when enough data exists:
+`description` is the detailed recoverable card text. It may include vehicle
+identity, customer context, VIN, work list, diagnostics, money, parts, and
+history. Keep it readable and preserve useful old text under `Подробности:` if
+needed.
+
+`board_summary` is the compact operator preview shown on the board. Update it
+with `set_card_board_summary` after card text/profile/tag changes. Keep it to
+four or five short lines and do not include phone numbers, VIN, full client
+identity, raw scan dumps, or long issue lists.
+
+Recommended `board_summary` shape:
 
 ```text
-<vehicle / plate / VIN if useful>
-Задача: <main job or request>
-Статус: <current operational state>
-Оплата/запчасти: <due total, paid state, ordered/arrived part, or blocker>
-Следующий шаг: <one concrete action>
+Что сейчас: <main issue or job>.
+Стадия: <diagnosis / agreement / waiting / repair / pickup>.
+Следующее действие: <one concrete operator step>.
+Важно: <one deadline/payment/parts/blocker if needed>.
 ```
 
 If the card is incomplete:
 
 ```text
-Авто: не указано
-Задача: уточнить обращение клиента
-Статус: не хватает данных
-Нужно: VIN/госномер/телефон/список работ
-Следующий шаг: связаться с клиентом
+Что сейчас: не хватает данных по обращению.
+Стадия: входящие / уточнение.
+Следующее действие: запросить недостающие данные.
+Важно: указать VIN/госномер/список работ в описании, но не в превью.
 ```
 
-Preserve useful old description text below the summary under `Подробности:`
-instead of deleting it. Do not put long AI reasoning into the public summary.
+Preserve useful old description text instead of deleting it. Do not put long AI
+reasoning into either field.
 
 ### 2. Vehicle Identity
 
@@ -148,9 +157,15 @@ If a card contains a VIN, chassis number, or body code:
 
 - classify identifier type first
 - use vehicle identity and VIN/OEM playbooks
-- fill stable vehicle profile fields only
+- if `engine_model`, `gearbox_model`, or `drivetrain` is empty, try to enrich
+  those fields from source-backed VIN/chassis/frame data
+- use local knowledge and `lookup_original_parts` first, then internet search
+  only when the current source needs confirmation
+- fill stable vehicle profile fields only when confidence is adequate
+- preserve manual fields; never overwrite operator-entered aggregate data
 - do not present inferred trim/options as confirmed
-- add short uncertainty when confidence is incomplete
+- when several variants are possible, leave the field empty and add short
+  uncertainty to `oem_notes` / `tentative_fields`
 
 ### 3. Parts And Procurement
 
@@ -240,12 +255,16 @@ Before every CRM write:
 - preserve existing user-entered content
 - make the smallest useful update
 - keep card text short
-- when touching `description`, keep the first five visible lines as the
-  external summary: vehicle, task, status, payment/parts, next step
+- when touching `description`, keep it detailed and recoverable rather than
+  treating its first lines as the board preview
+- after touching `description`, `title`, `tags`, or `vehicle_profile`, call
+  `set_card_board_summary` and verify `board_summary_stale=false`
 - avoid multiple noisy notes when one structured update is enough
 - do not rewrite a card just for style if it already reads clearly
 - do not move cards between columns during `Приберись` / `прибейсь`; leave the
   current column as-is unless the owner gives a separate explicit move command
+- do not archive cards during routine cleanup; leave an archive recommendation
+  unless the owner gives a separate explicit archive command
 
 Use the card itself for operational questions. Ask the owner in chat only when:
 
@@ -282,10 +301,11 @@ next operational state looks clear. Use non-moving updates instead:
 - tags
 - indicators
 - deadlines
-- public summary
+- detailed description
+- hidden board summary
 - short `AI:` note
 - vehicle-profile enrichment
-- archive completed cards when safe
+- archive recommendation when a card looks completed
 
 Move a card only when the owner gives a separate explicit command with the
 target card and target column.
@@ -296,7 +316,8 @@ Report to the owner briefly:
 
 - cards checked
 - cards updated
-- cards archived
+- cards archived only if explicitly requested
+- archive recommendations
 - cards left in their current columns by rule
 - VIN/OEM/parts work done
 - blockers that still need human decision

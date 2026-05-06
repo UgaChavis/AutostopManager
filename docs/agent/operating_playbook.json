@@ -245,9 +245,12 @@
       "Trigger on owner phrases: Приберись, прибейсь, прибери доску, обслужи доску, актуализируй доску, or routine board cleanup.",
       "Use docs/agent/board_cleanup_autopilot_playbook.md as the canonical procedure.",
       "In hourly automation mode, treat cleanup as incremental: prioritize blockers, write only meaningful deltas, avoid duplicate AI notes, and skip writes when CRM/MCP health is uncertain.",
-      "Operate as full autopilot: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, and archive completed cards when safe.",
+      "Operate as full autopilot without column moves/archive: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, detailed descriptions, and the separate board_summary preview.",
       "Do not move cards between columns during board-cleanup autopilot unless the owner gives a separate explicit move command.",
+      "Do not archive cards during board-cleanup autopilot unless the owner gives a separate explicit archive command; leave archive recommendations instead.",
       "Preserve user data: never delete works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
+      "When a VIN/chassis/frame number exists and engine_model, gearbox_model, or drivetrain is empty, enrich vehicle_profile only from source-backed data; preserve manual fields and leave uncertainty in oem_notes/tentative_fields.",
+      "After description, title, tags, or vehicle_profile changes, call set_card_board_summary and verify board_summary_stale=false; keep phone, VIN, full client identity, raw scan dumps, and long issue lists out of board_summary.",
       "Keep card notes short; use concise AI: notes for questions, next actions, OEM/price/source conclusions, payment blockers, and stale-card questions.",
       "Ask the owner in chat only for destructive actions beyond archive, unresolved money conflicts, client-sensitive decisions, or safety-critical technical uncertainty.",
       "End with a brief report: checked, updated, archived, left in current columns by rule, VIN/OEM/parts work, unresolved blockers, and risks."
@@ -313,6 +316,8 @@
     "new manager MCP commands or knowledge-intake rules should be reflected in the local memory catalog before future sessions depend on them",
     "Krasnoyarsk service-management work should be routed through the dedicated playbook and source catalog before ad hoc decisions",
     "The owner's board-cleanup command grants autopilot authority but not permission to delete user-entered CRM evidence",
+    "Board cleanup must treat full card description and hidden board_summary as separate outputs; refresh board_summary after card-content/profile changes",
+    "Routine board cleanup does not grant permission to move or archive cards; those require separate explicit owner commands",
     "Toyota GR Yaris requests should use the dedicated GXPA16/G16E-GTS playbook before general Toyota or marketplace routing"
   ]
 }

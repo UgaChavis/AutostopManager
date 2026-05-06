@@ -68,6 +68,7 @@ class _RouteCard:
     questions: list[str]
     source_of_truth: list[str]
     primary_files: list[str]
+    reference_files: list[str]
     required_context: list[str]
     search_text: str
 
@@ -82,6 +83,7 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
     domains: dict[str, Any] = payload.get("domains", {})
     now = _now()
     missing: list[str] = []
+    missing_optional: list[str] = []
     documents_indexed = 0
     sections_indexed = 0
     route_cards_indexed = 0
@@ -96,6 +98,8 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
         for domain, route in domains.items():
             use_when = [str(item) for item in route.get("use_when", [])]
             primary_files = [str(item) for item in route.get("primary_files", [])]
+            reference_files = [str(item) for item in route.get("reference_files", [])]
+            optional_files = [str(item) for item in route.get("optional_files", [])]
             skill_path = str(route.get("skill_path") or "")
             route_card = _build_route_card(domain, route)
             _insert_route_card(conn, route_card, indexed_at=now)
@@ -108,6 +112,10 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                     *[f"- {item}" for item in use_when],
                     "Primary files:",
                     *[f"- {item}" for item in primary_files],
+                    "Reference files:",
+                    *[f"- {item}" for item in reference_files],
+                    "Optional files:",
+                    *[f"- {item}" for item in optional_files],
                     f"Skill path: {skill_path}" if skill_path else "",
                 ]
             ).strip()
@@ -131,10 +139,13 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                 indexed_at=now,
             )
 
-            for raw_path in primary_files:
+            for raw_path in _unique_strings([*primary_files, *optional_files]):
                 resolved = _resolve_path(raw_path)
                 if not resolved.exists() or not resolved.is_file():
-                    missing.append(raw_path)
+                    if raw_path in primary_files:
+                        missing.append(raw_path)
+                    else:
+                        missing_optional.append(raw_path)
                     continue
                 content = resolved.read_text(encoding="utf-8-sig", errors="replace")
                 document_type = _document_type(resolved)
@@ -170,6 +181,7 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
         "annotations_indexed": annotations_indexed,
         "domains": sorted(domains.keys()),
         "missing_files": missing,
+        "missing_optional_files": missing_optional,
         "indexed_at": now,
     }
 
@@ -207,6 +219,7 @@ def probe_knowledge_base(
                 questions_json,
                 source_of_truth_json,
                 primary_files_json,
+                reference_files_json,
                 required_context_json,
                 search_text,
                 indexed_at
@@ -236,6 +249,7 @@ def probe_knowledge_base(
             continue
         source_of_truth = json.loads(item["source_of_truth_json"] or "[]")
         primary_files = json.loads(item["primary_files_json"] or "[]")
+        reference_files = json.loads(item["reference_files_json"] or "[]")
         open_first = (source_of_truth or primary_files or [""])[0]
         if command_route and item["domain"] == command_route.get("domain") and command_route.get("open_first"):
             open_first = str(command_route["open_first"])
@@ -250,6 +264,7 @@ def probe_knowledge_base(
             "open_first": open_first,
             "source_of_truth": source_of_truth,
             "primary_files": primary_files,
+            "reference_files": reference_files,
             "required_context": json.loads(item["required_context_json"] or "[]"),
             "use_when": json.loads(item["use_when_json"] or "[]"),
             "indexed_at": item["indexed_at"],
@@ -270,6 +285,7 @@ def probe_knowledge_base(
         "best_domain": best["domain"] if best else None,
         "open_first": best["open_first"] if best else None,
         "source_of_truth": best["source_of_truth"] if best else [],
+        "reference_files": best["reference_files"] if best else [],
         "command_route": command_route,
         "routes": routes,
         "next_action": "open_source_of_truth" if has_knowledge else "route_external_sources",
@@ -289,9 +305,11 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
     payload = _load_knowledge_map()
     domains: dict[str, Any] = payload.get("domains", {})
     missing_files: list[str] = []
+    missing_optional_files: list[str] = []
     domains_without_source_of_truth: list[str] = []
     domains_without_aliases: list[str] = []
     checked_paths: set[str] = set()
+    checked_optional_paths: set[str] = set()
 
     for domain, route in domains.items():
         if not route.get("source_of_truth_files") and not route.get("primary_files"):
@@ -302,6 +320,7 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
             [
                 *[str(item) for item in route.get("source_of_truth_files", [])],
                 *[str(item) for item in route.get("primary_files", [])],
+                *[str(item) for item in route.get("reference_files", [])],
             ]
         ):
             if raw_path in checked_paths:
@@ -310,6 +329,13 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
             resolved = _resolve_path(raw_path)
             if not resolved.exists() or not resolved.is_file():
                 missing_files.append(raw_path)
+        for raw_path in _unique_strings([str(item) for item in route.get("optional_files", [])]):
+            if raw_path in checked_paths or raw_path in checked_optional_paths:
+                continue
+            checked_optional_paths.add(raw_path)
+            resolved = _resolve_path(raw_path)
+            if not resolved.exists() or not resolved.is_file():
+                missing_optional_files.append(raw_path)
 
     with memory.connect() as conn:
         route_cards_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0)
@@ -341,6 +367,7 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         "sections_indexed": sections_indexed,
         "annotations_indexed": annotations_indexed,
         "missing_files": missing_files,
+        "missing_optional_files": missing_optional_files,
         "domains_without_source_of_truth": domains_without_source_of_truth,
         "domains_without_aliases": domains_without_aliases,
         "warnings": warnings,
@@ -416,7 +443,6 @@ def search_knowledge_base(
                 s.heading,
                 s.level,
                 s.preview,
-                s.content,
                 s.search_text,
                 d.title,
                 d.document_type,
@@ -581,6 +607,7 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
 def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
     use_when = _unique_strings([str(item) for item in route.get("use_when", [])])
     primary_files = _unique_strings([str(item) for item in route.get("primary_files", [])])
+    reference_files = _unique_strings([str(item) for item in route.get("reference_files", [])])
     source_of_truth = _unique_strings([str(item) for item in route.get("source_of_truth_files", [])]) or primary_files[:3]
     aliases = _unique_strings(
         [
@@ -610,6 +637,7 @@ def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
             *questions,
             *source_of_truth,
             *primary_files,
+            *reference_files,
             *required_context,
         ]
     ).lower()
@@ -622,6 +650,7 @@ def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
         questions=questions,
         source_of_truth=source_of_truth,
         primary_files=primary_files,
+        reference_files=reference_files,
         required_context=required_context,
         search_text=search_text,
     )
@@ -765,6 +794,7 @@ def _insert_route_card(conn: Any, card: _RouteCard, *, indexed_at: str) -> None:
         "questions": card.questions,
         "source_of_truth": card.source_of_truth,
         "primary_files": card.primary_files,
+        "reference_files": card.reference_files,
         "required_context": card.required_context,
     }
     digest = hashlib.sha256(
@@ -782,12 +812,13 @@ def _insert_route_card(conn: Any, card: _RouteCard, *, indexed_at: str) -> None:
                 questions_json,
                 source_of_truth_json,
                 primary_files_json,
+                reference_files_json,
                 required_context_json,
                 search_text,
                 content_hash,
                 indexed_at
             )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             card.domain,
@@ -798,6 +829,7 @@ def _insert_route_card(conn: Any, card: _RouteCard, *, indexed_at: str) -> None:
             _json_list(card.questions),
             _json_list(card.source_of_truth),
             _json_list(card.primary_files),
+            _json_list(card.reference_files),
             _json_list(card.required_context),
             card.search_text,
             digest,

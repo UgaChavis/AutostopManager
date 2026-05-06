@@ -5,7 +5,8 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 ## Source Pack
 
 - Path: `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/`
-- Intake source: owner-provided archive `C:/Users/User/Downloads/ecu_calibration_programming_knowledge_pack.zip`
+- Intake source: owner-provided archive; original user download path is
+  historical and not part of active routing.
 - Created in pack README: `2026-05-03`
 - Classification: owner-provided training/reference summaries, public-source routes, CSV/JSONL tables, Markdown, PDF renderings, and synthetic examples.
 - License/source boundary: safe for local reference as owner-provided material; final VIN-specific programming, coding, adaptation, recovery, immobilizer, emissions, SRS, ADAS, HV, and instrument-cluster procedures must still be verified through official OEM documentation and authorized tools.
@@ -21,7 +22,8 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 
 1. Exact vehicle context: VIN/chassis, market, year/make/model, module, current DTC/fault memory, complaint, prior programming history, and customer request.
 2. This playbook and the local ECU calibration/programming knowledge pack.
-3. Model-specific skill or playbook when present, such as `bmw-f15-n63` for BMW X5 F15/N63TU.
+3. Model-specific route or playbook when present, such as the BMW F15/N63 route
+   for BMW X5 F15/N63TU.
 4. OEM official programming/coding documentation, tool plan, subscription portal, and service information for the exact VIN/module.
 5. Public standards and source routes listed by the pack: ASAM A2L/ODX/MDF/CDF, ISO 14229 UDS, ISO 15765 DoCAN, ISO 13400 DoIP, SAE J2534, AUTOSAR.
 6. Secondary forum or field reports only as hypothesis generators, never as the authority for writing modules.

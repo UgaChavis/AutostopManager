@@ -139,10 +139,13 @@
         "enrich vehicle profiles",
         "source VIN/OEM/parts data",
         "set tags, indicators, and deadlines",
-        "archive completed cards when safe"
+        "update the separate hidden board_summary preview",
+        "leave archive recommendations when a card looks completed"
       ],
       "forbidden_actions": [
-        "move cards between columns unless the owner gives a separate explicit move command"
+        "move cards between columns unless the owner gives a separate explicit move command",
+        "archive cards unless the owner gives a separate explicit archive command",
+        "put phone, VIN, full client identity, raw scan dumps, or long issue lists into board_summary"
       ],
       "protected_data": [
         "repair-order works",

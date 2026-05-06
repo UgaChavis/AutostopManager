@@ -68,7 +68,7 @@
     {
       "id": "business-document-quality-gate",
       "priority": 24,
-      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md and C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run."
+      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and strongest available quality gate have run, or clearly state which gate could not run."
     },
     {
       "id": "memory-curator",
@@ -203,7 +203,7 @@
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants full board-management autonomy to read active CRM context, update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, and archive completed cards when safe, but it does not allow moving cards between columns."
+      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, detailed descriptions, and hidden board_summary previews. It does not allow moving or archiving cards unless the owner gives a separate explicit target/action."
     },
     {
       "id": "board-cleanup-no-card-movement",
@@ -223,7 +223,12 @@
     {
       "id": "board-cleanup-public-summary",
       "priority": 19,
-      "rule": "During board cleanup, keep the public card description preview useful. The first five visible lines should be an external summary: vehicle, task, status, payment or parts state, and one next step. Preserve useful old description text below the summary instead of deleting it."
+      "rule": "During board cleanup, keep full card description and hidden board_summary separate. The description is detailed recoverable card text. board_summary is the four-or-five-line operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, and long issue lists out of it."
+    },
+    {
+      "id": "board-cleanup-vin-profile-enrichment",
+      "priority": 19,
+      "rule": "If VIN/chassis/frame exists and engine_model, gearbox_model, or drivetrain is empty, enrich vehicle_profile only from source-backed data. Preserve manual_fields and record uncertainty in oem_notes or tentative_fields instead of guessing."
     },
     {
       "id": "phone-shared-memory",

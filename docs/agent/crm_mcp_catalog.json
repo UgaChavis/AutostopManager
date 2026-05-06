@@ -267,6 +267,9 @@
     "Use shared_files tools for shared documents and card attachment tools for card-local attachments; do not paste file bytes into notes unless required.",
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use set_card_board_summary only after reading the target card and keep it under 5 non-empty lines.",
+    "For the owner command Приберись, treat description and board_summary as separate outputs: detailed recoverable card text plus short operator preview.",
+    "Do not move or archive cards during routine cleanup unless the owner gives a separate explicit target/action.",
+    "If a VIN/chassis/frame number exists and vehicle_profile engine_model, gearbox_model, or drivetrain is empty, enrich only from source-backed data and preserve manual_fields.",
     "Use today_context/memory_context_for/recall/remember/learn_from_feedback only for durable non-CRM manager memory and lessons.",
     "Treat the autostopcrm-v1 branch in the CRM repo as canonical for new MCP commands and connector behavior.",
     "Refresh this catalog whenever the CRM repo or AutostopManager MCP tool surface changes."

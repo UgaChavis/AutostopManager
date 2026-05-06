@@ -5,21 +5,23 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 ## Source Pack
 
 - Path: `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/`
-- Intake source: owner-provided archive `C:/Users/User/Downloads/bmw_repair_knowledge_pack.zip`
+- Intake source: owner-provided archive; original user download path is
+  historical and not part of active routing.
 - Created in pack manifest: `2026-05-03T10:32:46Z`
 - Classification: owner-provided original reference summaries, public-source routes, CSV/JSONL indexes, Markdown, and PDF renderings.
 - License/source boundary: safe for local reference as owner-provided material; still verify final repair procedures, wiring, torque, coding, programming, campaigns, and fluid capacities by VIN in BMW ISTA/AIR/ETK/AOS/TIS or official/public bulletins.
 
 ## Use This First When
 
-- the user asks general BMW repair or diagnostic questions without a more specific model skill
+- the user asks general BMW repair or diagnostic questions without a more specific model route
 - the topic is BMW DTC/fault memory, OBD II, ISTA/AIR/TIS source routing, control units, bus/network architecture, body electronics, battery drain, xDrive, ZF automatic transmission, chassis/brakes/steering, HV safety, or BMW fluids
-- the vehicle is BMW but not specifically covered by `bmw-f15-n63` or another model-specific skill
+- the vehicle is BMW but not specifically covered by the BMW F15/N63 route or another model-specific route
 
 ## Source Order
 
 1. Exact VIN/model/year/market context from CRM or owner.
-2. Model-specific skill if present, such as `bmw-f15-n63`.
+2. Model-specific route/playbook if present, such as the BMW F15/N63 route in
+   `knowledge_map.json`.
 3. This BMW repair playbook and the local BMW repair knowledge pack.
 4. BMW official sources: ISTA, AIR, ETK, AOS, BMW TIS, BMW owner manual by VIN, BMW recall/technical update lookup.
 5. Public official documents: NHTSA BMW SIB/recall PDFs, ZF official service information, SAE/OBD standards.

@@ -5,7 +5,7 @@ Purpose: one entry point for AutostopManager knowledge. Start here when the owne
 ## Fast Route
 
 1. Run `probe_knowledge_base` or `python -m autostop_manager.cli knowledge-probe "<query>"`.
-2. If `has_knowledge=true`, open `open_first` / `source_of_truth` before broad file reads.
+2. If `has_knowledge=true`, open `open_first` / `source_of_truth` before broad file reads. Use returned `reference_files` only when the task specifically asks for a linked pack artifact, schema, manifest, source catalog, or implementation draft.
 3. If more detail is needed, run `search_knowledge_base` inside the returned `best_domain`.
 4. If `has_knowledge=false`, route to external/OEM sources and consider knowledge intake after the answer.
 5. If the task is technical automotive work, collect VIN/chassis, market, engine, transmission, mileage, complaint, and scan results before giving facts.
@@ -57,9 +57,15 @@ compact route card:
 - `keywords` - technical systems, components, fluids, DTC terms, and workflows.
 - `questions` - natural-language questions the domain should answer.
 - `source_of_truth_files` - the first files to open when the route matches.
+- `primary_files` - files synced into SQLite full-text search.
+- `reference_files` - active link-only files that are audited but not fully
+  indexed because they are large, duplicated, or mainly bibliography/source-pack
+  material.
+- `optional_files` - local runtime/private files indexed only when present.
 
 The agent should use route cards as the cheap first pass. Full document search
-is the second pass.
+is the second pass. `reference_files` should remain visible in probe output but
+should not produce full section matches in normal search.
 
 ## Core Control Files
 
@@ -167,13 +173,12 @@ For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the
 playbook first, then verify VIN/frame-specific repair, TSB, wiring, torque,
 fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
-Fluid maintenance has a dedicated Codex skill:
+Fluid maintenance has a dedicated playbook:
 
-- `C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md`
 - `docs/agent/fluid_maintenance_playbook.md`
 - `docs/agent/automotive_sources/fluid_maintenance_sources.json`
 
-For oil, fluid, approval, and fill-capacity requests, load the skill first,
+For oil, fluid, approval, and fill-capacity requests, load the playbook first,
 then verify exact vehicle/unit data through OEM or licensed service sources.
 
 ## Vehicle Identity and OEM Parts
@@ -190,7 +195,6 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 
 AI parts Красноярск project pack:
 
-- `C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md`
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/`
@@ -215,8 +219,9 @@ without API/cabinet/phone/message confirmation.
   facts selected from the newest reliable documents. This file is local runtime
   knowledge and must not be committed.
 - `data/private_knowledge/business_documents_inventory.json` - private
-  filesystem inventory of `C:/Users/User/Мой диск/ДОКУМЕНТЫ`, with dates,
-  hashes, and topic flags.
+  filesystem inventory of the owner's synced document folder, with dates,
+  hashes, and topic flags. This optional runtime file may be absent in a clean
+  Git checkout.
 
 For ИП / реквизиты / карточка предприятия / ИП Гришкявичус or Гришкевичус
 requests, search `business_identity` first and use the private current JSON.
@@ -228,8 +233,6 @@ source document if formatting matters.
 - `business_document_quality_playbook.md` - AutoStop route for PDF/DOCX/XLSX
   invoices, acts, КП, receipts, requisites sheets, accounting-style documents,
   and printable forms.
-- `C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md` - local
-  Codex skill with the mandatory document-quality gate.
 
 For счет / акт / КП / бухгалтерский документ / PDF / Word / Excel requests,
 search `business_documents` first. Use `business_identity` only for current

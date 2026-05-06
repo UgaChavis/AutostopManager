@@ -64,6 +64,9 @@ Use these locations consistently:
   guidance.
 - `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
   owner-provided packs that should not be duplicated into memory.
+- `docs/archive/` - historical implementation plans and retired notes. Do not
+  use archived files as active instructions unless a current playbook links to
+  them explicitly.
 - `C:/Users/9860606/.codex/skills/<topic>/` - optional focused trigger skills
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
@@ -99,6 +102,11 @@ Every durable domain in `knowledge_map.json` should include:
 - `questions` - natural questions the route should answer.
 - `source_of_truth_files` - the first files to open.
 - `primary_files` - files that should be synced into SQLite search.
+- `reference_files` - active supporting files that must exist and stay linked,
+  but should not be fully indexed because they are large, duplicated, or useful
+  mainly as source-pack/bibliography material.
+- `optional_files` - local runtime/private files that should be indexed when
+  present, but must not make a clean Git checkout fail audit when absent.
 - `required_context` - facts the agent should collect before giving a specific
   answer.
 

@@ -151,8 +151,8 @@ When the owner asks about BMW generally:
 - use the owner-provided BMW repair pack under
   `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/` as a
   local route/index, not as final OEM service information
-- switch to `bmw-f15-n63` or another model-specific skill when model/engine
-  matches
+- switch to the BMW F15/N63 route or another model-specific route when
+  model/engine matches
 - verify final repair operations, coding/programming, wiring/pinout, torque,
   campaigns, and fluid capacities by VIN through BMW ISTA/AIR/ETK/AOS/TIS,
   BMW owner manuals, BMW recall lookup, NHTSA/BMW SIBs, or ZF official data
@@ -202,12 +202,17 @@ When the owner says `Приберись`, `прибейсь`, or asks to clean u
 - use `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
   procedure
 - act as full board-management autopilot: update, tag, set indicators, set
-  deadlines, enrich VIN/OEM/parts/service data, and archive completed cards
-  when safe
+  deadlines, enrich VIN/OEM/parts/service data, and leave archive
+  recommendations when cards look completed
 - do not move cards between columns during this command unless the owner gives
   a separate explicit move command with the target card and target column
-- update the public card description so the first five visible lines form a
-  clean external summary: vehicle, task, status, payment/parts, next step
+- update the public card description as the detailed recoverable card text
+- update the separate hidden `board_summary` preview through
+  `set_card_board_summary`: four or five operator-facing lines, no phone, VIN,
+  full client identity, raw scan dump, or long issue list
+- if VIN/chassis/frame is present and `engine_model`, `gearbox_model`, or
+  `drivetrain` is empty, enrich those fields only from source-backed data and
+  preserve manual fields
 - preserve user-entered data: do not delete works, materials, prices, payments,
   contacts, files, manual diagnostics, or historical notes
 - keep all card notes very short; prefer one `AI:` line over long explanations

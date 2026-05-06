@@ -5,7 +5,8 @@ Purpose: route parts-search, local availability, supplier/API, used/contract par
 ## Source Pack
 
 - Path: `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/`
-- Intake source: owner-provided archive `C:/Users/User/Downloads/ai_parts_krasnoyarsk_project_pack.zip`
+- Intake source: owner-provided archive; original user download path is
+  historical and not part of active routing.
 - Created in pack README: `2026-05-03`
 - Classification: owner-provided project knowledge pack with Markdown docs, prompts, JSON schemas, YAML configs, CSV/JSONL data, Python code skeleton, and OpenAPI draft.
 - Secret boundary: the pack includes `configs/api_credentials.example.env` with placeholder names and default non-secret values only; never store real supplier/API keys in Git, docs, CRM cards, or memory.

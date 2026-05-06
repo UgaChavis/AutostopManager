@@ -34,9 +34,9 @@
       "next_actions": [
         "read live CRM board state",
         "classify blockers",
-        "update summaries, tags, indicators, deadlines, and concise AI notes",
+        "update detailed descriptions, separate board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
         "leave cards in their current columns",
-        "archive completed cards only when safe"
+        "leave archive recommendations unless the owner gives a separate explicit archive command"
       ]
     },
     {
@@ -71,6 +71,43 @@
         "check ready cars and due totals",
         "classify payment blockers",
         "create short follow-up notes or manager tasks"
+      ]
+    },
+    {
+      "command_id": "manager_documentation_hygiene",
+      "intent": "documentation_hygiene",
+      "domain": "knowledge_intake",
+      "open_first": "docs/agent/knowledge_shelves.md",
+      "aliases": [
+        "почисти документацию",
+        "архивируй старые документы",
+        "приведи документацию в порядок",
+        "оптимизируй базу знаний",
+        "убери старые инструкции",
+        "подготовь менеджера к работе"
+      ],
+      "keywords": [
+        "документация",
+        "архив",
+        "старые документы",
+        "неактуальные инструкции",
+        "база знаний",
+        "чистка",
+        "оптимизация",
+        "битые ссылки"
+      ],
+      "memory_queries": [
+        "knowledge_intake",
+        "documentation cleanup",
+        "knowledge quality",
+        "старые документы"
+      ],
+      "next_actions": [
+        "classify files as active, source pack, runtime, generated, or archive",
+        "move historical implementation plans to docs/archive",
+        "remove stale absolute paths and duplicate active instructions",
+        "update knowledge_map, knowledge_annotations, and navigation docs",
+        "run knowledge-sync, knowledge-audit, annotations-audit, and focused tests"
       ]
     }
   ]

@@ -12,8 +12,9 @@ Use the local private files first:
 - `data/private_knowledge/business_identity_current.json` - current curated
   business identity facts selected from the newest reliable documents.
 - `data/private_knowledge/business_documents_inventory.json` - full filesystem
-  inventory of `C:/Users/User/Мой диск/ДОКУМЕНТЫ` with dates, hashes, and topic
-  flags.
+  inventory of the owner's synced document folder with dates, hashes, and topic
+  flags. This runtime file is optional in Git checkouts and should be created
+  locally when business-document routing is needed.
 
 These files are under `data/`, which is ignored by Git. Do not move them into
 tracked docs and do not paste their private banking/contact contents into
@@ -42,7 +43,7 @@ current sources unless the owner explicitly asks to inspect history.
   boilerplate;
 - a CRM card, quote, invoice, tender response, or document draft needs current
   business identity facts;
-- the owner asks what is old versus current in `C:/Users/User/Мой диск/ДОКУМЕНТЫ`.
+- the owner asks what is old versus current in the local document inventory.
 
 ## Safety Rules
 

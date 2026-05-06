@@ -6,16 +6,13 @@ quality gate before delivery or CRM upload.
 
 ## Open First
 
-Use the local Codex skill:
+Use this playbook as the active route. Then load only the file-format skill or
+tooling needed by the artifact:
 
-- `C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md`
-
-Then load only the base skill needed by the file type:
-
-- DOCX/Word: `documents:documents`
-- XLSX/Excel/CSV register: `spreadsheets:Spreadsheets`
-- PDF/print form: `pdf-print-forms`
-- PDF extraction/source review: `pdf`
+- XLSX/Excel/CSV register: `spreadsheet`
+- PDF/print form/extraction/source review: `pdf`
+- DOCX/Word: use the available local document tooling, then render or export
+  for visual inspection before delivery.
 
 ## Required Behavior
 
@@ -33,10 +30,10 @@ Then load only the base skill needed by the file type:
 4. Render and inspect the final artifact before delivery:
    - every DOCX/PDF page;
    - every meaningful XLSX sheet or print area.
-5. Run:
-   ```powershell
-   python C:/Users/User/.codex/skills/autostop-business-documents/scripts/audit_business_document.py "<final-file>"
-   ```
+5. Run the strongest available quality gate for the artifact: formula/value
+   checks for spreadsheets, PDF render inspection for printable forms, and a
+   visual page pass for DOCX/PDF. If a dedicated audit script is installed in a
+   future environment, run it as an additional gate.
 6. If the document is a regulated/tax form such as счет-фактура or УПД, verify
    current requirements from official/current sources before finalizing.
 

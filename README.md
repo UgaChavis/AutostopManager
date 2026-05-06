@@ -27,6 +27,8 @@ up to date.
 - local access: `python -m autostop_manager.cli ...`
 - MCP access: `python -m autostop_manager.mcp_server`
 - docs for agents: `docs/agent/`
+- archived implementation notes: `docs/archive/` (historical only; active
+  instructions live in `docs/agent/`)
 - knowledge-base entrypoint: `docs/agent/knowledge_base_index.md`
 - knowledge-base machine map: `docs/agent/knowledge_map.json`
 - knowledge-base shelf map: `docs/agent/knowledge_shelves.md`
@@ -232,10 +234,11 @@ exact wording from the source document before external use.
 
 The owner's natural commands `Приберись` and `прибейсь` mean board-cleanup
 autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
-CRM board, classify blockers, enrich VIN/OEM/parts/service data, update short
-card notes, tag/mark/archive when safe, leave cards in their current columns,
-and preserve user-entered works, materials, prices, payments, files, contacts,
-and diagnostics.
+CRM board, classify blockers, enrich VIN/OEM/parts/service data, update card
+description and the separate `board_summary` preview, tag/mark when useful,
+leave cards in their current columns, do not archive without a separate explicit
+owner command, and preserve user-entered works, materials, prices, payments,
+files, contacts, and diagnostics.
 
 ## CRM MCP Sync
 

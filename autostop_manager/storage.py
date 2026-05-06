@@ -257,6 +257,7 @@ class ManagerMemoryStore:
                     questions_json TEXT NOT NULL DEFAULT '[]',
                     source_of_truth_json TEXT NOT NULL DEFAULT '[]',
                     primary_files_json TEXT NOT NULL DEFAULT '[]',
+                    reference_files_json TEXT NOT NULL DEFAULT '[]',
                     required_context_json TEXT NOT NULL DEFAULT '[]',
                     search_text TEXT NOT NULL DEFAULT '',
                     content_hash TEXT NOT NULL DEFAULT '',
@@ -369,6 +370,9 @@ class ManagerMemoryStore:
                 "sensitivity": "TEXT NOT NULL DEFAULT 'normal'",
                 "last_used_at": "TEXT",
                 "archived_at": "TEXT",
+            },
+            "knowledge_route_cards": {
+                "reference_files_json": "TEXT NOT NULL DEFAULT '[]'",
             },
         }
         for table, columns in desired.items():

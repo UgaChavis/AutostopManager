@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
 
 
-SKILL_ROOT = Path("C:/Users/User/.codex/skills")
+def _default_skill_root() -> Path:
+    configured = os.environ.get("CODEX_SKILL_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".codex" / "skills"
+
+
+SKILL_ROOT = _default_skill_root()
 KNOWLEDGE_MAP_PATH = PROJECT_ROOT / "docs" / "agent" / "knowledge_map.json"
 
 
@@ -84,7 +92,7 @@ def audit_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
         linked_domains = list(skill.get("linked_domains") or [])
         if not exists:
             warnings.append(f"missing skill file: {skill['skill_id']}")
-        if exists and not linked_domains and skill["skill_id"].startswith(("bmw-", "toyota-", "autostop-")):
+        if exists and not linked_domains and skill.get("source") == "knowledge_map.json":
             warnings.append(f"skill is not linked from knowledge_map.json: {skill['skill_id']}")
         item = dict(skill)
         item["exists"] = exists
