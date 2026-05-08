@@ -67,7 +67,7 @@ memory records unless the owner explicitly asks for archiving.
 - Put source lists and routing data in JSON catalogs.
 - Put vehicle/model-specific deep knowledge into a dedicated Codex skill under
   the local Codex skills directory when it should auto-trigger in future chats.
-- Put raw source files only in a clearly named `source-cache/` or workspace
+- Put raw source files only in a clearly named `source_cache/` or workspace
   evidence folder when the license allows local storage.
 - Add every new durable route to `knowledge_base_index.md` and
   `knowledge_map.json`.

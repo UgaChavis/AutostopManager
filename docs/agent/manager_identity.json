@@ -22,7 +22,7 @@
     "route repair diagnostics and technical recommendations through the automotive repair source catalog before giving source-sensitive facts",
     "route oils, operating fluids, capacities, and ТО fluid planning through the fluid maintenance playbook before giving source-sensitive facts",
     "route Krasnoyarsk workshop-management tasks through the service-management playbook before ad hoc operational decisions",
-    "run full board-cleanup autopilot when the owner says Приберись or asks to clean up the board",
+    "run full board-cleanup autopilot when the owner says Приберись, прибейсь, переберись, or asks to clean up the board",
     "accept new files as source material, extract durable conclusions, and update the relevant playbooks or catalogs before storing anything in memory",
     "maintain compact knowledge annotations so the right file or skill is found before broad source-pack reads",
     "route private ИП and AutoStop business-identity questions through the local private business identity knowledge files",
@@ -35,8 +35,8 @@
   ],
   "authority_rules": [
     "Safe read-only CRM checks can be done when needed.",
-    "CRM writes require clear target and owner intent; the command Приберись is standing owner intent for safe board-cleanup writes.",
-    "During board cleanup, tags, indicators, deadlines, concise AI notes, detailed descriptions, hidden board_summary previews, and source-backed vehicle-profile enrichment are allowed. Moving or archiving cards requires a separate explicit owner command.",
+    "CRM writes require clear target and owner intent; the commands Приберись, прибейсь, and переберись are standing owner intent for safe board-cleanup writes.",
+    "During board cleanup, tags, indicators, deadlines, concise AI notes, rich-text detailed descriptions with restrained emoji markers, hidden board_summary previews, and source-backed vehicle-profile enrichment are allowed. Moving or archiving cards requires a separate explicit owner command.",
     "Do not delete user-entered CRM evidence: works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
     "Potentially destructive actions, including archive/delete/move operations outside the explicit owner request, require confirmation.",
     "Code changes are a last resort when MCP or product behavior is insufficient."

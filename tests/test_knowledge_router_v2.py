@@ -17,6 +17,19 @@ def test_probe_routes_owner_board_cleanup_typo_to_cleanup_playbook(tmp_path):
     assert result["command_route"]["command_id"] == "board_cleanup_autopilot"
 
 
+def test_probe_routes_owner_board_cleanup_rich_text_alias_to_cleanup_playbook(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "переберись в карточках с эмодзи и форматированием", limit=5)
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "board_cleanup_autopilot"
+    assert result["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
+    assert result["command_route"]["command_id"] == "board_cleanup_autopilot"
+
+
 def test_probe_routes_ready_unpaid_daily_control_to_service_management(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)

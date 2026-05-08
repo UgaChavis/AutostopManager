@@ -114,9 +114,9 @@ Use intake when the owner says: "обнови базу знаний", "сохр�
 - `dsg_transmission_playbook.md` - Volkswagen Group DSG / Audi S tronic route for DQ/DL families, mechatronic modules, ODIS/SVM software updates, basic settings, adaptation, and used-unit sourcing risks.
 - `automotive_sources/dsg_transmission_sources.json` - official/public DSG/S tronic source registry: erWin/SVM, VW/Audi NHTSA TSBs, and VW technology references.
 - `ecu_calibration_programming_playbook.md` - ECU programming, calibration, coding, adaptation, UDS/OBD, file formats, BMW programming workflow, KOMBI/instrument-cluster, and "стрелковка" route.
-- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - owner-provided ECU calibration/programming reference pack with Markdown/PDF/data/source indexes and synthetic examples.
+- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - owner-provided ECU calibration/programming reference pack with Markdown/data/source indexes and synthetic examples.
 - `bmw_repair_playbook.md` - general BMW diagnostics, DTC, chassis, body electronics, xDrive, ZF transmission, HV, and fluids route.
-- `automotive_sources/source_cache/bmw_repair_knowledge_pack/` - owner-provided BMW repair reference pack with Markdown/PDF/data indexes.
+- `automotive_sources/source_cache/bmw_repair_knowledge_pack/` - owner-provided BMW repair reference pack with Markdown/JSONL indexes.
 - `toyota_gr_yaris_playbook.md` - Toyota GR Yaris / GXPA16 / G16E-GTS model-specific repair, fluids, recalls, TSB, and OEM parts routing.
 
 DSG / S tronic route:
@@ -260,7 +260,7 @@ approval for the exact action.
 - `service_management_sources.json` - source routing for Krasnoyarsk procurement, personnel, management, and local market context.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
-- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and routine board cleanup autonomy.
+- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись`, `прибейсь`, `переберись`, and routine board cleanup autonomy.
 
 ## Deployment and Operations
 
@@ -284,7 +284,7 @@ rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|sco
 rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|карточка предприятия|ОГРНИП|ИНН|ОКВЭД" docs/agent/business_identity_playbook.md data/private_knowledge
 rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment" docs/agent
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
-rg -n "Приберись|cleanup|archive|preserve|board" docs/agent
+rg -n "Приберись|прибейсь|переберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent
 ```
 

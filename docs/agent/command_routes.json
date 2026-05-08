@@ -9,6 +9,7 @@
       "aliases": [
         "Приберись",
         "прибейсь",
+        "переберись",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
@@ -29,12 +30,13 @@
         "board-cleanup",
         "Приберись",
         "прибейсь",
+        "переберись",
         "board-cleanup-no-card-movement"
       ],
       "next_actions": [
         "read live CRM board state",
         "classify blockers",
-        "update detailed descriptions, separate board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
+        "update detailed descriptions with supported rich text formatting and restrained emoji markers, separate board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
         "leave cards in their current columns",
         "leave archive recommendations unless the owner gives a separate explicit archive command"
       ]
@@ -104,7 +106,7 @@
       ],
       "next_actions": [
         "classify files as active, source pack, runtime, generated, or archive",
-        "move historical implementation plans to docs/archive",
+        "delete fully migrated or obsolete historical implementation plans instead of keeping a growing archive",
         "remove stale absolute paths and duplicate active instructions",
         "update knowledge_map, knowledge_annotations, and navigation docs",
         "run knowledge-sync, knowledge-audit, annotations-audit, and focused tests"

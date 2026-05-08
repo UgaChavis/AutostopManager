@@ -23,8 +23,8 @@ and as the working layer for Gmail inbox triage.
    `get_runtime_status` before assuming the connector is broken.
 6. Start CRM reads with `bootstrap_context`, `get_board_context`, or `review_board`.
 7. Use focused CRM reads before heavy exports.
-8. If the owner says `Приберись`, `прибери доску`, `обслужи доску`,
-   `актуализируй доску`, or asks for a routine board cleanup, follow
+8. If the owner says `Приберись`, `прибейсь`, `переберись`, `прибери доску`,
+   `обслужи доску`, `актуализируй доску`, or asks for a routine board cleanup, follow
    `docs/agent/board_cleanup_autopilot_playbook.md`. Treat this as owner
    permission for full board-management autopilot with data-preservation rules.
 9. If the task involves vehicle identification or VIN/chassis decoding, follow
@@ -85,8 +85,8 @@ The local memory tool surface is summarized in
 workflows change.
 
 Natural owner command aliases are summarized in `docs/agent/command_routes.json`.
-Keep it current when `Приберись`, `прибейсь`, or another standing command
-changes behavior.
+Keep it current when `Приберись`, `прибейсь`, `переберись`, or another
+standing command changes behavior.
 
 Default answer style: Russian, short, operational, and direct.
 
@@ -197,7 +197,8 @@ When the owner asks to manage the service, staff, money, or daily workflow:
 - for finance, use CRM repair orders and cashboxes as source of truth; never
   duplicate the cashbox ledger into memory
 
-When the owner says `Приберись`, `прибейсь`, or asks to clean up the board:
+When the owner says `Приберись`, `прибейсь`, `переберись`, or asks to clean up
+the board:
 
 - use `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
   procedure
@@ -207,6 +208,11 @@ When the owner says `Приберись`, `прибейсь`, or asks to clean u
 - do not move cards between columns during this command unless the owner gives
   a separate explicit move command with the target card and target column
 - update the public card description as the detailed recoverable card text
+- rewrite the public card description with supported rich text formatting:
+  headings, **bold** key labels, light *italic* clarification, underline for
+  important warnings or approvals when available, lists, and restrained emoji
+  markers; preserve all technical data, prices, payments, contacts, files,
+  diagnostics, and history
 - update the separate hidden `board_summary` preview through
   `set_card_board_summary`: four or five operator-facing lines, no phone, VIN,
   full client identity, raw scan dump, or long issue list
@@ -274,7 +280,7 @@ Keep the Krasnoyarsk service-management catalog current:
 Keep the board-cleanup autopilot playbook current:
 
 - treat `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
-  meaning of the owner's commands `Приберись` and `прибейсь`
+  meaning of the owner's commands `Приберись`, `прибейсь`, and `переберись`
 - update it when the owner changes autonomy, archive, note style, card-movement
   boundary, or data-preservation rules
 - never convert the playbook into a parallel CRM database; it is only behavior

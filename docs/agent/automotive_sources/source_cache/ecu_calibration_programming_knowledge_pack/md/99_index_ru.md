@@ -8,11 +8,11 @@
 
 ## Состав
 
-- pdf/ - PDF-модули для чтения.
-- md/ - те же модули в Markdown для машинной загрузки.
+- md/ - Markdown-модули для машинной загрузки и ручного чтения.
 - data/ - справочные таблицы CSV и JSONL.
 - examples/ - синтетические учебные примеры A2L, ODX, HEX, S19, DCM, JSON.
 - sources/ - публичный каталог стандартов и официальных источников.
+- MANIFEST.md - компактный список активных файлов.
 
 ## Ограничение
 
@@ -37,19 +37,10 @@
 Используйте data/repair_scenario_cards.jsonl, data/risk_register.jsonl, data/programming_precheck_matrix.csv и data/glossary_ecu_programming.jsonl.
 
 
-## PDF-модули
+## Компактность
 
-- pdf/00_scope_and_boundaries_ru.pdf
-- pdf/01_ecu_fundamentals_ru.pdf
-- pdf/02_networks_uds_obd_ru.pdf
-- pdf/03_file_formats_ru.pdf
-- pdf/04_calibration_theory_ru.pdf
-- pdf/05_oem_programming_workflow_ru.pdf
-- pdf/06_bmw_programming_overview_ru.pdf
-- pdf/07_emissions_diagnostics_ru.pdf
-- pdf/08_flash_failures_recovery_ru.pdf
-- pdf/09_validation_logging_ru.pdf
-- pdf/10_service_scenarios_ru.pdf
+Сгенерированные PDF-дубли удалены 2026-05-08. Активные материалы сохранены в
+Markdown/data/sources/examples.
 
 ## Файлы данных
 

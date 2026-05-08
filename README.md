@@ -27,8 +27,9 @@ up to date.
 - local access: `python -m autostop_manager.cli ...`
 - MCP access: `python -m autostop_manager.mcp_server`
 - docs for agents: `docs/agent/`
-- archived implementation notes: `docs/archive/` (historical only; active
-  instructions live in `docs/agent/`)
+- archived implementation notes: `docs/archive/` (temporary parking only;
+  active instructions live in `docs/agent/`, and fully migrated old plans should
+  be deleted)
 - knowledge-base entrypoint: `docs/agent/knowledge_base_index.md`
 - knowledge-base machine map: `docs/agent/knowledge_map.json`
 - knowledge-base shelf map: `docs/agent/knowledge_shelves.md`
@@ -42,7 +43,7 @@ up to date.
 - knowledge annotation audit: `python -m autostop_manager.cli annotations-audit`
 - memory quality audit: `python -m autostop_manager.cli memory-audit`
 - memory curation: `python -m autostop_manager.cli memory-curate --apply`
-- task-specific context: `python -m autostop_manager.cli prepare-context "прибейсь" --intent board_cleanup`
+- task-specific context: `python -m autostop_manager.cli prepare-context "переберись" --intent board_cleanup`
 - skill registry audit: `python -m autostop_manager.cli skills-audit`
 - operation ledger: `python -m autostop_manager.cli run-start "Приберись" --intent board_cleanup --dry-run`
 - repair source routing: use `docs/agent/automotive_repair_source_playbook.md`
@@ -67,10 +68,11 @@ up to date.
   `docs/agent/service_management_sources.json` before workshop-management
   decisions about parts procurement, repair triage, customer flow, staff load,
   finance control, daily CRM control, or new knowledge intake
-- board cleanup autopilot: when the owner says `Приберись`, use
-  `docs/agent/board_cleanup_autopilot_playbook.md` as the standing procedure
-  for a full CRM board cleanup with strict preservation of user-entered data;
-  scheduled runs are incremental and must avoid duplicate/noisy writes
+- board cleanup autopilot: when the owner says `Приберись`, `прибейсь`, or
+  `переберись`, use `docs/agent/board_cleanup_autopilot_playbook.md` as the
+  standing procedure for a full CRM board cleanup with strict preservation of
+  user-entered data; scheduled runs are incremental and must avoid
+  duplicate/noisy writes
 - deployment/runbook: use `docs/agent/deployment_runbook.md`; publish code,
   tests, and playbooks, but keep runtime CRM snapshots and SQLite databases out
   of GitHub
@@ -232,13 +234,14 @@ data, ИП Гришкявичус/Гришкевичус, and old-versus-current
 sorting. Keep private bank/contact details out of Git-tracked docs and verify
 exact wording from the source document before external use.
 
-The owner's natural commands `Приберись` and `прибейсь` mean board-cleanup
-autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
-CRM board, classify blockers, enrich VIN/OEM/parts/service data, update card
-description and the separate `board_summary` preview, tag/mark when useful,
-leave cards in their current columns, do not archive without a separate explicit
-owner command, and preserve user-entered works, materials, prices, payments,
-files, contacts, and diagnostics.
+The owner's natural commands `Приберись`, `прибейсь`, and `переберись` mean
+board-cleanup autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`:
+read the live CRM board, classify blockers, enrich VIN/OEM/parts/service data,
+rewrite public card descriptions with supported rich text formatting and
+restrained emoji markers, update the separate `board_summary` preview, tag/mark
+when useful, leave cards in their current columns, do not archive without a
+separate explicit owner command, and preserve user-entered works, materials,
+prices, payments, files, contacts, and diagnostics.
 
 ## CRM MCP Sync
 

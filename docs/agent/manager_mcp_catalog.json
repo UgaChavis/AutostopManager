@@ -123,6 +123,7 @@
     "Приберись": {
       "aliases": [
         "прибейсь",
+        "переберись",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
@@ -139,6 +140,7 @@
         "enrich vehicle profiles",
         "source VIN/OEM/parts data",
         "set tags, indicators, and deadlines",
+        "rewrite public descriptions with supported rich text formatting and restrained emoji markers",
         "update the separate hidden board_summary preview",
         "leave archive recommendations when a card looks completed"
       ],

@@ -1,8 +1,8 @@
 # Board Cleanup Autopilot Playbook
 
 Purpose: define the standard behavior when the owner says `Приберись`,
-`прибейсь`, `прибери доску`, `обслужи доску`, `актуализируй доску`, or asks
-for a routine board cleanup.
+`прибейсь`, `переберись`, `прибери доску`, `обслужи доску`,
+`актуализируй доску`, or asks for a routine board cleanup.
 
 This is not a separate product feature. It is an operating instruction for the
 agent when working through the existing AutoStop CRM MCP tools.
@@ -18,6 +18,7 @@ The agent may independently:
 - update card title, vehicle, description, tags, deadline, indicator, and
   vehicle profile
 - rewrite the public card description into a clean detailed working note
+  using supported rich text formatting and restrained emoji markers
 - update the hidden `board_summary` through `set_card_board_summary` so the
   board tile shows a four-or-five-line operator preview
 - leave archive recommendations in the card/report when a card appears
@@ -74,6 +75,10 @@ Allowed safe edits:
 - fix obvious typos
 - shorten noisy duplicated text
 - restructure text into readable sections
+- format the public description with clear headings, **bold** key labels,
+  *italic* clarifications, underlined emphasis when the CRM editor supports it,
+  bullet/check lists, and restrained emoji markers such as `🔧`, `✅`, `⚠️`,
+  and `💰`
 - expand abbreviations when meaning is clear
 - add missing labels such as `VIN:`, `OEM:`, `Следующий шаг:`
 - append an `AI:` note with a concise question or conclusion
@@ -124,6 +129,13 @@ different jobs.
 identity, customer context, VIN, work list, diagnostics, money, parts, and
 history. Keep it readable and preserve useful old text under `Подробности:` if
 needed.
+
+When rewriting `description`, use the CRM text editor deliberately: headings,
+bold labels, light italic comments, underline only for important warnings or
+money/client approvals, short lists, and a few useful emoji markers. Preserve
+technical data, part numbers, prices, payments, contacts, diagnostics, files,
+and history exactly; do not let formatting turn into data loss. Keep
+`board_summary` plain, compact, and free of decorative formatting.
 
 `board_summary` is the compact operator preview shown on the board. Update it
 with `set_card_board_summary` after card text/profile/tag changes. Keep it to
@@ -257,12 +269,16 @@ Before every CRM write:
 - keep card text short
 - when touching `description`, keep it detailed and recoverable rather than
   treating its first lines as the board preview
+- when rewriting `description`, apply supported rich text formatting and
+  restrained emoji markers without changing technical facts, prices, payments,
+  contacts, diagnostics, or historical notes
 - after touching `description`, `title`, `tags`, or `vehicle_profile`, call
   `set_card_board_summary` and verify `board_summary_stale=false`
 - avoid multiple noisy notes when one structured update is enough
 - do not rewrite a card just for style if it already reads clearly
-- do not move cards between columns during `Приберись` / `прибейсь`; leave the
-  current column as-is unless the owner gives a separate explicit move command
+- do not move cards between columns during `Приберись` / `прибейсь` /
+  `переберись`; leave the current column as-is unless the owner gives a
+  separate explicit move command
 - do not archive cards during routine cleanup; leave an archive recommendation
   unless the owner gives a separate explicit archive command
 

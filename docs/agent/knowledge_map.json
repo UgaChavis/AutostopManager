@@ -56,7 +56,8 @@
         "docs/agent/manager_rules.json",
         "docs/agent/operating_playbook.json",
         "docs/agent/command_routes.json",
-        "docs/agent/manager_mcp_catalog.json"
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
       ],
       "primary_files": [
         "docs/agent/autostop_manager_skill.md",
@@ -64,6 +65,7 @@
         "docs/agent/operating_playbook.json",
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json",
         "docs/agent/manager_identity.json",
         "docs/agent/memory_policy.json"
       ]
@@ -1296,6 +1298,8 @@
       "title": "Board cleanup autopilot: Приберись",
       "use_when": [
         "owner says Приберись",
+        "owner says прибейсь",
+        "owner says переберись",
         "owner says прибери доску",
         "owner says обслужи доску",
         "owner says актуализируй доску",
@@ -1304,6 +1308,8 @@
       ],
       "aliases": [
         "Приберись",
+        "прибейсь",
+        "переберись",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
@@ -1321,6 +1327,12 @@
         "archive",
         "preserve data",
         "AI note",
+        "rich text",
+        "emoji",
+        "описание",
+        "жирный",
+        "курсив",
+        "подчеркнутый",
         "deadline",
         "indicator",
         "tag",
@@ -1331,6 +1343,8 @@
       ],
       "questions": [
         "что делать когда владелец сказал Приберись",
+        "что делать когда владелец сказал переберись",
+        "как форматировать описание карточки при уборке доски",
         "как агент должен убирать CRM доску",
         "какие CRM правки разрешены автопилоту",
         "как запускать уборку доски каждый час",

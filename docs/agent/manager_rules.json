@@ -28,7 +28,7 @@
     {
       "id": "command-route-sync",
       "priority": 22,
-      "rule": "Treat docs/agent/command_routes.json as the canonical route map for natural owner commands such as Приберись and прибейсь; update it when command aliases, open-first files, or allowed actions change."
+      "rule": "Treat docs/agent/command_routes.json as the canonical route map for natural owner commands such as Приберись, прибейсь, and переберись; update it when command aliases, open-first files, or allowed actions change."
     },
     {
       "id": "knowledge-index-entrypoint",
@@ -198,7 +198,7 @@
     {
       "id": "board-cleanup-autopilot-trigger",
       "priority": 16,
-      "rule": "When the owner says 'Приберись', 'прибейсь', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md."
+      "rule": "When the owner says 'Приберись', 'прибейсь', 'переберись', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md."
     },
     {
       "id": "board-cleanup-autopilot-authority",
@@ -214,6 +214,11 @@
       "id": "board-cleanup-data-preservation",
       "priority": 18,
       "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer additive description edits: add a short manager block or question while preserving existing text below it."
+    },
+    {
+      "id": "board-cleanup-description-rich-text",
+      "priority": 19,
+      "rule": "During board cleanup, especially for the owner command 'переберись', rewrite the public card description with supported CRM text editing: clear headings, bold key labels, light italic clarifications, underline for important warnings or approvals when available, short lists, and restrained emoji markers. Preserve all technical data, part numbers, prices, payments, contacts, files, diagnostics, and historical notes. Keep board_summary plain and compact."
     },
     {
       "id": "board-cleanup-note-style",

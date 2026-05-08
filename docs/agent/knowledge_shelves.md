@@ -19,9 +19,9 @@ Use this loop before broad file reads:
    `knowledge-audit` and `annotations-audit`.
 
 For non-trivial operational tasks, run `prepare_manager_context` first. It
-applies command routes such as `Приберись` / `прибейсь`, relevant memory/rules,
-knowledge routing, missing required context, and next actions before broad file
-reads.
+applies command routes such as `Приберись` / `прибейсь` / `переберись`,
+relevant memory/rules, knowledge routing, missing required context, and next
+actions before broad file reads.
 
 If `has_knowledge=false`, use external/OEM/current sources for the answer, then
 decide whether the reusable route belongs in the intake flow.
@@ -63,10 +63,12 @@ Use these locations consistently:
 - `docs/agent/automotive_sources/*` - automotive source catalogs and ingestion
   guidance.
 - `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
-  owner-provided packs that should not be duplicated into memory.
-- `docs/archive/` - historical implementation plans and retired notes. Do not
-  use archived files as active instructions unless a current playbook links to
-  them explicitly.
+  owner-provided packs that should not be duplicated into memory. Prefer
+  Markdown/JSON/JSONL/CSV for tracked indexed material; keep PDFs only when the
+  original layout or source attachment itself is required.
+- `docs/archive/` - temporary parking for historical implementation notes that
+  still need review. Do not use archived files as active instructions; delete
+  fully migrated or obsolete plans during documentation hygiene.
 - `C:/Users/9860606/.codex/skills/<topic>/` - optional focused trigger skills
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
@@ -137,7 +139,8 @@ A source pack should have at least:
 
 Optional folders:
 
-- `pdf/` for printable/source attachments.
+- `pdf/` only for source attachments whose layout/evidence matters; remove
+  generated PDF copies when equivalent Markdown is the indexed source.
 - `examples/` for toy samples and safe fixtures.
 - `prompts/` for reusable agent prompts.
 - `schemas/` for JSON schemas.
