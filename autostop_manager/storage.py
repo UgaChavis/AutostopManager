@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -130,12 +132,20 @@ class ManagerMemoryStore:
     def path(self) -> Path:
         return self.db_path or get_db_path()
 
-    def connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def initialize(self) -> None:
         with self.connect() as conn:
@@ -314,6 +324,12 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_knowledge_annotations_search
                     ON knowledge_annotations(search_text);
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_sections_fts
+                USING fts5(domain, path, heading, search_text);
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_annotations_fts
+                USING fts5(domain, path, title, search_text);
 
                 CREATE TABLE IF NOT EXISTS manager_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

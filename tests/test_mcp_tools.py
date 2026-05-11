@@ -138,9 +138,33 @@ def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
     assert context["ok"] is True
     assert context["command_route"]["command_id"] == "board_cleanup_autopilot"
 
+    assert "agent_brief" in server.tools
+    brief = server.tools["agent_brief"]("прибейсь", intent="board_cleanup", limit=5)
+    assert brief["ok"] is True
+    assert brief["format"] == "agent_brief_v1"
+    assert brief["route"]["domain"] == "board_cleanup_autopilot"
+    assert "set_card_board_summary" in brief["allowed_actions"]
+
     assert "audit_skill_registry" in server.tools
     skills = server.tools["audit_skill_registry"]()
     assert skills["ok"] is True
+
+    assert "cleanup_audit" in server.tools
+    assert "system_audit" in server.tools
+    assert "crm_health_plan" in server.tools
+    cleanup = server.tools["cleanup_audit"]()
+    assert cleanup["ok"] is True
+    assert cleanup["mode"] == "dry_run"
+    system = server.tools["system_audit"]()
+    assert system["ok"] is True
+    crm_health = server.tools["crm_health_plan"](
+        board_review={
+            "by_column": [{"column_id": "column_2", "label": "Запись на ремонт", "count": 10}],
+            "recent_events": [{"actor_name": "Codex MCP QA", "type": "test"}],
+        }
+    )
+    assert crm_health["mode"] == "read_only"
+    assert crm_health["verification"]["cards_moved"] == 0
 
     assert "start_manager_run" in server.tools
     assert "record_manager_run_event" in server.tools

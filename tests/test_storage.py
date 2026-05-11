@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import sqlite3
+
+import pytest
+
 from autostop_manager.storage import ManagerMemoryStore
+
+
+def test_store_connect_context_closes_connection(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    with store.connect() as conn:
+        conn.execute("SELECT 1").fetchone()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn.execute("SELECT 1")
 
 
 def test_remember_and_recall(tmp_path):

@@ -7,7 +7,8 @@ Git-tracked docs.
 
 ## Source Of Truth
 
-Use the local private files first:
+Use this playbook as the public route and load local private runtime files only
+when they exist:
 
 - `data/private_knowledge/business_identity_current.json` - current curated
   business identity facts selected from the newest reliable documents.
@@ -15,9 +16,12 @@ Use the local private files first:
   inventory of `C:/Users/User/Мой диск/ДОКУМЕНТЫ` with dates, hashes, and topic
   flags.
 
-These files are under `data/`, which is ignored by Git. Do not move them into
-tracked docs and do not paste their private banking/contact contents into
-public playbooks.
+These files are under `data/`, which is ignored by Git. They may be absent in a
+clean checkout, and that must not break `knowledge-audit` or tests. When absent,
+route through this playbook and the `business_identity` annotation, but state
+that exact current реквизиты are unavailable until the local runtime files are
+restored. Do not move them into tracked docs and do not paste their private
+banking/contact contents into public playbooks.
 
 ## Current Selection Rule
 

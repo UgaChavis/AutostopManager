@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-05-06",
-  "tool_count": 28,
+  "last_verified": "2026-05-11",
+  "tool_count": 32,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -26,6 +26,7 @@
   "startup_tools": [
     "today_context",
     "prepare_manager_context",
+    "agent_brief",
     "recall",
     "memory_context_for",
     "recall_lessons",
@@ -49,6 +50,11 @@
     "audit_knowledge_annotations",
     "audit_skill_registry"
   ],
+  "health_tools": [
+    "system_audit",
+    "cleanup_audit",
+    "crm_health_plan"
+  ],
   "memory_quality_tools": [
     "audit_memory",
     "curate_memory"
@@ -71,6 +77,7 @@
     "add_manager_task",
     "today_context",
     "prepare_manager_context",
+    "agent_brief",
     "manager_journal",
     "sync_knowledge_base",
     "probe_knowledge_base",
@@ -78,6 +85,9 @@
     "audit_knowledge_base",
     "audit_knowledge_annotations",
     "audit_skill_registry",
+    "system_audit",
+    "cleanup_audit",
+    "crm_health_plan",
     "audit_memory",
     "curate_memory",
     "start_manager_run",
@@ -101,13 +111,17 @@
     "add_manager_task": "Create a durable task that is not a CRM card or repair order.",
     "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
     "prepare_manager_context": "Combine owner command routes, relevant memory/rules, knowledge routing, missing required context, and next actions for a specific request.",
+    "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, next actions, and verification.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
     "sync_knowledge_base": "Refresh the SQLite index of docs/agent/knowledge_map.json routes, playbooks, source catalogs, and model-specific skills.",
-    "probe_knowledge_base": "Cheaply test whether local knowledge exists for a vehicle, model, system, brand, fluid, diagnostic, parts, CRM, or source-intake task; if has_knowledge=true, open open_first/source_of_truth first.",
+    "probe_knowledge_base": "Cheaply test whether local knowledge exists for a vehicle, model, system, brand, fluid, diagnostic, parts, CRM, or source-intake task; if has_knowledge=true, open open_first/source_of_truth first; for routes with optional_runtime_files, report available/missing runtime files before claiming exact private facts.",
     "search_knowledge_base": "Search indexed knowledge sections after probing; optionally filter by domain such as fluids, automotive_repair, bmw_repair, bmw_f15_n63, toyota_gr_yaris, or vehicle_identity_and_oem.",
-    "audit_knowledge_base": "Check knowledge_map.json, route-card metadata, mapped files, and SQLite index counts after source intake or route edits.",
+    "audit_knowledge_base": "Check knowledge_map.json, route-card metadata, mapped files, SQLite index counts, and FTS health after source intake or route edits.",
     "audit_knowledge_annotations": "Check docs/agent/knowledge_annotations.jsonl compact file-level annotations and their domain coverage.",
     "audit_skill_registry": "Check local Codex skill files linked from knowledge_map.json and report missing or unlinked skills.",
+    "system_audit": "Run the canonical read-only AutoStop Manager health layer: knowledge audit, annotations audit, skills audit, cleanup dry-run summary, local SQLite stats, MCP catalog consistency, and tests_status=external.",
+    "cleanup_audit": "Run the dry-run cleanup audit for caches, duplicate PDFs, unreferenced agent docs, Obsidian mirror duplication, local DB size, and overindexed source packs; never deletes or moves files.",
+    "crm_health_plan": "Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads; never calls live CRM write tools and reports cards_moved=0 and cards_archived=0.",
     "audit_memory": "Check long-term manager memory for duplicate, expired, and superseded note/fact records before cleanup.",
     "curate_memory": "Non-destructively curate manager memory; with apply=true, archive duplicate note/fact copies instead of deleting source records.",
     "start_manager_run": "Start an auditable run for autopilot, procurement, finance, CRM, or knowledge work.",
@@ -138,11 +152,11 @@
         "add concise AI notes",
         "enrich vehicle profiles",
         "source VIN/OEM/parts data",
-        "set tags, indicators, and deadlines",
-        "archive completed cards when safe"
+        "set tags, indicators, deadlines, and board_summary"
       ],
       "forbidden_actions": [
-        "move cards between columns unless the owner gives a separate explicit move command"
+        "move cards between columns unless the owner gives a separate explicit owner command",
+        "archive cards unless the owner gives a separate explicit owner command"
       ],
       "protected_data": [
         "repair-order works",
@@ -162,6 +176,10 @@
     "entrypoint": "docs/agent/knowledge_base_index.md",
     "machine_map": "docs/agent/knowledge_map.json",
     "annotation_index": "docs/agent/knowledge_annotations.jsonl",
+    "obsidian_vault_playbook": "docs/agent/obsidian_knowledge_vault_playbook.md",
+    "crm_manager_data_playbook": "docs/agent/crm_manager_data_playbook.md",
+    "obsidian_cloud_vault": "C:\\Users\\User\\Мой диск\\Obsidian CRM\\AutostopCRM",
+    "obsidian_desktop_mirror": "C:\\Users\\User\\Desktop\\Obsidian CRM\\AutostopCRM",
     "accepted_inputs": [
       "md",
       "txt",
@@ -175,6 +193,8 @@
     ],
     "workflow": [
       "inspect docs/agent/knowledge_base_index.md and docs/agent/knowledge_map.json",
+      "inspect docs/agent/obsidian_knowledge_vault_playbook.md when the owner asks to use Obsidian or when CRM/MCP/connector work needs human-readable operating knowledge",
+      "inspect docs/agent/crm_manager_data_playbook.md before writing client, cashbox, repair-order, or CRM-statistics summaries into Obsidian",
       "use probe_knowledge_base before broad file reads",
       "classify source and license",
       "extract durable conclusions",
@@ -184,6 +204,7 @@
       "run sync_knowledge_base after durable docs/catalog/skill changes",
       "run audit_knowledge_base after route-card or source changes",
       "run audit_knowledge_annotations after annotation changes",
+      "refresh the Obsidian vault import after source docs/agent changes that should appear in the vault",
       "store only reusable memory",
       "journal the change"
     ],
@@ -192,6 +213,9 @@
       "full tables",
       "raw OCR dumps",
       "temporary search results",
+      "raw client databases",
+      "cashbox ledgers",
+      "full repair-order text",
       "licensed content without permission"
     ]
   },

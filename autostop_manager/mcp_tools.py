@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .context import prepare_manager_context
+from .cleanup_audit import build_cleanup_audit
+from .context import build_agent_brief, prepare_manager_context
+from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
     audit_knowledge_annotations,
@@ -16,7 +18,15 @@ from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
+from .system_audit import build_system_audit
 from .vin_lookup import lookup_original_parts
+
+
+def _registered_tool_names(server: Any) -> list[str] | None:
+    tools = getattr(server, "tools", None)
+    if isinstance(tools, dict):
+        return sorted(str(name) for name in tools)
+    return None
 
 
 def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:
@@ -183,6 +193,20 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return prepare_manager_context(memory, query, intent=intent, limit=limit)
 
     @server.tool(
+        name="agent_brief",
+        description=(
+            "Return a compact startup package for an agent before broad document reads: role, route, source boundaries, hot rules, "
+            "read order, allowed/forbidden actions, missing context, next actions, and verification."
+        ),
+    )
+    def agent_brief_tool(
+        query: str,
+        intent: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        return build_agent_brief(memory, query, intent=intent, limit=limit)
+
+    @server.tool(
         name="manager_journal",
         description="Append a short manager journal entry after important decisions, source changes, file intake, or CRM work.",
     )
@@ -253,6 +277,35 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     )
     def audit_skill_registry_tool() -> dict[str, Any]:
         return audit_skill_registry()
+
+    @server.tool(
+        name="cleanup_audit",
+        description="Run the dry-run cleanup audit for cache, duplicate, Obsidian, and knowledge cleanup candidates without deleting files.",
+    )
+    def cleanup_audit_tool() -> dict[str, Any]:
+        return build_cleanup_audit(store=memory)
+
+    @server.tool(
+        name="system_audit",
+        description="Run the canonical read-only AutoStop Manager health audit without running pytest or mutating CRM/files.",
+    )
+    def system_audit_tool() -> dict[str, Any]:
+        return build_system_audit(store=memory, registered_tool_names=_registered_tool_names(server))
+
+    @server.tool(
+        name="crm_health_plan",
+        description="Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads.",
+    )
+    def crm_health_plan_tool(
+        board_context: dict[str, Any] | None = None,
+        board_review: dict[str, Any] | None = None,
+        today_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return build_crm_health_plan(
+            board_context=board_context,
+            board_review=board_review,
+            today_context=today_context,
+        )
 
     @server.tool(
         name="audit_memory",

@@ -10,12 +10,18 @@ Use this loop before broad file reads:
 
 1. Run `probe_knowledge_base` with the owner's natural request.
 2. Open the returned `open_first` file when `has_knowledge=true`.
-3. Use compact annotations from `docs/agent/knowledge_annotations.jsonl` to
+3. If the route reports `optional_runtime_files`, check
+   `optional_missing_files` / `optional_available_files` before claiming exact
+   private facts.
+4. Use compact annotations from `docs/agent/knowledge_annotations.jsonl` to
    confirm file-level fit before broad source-pack reads.
-4. Use `search_knowledge_base --domain <best_domain>` only when the first file
+5. Use `search_knowledge_base --domain <best_domain>` only when the first file
    does not answer the task.
-5. Read raw source packs only after the route card and source-of-truth file.
-6. After adding or changing durable knowledge, run `knowledge-sync`, then
+6. Read raw source packs only after the route card and source-of-truth file.
+7. For human-readable CRM/MCP/connector operating context, inspect the Obsidian
+   vault through `docs/agent/obsidian_knowledge_vault_playbook.md`; prefer the
+   cloud path `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when available.
+8. After adding or changing durable knowledge, run `knowledge-sync`, then
    `knowledge-audit` and `annotations-audit`.
 
 For non-trivial operational tasks, run `prepare_manager_context` first. It
@@ -32,6 +38,7 @@ decide whether the reusable route belongs in the intake flow.
 | --- | --- | --- | --- |
 | Manager behavior | `startup_and_identity` | `docs/agent/autostop_manager_skill.md` | startup routine, answer rules, memory boundaries, MCP catalogs |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_intake_playbook.md` | new files, indexing, shelf placement, route-card cleanup, source licensing |
+| Obsidian working vault | `obsidian_knowledge_vault` | `docs/agent/obsidian_knowledge_vault_playbook.md` | Obsidian vault path, cloud sync, Bases, Codex interaction note, manager data snapshots, and refresh workflow |
 | General repair sources | `automotive_repair` | `docs/agent/automotive_repair_source_playbook.md` | diagnostic source hierarchy, TSB/recall/wiring/torque/labor routes |
 | ECU programming | `ecu_calibration_programming` | `docs/agent/ecu_calibration_programming_playbook.md` | ECU flashing, coding, calibration formats, UDS/J2534, BMW KOMBI/legal limits |
 | BMW general repair | `bmw_repair` | `docs/agent/bmw_repair_playbook.md` | BMW diagnostics, DTC, xDrive, ZF, body electronics, HV, fluids |
@@ -44,7 +51,7 @@ decide whether the reusable route belongs in the intake flow.
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` | PDF/DOCX/XLSX invoices, acts, КП, requisites sheets, accounting-style files, render/audit gates |
 | Gmail operations | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail inbox search, labels, drafts, attachments, thread reads, write safety, email-derived memory |
 | Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` | Krasnoyarsk parts search, ZZap/Drom/Avito, procurement price, offer scoring |
-| Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | workshop triage, staff, finance, customer flow, board cleanup |
+| Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | workshop triage, staff, finance, customer flow, board cleanup, CRM manager data summaries |
 | Deployment | `deployment` | `docs/agent/deployment_runbook.md` | local MCP startup, server publishing, GitHub/private-data boundary |
 
 ## File Types And Placement
@@ -58,6 +65,10 @@ Use these locations consistently:
 - `docs/agent/knowledge_shelves.md` - shelf map and placement rules.
 - `docs/agent/command_routes.json` - natural owner command aliases and
   open-first route overrides.
+- `docs/agent/obsidian_knowledge_vault_playbook.md` - Obsidian cloud/local
+  vault route and agent usage rules.
+- `docs/agent/crm_manager_data_playbook.md` - manager-facing CRM statistics,
+  client-quality, cashbox, and repair-order snapshot rules for Obsidian.
 - `docs/agent/*_playbook.md` - task workflow or domain operating procedure.
 - `docs/agent/*_sources.json` - curated source catalogs and routing metadata.
 - `docs/agent/automotive_sources/*` - automotive source catalogs and ingestion
@@ -68,9 +79,9 @@ Use these locations consistently:
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
   material that should usually stay out of Git.
-- `data/private_knowledge/` - local private knowledge such as current business
-  requisites or document inventories that must be indexed locally but not
-  committed.
+- `data/private_knowledge/` - optional local private knowledge such as current
+  business requisites or document inventories. Index these files when present,
+  but never commit them; a clean checkout may not have them.
 
 Do not move existing source packs just to make the tree prettier. Add route
 metadata and README/MANIFEST coverage first; move files only when a source is
@@ -99,6 +110,9 @@ Every durable domain in `knowledge_map.json` should include:
 - `questions` - natural questions the route should answer.
 - `source_of_truth_files` - the first files to open.
 - `primary_files` - files that should be synced into SQLite search.
+- `optional_runtime_files` - private or runtime files that should be synced
+  when present, reported as `optional_missing_files` when absent, and never
+  treated as fatal `missing_files`.
 - `required_context` - facts the agent should collect before giving a specific
   answer.
 
@@ -162,7 +176,9 @@ When new knowledge arrives:
   snapshots, raw email threads, or temporary marketplace search results in
   manager memory.
 - Do not move private business requisites from `data/private_knowledge/` into
-  Git-tracked docs. Public docs should contain only routes and safety rules.
+  Git-tracked docs. Public docs should contain only routes and safety rules; if
+  optional private files are missing, the route may still answer where to look
+  but not the exact current реквизиты.
 - For licensed/restricted sources, store only source routes and durable
   conclusions that are safe to reuse.
 - For automotive repair, programming, immobilizer, SRS, HV, pinout, torque, or

@@ -41,6 +41,16 @@
       "rule": "Treat docs/agent/knowledge_annotations.jsonl as the compact file-level annotation index. Update it when durable files, source packs, routes, or skills need better fast routing, and run audit_knowledge_annotations after changes."
     },
     {
+      "id": "obsidian-working-vault",
+      "priority": 22,
+      "rule": "Treat the AutoStop Obsidian vault as the human-facing working knowledge layer for CRM/MCP/connector/playbook tasks. Use docs/agent/obsidian_knowledge_vault_playbook.md; prefer C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM when available, and fall back to C:/Users/User/Desktop/Obsidian CRM/AutostopCRM."
+    },
+    {
+      "id": "obsidian-crm-data-boundary",
+      "priority": 22,
+      "rule": "When adding CRM-derived manager information to Obsidian, follow docs/agent/crm_manager_data_playbook.md. Store safe snapshots and quality signals; keep raw client databases, phone lists, VIN/license-plate tables, cashbox ledgers, full repair-order text, and full board dumps in CRM unless the owner explicitly approves that exact cloud export."
+    },
+    {
       "id": "knowledge-route-card-maintenance",
       "priority": 22,
       "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize BMW, Toyota GR Yaris, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
@@ -203,12 +213,12 @@
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants full board-management autonomy to read active CRM context, update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, and archive completed cards when safe, but it does not allow moving cards between columns."
+      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, and board_summary, but it does not allow moving, archiving, deleting, or changing financial/repair-order data without a separate explicit owner command."
     },
     {
       "id": "board-cleanup-no-card-movement",
       "priority": 17,
-      "rule": "During board cleanup, do not move cards between columns. Leave every card in its current column unless the owner gives a separate explicit move command with the target card and target column."
+      "rule": "During board cleanup, do not move or archive cards. Leave every card in its current column and archive state unless the owner gives a separate explicit owner command with the target card and requested action."
     },
     {
       "id": "board-cleanup-data-preservation",
@@ -223,7 +233,7 @@
     {
       "id": "board-cleanup-public-summary",
       "priority": 19,
-      "rule": "During board cleanup, keep the public card description preview useful. The first five visible lines should be an external summary: vehicle, task, status, payment or parts state, and one next step. Preserve useful old description text below the summary instead of deleting it."
+      "rule": "During board cleanup, keep board_summary useful as the 4-5 line board preview: vehicle, task, status, payment or parts state, and one next step. Keep full recoverable details in description and do not use description as the board preview."
     },
     {
       "id": "phone-shared-memory",

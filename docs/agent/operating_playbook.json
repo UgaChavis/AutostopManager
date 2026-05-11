@@ -2,6 +2,8 @@
   "startup_sequence": [
     "Read task-specific context with prepare_manager_context for non-trivial requests; use today_context for broad daily overview, and use memory_context_for when the task depends on owner preferences, writing style, prior lessons, Gmail context, CRM cleanup behavior, or repeated workflow decisions.",
     "If the task involves local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first; open source_of_truth/open_first when has_knowledge=true; use compact annotations before broad source-pack reads; use sync_knowledge_base, audit_knowledge_base, and audit_knowledge_annotations if docs/catalogs/skills/annotations changed.",
+    "Use the AutoStop Obsidian vault as the human-facing working knowledge layer for CRM/MCP/connector/playbook tasks; inspect docs/agent/obsidian_knowledge_vault_playbook.md and prefer C:\\Users\\User\\Мой диск\\Obsidian CRM\\AutostopCRM when available.",
+    "If the owner asks to put CRM data, clients, cashboxes, repair orders, or statistics into Obsidian, inspect docs/agent/crm_manager_data_playbook.md; store safe summaries and quality signals only, while raw client databases, cash journals, full repair orders, and board dumps remain in CRM unless explicitly approved for cloud export.",
     "If the current task involves email, inspect Gmail inbox state and relevant threads.",
     "If the user asks about live CRM state, call AutoStop CRM get_connector_identity, get_runtime_status, bootstrap_context, or get_board_context.",
     "If the owner says 'Приберись', 'прибейсь', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, inspect docs/agent/board_cleanup_autopilot_playbook.md and run the board-cleanup autopilot behavior without moving cards between columns.",
@@ -64,8 +66,14 @@
     "machine_map": "docs/agent/knowledge_map.json",
     "annotation_index": "docs/agent/knowledge_annotations.jsonl",
     "intake_playbook": "docs/agent/knowledge_intake_playbook.md",
+    "obsidian_vault_playbook": "docs/agent/obsidian_knowledge_vault_playbook.md",
+    "crm_manager_data_playbook": "docs/agent/crm_manager_data_playbook.md",
+    "obsidian_cloud_vault": "C:\\Users\\User\\Мой диск\\Obsidian CRM\\AutostopCRM",
+    "obsidian_desktop_mirror": "C:\\Users\\User\\Desktop\\Obsidian CRM\\AutostopCRM",
     "rules": [
       "Use probe_knowledge_base as the cheap first pass for vehicle, brand, system, fluid, diagnostic, parts, CRM, or local-knowledge questions.",
+      "For human-readable CRM/MCP/connector operating context, inspect the Obsidian vault after the route card identifies the relevant domain.",
+      "When docs/agent changes should be visible in Obsidian, refresh the vault import with _system/setup_autostop_obsidian_vault.ps1.",
       "Use compact annotations to identify the narrow file or skill before reading large source packs.",
       "If probe_knowledge_base returns has_knowledge=true, open open_first/source_of_truth before broad file search.",
       "Use search_knowledge_base only after probing, preferably constrained to the returned best_domain.",
@@ -245,12 +253,13 @@
       "Trigger on owner phrases: Приберись, прибейсь, прибери доску, обслужи доску, актуализируй доску, or routine board cleanup.",
       "Use docs/agent/board_cleanup_autopilot_playbook.md as the canonical procedure.",
       "In hourly automation mode, treat cleanup as incremental: prioritize blockers, write only meaningful deltas, avoid duplicate AI notes, and skip writes when CRM/MCP health is uncertain.",
-      "Operate as full autopilot: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, and archive completed cards when safe.",
-      "Do not move cards between columns during board-cleanup autopilot unless the owner gives a separate explicit move command.",
+      "Operate as full autopilot for non-destructive hygiene: enrich VIN/OEM/parts/technical data, update cards, tags, deadlines, indicators, and board_summary.",
+      "Do not move or archive cards during board-cleanup autopilot unless the owner gives a separate explicit owner command.",
       "Preserve user data: never delete works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
+      "Use board_summary as the 4-5 line board preview; keep full recoverable detail in description.",
       "Keep card notes short; use concise AI: notes for questions, next actions, OEM/price/source conclusions, payment blockers, and stale-card questions.",
-      "Ask the owner in chat only for destructive actions beyond archive, unresolved money conflicts, client-sensitive decisions, or safety-critical technical uncertainty.",
-      "End with a brief report: checked, updated, archived, left in current columns by rule, VIN/OEM/parts work, unresolved blockers, and risks."
+      "Ask the owner in chat only for destructive actions, unresolved money conflicts, client-sensitive decisions, or safety-critical technical uncertainty.",
+      "End with a brief report: checked, updated, archived=0 unless explicitly commanded, left in current columns by rule, VIN/OEM/parts work, unresolved blockers, and risks."
     ],
     "email_work": [
       "open docs/agent/gmail_workflow_playbook.md for Gmail tasks",

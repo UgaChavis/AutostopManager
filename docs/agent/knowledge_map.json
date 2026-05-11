@@ -167,6 +167,81 @@
         "CRM snapshots"
       ]
     },
+    "obsidian_knowledge_vault": {
+      "title": "AutoStop Obsidian working knowledge vault",
+      "use_when": [
+        "owner asks to use Obsidian as the manager knowledge base",
+        "CRM/MCP/connector work needs human-readable operating notes",
+        "knowledge base should be available on another PC through cloud sync",
+        "Codex needs to refresh or inspect the Obsidian vault",
+        "owner asks to place safe manager CRM summaries, client-quality signals, or cashbox overviews in Obsidian"
+      ],
+      "aliases": [
+        "Obsidian",
+        "Obsidian CRM",
+        "vault",
+        "AutoStop vault",
+        "cloud vault",
+        "Google Drive vault",
+        "база знаний Obsidian",
+        "обсидиан",
+        "облачная база знаний",
+        "рабочий ПК",
+        "Codex interaction",
+        "клиентская база в Obsidian",
+        "кассы в Obsidian",
+        "статистика CRM"
+      ],
+      "keywords": [
+        "obsidian vault",
+        "Home.md",
+        "Bases",
+        "Properties",
+        "Google Drive",
+        "cloud sync",
+        "Codex interaction",
+        "setup_autostop_obsidian_vault",
+        "30_Knowledge",
+        "80_Codex",
+        "CRM manager workspace",
+        "client quality",
+        "cashbox overview",
+        "repair orders overview"
+      ],
+      "questions": [
+        "где находится база знаний Obsidian",
+        "как Codex должен пользоваться Obsidian",
+        "как обновить импорт docs/agent в Obsidian",
+        "как открыть Obsidian на рабочем ПК",
+        "что можно и нельзя хранить в Obsidian",
+        "как заносить менеджерскую CRM статистику в Obsidian",
+        "можно ли переносить клиентскую базу или кассовый журнал в Obsidian"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/obsidian_knowledge_vault_playbook.md",
+        "docs/agent/crm_manager_data_playbook.md",
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_shelves.md"
+      ],
+      "primary_files": [
+        "docs/agent/obsidian_knowledge_vault_playbook.md",
+        "docs/agent/crm_manager_data_playbook.md",
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_shelves.md"
+      ],
+      "optional_runtime_files": [
+        "C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM/Home.md",
+        "C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM/80_Codex/Codex interaction.md",
+        "C:/Users/User/Desktop/Obsidian CRM/AutostopCRM/Home.md",
+        "C:/Users/User/Desktop/Obsidian CRM/AutostopCRM/80_Codex/Codex interaction.md"
+      ],
+      "required_context": [
+        "whether the cloud vault path exists on the current machine",
+        "whether the task needs live CRM data or only durable guidance",
+        "whether the note may contain sensitive CRM, Gmail, or credential data",
+        "whether the owner explicitly approved any raw client/cashbox export to cloud storage"
+      ]
+    },
     "business_identity": {
       "title": "Private business identity, ИП requisites, and current company-card route",
       "use_when": [
@@ -225,12 +300,12 @@
         "где взять текущие контакты для коммерческого предложения"
       ],
       "source_of_truth_files": [
-        "docs/agent/business_identity_playbook.md",
-        "data/private_knowledge/business_identity_current.json",
-        "data/private_knowledge/business_documents_inventory.json"
+        "docs/agent/business_identity_playbook.md"
       ],
       "primary_files": [
-        "docs/agent/business_identity_playbook.md",
+        "docs/agent/business_identity_playbook.md"
+      ],
+      "optional_runtime_files": [
         "data/private_knowledge/business_identity_current.json",
         "data/private_knowledge/business_documents_inventory.json"
       ],
@@ -1361,7 +1436,8 @@
         "staff load",
         "customer flow",
         "finance control",
-        "procurement pricing"
+        "procurement pricing",
+        "manager-facing CRM statistics or Obsidian snapshots"
       ],
       "aliases": [
         "service management",
@@ -1376,6 +1452,10 @@
         "загрузка мастеров",
         "финансы",
         "клиенты",
+        "клиентская база",
+        "кассы",
+        "кассовый журнал",
+        "заказ-наряды",
         "закупочная цена",
         "цена материалов",
         "наличие Красноярск"
@@ -1385,7 +1465,10 @@
         "staff load",
         "customer flow",
         "cashbox",
+        "cash journal",
         "repair order",
+        "clients overview",
+        "CRM manager data",
         "board cleanup",
         "blocked cards",
         "materials total",
@@ -1396,9 +1479,12 @@
         "что делать с закупкой или блокером",
         "как прибраться на доске",
         "где смотреть финансы и загрузку",
-        "как проверить закупочную стоимость материалов"
+        "как проверить закупочную стоимость материалов",
+        "какие CRM данные безопасно заносить в Obsidian",
+        "как сделать менеджерский обзор клиентов, касс и заказ-нарядов"
       ],
       "source_of_truth_files": [
+        "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
@@ -1406,6 +1492,7 @@
         "docs/agent/board_cleanup_autopilot_playbook.md"
       ],
       "primary_files": [
+        "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
@@ -1457,6 +1544,7 @@
     }
   },
   "search_patterns": {
+    "obsidian_knowledge_vault": "rg -n \"Obsidian|vault|Google Drive|Codex interaction|setup_autostop_obsidian_vault|Bases|client|cashbox|repair order|CRM manager\" docs/agent/obsidian_knowledge_vault_playbook.md docs/agent/crm_manager_data_playbook.md docs/agent/knowledge_base_index.md docs/agent/knowledge_shelves.md",
     "ecu_calibration_programming": "rg -n \"ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив\" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack",
     "bmw_repair": "rg -n \"BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
     "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",

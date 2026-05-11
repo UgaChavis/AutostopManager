@@ -5,71 +5,86 @@ and as the working layer for Gmail inbox triage.
 
 ## Startup Routine
 
-1. Read task-specific context with `prepare_manager_context` for non-trivial
-   requests; it combines command routes, relevant memory/rules, knowledge
-   routing, missing required context, and next actions. Use `today_context`
-   when a broad daily overview is needed. Use `memory_context_for` for
-   context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated
-   workflow tasks, and `recall_lessons` when prior feedback matters.
-2. If the user asks to search, expand, structure, or use the local knowledge
+1. Start with `agent_brief` for non-trivial manager tasks. It is the compact
+   startup package: route, source boundaries, memory_sources, hot rules, read
+   order, allowed/forbidden actions, missing context, next actions, and
+   verification.
+2. Read task-specific context with `prepare_manager_context` when more local
+   memory or route detail is needed. Use `today_context` when a broad daily
+   overview is needed. Use `memory_context_for` for context-sensitive CRM,
+   Gmail, writing-style, owner-preference, or repeated workflow tasks, and
+   `recall_lessons` when prior feedback matters.
+3. If the user asks to search, expand, structure, or use the local knowledge
    base, use `probe_knowledge_base` first. If `has_knowledge=true`, open
    `open_first` / `source_of_truth`, then use `search_knowledge_base` inside
    the returned domain only when more detail is needed. If the index may be
    stale after file changes, run `sync_knowledge_base`, then probe again.
-3. If the user asks about CRM state, use the existing AutoStop CRM MCP connector.
-4. If the user asks about email or inbox state, use the connected Gmail MCP
+4. Treat the AutoStop Obsidian vault as the human-facing working knowledge
+   layer for CRM management. For non-trivial CRM, MCP, connector, playbook, or
+   source-routing tasks, use `docs/agent/obsidian_knowledge_vault_playbook.md`
+   and inspect the vault when it can add useful human-readable context. Prefer
+   `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when available; fall back
+   to `C:\Users\User\Desktop\Obsidian CRM\AutostopCRM`.
+5. If the user asks to put CRM data, clients, cashboxes, repair orders, or
+   statistics into Obsidian, open `docs/agent/crm_manager_data_playbook.md`
+   first. Store safe summaries and quality signals in Obsidian; keep raw
+   client databases, cash journals, full repair-order text, and board dumps in
+   live CRM unless the owner explicitly approves that exact export.
+6. If the user asks about CRM state, use the existing AutoStop CRM MCP connector.
+7. If the user asks about email or inbox state, use the connected Gmail MCP
    tools first.
-5. If CRM tool availability looks stale, check `get_connector_identity` or
+8. If CRM tool availability looks stale, check `get_connector_identity` or
    `get_runtime_status` before assuming the connector is broken.
-6. Start CRM reads with `bootstrap_context`, `get_board_context`, or `review_board`.
-7. Use focused CRM reads before heavy exports.
-8. If the owner says `Приберись`, `прибери доску`, `обслужи доску`,
+9. Start CRM reads with `bootstrap_context`, `get_board_context`, or `review_board`.
+10. Use focused CRM reads before heavy exports.
+11. If the owner says `Приберись`, `прибери доску`, `обслужи доску`,
    `актуализируй доску`, or asks for a routine board cleanup, follow
    `docs/agent/board_cleanup_autopilot_playbook.md`. Treat this as owner
-   permission for full board-management autopilot with data-preservation rules.
-9. If the task involves vehicle identification or VIN/chassis decoding, follow
+   permission for non-destructive board hygiene; do not move or archive cards
+   without a separate explicit owner command.
+12. If the task involves vehicle identification or VIN/chassis decoding, follow
    `docs/agent/vehicle_identity_playbook.md` first, then
    `docs/agent/vin_oem_lookup_playbook.md` for OEM routing.
-10. If the task involves oils, operating fluids, fill capacities, maintenance
+13. If the task involves oils, operating fluids, fill capacities, maintenance
    service quantities, or ТО fluid planning, follow
    `docs/agent/fluid_maintenance_playbook.md` and use
    `recommend_fluid_maintenance_sources` before giving any capacity/spec.
-11. If the task involves gearbox or transmission diagnosis, clutch
+14. If the task involves gearbox or transmission diagnosis, clutch
    adaptation, or transmission-fluid service, follow
    `docs/agent/transmission_playbook.md` first.
-12. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
+15. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
    GR-FOUR, GRMN Yaris, 6MT EA67F, or 8AT UC80F, follow
    `docs/agent/toyota_gr_yaris_playbook.md` before answering.
-13. If the task involves general BMW repair, diagnostics, BMW fault memory,
+16. If the task involves general BMW repair, diagnostics, BMW fault memory,
     xDrive, ZF transmission, BMW body electronics, BMW HV, or BMW fluids and no
     more specific model skill already matches, search domain `bmw_repair` and
     use `docs/agent/bmw_repair_playbook.md`.
-14. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
+17. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
    wiring, fluids, torque specs, labor time, ADAS, SRS, HV, or programming,
    follow `docs/agent/automotive_repair_source_playbook.md` and use
    `docs/agent/automotive_sources/` for source routing before giving a
    technical fact.
-15. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
+18. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
     F15 electrical/electronics, injectors, drivetrain malfunction, misfires,
     oil consumption, or cooling, use `docs/agent/bmw_repair_playbook.md` and
     the indexed BMW repair source cache before answering.
-16. If the owner provides new files or asks to expand the knowledge base,
+19. If the owner provides new files or asks to expand the knowledge base,
     follow `docs/agent/knowledge_intake_playbook.md`, classify the source, and
     store only durable conclusions in memory.
-17. If the task involves workshop management in Krasnoyarsk, parts procurement
+20. If the task involves workshop management in Krasnoyarsk, parts procurement
     blockers, staff load, customer flow, finance control, or daily CRM control,
     follow `docs/agent/krasnoyarsk_service_management_playbook.md` and use
     `recommend_service_management_actions`.
-18. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
+21. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
     improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
     price comparison and replacement checks.
-19. Write only durable non-CRM context into AutostopManager memory.
-20. Use memory as context for judgment, not as a rigid template; preserve the
+22. Write only durable non-CRM context into AutostopManager memory.
+23. Use memory as context for judgment, not as a rigid template; preserve the
     owner's preference for intelligent, human-sounding card notes.
-21. After strong praise, criticism, a clear success, a clear failure, or an
+24. After strong praise, criticism, a clear success, a clear failure, or an
     owner request to do something differently, use `learn_from_feedback` to
     store a short reusable lesson instead of copying the full event.
-22. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
+25. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
     work, create a manager run ledger entry, record planned actions/skips/risks
     and writes, then finish it with verification evidence.
 
@@ -91,6 +106,17 @@ changes behavior.
 Default answer style: Russian, short, operational, and direct.
 
 ## Memory Boundary
+
+Memory has two operational layers:
+
+- local SQLite: knowledge index, local manager rules, and local CLI facts,
+  notes, lessons, tasks, reminders, and journal rows;
+- live CRM/MCP context: operational tasks, recent work journal, board state,
+  connector status, cards, repair orders, clients, files, and cashboxes.
+
+An empty local `memory-map` means only that the local SQLite memory sections
+are empty. It does not mean the live MCP operational memory or CRM board
+context is empty.
 
 Store in AutostopManager:
 
@@ -202,12 +228,12 @@ When the owner says `Приберись`, `прибейсь`, or asks to clean u
 - use `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
   procedure
 - act as full board-management autopilot: update, tag, set indicators, set
-  deadlines, enrich VIN/OEM/parts/service data, and archive completed cards
-  when safe
-- do not move cards between columns during this command unless the owner gives
-  a separate explicit move command with the target card and target column
-- update the public card description so the first five visible lines form a
-  clean external summary: vehicle, task, status, payment/parts, next step
+  deadlines, enrich VIN/OEM/parts/service data, and refresh `board_summary`
+- do not move or archive cards during this command unless the owner gives a
+  separate explicit owner command with the target card and target action
+- use `board_summary` as the clean 4-5 line board preview: vehicle, task,
+  status, payment/parts, next step; keep full recoverable detail in
+  `description`
 - preserve user-entered data: do not delete works, materials, prices, payments,
   contacts, files, manual diagnostics, or historical notes
 - keep all card notes very short; prefer one `AI:` line over long explanations
