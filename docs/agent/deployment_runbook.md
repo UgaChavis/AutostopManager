@@ -51,7 +51,9 @@ and deploy:
    any new commands or route cards.
 2. Run `python -m autostop_manager.cli knowledge-sync`.
 3. Run `python -m autostop_manager.cli knowledge-audit` and confirm
-   `missing_files=[]` and `warnings=[]`.
+   `missing_files=[]` and `warnings=[]`. `optional_missing_files` may list
+   `data/private_knowledge/*` in a clean checkout; restore those local runtime
+   files only when a business-identity task needs exact current private facts.
 4. Run `python -m pytest -q`.
 5. Check `git status --short --ignored` and confirm `data/`, caches, SQLite
    files, runtime snapshots, credentials, and CRM evidence are not staged.
@@ -102,6 +104,6 @@ After deployment, verify:
 - `today_context` works
 - `probe_knowledge_base` works for a known new route such as DSG, ECU/KOMBI, or
   Krasnoyarsk parts sourcing
-- `audit_knowledge_base` returns no missing files or warnings
+- `audit_knowledge_base` returns no required missing files or warnings
 - `recommend_service_management_actions` works
 - logs do not contain secrets or CRM dumps

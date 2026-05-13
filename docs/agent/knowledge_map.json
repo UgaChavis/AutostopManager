@@ -56,8 +56,7 @@
         "docs/agent/manager_rules.json",
         "docs/agent/operating_playbook.json",
         "docs/agent/command_routes.json",
-        "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/crm_mcp_catalog.json"
+        "docs/agent/manager_mcp_catalog.json"
       ],
       "primary_files": [
         "docs/agent/autostop_manager_skill.md",
@@ -65,7 +64,6 @@
         "docs/agent/operating_playbook.json",
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/crm_mcp_catalog.json",
         "docs/agent/manager_identity.json",
         "docs/agent/memory_policy.json"
       ]
@@ -160,15 +158,90 @@
         "docs/agent/knowledge_map.json",
         "docs/agent/knowledge_annotations.jsonl"
       ],
-      "reference_files": [
-        "docs/agent/automotive_sources/ingestion_tasks.jsonl"
-      ],
       "do_not_store": [
         "raw manuals",
         "full spreadsheets",
         "copied licensed database records",
         "temporary search results",
         "CRM snapshots"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/ingestion_tasks.jsonl"
+      ]
+    },
+    "obsidian_knowledge_vault": {
+      "title": "AutoStop Obsidian working knowledge vault",
+      "use_when": [
+        "owner asks to use Obsidian as the manager knowledge base",
+        "CRM/MCP/connector work needs human-readable operating notes",
+        "knowledge base should be available on another PC through cloud sync",
+        "Codex needs to refresh or inspect the Obsidian vault",
+        "owner asks to place safe manager CRM summaries, client-quality signals, or cashbox overviews in Obsidian"
+      ],
+      "aliases": [
+        "Obsidian",
+        "Obsidian CRM",
+        "vault",
+        "AutoStop vault",
+        "cloud vault",
+        "Google Drive vault",
+        "база знаний Obsidian",
+        "обсидиан",
+        "облачная база знаний",
+        "рабочий ПК",
+        "Codex interaction",
+        "клиентская база в Obsidian",
+        "кассы в Obsidian",
+        "статистика CRM"
+      ],
+      "keywords": [
+        "obsidian vault",
+        "Home.md",
+        "Bases",
+        "Properties",
+        "Google Drive",
+        "cloud sync",
+        "Codex interaction",
+        "setup_autostop_obsidian_vault",
+        "30_Knowledge",
+        "80_Codex",
+        "CRM manager workspace",
+        "client quality",
+        "cashbox overview",
+        "repair orders overview"
+      ],
+      "questions": [
+        "где находится база знаний Obsidian",
+        "как Codex должен пользоваться Obsidian",
+        "как обновить импорт docs/agent в Obsidian",
+        "как открыть Obsidian на рабочем ПК",
+        "что можно и нельзя хранить в Obsidian",
+        "как заносить менеджерскую CRM статистику в Obsidian",
+        "можно ли переносить клиентскую базу или кассовый журнал в Obsidian"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/obsidian_knowledge_vault_playbook.md",
+        "docs/agent/crm_manager_data_playbook.md",
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_shelves.md"
+      ],
+      "primary_files": [
+        "docs/agent/obsidian_knowledge_vault_playbook.md",
+        "docs/agent/crm_manager_data_playbook.md",
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_shelves.md"
+      ],
+      "optional_runtime_files": [
+        "C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM/Home.md",
+        "C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM/80_Codex/Codex interaction.md",
+        "C:/Users/User/Desktop/Obsidian CRM/AutostopCRM/Home.md",
+        "C:/Users/User/Desktop/Obsidian CRM/AutostopCRM/80_Codex/Codex interaction.md"
+      ],
+      "required_context": [
+        "whether the cloud vault path exists on the current machine",
+        "whether the task needs live CRM data or only durable guidance",
+        "whether the note may contain sensitive CRM, Gmail, or credential data",
+        "whether the owner explicitly approved any raw client/cashbox export to cloud storage"
       ]
     },
     "business_identity": {
@@ -234,7 +307,7 @@
       "primary_files": [
         "docs/agent/business_identity_playbook.md"
       ],
-      "optional_files": [
+      "optional_runtime_files": [
         "data/private_knowledge/business_identity_current.json",
         "data/private_knowledge/business_documents_inventory.json"
       ],
@@ -273,7 +346,7 @@
         "форма PDF"
       ],
       "keywords": [
-        "business_document_quality_playbook",
+        "autostop-business-documents",
         "audit_business_document",
         "render_docx",
         "render_pdf",
@@ -294,7 +367,7 @@
         "как сделать качественный счет",
         "как проверить акт или КП перед отправкой",
         "как оформить PDF Word Excel документ без кривой верстки",
-        "какой маршрут использовать для бухгалтерского документа",
+        "какой скилл использовать для бухгалтерского документа",
         "как проверить суммы и НДС в документе",
         "как подготовить документ для загрузки в CRM Files"
       ],
@@ -455,9 +528,6 @@
         "docs/agent/bmw_repair_playbook.md",
         "docs/agent/toyota_gr_yaris_playbook.md"
       ],
-      "reference_files": [
-        "docs/agent/automotive_sources/data_type_source_map.json"
-      ],
       "required_context": [
         "VIN or chassis",
         "market",
@@ -467,6 +537,9 @@
         "mileage",
         "complaint",
         "scan results"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/data_type_source_map.json"
       ]
     },
     "ecu_calibration_programming": {
@@ -614,13 +687,6 @@
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl"
       ],
-      "reference_files": [
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/learning_flashcards.jsonl",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/examples/README_examples.md"
-      ],
       "required_context": [
         "VIN or chassis",
         "market",
@@ -634,6 +700,13 @@
         "prior programming/coding history",
         "tool and VCI",
         "battery/power-supply state"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/learning_flashcards.jsonl",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/examples/README_examples.md"
       ]
     },
     "bmw_repair": {
@@ -709,12 +782,6 @@
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_symptom_diagnostic_index.jsonl",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_transmission_families.jsonl"
       ],
-      "reference_files": [
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_glossary_abbreviations.jsonl",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/generic_obd2_dtc_high_value.jsonl",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/public_sources_bmw_zf_nhtsa.jsonl"
-      ],
       "required_context": [
         "VIN or chassis",
         "market",
@@ -724,6 +791,12 @@
         "mileage",
         "complaint",
         "BMW fault memory with module names"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_glossary_abbreviations.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/generic_obd2_dtc_high_value.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/public_sources_bmw_zf_nhtsa.jsonl"
       ]
     },
     "toyota_gr_yaris": {
@@ -1298,8 +1371,6 @@
       "title": "Board cleanup autopilot: Приберись",
       "use_when": [
         "owner says Приберись",
-        "owner says прибейсь",
-        "owner says переберись",
         "owner says прибери доску",
         "owner says обслужи доску",
         "owner says актуализируй доску",
@@ -1308,8 +1379,6 @@
       ],
       "aliases": [
         "Приберись",
-        "прибейсь",
-        "переберись",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
@@ -1327,12 +1396,6 @@
         "archive",
         "preserve data",
         "AI note",
-        "rich text",
-        "emoji",
-        "описание",
-        "жирный",
-        "курсив",
-        "подчеркнутый",
         "deadline",
         "indicator",
         "tag",
@@ -1343,8 +1406,6 @@
       ],
       "questions": [
         "что делать когда владелец сказал Приберись",
-        "что делать когда владелец сказал переберись",
-        "как форматировать описание карточки при уборке доски",
         "как агент должен убирать CRM доску",
         "какие CRM правки разрешены автопилоту",
         "как запускать уборку доски каждый час",
@@ -1373,7 +1434,8 @@
         "staff load",
         "customer flow",
         "finance control",
-        "procurement pricing"
+        "procurement pricing",
+        "manager-facing CRM statistics or Obsidian snapshots"
       ],
       "aliases": [
         "service management",
@@ -1388,6 +1450,10 @@
         "загрузка мастеров",
         "финансы",
         "клиенты",
+        "клиентская база",
+        "кассы",
+        "кассовый журнал",
+        "заказ-наряды",
         "закупочная цена",
         "цена материалов",
         "наличие Красноярск"
@@ -1397,7 +1463,10 @@
         "staff load",
         "customer flow",
         "cashbox",
+        "cash journal",
         "repair order",
+        "clients overview",
+        "CRM manager data",
         "board cleanup",
         "blocked cards",
         "materials total",
@@ -1408,9 +1477,12 @@
         "что делать с закупкой или блокером",
         "как прибраться на доске",
         "где смотреть финансы и загрузку",
-        "как проверить закупочную стоимость материалов"
+        "как проверить закупочную стоимость материалов",
+        "какие CRM данные безопасно заносить в Obsidian",
+        "как сделать менеджерский обзор клиентов, касс и заказ-нарядов"
       ],
       "source_of_truth_files": [
+        "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
@@ -1418,6 +1490,7 @@
         "docs/agent/board_cleanup_autopilot_playbook.md"
       ],
       "primary_files": [
+        "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
@@ -1469,6 +1542,7 @@
     }
   },
   "search_patterns": {
+    "obsidian_knowledge_vault": "rg -n \"Obsidian|vault|Google Drive|Codex interaction|setup_autostop_obsidian_vault|Bases|client|cashbox|repair order|CRM manager\" docs/agent/obsidian_knowledge_vault_playbook.md docs/agent/crm_manager_data_playbook.md docs/agent/knowledge_base_index.md docs/agent/knowledge_shelves.md",
     "ecu_calibration_programming": "rg -n \"ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив\" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack",
     "bmw_repair": "rg -n \"BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
     "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
@@ -1476,8 +1550,9 @@
     "vin_oem": "rg -n \"VIN|OEM|frame|chassis|кузов|каталог\" docs/agent",
     "fluids": "rg -n \"fluid|oil|capacity|масло|жидк|заправ\" docs/agent",
     "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",
-    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent",
+    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent C:/Users/User/.codex/skills/autostop-business-documents",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent"
-  }
+  },
+  "search_commands": {}
 }

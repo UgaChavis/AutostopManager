@@ -4,13 +4,27 @@ Purpose: one entry point for AutostopManager knowledge. Start here when the owne
 
 ## Fast Route
 
-1. Run `probe_knowledge_base` or `python -m autostop_manager.cli knowledge-probe "<query>"`.
+1. Run `agent_brief` for a new agent task, then `probe_knowledge_base` or
+   `python -m autostop_manager.cli knowledge-probe "<query>"`.
 2. If `has_knowledge=true`, open `open_first` / `source_of_truth` before broad file reads. Use returned `reference_files` only when the task specifically asks for a linked pack artifact, schema, manifest, source catalog, or implementation draft.
 3. If more detail is needed, run `search_knowledge_base` inside the returned `best_domain`.
 4. If `has_knowledge=false`, route to external/OEM sources and consider knowledge intake after the answer.
 5. If the task is technical automotive work, collect VIN/chassis, market, engine, transmission, mileage, complaint, and scan results before giving facts.
 6. If adding new knowledge, follow `knowledge_intake_playbook.md`, update this index plus `knowledge_map.json`, then run `sync_knowledge_base`.
 7. Keep raw evidence out of memory and Git unless explicitly safe. Store durable rules, source routes, and short verified conclusions.
+8. For human-readable CRM/MCP/connector work, use the Obsidian route in
+   `obsidian_knowledge_vault_playbook.md`; prefer the cloud vault at
+   `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when it exists.
+9. For client/cashbox/repair-order manager summaries, use
+   `crm_manager_data_playbook.md`: Obsidian stores safe snapshots and quality
+   signals, while raw client data, cash journals, and repair orders stay in CRM.
+10. For system health, run `system-audit` or `doctor`; it aggregates local
+    audits and reports `tests_status: external` without running pytest.
+11. For cleanup candidates, run `cleanup-audit`; it is dry-run only and never
+    deletes files, edits Obsidian, or writes to CRM.
+12. For CRM board health planning, use `crm-health-plan` with saved
+    `board_review`, `board_context`, and `today_context` JSON payloads; it is
+    read-only and reports zero card moves/archives.
 
 ## Indexed Navigation
 
@@ -24,6 +38,7 @@ python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW �
 python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
 python -m autostop_manager.cli knowledge-probe "сделать счет или КП в PDF Word Excel и проверить оформление"
 python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения черновики"
+python -m autostop_manager.cli knowledge-probe "Obsidian база знаний vault cloud MCP connector"
 python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
 python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 python -m autostop_manager.cli knowledge-search "счет акт КП НДС реквизиты render audit" --domain business_documents
@@ -32,21 +47,40 @@ python -m autostop_manager.cli knowledge-search "engine oil capacity" --domain f
 python -m autostop_manager.cli knowledge-search "BMW xDrive shudder transfer case" --domain bmw_repair
 python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"
 python -m autostop_manager.cli knowledge-search "GR Yaris G16E"
+python -m autostop_manager.cli system-audit
+python -m autostop_manager.cli doctor
 python -m autostop_manager.cli knowledge-audit
+python -m autostop_manager.cli cleanup-audit
+python -m autostop_manager.cli crm-health-plan --board-review-json board_review.json --today-json today_context.json
 ```
 
 Use these MCP tools when working through the manager:
 
+- `agent_brief` - mandatory compact startup package before broad document
+  reads or CRM work: route, memory_sources, hot rules, allowed/forbidden
+  actions, read order, and verification.
 - `prepare_manager_context` - combine command routes, relevant memory/rules,
   knowledge routing, missing required context, and next actions.
 - `sync_knowledge_base` - refresh the SQLite index after docs/catalog/skill changes.
-- `probe_knowledge_base` - cheaply decide whether local knowledge exists and which source-of-truth file to open first.
+- `probe_knowledge_base` - cheaply decide whether local knowledge exists and
+  which source-of-truth file to open first; for routes with
+  `optional_runtime_files`, it also reports available/missing runtime files and
+  whether exact private facts are locally available.
 - `search_knowledge_base` - find the right route before reading full files.
-- `audit_knowledge_base` - verify route cards, mapped files, and index counts after source intake.
+- `audit_knowledge_base` - verify route cards, mapped files, index counts, and
+  FTS health after source intake.
 - `audit_knowledge_annotations` - verify compact sidecar annotations used for
   fast file-level routing before broad section reads.
 - `audit_skill_registry` - verify linked local Codex skills exist and are
   mapped to knowledge domains.
+- `system_audit` - canonical read-only health layer: knowledge audit,
+  annotations audit, skills audit, cleanup dry-run summary, local SQLite stats,
+  manager MCP catalog consistency, and external test status.
+- `cleanup_audit` - dry-run cleanup candidate report; it recommends actions
+  but never deletes, moves, archives, or edits files/Obsidian/CRM.
+- `crm_health_plan` - read-only CRM health plan from already fetched
+  `board_context`, `board_review`, and `today_context` payloads; it never calls
+  live write tools and reports `cards_moved=0` and `cards_archived=0`.
 
 ## Route Cards
 
@@ -61,7 +95,8 @@ compact route card:
 - `reference_files` - active link-only files that are audited but not fully
   indexed because they are large, duplicated, or mainly bibliography/source-pack
   material.
-- `optional_files` - local runtime/private files indexed only when present.
+- `optional_runtime_files` - local/private ignored files that should be indexed
+  when present, but may be absent in a clean checkout.
 
 The agent should use route cards as the cheap first pass. Full document search
 is the second pass. `reference_files` should remain visible in probe output but
@@ -73,6 +108,11 @@ should not produce full section matches in normal search.
 - `manager_rules.json` - durable operating rules with priorities.
 - `operating_playbook.json` - machine-readable startup and routing map.
 - `knowledge_shelves.md` - shelf map, file placement rules, route-card contract, and maintenance checklist.
+- `obsidian_knowledge_vault_playbook.md` - Obsidian vault path, cloud sync,
+  refresh workflow, and safety boundary for manager-agent knowledge work.
+- `crm_manager_data_playbook.md` - safety boundary and refresh workflow for
+  manager-facing CRM statistics, client-quality signals, cashbox overviews, and
+  repair-order summaries in Obsidian.
 - `manager_mcp_catalog.json` - local AutostopManager MCP tool surface.
 - `crm_mcp_catalog.json` - AutoStop CRM connector tool surface.
 - `gmail_workflow_playbook.md` - Gmail workflow, read/write safety, query
@@ -114,9 +154,9 @@ Use intake when the owner says: "обнови базу знаний", "сохр�
 - `dsg_transmission_playbook.md` - Volkswagen Group DSG / Audi S tronic route for DQ/DL families, mechatronic modules, ODIS/SVM software updates, basic settings, adaptation, and used-unit sourcing risks.
 - `automotive_sources/dsg_transmission_sources.json` - official/public DSG/S tronic source registry: erWin/SVM, VW/Audi NHTSA TSBs, and VW technology references.
 - `ecu_calibration_programming_playbook.md` - ECU programming, calibration, coding, adaptation, UDS/OBD, file formats, BMW programming workflow, KOMBI/instrument-cluster, and "стрелковка" route.
-- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - owner-provided ECU calibration/programming reference pack with Markdown/data/source indexes and synthetic examples.
+- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - owner-provided ECU calibration/programming reference pack with Markdown/PDF/data/source indexes and synthetic examples.
 - `bmw_repair_playbook.md` - general BMW diagnostics, DTC, chassis, body electronics, xDrive, ZF transmission, HV, and fluids route.
-- `automotive_sources/source_cache/bmw_repair_knowledge_pack/` - owner-provided BMW repair reference pack with Markdown/JSONL indexes.
+- `automotive_sources/source_cache/bmw_repair_knowledge_pack/` - owner-provided BMW repair reference pack with Markdown/PDF/data indexes.
 - `toyota_gr_yaris_playbook.md` - Toyota GR Yaris / GXPA16 / G16E-GTS model-specific repair, fluids, recalls, TSB, and OEM parts routing.
 
 DSG / S tronic route:
@@ -173,12 +213,13 @@ For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the
 playbook first, then verify VIN/frame-specific repair, TSB, wiring, torque,
 fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
-Fluid maintenance has a dedicated playbook:
+Fluid maintenance has a dedicated Codex skill:
 
+- `C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md`
 - `docs/agent/fluid_maintenance_playbook.md`
 - `docs/agent/automotive_sources/fluid_maintenance_sources.json`
 
-For oil, fluid, approval, and fill-capacity requests, load the playbook first,
+For oil, fluid, approval, and fill-capacity requests, load the skill first,
 then verify exact vehicle/unit data through OEM or licensed service sources.
 
 ## Vehicle Identity and OEM Parts
@@ -195,6 +236,7 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 
 AI parts Красноярск project pack:
 
+- `C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md`
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/`
@@ -215,24 +257,27 @@ without API/cabinet/phone/message confirmation.
 - `business_identity_playbook.md` - private local route for current ИП
   requisites, company-card data, AutoStop commercial-offer identity, and
   document freshness decisions.
-- `data/private_knowledge/business_identity_current.json` - private current
+- `data/private_knowledge/business_identity_current.json` - optional private current
   facts selected from the newest reliable documents. This file is local runtime
   knowledge and must not be committed.
-- `data/private_knowledge/business_documents_inventory.json` - private
-  filesystem inventory of the owner's synced document folder, with dates,
-  hashes, and topic flags. This optional runtime file may be absent in a clean
-  Git checkout.
+- `data/private_knowledge/business_documents_inventory.json` - optional private
+  filesystem inventory of `C:/Users/User/Мой диск/ДОКУМЕНТЫ`, with dates,
+  hashes, and topic flags.
 
 For ИП / реквизиты / карточка предприятия / ИП Гришкявичус or Гришкевичус
-requests, search `business_identity` first and use the private current JSON.
-Before external use, verify exact banking/legal wording against the original
-source document if formatting matters.
+requests, search `business_identity` first. If the optional private JSON files
+are absent, use the playbook/annotation only for routing and say that exact
+current реквизиты are unavailable until local runtime files are restored. Before
+external use, verify exact banking/legal wording against the original source
+document if formatting matters.
 
 ## Business Documents
 
 - `business_document_quality_playbook.md` - AutoStop route for PDF/DOCX/XLSX
   invoices, acts, КП, receipts, requisites sheets, accounting-style documents,
   and printable forms.
+- `C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md` - local
+  Codex skill with the mandatory document-quality gate.
 
 For счет / акт / КП / бухгалтерский документ / PDF / Word / Excel requests,
 search `business_documents` first. Use `business_identity` only for current
@@ -257,10 +302,12 @@ approval for the exact action.
 ## Service Management
 
 - `krasnoyarsk_service_management_playbook.md` - daily workshop control, procurement, repair triage, customer flow, staff, finance, and source intake.
+- `crm_manager_data_playbook.md` - what operational CRM data can be summarized
+  in Obsidian and what must remain live-only in CRM.
 - `service_management_sources.json` - source routing for Krasnoyarsk procurement, personnel, management, and local market context.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
-- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись`, `прибейсь`, `переберись`, and routine board cleanup autonomy.
+- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and routine board cleanup autonomy.
 
 ## Deployment and Operations
 
@@ -281,7 +328,8 @@ rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent/toyota_gr_y
 rg -n "VIN|OEM|frame|chassis|кузов|каталог" docs/agent
 rg -n "DSG|S tronic|DQ200|DQ250|DQ381|DQ500|DL501|DL382|0AM|0CW|02E|0B5|мехатрон|J217|J743|ODIS|SVM|basic settings|адаптац" docs/agent/dsg_transmission_playbook.md docs/agent/automotive_sources/dsg_transmission_sources.json docs/agent/transmission_playbook.md
 rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|source_registry|parts search gateway" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack
-rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|карточка предприятия|ОГРНИП|ИНН|ОКВЭД" docs/agent/business_identity_playbook.md data/private_knowledge
+rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|карточка предприятия|ОГРНИП|ИНН|ОКВЭД" docs/agent/business_identity_playbook.md
+# If data/private_knowledge exists locally, search it too; it is optional and ignored by Git.
 rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment" docs/agent
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
 rg -n "Приберись|прибейсь|переберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent

@@ -27,23 +27,33 @@ up to date.
 - local access: `python -m autostop_manager.cli ...`
 - MCP access: `python -m autostop_manager.mcp_server`
 - docs for agents: `docs/agent/`
-- archived implementation notes: `docs/archive/` (temporary parking only;
-  active instructions live in `docs/agent/`, and fully migrated old plans should
-  be deleted)
 - knowledge-base entrypoint: `docs/agent/knowledge_base_index.md`
 - knowledge-base machine map: `docs/agent/knowledge_map.json`
 - knowledge-base shelf map: `docs/agent/knowledge_shelves.md`
 - knowledge-base annotation index: `docs/agent/knowledge_annotations.jsonl`
+- Obsidian working vault route:
+  `docs/agent/obsidian_knowledge_vault_playbook.md`; prefer the cloud vault
+  at `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when available, with
+  the desktop mirror at `C:\Users\User\Desktop\Obsidian CRM\AutostopCRM`
+- CRM manager data route: `docs/agent/crm_manager_data_playbook.md`; Obsidian
+  may hold safe snapshots and quality signals, while raw client databases,
+  cashbox ledgers, repair orders, and full board dumps stay in AutoStop CRM
 - private business identity route: `docs/agent/business_identity_playbook.md`
   with local private facts under `data/private_knowledge/`
 - knowledge-base SQLite sync: `python -m autostop_manager.cli knowledge-sync`
 - knowledge-base probe: `python -m autostop_manager.cli knowledge-probe "BMW X5 F15 N63 электрика"`
 - knowledge-base search: `python -m autostop_manager.cli knowledge-search "BMW F15 N63 BDC"`
+- canonical read-only health audit: `python -m autostop_manager.cli system-audit`
+- doctor alias: `python -m autostop_manager.cli doctor`
 - knowledge-base audit: `python -m autostop_manager.cli knowledge-audit`
+- cleanup dry-run audit: `python -m autostop_manager.cli cleanup-audit`
+- read-only CRM health plan from saved payloads:
+  `python -m autostop_manager.cli crm-health-plan --board-review-json board_review.json --today-json today_context.json`
 - knowledge annotation audit: `python -m autostop_manager.cli annotations-audit`
 - memory quality audit: `python -m autostop_manager.cli memory-audit`
 - memory curation: `python -m autostop_manager.cli memory-curate --apply`
 - task-specific context: `python -m autostop_manager.cli prepare-context "переберись" --intent board_cleanup`
+- compact agent startup package: `python -m autostop_manager.cli agent-brief "прибейсь" --intent board_cleanup`
 - skill registry audit: `python -m autostop_manager.cli skills-audit`
 - operation ledger: `python -m autostop_manager.cli run-start "Приберись" --intent board_cleanup --dry-run`
 - repair source routing: use `docs/agent/automotive_repair_source_playbook.md`
@@ -70,9 +80,10 @@ up to date.
   finance control, daily CRM control, or new knowledge intake
 - board cleanup autopilot: when the owner says `Приберись`, `прибейсь`, or
   `переберись`, use `docs/agent/board_cleanup_autopilot_playbook.md` as the
-  standing procedure for a full CRM board cleanup with strict preservation of
-  user-entered data; scheduled runs are incremental and must avoid
-  duplicate/noisy writes
+  standing procedure for CRM board hygiene with strict preservation of
+  user-entered data; update detailed descriptions and the separate
+  `board_summary` preview, and do not move or archive cards without a separate
+  explicit owner command
 - deployment/runbook: use `docs/agent/deployment_runbook.md`; publish code,
   tests, and playbooks, but keep runtime CRM snapshots and SQLite databases out
   of GitHub
@@ -134,7 +145,11 @@ python -m autostop_manager.cli knowledge-search "8013FE IHKA" --domain bmw_repai
 python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
 python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
+python -m autostop_manager.cli system-audit
+python -m autostop_manager.cli doctor
 python -m autostop_manager.cli knowledge-audit
+python -m autostop_manager.cli cleanup-audit
+python -m autostop_manager.cli crm-health-plan --board-review-json board_review.json --today-json today_context.json
 python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli memory-audit
 python -m autostop_manager.cli memory-curate --apply
@@ -156,6 +171,7 @@ The manager memory tools are intentionally separate from CRM operations:
 - `today_context`
 - `manager_journal`
 - `prepare_manager_context`
+- `agent_brief`
 - `lookup_original_parts`
 - `recommend_automotive_sources`
 - `recommend_fluid_maintenance_sources`
@@ -166,12 +182,50 @@ The manager memory tools are intentionally separate from CRM operations:
 - `audit_knowledge_base`
 - `audit_knowledge_annotations`
 - `audit_skill_registry`
+- `system_audit`
+- `cleanup_audit`
+- `crm_health_plan`
 - `audit_memory`
 - `curate_memory`
 - `start_manager_run`
 - `record_manager_run_event`
 - `finish_manager_run`
 - `list_manager_runs`
+
+## Agent Startup Order
+
+For a new Codex/ChatGPT manager task, start with the compact package:
+
+```powershell
+python -m autostop_manager.cli agent-brief "прибейсь" --intent board_cleanup
+```
+
+Use layers in this order:
+
+1. `agent-brief` for hot rules, command route, allowed/forbidden actions, and
+   memory boundaries.
+2. Live AutoStop CRM MCP context for CRM work: board, cards, repair orders,
+   cashboxes, clients, files, and operational journal.
+3. Targeted `knowledge-probe` or `knowledge-search` for local route cards and
+   source files.
+4. Long playbooks and source packs only after the targeted route is known.
+
+For system maintenance, `system-audit` / `doctor` is the canonical read-only
+health layer. It aggregates knowledge, annotations, skills, cleanup dry-run,
+local SQLite stats, and manager MCP catalog checks; it reports
+`tests_status: external` instead of running pytest. For CRM board hygiene
+planning without writes, use `crm-health-plan` on saved `board_review`,
+`board_context`, and `today_context` JSON payloads.
+
+Memory is intentionally split:
+
+- local SQLite stores the knowledge index, local rules, and any local CLI
+  facts, notes, lessons, tasks, reminders, and journal rows;
+- live CRM/MCP memory carries operational tasks, recent work journal, board
+  state, and connector context.
+
+An empty local `memory-map` does not mean the manager has no live operational
+memory; read MCP context before CRM decisions.
 
 When the owner provides new files, treat them as source material, not memory.
 Extract durable rules, update the relevant playbook or catalog, then store
@@ -234,14 +288,12 @@ data, ИП Гришкявичус/Гришкевичус, and old-versus-current
 sorting. Keep private bank/contact details out of Git-tracked docs and verify
 exact wording from the source document before external use.
 
-The owner's natural commands `Приберись`, `прибейсь`, and `переберись` mean
-board-cleanup autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`:
-read the live CRM board, classify blockers, enrich VIN/OEM/parts/service data,
-rewrite public card descriptions with supported rich text formatting and
-restrained emoji markers, update the separate `board_summary` preview, tag/mark
-when useful, leave cards in their current columns, do not archive without a
-separate explicit owner command, and preserve user-entered works, materials,
-prices, payments, files, contacts, and diagnostics.
+The owner's natural commands `Приберись` and `прибейсь` mean board-cleanup
+autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
+CRM board, classify blockers, enrich VIN/OEM/parts/service data, update short
+card notes, tag/mark/archive when safe, leave cards in their current columns,
+and preserve user-entered works, materials, prices, payments, files, contacts,
+and diagnostics.
 
 ## CRM MCP Sync
 

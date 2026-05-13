@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
-from .context import prepare_manager_context
+from .cleanup_audit import build_cleanup_audit
+from .context import build_agent_brief, prepare_manager_context
+from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
     audit_knowledge_annotations,
@@ -19,6 +22,7 @@ from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
+from .system_audit import build_system_audit
 from .vin_lookup import lookup_original_parts
 
 
@@ -43,6 +47,13 @@ def _json_object(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"raw": raw}
     return value if isinstance(value, dict) else {"value": value}
+
+
+def _json_file(raw_path: str | None) -> Any:
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,6 +139,14 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_context.add_argument("--intent", default=None)
     prepare_context.add_argument("--limit", type=int, default=10)
 
+    agent_brief = sub.add_parser(
+        "agent-brief",
+        help="Return a compact startup package for an agent before broad document reads",
+    )
+    agent_brief.add_argument("query")
+    agent_brief.add_argument("--intent", default=None)
+    agent_brief.add_argument("--limit", type=int, default=8)
+
     lookup = sub.add_parser("lookup-oem", help="Classify a VIN or frame number and return OEM lookup routing")
     lookup.add_argument("identifier")
     lookup.add_argument("--model-year", type=int, default=None)
@@ -209,6 +228,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("knowledge-audit", help="Audit the local knowledge map, route cards, files, and SQLite index")
 
+    sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, Obsidian, and knowledge cleanup candidates")
+
+    sub.add_parser("system-audit", help="Run the read-only AutoStop Manager health audit")
+    sub.add_parser("doctor", help="Alias for system-audit")
+
+    crm_health = sub.add_parser("crm-health-plan", help="Build a read-only CRM health plan from saved JSON payloads")
+    crm_health.add_argument("--board-context-json", default=None)
+    crm_health.add_argument("--board-review-json", default=None)
+    crm_health.add_argument("--today-json", default=None)
+
     sub.add_parser("annotations-audit", help="Audit compact knowledge annotations used for fast routing")
 
     sub.add_parser("skills-audit", help="Audit local Codex skill files linked to knowledge routes")
@@ -263,6 +292,18 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(search_knowledge_base(store, args.query, domain=args.domain, limit=args.limit))
     elif args.command == "knowledge-audit":
         _print_json(audit_knowledge_base(store))
+    elif args.command == "cleanup-audit":
+        _print_json(build_cleanup_audit(store=store))
+    elif args.command in {"system-audit", "doctor"}:
+        _print_json(build_system_audit(store=store))
+    elif args.command == "crm-health-plan":
+        _print_json(
+            build_crm_health_plan(
+                board_context=_json_file(args.board_context_json),
+                board_review=_json_file(args.board_review_json),
+                today_context=_json_file(args.today_json),
+            )
+        )
     elif args.command == "annotations-audit":
         _print_json(audit_knowledge_annotations(store))
     elif args.command == "skills-audit":
@@ -388,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(store.today_context(limit=args.limit))
     elif args.command == "prepare-context":
         _print_json(prepare_manager_context(store, args.query, intent=args.intent, limit=args.limit))
+    elif args.command == "agent-brief":
+        _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "lookup-oem":
         _print_json(lookup_original_parts(args.identifier, model_year=args.model_year, make_hint=args.make))
     elif args.command == "source-route":

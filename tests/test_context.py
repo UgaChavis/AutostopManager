@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from autostop_manager import context
 from autostop_manager.context import prepare_manager_context
 from autostop_manager.knowledge_base import sync_knowledge_base
 from autostop_manager.storage import ManagerMemoryStore
@@ -37,3 +38,30 @@ def test_prepare_manager_context_flags_missing_required_context(tmp_path):
     assert result["ok"] is True
     assert result["knowledge"]["best_domain"] == "bmw_f15_n63"
     assert "VIN or chassis" in result["missing_context"]
+
+
+def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "прибейсь", intent="board_cleanup", limit=8)
+
+    assert result["ok"] is True
+    assert result["format"] == "agent_brief_v1"
+    assert result["role"] == "AutoStop CRM manager agent"
+    assert result["memory_sources"] == {
+        "local_sqlite": "knowledge_index_and_local_rules",
+        "crm_mcp": "operational_memory_and_live_board_context",
+        "rule": "before CRM work, read live MCP context; before broad docs, use local knowledge routes",
+    }
+    assert result["route"]["domain"] == "board_cleanup_autopilot"
+    assert result["route"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
+    assert len(result["hot_rules"]) <= 8
+    assert any("CRM" in rule and "source of truth" in rule for rule in result["hot_rules"])
+    assert "today_context" in result["read_order"][0]
+    assert "set_card_board_summary" in result["allowed_actions"]
+    assert any("move" in action for action in result["forbidden_actions"])
+    assert any("archive" in action for action in result["forbidden_actions"])
+    assert any("delete" in action for action in result["forbidden_actions"])
+    assert any("board_summary_stale=false" in check for check in result["verification"])

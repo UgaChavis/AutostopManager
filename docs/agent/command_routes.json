@@ -9,12 +9,12 @@
       "aliases": [
         "Приберись",
         "прибейсь",
-        "переберись",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
         "проведи уборку доски",
-        "проверь доску"
+        "проверь доску",
+        "переберись"
       ],
       "keywords": [
         "доска",
@@ -30,15 +30,15 @@
         "board-cleanup",
         "Приберись",
         "прибейсь",
-        "переберись",
-        "board-cleanup-no-card-movement"
+        "board-cleanup-no-card-movement",
+        "переберись"
       ],
       "next_actions": [
         "read live CRM board state",
         "classify blockers",
         "update detailed descriptions with supported rich text formatting and restrained emoji markers, separate board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
         "leave cards in their current columns",
-        "leave archive recommendations unless the owner gives a separate explicit archive command"
+        "do not archive cards without a separate explicit owner command; leave archive recommendations instead"
       ]
     },
     {
@@ -73,6 +73,53 @@
         "check ready cars and due totals",
         "classify payment blockers",
         "create short follow-up notes or manager tasks"
+      ]
+    },
+    {
+      "command_id": "obsidian_knowledge_vault",
+      "intent": "knowledge_vault",
+      "domain": "obsidian_knowledge_vault",
+      "open_first": "docs/agent/obsidian_knowledge_vault_playbook.md",
+      "aliases": [
+        "обнови Obsidian",
+        "обнови обсидиан",
+        "открой базу знаний Obsidian",
+        "синхронизируй Obsidian",
+        "добавь в Obsidian",
+        "перенеси в Obsidian",
+        "база знаний Obsidian",
+        "подключи Obsidian",
+        "занеси клиентов в Obsidian",
+        "добавь кассы в Obsidian",
+        "статистика CRM в Obsidian"
+      ],
+      "keywords": [
+        "Obsidian",
+        "обсидиан",
+        "vault",
+        "база знаний",
+        "Google Drive",
+        "Мой диск",
+        "cloud",
+        "рабочий ПК",
+        "Codex interaction",
+        "clients overview",
+        "cashbox overview",
+        "repair orders overview",
+        "CRM manager workspace"
+      ],
+      "memory_queries": [
+        "obsidian",
+        "knowledge-vault",
+        "cloud-vault",
+        "Codex interaction"
+      ],
+      "next_actions": [
+        "open the Obsidian vault playbook",
+        "prefer the Google Drive cloud vault when present",
+        "refresh imported docs/agent content when source docs changed",
+        "use crm_manager_data_playbook.md before writing CRM-derived manager snapshots",
+        "avoid storing raw client databases, cashbox ledgers, email threads, credentials, or secrets"
       ]
     },
     {

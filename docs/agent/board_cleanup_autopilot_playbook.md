@@ -17,12 +17,11 @@ The agent may independently:
 - read all active board/card/repair-order/cashbox context needed for cleanup
 - update card title, vehicle, description, tags, deadline, indicator, and
   vehicle profile
-- rewrite the public card description into a clean detailed working note
-  using supported rich text formatting and restrained emoji markers
-- update the hidden `board_summary` through `set_card_board_summary` so the
-  board tile shows a four-or-five-line operator preview
-- leave archive recommendations in the card/report when a card appears
-  completed; do not archive automatically during routine cleanup
+- rewrite the public card description into a clean detailed working note using
+  supported rich text formatting and restrained emoji markers when useful
+- set or refresh the hidden `board_summary` as the clean 4-5 line board preview
+- recommend archive candidates in the report, but do not archive cards unless
+  the owner gives a separate explicit owner command for archive
 - add short questions or recommendations inside the card instead of asking the
   owner in chat
 - fill VIN/chassis-derived vehicle fields when source confidence is adequate
@@ -48,12 +47,12 @@ Hourly automation should:
 - stop without writes if CRM/MCP status is unhealthy or target card identity is
   uncertain
 
-Hourly automation may still update descriptions, board summaries, tags,
-indicators, deadlines, and safe vehicle fields when the usual safety rules below
-are satisfied. It must not move cards between columns or archive cards unless
-the owner explicitly asks for one exact target/action. The final report should
-be compact: checked, changed, moved=0, archived=0 unless explicitly requested,
-archive recommendations, blockers, and any risks.
+Hourly automation may still update descriptions, `board_summary`, tags,
+indicators, deadlines, and safe vehicle fields when the usual safety rules
+below are satisfied. It must not move or archive cards unless the owner
+explicitly asks for one exact target/action. The final report should be compact:
+checked, changed, moved=0, archived=0 unless explicitly commanded, archive
+recommendations, blockers, and any risks.
 
 ## Data Preservation Rules
 
@@ -75,10 +74,6 @@ Allowed safe edits:
 - fix obvious typos
 - shorten noisy duplicated text
 - restructure text into readable sections
-- format the public description with clear headings, **bold** key labels,
-  *italic* clarifications, underlined emphasis when the CRM editor supports it,
-  bullet/check lists, and restrained emoji markers such as `🔧`, `✅`, `⚠️`,
-  and `💰`
 - expand abbreviations when meaning is clear
 - add missing labels such as `VIN:`, `OEM:`, `Следующий шаг:`
 - append an `AI:` note with a concise question or conclusion
@@ -169,15 +164,9 @@ If a card contains a VIN, chassis number, or body code:
 
 - classify identifier type first
 - use vehicle identity and VIN/OEM playbooks
-- if `engine_model`, `gearbox_model`, or `drivetrain` is empty, try to enrich
-  those fields from source-backed VIN/chassis/frame data
-- use local knowledge and `lookup_original_parts` first, then internet search
-  only when the current source needs confirmation
-- fill stable vehicle profile fields only when confidence is adequate
-- preserve manual fields; never overwrite operator-entered aggregate data
+- fill stable vehicle profile fields only
 - do not present inferred trim/options as confirmed
-- when several variants are possible, leave the field empty and add short
-  uncertainty to `oem_notes` / `tentative_fields`
+- add short uncertainty when confidence is incomplete
 
 ### 3. Parts And Procurement
 
@@ -276,15 +265,13 @@ Before every CRM write:
   `set_card_board_summary` and verify `board_summary_stale=false`
 - avoid multiple noisy notes when one structured update is enough
 - do not rewrite a card just for style if it already reads clearly
-- do not move cards between columns during `Приберись` / `прибейсь` /
-  `переберись`; leave the current column as-is unless the owner gives a
-  separate explicit move command
-- do not archive cards during routine cleanup; leave an archive recommendation
-  unless the owner gives a separate explicit archive command
+- do not move or archive cards during `Приберись` / `прибейсь` /
+  `переберись`; leave the current column and archive state as-is unless the
+  owner gives a separate explicit owner command for that target
 
 Use the card itself for operational questions. Ask the owner in chat only when:
 
-- a destructive action beyond archive is needed
+- a destructive action is needed
 - payment/cashbox data conflict and cannot be resolved from CRM
 - a client-sensitive decision needs owner judgment
 - source-backed technical data is unavailable for a safety-critical action
@@ -311,20 +298,20 @@ Indicator:
 
 ## Column Movement Boundary
 
-Do not move cards between columns during board-cleanup autopilot, even when the
-next operational state looks clear. Use non-moving updates instead:
+Do not move or archive cards during board-cleanup autopilot, even when the next
+operational state looks clear. Use non-moving, non-archive updates instead:
 
 - tags
 - indicators
 - deadlines
 - detailed description
-- hidden board summary
+- hidden `board_summary`
 - short `AI:` note
 - vehicle-profile enrichment
-- archive recommendation when a card looks completed
+- archive recommendation in the final report
 
-Move a card only when the owner gives a separate explicit command with the
-target card and target column.
+Move or archive a card only when the owner gives a separate explicit owner
+command with the target card and requested destination or archive action.
 
 ## Final Report
 
@@ -332,7 +319,7 @@ Report to the owner briefly:
 
 - cards checked
 - cards updated
-- cards archived only if explicitly requested
+- cards archived=0 unless explicitly commanded
 - archive recommendations
 - cards left in their current columns by rule
 - VIN/OEM/parts work done

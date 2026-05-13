@@ -4,6 +4,12 @@ from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledg
 from autostop_manager.storage import ManagerMemoryStore
 
 
+PRIVATE_RUNTIME_FILES = [
+    "data/private_knowledge/business_identity_current.json",
+    "data/private_knowledge/business_documents_inventory.json",
+]
+
+
 def test_sync_indexes_domains_documents_and_sections(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -13,6 +19,56 @@ def test_sync_indexes_domains_documents_and_sections(tmp_path):
     assert result["documents_indexed"] > 0
     assert result["sections_indexed"] > 0
     assert "bmw_f15_n63" in result["domains"]
+    assert result["missing_files"] == []
+    assert set(PRIVATE_RUNTIME_FILES).issubset(set(result["optional_missing_files"]))
+
+
+def test_sync_populates_fast_knowledge_fts_indexes(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    with store.connect() as conn:
+        sections = conn.execute(
+            "SELECT COUNT(*) AS count FROM knowledge_sections_fts WHERE knowledge_sections_fts MATCH ?",
+            ("KOMBI",),
+        ).fetchone()
+        annotations = conn.execute(
+            "SELECT COUNT(*) AS count FROM knowledge_annotations_fts WHERE knowledge_annotations_fts MATCH ?",
+            ("business_identity",),
+        ).fetchone()
+
+    assert int(sections["count"]) > 0
+    assert int(annotations["count"]) > 0
+
+
+def test_sync_rebuilds_fast_knowledge_fts_indexes_idempotently(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    first = sync_knowledge_base(store)
+    second = sync_knowledge_base(store)
+
+    with store.connect() as conn:
+        sections = conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections").fetchone()
+        sections_fts = conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()
+        annotations = conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()
+        annotations_fts = conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations_fts").fetchone()
+
+    assert second["sections_indexed"] == first["sections_indexed"]
+    assert int(sections_fts["count"]) == int(sections["count"])
+    assert int(annotations_fts["count"]) == int(annotations["count"])
+
+
+def test_audit_reports_broken_fast_knowledge_fts_indexes(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+    with store.connect() as conn:
+        conn.execute("DELETE FROM knowledge_sections_fts")
+
+    result = audit_knowledge_base(store)
+
+    assert result["ok"] is False
+    assert result["sections_fts_indexed"] == 0
+    assert result["sections_indexed"] > 0
+    assert "knowledge_sections_fts_count_mismatch" in result["warnings"]
 
 
 def test_search_finds_model_specific_route_after_sync(tmp_path):
@@ -267,7 +323,10 @@ def test_audit_reports_route_cards_and_no_missing_files_after_sync(tmp_path):
     assert result["route_cards_indexed"] == result["domain_count"]
     assert result["documents_indexed"] > 0
     assert result["sections_indexed"] > 0
+    assert result["sections_fts_indexed"] == result["sections_indexed"]
+    assert result["annotations_fts_indexed"] == result["annotations_indexed"]
     assert result["missing_files"] == []
+    assert set(PRIVATE_RUNTIME_FILES).issubset(set(result["optional_missing_files"]))
 
 
 def test_reference_files_are_audited_but_not_fully_indexed(tmp_path):

@@ -85,6 +85,28 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["knowledge-audit"])
     assert args.command == "knowledge-audit"
 
+    args = parser.parse_args(["cleanup-audit"])
+    assert args.command == "cleanup-audit"
+
+    args = parser.parse_args(["system-audit"])
+    assert args.command == "system-audit"
+
+    args = parser.parse_args(["doctor"])
+    assert args.command == "doctor"
+
+    args = parser.parse_args(
+        [
+            "crm-health-plan",
+            "--board-review-json",
+            "board_review.json",
+            "--today-json",
+            "today_context.json",
+        ]
+    )
+    assert args.command == "crm-health-plan"
+    assert args.board_review_json == "board_review.json"
+    assert args.today_json == "today_context.json"
+
     args = parser.parse_args(
         [
             "learn",
@@ -139,6 +161,12 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(["prepare-context", "прибейсь", "--intent", "board_cleanup", "--limit", "5"])
     assert args.command == "prepare-context"
+    assert args.query == "прибейсь"
+    assert args.intent == "board_cleanup"
+    assert args.limit == 5
+
+    args = parser.parse_args(["agent-brief", "прибейсь", "--intent", "board_cleanup", "--limit", "5"])
+    assert args.command == "agent-brief"
     assert args.query == "прибейсь"
     assert args.intent == "board_cleanup"
     assert args.limit == 5
