@@ -61,8 +61,8 @@ memory records unless the owner explicitly asks for archiving.
 
 ## Placement Rules
 
-- Put broad behavior in `autostop_manager_skill.md`, `manager_rules.json`, or
-  `operating_playbook.json`.
+- Put broad behavior in `autostop_manager_skill.md` or
+  `manager_rules.json`.
 - Put task workflows in a specific `*_playbook.md`.
 - Put source lists and routing data in JSON catalogs.
 - Put vehicle/model-specific deep knowledge into a dedicated Codex skill under

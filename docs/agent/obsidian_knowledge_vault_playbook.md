@@ -22,7 +22,8 @@ Open-first notes:
 - `80_Codex\Codex interaction.md`
 - `10_Manager\CRM\CRM manager workspace.md`
 - `30_Knowledge\AutoStopManager\docs_agent\knowledge_base_index.md`
-- `30_Knowledge\AutoStopCRM-V1\00_START_HERE_AUTOSTOP_CRM.md`
+- `30_Knowledge\AutoStopCRM-V1\README.md`
+- `30_Knowledge\AutoStopCRM-V1\docs\OPERATIONS_RUNBOOK.md`
 - `00_Home\Bases\Knowledge.base`
 
 ## Role

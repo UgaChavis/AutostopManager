@@ -14,7 +14,6 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
         ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
         ROOT / "docs" / "agent" / "manager_mcp_catalog.json",
         ROOT / "docs" / "agent" / "manager_rules.json",
-        ROOT / "docs" / "agent" / "operating_playbook.json",
     ]
     stale_fragments = [
         "archive completed cards when safe",

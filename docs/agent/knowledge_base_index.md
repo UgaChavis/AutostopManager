@@ -106,7 +106,6 @@ should not produce full section matches in normal search.
 
 - `autostop_manager_skill.md` - agent startup routine, role, memory boundaries, and canonical behavior.
 - `manager_rules.json` - durable operating rules with priorities.
-- `operating_playbook.json` - machine-readable startup and routing map.
 - `knowledge_shelves.md` - shelf map, file placement rules, route-card contract, and maintenance checklist.
 - `obsidian_knowledge_vault_playbook.md` - Obsidian vault path, cloud sync,
   refresh workflow, and safety boundary for manager-agent knowledge work.

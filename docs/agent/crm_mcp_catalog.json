@@ -13,9 +13,10 @@
   },
   "source_documents": [
     "README.md",
+    "docs/OPERATIONS_RUNBOOK.md",
     "MCP_GUIDE.md",
+    "API_GUIDE.md",
     "CHATGPT_CONNECTOR_SETUP.md",
-    "CODEX_PROJECT_MAP.md",
     "src/minimal_kanban/connection_card.py",
     "src/minimal_kanban/mcp/server.py",
     "src/minimal_kanban/mcp/main.py",

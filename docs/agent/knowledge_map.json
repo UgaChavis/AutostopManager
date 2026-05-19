@@ -54,14 +54,12 @@
       "source_of_truth_files": [
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
-        "docs/agent/operating_playbook.json",
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json"
       ],
       "primary_files": [
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
-        "docs/agent/operating_playbook.json",
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json",
         "docs/agent/manager_identity.json",
@@ -462,8 +460,7 @@
       "primary_files": [
         "docs/agent/gmail_workflow_playbook.md",
         "docs/agent/gmail_mcp_catalog.json",
-        "docs/agent/manager_rules.json",
-        "docs/agent/operating_playbook.json"
+        "docs/agent/manager_rules.json"
       ],
       "required_context": [
         "whether the owner asks for read-only inspection or an actual mailbox mutation",
@@ -1360,13 +1357,11 @@
       "source_of_truth_files": [
         "docs/agent/board_cleanup_autopilot_playbook.md",
         "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/operating_playbook.json",
         "docs/agent/manager_rules.json"
       ],
       "primary_files": [
         "docs/agent/board_cleanup_autopilot_playbook.md",
         "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/operating_playbook.json",
         "docs/agent/manager_rules.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md"
       ]

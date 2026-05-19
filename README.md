@@ -302,8 +302,8 @@ The canonical MCP surface for AutoStop CRM lives in the CRM repository:
 
 - repository: `UgaChavis/AutostopCRM-V1`
 - active development branch: `autostopcrm-v1`
-- connector docs: `MCP_GUIDE.md`, `CHATGPT_CONNECTOR_SETUP.md`,
-  `CODEX_PROJECT_MAP.md`
+- connector docs: `README.md`, `docs/OPERATIONS_RUNBOOK.md`, `MCP_GUIDE.md`,
+  `API_GUIDE.md`, `CHATGPT_CONNECTOR_SETUP.md`
 - runtime files: `src/minimal_kanban/mcp/server.py`, `src/minimal_kanban/mcp/main.py`,
   `src/minimal_kanban/mcp/runtime.py`, `src/minimal_kanban/mcp/auth.py`
 
