@@ -1,9 +1,0 @@
-{"risk_id": "vin_required_missing", "severity": "high", "description": "Деталь зависит от VIN, но VIN не указан", "mitigation": "Запросить VIN или фото старой детали"}
-{"risk_id": "side_missing", "severity": "medium", "description": "Не указана сторона/ось", "mitigation": "Уточнить лев/прав/перед/зад"}
-{"risk_id": "marketplace_unconfirmed_stock", "severity": "medium", "description": "Объявление найдено, но наличие не подтверждено", "mitigation": "Позвонить продавцу"}
-{"risk_id": "price_too_low", "severity": "medium", "description": "Цена сильно ниже медианы", "mitigation": "Проверить комплектность, документы, контрафактный риск"}
-{"risk_id": "electronic_no_hw_number", "severity": "high", "description": "Нет аппаратного номера блока", "mitigation": "Запросить фото наклеек и условия возврата"}
-{"risk_id": "needs_marking_photo", "severity": "high", "description": "Нет фото маркировки б/у/контрактной детали", "mitigation": "Запросить фото маркировки крупно"}
-{"risk_id": "needs_video", "severity": "high", "description": "Для агрегата нет видео проверки", "mitigation": "Запросить видео запуска/работы или стендовый отчет"}
-{"risk_id": "no_return", "severity": "high", "description": "Нет возврата", "mitigation": "Снизить рейтинг, искать альтернативу"}
-{"risk_id": "stale_data", "severity": "medium", "description": "Данные устарели", "mitigation": "Повторить запрос или звонок"}

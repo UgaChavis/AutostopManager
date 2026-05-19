@@ -1,5 +1,0 @@
-{"case_id": "urgent_local_new", "mode": "urgent_today", "input_offer": "OFF-SYN-001", "expected": "should_rank_high_due_to_confirmed_local_stock"}
-{"case_id": "cheap_remote_not_urgent", "mode": "standard", "input_offer": "OFF-SYN-002", "expected": "may_rank_high_if_fitment_good_and_delivery_ok"}
-{"case_id": "marketplace_unconfirmed", "mode": "urgent_today", "input_offer": "OFF-SYN-003", "expected": "should_not_be_best_until_call_confirmed"}
-{"case_id": "electronics_no_hw", "mode": "electronics", "input_offer": "OFF-SYN-004", "expected": "penalty_until_hw_number_confirmed"}
-{"case_id": "contract_cvt", "mode": "used_or_contract", "input_offer": "OFF-SYN-005", "expected": "needs_marking_video_warranty_before_recommendation"}

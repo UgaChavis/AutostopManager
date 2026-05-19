@@ -7,10 +7,8 @@ the material without reading every attachment first.
 
 - `README.md` - purpose, safety boundary, and recommended reading order.
 - `md/` - searchable Markdown modules used by the knowledge index.
-- `data/` - CSV/JSONL reference tables for scenario cards, risk checks, and
-  glossary terms.
-- `examples/` - synthetic training examples for calibration and programming
-  file formats.
+- `data/` - CSV/JSONL reference tables for scenario cards, risk checks, module
+  dictionaries, and glossary terms.
 - `sources/` - source catalog and public/legal reference routing.
 
 ## Load Order
@@ -31,8 +29,10 @@ the material without reading every attachment first.
 14. `data/`
 15. `sources/`
 
-Generated PDF duplicates were removed on 2026-05-08. The active indexed source
-is Markdown plus data/sources/examples.
+Generated PDF duplicates were removed on 2026-05-08. Synthetic examples,
+flashcards, and duplicate CSV glossary output were removed during the
+documentation reduction pass. The active indexed source is Markdown plus
+data/sources.
 
 ## Safety Boundary
 

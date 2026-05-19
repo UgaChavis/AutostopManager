@@ -1,6 +1,0 @@
-{"category": "electronics", "requires": ["vin_or_frame", "old_part_number", "hardware_version"], "block_if_missing": ["old_part_number"], "manual_checks": ["coding_required", "return_policy", "module_variant"]}
-{"category": "powertrain", "requires": ["vin_or_frame", "aggregate_marking"], "block_if_missing": ["aggregate_marking"], "manual_checks": ["mileage", "video", "warranty", "delivery_damage_risk"]}
-{"category": "body", "requires": ["body_code", "restyling", "side"], "block_if_missing": ["side"], "manual_checks": ["mounts_photo", "color_code", "damage_photo"]}
-{"category": "suspension_brakes", "requires": ["side_or_position", "body_code"], "block_if_missing": [], "manual_checks": ["axis", "brake_size", "drive_type"]}
-{"category": "cooling_ac", "requires": ["engine_code", "transmission_type"], "block_if_missing": [], "manual_checks": ["ports", "dimensions", "fan_package"]}
-{"category": "consumables", "requires": ["engine_code"], "block_if_missing": [], "manual_checks": ["service_interval", "quality_grade"]}

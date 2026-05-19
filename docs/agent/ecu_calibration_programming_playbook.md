@@ -8,7 +8,9 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 - Intake source: owner-provided archive; original user download path is
   historical and not part of active routing.
 - Created in pack README: `2026-05-03`
-- Classification: owner-provided training/reference summaries, public-source routes, CSV/JSONL tables, Markdown, PDF renderings, and synthetic examples.
+- Classification: compact owner-provided training/reference summaries,
+  public-source routes, Markdown modules, and the active CSV/JSONL tables used
+  by routing.
 - License/source boundary: safe for local reference as owner-provided material; final VIN-specific programming, coding, adaptation, recovery, immobilizer, emissions, SRS, ADAS, HV, and instrument-cluster procedures must still be verified through official OEM documentation and authorized tools.
 
 ## Use This First When
@@ -47,7 +49,7 @@ Markdown modules:
 
 Data indexes:
 
-- `data/glossary_ecu_programming.jsonl` and `.csv` - ECU/programming abbreviations and Russian explanations.
+- `data/glossary_ecu_programming.jsonl` - ECU/programming abbreviations and Russian explanations.
 - `data/uds_services_reference.csv` - UDS services by service ID and safe role.
 - `data/file_format_index.csv` - format names, meaning, and caveats.
 - `data/generic_dtc_examples_emissions_network.csv` - generic emissions/network DTC examples for diagnostic routing.
@@ -55,12 +57,7 @@ Data indexes:
 - `data/programming_precheck_matrix.csv` - programming precheck matrix.
 - `data/risk_register.jsonl` - programming/coding risk register.
 - `data/repair_scenario_cards.jsonl` - scenario cards for repair knowledge workflows.
-- `data/learning_flashcards.jsonl` - learning cards for concepts.
 - `sources/citations_and_standards.md` and `sources/public_source_catalog.csv` - public standards/source routes.
-
-Synthetic examples:
-
-- `examples/` contains toy A2L, DCM, ODX, Intel HEX, S-record, calibration metadata, and MDF metadata examples for parsing and concept explanation only. They are not vehicle files and must not be used as programming input.
 
 ## Operating Rules
 

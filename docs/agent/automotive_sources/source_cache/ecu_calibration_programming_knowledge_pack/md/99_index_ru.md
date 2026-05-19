@@ -10,7 +10,6 @@
 
 - md/ - Markdown-модули для машинной загрузки и ручного чтения.
 - data/ - справочные таблицы CSV и JSONL.
-- examples/ - синтетические учебные примеры A2L, ODX, HEX, S19, DCM, JSON.
 - sources/ - публичный каталог стандартов и официальных источников.
 - MANIFEST.md - компактный список активных файлов.
 
@@ -39,29 +38,17 @@
 
 ## Компактность
 
-Сгенерированные PDF-дубли удалены 2026-05-08. Активные материалы сохранены в
-Markdown/data/sources/examples.
+Сгенерированные PDF-дубли удалены 2026-05-08. Синтетические examples,
+flashcards и CSV-дубль glossary удалены при сокращении документации. Активные
+материалы сохранены в Markdown/data/sources.
 
 ## Файлы данных
 
 - data/bmw_ecu_module_dictionary.csv
 - data/file_format_index.csv
 - data/generic_dtc_examples_emissions_network.csv
-- data/glossary_ecu_programming.csv
 - data/glossary_ecu_programming.jsonl
-- data/learning_flashcards.jsonl
 - data/programming_precheck_matrix.csv
 - data/repair_scenario_cards.jsonl
 - data/risk_register.jsonl
 - data/uds_services_reference.csv
-
-## Синтетические примеры
-
-- examples/README_examples.md
-- examples/toy_calibration_metadata.json
-- examples/toy_dcm_values.dcm
-- examples/toy_intel_hex.hex
-- examples/toy_log_metadata_mdf.json
-- examples/toy_motorola_srecord.s19
-- examples/toy_odx_snippet.xml
-- examples/toy_project_a2l.a2l

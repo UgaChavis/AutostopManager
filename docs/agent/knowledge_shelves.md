@@ -83,6 +83,27 @@ Use these locations consistently:
   business requisites or document inventories. Index these files when present,
   but never commit them; a clean checkout may not have them.
 
+## Documentation Hygiene Classes
+
+Classify tracked documentation with these labels during cleanup:
+
+- `active_control`: root README, agent startup rules, MCP catalogs, command
+  routes, and navigation files that define current behavior.
+- `active_playbook`: human workflow instructions opened by route cards.
+- `structured_catalog`: JSON/JSONL/CSV/YAML/SQL catalogs, schemas, maps, or
+  source registries used by playbooks or future ingestion.
+- `source_pack`: owner-provided or curated corpora under `source_cache/`; keep
+  README/MANIFEST coverage and avoid rewriting raw source material.
+- `reference_only`: linked supporting files that must be audited but should not
+  be fully indexed into SQLite search.
+- `archive_policy`: `docs/archive/` policy files; do not treat archived plans
+  as current instructions.
+- `delete_candidate`: fully migrated plans, duplicate generated summaries,
+  broken scratch files, or obsolete instructions with no active route.
+- `untracked_artifact`: local PDFs, runtime output, caches, SQLite databases,
+  CRM evidence, and private files that must stay out of Git unless explicitly
+  promoted.
+
 Do not move existing source packs just to make the tree prettier. Add route
 metadata and README/MANIFEST coverage first; move files only when a source is
 misclassified or unsafe in its current location.
@@ -148,11 +169,10 @@ Optional folders:
 
 - `pdf/` for printable/source attachments.
 - `examples/` for toy samples and safe fixtures.
-- `prompts/` for reusable agent prompts.
-- `schemas/` for JSON schemas.
-- `configs/` for YAML/JSON configuration.
-- `code_skeleton/` for reference implementation drafts.
-- `openapi/` for API specs.
+
+Keep prompts, schemas, implementation drafts, generated samples, and API
+contracts out of the active docs tree unless a current implementation task
+uses them and tests cover the route.
 
 ## Intake Checklist
 

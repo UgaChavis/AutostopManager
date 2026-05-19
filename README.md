@@ -101,7 +101,7 @@ up to date.
 - AI parts search: use `docs/agent/ai_parts_krasnoyarsk_playbook.md` and
   `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/`
   for Krasnoyarsk vendor discovery, steering-rack/contract-part risk checks,
-  offer scoring, seller-call confirmation, schemas, configs, and OpenAPI drafts
+  offer scoring, seller-call confirmation, pricing logic, and compact reporting
 - BMW X5 F15/N63TU: use the indexed BMW route in
   `docs/agent/bmw_repair_playbook.md` and the BMW source cache before F15/N63
   diagnostics, wiring/electronics orientation, BDC/gateway issues, injector
@@ -291,9 +291,10 @@ exact wording from the source document before external use.
 The owner's natural commands `Приберись` and `прибейсь` mean board-cleanup
 autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
 CRM board, classify blockers, enrich VIN/OEM/parts/service data, update short
-card notes, tag/mark/archive when safe, leave cards in their current columns,
-and preserve user-entered works, materials, prices, payments, files, contacts,
-and diagnostics.
+card notes, update tags/indicators/deadlines, recommend archive candidates when
+safe, leave cards in their current columns and archive state unless separately
+commanded, and preserve user-entered works, materials, prices, payments, files,
+contacts, and diagnostics.
 
 ## CRM MCP Sync
 

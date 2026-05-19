@@ -3,8 +3,8 @@
   "created_utc": "2026-05-03T10:32:46Z",
   "compacted_utc": "2026-05-08",
   "description_ru": "Справочные материалы по ремонту BMW: диагностика, DTC, двигатели, трансмиссия, xDrive, кузовная электроника, HV, жидкости.",
-  "file_count_excluding_manifest": 19,
-  "format_policy": "Keep Markdown and JSONL as the active indexed formats. Generated PDF, CSV, HTML, and plaintext duplicates were removed after the Markdown/JSONL equivalents were preserved.",
+  "file_count_excluding_manifest": 16,
+  "format_policy": "Keep only Markdown and active JSONL routing indexes. Generated PDF, CSV, HTML, plaintext duplicates, generic glossary/source snapshots, and other non-active references were removed after the compact playbooks preserved the route.",
   "files": [
     "README_ru.md",
     "markdown/bmw_01_diagnostics_architecture_ru.md",
@@ -20,10 +20,7 @@
     "data/bmw_engine_families.jsonl",
     "data/bmw_fault_memory_public_examples.jsonl",
     "data/bmw_fluids_specification_logic.jsonl",
-    "data/bmw_glossary_abbreviations.jsonl",
     "data/bmw_symptom_diagnostic_index.jsonl",
-    "data/bmw_transmission_families.jsonl",
-    "data/generic_obd2_dtc_high_value.jsonl",
-    "data/public_sources_bmw_zf_nhtsa.jsonl"
+    "data/bmw_transmission_families.jsonl"
   ]
 }

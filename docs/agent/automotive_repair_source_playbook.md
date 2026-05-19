@@ -12,9 +12,9 @@ Use the local knowledge package in `docs/agent/automotive_sources/`:
 - `brand_source_map.json` maps vehicle brands to preferred sources.
 - `data_type_source_map.json` maps work type to preferred sources.
 - `open_dataset_endpoints.json` lists legally open datasets and endpoints.
-- `ingestion_tasks.jsonl` lists acquisition and ingestion actions.
-- `codex_agent_rules_ru.md` is the original Russian rule sheet.
-- `db_schema.sql` is the proposed schema for a future repair knowledge base.
+
+Do not update `last_verified` fields in source catalogs during documentation
+hygiene unless the external source was actually checked in that pass.
 
 ## Required Vehicle Context
 

@@ -1,9 +1,0 @@
-query_type,template,source_group,priority
-exact_oem,{oem},all,1
-exact_oem_brand,{oem} {brand},marketplace,1
-vehicle_part,{part_name} {make} {model} {body_code},marketplace_maps,2
-engine_part,{part_name} {engine_code} {make},marketplace,3
-used_contract,контрактный {part_name} {make} {model},marketplace,2
-used_bu,б/у {part_name} {make} {model},marketplace,2
-yard,разбор {make} {model} {body_code} {part_name},maps_marketplace,3
-local_category,{category_phrase} Красноярск,maps,1

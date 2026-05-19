@@ -18,10 +18,15 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     docs_agent = root / "docs" / "agent"
     docs_agent.mkdir(parents=True, exist_ok=True)
     (docs_agent / "knowledge_map.json").write_text(
-        '{"domains":{"startup":{"primary_files":["docs/agent/known.md"],"source_of_truth_files":["docs/agent/known.md"]}}}',
+        '{"domains":{"startup":{'
+        '"primary_files":["docs/agent/known.md"],'
+        '"reference_files":["docs/agent/reference_only.md"],'
+        '"source_of_truth_files":["docs/agent/known.md"]'
+        "}}}",
         encoding="utf-8",
     )
     (docs_agent / "known.md").write_text("# Known\n", encoding="utf-8")
+    (docs_agent / "reference_only.md").write_text("# Reference\n", encoding="utf-8")
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
     (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
     cloud_vault = tmp_path / "cloud" / "AutostopCRM"
@@ -58,6 +63,7 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     }
     assert all(item["requires_approval"] is True for item in result["candidates"])
     assert all(item["recommended_action"] in allowed_actions for item in result["candidates"])
+    assert not any(item["path"] == "docs/agent/reference_only.md" for item in result["candidates"])
 
 
 def test_cleanup_audit_flags_source_pack_overindexed_routes(tmp_path):

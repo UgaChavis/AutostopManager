@@ -130,8 +130,6 @@ should not produce full section matches in normal search.
 
 - `knowledge_intake_playbook.md` - required workflow for new files, links, PDFs, spreadsheets, scans, catalogs, and owner notes.
 - `knowledge_shelves.md` - where durable knowledge belongs, how route cards are marked, and how source packs should be signed.
-- `automotive_sources/ingestion_tasks.jsonl` - pending/source-ingestion actions.
-- `automotive_sources/db_schema.sql` - proposed future repair knowledge database schema.
 - `business_identity_playbook.md` - private route for current ИП/AutoStop
   requisites and freshness sorting of owner business documents.
 - `business_document_quality_playbook.md` - route for high-quality PDF/DOCX/XLSX
@@ -154,7 +152,7 @@ Use intake when the owner says: "обнови базу знаний", "сохр�
 - `dsg_transmission_playbook.md` - Volkswagen Group DSG / Audi S tronic route for DQ/DL families, mechatronic modules, ODIS/SVM software updates, basic settings, adaptation, and used-unit sourcing risks.
 - `automotive_sources/dsg_transmission_sources.json` - official/public DSG/S tronic source registry: erWin/SVM, VW/Audi NHTSA TSBs, and VW technology references.
 - `ecu_calibration_programming_playbook.md` - ECU programming, calibration, coding, adaptation, UDS/OBD, file formats, BMW programming workflow, KOMBI/instrument-cluster, and "стрелковка" route.
-- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - owner-provided ECU calibration/programming reference pack with Markdown/PDF/data/source indexes and synthetic examples.
+- `automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/` - compact owner-provided ECU calibration/programming reference pack with Markdown, data, and source indexes.
 - `bmw_repair_playbook.md` - general BMW diagnostics, DTC, chassis, body electronics, xDrive, ZF transmission, HV, and fluids route.
 - `automotive_sources/source_cache/bmw_repair_knowledge_pack/` - owner-provided BMW repair reference pack with Markdown/PDF/data indexes.
 - `toyota_gr_yaris_playbook.md` - Toyota GR Yaris / GXPA16 / G16E-GTS model-specific repair, fluids, recalls, TSB, and OEM parts routing.
@@ -181,7 +179,6 @@ ECU calibration/programming pack:
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/`
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/`
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/`
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/examples/`
 
 For ECU programming, calibration formats, UDS/OBD/J2534, flash recovery, BMW ISTA/I-level/VO/FA, or "стрелковка" / KOMBI / instrument-cluster questions, search `ecu_calibration_programming` first. Treat cluster/needle requests as legal coding/adaptation diagnostics only; if the request touches odometer, VIN, EEPROM/NVM dump cloning, immobilizer, security bypass, or emissions delete, route to official/legal service procedure and do not provide bypass steps.
 
@@ -231,23 +228,19 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 - `zzap_search_playbook.md` - ZZap price comparison, replacements, and local-region checks.
 - `procurement_pricing_playbook.md` - закупочная цена, Красноярск-first availability, selected-part vs OEM-reference separation, package/unit math, and CRM material-total rules.
 - `procurement_price_sources.json` - supplier/API catalog for ROSSKO/Роска, Armtek, Autopiter, AutoEuro, ZZap, AutoSputnik, APEC, PartsAPI, UMAPI, AUTOPOISK, Mikado, local Krasnoyarsk sources, access modes, and quote fields.
-- `ai_parts_krasnoyarsk_playbook.md` - AI parts search, local Красноярск vendor discovery, offer scoring, seller-call confirmation, schemas, source registry, OpenAPI, and high-risk parts such as рулевая рейка.
-- `automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/` - owner-provided AI Parts Search Krasnoyarsk/Russia project pack with docs, prompts, schemas, configs, data, code skeleton, and OpenAPI draft.
+- `ai_parts_krasnoyarsk_playbook.md` - AI parts search, local Красноярск vendor discovery, offer scoring, seller-call confirmation, and high-risk parts such as рулевая рейка.
+- `automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/` - compact owner-provided AI Parts Search Krasnoyarsk/Russia project pack with retained workflow docs only.
 
 AI parts Красноярск project pack:
 
 - `C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md`
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/`
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/`
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/`
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/`
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/`
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/openapi/`
 
 For spare-parts search, steering rack / рулевая рейка, used/contract parts,
-seller discovery, call confirmation, offer scoring, API integration, or local
+seller discovery, call confirmation, offer scoring, supplier routing, or local
 Красноярск availability questions, search `parts_sourcing` first. Do not treat
 marketplace listings or supplier-site stock text as confirmed availability
 without API/cabinet/phone/message confirmation.
@@ -327,7 +320,7 @@ rg -n "ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|co
 rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent/toyota_gr_yaris_playbook.md docs/agent/automotive_sources
 rg -n "VIN|OEM|frame|chassis|кузов|каталог" docs/agent
 rg -n "DSG|S tronic|DQ200|DQ250|DQ381|DQ500|DL501|DL382|0AM|0CW|02E|0B5|мехатрон|J217|J743|ODIS|SVM|basic settings|адаптац" docs/agent/dsg_transmission_playbook.md docs/agent/automotive_sources/dsg_transmission_sources.json docs/agent/transmission_playbook.md
-rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|source_registry|parts search gateway" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack
+rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|pricing|reporting" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack
 rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|карточка предприятия|ОГРНИП|ИНН|ОКВЭД" docs/agent/business_identity_playbook.md
 # If data/private_knowledge exists locally, search it too; it is optional and ignored by Git.
 rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment" docs/agent

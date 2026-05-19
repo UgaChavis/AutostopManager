@@ -165,9 +165,7 @@
         "temporary search results",
         "CRM snapshots"
       ],
-      "reference_files": [
-        "docs/agent/automotive_sources/ingestion_tasks.jsonl"
-      ]
+      "reference_files": []
     },
     "obsidian_knowledge_vault": {
       "title": "AutoStop Obsidian working knowledge vault",
@@ -679,13 +677,7 @@
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/09_validation_logging_ru.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/10_service_scenarios_ru.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/99_index_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/uds_services_reference.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/file_format_index.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/generic_dtc_examples_emissions_network.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/bmw_ecu_module_dictionary.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/programming_precheck_matrix.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl"
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/bmw_ecu_module_dictionary.csv"
       ],
       "required_context": [
         "VIN or chassis",
@@ -703,10 +695,15 @@
       ],
       "reference_files": [
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/learning_flashcards.jsonl",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/examples/README_examples.md"
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/uds_services_reference.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/file_format_index.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/generic_dtc_examples_emissions_network.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/programming_precheck_matrix.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md"
       ]
     },
     "bmw_repair": {
@@ -793,10 +790,7 @@
         "BMW fault memory with module names"
       ],
       "reference_files": [
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_glossary_abbreviations.jsonl",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/generic_obd2_dtc_high_value.jsonl",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/public_sources_bmw_zf_nhtsa.jsonl"
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json"
       ]
     },
     "toyota_gr_yaris": {
@@ -1197,7 +1191,7 @@
         "оригинал или заменитель",
         "цена непонятна",
         "AI parts search",
-        "parts search gateway",
+        "parts sourcing workflow",
         "offer scoring",
         "seller call",
         "call confirmation",
@@ -1285,7 +1279,7 @@
         "как оценить предложения по запчасти с учетом наличия срока гарантии и риска",
         "как построить отчет по найденным запчастям",
         "как вести локальную базу продавцов Красноярска",
-        "какие схемы и OpenAPI использовать для parts search gateway"
+        "какие workflow docs использовать для поиска и оценки предложений по запчастям"
       ],
       "source_of_truth_files": [
         "docs/agent/ai_parts_krasnoyarsk_playbook.md",
@@ -1309,18 +1303,6 @@
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/08_krasnoyarsk_vendor_discovery_ru.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/09_compliance_limits_ru.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/14_pricing_and_averaging_model_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/source_registry.yaml",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/scoring_weights.yaml",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/query_templates.yaml",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/part_categories.yaml",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/brand_aliases.yaml",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/source_catalog.csv",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/local_vendor_seed_krasnoyarsk.csv",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/query_templates.csv",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/synonym_dictionary.jsonl",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/part_category_rules.jsonl",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/call_confirmation_checklist.jsonl",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/risk_map.jsonl",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/parts_search_playbook.md",
@@ -1328,43 +1310,7 @@
         "docs/agent/service_management_sources.json"
       ],
       "reference_files": [
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/PROJECT_BOOTSTRAP_FOR_CODEX.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/01_market_analysis_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/05_api_integration_plan_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/10_implementation_roadmap_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/11_data_quality_and_feedback_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/12_source_references_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/13_api_connector_specifications_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/PROMPT_TO_PASTE_IN_CODEX.txt",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/00_role_parts_sourcing_agent.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/01_part_request_intake.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/02_fitment_identification.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/03_api_search_task.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/04_marketplace_manual_search.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/05_offer_scoring.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/06_seller_call.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/07_no_result_escalation.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/prompts/08_codex_build_tasks.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/README.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/part_request.schema.json",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/offer.schema.json",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/seller.schema.json",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/search_report.schema.json",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/schemas/feedback.schema.json",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/configs/api_credentials.example.env",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/sample_part_requests.jsonl",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/sample_offers_synthetic.jsonl",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/scoring_test_cases.jsonl",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/README.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/models.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/normalization.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/scoring.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/connectors_base.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/manual_marketplace.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/reporting.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/code_skeleton/example_run.py",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/openapi/parts_search_gateway.openapi.yaml"
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md"
       ]
     },
     "board_cleanup_autopilot": {

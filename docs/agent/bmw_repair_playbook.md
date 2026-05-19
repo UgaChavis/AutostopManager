@@ -8,7 +8,8 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 - Intake source: owner-provided archive; original user download path is
   historical and not part of active routing.
 - Created in pack manifest: `2026-05-03T10:32:46Z`
-- Classification: owner-provided original reference summaries, public-source routes, CSV/JSONL indexes, Markdown, and PDF renderings.
+- Classification: compact owner-provided original reference summaries with
+  Markdown modules and only the JSONL indexes used by active routing.
 - License/source boundary: safe for local reference as owner-provided material; still verify final repair procedures, wiring, torque, coding, programming, campaigns, and fluid capacities by VIN in BMW ISTA/AIR/ETK/AOS/TIS or official/public bulletins.
 
 ## Use This First When
@@ -47,11 +48,8 @@ Data indexes:
 - `data/bmw_engine_families.jsonl` - engine families and common service topics.
 - `data/bmw_fault_memory_public_examples.jsonl` - public BMW fault-memory examples from bulletins.
 - `data/bmw_fluids_specification_logic.jsonl` - BMW fluid-specification decision logic and verification source.
-- `data/bmw_glossary_abbreviations.jsonl` - BMW/diagnostic glossary.
 - `data/bmw_symptom_diagnostic_index.jsonl` - symptom-to-system and data-to-capture map.
 - `data/bmw_transmission_families.jsonl` - BMW/ZF transmission families.
-- `data/generic_obd2_dtc_high_value.jsonl` - generic OBD II P-code diagnostic value map.
-- `data/public_sources_bmw_zf_nhtsa.jsonl` - BMW/ZF/NHTSA public source route catalog.
 
 ## Operating Rules
 

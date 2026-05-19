@@ -341,32 +341,32 @@ def test_reference_files_are_audited_but_not_fully_indexed(tmp_path):
     assert not any(item["path"].endswith("data_type_source_map.json") for item in result["items"])
 
 
-def test_parts_sourcing_reference_pack_files_stay_linked_without_index_noise(tmp_path):
+def test_parts_sourcing_pack_keeps_compact_manifest_without_draft_noise(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
     audit = audit_knowledge_base(store)
-    probe = probe_knowledge_base(store, "parts search gateway OpenAPI offer schema")
-    result = search_knowledge_base(store, "parts search gateway OpenAPI offer schema", domain="parts_sourcing", limit=20)
+    probe = probe_knowledge_base(store, "рейка Красноярск vendor discovery offer scoring")
+    result = search_knowledge_base(store, "OpenAPI offer schema code skeleton", domain="parts_sourcing", limit=20)
 
     assert audit["ok"] is True
     assert audit["missing_files"] == []
     assert probe["best_domain"] == "parts_sourcing"
-    assert any(item.endswith("parts_search_gateway.openapi.yaml") for item in probe["reference_files"])
-    assert not any(item["path"].endswith("parts_search_gateway.openapi.yaml") for item in result["items"])
+    assert any(item.endswith("MANIFEST.md") for item in probe["source_of_truth"])
+    assert not any("openapi" in item["path"].lower() or "code_skeleton" in item["path"].lower() for item in result["items"])
 
 
-def test_bmw_reference_catalogs_stay_linked_without_hiding_fault_examples(tmp_path):
+def test_bmw_compacted_pack_keeps_fault_examples_searchable(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    probe = probe_knowledge_base(store, "BMW public sources NHTSA ZF source catalog")
-    catalog_result = search_knowledge_base(store, "public_sources_bmw_zf_nhtsa", domain="bmw_repair", limit=20)
+    probe = probe_knowledge_base(store, "BMW fault memory IHKA source route")
+    compacted_result = search_knowledge_base(store, "public_sources_bmw_zf_nhtsa", domain="bmw_repair", limit=20)
     fault_result = search_knowledge_base(store, "8013FE IHKA", domain="bmw_repair", limit=5)
 
     assert probe["best_domain"] == "bmw_repair"
-    assert any(item.endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in probe["reference_files"])
-    assert not any(item["path"].endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in catalog_result["items"])
+    assert not any(item.endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in probe["reference_files"])
+    assert not any(item["path"].endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in compacted_result["items"])
     assert fault_result["items"][0]["document_type"] == "jsonl"
     assert "8013FE" in fault_result["items"][0]["heading"]
 

@@ -260,7 +260,7 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert catalog["tool_counts"]["crm_base_tools"] == 71
-    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 19
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 90
-    assert len(catalog["live_tools_verified"]) == 90
+    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 32
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 103
+    assert len(catalog["live_tools_verified"]) == 103
     assert "cleanup_card_content" in catalog["not_mcp_runtime_tools"]

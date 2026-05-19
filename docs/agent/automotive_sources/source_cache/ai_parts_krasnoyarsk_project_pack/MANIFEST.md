@@ -1,58 +1,31 @@
 # MANIFEST
 
-## Корневые файлы
+This source pack was compacted during documentation reduction. Active
+operational rules live in:
 
-- `README.md` — что это за пакет и порядок загрузки.
-- `PROJECT_BOOTSTRAP_FOR_CODEX.md` — стартовое техническое задание для Codex.
-- `MANIFEST.md` — список файлов.
+- `docs/agent/ai_parts_krasnoyarsk_playbook.md`
+- `docs/agent/procurement_pricing_playbook.md`
+- `docs/agent/procurement_price_sources.json`
+- `docs/agent/parts_search_playbook.md`
+- `docs/agent/zzap_search_playbook.md`
 
-## docs
+## Retained Files
 
-- `00_executive_summary_ru.md` — концепция проекта.
-- `01_market_analysis_ru.md` — анализ рынка Красноярска и России.
-- `02_data_sources_ru.md` — источники данных и матрица доверия.
-- `03_part_identity_ru.md` — идентификация детали и нормализация.
-- `04_search_workflows_ru.md` — сценарии поиска.
-- `05_api_integration_plan_ru.md` — план API-интеграций.
-- `06_scoring_and_decision_model_ru.md` — скоринг предложений.
-- `07_reporting_templates_ru.md` — шаблоны отчетов.
-- `08_krasnoyarsk_vendor_discovery_ru.md` — поиск и ведение локальной базы продавцов.
-- `09_compliance_limits_ru.md` — ограничения и законная автоматизация.
-- `10_implementation_roadmap_ru.md` — дорожная карта разработки.
-- `11_data_quality_and_feedback_ru.md` — качество данных и обратная связь.
-- `12_source_references_ru.md` — справочник источников.
-- `13_api_connector_specifications_ru.md` — спецификации коннекторов API.
-- `14_pricing_and_averaging_model_ru.md` — проценка, медианы, стоимость простоя.
+- `README.md` - package purpose and compact load order.
+- `MANIFEST.md` - current retained-file list.
+- `docs/00_executive_summary_ru.md` - concept and minimum workflow.
+- `docs/02_data_sources_ru.md` - source matrix and trust levels.
+- `docs/03_part_identity_ru.md` - part identity and fitment normalization.
+- `docs/04_search_workflows_ru.md` - search and escalation workflows.
+- `docs/06_scoring_and_decision_model_ru.md` - offer scoring rules.
+- `docs/07_reporting_templates_ru.md` - manager-facing output templates.
+- `docs/08_krasnoyarsk_vendor_discovery_ru.md` - local seller discovery.
+- `docs/09_compliance_limits_ru.md` - legal and platform boundaries.
+- `docs/14_pricing_and_averaging_model_ru.md` - pricing and downtime model.
 
-## prompts
+## Removed As Draft Material
 
-- `PROMPT_TO_PASTE_IN_CODEX.txt` — главный промпт для Codex.
-- `00_role_parts_sourcing_agent.md` — роль агента.
-- `01_part_request_intake.md` — прием заявки.
-- `02_fitment_identification.md` — применяемость.
-- `03_api_search_task.md` — постановка API-поиска.
-- `04_marketplace_manual_search.md` — ручной поиск на Авито/Дром/FarPost.
-- `05_offer_scoring.md` — оценка предложений.
-- `06_seller_call.md` — звонок продавцу.
-- `07_no_result_escalation.md` — если ничего не найдено.
-- `08_codex_build_tasks.md` — задачи разработки.
-
-## schemas
-
-JSON Schema (схемы JSON) для заявки, предложения, продавца, отчета и обратной связи.
-
-## configs
-
-YAML/ENV-конфигурации источников, весов скоринга, поисковых шаблонов, категорий и брендов.
-
-## data
-
-CSV/JSONL-данные: источники, шаблоны запросов, синтетические заявки и офферы, словарь синонимов, риск-карта, чек-листы.
-
-## code_skeleton
-
-Python-скелет: модели, нормализация, скоринг, безопасные ручные запросы, отчет, пример запуска.
-
-## openapi
-
-Черновой OpenAPI-контракт внутреннего шлюза поиска запчастей.
+Prompts, schemas, configs, sample data, code skeleton, OpenAPI drafts, API
+connector plans, implementation roadmap, source-reference snapshots, and market
+analysis notes were removed from the active repository. Recreate implementation
+contracts from current requirements instead of reviving old drafts.

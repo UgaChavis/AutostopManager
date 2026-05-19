@@ -222,7 +222,7 @@ def _referenced_agent_paths(root: Path) -> set[str]:
         except json.JSONDecodeError:
             payload = {}
         for route in (payload.get("domains") or {}).values():
-            for key in ["source_of_truth_files", "primary_files", "optional_runtime_files"]:
+            for key in ["source_of_truth_files", "primary_files", "reference_files", "optional_runtime_files"]:
                 for raw_path in route.get(key, []):
                     text = str(raw_path).replace("\\", "/")
                     if text.startswith("docs/agent/"):
