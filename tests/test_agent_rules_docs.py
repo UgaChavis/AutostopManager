@@ -21,6 +21,14 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
         "safe archive",
         "first five visible lines",
         "tag/mark/archive",
+        "detailed descriptions",
+        "detailed recoverable card text",
+        "oem/price/source conclusion",
+        "source conclusions into the card",
+        "<u>",
+        "</u>",
+        "rare underline",
+        "if the crm renderer supports it",
     ]
 
     combined = "\n".join(path.read_text(encoding="utf-8").casefold() for path in checked_paths)

@@ -2,7 +2,7 @@
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
   "last_verified": "2026-05-11",
-  "tool_count": 32,
+  "tool_count": 33,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -40,6 +40,7 @@
   ],
   "routing_tools": [
     "lookup_original_parts",
+    "estimate_repair_work_cost",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
     "recommend_service_management_actions",
@@ -95,6 +96,7 @@
     "finish_manager_run",
     "list_manager_runs",
     "lookup_original_parts",
+    "estimate_repair_work_cost",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
     "recommend_service_management_actions"
@@ -128,22 +130,15 @@
     "record_manager_run_event": "Record planned actions, writes, skips, risks, and verification events for a manager run.",
     "finish_manager_run": "Close a manager run with status, summary, and verification evidence.",
     "list_manager_runs": "List recent manager runs and optionally include their events.",
-    "lookup_original_parts": "Classify VIN, chassis, or market code and return a source-aware OEM lookup route.",
+    "lookup_original_parts": "Build a VIN/frame OEM lookup dossier with catalog routes, OEM candidates, supersessions, confidence, missing context, and next actions.",
+    "estimate_repair_work_cost": "Build a read-only labor estimate from vehicle/work items, public Russia STO labor-only prices, and a public norm-hours/labor-time plausibility layer; returns normalized operations, market sample, labor-time checks, Russia average, AutoStop +50% price, confidence, missing context, and next actions without writing repair orders.",
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
     "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake."
   },
   "natural_language_commands": {
     "Приберись": {
-      "aliases": [
-        "прибейсь",
-        "прибери доску",
-        "обслужи доску",
-        "актуализируй доску",
-        "проведи уборку доски",
-        "проверь доску",
-        "переберись"
-      ],
+      "aliases": [],
       "playbook": "docs/agent/board_cleanup_autopilot_playbook.md",
       "authority": "full board-management autopilot with strict preservation of user-entered CRM data",
       "automation_behavior": "When scheduled hourly, run as an incremental control pass: inspect live CRM state, prioritize blockers and stale cards, write only meaningful deltas, avoid duplicate AI notes, and skip writes if CRM/MCP health or target identity is uncertain.",
@@ -154,7 +149,7 @@
         "enrich vehicle profiles",
         "source VIN/OEM/parts data",
         "set tags, indicators, and deadlines",
-        "rewrite public descriptions with supported rich text formatting and restrained emoji markers",
+        "rewrite public descriptions as short readable working notes with paragraphs, useful emoji/rich-text accents that render cleanly, no raw technical markup, only important facts, blockers, and next actions",
         "update the separate hidden board_summary preview",
         "leave archive recommendations when a card looks completed"
       ],
@@ -258,6 +253,7 @@
     "treat the owner's Приберись command as docs/agent/board_cleanup_autopilot_playbook.md",
     "phone ChatGPT access uses the same CRM MCP endpoint when AutostopManager is mounted on the server",
     "route management, procurement, staff, customer, and finance work through docs/agent/krasnoyarsk_service_management_playbook.md",
+    "route labor work estimates through docs/agent/work_labor_pricing_playbook.md and keep estimate_repair_work_cost read-only until a separate ЗН write command",
     "route private ИП/AutoStop business identity and requisites through docs/agent/business_identity_playbook.md and data/private_knowledge",
     "prefer explicit uncertainty over invented completeness"
   ]

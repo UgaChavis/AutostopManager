@@ -2,14 +2,14 @@
   "purpose": "Machine-readable summary of the current AutoStop CRM MCP surface used by the manager agent.",
   "source_of_truth_repo": "UgaChavis/AutostopCRM-V1",
   "source_branch": "autostopcrm-v1",
-  "local_repo": "C:/Users/9860606/Desktop/AutostopCRM/autostopcrm",
+  "local_repo": "C:/Users/User/Desktop/AutostopCRM/autostopcrm",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
   "last_verified": "2026-05-19",
   "tool_counts": {
     "crm_base_tools": 71,
-    "optional_autostop_manager_tools": 32,
-    "production_tools_with_manager_mounted": 103
+    "optional_autostop_manager_tools": 33,
+    "production_tools_with_manager_mounted": 104
   },
   "source_documents": [
     "README.md",
@@ -172,6 +172,7 @@
       "finish_manager_run",
       "list_manager_runs",
       "lookup_original_parts",
+      "estimate_repair_work_cost",
       "recommend_automotive_sources",
       "recommend_fluid_maintenance_sources",
       "recommend_service_management_actions"
@@ -204,6 +205,7 @@
     "delete_sticky",
     "download_repair_order_print_pdf",
     "download_shared_file",
+    "estimate_repair_work_cost",
     "finish_manager_run",
     "get_board_content",
     "get_board_context",
@@ -294,9 +296,10 @@
     "Use shared_files tools for shared documents and card attachment tools for card-local attachments; do not paste file bytes into notes unless required.",
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use set_card_board_summary only after reading the target card and keep it under 5 non-empty lines.",
-    "For the owner commands Приберись, прибейсь, and переберись, treat description and board_summary as separate outputs: rich-text detailed recoverable card text plus short plain operator preview.",
+    "For the owner command Приберись, treat description and board_summary as separate outputs: short readable public working note with useful paragraphs/emoji/rich-text accents that render cleanly and no raw technical markup, plus short plain operator preview.",
     "Do not move or archive cards during routine cleanup unless the owner gives a separate explicit target/action.",
     "If a VIN/chassis/frame number exists and vehicle_profile engine_model, gearbox_model, or drivetrain is empty, enrich only from source-backed data and preserve manual_fields.",
+    "Use estimate_repair_work_cost for read-only labor estimates with public price averaging and public norm-hours/labor-time plausibility; do not call replace_repair_order_works from a pricing estimate unless the owner separately approves the exact ЗН write.",
     "Use today_context/memory_context_for/recall/remember/learn_from_feedback only for durable non-CRM manager memory and lessons.",
     "Treat the autostopcrm-v1 branch in the CRM repo as canonical for new MCP commands and connector behavior.",
     "Refresh this catalog whenever the CRM repo or AutostopManager MCP tool surface changes."

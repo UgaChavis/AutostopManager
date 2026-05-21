@@ -18,12 +18,12 @@
     {
       "id": "board-cleanup-autopilot-trigger",
       "priority": 16,
-      "rule": "When the owner says 'Приберись', 'прибейсь', 'переберись', 'прибери доску', 'обслужи доску', 'актуализируй доску', or asks for routine board cleanup, treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md."
+      "rule": "When the owner says the canonical command 'Приберись', treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md. Older voice-dictation variants are deprecated and must not be documented as aliases."
     },
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, detailed descriptions, and hidden board_summary previews. It does not allow moving, archiving, deleting, or changing financial/repair-order data without a separate explicit owner command."
+      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, short readable public descriptions, and hidden board_summary previews. It does not allow moving, archiving, deleting, or changing financial/repair-order data without a separate explicit owner command."
     },
     {
       "id": "board-cleanup-no-card-movement",
@@ -33,22 +33,22 @@
     {
       "id": "board-cleanup-data-preservation",
       "priority": 18,
-      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer additive description edits: add a short manager block or question while preserving existing text below it."
+      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer short structured description edits: keep the important fact and next step, and avoid keeping noisy old text verbatim unless it is operationally needed."
     },
     {
       "id": "board-cleanup-description-rich-text",
       "priority": 19,
-      "rule": "During board cleanup, especially for the owner command 'переберись', rewrite the public card description with supported CRM text editing: clear headings, bold key labels, light italic clarifications, underline for important warnings or approvals when available, short lists, and restrained emoji markers. Preserve all technical data, part numbers, prices, payments, contacts, files, diagnostics, and historical notes. Keep board_summary plain and compact."
+      "rule": "During board cleanup after the owner command 'Приберись', rewrite the public card description as a short human-readable working note: only important facts, blocker, money/parts note when relevant, and next action. Split text into paragraphs where it improves reading. Use restrained emoji markers and supported rich text for scanning: bold labels/key facts and italic uncertainty. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator; use bold text plus a marker for critical emphasis instead. Do not add source lists, long provenance notes, diagnostic theory, or verbose AI explanations. Preserve relevant technical data, part numbers, prices, payments, contacts, files, diagnostics, and history without expanding them."
     },
     {
       "id": "board-cleanup-note-style",
       "priority": 19,
-      "rule": "During board cleanup, write very short card notes. Prefer one concise 'AI:' line with a next action, question, OEM/price/source conclusion, payment blocker, or stale-card status. Do not make people read long explanations inside cards."
+      "rule": "During board cleanup, write very short card notes. Prefer one concise 'AI:' line with a next action, question, OEM/price conclusion, payment blocker, or stale-card status. Do not make people read long explanations or source lists inside cards."
     },
     {
       "id": "board-cleanup-public-summary",
       "priority": 19,
-      "rule": "During board cleanup, keep full card description and hidden board_summary separate. The description is detailed recoverable card text. board_summary is the four-or-five-line operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, and long issue lists out of it."
+      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description is a short readable working note with paragraphs, useful visual markers, important facts, and next action. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, and long issue lists out of it."
     },
     {
       "id": "board-cleanup-vin-profile-enrichment",
@@ -73,7 +73,7 @@
     {
       "id": "command-route-sync",
       "priority": 22,
-      "rule": "Treat docs/agent/command_routes.json as the canonical route map for natural owner commands such as Приберись and прибейсь; update it when command aliases, open-first files, or allowed actions change."
+      "rule": "Treat docs/agent/command_routes.json as the canonical route map for standing owner commands such as Приберись; update it when command names, open-first files, or allowed actions change."
     },
     {
       "id": "knowledge-annotation-index",
@@ -118,7 +118,7 @@
     {
       "id": "business-document-quality-gate",
       "priority": 24,
-      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md and C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run."
+      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. If a focused local Codex skill is installed, it may help with render/audit steps, but the playbook is canonical. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run."
     },
     {
       "id": "business-identity-private-route",
@@ -218,7 +218,7 @@
     {
       "id": "vin-oem-lookup-workflow",
       "priority": 31,
-      "rule": "When the owner asks for original catalog numbers from a VIN or chassis number, route the identifier through the VIN/OEM lookup playbook first: decode ISO VINs through vPIC, use manufacturer frame-number or EPC routes for Japan-market chassis numbers, and preserve source provenance plus uncertainty in the response."
+      "rule": "When the owner asks for original catalog numbers from a VIN or chassis number, build a VIN/OEM lookup dossier first: decode ISO VINs through vPIC only for vehicle identity, prefer legal paid/official EPC routes for BMW/VAG, capture OEM candidates and supersessions from VIN-specific EPC evidence, and return missing context instead of guessing."
     },
     {
       "id": "crm-mcp-sync",
@@ -234,6 +234,11 @@
       "id": "service-management-source-boundary",
       "priority": 32,
       "rule": "Use live AutoStop CRM MCP as the source of truth for board state, repair orders, cashboxes, clients, and vehicle cards. Use docs/agent/service_management_sources.json only for source routing and public/local supplier or labor-market context."
+    },
+    {
+      "id": "work-labor-pricing-workflow",
+      "priority": 32,
+      "rule": "When the owner asks to estimate repair work cost, use docs/agent/work_labor_pricing_playbook.md and estimate_repair_work_cost. Price labor only from public Russia STO samples, calculate the average after outlier filtering, apply AutoStop +50%, automatically add public norm-hours/labor-time plausibility when available, and do not call replace_repair_order_works without a separate explicit owner command."
     },
     {
       "id": "parts-search-workflow",

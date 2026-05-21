@@ -1,8 +1,11 @@
 # Board Cleanup Autopilot Playbook
 
-Purpose: define the standard behavior when the owner says `Приберись`,
-`прибейсь`, `переберись`, `прибери доску`, `обслужи доску`,
-`актуализируй доску`, or asks for a routine board cleanup.
+Purpose: define the standard behavior when the owner says the canonical
+command `Приберись`.
+
+Older spellings produced by voice input or earlier docs are deprecated. Do not
+list them as command aliases; the standing board-cleanup command is one word:
+`Приберись`.
 
 This is not a separate product feature. It is an operating instruction for the
 agent when working through the existing AutoStop CRM MCP tools.
@@ -17,15 +20,16 @@ The agent may independently:
 - read all active board/card/repair-order/cashbox context needed for cleanup
 - update card title, vehicle, description, tags, deadline, indicator, and
   vehicle profile
-- rewrite the public card description into a clean detailed working note using
-  supported rich text formatting and restrained emoji markers when useful
+- rewrite the public card description into a short, human-readable working note
+  with paragraphs, useful visual markers, and supported rich text formatting
 - set or refresh the hidden `board_summary` as the clean 4-5 line board preview
 - recommend archive candidates in the report, but do not archive cards unless
   the owner gives a separate explicit owner command for archive
 - add short questions or recommendations inside the card instead of asking the
   owner in chat
 - fill VIN/chassis-derived vehicle fields when source confidence is adequate
-- source parts and add short OEM/price/source conclusions into the card
+- source parts and add only the chosen OEM/price/next-action facts into the
+  card, without source lists or long provenance notes
 - clean wording, spelling, formatting, and duplicated text while preserving the
   user's meaning
 
@@ -120,17 +124,48 @@ Classify every relevant active card into one current blocker:
 The public `description` and hidden `board_summary` are different fields with
 different jobs.
 
-`description` is the detailed recoverable card text. It may include vehicle
-identity, customer context, VIN, work list, diagnostics, money, parts, and
-history. Keep it readable and preserve useful old text under `Подробности:` if
-needed.
+`description` is a concise working note for a person, not a dump of everything
+the agent knows. Keep only what the operator needs now: current status, key
+facts, blocker, money/parts note if relevant, and the next action. Do not write
+long explanations, source lists, search history, diagnostic theory, or broad
+background. Preserve valuable old facts, but compress them into readable
+paragraphs instead of expanding them.
 
-When rewriting `description`, use the CRM text editor deliberately: headings,
-bold labels, light italic comments, underline only for important warnings or
-money/client approvals, short lists, and a few useful emoji markers. Preserve
-technical data, part numbers, prices, payments, contacts, diagnostics, files,
-and history exactly; do not let formatting turn into data loss. Keep
-`board_summary` plain, compact, and free of decorative formatting.
+When rewriting `description`, make it easy to scan:
+
+- split meaning into short paragraphs; avoid one dense line of mixed facts
+- use **bold** for labels and decisive facts
+- use *italic* for uncertainty, caution, or "needs verification"
+- do not use raw HTML-style tags for underline; CRM may show them to the
+  operator as technical text
+- if a critical blocker/deadline needs emphasis, use **bold** text and a
+  restrained marker such as ⚠️ instead of simulated underline
+- use restrained emoji markers only when they speed up reading, for example
+  🔧 work, 📌 status, 💰 money, ⚠️ blocker, ⏭️ next action, ✅ ready/done
+- do not decorate every line; formatting should help the mechanic or manager
+  understand the card faster
+- after saving, inspect the visible description/preview; if markup characters
+  such as `<...>`, raw tags, or other technical symbols are visible, remove
+  them immediately
+
+Preferred public `description` shape:
+
+```markdown
+📌 **Статус:** <коротко что с машиной сейчас>.
+
+🔧 **Работы:** <только важный список или итог>.
+
+💰 **Деньги/запчасти:** <сумма, заказ, наличие или "не считали">.
+
+⏭️ **Следующий шаг:** <одно конкретное действие>.
+```
+
+Use only the blocks that matter for the card. For a tiny card, two paragraphs
+are enough. Avoid decorative formatting, long source/provenance blocks, and
+verbose AI explanations. Preserve technical data, part numbers, prices,
+payments, contacts, diagnostics, files, and history exactly when they are still
+relevant; if old text is noisy, reduce it to the important fact plus next step.
+Keep `board_summary` plain, compact, and free of decorative formatting.
 
 `board_summary` is the compact operator preview shown on the board. Update it
 with `set_card_board_summary` after card text/profile/tag changes. Keep it to
@@ -155,8 +190,10 @@ If the card is incomplete:
 Важно: указать VIN/госномер/список работ в описании, но не в превью.
 ```
 
-Preserve useful old description text instead of deleting it. Do not put long AI
-reasoning into either field.
+Preserve useful old facts instead of deleting them. Do not put long AI
+reasoning or source lists into either field. Rich formatting belongs mainly in
+the public `description`; `board_summary` should stay plain so the board
+preview remains stable.
 
 ### 2. Vehicle Identity
 
@@ -173,12 +210,13 @@ If a card contains a VIN, chassis number, or body code:
 If a card asks for a detail/part:
 
 - normalize part name, side, axle, position, condition, and OEM if present
-- find OEM number when VIN/chassis is available
+- build a VIN/OEM dossier when VIN/chassis is available; if EPC evidence is
+  missing, record missing context instead of guessing an OEM number
 - search exact OEM first
 - use Drom, ZZap, Avito, Emex, Exist, Autodoc, and local Krasnoyarsk suppliers
   according to urgency
-- add only concise useful output to the card: OEM, price range, source, delivery
-  or pickup, and next action
+- add only concise useful output to the card: OEM, price range, delivery or
+  pickup, and next action
 
 Preferred note format:
 
@@ -256,18 +294,22 @@ Before every CRM write:
 - preserve existing user-entered content
 - make the smallest useful update
 - keep card text short
-- when touching `description`, keep it detailed and recoverable rather than
-  treating its first lines as the board preview
+- when touching `description`, keep it short, recoverable, and readable:
+  important facts plus next action, split into useful paragraphs, not a full
+  report and not a source log
 - when rewriting `description`, apply supported rich text formatting and
-  restrained emoji markers without changing technical facts, prices, payments,
-  contacts, diagnostics, or historical notes
+  restrained emoji markers where they help scanning; use **bold** and *italic*
+  for real emphasis, not decoration
+- never write raw HTML or pseudo-formatting into a CRM description; visible
+  markup is worse than no formatting
+- do not add sources, long explanations, or extra background into the card
 - after touching `description`, `title`, `tags`, or `vehicle_profile`, call
   `set_card_board_summary` and verify `board_summary_stale=false`
 - avoid multiple noisy notes when one structured update is enough
 - do not rewrite a card just for style if it already reads clearly
-- do not move or archive cards during `Приберись` / `прибейсь` /
-  `переберись`; leave the current column and archive state as-is unless the
-  owner gives a separate explicit owner command for that target
+- do not move or archive cards during `Приберись`; leave the current column
+  and archive state as-is unless the owner gives a separate explicit owner
+  command for that target
 
 Use the card itself for operational questions. Ask the owner in chat only when:
 
@@ -304,7 +346,7 @@ operational state looks clear. Use non-moving, non-archive updates instead:
 - tags
 - indicators
 - deadlines
-- detailed description
+- readable public description
 - hidden `board_summary`
 - short `AI:` note
 - vehicle-profile enrichment

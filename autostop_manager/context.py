@@ -26,7 +26,9 @@ DOMAIN_BRIEF_RULES = {
         "Routine board cleanup may update confirmed fields, tags, deadlines, indicators, source-backed vehicle profile fields, concise AI notes, and board_summary.",
         "Routine board cleanup must not move cards between columns and must not archive cards unless the owner gives a separate explicit command.",
         "Preserve operator evidence: works, materials, prices, payments, files, contacts, VIN/chassis/license data, diagnostics, and historical notes.",
-        "Use board_summary for the 4-5 line board preview; keep full recoverable detail in description and keep phone, VIN, full client name, and raw diagnostic dumps out of board_summary.",
+        "Use description as a short readable working note: paragraphs when useful, important facts plus next action, restrained emoji/rich-text accents that render cleanly, and no raw HTML/pseudo-formatting/visible technical markup; keep board_summary a plain 4-5 line preview.",
+        "After saving CRM description, inspect the visible text/preview and remove formatting artifacts immediately.",
+        "Keep source lists, long explanations, phone, VIN, full client name, raw diagnostic dumps, rich formatting, emoji decoration, and long issue lists out of board_summary.",
     ],
 }
 

@@ -7,36 +7,18 @@
       "domain": "board_cleanup_autopilot",
       "open_first": "docs/agent/board_cleanup_autopilot_playbook.md",
       "aliases": [
-        "Приберись",
-        "прибейсь",
-        "прибери доску",
-        "обслужи доску",
-        "актуализируй доску",
-        "проведи уборку доски",
-        "проверь доску",
-        "переберись"
+        "Приберись"
       ],
-      "keywords": [
-        "доска",
-        "уборка",
-        "карточки",
-        "актуализируй",
-        "архив",
-        "готовые",
-        "без оплаты",
-        "просроченные"
-      ],
+      "keywords": [],
       "memory_queries": [
         "board-cleanup",
         "Приберись",
-        "прибейсь",
-        "board-cleanup-no-card-movement",
-        "переберись"
+        "board-cleanup-no-card-movement"
       ],
       "next_actions": [
         "read live CRM board state",
         "classify blockers",
-        "update detailed descriptions with supported rich text formatting and restrained emoji markers, separate board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
+        "update short readable public descriptions with paragraphs, useful emoji/rich-text accents that render cleanly, no raw technical markup, only important facts and next actions, separate plain board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
         "leave cards in their current columns",
         "do not archive cards without a separate explicit owner command; leave archive recommendations instead"
       ]

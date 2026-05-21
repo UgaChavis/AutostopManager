@@ -17,7 +17,7 @@ def test_prepare_manager_context_combines_rules_memory_and_knowledge_route(tmp_p
         tags=["board-cleanup"],
     )
 
-    result = prepare_manager_context(store, "прибейсь", intent="board_cleanup", limit=8)
+    result = prepare_manager_context(store, "Приберись", intent="board_cleanup", limit=8)
 
     assert result["ok"] is True
     assert result["intent"] == "board_cleanup"
@@ -45,7 +45,7 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     store.seed_default_rules()
     sync_knowledge_base(store)
 
-    result = context.build_agent_brief(store, "прибейсь", intent="board_cleanup", limit=8)
+    result = context.build_agent_brief(store, "Приберись", intent="board_cleanup", limit=8)
 
     assert result["ok"] is True
     assert result["format"] == "agent_brief_v1"

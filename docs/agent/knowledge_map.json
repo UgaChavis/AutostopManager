@@ -342,7 +342,7 @@
         "форма PDF"
       ],
       "keywords": [
-        "autostop-business-documents",
+        "business_document_quality_playbook",
         "audit_business_document",
         "render_docx",
         "render_pdf",
@@ -1314,19 +1314,12 @@
       "title": "Board cleanup autopilot: Приберись",
       "use_when": [
         "owner says Приберись",
-        "owner says прибери доску",
-        "owner says обслужи доску",
-        "owner says актуализируй доску",
         "routine CRM board cleanup",
-        "hourly board cleanup automation"
+        "hourly board cleanup automation",
+        "card description formatting during cleanup"
       ],
       "aliases": [
         "Приберись",
-        "прибери доску",
-        "обслужи доску",
-        "актуализируй доску",
-        "проведи уборку доски",
-        "проверь доску",
         "board cleanup",
         "cleanup autopilot",
         "CRM cleanup",
@@ -1339,6 +1332,15 @@
         "archive",
         "preserve data",
         "AI note",
+        "readable description",
+        "description formatting",
+        "emoji",
+        "эмодзи",
+        "абзацы",
+        "bold",
+        "italic",
+        "no raw HTML",
+        "без технических символов",
         "deadline",
         "indicator",
         "tag",
@@ -1350,6 +1352,8 @@
       "questions": [
         "что делать когда владелец сказал Приберись",
         "как агент должен убирать CRM доску",
+        "как оформлять описание карточки при уборке",
+        "как использовать эмодзи и шрифты в описании карточки",
         "какие CRM правки разрешены автопилоту",
         "как запускать уборку доски каждый час",
         "что нельзя удалять при уборке доски"
@@ -1366,6 +1370,84 @@
         "docs/agent/krasnoyarsk_service_management_playbook.md"
       ]
     },
+    "work_labor_pricing": {
+      "title": "Read-only labor work pricing from public Russia STO prices plus public labor-time plausibility",
+      "use_when": [
+        "repair work cost estimate",
+        "labor-only pricing",
+        "average Russia work price plus AutoStop markup",
+        "diagnostic-first estimate from complaint"
+      ],
+      "aliases": [
+        "work pricing",
+        "labor pricing",
+        "labor estimate",
+        "estimate work",
+        "estimate_repair_work_cost",
+        "стоимость работ",
+        "оценка работ",
+        "смета работ",
+        "цена работы",
+        "работа без запчастей",
+        "средняя по России",
+        "плюс 50%",
+        "прайс СТО",
+        "нормочасы",
+        "нормо-часы",
+        "норма времени",
+        "трудоемкость",
+        "диагностика перед сметой"
+      ],
+      "keywords": [
+        "labor-only",
+        "public STO prices",
+        "market sample",
+        "Russia average",
+        "AutoStop markup",
+        "round_to_100",
+        "outlier filter",
+        "minimum 3 quotes",
+        "public norm-hours",
+        "labor-time plausibility",
+        "overlap adjustments",
+        "replace_repair_order_works forbidden",
+        "diagnostic checklist",
+        "Mitchell ProDemand",
+        "MOTOR Estimated Work Times",
+        "TecAlliance",
+        "Autodata"
+      ],
+      "questions": [
+        "как оценить стоимость работ",
+        "как посчитать среднюю цену работ по России плюс 50%",
+        "какие источники использовать для прайсов СТО",
+        "как не смешивать работы и запчасти",
+        "что делать если есть только жалоба без списка работ",
+        "когда можно считать цену уверенной"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/work_labor_pricing_playbook.md",
+        "docs/agent/labor_pricing_sources.json",
+        "docs/agent/krasnoyarsk_service_management_playbook.md"
+      ],
+      "primary_files": [
+        "docs/agent/work_labor_pricing_playbook.md",
+        "docs/agent/labor_pricing_sources.json",
+        "docs/agent/krasnoyarsk_service_management_playbook.md"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/data_type_source_map.json",
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
+      ],
+      "required_context": [
+        "vehicle or VIN/chassis",
+        "exact work items or complaint",
+        "public labor-only quote sample",
+        "public norm-hours/labor-time sample when available",
+        "city/region and vehicle class",
+        "engine/transmission when they affect the operation"
+      ]
+    },
     "service_management": {
       "title": "Krasnoyarsk workshop service management route",
       "use_when": [
@@ -1376,6 +1458,7 @@
         "customer flow",
         "finance control",
         "procurement pricing",
+        "labor work pricing",
         "manager-facing CRM statistics or Obsidian snapshots"
       ],
       "aliases": [
@@ -1397,6 +1480,9 @@
         "заказ-наряды",
         "закупочная цена",
         "цена материалов",
+        "стоимость работ",
+        "смета работ",
+        "работа без запчастей",
         "наличие Красноярск"
       ],
       "keywords": [
@@ -1411,6 +1497,8 @@
         "board cleanup",
         "blocked cards",
         "materials total",
+        "labor pricing",
+        "work estimate",
         "local supplier"
       ],
       "questions": [
@@ -1419,6 +1507,7 @@
         "как прибраться на доске",
         "где смотреть финансы и загрузку",
         "как проверить закупочную стоимость материалов",
+        "как оценить стоимость работ по средним ценам России",
         "какие CRM данные безопасно заносить в Obsidian",
         "как сделать менеджерский обзор клиентов, касс и заказ-нарядов"
       ],
@@ -1426,6 +1515,8 @@
         "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
+        "docs/agent/work_labor_pricing_playbook.md",
+        "docs/agent/labor_pricing_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/service_management_sources.json",
         "docs/agent/board_cleanup_autopilot_playbook.md"
@@ -1434,6 +1525,8 @@
         "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
+        "docs/agent/work_labor_pricing_playbook.md",
+        "docs/agent/labor_pricing_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/service_management_sources.json",
         "docs/agent/service_patterns.json",
@@ -1490,8 +1583,8 @@
     "toyota_gr_yaris": "rg -n \"GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F\" docs/agent/toyota_gr_yaris_playbook.md docs/agent/automotive_sources",
     "vin_oem": "rg -n \"VIN|OEM|frame|chassis|кузов|каталог\" docs/agent",
     "fluids": "rg -n \"fluid|oil|capacity|масло|жидк|заправ\" docs/agent",
-    "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",
-    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent C:/Users/User/.codex/skills/autostop-business-documents",
+    "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board|описание|emoji|эмодзи|format|rich text\" docs/agent",
+    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent"
   },

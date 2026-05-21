@@ -23,8 +23,11 @@ Refresh this model with `get_board_context` when the board changes.
 - `Запись на ремонт` and `Ресепшен`: appointment and intake flow; check
   date mismatch, no-show risk, and missing VIN/contact details.
 - Technician columns such as `В работе, Константин`, `В работе Немец`,
-  `В работе Валера`, `Слесарь Сергей`, `Электрик Александр`, `КПП - Дмитрий`,
-  and student/assistant columns are load signals, not final payroll records.
+  `В работе Слава`, `В работе Валера`, `Электрик Александр`,
+  `в работе артем студент`, `В работе Максим Курсеич`, `В работе Кирилл`,
+  `КПП - Дмитрий`, and assistant/reception columns are load signals, not
+  final payroll records. Refresh the exact labels from live `get_board_context`
+  before staff-load decisions.
 - `Снабжение` and `Заказы запчастей`: procurement blocker queues; every card
   should show the exact part identity, source, price, delivery date, and next
   supplier action.
@@ -40,7 +43,9 @@ retail, and client sell prices separate.
 Use this order:
 
 1. Normalize vehicle identity and part identity from CRM.
-2. Confirm OEM or replacement number through VIN/OEM routing.
+2. Confirm OEM or replacement number through the VIN/OEM dossier workflow:
+   catalog route, EPC evidence, OEM candidates, supersessions, confidence, and
+   missing context.
 3. Search exact number in Drom, ZZap, Emex/Exist/Autodoc, then local
    Krasnoyarsk suppliers.
 4. Rank by exact article, city pickup, delivery time, seller reliability,
@@ -64,6 +69,29 @@ Use this order:
 3. For safety-critical systems, use OEM or licensed professional information.
 4. Create a diagnostic checklist before pricing parts.
 5. Keep unsupported facts as questions for the technician.
+
+## Work Labor Pricing
+
+For labor-only work estimates, use `work_labor_pricing_playbook.md` and
+`estimate_repair_work_cost`.
+
+Rules:
+
+- Price work separately from parts, fluids, materials, and procurement markup.
+- Use public Russia STO labor prices as the main basis.
+- Add public norm-hours/labor-time as a second plausibility layer when it can
+  be found automatically; do not ask the owner to provide norm-hours.
+- Group only comparable operations and comparable vehicle classes.
+- Calculate average after outlier filtering, then AutoStop price as
+  `average * 1.50`, rounded to 100 rubles.
+- Use norm-hours to check complexity and overlapping operations, not as a
+  replacement for the public price average.
+- If fewer than 3 valid labor-only prices remain, return low confidence and
+  missing context instead of a confident price.
+- If the card has only a complaint, estimate diagnostics only and return a
+  checklist before final repair pricing.
+- Do not call `replace_repair_order_works`; ЗН write needs a separate explicit
+  owner command.
 
 ## Staff Management
 

@@ -25,7 +25,7 @@ Use this loop before broad file reads:
    `knowledge-audit` and `annotations-audit`.
 
 For non-trivial operational tasks, run `prepare_manager_context` first. It
-applies command routes such as `Приберись` / `прибейсь`, relevant memory/rules,
+applies command routes such as `Приберись`, relevant memory/rules,
 knowledge routing, missing required context, and next actions before broad file
 reads.
 
@@ -52,6 +52,7 @@ decide whether the reusable route belongs in the intake flow.
 | Gmail operations | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail inbox search, labels, drafts, attachments, thread reads, write safety, email-derived memory |
 | Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` | Krasnoyarsk parts search, ZZap/Drom/Avito, procurement price, offer scoring |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | workshop triage, staff, finance, customer flow, board cleanup, CRM manager data summaries |
+| Work labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` | read-only work estimates from public Russia labor-only STO prices plus public norm-hours/labor-time plausibility, average price, AutoStop +50%, confidence |
 | Deployment | `deployment` | `docs/agent/deployment_runbook.md` | local MCP startup, server publishing, GitHub/private-data boundary |
 
 ## File Types And Placement
@@ -75,7 +76,7 @@ Use these locations consistently:
   guidance.
 - `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
   owner-provided packs that should not be duplicated into memory.
-- `C:/Users/9860606/.codex/skills/<topic>/` - optional focused trigger skills
+- `C:/Users/User/.codex/skills/<topic>/` - optional focused trigger skills
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
   material that should usually stay out of Git.

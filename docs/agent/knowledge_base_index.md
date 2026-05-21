@@ -209,20 +209,24 @@ For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the
 playbook first, then verify VIN/frame-specific repair, TSB, wiring, torque,
 fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
-Fluid maintenance has a dedicated Codex skill:
+Fluid maintenance route:
 
-- `C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md`
 - `docs/agent/fluid_maintenance_playbook.md`
 - `docs/agent/automotive_sources/fluid_maintenance_sources.json`
 
-For oil, fluid, approval, and fill-capacity requests, load the skill first,
+For oil, fluid, approval, and fill-capacity requests, load the playbook first,
 then verify exact vehicle/unit data through OEM or licensed service sources.
+If a focused local Codex skill is installed in the current environment, it may
+help, but the playbook/catalog route is canonical.
 
 ## Vehicle Identity and OEM Parts
 
 - `vehicle_identity_playbook.md` - classify VIN, Japanese frame/chassis number, Korean VIN, and market-specific codes.
-- `vin_oem_lookup_playbook.md` - original catalog number lookup routing.
-- `vin_oem_sources.json` - VIN/OEM source catalog.
+- `vin_oem_lookup_playbook.md` - original catalog-number dossier workflow:
+  VIN decode, catalog vehicle selection, part group lookup, OEM candidate
+  validation, confidence, and missing context.
+- `vin_oem_sources.json` - VIN/OEM source catalog with BMW/VAG paid EPC
+  preferences and public fallback routes.
 - `parts_search_playbook.md` - Drom/marketplace sourcing workflow.
 - `zzap_search_playbook.md` - ZZap price comparison, replacements, and local-region checks.
 - `procurement_pricing_playbook.md` - закупочная цена, Красноярск-first availability, selected-part vs OEM-reference separation, package/unit math, and CRM material-total rules.
@@ -232,7 +236,6 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 
 AI parts Красноярск project pack:
 
-- `C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md`
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md`
@@ -268,13 +271,13 @@ document if formatting matters.
 - `business_document_quality_playbook.md` - AutoStop route for PDF/DOCX/XLSX
   invoices, acts, КП, receipts, requisites sheets, accounting-style documents,
   and printable forms.
-- `C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md` - local
-  Codex skill with the mandatory document-quality gate.
 
 For счет / акт / КП / бухгалтерский документ / PDF / Word / Excel requests,
 search `business_documents` first. Use `business_identity` only for current
 private company facts, then render-inspect the final artifact and run the
-business-document audit script before saying the file is ready.
+business-document audit script before saying the file is ready. If a focused
+local Codex skill is installed in the current environment, it may help with
+rendering and audit steps, but the playbook remains the canonical route.
 
 ## Gmail Operations
 
@@ -294,12 +297,23 @@ approval for the exact action.
 ## Service Management
 
 - `krasnoyarsk_service_management_playbook.md` - daily workshop control, procurement, repair triage, customer flow, staff, finance, and source intake.
+- `work_labor_pricing_playbook.md` - read-only labor estimate workflow:
+  vehicle and exact work, public Russia STO labor-only sample, average after
+  outlier filtering, AutoStop `+50%`, public norm-hours/labor-time
+  plausibility layer, confidence, and missing context.
+- `labor_pricing_sources.json` - source routing for public STO prices,
+  map/search discovery, and public norm-hours/labor-time plausibility checks.
 - `crm_manager_data_playbook.md` - what operational CRM data can be summarized
   in Obsidian and what must remain live-only in CRM.
 - `service_management_sources.json` - source routing for Krasnoyarsk procurement, personnel, management, and local market context.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
 - `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and routine board cleanup autonomy.
+
+For work-cost estimates, use `estimate_repair_work_cost` or
+`python -m autostop_manager.cli estimate-work`. It is read-only and must not
+write repair-order works; a ЗН write requires a separate explicit owner
+command.
 
 ## Deployment and Operations
 
@@ -320,11 +334,12 @@ rg -n "GR Yaris|Yaris GR|GXPA16|G16E|GR-FOUR|EA67F|UC80F" docs/agent/toyota_gr_y
 rg -n "VIN|OEM|frame|chassis|кузов|каталог" docs/agent
 rg -n "DSG|S tronic|DQ200|DQ250|DQ381|DQ500|DL501|DL382|0AM|0CW|02E|0B5|мехатрон|J217|J743|ODIS|SVM|basic settings|адаптац" docs/agent/dsg_transmission_playbook.md docs/agent/automotive_sources/dsg_transmission_sources.json docs/agent/transmission_playbook.md
 rg -n "рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|pricing|reporting" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack
+rg -n "стоимость работ|смета|labor-only|прайс СТО|средняя по России|estimate_repair_work_cost" docs/agent/work_labor_pricing_playbook.md docs/agent/labor_pricing_sources.json
 rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|карточка предприятия|ОГРНИП|ИНН|ОКВЭД" docs/agent/business_identity_playbook.md
 # If data/private_knowledge exists locally, search it too; it is optional and ignored by Git.
 rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment" docs/agent
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
-rg -n "Приберись|прибейсь|переберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent
+rg -n "Приберись|cleanup|archive|preserve|board|описание|format|rich text|emoji|эмодзи|абзац" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent
 ```
 

@@ -52,13 +52,16 @@ up to date.
 - knowledge annotation audit: `python -m autostop_manager.cli annotations-audit`
 - memory quality audit: `python -m autostop_manager.cli memory-audit`
 - memory curation: `python -m autostop_manager.cli memory-curate --apply`
-- task-specific context: `python -m autostop_manager.cli prepare-context "переберись" --intent board_cleanup`
-- compact agent startup package: `python -m autostop_manager.cli agent-brief "прибейсь" --intent board_cleanup`
+- task-specific context: `python -m autostop_manager.cli prepare-context "Приберись" --intent board_cleanup`
+- compact agent startup package: `python -m autostop_manager.cli agent-brief "Приберись" --intent board_cleanup`
 - skill registry audit: `python -m autostop_manager.cli skills-audit`
 - operation ledger: `python -m autostop_manager.cli run-start "Приберись" --intent board_cleanup --dry-run`
 - repair source routing: use `docs/agent/automotive_repair_source_playbook.md`
   and `docs/agent/automotive_sources/` before technical repair, TSB, recall,
   diagnostics, labor, fluid, torque, wiring, ADAS, SRS, or HV recommendations
+- VIN/OEM lookup routing: use `python -m autostop_manager.cli lookup-oem`
+  with `--part-name`, `--side`, `--position`, and optional manual EPC capture
+  fields to build a structured original-number dossier before price search
 - fluid maintenance routing: use `docs/agent/fluid_maintenance_playbook.md`
   and `docs/agent/automotive_sources/fluid_maintenance_sources.json` before
   oil, operating-fluid, fill-capacity, or ТО service recommendations
@@ -78,18 +81,25 @@ up to date.
   `docs/agent/service_management_sources.json` before workshop-management
   decisions about parts procurement, repair triage, customer flow, staff load,
   finance control, daily CRM control, or new knowledge intake
-- board cleanup autopilot: when the owner says `Приберись`, `прибейсь`, or
-  `переберись`, use `docs/agent/board_cleanup_autopilot_playbook.md` as the
+- labor work pricing: use `python -m autostop_manager.cli estimate-work` or
+  MCP `estimate_repair_work_cost` with public Russia labor-only STO quotes
+  plus a public norm-hours/labor-time plausibility layer; it returns average
+  work cost, AutoStop `+50%`, norm-hour checks, confidence, and missing context
+  without writing repair-order works
+- board cleanup autopilot: when the owner says `Приберись`, use
+  `docs/agent/board_cleanup_autopilot_playbook.md` as the
   standing procedure for CRM board hygiene with strict preservation of
-  user-entered data; update detailed descriptions and the separate
-  `board_summary` preview, and do not move or archive cards without a separate
-  explicit owner command
+  user-entered data; update short readable public descriptions with useful
+  paragraphs, restrained emoji/rich-text accents that render cleanly and no
+  raw technical markup, plus the separate plain `board_summary` preview; do
+  not move or archive cards without a separate explicit owner command
 - deployment/runbook: use `docs/agent/deployment_runbook.md`; publish code,
   tests, and playbooks, but keep runtime CRM snapshots and SQLite databases out
   of GitHub
 - VIN/OEM lookup: use `docs/agent/vin_oem_lookup_playbook.md` and
   `docs/agent/vin_oem_sources.json` for VIN, chassis, and original catalog
-  number routing
+  number dossiers with catalog routes, OEM candidates, supersessions,
+  confidence, missing context, and next actions
 - email work: use the connected Gmail MCP tools for inbox inspection,
   thread reading, triage, reply drafting, forwarding, and labels
 - vehicle identity: use `docs/agent/vehicle_identity_playbook.md` for VIN,
@@ -124,17 +134,18 @@ python -m autostop_manager.cli memory-context "уборка CRM карточек
 python -m autostop_manager.cli memory-map
 python -m autostop_manager.cli memory-topics
 python -m autostop_manager.cli memory-gaps
-python -m autostop_manager.cli task "Проверить просроченные машины утром" --due 2026-04-30
-python -m autostop_manager.cli remind "Напомнить про аренду" --due 2026-05-04T10:00:00+07:00
+python -m autostop_manager.cli task "Проверить просроченные машины утром" --due 2026-06-01
+python -m autostop_manager.cli remind "Напомнить про аренду" --due 2026-06-04T10:00:00+07:00
 python -m autostop_manager.cli today
 python -m autostop_manager.cli journal "Проверил доску CRM, готовые машины требуют оплаты"
 python -m autostop_manager.cli init
 python -m autostop_manager.cli seed-rules
-python -m autostop_manager.cli lookup-oem 1HGCM82633A004352 --model-year 2003
+python -m autostop_manager.cli lookup-oem WBA00000000000000 --make BMW --part-name "рулевая рейка" --side left --position front
 python -m autostop_manager.cli source-route --brand Toyota --data-type repair_manuals
 python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia
 python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
 python -m autostop_manager.cli service-plan --area персонал --role автослесарь --city Красноярск
+python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "замена рулевой рейки" --quotes-json quotes.json
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
 python -m autostop_manager.cli knowledge-probe "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM"
@@ -173,6 +184,7 @@ The manager memory tools are intentionally separate from CRM operations:
 - `prepare_manager_context`
 - `agent_brief`
 - `lookup_original_parts`
+- `estimate_repair_work_cost`
 - `recommend_automotive_sources`
 - `recommend_fluid_maintenance_sources`
 - `recommend_service_management_actions`
@@ -197,7 +209,7 @@ The manager memory tools are intentionally separate from CRM operations:
 For a new Codex/ChatGPT manager task, start with the compact package:
 
 ```powershell
-python -m autostop_manager.cli agent-brief "прибейсь" --intent board_cleanup
+python -m autostop_manager.cli agent-brief "Приберись" --intent board_cleanup
 ```
 
 Use layers in this order:
@@ -288,13 +300,14 @@ data, ИП Гришкявичус/Гришкевичус, and old-versus-current
 sorting. Keep private bank/contact details out of Git-tracked docs and verify
 exact wording from the source document before external use.
 
-The owner's natural commands `Приберись` and `прибейсь` mean board-cleanup
+The owner's canonical command `Приберись` means board-cleanup
 autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
 CRM board, classify blockers, enrich VIN/OEM/parts/service data, update short
-card notes, update tags/indicators/deadlines, recommend archive candidates when
-safe, leave cards in their current columns and archive state unless separately
-commanded, and preserve user-entered works, materials, prices, payments, files,
-contacts, and diagnostics.
+card notes, update short readable public descriptions, update
+tags/indicators/deadlines, recommend archive candidates when safe, leave cards
+in their current columns and archive state unless separately commanded, and
+preserve user-entered works, materials, prices, payments, files, contacts, and
+diagnostics.
 
 ## CRM MCP Sync
 

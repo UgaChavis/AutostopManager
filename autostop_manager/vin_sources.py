@@ -11,6 +11,27 @@ from .config import PROJECT_ROOT
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 
 _MAKE_SOURCE_MAP: dict[str, list[str]] = {
+    "BMW": [
+        "partslink24 Mobile",
+        "BMW AIR/ETK via AOS",
+        "BMW Aftersales Online System (AOS)",
+        "BMW Technical Information System",
+        "partslink24 Product Info",
+    ],
+    "MINI": [
+        "partslink24 Mobile",
+        "BMW AIR/ETK via AOS",
+        "BMW Aftersales Online System (AOS)",
+        "BMW Technical Information System",
+        "partslink24 Product Info",
+    ],
+    "VAG": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "Audi erWin", "partslink24 Product Info"],
+    "VOLKSWAGEN": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
+    "VW": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
+    "AUDI": ["partslink24 Mobile", "Volkswagen Group ETKA", "Audi erWin", "partslink24 Product Info"],
+    "SKODA": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
+    "SEAT": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
+    "CUPRA": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
     "TOYOTA": ["Toyota Japan EPC Help", "Toyota EPC Mirror", "Toyota Recall Search"],
     "LEXUS": ["Toyota Japan EPC Help", "Toyota EPC Mirror", "Toyota Recall Search"],
     "HONDA": ["Honda EPC Mirror", "Honda Recall Lookup", "partslink24 Mobile", "partslink24 Product Info"],

@@ -1,7 +1,9 @@
 # VIN/OEM Lookup Playbook
 
 Purpose: make OEM and original catalog number lookup from VIN or chassis/frame
-number deterministic, source-aware, and auditable.
+number deterministic, source-aware, and auditable. The first strengthened
+route is BMW/VAG with paid/official EPC sources as the preferred authority and
+public mirrors only as fallback.
 
 ## Core Rule
 
@@ -18,9 +20,11 @@ Classify the identifier first, then choose the market-appropriate source:
 ## Source Priority
 
 1. Official decode source for the identifier type.
-2. Manufacturer catalog or recall portal that accepts the same identifier.
-3. Public EPC mirror or catalog that exposes the relevant original part data.
-4. Marketplace only after the OEM or replacement number is known.
+2. Paid/official EPC or genuine-parts portal that accepts the same identifier.
+3. Manufacturer catalog, AIR/ETK/ETKA, or recall/service portal that helps
+   confirm market, options, PR/SA codes, or campaigns.
+4. Public EPC mirror only as fallback.
+5. Marketplace only after the OEM or replacement number is known.
 
 ## Minimal Inputs To Collect
 
@@ -32,6 +36,24 @@ Before lookup, capture:
 - market if known
 - model year or build window if known
 - engine and transmission if the source needs them
+- part name or catalog group
+- side, axle, front/rear, left/right, or position when relevant
+- old part number or label photo for high-variant parts
+
+## Workflow Phases
+
+1. `VIN decode`: classify the identifier and decode ISO VINs through NHTSA
+   vPIC or the market-appropriate frame/chassis route. vPIC is vehicle identity
+   only, not an OEM-parts catalog.
+2. `Catalog vehicle selection`: choose the brand/market catalog route from
+   `vin_oem_sources.json`; for BMW/VAG prefer paid/official partslink24,
+   BMW AOS/AIR/ETK, or VAG ETKA routes when legal access exists.
+3. `Part group lookup`: search the catalog by part name, group, diagram, or
+   old part number. Do not use Drom/ZZap/Avito to decide the OEM number.
+4. `OEM candidate validation`: record only numbers backed by a VIN-specific
+   EPC screen/export, including supersession chain and quantity where visible.
+5. `Market price search`: begin pricing or availability search only after the
+   OEM reference is stable.
 
 ## Routing Rules
 
@@ -58,18 +80,57 @@ Before lookup, capture:
 3. Use the most direct official catalog or EPC route.
 4. If the code is ambiguous, return the smallest safe set of candidate routes.
 
+### BMW / MINI
+
+Preferred route:
+
+1. partslink24 when an authorized account is available.
+2. BMW AOS -> AIR/ETK when subscribed.
+3. BMW technical/service sources only for vehicle context; confirm the actual
+   part number in ETK/AIR/partslink24.
+
+Capture exact OEM number, supersession, quantity, SA/options, and any VIN
+variant note. If ETK/AIR shows multiple variants, request old part number,
+label photo, or option data instead of guessing.
+
+### VAG / Audi / Volkswagen / Skoda / Seat / Cupra
+
+Preferred route:
+
+1. partslink24 when an authorized account is available.
+2. ETKA or an authorized VAG parts catalog.
+3. erWin only for service/repair context; confirm part numbers in ETKA or
+   partslink24.
+
+For DSG/mechatronic, control units, steering racks, body electronics, and
+option-dependent parts, capture gearbox code, PR/options, old label number, and
+hardware/software number when the catalog asks for them.
+
 ## Output Shape
 
-Return a compact lookup card:
+Return an OEM lookup dossier:
 
 - identifier type
 - normalized identifier
 - market
 - decoded make / model / generation
-- catalog route used
-- OEM candidate numbers
-- supersession or replacement notes
-- confidence and uncertainty
+- `catalog_routes` / backward-compatible `steps`
+- `provider_adapters`: `route_only`, `manual_capture`, future `connected`
+- `oem_candidates`
+- `supersessions`
+- `fitment_confidence`
+- `missing_context`
+- `next_actions`
+
+Confidence model:
+
+- `high`: VIN-specific EPC accepted the vehicle and produced one OEM number or
+  a clear supersession chain.
+- `medium`: source-backed OEM exists, but options or variant notes still need
+  review.
+- `low`: public mirror or indirect catalog result only.
+- `blocked`: missing part name, EPC capture, old part number, PR/SA option, or
+  other data needed to avoid a wrong purchase.
 
 ## Memory Rule
 

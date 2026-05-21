@@ -18,6 +18,7 @@ AREA_ALIASES: dict[str, set[str]] = {
     "customer_flow": {"customer", "client", "approval", "клиент", "клиенты", "согласование", "звонки"},
     "finance_control": {"finance", "money", "cashbox", "payment", "деньги", "финансы", "касса", "оплата"},
     "knowledge_intake": {"knowledge", "files", "intake", "learning", "знания", "файлы", "обучение", "база"},
+    "work_pricing": {"work", "labor", "estimate", "pricing", "работы", "стоимость", "смета", "оценка"},
 }
 
 

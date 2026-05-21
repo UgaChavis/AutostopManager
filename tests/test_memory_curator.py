@@ -10,11 +10,11 @@ def test_recall_ranks_tags_importance_and_priority_above_plain_recency(tmp_path)
     important = store.remember(
         "During board cleanup, never move cards between columns.",
         title="board cleanup no movement",
-        tags=["board-cleanup", "прибейсь", "карточки"],
+        tags=["board-cleanup", "Приберись", "карточки"],
         importance=0.95,
     )
 
-    result = store.recall("прибейсь карточки", limit=5)
+    result = store.recall("Приберись карточки", limit=5)
 
     assert result["items"][0]["id"] == important["id"]
     assert result["items"][0]["kind"] == "note"
