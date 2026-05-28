@@ -54,6 +54,9 @@ python -m autostop_manager.cli cleanup-audit
 python -m autostop_manager.cli crm-health-plan --board-review-json board_review.json --today-json today_context.json
 ```
 
+Search examples in this project usually assume `rg`; when `rg` is unavailable,
+use `grep -RIn` with the same patterns and the same active-doc scope.
+
 Use these MCP tools when working through the manager:
 
 - `agent_brief` - mandatory compact startup package before broad document
@@ -308,7 +311,9 @@ approval for the exact action.
 - `service_management_sources.json` - source routing for Krasnoyarsk procurement, personnel, management, and local market context.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
-- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and routine board cleanup autonomy.
+- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись`,
+  routine board cleanup autonomy, vehicle passport enrichment, formatted
+  public descriptions, and the repair-order write boundary.
 
 For work-cost estimates, use `estimate_repair_work_cost` or
 `python -m autostop_manager.cli estimate-work`. It is read-only and must not

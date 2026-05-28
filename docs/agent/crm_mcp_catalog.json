@@ -296,7 +296,7 @@
     "Use shared_files tools for shared documents and card attachment tools for card-local attachments; do not paste file bytes into notes unless required.",
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use set_card_board_summary only after reading the target card and keep it under 5 non-empty lines.",
-    "For the owner command Приберись, treat description and board_summary as separate outputs: short readable public working note with useful paragraphs/emoji/rich-text accents that render cleanly and no raw technical markup, plus short plain operator preview.",
+    "For the owner command Приберись, treat description and board_summary as separate outputs: fill the vehicle passport from available source-backed data, write a short readable public working note with useful paragraphs, emoji markers, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly and no raw technical markup, plus a short plain operator preview. Update repair orders only when explicitly asked to fill or расписывать the target ЗН/заказ-наряд.",
     "Do not move or archive cards during routine cleanup unless the owner gives a separate explicit target/action.",
     "If a VIN/chassis/frame number exists and vehicle_profile engine_model, gearbox_model, or drivetrain is empty, enrich only from source-backed data and preserve manual_fields.",
     "Use estimate_repair_work_cost for read-only labor estimates with public price averaging and public norm-hours/labor-time plausibility; do not call replace_repair_order_works from a pricing estimate unless the owner separately approves the exact ЗН write.",

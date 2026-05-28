@@ -26,7 +26,9 @@ DOMAIN_BRIEF_RULES = {
         "Routine board cleanup may update confirmed fields, tags, deadlines, indicators, source-backed vehicle profile fields, concise AI notes, and board_summary.",
         "Routine board cleanup must not move cards between columns and must not archive cards unless the owner gives a separate explicit command.",
         "Preserve operator evidence: works, materials, prices, payments, files, contacts, VIN/chassis/license data, diagnostics, and historical notes.",
-        "Use description as a short readable working note: paragraphs when useful, important facts plus next action, restrained emoji/rich-text accents that render cleanly, and no raw HTML/pseudo-formatting/visible technical markup; keep board_summary a plain 4-5 line preview.",
+        "For 'Приберись', fill the vehicle passport from available card/order/VIN/source data whenever possible, then rewrite the public description as a short formatted working note with emojis and supported CRM Markdown: **bold**, *italic*, and ++underline++; never leave raw HTML or visible pseudo-markup.",
+        "Use description for important facts only, with readable paragraphs and no separate 'Статус:' or 'Следующий шаг:' blocks; keep board_summary a plain 4-5 line factual preview without private data or decorative formatting.",
+        "Update a live repair order only when the owner explicitly asks to fill or расписывать the ЗН/заказ-наряд for the target card.",
         "After saving CRM description, inspect the visible text/preview and remove formatting artifacts immediately.",
         "Keep source lists, long explanations, phone, VIN, full client name, raw diagnostic dumps, rich formatting, emoji decoration, and long issue lists out of board_summary.",
     ],
@@ -52,7 +54,8 @@ BOARD_CLEANUP_ALLOWED_ACTIONS = [
     "read live CRM board/card/order/cashbox context",
     "update confirmed title, vehicle, description, tags, deadline, indicator, and source-backed vehicle profile fields",
     "set_card_board_summary",
-    "add one concise AI note or question when it changes the next action",
+    "add one concise AI note or question only when it adds a factual blocker, missing data, or verified conclusion",
+    "update repair_order only when the owner explicitly asks to fill or расписывать the target ЗН/заказ-наряд",
     "record manager run events and a short manager_journal after meaningful work",
 ]
 

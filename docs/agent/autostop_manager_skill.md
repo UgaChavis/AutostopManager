@@ -251,20 +251,29 @@ When the owner says `Приберись`:
   deadlines, enrich VIN/OEM/parts/service data, rewrite descriptions as very
   short human-readable working notes when useful, and refresh the separate
   `board_summary`
+- fill missing vehicle passport fields from available card, repair-order, VIN,
+  attachment, and source-backed lookup data whenever confidence is adequate
 - do not move or archive cards during this command unless the owner gives a
   separate explicit owner command with the target card and target action
 - rewrite the public card description as a short, readable working note: only
-  important facts, blocker, money/parts note when relevant, and next action.
-  Split text into paragraphs when it improves reading. Use restrained emoji
-  markers and supported rich text for scanning: **bold** labels/key facts and
-  *italic* uncertainty. Do not use raw HTML-style tags or other
-  pseudo-formatting; if emphasis is needed, use bold text plus a restrained
-  marker. After saving, inspect the visible text/preview and remove any visible
-  technical markup. Do not add source lists, long provenance notes, diagnostic
-  theory, or verbose AI explanation. Preserve relevant technical data, prices,
-  payments, contacts, files, diagnostics, and history without expanding them.
+  task/complaint, important facts, blocker, money/parts note, and confirmed
+  diagnostics when relevant. Do not add separate `Статус:` or `Следующий шаг:`
+  blocks during `Приберись`; the manager decides workflow actions from the
+  facts. Split text into paragraphs when it improves reading. Use restrained
+  emoji markers and supported CRM Markdown for scanning: **bold** labels/key
+  facts, *italic* uncertainty/caution, and ++underline++ for the key amount,
+  OEM/catalog number, approval, or waiting state. Do not use raw HTML-style
+  tags or other pseudo-formatting. After saving, inspect the visible
+  text/preview and remove any visible technical markup. Do not add source
+  lists, long provenance notes, diagnostic theory, or verbose AI explanation.
+  Preserve relevant technical data, prices, payments, contacts, files,
+  diagnostics, and history without expanding them.
+- read repair orders when they explain card state, but fill or rewrite a live
+  ЗН only when the owner explicitly asks to `заполнить`, `расписать`, or
+  `обновить` the target заказ-наряд
 - use `board_summary` as the clean 4-5 line board preview; keep phone, VIN,
-  full client identity, raw scan dumps, and long issue lists out of it
+  full client identity, raw scan dumps, long issue lists, workflow status, and
+  next-action instructions out of it
 - preserve user-entered data: do not delete works, materials, prices, payments,
   contacts, files, manual diagnostics, or historical notes
 - keep all card notes very short; prefer one `AI:` line over long explanations

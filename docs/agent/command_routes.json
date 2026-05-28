@@ -18,7 +18,7 @@
       "next_actions": [
         "read live CRM board state",
         "classify blockers",
-        "update short readable public descriptions with paragraphs, useful emoji/rich-text accents that render cleanly, no raw technical markup, only important facts and next actions, separate plain board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise AI notes",
+        "fill missing vehicle passport fields from available source-backed data; update short readable public descriptions with paragraphs, emoji markers, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly; keep only important facts, no raw technical markup, no separate status or next-step blocks; update separate plain board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise factual AI notes; update repair orders only when explicitly requested",
         "leave cards in their current columns",
         "do not archive cards without a separate explicit owner command; leave archive recommendations instead"
       ]

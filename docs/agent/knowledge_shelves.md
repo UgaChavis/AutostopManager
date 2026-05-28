@@ -52,6 +52,7 @@ decide whether the reusable route belongs in the intake flow.
 | Gmail operations | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail inbox search, labels, drafts, attachments, thread reads, write safety, email-derived memory |
 | Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` | Krasnoyarsk parts search, ZZap/Drom/Avito, procurement price, offer scoring |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | workshop triage, staff, finance, customer flow, board cleanup, CRM manager data summaries |
+| Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` | `Приберись`, vehicle passport enrichment, formatted card descriptions, board summaries, repair-order write boundary |
 | Work labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` | read-only work estimates from public Russia labor-only STO prices plus public norm-hours/labor-time plausibility, average price, AutoStop +50%, confidence |
 | Deployment | `deployment` | `docs/agent/deployment_runbook.md` | local MCP startup, server publishing, GitHub/private-data boundary |
 
@@ -221,3 +222,7 @@ python -m autostop_manager.cli knowledge-probe "структурируй баз�
 python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 python -m pytest tests/test_knowledge_base.py -q
 ```
+
+Use `rg` for local text checks when it is installed. If the current environment
+does not provide `rg`, fall back to `grep -RIn` and keep the search scoped to
+active docs, catalogs, and tests.

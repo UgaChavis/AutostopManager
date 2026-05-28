@@ -23,7 +23,7 @@
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, short readable public descriptions, and hidden board_summary previews. It does not allow moving, archiving, deleting, or changing financial/repair-order data without a separate explicit owner command."
+      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, short readable public descriptions, and hidden board_summary previews. It also requires filling missing vehicle passport fields from available source-backed card/order/VIN data whenever possible. It does not allow moving, archiving, deleting, or changing financial/repair-order data without a separate explicit owner command."
     },
     {
       "id": "board-cleanup-no-card-movement",
@@ -33,22 +33,27 @@
     {
       "id": "board-cleanup-data-preservation",
       "priority": 18,
-      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer short structured description edits: keep the important fact and next step, and avoid keeping noisy old text verbatim unless it is operationally needed."
+      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer short structured description edits: keep the important facts, and avoid keeping noisy old text verbatim unless it is operationally needed."
     },
     {
       "id": "board-cleanup-description-rich-text",
       "priority": 19,
-      "rule": "During board cleanup after the owner command 'Приберись', rewrite the public card description as a short human-readable working note: only important facts, blocker, money/parts note when relevant, and next action. Split text into paragraphs where it improves reading. Use restrained emoji markers and supported rich text for scanning: bold labels/key facts and italic uncertainty. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator; use bold text plus a marker for critical emphasis instead. Do not add source lists, long provenance notes, diagnostic theory, or verbose AI explanations. Preserve relevant technical data, part numbers, prices, payments, contacts, files, diagnostics, and history without expanding them."
+      "rule": "During board cleanup after the owner command 'Приберись', rewrite the public card description as a short human-readable working note: only task/complaint, important facts, blocker, money/parts note, and confirmed diagnostics when relevant. Do not add separate 'Статус:' or 'Следующий шаг:' blocks; the manager decides workflow actions from the facts. Split text into paragraphs where it improves reading. The default is formatted text, not a plain dump: use restrained emoji section markers and supported CRM Markdown for scanning: **bold** labels/key facts, *italic* uncertainty/caution, and ++underline++ for the key amount, OEM/catalog number, approval, or waiting state. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator. Do not add source lists, long provenance notes, diagnostic theory, or verbose AI explanations. Preserve relevant technical data, part numbers, prices, payments, contacts, files, diagnostics, and history without expanding them."
+    },
+    {
+      "id": "board-cleanup-repair-order-boundary",
+      "priority": 19,
+      "rule": "During 'Приберись', read repair orders when they explain works, materials, payment, completion, or blockers, but do not write a live repair order unless the owner explicitly asks to fill, update, or расписывать the target ЗН/заказ-наряд. When explicitly asked, preserve existing rows/payments/dates, write only confirmed work/material/payment data, and reread the order after saving."
     },
     {
       "id": "board-cleanup-note-style",
       "priority": 19,
-      "rule": "During board cleanup, write very short card notes. Prefer one concise 'AI:' line with a next action, question, OEM/price conclusion, payment blocker, or stale-card status. Do not make people read long explanations or source lists inside cards."
+      "rule": "During board cleanup, write very short card notes. Prefer one concise 'AI:' line only when it adds a factual question, OEM/price conclusion, payment blocker, missing data, or stale-card fact. Do not write manager-style next-action instructions and do not make people read long explanations or source lists inside cards."
     },
     {
       "id": "board-cleanup-public-summary",
       "priority": 19,
-      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description is a short readable working note with paragraphs, useful visual markers, important facts, and next action. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, and long issue lists out of it."
+      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description is a short readable working note with paragraphs, useful emoji markers, supported rich text, and important facts only; do not add 'Статус:' or 'Следующий шаг:' blocks. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, long issue lists, and next-action instructions out of it. A short factual waiting/approval state is allowed when it is the main blocker."
     },
     {
       "id": "board-cleanup-vin-profile-enrichment",

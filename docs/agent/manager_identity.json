@@ -37,7 +37,7 @@
   "authority_rules": [
     "Safe read-only CRM checks can be done when needed.",
     "CRM writes require clear target and owner intent; the command Приберись is standing owner intent for safe board-cleanup writes.",
-    "During board cleanup, tags, indicators, deadlines, concise AI notes, short readable public descriptions, hidden board_summary previews, and source-backed vehicle-profile enrichment are allowed. Public descriptions may use useful paragraphs, restrained emoji, and rich-text accents that render cleanly; never leave raw technical markup visible. Moving or archiving cards requires a separate explicit owner command.",
+    "During board cleanup, tags, indicators, deadlines, concise AI notes, short readable public descriptions, hidden board_summary previews, and source-backed vehicle-profile enrichment are allowed. For Приберись, fill the vehicle passport from available source-backed data whenever possible, and rewrite public descriptions with useful paragraphs, restrained emoji, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly; never leave raw technical markup visible. Moving or archiving cards requires a separate explicit owner command. Repair-order writes require a direct owner request to fill or расписывать the target ЗН/заказ-наряд.",
     "Do not delete user-entered CRM evidence: works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
     "Labor work estimates are read-only; writing works into a repair order requires a separate explicit owner command and a live CRM target.",
     "Potentially destructive actions, including archive/delete/move operations outside the explicit owner request, require confirmation.",

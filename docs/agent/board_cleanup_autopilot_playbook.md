@@ -22,14 +22,20 @@ The agent may independently:
   vehicle profile
 - rewrite the public card description into a short, human-readable working note
   with paragraphs, useful visual markers, and supported rich text formatting
+- fill missing vehicle passport fields from the card, repair order, VIN/chassis
+  decode, attachments, and source-backed lookup results whenever the data is
+  available with adequate confidence
+- update or fill the repair order only when the owner directly asks to
+  `заполнить ЗН`, `заполнить заказ-наряд`, `расписать заказ-наряд`, or gives an
+  equivalent explicit repair-order command for the target card
 - set or refresh the hidden `board_summary` as the clean 4-5 line board preview
 - recommend archive candidates in the report, but do not archive cards unless
   the owner gives a separate explicit owner command for archive
-- add short questions or recommendations inside the card instead of asking the
-  owner in chat
+- add short factual questions or conclusions inside the card instead of asking
+  the owner in chat
 - fill VIN/chassis-derived vehicle fields when source confidence is adequate
-- source parts and add only the chosen OEM/price/next-action facts into the
-  card, without source lists or long provenance notes
+- source parts and add only the chosen OEM, price, delivery, or verification
+  fact into the card, without source lists or long provenance notes
 - clean wording, spelling, formatting, and duplicated text while preserving the
   user's meaning
 
@@ -79,8 +85,8 @@ Allowed safe edits:
 - shorten noisy duplicated text
 - restructure text into readable sections
 - expand abbreviations when meaning is clear
-- add missing labels such as `VIN:`, `OEM:`, `Следующий шаг:`
-- append an `AI:` note with a concise question or conclusion
+- add missing factual labels such as `VIN:`, `OEM:`, `Оплата:`, or `Запчасти:`
+- append an `AI:` note only when it carries a concise question or conclusion
 
 If a field conflicts with another source, preserve the original and add a short
 uncertainty note instead of overwriting blindly.
@@ -109,12 +115,12 @@ Classify every relevant active card into one current blocker:
 
 - `parts`: needs part number, price, supplier, delivery, or arrival check
 - `vin`: VIN/chassis/body number missing or unparsed
-- `diagnosis`: complaint exists but diagnostic next step is unclear
+- `diagnosis`: complaint exists but diagnostic context is unclear
 - `client`: waiting for approval, answer, pickup, appointment, or missing phone
 - `payment`: ready/done but due total, payment status, or cashbox status needs
   attention
 - `queue`: car is waiting for technician, bay, or appointment date
-- `ready`: work appears complete and pickup/closure is next
+- `ready`: work appears complete and pickup/closure evidence matters
 - `archive_candidate`: card appears finished and can be recommended for human
   archive
 - `unclear`: data conflict; leave a short question in the card
@@ -125,25 +131,34 @@ The public `description` and hidden `board_summary` are different fields with
 different jobs.
 
 `description` is a concise working note for a person, not a dump of everything
-the agent knows. Keep only what the operator needs now: current status, key
-facts, blocker, money/parts note if relevant, and the next action. Do not write
-long explanations, source lists, search history, diagnostic theory, or broad
-background. Preserve valuable old facts, but compress them into readable
-paragraphs instead of expanding them.
+the agent knows. Keep only the card substance: task/complaint, key facts,
+blocker, money/parts note, confirmed diagnostics, and useful vehicle data when
+relevant. Do not write management blocks such as `Статус:` or `Следующий шаг:`
+during `Приберись`; the manager can decide workflow actions from the facts. Do
+not write long explanations, source lists, search history, diagnostic theory,
+or broad background. Preserve valuable old facts, but compress them into
+readable paragraphs instead of expanding them.
 
-When rewriting `description`, make it easy to scan:
+When rewriting `description`, make it easy to scan. The default for
+`Приберись` is a formatted public note, not a plain text dump: use emoji
+section markers and at least one rich-text accent in any substantial rewritten
+description unless the CRM renderer is broken.
 
 - split meaning into short paragraphs; avoid one dense line of mixed facts
 - use **bold** for labels and decisive facts
 - use *italic* for uncertainty, caution, or "needs verification"
-- do not use raw HTML-style tags for underline; CRM may show them to the
-  operator as technical text
-- if a critical blocker/deadline needs emphasis, use **bold** text and a
-  restrained marker such as ⚠️ instead of simulated underline
+- use ++underline++ for the most important amount, OEM/catalog number, approval
+  state, or waiting state when emphasis is useful
+- use only CRM-supported Markdown syntax: `**bold**`, `*italic*`, and
+  `++underline++`; never use raw HTML-style tags for styling
+- if a critical blocker/deadline needs emphasis, combine a restrained marker
+  such as ⚠️ with **bold** or ++underline++ text
 - use restrained emoji markers only when they speed up reading, for example
-  🔧 work, 📌 status, 💰 money, ⚠️ blocker, ⏭️ next action, ✅ ready/done
+  🔧 work, 🧪 diagnostics, 📦 parts, 💰 money, ⚠️ blocker
 - do not decorate every line; formatting should help the mechanic or manager
   understand the card faster
+- never add a separate `Статус:` paragraph or `Следующий шаг:` paragraph during
+  `Приберись`
 - after saving, inspect the visible description/preview; if markup characters
   such as `<...>`, raw tags, or other technical symbols are visible, remove
   them immediately
@@ -151,20 +166,22 @@ When rewriting `description`, make it easy to scan:
 Preferred public `description` shape:
 
 ```markdown
-📌 **Статус:** <коротко что с машиной сейчас>.
+🚘 <автомобиль>.
 
-🔧 **Работы:** <только важный список или итог>.
+🔧 **Работы/задача:** <только важный список или итог>.
 
-💰 **Деньги/запчасти:** <сумма, заказ, наличие или "не считали">.
+📦 **Запчасти:** <OEM/каталожный номер, наличие, поставщик или "не подобрано">.
 
-⏭️ **Следующий шаг:** <одно конкретное действие>.
+💰 **Деньги:** **++<сумма или согласование>++**.
+
+⚠️ *Важно:* <короткий риск, blocker, проверка или условие, если есть>.
 ```
 
 Use only the blocks that matter for the card. For a tiny card, two paragraphs
 are enough. Avoid decorative formatting, long source/provenance blocks, and
 verbose AI explanations. Preserve technical data, part numbers, prices,
 payments, contacts, diagnostics, files, and history exactly when they are still
-relevant; if old text is noisy, reduce it to the important fact plus next step.
+relevant; if old text is noisy, reduce it to the important facts only.
 Keep `board_summary` plain, compact, and free of decorative formatting.
 
 `board_summary` is the compact operator preview shown on the board. Update it
@@ -175,25 +192,41 @@ identity, raw scan dumps, or long issue lists.
 Recommended `board_summary` shape:
 
 ```text
-Что сейчас: <main issue or job>.
-Стадия: <diagnosis / agreement / waiting / repair / pickup>.
-Следующее действие: <one concrete operator step>.
-Важно: <one deadline/payment/parts/blocker if needed>.
+<vehicle or job>.
+Факт: <main issue, work, or result>.
+Деньги/запчасти: <only if relevant>.
+Важно: <one blocker, caveat, or missing fact if needed>.
 ```
 
 If the card is incomplete:
 
 ```text
-Что сейчас: не хватает данных по обращению.
-Стадия: входящие / уточнение.
-Следующее действие: запросить недостающие данные.
-Важно: указать VIN/госномер/список работ в описании, но не в превью.
+Данные по обращению неполные.
+Не хватает: VIN/госномер/список работ.
+В описании сохранить только известные факты.
 ```
 
 Preserve useful old facts instead of deleting them. Do not put long AI
 reasoning or source lists into either field. Rich formatting belongs mainly in
 the public `description`; `board_summary` should stay plain so the board
 preview remains stable.
+
+### 1b. Repair Order Boundary
+
+`Приберись` by itself does not authorize repair-order writes. During ordinary
+cleanup, read repair orders when they explain money, work, materials, payment,
+or completion state, then summarize the relevant facts in the card description
+and board summary.
+
+Only fill or rewrite a live repair order when the owner explicitly asks for
+that target, for example `заполни заказ-наряд`, `распиши ЗН`, `добавь работы в
+заказ-наряд`, or `обнови материалы в ЗН`. In that case:
+
+- reread the card and repair order first
+- preserve existing works, materials, prices, payments, comments, and dates
+- write only confirmed work/material/payment rows from the owner's request or
+  trusted source text
+- verify the repair order after saving and report what changed
 
 ### 2. Vehicle Identity
 
@@ -216,12 +249,12 @@ If a card asks for a detail/part:
 - use Drom, ZZap, Avito, Emex, Exist, Autodoc, and local Krasnoyarsk suppliers
   according to urgency
 - add only concise useful output to the card: OEM, price range, delivery or
-  pickup, and next action
+  pickup, and verification caveat when needed
 
 Preferred note format:
 
 ```text
-AI: OEM 90311-89014. Проверить наличие: Drom/ZZap, Красноярск.
+AI: OEM 90311-89014. Наличие: Drom/ZZap, Красноярск.
 ```
 
 ### 4. Repair And Technical Data
@@ -232,22 +265,22 @@ If a card contains a repair complaint:
 - route technical facts through repair-source playbooks
 - never invent torque, fluid, pinout, labor, programming, SRS, ADAS, HV, or
   immobilizer data
-- write the next diagnostic action in short form
+- write only the confirmed diagnostic fact, missing data, or concise question
 
 Preferred note format:
 
 ```text
-AI: нужен скан/ошибки перед заказом детали.
+AI: скан/ошибки не указаны; деталь до диагностики не подтверждена.
 ```
 
 ### 5. Customer Flow
 
 Every active customer-facing card should show:
 
-- next action
 - who/what is waited on
 - deadline or follow-up point when useful
 - approval/payment/pickup state when visible
+- the factual blocker when it is already clear
 
 Preferred note format:
 
@@ -283,7 +316,7 @@ If an active card has not changed for a long time:
 Preferred note format:
 
 ```text
-AI: давно без движения. Следующий шаг: подтвердить статус детали.
+AI: давно без движения, по детали нет подтверждения.
 ```
 
 ## Write Rules
@@ -295,11 +328,11 @@ Before every CRM write:
 - make the smallest useful update
 - keep card text short
 - when touching `description`, keep it short, recoverable, and readable:
-  important facts plus next action, split into useful paragraphs, not a full
-  report and not a source log
-- when rewriting `description`, apply supported rich text formatting and
-  restrained emoji markers where they help scanning; use **bold** and *italic*
-  for real emphasis, not decoration
+  important facts only, split into useful paragraphs, not a full report, not a
+  source log, and not a status/next-step instruction for the manager
+- when rewriting `description`, actively apply supported rich text formatting
+  and restrained emoji markers; use **bold**, *italic*, and ++underline++ for
+  real emphasis, not decoration
 - never write raw HTML or pseudo-formatting into a CRM description; visible
   markup is worse than no formatting
 - do not add sources, long explanations, or extra background into the card
@@ -335,7 +368,7 @@ Indicator:
 
 - red: payment blocker, urgent stale card, missing critical data, serious
   contradiction
-- yellow: waiting for parts/client/diagnosis but next action is known
+- yellow: waiting for parts/client/diagnosis or a known non-urgent blocker
 - green: ready/clear/no blocker
 
 ## Column Movement Boundary

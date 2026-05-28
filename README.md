@@ -21,7 +21,7 @@ For new files and knowledge expansion, use
 in `docs/agent/manager_mcp_catalog.json` and `docs/agent/crm_mcp_catalog.json`
 up to date.
 
-## First Version
+## Current Manager Layer
 
 - storage: SQLite at `data/autostop_manager.sqlite3`
 - local access: `python -m autostop_manager.cli ...`
@@ -89,10 +89,14 @@ up to date.
 - board cleanup autopilot: when the owner says `Приберись`, use
   `docs/agent/board_cleanup_autopilot_playbook.md` as the
   standing procedure for CRM board hygiene with strict preservation of
-  user-entered data; update short readable public descriptions with useful
-  paragraphs, restrained emoji/rich-text accents that render cleanly and no
-  raw technical markup, plus the separate plain `board_summary` preview; do
-  not move or archive cards without a separate explicit owner command
+  user-entered data; fill missing vehicle passport fields from available
+  source-backed data; update short readable public descriptions with useful
+  paragraphs, emoji markers, and supported CRM Markdown (`**bold**`,
+  `*italic*`, `++underline++`) that renders cleanly and no raw technical
+  markup, plus the separate plain `board_summary` preview; update
+  repair-order data only when the owner explicitly asks to fill or расписывать
+  the target ЗН/заказ-наряд; do not move or archive cards without a separate
+  explicit owner command
 - deployment/runbook: use `docs/agent/deployment_runbook.md`; publish code,
   tests, and playbooks, but keep runtime CRM snapshots and SQLite databases out
   of GitHub
@@ -128,7 +132,7 @@ up to date.
 ```powershell
 python -m autostop_manager.cli remember "Аренда бокса оплачивается до 5 числа" --kind fact --tags аренда --confidence 0.9
 python -m autostop_manager.cli recall аренда --kind fact --tags аренда
-python -m autostop_manager.cli learn "В карточках писать живым языком и коротко" --applies-to crm_cleanup --signal owner_correction --recommendation "Одна строка: статус, следующий шаг или вопрос" --avoid "Длинный сухой AI-шаблон" --importance 0.9 --confidence 1.0 --tags карточки,стиль
+python -m autostop_manager.cli learn "В карточках писать живым языком и коротко" --applies-to crm_cleanup --signal owner_correction --recommendation "Краткая суть: задача, важные факты, деньги/запчасти/проверки; без блоков Статус и Следующий шаг" --avoid "Длинный сухой AI-шаблон" --importance 0.9 --confidence 1.0 --tags карточки,стиль
 python -m autostop_manager.cli lessons "живым языком" --applies-to crm_cleanup --tags стиль
 python -m autostop_manager.cli memory-context "уборка CRM карточек"
 python -m autostop_manager.cli memory-map
@@ -145,6 +149,7 @@ python -m autostop_manager.cli source-route --brand Toyota --data-type repair_ma
 python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia
 python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
 python -m autostop_manager.cli service-plan --area персонал --role автослесарь --city Красноярск
+python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "замена рулевой рейки"
 python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "замена рулевой рейки" --quotes-json quotes.json
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
@@ -165,6 +170,11 @@ python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli memory-audit
 python -m autostop_manager.cli memory-curate --apply
 ```
+
+For `estimate-work`, the plain call is the normal public-research route for
+labor-only Russia market prices plus public labor-time checks. Use
+`--quotes-json` only for offline/manual quote samples, tests, or no-network
+scenarios.
 
 ## MCP Tools
 
@@ -302,12 +312,14 @@ exact wording from the source document before external use.
 
 The owner's canonical command `Приберись` means board-cleanup
 autopilot. Use `docs/agent/board_cleanup_autopilot_playbook.md`: read the live
-CRM board, classify blockers, enrich VIN/OEM/parts/service data, update short
-card notes, update short readable public descriptions, update
+CRM board, classify blockers, fill vehicle passport fields from available
+source-backed data, enrich VIN/OEM/parts/service data, update short card notes,
+rewrite short readable public descriptions with emoji markers and supported
+CRM Markdown (`**bold**`, `*italic*`, `++underline++`), update
 tags/indicators/deadlines, recommend archive candidates when safe, leave cards
-in their current columns and archive state unless separately commanded, and
-preserve user-entered works, materials, prices, payments, files, contacts, and
-diagnostics.
+in their current columns and archive state unless separately commanded, update
+repair orders only by explicit owner request, and preserve user-entered works,
+materials, prices, payments, files, contacts, and diagnostics.
 
 ## CRM MCP Sync
 
