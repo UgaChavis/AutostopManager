@@ -8,8 +8,9 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 - Intake source: owner-provided archive; original user download path is
   historical and not part of active routing.
 - Created in pack manifest: `2026-05-03T10:32:46Z`
-- Classification: compact owner-provided original reference summaries with
-  Markdown modules and only the JSONL indexes used by active routing.
+- Classification: compact owner-provided reference pack retained as README,
+  manifest, and JSONL indexes used by active routing. Long Markdown modules
+  were migrated into this playbook and removed during documentation reduction.
 - License/source boundary: safe for local reference as owner-provided material; still verify final repair procedures, wiring, torque, coding, programming, campaigns, and fluid capacities by VIN in BMW ISTA/AIR/ETK/AOS/TIS or official/public bulletins.
 
 ## Use This First When
@@ -23,30 +24,26 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 1. Exact VIN/model/year/market context from CRM or owner.
 2. Model-specific route/playbook if present, such as the BMW F15/N63 route in
    `knowledge_map.json`.
-3. This BMW repair playbook and the local BMW repair knowledge pack.
+3. This BMW repair playbook and the retained JSONL indexes in the local BMW
+   repair knowledge pack.
 4. BMW official sources: ISTA, AIR, ETK, AOS, BMW TIS, BMW owner manual by VIN, BMW recall/technical update lookup.
 5. Public official documents: NHTSA BMW SIB/recall PDFs, ZF official service information, SAE/OBD standards.
 6. Secondary field reports only as hypothesis generators.
 
 ## Pack Navigation
 
-Markdown sections:
+Retained pack files:
 
-- `markdown/bmw_01_diagnostics_architecture_ru.md` - BMW diagnostic architecture, ISTA/AIR/TIS, control units, networks, minimum vehicle card.
-- `markdown/bmw_02_fault_codes_dtc_catalog_ru.md` - OBD II, BMW fault memory, high-value generic DTC patterns, subsystem code indexes.
-- `markdown/bmw_03_engines_common_service_topics_ru.md` - engine families, common service topics, symptom-to-system engine checks.
-- `markdown/bmw_04_transmission_xdrive_driveline_ru.md` - ZF 5HP/6HP/8HP, EGS, ATF level logic, xDrive transfer case, driveline.
-- `markdown/bmw_05_chassis_brakes_steering_ru.md` - suspension, brakes, DSC/ABS, steering, chassis-to-powertrain interaction.
-- `markdown/bmw_06_body_electrical_networks_ru.md` - terminals, body modules, sleep current, water ingress, CAN/FlexRay/network issues.
-- `markdown/bmw_07_hybrid_electric_high_voltage_ru.md` - BMW HV architecture, READY/charging symptoms, 12V dependency, safety boundary.
-- `markdown/bmw_08_service_fluids_maintenance_ru.md` - BMW Longlife logic, ZF fluids, xDrive transfer case oil, brake fluid, coolant, VIN dependency.
+- `README_ru.md` - provenance, source boundary, and load policy.
+- `manifest.json` - retained-file list and compacted-pack metadata.
 
 Data indexes:
 
 - `data/bmw_chassis_codes.jsonl` - BMW chassis/body-code lookup hints.
 - `data/bmw_control_units_glossary.jsonl` - BMW module abbreviations and diagnostic meaning.
 - `data/bmw_engine_families.jsonl` - engine families and common service topics.
-- `data/bmw_fault_memory_public_examples.jsonl` - public BMW fault-memory examples from bulletins.
+- `data/bmw_fault_memory_public_examples.jsonl` - public BMW fault-memory
+  examples from bulletins, including searchable DTC/fault-memory examples.
 - `data/bmw_fluids_specification_logic.jsonl` - BMW fluid-specification decision logic and verification source.
 - `data/bmw_symptom_diagnostic_index.jsonl` - symptom-to-system and data-to-capture map.
 - `data/bmw_transmission_families.jsonl` - BMW/ZF transmission families.

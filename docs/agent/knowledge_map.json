@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable navigation map for AutostopManager knowledge files.",
   "entrypoint": "docs/agent/knowledge_base_index.md",
-  "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_base_index.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
+  "update_rule": "When durable playbooks, source catalogs, command routes, or compact source packs change, update this file, docs/agent/knowledge_annotations.jsonl, and the compact docs/agent/knowledge_base_index.md. Keep route cards compact; put procedures in playbooks.",
   "domains": {
     "startup_and_identity": {
       "title": "Manager startup, identity, and operating rules",
@@ -657,24 +657,16 @@
       "source_of_truth_files": [
         "docs/agent/ecu_calibration_programming_playbook.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/99_index_ru.md"
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md"
       ],
       "primary_files": [
         "docs/agent/ecu_calibration_programming_playbook.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/00_scope_and_boundaries_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/01_ecu_fundamentals_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/02_networks_uds_obd_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/03_file_formats_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/04_calibration_theory_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/05_oem_programming_workflow_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/06_bmw_programming_overview_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/07_emissions_diagnostics_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/08_flash_failures_recovery_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/09_validation_logging_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/10_service_scenarios_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/99_index_ru.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/bmw_ecu_module_dictionary.csv"
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/bmw_ecu_module_dictionary.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/file_format_index.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/programming_precheck_matrix.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl"
       ],
       "required_context": [
         "VIN or chassis",
@@ -692,14 +684,10 @@
       ],
       "reference_files": [
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/uds_services_reference.csv",
+        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/generic_dtc_examples_emissions_network.csv",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/uds_services_reference.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/file_format_index.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/generic_dtc_examples_emissions_network.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/programming_precheck_matrix.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md"
       ]
     },
@@ -759,15 +747,6 @@
       ],
       "primary_files": [
         "docs/agent/bmw_repair_playbook.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_01_diagnostics_architecture_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_02_fault_codes_dtc_catalog_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_03_engines_common_service_topics_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_04_transmission_xdrive_driveline_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_05_chassis_brakes_steering_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_06_body_electrical_networks_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_07_hybrid_electric_high_voltage_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_08_service_fluids_maintenance_ru.md",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_chassis_codes.jsonl",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_control_units_glossary.jsonl",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_engine_families.jsonl",
@@ -911,10 +890,13 @@
       "primary_files": [
         "docs/agent/bmw_repair_playbook.md",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_01_diagnostics_architecture_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_03_engines_common_service_topics_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_06_body_electrical_networks_ru.md"
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_control_units_glossary.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_engine_families.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_fault_memory_public_examples.jsonl",
+        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_symptom_diagnostic_index.jsonl"
       ]
     },
     "fluids": {
@@ -1280,34 +1262,24 @@
       ],
       "source_of_truth_files": [
         "docs/agent/ai_parts_krasnoyarsk_playbook.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/parts_search_playbook.md",
         "docs/agent/zzap_search_playbook.md",
-        "docs/agent/service_management_sources.json"
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md"
       ],
       "primary_files": [
         "docs/agent/ai_parts_krasnoyarsk_playbook.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/00_executive_summary_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/02_data_sources_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/03_part_identity_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/04_search_workflows_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/06_scoring_and_decision_model_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/07_reporting_templates_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/08_krasnoyarsk_vendor_discovery_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/09_compliance_limits_ru.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/14_pricing_and_averaging_model_ru.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/parts_search_playbook.md",
         "docs/agent/zzap_search_playbook.md",
-        "docs/agent/service_management_sources.json"
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md"
       ],
       "reference_files": [
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md"
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
+        "docs/agent/labor_pricing_sources.json"
       ]
     },
     "board_cleanup_autopilot": {
@@ -1604,5 +1576,10 @@
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent"
   },
-  "search_commands": {}
+  "search_commands": {
+    "ecu_calibration_programming": "rg -n \"ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив\" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources",
+    "bmw_repair": "rg -n \"BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data",
+    "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data",
+    "parts_sourcing": "rg -n \"рейк|рулев|запчаст|Красноярск|vendor|seller|scoring|confirmation|pricing|reporting\" docs/agent/ai_parts_krasnoyarsk_playbook.md docs/agent/procurement_pricing_playbook.md docs/agent/parts_search_playbook.md docs/agent/zzap_search_playbook.md docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md"
+  }
 }

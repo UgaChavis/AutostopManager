@@ -5,7 +5,7 @@
   "local_repo": "C:/Users/User/Desktop/AutostopCRM/autostopcrm",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-05-19",
+  "last_verified": "2026-05-29",
   "tool_counts": {
     "crm_base_tools": 71,
     "optional_autostop_manager_tools": 33,
@@ -290,6 +290,8 @@
     "autofill_repair_order"
   ],
   "operation_notes": [
+    "Deadline writes must use the current live deadline payload shape; do not assume an old static string-only wrapper is authoritative.",
+    "Before any write, inspect live tool metadata or bootstrap_context/get_board_context when schema shape matters.",
     "Always use ping_connector/get_connector_identity/get_runtime_status when connector availability or auth behavior is uncertain.",
     "Start broad CRM orientation with bootstrap_context, get_board_context, or review_board.",
     "Use search_cards, search_clients, get_card_context, get_client, and list_repair_orders before heavy board exports.",
@@ -303,5 +305,10 @@
     "Use today_context/memory_context_for/recall/remember/learn_from_feedback only for durable non-CRM manager memory and lessons.",
     "Treat the autostopcrm-v1 branch in the CRM repo as canonical for new MCP commands and connector behavior.",
     "Refresh this catalog whenever the CRM repo or AutostopManager MCP tool surface changes."
-  ]
+  ],
+  "schema_notes": {
+    "live_discovery_rule": "Before CRM writes, prefer the currently exposed MCP/tool schema over stale docs or static wrappers.",
+    "set_card_deadline": "Deadline-capable CRM tools accept duration-style payloads such as days/hours/minutes/seconds or total_seconds on the live connector; wrapper metadata may render the field loosely.",
+    "write_scope": "All CRM tools operate only on the current AutoStop CRM board served by this MCP/API endpoint."
+  }
 }

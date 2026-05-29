@@ -13,19 +13,12 @@ operational rules live in:
 
 - `README.md` - package purpose and compact load order.
 - `MANIFEST.md` - current retained-file list.
-- `docs/00_executive_summary_ru.md` - concept and minimum workflow.
-- `docs/02_data_sources_ru.md` - source matrix and trust levels.
-- `docs/03_part_identity_ru.md` - part identity and fitment normalization.
-- `docs/04_search_workflows_ru.md` - search and escalation workflows.
-- `docs/06_scoring_and_decision_model_ru.md` - offer scoring rules.
-- `docs/07_reporting_templates_ru.md` - manager-facing output templates.
-- `docs/08_krasnoyarsk_vendor_discovery_ru.md` - local seller discovery.
-- `docs/09_compliance_limits_ru.md` - legal and platform boundaries.
-- `docs/14_pricing_and_averaging_model_ru.md` - pricing and downtime model.
 
 ## Removed As Draft Material
 
 Prompts, schemas, configs, sample data, code skeleton, OpenAPI drafts, API
 connector plans, implementation roadmap, source-reference snapshots, and market
-analysis notes were removed from the active repository. Recreate implementation
-contracts from current requirements instead of reviving old drafts.
+analysis notes were removed from the active repository. During the 2026-05-29
+hard cleanup, long Markdown workflow chapters were also migrated into active
+playbooks/catalogs and deleted. Recreate implementation contracts from current
+requirements instead of reviving old drafts.

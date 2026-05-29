@@ -55,6 +55,10 @@ python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "заме
 10. Use labor-time only as the second layer: plausibility check, effective
     hourly-rate check, and overlap detection. Norm-hours alone must not create a
     confident AutoStop price.
+    Missing public labor-time data should set `labor_time_confidence=blocked`
+    and add a next action. It does not by itself override a valid market
+    estimate from 3+ comparable labor-only quotes; lower the overall confidence
+    when the job is complex, safety-critical, or still too broad.
 11. If fewer than 3 valid comparable labor-only quotes remain, return
    `confidence=low` and do not present the AutoStop price as confident.
 12. Before a repair-order write, require a separate explicit owner command and a

@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 tmp/
 output/
+generated_invoices/
 data/
 data/*.sqlite3
 data/*.sqlite3-*

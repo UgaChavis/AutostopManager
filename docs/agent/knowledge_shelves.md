@@ -75,8 +75,10 @@ Use these locations consistently:
 - `docs/agent/*_sources.json` - curated source catalogs and routing metadata.
 - `docs/agent/automotive_sources/*` - automotive source catalogs and ingestion
   guidance.
-- `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
-  owner-provided packs that should not be duplicated into memory.
+- `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` -
+  compact cold source packs. Keep only README/MANIFEST, source/license notes,
+  and important CSV/JSON/JSONL tables unless a current task and tests justify
+  searchable Markdown modules.
 - `C:/Users/User/.codex/skills/<topic>/` - optional focused trigger skills
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
@@ -95,7 +97,9 @@ Classify tracked documentation with these labels during cleanup:
 - `structured_catalog`: JSON/JSONL/CSV/YAML/SQL catalogs, schemas, maps, or
   source registries used by playbooks or future ingestion.
 - `source_pack`: owner-provided or curated corpora under `source_cache/`; keep
-  README/MANIFEST coverage and avoid rewriting raw source material.
+  README/MANIFEST coverage, source/license notes, and active structured tables.
+  Long duplicate Markdown chapters are delete candidates after unique rules are
+  migrated into canonical playbooks/catalogs.
 - `reference_only`: linked supporting files that must be audited but should not
   be fully indexed into SQLite search.
 - `archive_policy`: `docs/archive/` policy files; do not treat archived plans
@@ -106,9 +110,9 @@ Classify tracked documentation with these labels during cleanup:
   CRM evidence, and private files that must stay out of Git unless explicitly
   promoted.
 
-Do not move existing source packs just to make the tree prettier. Add route
-metadata and README/MANIFEST coverage first; move files only when a source is
-misclassified or unsafe in its current location.
+Do not move existing source packs just to make the tree prettier. Aggressively
+delete stale generated/draft/source-pack chapters only after the active rule is
+already present in a playbook/catalog and `knowledge-audit` will still pass.
 
 ## Naming Rules
 
@@ -159,22 +163,27 @@ include:
 
 ## Source Pack Contract
 
-A source pack should have at least:
+A retained source pack should have at least:
 
 - `README.md` or `README_ru.md` with purpose, load order, and safety limits.
 - `MANIFEST.md` or `manifest.json` listing included files.
-- `md/` or `markdown/` for searchable text equivalents of PDFs.
-- `data/` for CSV/JSON/JSONL tables.
-- `sources/` for citations, standards, licenses, and source catalogs.
+- `data/` for important CSV/JSON/JSONL tables when the pack has structured
+  material.
+- `sources/` for citations, standards, licenses, and source catalogs when the
+  source route matters.
+
+Searchable `md/` or `markdown/` modules are optional. Keep them only when they
+carry unique current knowledge not already migrated into a playbook or
+structured catalog.
 
 Optional folders:
 
 - `pdf/` for printable/source attachments.
 - `examples/` for toy samples and safe fixtures.
 
-Keep prompts, schemas, implementation drafts, generated samples, and API
-contracts out of the active docs tree unless a current implementation task
-uses them and tests cover the route.
+Keep prompts, schemas, implementation drafts, generated samples, API contracts,
+and long duplicate training chapters out of the active docs tree unless a
+current implementation task uses them and tests cover the route.
 
 ## Intake Checklist
 

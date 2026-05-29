@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-05-11",
+  "last_verified": "2026-05-29",
   "tool_count": 33,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
@@ -257,6 +257,8 @@
     "route management, procurement, staff, customer, and finance work through docs/agent/krasnoyarsk_service_management_playbook.md",
     "route labor work estimates through docs/agent/work_labor_pricing_playbook.md and keep estimate_repair_work_cost read-only until a separate ЗН write command",
     "route private ИП/AutoStop business identity and requisites through docs/agent/business_identity_playbook.md and data/private_knowledge",
-    "prefer explicit uncertainty over invented completeness"
+    "prefer explicit uncertainty over invented completeness",
+    "For documentation hygiene, classify files first, migrate unique active rules into canonical playbooks/catalogs, delete obsolete duplicates, then run knowledge-sync/audit/annotations-audit/cleanup-audit/system-audit.",
+    "Generated local artifacts such as generated_invoices/ are not documentation and must stay out of Git unless explicitly promoted as fixtures."
   ]
 }
