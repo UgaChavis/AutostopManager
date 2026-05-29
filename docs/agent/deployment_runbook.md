@@ -72,9 +72,15 @@ The GitHub deploy key is already present on the server:
 - Repository SSH URL:
   `git@github.com-autostopcrm:UgaChavis/AutostopManager.git`
 
-Do not use the HTTPS remote for unattended pushes from this shell; it will fail
-with `could not read Username for 'https://github.com'`. Do not assume raw
-`git@github.com` will pick the right key either; use the configured alias.
+Important: this key is currently a read-only deploy key for GitHub. It is good
+for authentication checks and fetch/pull operations. A direct `git push` with
+this key fails with `The key you are authenticating with has been marked as read
+only.`
+
+Do not use the HTTPS remote for unattended operations from this shell; it will
+fail with `could not read Username for 'https://github.com'` unless a separate
+credential helper is configured. Do not assume raw `git@github.com` will pick
+the right key either; use the configured alias.
 
 Verify access without printing secrets:
 
@@ -91,19 +97,19 @@ If `origin` points at HTTPS, fix it once:
 git remote set-url origin git@github.com-autostopcrm:UgaChavis/AutostopManager.git
 ```
 
-Normal publish from `/opt/AutostopManager`:
+Normal server sync from `/opt/AutostopManager`:
 
 ```bash
 git status --short
 git branch --show-current
-git push origin AutostopManager
+git fetch origin AutostopManager
 ```
 
-For a feature branch:
+For publishing, use one of these write-capable paths:
 
-```bash
-git push -u origin codex/<branch-name>
-```
+- temporarily configure a GitHub write credential/token for `git push`;
+- use a separate write-enabled SSH key/alias;
+- use the GitHub connector/API from Codex when available.
 
 Keep private keys out of Git and never paste key contents into chat, docs, CRM,
 or logs.
