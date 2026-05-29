@@ -60,6 +60,54 @@ and deploy:
 6. Commit only code, tests, documentation, and safe owner-provided source packs.
 7. Push the current branch to GitHub.
 
+## GitHub SSH Access From Codex VPS
+
+Verified on the production Codex/server shell on 2026-05-29.
+
+The GitHub deploy key is already present on the server:
+
+- SSH config: `/root/.ssh/config`
+- Host alias: `github.com-autostopcrm`
+- Identity file: `/root/.ssh/autostopcrm_github`
+- Repository SSH URL:
+  `git@github.com-autostopcrm:UgaChavis/AutostopManager.git`
+
+Do not use the HTTPS remote for unattended pushes from this shell; it will fail
+with `could not read Username for 'https://github.com'`. Do not assume raw
+`git@github.com` will pick the right key either; use the configured alias.
+
+Verify access without printing secrets:
+
+```bash
+ssh -T github.com-autostopcrm
+```
+
+Expected result is the normal GitHub authentication greeting for
+`UgaChavis/GITHUB`; GitHub still says it does not provide shell access.
+
+If `origin` points at HTTPS, fix it once:
+
+```bash
+git remote set-url origin git@github.com-autostopcrm:UgaChavis/AutostopManager.git
+```
+
+Normal publish from `/opt/AutostopManager`:
+
+```bash
+git status --short
+git branch --show-current
+git push origin AutostopManager
+```
+
+For a feature branch:
+
+```bash
+git push -u origin codex/<branch-name>
+```
+
+Keep private keys out of Git and never paste key contents into chat, docs, CRM,
+or logs.
+
 ## Local MCP Server
 
 Default local command:
@@ -77,23 +125,49 @@ $env:AUTOSTOP_MANAGER_MCP_PATH = "/mcp"
 $env:AUTOSTOP_MANAGER_DB = "C:\path\to\autostop_manager.sqlite3"
 ```
 
-## Server Deployment Requirements
+## Production Server Deployment
 
-A real server deployment needs one explicit target:
+Verified production shape on 2026-05-29:
 
-- host/IP or platform
-- SSH/user or deployment token
-- service manager: systemd, Docker, PM2, Cloudflare, or another platform
-- persistent path for `AUTOSTOP_MANAGER_DB`
-- network exposure rule for the MCP endpoint
-- restart/smoke-check command
+- host: `vps26457.mnogoweb.in`
+- AutostopManager checkout: `/opt/AutostopManager`
+- CRM checkout: `/opt/autostopcrm`
+- CRM compose file: `/opt/autostopcrm/docker-compose.yml`
+- CRM deploy script: `/opt/autostopcrm/deploy.sh`
+- CRM MCP endpoint inside container: `http://127.0.0.1:41831/mcp`
+- host port for MCP: `127.0.0.1:8001`
+- public MCP endpoint: `https://crm.autostopcrm.ru/mcp`
 
-Do not invent deployment credentials or push private runtime data to make a
-deployment appear complete.
+The CRM Docker compose mounts AutostopManager into the CRM container:
 
-If the target or credential path is not available in the repo, environment, or
-owner message, stop after the GitHub push and report the server deployment as
-blocked by missing target details.
+```yaml
+AUTOSTOP_MANAGER_PATH: /opt/AutostopManager
+```
+
+There is no separate systemd service for AutostopManager in this setup. The
+manager MCP tools are loaded by the CRM container when the manager checkout is
+mounted and `autostop_manager.mcp_tools` can be imported.
+
+Server update flow for AutostopManager-only changes:
+
+```bash
+cd /opt/AutostopManager
+git switch AutostopManager
+git pull --ff-only origin AutostopManager
+python -m autostop_manager.cli knowledge-sync
+python -m autostop_manager.cli knowledge-audit
+python -m autostop_manager.cli annotations-audit
+python -m autostop_manager.cli system-audit
+
+cd /opt/autostopcrm
+AUTOSTOP_SKIP_GIT_SYNC=1 ./deploy.sh
+```
+
+Use `AUTOSTOP_SKIP_GIT_SYNC=1` when only the mounted AutostopManager checkout
+changed and the CRM checkout should not be reset. Omit it only when the CRM repo
+itself must be synced from `origin/autostopcrm-v1`.
+
+Do not push private runtime data to make deployment appear complete.
 
 ## Server Smoke Check
 
@@ -107,3 +181,17 @@ After deployment, verify:
 - `audit_knowledge_base` returns no required missing files or warnings
 - `recommend_service_management_actions` works
 - logs do not contain secrets or CRM dumps
+
+Useful production checks:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+cd /opt/autostopcrm
+docker compose exec -T autostopcrm python scripts/check_live_connector.py \
+  --strict \
+  --skip-public-site \
+  --skip-public-write-protection \
+  --local-api-url http://127.0.0.1:41731 \
+  --mcp-url http://127.0.0.1:41831/mcp \
+  --expect-admin
+```
