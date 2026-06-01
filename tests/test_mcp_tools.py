@@ -32,6 +32,18 @@ def test_lookup_original_parts_tool_is_registered(tmp_path):
     result = server.tools["lookup_original_parts"]("GXE10-0088644")
     assert result["identifier"]["kind"] == "frame_number"
     assert result["steps"]
+    assert result["catalog_routes"] == result["steps"]
+    assert "oem_candidates" in result
+    assert "fitment_confidence" in result
+
+    captured = server.tools["lookup_original_parts"](
+        "GXE10-0088644",
+        make_hint="Toyota",
+        part_name="сальник",
+        captured_oem_number="90311-89014",
+        captured_source="Toyota EPC Mirror",
+    )
+    assert captured["oem_candidates"][0]["normalized_number"] == "9031189014"
 
 
 def test_decode_vehicle_identity_tool_is_registered(tmp_path):
@@ -272,6 +284,52 @@ def test_recommend_service_management_actions_tool_is_registered(tmp_path):
     assert any(source["source_id"] == "drom_parts" for source in result["sources"])
 
 
+def test_estimate_repair_work_cost_tool_is_registered(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    assert "estimate_repair_work_cost" in server.tools
+    result = server.tools["estimate_repair_work_cost"](
+        vehicle="BMW X5",
+        vin="WBA00000000000000",
+        work_items=["замена рулевой рейки"],
+        quotes_json=[
+            {
+                "source": "sto-a",
+                "city": "Москва",
+                "operation_name": "замена рулевой рейки",
+                "price_rub": 10000,
+                "includes_parts": False,
+                "captured_at": "2026-05-21",
+            },
+            {
+                "source": "sto-b",
+                "city": "Красноярск",
+                "operation_name": "рулевая рейка снять/поставить",
+                "price_rub": 12000,
+                "includes_parts": False,
+                "captured_at": "2026-05-21",
+            },
+            {
+                "source": "sto-c",
+                "city": "Новосибирск",
+                "operation_name": "поменять рейку",
+                "price_rub": 11000,
+                "includes_parts": False,
+                "captured_at": "2026-05-21",
+            },
+        ],
+    )
+    assert result["ok"] is True
+    assert result["read_only"] is True
+    assert result["russia_average_rub"] == 11000
+    assert result["autostop_price_rub"] == 16500
+    assert "labor_time_analysis" in result
+    assert "pricing_basis" in result
+
+
 def test_knowledge_base_tools_are_registered(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -320,12 +378,12 @@ def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
     register_manager_memory_tools(server, store)
 
     assert "prepare_manager_context" in server.tools
-    context = server.tools["prepare_manager_context"]("прибейсь", intent="board_cleanup", limit=5)
+    context = server.tools["prepare_manager_context"]("Приберись", intent="board_cleanup", limit=5)
     assert context["ok"] is True
     assert context["command_route"]["command_id"] == "board_cleanup_autopilot"
 
     assert "agent_brief" in server.tools
-    brief = server.tools["agent_brief"]("прибейсь", intent="board_cleanup", limit=5)
+    brief = server.tools["agent_brief"]("Приберись", intent="board_cleanup", limit=5)
     assert brief["ok"] is True
     assert brief["format"] == "agent_brief_v1"
     assert brief["route"]["domain"] == "board_cleanup_autopilot"
@@ -446,9 +504,10 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert catalog["tool_counts"]["crm_base_tools"] == 71
-    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 43
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 114
-    assert len(catalog["live_tools_verified"]) == 104
+    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 45
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 116
+    assert len(catalog["live_tools_verified"]) == 116
+    assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identities" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "catalog_provider_status" in catalog["tool_families"]["optional_manager_memory_and_routing"]
@@ -462,4 +521,5 @@ def test_crm_mcp_catalog_counts_are_current():
     assert "build_vin_parts_work_order" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert any("decode_vehicle_identity" in note for note in catalog["operation_notes"])
     assert any("plan_crm_vin_oem_parts_lookup" in note for note in catalog["operation_notes"])
+    assert any("estimate_repair_work_cost" in note for note in catalog["operation_notes"])
     assert "cleanup_card_content" in catalog["not_mcp_runtime_tools"]

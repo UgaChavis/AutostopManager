@@ -164,6 +164,13 @@
       "inputs": [
         "vin"
       ],
+      "requires_login": true,
+      "outputs": [
+        "vehicle_options",
+        "production_date",
+        "oem_part_numbers",
+        "supersessions"
+      ],
       "url": "https://www.partslink24.com/partlink24mobile_en/index.html",
       "notes": "VIN-scan entry and genuine parts access for participating brands; useful when dealership-grade catalog access is available."
     },
@@ -176,6 +183,68 @@
       ],
       "url": "https://www.partslink24.com/pl24connectLounge/html/en/product.html",
       "notes": "Explains VIN access and original parts access for authorized dealers."
+    },
+    {
+      "source_id": "bmw_air_etk_aos",
+      "name": "BMW AIR/ETK via AOS",
+      "kind": "manufacturer_service_catalog",
+      "authority": "manufacturer",
+      "inputs": [
+        "vin",
+        "part_name",
+        "part_number"
+      ],
+      "requires_login": true,
+      "outputs": [
+        "vehicle_options",
+        "production_date",
+        "oem_part_numbers",
+        "supersessions",
+        "repair_information"
+      ],
+      "brands": [
+        "BMW",
+        "MINI"
+      ],
+      "url": "https://aos.bmwgroup.com/",
+      "role": "Authorized BMW/MINI route for VIN-specific vehicle identity, equipment, OEM catalog part numbers, and service information.",
+      "access": "Paid authorized AOS login; credentials and contract must stay outside Git.",
+      "limits": "Use only with authorized access. Treat output as high-confidence catalog evidence, but keep source/date in CRM notes.",
+      "mvp_priority": "high",
+      "notes": "Preferred BMW/MINI confirmation route when OEM numbers are VIN-critical."
+    },
+    {
+      "source_id": "vag_etka",
+      "name": "Volkswagen Group ETKA",
+      "kind": "manufacturer_parts_catalog",
+      "authority": "manufacturer",
+      "inputs": [
+        "vin",
+        "part_name",
+        "part_number",
+        "gearbox_code"
+      ],
+      "requires_login": true,
+      "outputs": [
+        "vehicle_options",
+        "production_date",
+        "oem_part_numbers",
+        "supersessions",
+        "pr_codes"
+      ],
+      "brands": [
+        "Volkswagen",
+        "Audi",
+        "Skoda",
+        "SEAT",
+        "Cupra"
+      ],
+      "url": "https://www.partslink24.com/",
+      "role": "Authorized Volkswagen Group EPC route for VIN/PR-code-specific OEM part verification.",
+      "access": "Paid authorized ETKA or partslink24 access; credentials and screenshots must stay outside Git unless redacted.",
+      "limits": "VIN, PR codes, gearbox/engine codes, and production date are required before confirming DSG mechatronic or other configuration-sensitive parts.",
+      "mvp_priority": "high",
+      "notes": "Preferred VAG route for DSG, gearbox, electronics, and other PR-code-sensitive catalog decisions."
     },
     {
       "name": "Toyota EPC Mirror",

@@ -5,11 +5,11 @@
   "local_repo": "C:/Users/User/Desktop/AutostopCRM-V1",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-05-19",
+  "last_verified": "2026-06-01",
   "tool_counts": {
     "crm_base_tools": 71,
-    "optional_autostop_manager_tools": 43,
-    "production_tools_with_manager_mounted": 114
+    "optional_autostop_manager_tools": 45,
+    "production_tools_with_manager_mounted": 116
   },
   "source_documents": [
     "README.md",
@@ -185,7 +185,9 @@
       "build_vin_parts_work_order",
       "recommend_automotive_sources",
       "recommend_fluid_maintenance_sources",
-      "recommend_service_management_actions"
+      "recommend_service_management_actions",
+      "estimate_repair_work_cost",
+      "lookup_oem_catalog_candidates"
     ]
   },
   "live_tools_verified": [
@@ -196,8 +198,11 @@
     "audit_knowledge_base",
     "audit_memory",
     "audit_skill_registry",
+    "benchmark_vin_parts_lookup",
     "bootstrap_context",
+    "build_vin_parts_work_order",
     "bulk_move_cards",
+    "catalog_provider_status",
     "cleanup_audit",
     "create_card",
     "create_cash_transaction",
@@ -207,6 +212,8 @@
     "create_sticky",
     "crm_health_plan",
     "curate_memory",
+    "decode_vehicle_identities",
+    "decode_vehicle_identity",
     "delete_cashbox",
     "delete_client",
     "delete_client_vehicle",
@@ -215,6 +222,7 @@
     "delete_sticky",
     "download_repair_order_print_pdf",
     "download_shared_file",
+    "estimate_repair_work_cost",
     "finish_manager_run",
     "get_board_content",
     "get_board_context",
@@ -246,6 +254,7 @@
     "list_overdue_cards",
     "list_repair_orders",
     "list_shared_files",
+    "lookup_oem_catalog_candidates",
     "lookup_original_parts",
     "manager_journal",
     "mark_card_ready",
@@ -255,7 +264,10 @@
     "memory_topics",
     "move_card",
     "move_sticky",
+    "partsapi_catalog_lookup",
     "ping_connector",
+    "plan_crm_vin_oem_parts_lookup",
+    "plan_oem_parts_providers",
     "prepare_manager_context",
     "probe_knowledge_base",
     "public_aftermarket_catalog_lookup",
@@ -292,7 +304,9 @@
     "update_shared_file_position",
     "update_sticky",
     "upload_shared_file",
-    "upsert_client_vehicle"
+    "upsert_client_vehicle",
+    "vin17_decode_vehicle",
+    "vin17_search_part_number_by_vin"
   ],
   "not_mcp_runtime_tools": [
     "cleanup_card_content",
@@ -316,6 +330,12 @@
     "Use today_context/memory_context_for/recall/remember/learn_from_feedback only for durable non-CRM manager memory and lessons.",
     "Treat the autostopcrm-v1 branch in the CRM repo as canonical for new MCP commands and connector behavior.",
     "Refresh this catalog whenever the CRM repo or AutostopManager MCP tool surface changes.",
-    "For CRM VIN/frame/body-number parts lookup and writeback planning, use plan_crm_vin_oem_parts_lookup locally; verify production CRM server has the updated AutostopManager mount before relying on it through the CRM MCP endpoint."
-  ]
+    "For CRM VIN/frame/body-number parts lookup and writeback planning, use plan_crm_vin_oem_parts_lookup locally; verify production CRM server has the updated AutostopManager mount before relying on it through the CRM MCP endpoint.",
+    "Use estimate_repair_work_cost for read-only labor estimates with public price averaging and public norm-hours/labor-time plausibility; do not call replace_repair_order_works from a pricing estimate unless the owner separately approves the exact ЗН write."
+  ],
+  "schema_notes": {
+    "live_discovery_rule": "Before CRM writes, prefer the currently exposed MCP/tool schema over stale docs or static wrappers.",
+    "set_card_deadline": "Deadline-capable CRM tools accept duration-style payloads such as days/hours/minutes/seconds or total_seconds on the live connector; wrapper metadata may render the field loosely.",
+    "write_scope": "All CRM tools operate only on the current AutoStop CRM board served by this MCP/API endpoint."
+  }
 }

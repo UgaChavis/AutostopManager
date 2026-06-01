@@ -180,6 +180,31 @@ def test_cli_parser_has_core_commands():
     assert args.requested_part == "передние колодки"
     assert args.no_live_vpic is True
 
+    args = parser.parse_args(
+        [
+            "lookup-oem",
+            "WBA00000000000000",
+            "--part-name",
+            "рулевая рейка",
+            "--side",
+            "left",
+            "--position",
+            "front",
+            "--old-part-number",
+            "7852 123 456",
+            "--captured-oem",
+            "32 10 6 888 999",
+            "--captured-source",
+            "BMW AIR/ETK via AOS",
+        ]
+    )
+    assert args.part_name == "рулевая рейка"
+    assert args.side == "left"
+    assert args.position == "front"
+    assert args.old_part_number == "7852 123 456"
+    assert args.captured_oem == "32 10 6 888 999"
+    assert args.captured_source == "BMW AIR/ETK via AOS"
+
     args = parser.parse_args(["source-route", "--brand", "Toyota", "--data-type", "repair_manuals"])
     assert args.command == "source-route"
     assert args.brand == "Toyota"
@@ -222,6 +247,27 @@ def test_cli_parser_has_core_commands():
     assert args.command == "service-plan"
     assert args.area == "parts"
     assert args.part_number == "90311-89014"
+
+    args = parser.parse_args(
+        [
+            "estimate-work",
+            "--vehicle",
+            "BMW X5",
+            "--work",
+            "замена рулевой рейки",
+            "--quotes-json",
+            "quotes.json",
+            "--no-auto-research",
+            "--labor-time-policy",
+            "public_only",
+        ]
+    )
+    assert args.command == "estimate-work"
+    assert args.vehicle == "BMW X5"
+    assert args.work_items == ["замена рулевой рейки"]
+    assert args.quotes_json == "quotes.json"
+    assert args.auto_research is False
+    assert args.labor_time_policy == "public_only"
 
     args = parser.parse_args(["knowledge-sync"])
     assert args.command == "knowledge-sync"
@@ -314,15 +360,15 @@ def test_cli_parser_has_core_commands():
     assert args.command == "memory-curate"
     assert args.apply is True
 
-    args = parser.parse_args(["prepare-context", "прибейсь", "--intent", "board_cleanup", "--limit", "5"])
+    args = parser.parse_args(["prepare-context", "Приберись", "--intent", "board_cleanup", "--limit", "5"])
     assert args.command == "prepare-context"
-    assert args.query == "прибейсь"
+    assert args.query == "Приберись"
     assert args.intent == "board_cleanup"
     assert args.limit == 5
 
-    args = parser.parse_args(["agent-brief", "прибейсь", "--intent", "board_cleanup", "--limit", "5"])
+    args = parser.parse_args(["agent-brief", "Приберись", "--intent", "board_cleanup", "--limit", "5"])
     assert args.command == "agent-brief"
-    assert args.query == "прибейсь"
+    assert args.query == "Приберись"
     assert args.intent == "board_cleanup"
     assert args.limit == 5
 

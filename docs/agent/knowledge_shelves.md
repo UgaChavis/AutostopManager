@@ -22,7 +22,7 @@ Use this loop before broad file reads:
    `knowledge-audit` and `annotations-audit`.
 
 For non-trivial operational tasks, run `prepare_manager_context` first. It
-applies command routes such as `Приберись` / `прибейсь`, relevant memory/rules,
+applies command routes such as `Приберись`, relevant memory/rules,
 knowledge routing, missing required context, and next actions before broad file
 reads.
 
@@ -49,6 +49,8 @@ decide whether the reusable route belongs in the intake flow.
 | Gmail operations | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail inbox search, labels, drafts, attachments, thread reads, write safety, email-derived memory |
 | Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` | Krasnoyarsk parts search, ZZap/Drom/Avito, procurement price, offer scoring |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | workshop triage, staff, finance, customer flow, board cleanup, CRM manager data summaries |
+| Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` | `Приберись`, vehicle passport enrichment, formatted card descriptions, board summaries, repair-order write boundary |
+| Work labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` | read-only work estimates from public Russia labor-only STO prices plus public norm-hours/labor-time plausibility, average price, AutoStop +50%, confidence |
 | Deployment | `deployment` | `docs/agent/deployment_runbook.md` | local MCP startup, server publishing, GitHub/private-data boundary |
 
 ## File Types And Placement
@@ -68,8 +70,10 @@ Use these locations consistently:
 - `docs/agent/*_sources.json` - curated source catalogs and routing metadata.
 - `docs/agent/automotive_sources/*` - automotive source catalogs and ingestion
   guidance.
-- `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
-  owner-provided packs that should not be duplicated into memory.
+- `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` -
+  compact cold source packs. Keep only README/MANIFEST, source/license notes,
+  and important CSV/JSON/JSONL tables unless a current task and tests justify
+  searchable Markdown modules.
 - `C:/Users/User/.codex/skills/<topic>/` - optional focused trigger skills
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
@@ -88,7 +92,9 @@ Classify tracked documentation with these labels during cleanup:
 - `structured_catalog`: JSON/JSONL/CSV/YAML/SQL catalogs, schemas, maps, or
   source registries used by playbooks or future ingestion.
 - `source_pack`: owner-provided or curated corpora under `source_cache/`; keep
-  README/MANIFEST coverage and avoid rewriting raw source material.
+  README/MANIFEST coverage, source/license notes, and active structured tables.
+  Long duplicate Markdown chapters are delete candidates after unique rules are
+  migrated into canonical playbooks/catalogs.
 - `reference_only`: linked supporting files that must be audited but should not
   be fully indexed into SQLite search.
 - `archive_policy`: archived policy files only when an archive folder exists;
@@ -99,9 +105,9 @@ Classify tracked documentation with these labels during cleanup:
   CRM evidence, and private files that must stay out of Git unless explicitly
   promoted.
 
-Do not move existing source packs just to make the tree prettier. Add route
-metadata and README/MANIFEST coverage first; move files only when a source is
-misclassified or unsafe in its current location.
+Do not move existing source packs just to make the tree prettier. Aggressively
+delete stale generated/draft/source-pack chapters only after the active rule is
+already present in a playbook/catalog and `knowledge-audit` will still pass.
 
 ## Naming Rules
 
@@ -152,22 +158,27 @@ include:
 
 ## Source Pack Contract
 
-A source pack should have at least:
+A retained source pack should have at least:
 
 - `README.md` or `README_ru.md` with purpose, load order, and safety limits.
 - `MANIFEST.md` or `manifest.json` listing included files.
-- `md/` or `markdown/` for searchable text equivalents of PDFs.
-- `data/` for CSV/JSON/JSONL tables.
-- `sources/` for citations, standards, licenses, and source catalogs.
+- `data/` for important CSV/JSON/JSONL tables when the pack has structured
+  material.
+- `sources/` for citations, standards, licenses, and source catalogs when the
+  source route matters.
+
+Searchable `md/` or `markdown/` modules are optional. Keep them only when they
+carry unique current knowledge not already migrated into a playbook or
+structured catalog.
 
 Optional folders:
 
 - `pdf/` for printable/source attachments.
 - `examples/` for toy samples and safe fixtures.
 
-Keep prompts, schemas, implementation drafts, generated samples, and API
-contracts out of the active docs tree unless a current implementation task
-uses them and tests cover the route.
+Keep prompts, schemas, implementation drafts, generated samples, API contracts,
+and long duplicate training chapters out of the active docs tree unless a
+current implementation task uses them and tests cover the route.
 
 ## Intake Checklist
 
@@ -215,3 +226,7 @@ python -m autostop_manager.cli knowledge-probe "структурируй баз�
 python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 python -m pytest tests/test_knowledge_base.py -q
 ```
+
+Use `rg` for local text checks when it is installed. If the current environment
+does not provide `rg`, fall back to `grep -RIn` and keep the search scoped to
+active docs, catalogs, and tests.

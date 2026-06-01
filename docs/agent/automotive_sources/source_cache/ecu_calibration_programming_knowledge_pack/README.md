@@ -6,15 +6,14 @@
 
 ## Состав
 
-- md/ - Markdown-модули для машинной загрузки и ручного чтения.
 - data/ - справочные таблицы CSV и JSONL.
-- examples/ - синтетические учебные примеры A2L, ODX, HEX, S19, DCM, JSON.
 - sources/ - публичный каталог стандартов и официальных источников.
 - MANIFEST.md - компактный список активных файлов и границы использования.
 
 Сгенерированные PDF-дубли удалены 2026-05-08: активная база знаний индексирует
-Markdown/data/sources/examples, поэтому отдельные PDF-копии только утяжеляли
-проект.
+playbook/data/sources, поэтому отдельные PDF-копии только утяжеляли проект.
+Длинные Markdown-модули удалены 2026-05-29 после переноса активных правил в
+`docs/agent/ecu_calibration_programming_playbook.md`.
 
 ## Ограничение
 
@@ -22,17 +21,9 @@ Markdown/data/sources/examples, поэтому отдельные PDF-копии
 
 ## Рекомендуемый порядок чтения
 
-1. 00_scope_and_boundaries_ru
-2. 01_ecu_fundamentals_ru
-3. 02_networks_uds_obd_ru
-4. 03_file_formats_ru
-5. 04_calibration_theory_ru
-6. 05_oem_programming_workflow_ru
-7. 06_bmw_programming_overview_ru
-8. 07_emissions_diagnostics_ru
-9. 08_flash_failures_recovery_ru
-10. 09_validation_logging_ru
-11. 10_service_scenarios_ru
+1. `docs/agent/ecu_calibration_programming_playbook.md`
+2. `data/`
+3. `sources/`
 
 ## Для загрузки в базу сценариев
 

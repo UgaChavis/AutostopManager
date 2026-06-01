@@ -286,7 +286,7 @@ def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
     assert any("knowledge_shelves.md" in path for path in result["source_of_truth"])
 
 
-def test_search_finds_ai_parts_pack_for_local_vendor_scoring(tmp_path):
+def test_search_finds_ai_parts_playbook_for_local_vendor_scoring(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -298,7 +298,8 @@ def test_search_finds_ai_parts_pack_for_local_vendor_scoring(tmp_path):
     )
 
     assert result["ok"] is True
-    assert any("ai_parts_krasnoyarsk_project_pack" in item["path"] for item in result["items"])
+    assert any("ai_parts_krasnoyarsk_playbook.md" in item["path"] for item in result["items"])
+    assert not any("/docs/" in item["path"] and "ai_parts_krasnoyarsk_project_pack" in item["path"] for item in result["items"])
 
 
 def test_probe_returns_low_confidence_for_unknown_vehicle_corpus(tmp_path):
@@ -383,4 +384,8 @@ def test_ecu_reference_glossary_stays_linked_without_hiding_format_docs(tmp_path
     assert any(item.endswith("glossary_ecu_programming.jsonl") for item in probe["reference_files"])
     assert not any(item["path"].endswith("glossary_ecu_programming.jsonl") for item in glossary_result["items"])
     assert format_result["items"][0]["domain"] == "ecu_calibration_programming"
-    assert any("md/03_file_formats_ru.md" in item["path"] for item in format_result["items"])
+    assert any(
+        item["path"].endswith("ecu_calibration_programming_playbook.md")
+        or item["path"].endswith("data/file_format_index.csv")
+        for item in format_result["items"]
+    )

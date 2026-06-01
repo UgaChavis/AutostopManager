@@ -21,6 +21,12 @@ before starting marketplace search. If the owner wants original catalog
 numbers rather than marketplace candidates, route through
 `docs/agent/vin_oem_lookup_playbook.md` first.
 
+Do not treat marketplace text as the source for an original catalog number.
+The OEM-number workflow is: VIN decode -> catalog vehicle selection -> part
+group lookup -> OEM candidate validation -> only then market price search.
+For BMW/VAG, prefer legal paid/official EPC routes such as partslink24,
+BMW AOS/AIR/ETK, or VAG ETKA; public EPC mirrors are fallback evidence only.
+
 If the owner asks for закупочная цена, local availability, repair-order
 materials pricing, or cost correction, load
 `docs/agent/procurement_pricing_playbook.md` before writing prices.

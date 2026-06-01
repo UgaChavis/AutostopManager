@@ -17,19 +17,16 @@
 
 ## Быстрый порядок загрузки в Codex
 
-1. `docs/00_executive_summary_ru.md`
-2. `docs/02_data_sources_ru.md`
-3. `docs/03_part_identity_ru.md`
-4. `docs/04_search_workflows_ru.md`
-5. `docs/06_scoring_and_decision_model_ru.md`
-6. `docs/07_reporting_templates_ru.md`
-7. `docs/08_krasnoyarsk_vendor_discovery_ru.md`
-8. `docs/09_compliance_limits_ru.md`
-9. `docs/14_pricing_and_averaging_model_ru.md`
+1. `docs/agent/ai_parts_krasnoyarsk_playbook.md`
+2. `docs/agent/procurement_pricing_playbook.md`
+3. `docs/agent/procurement_price_sources.json`
+4. `docs/agent/parts_search_playbook.md`
+5. `docs/agent/zzap_search_playbook.md`
 
 Этот пакет был сокращен во время ревизии документации: удалены черновики API,
-prompts, schemas, configs, data samples, code skeleton и OpenAPI. Активные
-правила перенесены в `docs/agent/ai_parts_krasnoyarsk_playbook.md`,
+prompts, schemas, configs, data samples, code skeleton, OpenAPI и длинные
+дублирующие Markdown-главы. Активные правила перенесены в
+`docs/agent/ai_parts_krasnoyarsk_playbook.md`,
 `docs/agent/procurement_pricing_playbook.md`,
 `docs/agent/procurement_price_sources.json`, `parts_search_playbook.md` и
 `zzap_search_playbook.md`.

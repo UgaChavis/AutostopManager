@@ -220,7 +220,7 @@ ECU calibration/programming pack:
 
 - `docs/agent/ecu_calibration_programming_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/README.md`
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/`
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md`
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/`
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/`
 
@@ -230,7 +230,7 @@ General BMW repair pack:
 
 - `docs/agent/bmw_repair_playbook.md`
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md`
-- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/`
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json`
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/`
 
 For generic BMW diagnostics, DTC/fault memory, xDrive, ZF transmission,
@@ -241,7 +241,7 @@ BMW X5 F15/N63TU route:
 
 - `docs/agent/bmw_repair_playbook.md`
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md`
-- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/`
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json`
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/`
 
 For BMW F15/N63 requests, load the BMW route first, then route safety-critical or VIN-specific facts through ISTA/AIR/ETK or BMW official sources.
@@ -282,7 +282,6 @@ AI parts Красноярск project pack:
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md`
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/`
 
 For spare-parts search, steering rack / рулевая рейка, used/contract parts,
 seller discovery, call confirmation, offer scoring, supplier routing, or local
@@ -346,6 +345,17 @@ approval for the exact action.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
 - `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and routine board cleanup autonomy.
+
+## Work Labor Pricing
+
+- `work_labor_pricing_playbook.md` - read-only labor estimate workflow,
+  public Russia STO sample rules, AutoStop `+50%` pricing formula, and
+  norm-hours plausibility layer.
+- `labor_pricing_sources.json` - source catalog for public labor pricing and
+  labor-time cross-checks.
+
+Use `estimate_repair_work_cost` only for estimates. It must not write
+repair-order works or materials without a separate explicit owner command.
 
 ## Deployment and Operations
 

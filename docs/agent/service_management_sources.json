@@ -319,6 +319,22 @@
       "kpis": ["unpaid ready total", "materials without labor", "cashbox mismatch count", "overdue receivables"],
       "memory_rules": ["Do not duplicate cashbox ledger in memory."]
     },
+    "work_pricing": {
+      "source_ids": [],
+      "required_context": ["vehicle", "work_items", "public_labor_only_quotes"],
+      "crm_tools": ["estimate_repair_work_cost", "get_card_context", "manager_journal"],
+      "actions": [
+        "Normalize vehicle and exact labor operations.",
+        "Collect public Russia STO labor-only prices for comparable work.",
+        "Collect public norm-hours/labor-time mentions as a second plausibility layer when available.",
+        "Filter outliers, average valid quotes, and apply AutoStop +50%.",
+        "Use norm-hours to check complexity and overlaps, not as the primary price basis.",
+        "Return missing context when fewer than 3 valid quotes remain.",
+        "Keep the estimate read-only until the owner gives a separate ЗН write command."
+      ],
+      "kpis": ["valid labor-only quote count", "source count", "confidence", "missing context"],
+      "memory_rules": ["Do not store full price lists; keep only durable pricing rules and short quote schema."]
+    },
     "knowledge_intake": {
       "source_ids": [],
       "required_context": ["file_path", "source_type", "license_status", "target_playbook"],

@@ -8,7 +8,11 @@ Purpose: route parts-search, local availability, supplier/API, used/contract par
 - Intake source: owner-provided archive; original user download path is
   historical and not part of active routing.
 - Created in pack README: `2026-05-03`
-- Classification: compact owner-provided project knowledge pack with retained Markdown workflow docs only. Implementation drafts, prompts, schemas, configs, code skeleton, OpenAPI, samples, and generated data were removed during documentation reduction.
+- Classification: compact owner-provided project knowledge pack retained as a
+  cold reference. Long workflow chapters were migrated into this playbook and
+  procurement/parts catalogs; implementation drafts, prompts, schemas, configs,
+  code skeleton, OpenAPI, samples, generated data, and duplicate Markdown
+  chapters were removed during documentation reduction.
 - Secret boundary: never store real supplier/API keys in Git, docs, CRM cards, or memory.
 
 ## Use This First When
@@ -23,23 +27,22 @@ Purpose: route parts-search, local availability, supplier/API, used/contract par
 1. Exact request intake: VIN/frame, year/make/model, engine, gearbox, drivetrain, part name, side, OEM number, brand/article if known, photo/marking, required condition, urgency, budget, and repair-order context.
 2. Vehicle identity and OEM route: `vehicle_identity_playbook.md`, `vin_oem_lookup_playbook.md`, and catalog/VIN sources.
 3. Procurement pricing route: `procurement_pricing_playbook.md` and `procurement_price_sources.json`.
-4. This playbook and the local AI parts pack for workflow, scoring, local vendor discovery, compliance limits, pricing logic, and reporting.
+4. This playbook for workflow, scoring, local vendor discovery, compliance
+   limits, pricing logic, and reporting. The local AI parts pack is now a
+   compact cold reference for README/MANIFEST provenance only.
 5. Supplier/API/cabinet/price-list sources allowed by contract; public marketplaces only as manual/official channels and sanity checks.
 6. Phone/message confirmation for urgent or expensive parts before recommending purchase.
 
 ## Pack Navigation
 
-Core docs:
+Retained files:
 
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/00_executive_summary_ru.md` - concept and minimum workflow.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/02_data_sources_ru.md` - source matrix and trust levels.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/03_part_identity_ru.md` - VIN/OEM/brand/article/fitment normalization.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/04_search_workflows_ru.md` - local, supplier, marketplace, no-result, and escalation workflows.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/06_scoring_and_decision_model_ru.md` - offer scoring model.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/07_reporting_templates_ru.md` - manager-facing report templates.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/08_krasnoyarsk_vendor_discovery_ru.md` - local seller discovery and vendor registry workflow.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/09_compliance_limits_ru.md` - legal/terms boundaries.
-- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/14_pricing_and_averaging_model_ru.md` - median/outlier/local-premium and downtime cost model.
+- `README.md` - provenance, minimum sourcing chain, and safety boundary.
+- `MANIFEST.md` - retained-file list and deletion record.
+
+Active operational rules now live in this playbook,
+`procurement_pricing_playbook.md`, `procurement_price_sources.json`,
+`parts_search_playbook.md`, and `zzap_search_playbook.md`.
 
 ## Steering Rack Rule
 

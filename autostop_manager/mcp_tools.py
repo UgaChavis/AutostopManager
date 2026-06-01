@@ -32,6 +32,7 @@ from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_lookup import lookup_original_parts
+from .work_pricing import estimate_repair_work_cost
 
 
 def _registered_tool_names(server: Any) -> list[str] | None:
@@ -395,15 +396,78 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     @server.tool(
         name="lookup_original_parts",
         description=(
-            "Classify a VIN, chassis number, or market code and return a source-aware lookup plan for original catalog numbers."
+            "Build a VIN, chassis, or market-code OEM lookup dossier with catalog routes, OEM candidates, confidence, and missing context."
         ),
     )
     def lookup_original_parts_tool(
         identifier: str,
         model_year: int | None = None,
         make_hint: str | None = None,
+        part_name: str | None = None,
+        part_group: str | None = None,
+        side: str | None = None,
+        position: str | None = None,
+        old_part_number: str | None = None,
+        captured_oem_number: str | None = None,
+        captured_source: str | None = None,
+        captured_supersedes: str | None = None,
+        captured_note: str | None = None,
     ) -> dict[str, Any]:
-        return lookup_original_parts(identifier, model_year=model_year, make_hint=make_hint)
+        return lookup_original_parts(
+            identifier,
+            model_year=model_year,
+            make_hint=make_hint,
+            part_name=part_name,
+            part_group=part_group,
+            side=side,
+            position=position,
+            old_part_number=old_part_number,
+            captured_oem_number=captured_oem_number,
+            captured_source=captured_source,
+            captured_supersedes=captured_supersedes,
+            captured_note=captured_note,
+        )
+
+    @server.tool(
+        name="estimate_repair_work_cost",
+        description=(
+            "Build a read-only labor cost estimate from vehicle/work items, public Russia STO labor-only prices, "
+            "and a public norm-hours/labor-time plausibility layer. Returns Russia average, AutoStop +50% price, "
+            "labor-time checks, confidence, missing context, and next actions without writing repair orders."
+        ),
+    )
+    def estimate_repair_work_cost_tool(
+        vehicle: str | None = None,
+        vin: str | None = None,
+        chassis: str | None = None,
+        make: str | None = None,
+        model: str | None = None,
+        year: int | str | None = None,
+        engine: str | None = None,
+        transmission: str | None = None,
+        work_items: str | list[str] | None = None,
+        complaint: str | None = None,
+        city: str = "Красноярск",
+        quotes_json: list[dict[str, Any]] | dict[str, Any] | None = None,
+        auto_research: bool = True,
+        labor_time_policy: str = "public_only",
+    ) -> dict[str, Any]:
+        return estimate_repair_work_cost(
+            vehicle=vehicle,
+            vin=vin,
+            chassis=chassis,
+            make=make,
+            model=model,
+            year=year,
+            engine=engine,
+            transmission=transmission,
+            work_items=work_items,
+            complaint=complaint,
+            city=city,
+            quotes_json=quotes_json,
+            auto_research=auto_research,
+            labor_time_policy=labor_time_policy,
+        )
 
     @server.tool(
         name="decode_vehicle_identity",

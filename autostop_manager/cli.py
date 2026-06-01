@@ -36,6 +36,7 @@ from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_lookup import lookup_original_parts
+from .work_pricing import estimate_repair_work_cost
 
 
 def _tags(raw: str | None) -> list[str]:
@@ -159,10 +160,19 @@ def build_parser() -> argparse.ArgumentParser:
     agent_brief.add_argument("--intent", default=None)
     agent_brief.add_argument("--limit", type=int, default=8)
 
-    lookup = sub.add_parser("lookup-oem", help="Classify a VIN or frame number and return OEM lookup routing")
+    lookup = sub.add_parser("lookup-oem", help="Build a VIN/frame OEM lookup dossier for original catalog numbers")
     lookup.add_argument("identifier")
     lookup.add_argument("--model-year", type=int, default=None)
     lookup.add_argument("--make", default=None)
+    lookup.add_argument("--part-name", default=None)
+    lookup.add_argument("--part-group", default=None)
+    lookup.add_argument("--side", default=None)
+    lookup.add_argument("--position", default=None)
+    lookup.add_argument("--old-part-number", default=None)
+    lookup.add_argument("--captured-oem", default=None)
+    lookup.add_argument("--captured-source", default=None)
+    lookup.add_argument("--captured-supersedes", default=None)
+    lookup.add_argument("--captured-note", default=None)
 
     vehicle_identity = sub.add_parser(
         "decode-vehicle",
@@ -362,6 +372,25 @@ def build_parser() -> argparse.ArgumentParser:
     service_plan.add_argument("--license-status", default=None)
     service_plan.add_argument("--target-playbook", default=None)
     service_plan.add_argument("--limit", type=int, default=10)
+
+    estimate_work = sub.add_parser(
+        "estimate-work",
+        help="Build a read-only labor cost estimate from public Russia STO prices plus AutoStop 50%% markup",
+    )
+    estimate_work.add_argument("--vehicle", default=None)
+    estimate_work.add_argument("--vin", default=None)
+    estimate_work.add_argument("--chassis", default=None)
+    estimate_work.add_argument("--make", default=None)
+    estimate_work.add_argument("--model", default=None)
+    estimate_work.add_argument("--year", type=int, default=None)
+    estimate_work.add_argument("--engine", default=None)
+    estimate_work.add_argument("--transmission", default=None)
+    estimate_work.add_argument("--work", action="append", dest="work_items", default=[])
+    estimate_work.add_argument("--complaint", default=None)
+    estimate_work.add_argument("--city", default="Красноярск")
+    estimate_work.add_argument("--quotes-json", default=None)
+    estimate_work.add_argument("--auto-research", action=argparse.BooleanOptionalAction, default=True)
+    estimate_work.add_argument("--labor-time-policy", choices=["public_only"], default="public_only")
 
     sub.add_parser("init", help="Initialize SQLite storage")
     sub.add_parser("seed-rules", help="Seed default manager rules from docs")
@@ -586,7 +615,22 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "lookup-oem":
-        _print_json(lookup_original_parts(args.identifier, model_year=args.model_year, make_hint=args.make))
+        _print_json(
+            lookup_original_parts(
+                args.identifier,
+                model_year=args.model_year,
+                make_hint=args.make,
+                part_name=args.part_name,
+                part_group=args.part_group,
+                side=args.side,
+                position=args.position,
+                old_part_number=args.old_part_number,
+                captured_oem_number=args.captured_oem,
+                captured_source=args.captured_source,
+                captured_supersedes=args.captured_supersedes,
+                captured_note=args.captured_note,
+            )
+        )
     elif args.command == "decode-vehicle":
         _print_json(
             decode_vehicle_identity(
@@ -785,6 +829,25 @@ def main(argv: list[str] | None = None) -> int:
                 license_status=args.license_status,
                 target_playbook=args.target_playbook,
                 limit=args.limit,
+            )
+        )
+    elif args.command == "estimate-work":
+        _print_json(
+            estimate_repair_work_cost(
+                vehicle=args.vehicle,
+                vin=args.vin,
+                chassis=args.chassis,
+                make=args.make,
+                model=args.model,
+                year=args.year,
+                engine=args.engine,
+                transmission=args.transmission,
+                work_items=args.work_items,
+                complaint=args.complaint,
+                city=args.city,
+                quotes_json=_json_file(args.quotes_json),
+                auto_research=args.auto_research,
+                labor_time_policy=args.labor_time_policy,
             )
         )
     return 0

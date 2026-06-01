@@ -8,9 +8,10 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 - Intake source: owner-provided archive; original user download path is
   historical and not part of active routing.
 - Created in pack README: `2026-05-03`
-- Classification: compact owner-provided training/reference summaries,
-  public-source routes, Markdown modules, and the active CSV/JSONL tables used
-  by routing.
+- Classification: compact owner-provided training/reference route retained as
+  README, MANIFEST, public-source routes, and active CSV/JSONL tables. Long
+  Markdown modules were migrated into this playbook and removed during
+  documentation reduction.
 - License/source boundary: safe for local reference as owner-provided material; final VIN-specific programming, coding, adaptation, recovery, immobilizer, emissions, SRS, ADAS, HV, and instrument-cluster procedures must still be verified through official OEM documentation and authorized tools.
 
 ## Use This First When
@@ -23,7 +24,8 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 ## Source Order
 
 1. Exact vehicle context: VIN/chassis, market, year/make/model, module, current DTC/fault memory, complaint, prior programming history, and customer request.
-2. This playbook and the local ECU calibration/programming knowledge pack.
+2. This playbook and the retained tables/source catalog in the local ECU
+   calibration/programming knowledge pack.
 3. Model-specific route or playbook when present, such as the BMW F15/N63 route
    for BMW X5 F15/N63TU.
 4. OEM official programming/coding documentation, tool plan, subscription portal, and service information for the exact VIN/module.
@@ -32,20 +34,13 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 
 ## Pack Navigation
 
-Markdown modules:
+Retained pack files:
 
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/00_scope_and_boundaries_ru.md` - legal/safety boundaries, permitted learning scope, forbidden shortcuts.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/01_ecu_fundamentals_ru.md` - ECU memory layers, firmware/calibration/coding/adaptation, NVM/EEPROM, flash segments.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/02_networks_uds_obd_ru.md` - CAN, DoIP, UDS, OBD, diagnostic sessions, security-access concepts, J2534.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/03_file_formats_ru.md` - BIN, Intel HEX, Motorola S-record, A2L, DCM, CDF/CDFX, ODX/PDX, MDF/MF4, BLF/ASC/DBC.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/04_calibration_theory_ru.md` - calibration maps, axes, units, interpolation, validation and risk boundaries.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/05_oem_programming_workflow_ru.md` - precheck, power supply, programming plan, coding, adaptation, DTC/readiness handling, report content.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/06_bmw_programming_overview_ru.md` - BMW ISTA/AOS/AIR workflow, I-level, VO/FA, measures plan, DME/DDE/EGS/BDC/FEM/CAS/EWS/KOMBI.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/07_emissions_diagnostics_ru.md` - legal diagnostics of EGR/DPF/GPF/SCR/readiness without delete/tampering.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/08_flash_failures_recovery_ru.md` - failed flash triage, recovery/resume, bootloader response, replacement-block workflow.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/09_validation_logging_ru.md` - logs, road-test validation, report fields, source freshness rule.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/10_service_scenarios_ru.md` - safe scenario cards for post-flash loss of power, no-response ECU, contract ECU, readiness, customer delete requests, unknown tuned file.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/99_index_ru.md` - pack index.
+- `README.md` - provenance, purpose, and safety boundary.
+- `MANIFEST.md` - retained-file list and compacted-pack metadata.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md` and
+  `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv`
+  - public standards/source routes.
 
 Data indexes:
 

@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-05-31",
-  "tool_count": 44,
+  "last_verified": "2026-06-01",
+  "tool_count": 45,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -40,6 +40,7 @@
   ],
   "routing_tools": [
     "lookup_original_parts",
+    "estimate_repair_work_cost",
     "decode_vehicle_identity",
     "decode_vehicle_identities",
     "catalog_provider_status",
@@ -107,6 +108,7 @@
     "finish_manager_run",
     "list_manager_runs",
     "lookup_original_parts",
+    "estimate_repair_work_cost",
     "decode_vehicle_identity",
     "decode_vehicle_identities",
     "catalog_provider_status",
@@ -167,7 +169,8 @@
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
     "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake.",
-    "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, procurement/RF market quote matrix, selected-part material line policy, CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders."
+    "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, procurement/RF market quote matrix, selected-part material line policy, CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders.",
+    "estimate_repair_work_cost": "Build a read-only labor estimate from vehicle/work items, public Russia STO labor-only prices, and a public norm-hours/labor-time plausibility layer; returns normalized operations, market sample, labor-time checks, Russia average, AutoStop +50% price, confidence, missing context, and next actions without writing repair orders."
   },
   "natural_language_commands": {
     "Приберись": {
@@ -299,5 +302,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 42
+  "all_tools_count": 45
 }

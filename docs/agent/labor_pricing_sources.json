@@ -1,0 +1,228 @@
+{
+  "generated_on": "2026-05-21",
+  "purpose": "Source routing for read-only labor cost estimates: public Russia STO labor-only prices first, public norm-hours/labor-time mentions as the second plausibility layer.",
+  "pricing_policy": {
+    "primary_basis": "public_russia_sto_labor_prices",
+    "markup_multiplier": 1.5,
+    "rounding": "round_to_100_rub",
+    "minimum_confident_quotes": 3,
+    "required_quote_fields": [
+      "source",
+      "city_or_region",
+      "operation_name",
+      "price_rub",
+      "includes_parts=false",
+      "captured_at",
+      "confidence"
+    ],
+    "do_not_use_as_price_basis": [
+      "parts prices",
+      "repair order material totals",
+      "norm-hours alone",
+      "closed licensed database snippets",
+      "forum claims without a public price source"
+    ],
+    "secondary_labor_time_policy": {
+      "basis": "public_web_only_norm_hours_or_labor_time_mentions",
+      "use_for": [
+        "operation_scope_plausibility",
+        "effective_hourly_rate_check",
+        "overlap_detection",
+        "missing_context_for_complex_jobs"
+      ],
+      "not_used_for": [
+        "replacing_public_russia_average",
+        "presenting_official_oem_norm_hours_without_official_public_source",
+        "confident_price_when_fewer_than_3_labor_only_quotes"
+      ],
+      "manual_owner_input_required": false
+    }
+  },
+  "public_price_sources": [
+    {
+      "source_id": "public_sto_price_pages",
+      "name": "Public STO price pages",
+      "category": "primary_public_labor_price",
+      "city_focus": "Россия",
+      "url": null,
+      "access_mode": "public_web",
+      "use_for": [
+        "labor_only_prices",
+        "operation_price_sample",
+        "regional_public_price_benchmark"
+      ],
+      "capture_rule": "Capture only the short quote row: source, city/region, operation, price, includes_parts flag, capture date, and confidence.",
+      "verification": "Confirm the price is for labor only and the operation matches the requested vehicle class."
+    },
+    {
+      "source_id": "fit_service_public_prices",
+      "name": "FIT SERVICE public city price pages",
+      "category": "primary_public_labor_price",
+      "city_focus": "Россия",
+      "url": "https://fitauto.ru/",
+      "access_mode": "public_web",
+      "use_for": [
+        "network_sto_public_prices",
+        "diagnostic_prices",
+        "common_repair_work_prices"
+      ],
+      "capture_rule": "Use city/service pages when they expose a specific operation price; record city and whether parts are excluded.",
+      "verification": "Do not mix promotional bundle prices or parts/materials with labor-only work."
+    },
+    {
+      "source_id": "yandex_maps_public_service_cards",
+      "name": "Yandex Maps service cards and linked public pages",
+      "category": "public_price_discovery",
+      "city_focus": "Россия",
+      "url": "https://yandex.ru/maps/",
+      "access_mode": "public_web",
+      "use_for": [
+        "sto_discovery",
+        "public_price_or_menu_discovery",
+        "regional_sample_expansion"
+      ],
+      "capture_rule": "Use only prices visible in the public card or the linked official/public service page.",
+      "verification": "Treat reviews and free text as context only; do not use them as price quotes."
+    },
+    {
+      "source_id": "2gis_public_service_cards",
+      "name": "2GIS service cards and public price/menu tabs",
+      "category": "public_price_discovery",
+      "city_focus": "Россия",
+      "url": "https://2gis.ru/",
+      "access_mode": "public_web",
+      "use_for": [
+        "sto_discovery",
+        "public_price_or_menu_discovery",
+        "regional_sample_expansion"
+      ],
+      "capture_rule": "Use only explicit public price rows or linked public price pages; record city and source.",
+      "verification": "Do not treat user-uploaded images as confirmed unless the operation, price, and labor-only status are clear."
+    },
+    {
+      "source_id": "brand_specialist_public_prices",
+      "name": "Brand-specialized STO public price pages",
+      "category": "primary_public_labor_price",
+      "city_focus": "Россия",
+      "url": null,
+      "access_mode": "public_web",
+      "use_for": [
+        "premium_vehicle_class_prices",
+        "BMW_or_VAG_specific_work",
+        "transmission_or_steering_specialist_price_sample"
+      ],
+      "capture_rule": "Use when the requested car or operation is not comparable to a generic passenger-car price.",
+      "verification": "Keep labor-only price separate from aggregate/unit/parts/programming costs."
+    }
+  ],
+  "public_labor_time_sources": [
+    {
+      "source_id": "public_norm_hours_mentions",
+      "name": "Public norm-hours / labor-time mentions",
+      "category": "secondary_public_labor_time",
+      "city_focus": "Россия",
+      "url": null,
+      "access_mode": "public_web",
+      "use_for": [
+        "norm_hours_mentions",
+        "labor_time_range",
+        "repair_duration_plausibility"
+      ],
+      "search_terms": [
+        "нормо-часы",
+        "норма времени",
+        "трудоемкость",
+        "время выполнения",
+        "снять установить"
+      ],
+      "capture_rule": "Capture only a short row: source, operation, hours/range, captured_at, confidence, public_source=true.",
+      "verification": "Do not call public snippets official OEM norm-hours unless the source is an official public OEM/RMI page."
+    },
+    {
+      "source_id": "public_sto_duration_pages",
+      "name": "Public STO duration and task pages",
+      "category": "secondary_public_labor_time",
+      "city_focus": "Россия",
+      "url": null,
+      "access_mode": "public_web",
+      "use_for": [
+        "operation_duration",
+        "task_scope_hint",
+        "overlap_detection"
+      ],
+      "capture_rule": "Use only explicit public duration/labor-time rows or snippets tied to the same operation.",
+      "verification": "Duration is a plausibility hint; price still comes from public labor-only STO quotes."
+    }
+  ],
+  "professional_labor_time_fallback_sources": [
+    {
+      "source_id": "mitchell_prodemand",
+      "name": "Mitchell 1 ProDemand",
+      "category": "professional_labor_time_and_estimating",
+      "url": "https://get.mitchell1.com/prodemand/",
+      "access_mode": "licensed",
+      "use_for": [
+        "operation_scope_check",
+        "labor_time_plausibility",
+        "repair_estimate_structure"
+      ],
+      "price_basis": false,
+      "verification": "Use only with legal access; do not copy licensed tables into docs, memory, or CRM."
+    },
+    {
+      "source_id": "motor_estimated_work_times",
+      "name": "MOTOR Estimated Work Times",
+      "category": "professional_labor_time",
+      "url": "https://www.motor.com/products-services/data-products/estimated-work-times/",
+      "access_mode": "licensed",
+      "use_for": [
+        "labor_time_plausibility",
+        "operation_scope_check"
+      ],
+      "price_basis": false,
+      "verification": "Use for norm-time verification only, not as the public Russia price average."
+    },
+    {
+      "source_id": "tecalliance_repair_data",
+      "name": "TecAlliance TecDoc / Repair Data",
+      "category": "professional_repair_data",
+      "url": "https://www.tecalliance.net/",
+      "access_mode": "licensed_or_partner",
+      "use_for": [
+        "repair_data",
+        "labor_estimate_cross_check",
+        "operation_scope_check"
+      ],
+      "price_basis": false,
+      "verification": "Use as fallback structure check when access is legal; final price still comes from public STO quotes."
+    },
+    {
+      "source_id": "autodata_cars_vans",
+      "name": "Autodata for Cars & Vans",
+      "category": "professional_repair_data",
+      "url": "https://www.autodata-group.com/",
+      "access_mode": "licensed",
+      "use_for": [
+        "labor_estimate_cross_check",
+        "repair_procedure_context",
+        "operation_scope_check"
+      ],
+      "price_basis": false,
+      "verification": "Use only as source-backed technical context; do not expose licensed rows in CRM cards."
+    }
+  ],
+  "sample_quote_schema": {
+    "source": "string",
+    "city": "string",
+    "operation_name": "string",
+    "price_rub": "integer",
+    "includes_parts": false,
+    "captured_at": "YYYY-MM-DD",
+    "confidence": "high|medium|low"
+  },
+  "crm_boundary": {
+    "read_only": true,
+    "forbidden_tool": "replace_repair_order_works",
+    "future_write_requirement": "separate explicit owner command with live CRM target"
+  }
+}
