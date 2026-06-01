@@ -162,82 +162,6 @@
         "copied licensed database records",
         "temporary search results",
         "CRM snapshots"
-      ],
-      "reference_files": []
-    },
-    "obsidian_knowledge_vault": {
-      "title": "AutoStop Obsidian working knowledge vault",
-      "use_when": [
-        "owner asks to use Obsidian as the manager knowledge base",
-        "CRM/MCP/connector work needs human-readable operating notes",
-        "knowledge base should be available on another PC through cloud sync",
-        "Codex needs to refresh or inspect the Obsidian vault",
-        "owner asks to place safe manager CRM summaries, client-quality signals, or cashbox overviews in Obsidian"
-      ],
-      "aliases": [
-        "Obsidian",
-        "Obsidian CRM",
-        "vault",
-        "AutoStop vault",
-        "cloud vault",
-        "Google Drive vault",
-        "база знаний Obsidian",
-        "обсидиан",
-        "облачная база знаний",
-        "рабочий ПК",
-        "Codex interaction",
-        "клиентская база в Obsidian",
-        "кассы в Obsidian",
-        "статистика CRM"
-      ],
-      "keywords": [
-        "obsidian vault",
-        "Home.md",
-        "Bases",
-        "Properties",
-        "Google Drive",
-        "cloud sync",
-        "Codex interaction",
-        "setup_autostop_obsidian_vault",
-        "30_Knowledge",
-        "80_Codex",
-        "CRM manager workspace",
-        "client quality",
-        "cashbox overview",
-        "repair orders overview"
-      ],
-      "questions": [
-        "где находится база знаний Obsidian",
-        "как Codex должен пользоваться Obsidian",
-        "как обновить импорт docs/agent в Obsidian",
-        "как открыть Obsidian на рабочем ПК",
-        "что можно и нельзя хранить в Obsidian",
-        "как заносить менеджерскую CRM статистику в Obsidian",
-        "можно ли переносить клиентскую базу или кассовый журнал в Obsidian"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/obsidian_knowledge_vault_playbook.md",
-        "docs/agent/crm_manager_data_playbook.md",
-        "docs/agent/knowledge_base_index.md",
-        "docs/agent/knowledge_shelves.md"
-      ],
-      "primary_files": [
-        "docs/agent/obsidian_knowledge_vault_playbook.md",
-        "docs/agent/crm_manager_data_playbook.md",
-        "docs/agent/knowledge_base_index.md",
-        "docs/agent/knowledge_shelves.md"
-      ],
-      "optional_runtime_files": [
-        "C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM/Home.md",
-        "C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM/80_Codex/Codex interaction.md",
-        "C:/Users/User/Desktop/Obsidian CRM/AutostopCRM/Home.md",
-        "C:/Users/User/Desktop/Obsidian CRM/AutostopCRM/80_Codex/Codex interaction.md"
-      ],
-      "required_context": [
-        "whether the cloud vault path exists on the current machine",
-        "whether the task needs live CRM data or only durable guidance",
-        "whether the note may contain sensitive CRM, Gmail, or credential data",
-        "whether the owner explicitly approved any raw client/cashbox export to cloud storage"
       ]
     },
     "business_identity": {
@@ -1106,7 +1030,11 @@
         "номер рамы",
         "кузов",
         "каталог",
-        "оригинальный номер"
+        "оригинальный номер",
+        "CRM VIN OEM parts lookup",
+        "KDM VIN",
+        "JDM frame",
+        "catalog number by VIN"
       ],
       "keywords": [
         "vPIC",
@@ -1209,7 +1137,11 @@
         "разборка",
         "авторазбор",
         "б/у запчасти",
-        "агрегатная запчасть"
+        "агрегатная запчасть",
+        "CRM VIN OEM parts lookup",
+        "quote matrix",
+        "client sale price",
+        "RF market price"
       ],
       "keywords": [
         "OEM number",
@@ -1375,8 +1307,7 @@
         "staff load",
         "customer flow",
         "finance control",
-        "procurement pricing",
-        "manager-facing CRM statistics or Obsidian snapshots"
+        "procurement pricing"
       ],
       "aliases": [
         "service management",
@@ -1419,7 +1350,6 @@
         "как прибраться на доске",
         "где смотреть финансы и загрузку",
         "как проверить закупочную стоимость материалов",
-        "какие CRM данные безопасно заносить в Obsidian",
         "как сделать менеджерский обзор клиентов, касс и заказ-нарядов"
       ],
       "source_of_truth_files": [
@@ -1480,10 +1410,202 @@
         "docs/agent/deployment_runbook.md",
         "README.md"
       ]
+    },
+    "crm_vin_oem_parts_lookup": {
+      "title": "CRM VIN/frame OEM parts lookup, quote matrix, and CRM writeback",
+      "use_when": [
+        "CRM card contains VIN/frame/body number and requested part",
+        "find OEM catalog number for plugs, pads, filters, or other parts from VIN/frame",
+        "find replacements, crosses, analogs, procurement price, RF market price, and write result back to CRM"
+      ],
+      "aliases": [
+        "CRM VIN OEM parts lookup",
+        "VIN parts writeback",
+        "VIN OEM quote matrix",
+        "frame parts lookup",
+        "body number parts lookup",
+        "KDM VIN parts lookup",
+        "JDM frame OEM",
+        "OEM writeback",
+        "каталожный номер по VIN",
+        "оригинальный номер по VIN",
+        "номер кузова запчасти",
+        "записать в карточку CRM",
+        "подбор запчастей по VIN",
+        "свечи по VIN",
+        "колодки по VIN",
+        "фильтр по VIN",
+        "закупка по VIN",
+        "аналоги по VIN",
+        "кроссы по VIN"
+      ],
+      "keywords": [
+        "CRM",
+        "card_id",
+        "VIN",
+        "frame number",
+        "body number",
+        "KDM VIN",
+        "JDM frame",
+        "OEM",
+        "catalog number",
+        "original number",
+        "spark plugs",
+        "brake pads",
+        "filters",
+        "supersession",
+        "replacement",
+        "cross",
+        "analog",
+        "applicability",
+        "side",
+        "axle",
+        "production date",
+        "procurement price",
+        "public retail price",
+        "client sale price",
+        "quote matrix",
+        "writeback",
+        "replace_repair_order_materials",
+        "update_card",
+        "set_card_board_summary",
+        "каталожный номер",
+        "оригинальный номер",
+        "свечи",
+        "колодки",
+        "фильтры",
+        "закупка",
+        "рыночная цена РФ",
+        "кроссы",
+        "аналоги",
+        "применяемость",
+        "запись в CRM"
+      ],
+      "questions": [
+        "как найти оригинальный номер детали по VIN из карточки CRM",
+        "как проверить OEM, замену, кросс и применяемость перед записью в CRM",
+        "как разделить закупку, рынок РФ и цену клиенту в карточке CRM",
+        "как записать выбранную деталь в материалы ЗН без смешивания OEM и аналога"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
+        "docs/agent/vehicle_identity_playbook.md",
+        "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/vin_oem_sources.json",
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
+        "docs/agent/vehicle_identity_playbook.md",
+        "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json"
+      ]
+    },
+    "3d_printing_cad": {
+      "title": "FDM CAD, STL, and Anycubic Kobra S1 printing route",
+      "use_when": [
+        "owner asks to design or print a small 3D part",
+        "photo or description needs to become a CAD model or STL",
+        "Anycubic Kobra S1 material, orientation, slicer, or printer handoff is involved",
+        "OpenSCAD, BOSL2, build123d, CadQuery, FreeCAD, STL, STEP, SVG, or DXF workflow is needed"
+      ],
+      "aliases": [
+        "3D printing",
+        "3д печать",
+        "3D печать",
+        "CAD",
+        "STL",
+        "Anycubic",
+        "Kobra S1",
+        "Kobra S1 Combo",
+        "Anycubic Slicer Next",
+        "OrcaSlicer",
+        "OpenSCAD",
+        "BOSL2",
+        "build123d",
+        "CadQuery",
+        "FreeCAD",
+        "напечатать деталь",
+        "спроектировать деталь",
+        "сделать STL",
+        "болт",
+        "гайка",
+        "клипса",
+        "кронштейн",
+        "хомут",
+        "втулка",
+        "проставка"
+      ],
+      "keywords": [
+        "FDM",
+        "PLA",
+        "PETG",
+        "ASA",
+        "ABS",
+        "PA",
+        "nylon",
+        "TPU",
+        "nozzle",
+        "0.4 mm",
+        "0.2 mm layer",
+        "250 x 250 x 250",
+        "clearance",
+        "tolerance",
+        "thread",
+        "snap-fit",
+        "clip",
+        "clamp",
+        "bracket",
+        "wall thickness",
+        "infill",
+        "orientation",
+        "supports",
+        "Moonraker",
+        "Rinkhals",
+        "Mainsail",
+        "Fluidd",
+        "gcode"
+      ],
+      "questions": [
+        "как спроектировать деталь для 3D печати",
+        "какие размеры нужны для модели по фотографии",
+        "как сделать STL для Anycubic Kobra S1",
+        "какой материал выбрать для клипсы или хомута",
+        "как проверить что STL готов к печати",
+        "как открыть STL в Anycubic Slicer Next",
+        "можно ли отправить файл на Anycubic по сети"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/3d_printing_cad_playbook.md"
+      ],
+      "primary_files": [
+        "docs/agent/3d_printing_cad_playbook.md"
+      ],
+      "optional_runtime_files": [
+        "C:/Users/User/Desktop/3д/AGENTS.md",
+        "C:/Users/User/Desktop/3д/README.md",
+        "C:/Users/User/Desktop/3д/docs/workflow.md",
+        "C:/Users/User/Desktop/3д/docs/mechanical-cad-playbook.md",
+        "C:/Users/User/Desktop/3д/docs/slicer-checklist.md",
+        "C:/Users/User/Desktop/3д/docs/remote-printing.md",
+        "C:/Users/User/Desktop/3д/docs/cad-stack-upgrade.md",
+        "C:/Users/User/Desktop/3д/docs/fdm-mechanical-printing-knowledge.md",
+        "C:/Users/User/Desktop/3д/config/printer-kobra-s1-pla.json",
+        "C:/Users/User/Desktop/3д/models/catalog.json"
+      ],
+      "required_context": [
+        "purpose and service environment",
+        "critical dimensions and mating features",
+        "fit target and load direction",
+        "material and support tolerance",
+        "print orientation and hardware used"
+      ]
     }
   },
   "search_patterns": {
-    "obsidian_knowledge_vault": "rg -n \"Obsidian|vault|Google Drive|Codex interaction|setup_autostop_obsidian_vault|Bases|client|cashbox|repair order|CRM manager\" docs/agent/obsidian_knowledge_vault_playbook.md docs/agent/crm_manager_data_playbook.md docs/agent/knowledge_base_index.md docs/agent/knowledge_shelves.md",
     "ecu_calibration_programming": "rg -n \"ECU|ЭБУ|KOMBI|стрелков|приборк|A2L|ODX|DCM|UDS|J2534|coding|calibration|flash|прошив\" docs/agent/ecu_calibration_programming_playbook.md docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack",
     "bmw_repair": "rg -n \"BMW|ISTA|AIR|DTC|fault memory|xDrive|ZF|IBS|IHKA|Longlife\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
     "bmw_f15_n63": "rg -n \"BMW|F15|N63|BDC|MEVD|misfire|форсун\" docs/agent/bmw_repair_playbook.md docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack",
@@ -1493,7 +1615,7 @@
     "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",
     "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent C:/Users/User/.codex/skills/autostop-business-documents",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
-    "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent"
-  },
-  "search_commands": {}
+    "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
+    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md C:/Users/User/Desktop/3д/docs C:/Users/User/Desktop/3д/AGENTS.md"
+  }
 }

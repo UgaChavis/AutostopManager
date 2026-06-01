@@ -173,7 +173,10 @@ If a card contains a VIN, chassis number, or body code:
 If a card asks for a detail/part:
 
 - normalize part name, side, axle, position, condition, and OEM if present
-- find OEM number when VIN/chassis is available
+- when VIN/chassis/body number plus writeback is required, use
+  `docs/agent/crm_vin_oem_parts_lookup_playbook.md`
+- find OEM number when VIN/chassis is available; do not invent it from a weak
+  listing
 - search exact OEM first
 - use Drom, ZZap, Avito, Emex, Exist, Autodoc, and local Krasnoyarsk suppliers
   according to urgency

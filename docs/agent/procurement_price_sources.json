@@ -54,15 +54,28 @@
     {
       "source_id": "rossko",
       "name": "ROSSKO / Росско",
-      "aliases": ["росско", "роско", "роска", "rossko"],
+      "aliases": [
+        "росско",
+        "роско",
+        "роска",
+        "rossko"
+      ],
       "category": "wholesale_parts_supplier",
       "city_focus": "Красноярск / Россия",
       "url": "https://rossko.ru/",
       "krasnoyarsk_url": "https://rossko.ru/contacts/magaziny-avtozapchastei-krasnoyarsk-2400000100000/18019/",
-      "use_for": ["new_parts", "consumables", "local_stock", "procurement_price", "same_day_or_next_day"],
+      "use_for": [
+        "new_parts",
+        "consumables",
+        "local_stock",
+        "procurement_price",
+        "same_day_or_next_day"
+      ],
       "access_mode": "account_required",
       "api_status": "api_keys_available_for_registered_account; confirm official terms with ROSSKO manager",
-      "api_evidence_urls": ["https://aksys.info/help/rossko.html"],
+      "api_evidence_urls": [
+        "https://aksys.info/help/rossko.html"
+      ],
       "integration_priority": "high",
       "verification": "Use as a high-priority Krasnoyarsk source after AutoStop account/API keys are available. Confirm warehouse, pickup address, price type, and return terms before writing закупка."
     },
@@ -72,10 +85,17 @@
       "category": "wholesale_parts_supplier",
       "city_focus": "Россия / СНГ",
       "url": "https://etp.armtek.ru/",
-      "use_for": ["new_parts", "b2b_procurement", "stock_and_delivery_check", "price_benchmark"],
+      "use_for": [
+        "new_parts",
+        "b2b_procurement",
+        "stock_and_delivery_check",
+        "price_benchmark"
+      ],
       "access_mode": "account_required",
       "api_status": "partner_account_or_ETP_required",
-      "api_evidence_urls": ["https://etp.armtek.ru/"],
+      "api_evidence_urls": [
+        "https://etp.armtek.ru/"
+      ],
       "integration_priority": "high",
       "verification": "Treat as B2B supplier route. Use only account-approved API/ETP or exported price lists; confirm Krasnoyarsk logistics."
     },
@@ -85,10 +105,19 @@
       "category": "federal_parts_supplier",
       "city_focus": "Россия",
       "url": "https://autopiter.ru/",
-      "use_for": ["new_parts", "oem_parts", "analogs", "russia_order", "procurement_price"],
+      "use_for": [
+        "new_parts",
+        "oem_parts",
+        "analogs",
+        "russia_order",
+        "procurement_price"
+      ],
       "access_mode": "account_required_for_wholesale",
       "api_status": "webservice_request_available_after supplier registration",
-      "api_evidence_urls": ["https://aksys.info/help/autopiter.html", "https://autopiter.ru/opt"],
+      "api_evidence_urls": [
+        "https://aksys.info/help/autopiter.html",
+        "https://autopiter.ru/opt"
+      ],
       "integration_priority": "high",
       "verification": "Use for Russia-wide закупка and supplier comparison; оптовые цены require legal-entity registration/account."
     },
@@ -98,10 +127,17 @@
       "category": "supplier_api",
       "city_focus": "Россия",
       "url": "https://api.autoeuro.ru/doc/v2",
-      "use_for": ["new_parts", "price_and_stock_confirmation", "order_creation", "order_status"],
+      "use_for": [
+        "new_parts",
+        "price_and_stock_confirmation",
+        "order_creation",
+        "order_status"
+      ],
       "access_mode": "api_key_required",
       "api_status": "official_public_api_documentation",
-      "api_evidence_urls": ["https://api.autoeuro.ru/doc/v2"],
+      "api_evidence_urls": [
+        "https://api.autoeuro.ru/doc/v2"
+      ],
       "integration_priority": "high",
       "verification": "API can confirm price, stock, delivery, create orders, and check order status after API activation in the client account."
     },
@@ -111,10 +147,18 @@
       "category": "parts_price_comparison",
       "city_focus": "Красноярск / Россия",
       "url": "https://www.zzap.ru/",
-      "use_for": ["new_parts", "replacement_numbers", "price_benchmark", "seller_comparison"],
+      "use_for": [
+        "new_parts",
+        "replacement_numbers",
+        "price_benchmark",
+        "seller_comparison"
+      ],
       "access_mode": "public_site; partner_api_by_request",
       "api_status": "partner_api_available_by_request; verify contract before use",
-      "api_evidence_urls": ["https://apiportal.ru/catalog/api-zzap-ru/", "https://wiki.zzap.ru/zzap/zzap-iframe/"],
+      "api_evidence_urls": [
+        "https://apiportal.ru/catalog/api-zzap-ru/",
+        "https://wiki.zzap.ru/zzap/zzap-iframe/"
+      ],
       "integration_priority": "medium",
       "verification": "Use public search as price benchmark and seller comparison; API route requires partner approval and should not replace supplier-confirmed закупка."
     },
@@ -124,12 +168,61 @@
       "category": "catalog_fitment_api",
       "city_focus": "Россия",
       "url": "https://partsapi.ru/",
-      "use_for": ["tecdoc_crosses", "vin_decode", "applicability", "oem_or_analog_identification"],
+      "use_for": [
+        "tecdoc_crosses",
+        "vin_decode",
+        "applicability",
+        "oem_or_analog_identification"
+      ],
       "access_mode": "api_key_required",
       "api_status": "public_api_docs_and_demo_keys",
-      "api_evidence_urls": ["https://partsapi.ru/", "https://partsapi.ru/docs"],
+      "api_evidence_urls": [
+        "https://partsapi.ru/",
+        "https://partsapi.ru/docs"
+      ],
       "integration_priority": "medium",
       "verification": "Use for fitment, TecDoc-style crosses, VIN/frame/OEM routing, not as a procurement price source unless a price endpoint is explicitly confirmed."
+    },
+    {
+      "source_id": "mann_filter_catalog",
+      "name": "MANN-FILTER Catalog",
+      "category": "public_aftermarket_catalog",
+      "city_focus": "global / public",
+      "url": "https://www.mann-filter.com/us-en/catalog.html",
+      "use_for": [
+        "filter_part_search",
+        "oe_number_search",
+        "comparison_numbers",
+        "brand_catalog_enrichment"
+      ],
+      "access_mode": "public_api",
+      "api_status": "official_public_graphql_backend_observed",
+      "api_evidence_urls": [
+        "https://www.mann-filter.com/us-en/catalog.html"
+      ],
+      "integration_priority": "medium",
+      "verification": "Use public_aftermarket_catalog_lookup for filter/OE/catalog enrichment. It is not a VIN-specific OEM EPC and does not provide AutoStop закупка or Красноярск stock."
+    },
+    {
+      "source_id": "denso_aftermarket_catalog",
+      "name": "DENSO Aftermarket Catalog",
+      "category": "public_aftermarket_catalog",
+      "city_focus": "global / public",
+      "url": "https://www.denso-am.eu/catalog/vin",
+      "use_for": [
+        "denso_part_search",
+        "oe_number_search",
+        "product_details",
+        "brand_catalog_enrichment"
+      ],
+      "access_mode": "public_api",
+      "api_status": "official_public_catalog_api_observed",
+      "api_evidence_urls": [
+        "https://www.denso-am.eu/catalog/vin",
+        "https://www.denso-am.eu/news/denso-aftermarket-makes-part-identification-simple-with-new-vin-search"
+      ],
+      "integration_priority": "medium",
+      "verification": "Use public_aftermarket_catalog_lookup for DENSO/OE search and detail checks. VIN search is DENSO fitment only and does not replace OEM EPC or supplier price confirmation."
     },
     {
       "source_id": "umapi",
@@ -137,10 +230,17 @@
       "category": "catalog_and_price_list_platform",
       "city_focus": "Россия",
       "url": "https://umapi.ru/",
-      "use_for": ["catalog_data", "price_list_exchange", "supplier_data_integration"],
+      "use_for": [
+        "catalog_data",
+        "price_list_exchange",
+        "supplier_data_integration"
+      ],
       "access_mode": "commercial_api_or_platform_account",
       "api_status": "public API product; terms/account required",
-      "api_evidence_urls": ["https://umapi.ru/", "https://api.umapi.ru/"],
+      "api_evidence_urls": [
+        "https://umapi.ru/",
+        "https://api.umapi.ru/"
+      ],
       "integration_priority": "medium",
       "verification": "Evaluate for supplier price-list exchange and catalog enrichment; do not assume it provides Красноярск stock without connected suppliers."
     },
@@ -150,10 +250,17 @@
       "category": "supplier_api_docs",
       "city_focus": "Россия",
       "url": "https://docum.autopiter.ru/",
-      "use_for": ["brand_by_part_number", "parts_by_article", "cart", "order_status"],
+      "use_for": [
+        "brand_by_part_number",
+        "parts_by_article",
+        "cart",
+        "order_status"
+      ],
       "access_mode": "account_required",
       "api_status": "public docs visible; supplier account required for live use",
-      "api_evidence_urls": ["https://docum.autopiter.ru/"],
+      "api_evidence_urls": [
+        "https://docum.autopiter.ru/"
+      ],
       "integration_priority": "medium",
       "verification": "Use docs for implementation planning; live price/order calls need real account credentials."
     },
@@ -163,10 +270,16 @@
       "category": "supplier_api_docs",
       "city_focus": "Россия",
       "url": "https://mikado-parts.ru/ws1/Docs",
-      "use_for": ["parts_search", "price_and_stock_check", "supplier_benchmark"],
+      "use_for": [
+        "parts_search",
+        "price_and_stock_check",
+        "supplier_benchmark"
+      ],
       "access_mode": "account_required",
       "api_status": "public webservice documentation",
-      "api_evidence_urls": ["https://mikado-parts.ru/ws1/Docs"],
+      "api_evidence_urls": [
+        "https://mikado-parts.ru/ws1/Docs"
+      ],
       "integration_priority": "medium",
       "verification": "Use as an additional API candidate after commercial access is confirmed."
     },
@@ -176,10 +289,18 @@
       "category": "supplier_api",
       "city_focus": "Россия",
       "url": "https://api.auto-sputnik.ru/?act=api_search",
-      "use_for": ["parts_search", "price", "stock", "lead_time", "return_terms"],
+      "use_for": [
+        "parts_search",
+        "price",
+        "stock",
+        "lead_time",
+        "return_terms"
+      ],
       "access_mode": "supplier_login_required",
       "api_status": "public legacy API docs; new API migration noted by supplier",
-      "api_evidence_urls": ["https://api.auto-sputnik.ru/?act=api_search"],
+      "api_evidence_urls": [
+        "https://api.auto-sputnik.ru/?act=api_search"
+      ],
       "integration_priority": "medium",
       "verification": "Use only after supplier login and current API endpoint are confirmed; legacy docs mention migration and shutdown timing."
     },
@@ -189,10 +310,18 @@
       "category": "supplier_api",
       "city_focus": "Россия / импорт",
       "url": "https://api.apecauto.com/",
-      "use_for": ["spare_parts_pricing", "delivery_days", "quantity_available", "order_creation", "order_status"],
+      "use_for": [
+        "spare_parts_pricing",
+        "delivery_days",
+        "quantity_available",
+        "order_creation",
+        "order_status"
+      ],
       "access_mode": "login_required",
       "api_status": "public REST API documentation",
-      "api_evidence_urls": ["https://api.apecauto.com/"],
+      "api_evidence_urls": [
+        "https://api.apecauto.com/"
+      ],
       "integration_priority": "medium",
       "verification": "Use as import/Russia-order benchmark if commercial account and delivery route are relevant to AutoStop."
     },
@@ -202,10 +331,18 @@
       "category": "catalog_and_supplier_data_platform",
       "city_focus": "Россия",
       "url": "https://autopoisk.su/ru",
-      "use_for": ["vin_identification", "catalogs", "crosses", "supplier_statistics", "repair_information"],
+      "use_for": [
+        "vin_identification",
+        "catalogs",
+        "crosses",
+        "supplier_statistics",
+        "repair_information"
+      ],
       "access_mode": "legal_entity_subscription",
       "api_status": "RESTful API advertised; commercial subscription/demo required",
-      "api_evidence_urls": ["https://autopoisk.su/ru"],
+      "api_evidence_urls": [
+        "https://autopoisk.su/ru"
+      ],
       "integration_priority": "medium",
       "verification": "Use for professional catalog/cross/OEM enrichment and supplier-market context; not a direct закупка source until connected supplier prices are verified."
     },
@@ -215,7 +352,12 @@
       "category": "new_parts_supplier",
       "city_focus": "Красноярск / Россия",
       "url": "https://emex.ru/",
-      "use_for": ["new_parts", "oem_parts", "analogs", "delivery_price_benchmark"],
+      "use_for": [
+        "new_parts",
+        "oem_parts",
+        "analogs",
+        "delivery_price_benchmark"
+      ],
       "access_mode": "account_or_public_site",
       "api_status": "not_confirmed_for_autostop; treat as cabinet/manual until contract exists",
       "integration_priority": "medium",
@@ -227,7 +369,11 @@
       "category": "new_parts_supplier",
       "city_focus": "Красноярск / Россия",
       "url": "https://www.exist.ru/",
-      "use_for": ["oem_parts", "catalog_cross_check", "new_parts"],
+      "use_for": [
+        "oem_parts",
+        "catalog_cross_check",
+        "new_parts"
+      ],
       "access_mode": "account_or_public_site",
       "api_status": "not_confirmed_for_autostop; treat as cabinet/manual until contract exists",
       "integration_priority": "medium",
@@ -239,7 +385,11 @@
       "category": "new_parts_supplier",
       "city_focus": "Россия",
       "url": "https://www.autodoc.ru/",
-      "use_for": ["new_parts", "brand_cross_check", "price_benchmark"],
+      "use_for": [
+        "new_parts",
+        "brand_cross_check",
+        "price_benchmark"
+      ],
       "access_mode": "account_or_public_site",
       "api_status": "not_confirmed_for_autostop; treat as cabinet/manual until contract exists",
       "integration_priority": "medium",
@@ -251,7 +401,12 @@
       "category": "local_parts_and_fluids_supplier",
       "city_focus": "Красноярск",
       "url": "https://xn--80atblfjdfd2l.xn--80aaaoea1ebkq6dxec.xn--p1ai/",
-      "use_for": ["local_fluids", "maintenance_parts", "vin_inquiry", "same_day_check"],
+      "use_for": [
+        "local_fluids",
+        "maintenance_parts",
+        "vin_inquiry",
+        "same_day_check"
+      ],
       "access_mode": "public_site_or_account",
       "api_status": "site integration page exists; API terms need direct confirmation",
       "integration_priority": "medium",
@@ -263,7 +418,12 @@
       "category": "local_fluids_supplier",
       "city_focus": "Красноярск",
       "url": "https://liqui-moly24.ru/",
-      "use_for": ["fluids", "additives", "maintenance_consumables", "local_stock"],
+      "use_for": [
+        "fluids",
+        "additives",
+        "maintenance_consumables",
+        "local_stock"
+      ],
       "access_mode": "public_site_or_phone",
       "api_status": "manual",
       "integration_priority": "low",
@@ -275,7 +435,12 @@
       "category": "marketplace_parts",
       "city_focus": "Красноярск",
       "url": "https://baza.drom.ru/krasnoyarsk/sell_spare_parts/",
-      "use_for": ["used_parts", "contract_parts", "local_exact_oem_search", "urgent_pickup"],
+      "use_for": [
+        "used_parts",
+        "contract_parts",
+        "local_exact_oem_search",
+        "urgent_pickup"
+      ],
       "access_mode": "public_site",
       "api_status": "manual",
       "integration_priority": "low",
@@ -287,7 +452,11 @@
       "category": "marketplace_parts",
       "city_focus": "Красноярск",
       "url": "https://www.avito.ru/krasnoyarsk/zapchasti_i_aksessuary",
-      "use_for": ["used_parts", "urgent_local_pickup", "rare_parts"],
+      "use_for": [
+        "used_parts",
+        "urgent_local_pickup",
+        "rare_parts"
+      ],
       "access_mode": "public_site",
       "api_status": "manual",
       "integration_priority": "low",
@@ -331,6 +500,7 @@
     "AUTOEURO_API_KEY",
     "ZZAP_API_KEY",
     "PARTSAPI_KEY",
+    "PARTSAPI_BASE_URL",
     "UMAPI_TOKEN",
     "MIKADO_LOGIN",
     "MIKADO_PASSWORD",
@@ -338,6 +508,195 @@
     "AUTO_SPUTNIK_PASSWORD",
     "APEC_USERNAME",
     "APEC_PASSWORD",
-    "AUTOPOISK_TOKEN"
+    "AUTOPOISK_TOKEN",
+    "PARTS_CATALOGS_API_KEY",
+    "VIN17_ACCOUNT",
+    "VIN17_SECRET",
+    "EMEX_LOGIN",
+    "EMEX_PASSWORD",
+    "EXIST_LOGIN",
+    "EXIST_PASSWORD",
+    "AUTODOC_LOGIN",
+    "AUTODOC_PASSWORD"
+  ],
+  "crm_vin_oem_parts_pricing_backlog": [
+    {
+      "source_id": "rossko",
+      "role": "Krasnoyarsk-first procurement, stock, lead time, order/reserve candidate.",
+      "access": "Registered account API keys; confirm HTTPS API 2.1, delivery address/type, analog settings, and manager terms.",
+      "data": [
+        "GetSearch",
+        "GetCheckout",
+        "GetDeliveryDetails",
+        "GetOrders"
+      ],
+      "limits": "Analogs may be disabled; no-stock cards require manager settings; API has minute/day limits; do not order without explicit approval.",
+      "env_names": [
+        "ROSSKO_KEY1",
+        "ROSSKO_KEY2"
+      ],
+      "mvp_priority": "high",
+      "test_vin_checks": [
+        "exact selected article price",
+        "analog setting behavior",
+        "Krasnoyarsk delivery wave",
+        "vendor-code article handling"
+      ]
+    },
+    {
+      "source_id": "autoeuro_api",
+      "role": "Supplier API for price/stock confirmation and order status after account activation.",
+      "access": "API key activated in shop.autoeuro.ru account.",
+      "data": [
+        "search_brands",
+        "search_items",
+        "get_deliveries",
+        "create_order",
+        "get_orders",
+        "get_statuses"
+      ],
+      "limits": "New accounts have daily search limits; use price-list export for broad проценка and API for confirmation/order status.",
+      "env_names": [
+        "AUTOEURO_API_KEY"
+      ],
+      "mvp_priority": "high",
+      "test_vin_checks": [
+        "brand+article exact search",
+        "stock amount",
+        "delivery time",
+        "returnable/cancelable flags",
+        "status mapping"
+      ]
+    },
+    {
+      "source_id": "zzap",
+      "role": "RF market benchmark, replacements visibility, seller comparison, and average/stat price candidate.",
+      "access": "Public site manually; partner/API/stat access by request/contract.",
+      "data": [
+        "exact article offers",
+        "all replacements",
+        "seller/city/lead time",
+        "market price range/statistics if available"
+      ],
+      "limits": "Benchmark/retail source, not supplier-confirmed закупка unless a contracted supplier result is visible and current.",
+      "env_names": [
+        "ZZAP_API_KEY"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "exact OEM search",
+        "selected analog search",
+        "replacement list",
+        "3-5 offer market range"
+      ]
+    },
+    {
+      "source_id": "armtek",
+      "role": "B2B procurement and stock/lead-time benchmark candidate.",
+      "access": "Partner account/ETP or approved export/API route required.",
+      "data": [
+        "brand/article offers",
+        "stock",
+        "lead time",
+        "price type"
+      ],
+      "limits": "Treat as account route until API/export terms are confirmed for AutoStop.",
+      "env_names": [
+        "ARMTEK_LOGIN",
+        "ARMTEK_PASSWORD"
+      ],
+      "mvp_priority": "high",
+      "test_vin_checks": [
+        "exact article with brand normalization",
+        "Krasnoyarsk logistics",
+        "return terms"
+      ]
+    },
+    {
+      "source_id": "autopiter",
+      "role": "Russia-wide procurement, OEM/analog search, and webservice candidate.",
+      "access": "Supplier registration and API/webservice request in account tools.",
+      "data": [
+        "brand by part number",
+        "parts by article",
+        "price/stock",
+        "cart/order status where available"
+      ],
+      "limits": "Wholesale prices require legal-entity account; public website is retail/benchmark only.",
+      "env_names": [
+        "AUTOPITER_USER_ID",
+        "AUTOPITER_PASSWORD"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "exact selected article search",
+        "brand disambiguation",
+        "delivery to Krasnoyarsk"
+      ]
+    },
+    {
+      "source_id": "emex",
+      "role": "Russia-wide/manual cabinet benchmark for exact article and delivery.",
+      "access": "Account or public site; API not confirmed for AutoStop.",
+      "data": [
+        "exact article price",
+        "delivery time",
+        "analogs/catalog hints"
+      ],
+      "limits": "Manual/cabinet until contract/API/export exists; do not scrape closed pages.",
+      "env_names": [
+        "EMEX_LOGIN",
+        "EMEX_PASSWORD"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "exact article",
+        "delivery time",
+        "return terms"
+      ]
+    },
+    {
+      "source_id": "exist",
+      "role": "OEM/catalog and public/account retail benchmark.",
+      "access": "Account or public site; API/export not confirmed for AutoStop.",
+      "data": [
+        "OEM/catalog lookup",
+        "exact article price/delivery",
+        "analogs"
+      ],
+      "limits": "Use as manual verification/retail benchmark until a contracted integration exists.",
+      "env_names": [
+        "EXIST_LOGIN",
+        "EXIST_PASSWORD"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "OEM article price",
+        "analog comparison",
+        "delivery city"
+      ]
+    },
+    {
+      "source_id": "autodoc",
+      "role": "Russia/Europe retail benchmark and secondary article availability check.",
+      "access": "Account/public website; API not confirmed for AutoStop.",
+      "data": [
+        "brand/article price",
+        "availability",
+        "delivery estimate",
+        "analog suggestions"
+      ],
+      "limits": "Treat as retail/benchmark; confirm fitment by OEM/cross source first.",
+      "env_names": [
+        "AUTODOC_LOGIN",
+        "AUTODOC_PASSWORD"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "exact article search",
+        "kit/side ambiguity",
+        "delivery estimate"
+      ]
+    }
   ]
 }

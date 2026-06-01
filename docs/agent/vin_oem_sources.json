@@ -1,12 +1,50 @@
 {
   "version": 2,
   "purpose": "Machine-readable source registry for VIN, chassis, and OEM lookup routing.",
+  "vehicle_identity_decode_pipeline": {
+    "local_tool": "decode_vehicle_identity",
+    "cli": "python -m autostop_manager.cli decode-vehicle <VIN_OR_FRAME> --make <make> --model <model> --model-year <year>",
+    "provider_status_tool": "catalog_provider_status",
+    "provider_plan_tool": "plan_oem_parts_providers",
+    "free_baseline": [
+      "NHTSA vPIC API for basic VIN/WMI decode, WMI decode, and batch VIN decode",
+      "local WMI/platform hints for common AutoStop ROW/JDM patterns",
+      "CRM vehicle_profile context with explicit conflict reporting"
+    ],
+    "high_confidence_requires": [
+      "VIN/frame-specific EPC or commercial catalog confirmation",
+      "production date/build window and market/grade/options when parts are VIN-critical",
+      "independent source or supplier confirmation before CRM parts writeback"
+    ],
+    "paid_adapter_env": {
+      "PARTSAPI.RU": [
+        "PARTSAPI_KEY",
+        "PARTSAPI_BASE_URL"
+      ],
+      "Parts-Catalogs API": [
+        "PARTS_CATALOGS_API_KEY",
+        "PARTS_CATALOGS_BASE_URL"
+      ],
+      "17VIN API": [
+        "VIN17_ACCOUNT",
+        "VIN17_SECRET"
+      ],
+      "AUTOPOISK": [
+        "AUTOPOISK_TOKEN"
+      ],
+      "partslink24 or brand EPC": [
+        "manual subscription/login outside Git"
+      ]
+    }
+  },
   "sources": [
     {
       "name": "NHTSA vPIC API",
       "kind": "api",
       "authority": "official",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://vpic.nhtsa.dot.gov/api/Home/Index",
       "notes": "Primary VIN decode source for regulated vehicles. Supports decode and manufacturer data."
     },
@@ -14,7 +52,9 @@
       "name": "NHTSA vPIC Home",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://vpic.nhtsa.dot.gov/",
       "notes": "Official home for VIN decoding, MID, and downloadable standalone datasets."
     },
@@ -22,7 +62,12 @@
       "name": "Toyota Japan EPC Help",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["vin", "frame_number", "model_name", "catalog_code"],
+      "inputs": [
+        "vin",
+        "frame_number",
+        "model_name",
+        "catalog_code"
+      ],
       "url": "https://spsepchtr.mx.toyota.co.jp/kN0k/CONTENTS/HELP/V2D00_E4.PDF",
       "notes": "Documents Toyota Japan catalog inputs including VIN and frame number search flow."
     },
@@ -30,7 +75,9 @@
       "name": "Toyota Recall Search",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["chassis_number"],
+      "inputs": [
+        "chassis_number"
+      ],
       "url": "https://www.toyota.co.jp/recall-search/dc/en/search/",
       "notes": "Useful for Japan-market chassis-number confirmation."
     },
@@ -38,7 +85,10 @@
       "name": "Honda EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["frame_number", "vin"],
+      "inputs": [
+        "frame_number",
+        "vin"
+      ],
       "url": "https://honda.epc-data.com/",
       "notes": "Public Honda catalog mirror with frame-number search entry and catalog navigation."
     },
@@ -46,7 +96,9 @@
       "name": "Honda Recall Lookup",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://owners.honda.com/service-maintenance/recalls/",
       "notes": "Recall lookup only, but useful as a source-of-truth check when Honda VIN routing is needed."
     },
@@ -54,7 +106,10 @@
       "name": "Nissan EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["frame_number", "vin"],
+      "inputs": [
+        "frame_number",
+        "vin"
+      ],
       "url": "https://nissan.epc-data.com/",
       "notes": "Public Nissan catalog mirror with frame-number search entry and catalog navigation."
     },
@@ -62,7 +117,10 @@
       "name": "Nissan Recall Search",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["chassis_number", "vin"],
+      "inputs": [
+        "chassis_number",
+        "vin"
+      ],
       "url": "https://www.nissan.co.jp/RECALL/search_en.html",
       "notes": "Official Japanese recall lookup that accepts chassis or vehicle-number style searches."
     },
@@ -70,7 +128,10 @@
       "name": "Mazda Recall Search",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["chassis_number", "vin"],
+      "inputs": [
+        "chassis_number",
+        "vin"
+      ],
       "url": "https://www2.mazda.co.jp/service/recall/",
       "notes": "Official Mazda recall lookup for Japan-market confirmation."
     },
@@ -78,7 +139,10 @@
       "name": "Subaru Recall Search",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["chassis_number", "vin"],
+      "inputs": [
+        "chassis_number",
+        "vin"
+      ],
       "url": "https://recall.subaru.co.jp/lqsb/",
       "notes": "Official Subaru recall lookup for Japan-market confirmation."
     },
@@ -86,7 +150,10 @@
       "name": "Subaru EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["frame_number", "vin"],
+      "inputs": [
+        "frame_number",
+        "vin"
+      ],
       "url": "https://subaru.epc-data.com/",
       "notes": "Public Subaru catalog mirror with frame-number search entry and catalog navigation."
     },
@@ -94,7 +161,9 @@
       "name": "partslink24 Mobile",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://www.partslink24.com/partlink24mobile_en/index.html",
       "notes": "VIN-scan entry and genuine parts access for participating brands; useful when dealership-grade catalog access is available."
     },
@@ -102,7 +171,9 @@
       "name": "partslink24 Product Info",
       "kind": "portal",
       "authority": "official",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://www.partslink24.com/pl24connectLounge/html/en/product.html",
       "notes": "Explains VIN access and original parts access for authorized dealers."
     },
@@ -110,7 +181,10 @@
       "name": "Toyota EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["frame_number", "vin"],
+      "inputs": [
+        "frame_number",
+        "vin"
+      ],
       "url": "https://toyota.epc-data.com/",
       "notes": "Public Toyota catalog mirror with frame-number search entry."
     },
@@ -118,7 +192,9 @@
       "name": "Hyundai EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://hyundai.epc-data.com/",
       "notes": "Public Hyundai catalog mirror with VIN search entry."
     },
@@ -126,7 +202,9 @@
       "name": "Kia EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://kia.epc-data.com/",
       "notes": "Public Kia catalog mirror with VIN search entry."
     },
@@ -134,9 +212,263 @@
       "name": "Renault EPC Mirror",
       "kind": "mirror",
       "authority": "public",
-      "inputs": ["vin"],
+      "inputs": [
+        "vin"
+      ],
       "url": "https://renault.epc-data.com/",
       "notes": "Public Renault catalog mirror with model and VIN-oriented catalog navigation."
+    },
+    {
+      "source_id": "parts_catalogs_api",
+      "name": "Parts-Catalogs API",
+      "kind": "api",
+      "authority": "commercial_oem_catalog",
+      "inputs": [
+        "vin",
+        "frame_number",
+        "vehicle_parameters",
+        "catalog_group",
+        "oem_number"
+      ],
+      "url": "https://www.parts-catalogs.com/doc/us/introduction.htm",
+      "role": "VIN/FRAME entry into OEM catalogs and catalog group/part lookup.",
+      "access": "paid subscription/API access through Tradesoft/Parts-Catalogs; confirm contract and API auth before integration.",
+      "data": [
+        "car info by VIN/FRAME",
+        "catalogs",
+        "groups",
+        "parts",
+        "diagrams/schemas",
+        "example prices"
+      ],
+      "limits": "Commercial catalog; requires subscription; exact brand coverage and Russian/Krasnoyarsk pricing must be tested separately.",
+      "env_names": [
+        "PARTS_CATALOGS_API_KEY",
+        "PARTS_CATALOGS_BASE_URL"
+      ],
+      "mvp_priority": "high",
+      "test_vin_checks": [
+        "17-character VIN car info",
+        "JDM frame number car info",
+        "spark plug/brake pad/filter group lookup",
+        "production date and side/axis split"
+      ],
+      "notes": "Primary candidate for OEM lookup when the task starts from CRM VIN/frame and a requested part group."
+    },
+    {
+      "source_id": "partsapi_ru",
+      "name": "PARTSAPI.RU",
+      "kind": "api",
+      "authority": "commercial_catalog_cross_api",
+      "inputs": [
+        "vin",
+        "frame_number",
+        "oem_number",
+        "brand_article",
+        "tecdoc_vehicle"
+      ],
+      "url": "https://partsapi.ru/docs",
+      "role": "VIN/OE decode, TecDoc-style catalog, applicability, crosses, CROSSBASE-style analogs, and part metadata.",
+      "access": "API key from PARTSAPI account; demo keys may be available in cabinet.",
+      "data": [
+        "VINdecode",
+        "VINdecodeOE",
+        "getPartsbyVIN",
+        "getOEApplicability",
+        "getArticleCrosses",
+        "getApplicability",
+        "getCrosses",
+        "getCrossesWithBrand"
+      ],
+      "limits": "Not a закупка source by itself unless connected price/stock data is explicitly available; validate license and regional data freshness.",
+      "env_names": [
+        "PARTSAPI_KEY",
+        "PARTSAPI_BASE_URL"
+      ],
+      "mvp_priority": "high",
+      "test_vin_checks": [
+        "VINdecodeOE result for common Toyota/Kia/Hyundai VIN",
+        "getPartsbyVIN filtered by service part group",
+        "getOEApplicability for selected OEM",
+        "crosses for selected analog"
+      ],
+      "notes": "Good MVP candidate for cross/applicability layer after OEM candidate is found."
+    },
+    {
+      "source_id": "vin17_api",
+      "name": "17VIN API",
+      "kind": "api",
+      "authority": "commercial_epc_api",
+      "inputs": [
+        "vin",
+        "oe_number",
+        "brand_part_number",
+        "part_name"
+      ],
+      "url": "https://en.17vin.com/doc.html",
+      "role": "VIN decoding and VIN-based OE parts/category lookup, including common-wear parts by VIN.",
+      "access": "Commercial API account/token; test account required.",
+      "data": [
+        "VIN decoder",
+        "OE parts lookup via VIN",
+        "part list via VIN",
+        "part search via VIN",
+        "replacement numbers",
+        "applicable vehicle models"
+      ],
+      "limits": "China-hosted commercial API; confirm supported brands/markets, latency, terms, and data language before relying on it for Russian workflow.",
+      "env_names": [
+        "VIN17_ACCOUNT",
+        "VIN17_SECRET"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "VIN part category tree",
+        "common-wear parts search for plugs/pads/filters",
+        "replacement numbers by OE",
+        "Korean VIN coverage"
+      ],
+      "notes": "Useful second-source candidate and high-coverage common parts route if contract is acceptable."
+    },
+    {
+      "source_id": "autopoisk",
+      "name": "AUTOPOISK",
+      "kind": "portal_api",
+      "authority": "commercial_professional_catalog",
+      "inputs": [
+        "vin",
+        "frame_number",
+        "part_number",
+        "oem_number",
+        "cross"
+      ],
+      "url": "https://autopoisk.su/en",
+      "role": "Professional EPC, VIN/frame identification, OEM/Cross tab, supplier statistics, and repair information under subscription.",
+      "access": "Legal-entity subscription/demo; RESTful API is advertised for aftermarket data, terms required.",
+      "data": [
+        "dealer catalogs",
+        "VIN/frame identification",
+        "OEM",
+        "crosses",
+        "supplier statistics",
+        "price-list aggregation"
+      ],
+      "limits": "Works only for business users; demo access may hide spare part numbers; not a procurement source unless supplier price data is connected and current.",
+      "env_names": [
+        "AUTOPOISK_TOKEN"
+      ],
+      "mvp_priority": "medium",
+      "test_vin_checks": [
+        "VIN/frame exact vehicle equipment",
+        "OEM/cross tab for plugs/pads/filters",
+        "supplier statistics visibility",
+        "export/API terms"
+      ],
+      "notes": "Strong manual/semiautomatic candidate for professional catalog verification and market context."
+    },
+    {
+      "source_id": "partsouq_manual",
+      "name": "PartSouq manual catalog",
+      "kind": "portal",
+      "authority": "public_commercial_catalog_store",
+      "inputs": [
+        "vin",
+        "frame_number",
+        "part_number"
+      ],
+      "url": "https://partsouq.com/en/",
+      "role": "Manual fallback for genuine catalog lookup, part diagrams, availability, and international price sanity check.",
+      "access": "Public website/account; manual verification only unless a contract/API is later confirmed.",
+      "data": [
+        "VIN/Frame search",
+        "brand catalogs",
+        "OEM parts",
+        "availability",
+        "dispatch estimate",
+        "international price"
+      ],
+      "limits": "International availability/price is not Russian procurement; coverage can be inconsistent; use as fallback/source check, not final закупка.",
+      "env_names": [],
+      "mvp_priority": "low",
+      "test_vin_checks": [
+        "JDM frame lookup",
+        "Toyota filter example",
+        "supersession/availability display",
+        "compare with EPC source"
+      ],
+      "notes": "Keep as manual fallback and visual sanity check."
+    },
+    {
+      "source_id": "epc_data_manual",
+      "name": "epc-data manual catalog",
+      "kind": "portal",
+      "authority": "public_epc_mirror",
+      "inputs": [
+        "frame_number",
+        "vin"
+      ],
+      "url": "https://www.epc-data.com/",
+      "role": "Manual fallback for Japanese frame-number and selected Korean VIN catalog entry.",
+      "access": "Public website; manual verification only.",
+      "data": [
+        "Toyota/Nissan/Honda/Subaru/Lexus frame search",
+        "Hyundai/Kia VIN search",
+        "catalog navigation"
+      ],
+      "limits": "Public mirror, not official; must be cross-checked before high-confidence CRM writeback.",
+      "env_names": [],
+      "mvp_priority": "low",
+      "test_vin_checks": [
+        "Toyota JDM frame",
+        "Nissan frame",
+        "Hyundai/Kia VIN",
+        "part group navigation"
+      ],
+      "notes": "Useful JDM/KDM fallback because it explicitly exposes frame/VIN entry patterns."
+    }
+  ],
+  "crm_vin_oem_parts_lookup_backlog": [
+    {
+      "source_id": "parts_catalogs_api",
+      "role": "Primary OEM/VIN/FRAME catalog candidate.",
+      "mvp_priority": "high",
+      "adapter": "read-only vehicle_info, groups, parts, diagrams; no CRM writes inside adapter.",
+      "acceptance": "Given one ISO VIN and one JDM frame, return exact vehicle profile and requested service-part OEM candidates with production/option evidence."
+    },
+    {
+      "source_id": "partsapi_ru",
+      "role": "Cross/applicability and VIN/OE decode candidate.",
+      "mvp_priority": "high",
+      "adapter": "read-only VINdecodeOE/getPartsbyVIN/getOEApplicability/getCrosses normalizer.",
+      "acceptance": "For each test OEM, return applicability, crosses, and confidence flags without treating crosses as fitment-confirmed by default."
+    },
+    {
+      "source_id": "vin17_api",
+      "role": "Second-source VIN-to-parts and common-wear parts candidate.",
+      "mvp_priority": "medium",
+      "adapter": "read-only VIN category/part search and replacement normalizer.",
+      "acceptance": "Find plugs/pads/filters by VIN and expose replacement chain/source provenance."
+    },
+    {
+      "source_id": "autopoisk",
+      "role": "Manual/semiautomatic professional EPC, Cross tab, and supplier-statistics candidate.",
+      "mvp_priority": "medium",
+      "adapter": "manual workflow first; API only after legal-entity subscription/demo confirms access.",
+      "acceptance": "Show exact vehicle equipment and OEM/cross evidence for test VIN/frame without storing raw customer identifiers."
+    },
+    {
+      "source_id": "partsouq_manual",
+      "role": "Fallback/manual verification and international price sanity check.",
+      "mvp_priority": "low",
+      "adapter": "manual-only checklist, not automated scraping.",
+      "acceptance": "Use as second check for part diagram/OEM only; never mark as Russian закупка."
+    },
+    {
+      "source_id": "epc_data_manual",
+      "role": "Fallback/manual JDM/KDM frame/VIN catalog verification.",
+      "mvp_priority": "low",
+      "adapter": "manual-only checklist, not automated scraping.",
+      "acceptance": "For Japan/Korea test identifiers, confirm catalog entry and require second source before high confidence."
     }
   ]
 }

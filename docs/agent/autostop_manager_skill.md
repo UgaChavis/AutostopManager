@@ -19,17 +19,14 @@ and as the working layer for Gmail inbox triage.
    `open_first` / `source_of_truth`, then use `search_knowledge_base` inside
    the returned domain only when more detail is needed. If the index may be
    stale after file changes, run `sync_knowledge_base`, then probe again.
-4. Treat the AutoStop Obsidian vault as the human-facing working knowledge
-   layer for CRM management. For non-trivial CRM, MCP, connector, playbook, or
-   source-routing tasks, use `docs/agent/obsidian_knowledge_vault_playbook.md`
-   and inspect the vault when it can add useful human-readable context. Prefer
-   `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when available; fall back
-   to `C:\Users\User\Desktop\Obsidian CRM\AutostopCRM`.
-5. If the user asks to put CRM data, clients, cashboxes, repair orders, or
-   statistics into Obsidian, open `docs/agent/crm_manager_data_playbook.md`
-   first. Store safe summaries and quality signals in Obsidian; keep raw
-   client databases, cash journals, full repair-order text, and board dumps in
-   live CRM unless the owner explicitly approves that exact export.
+4. For non-trivial CRM, MCP, connector, playbook, or source-routing tasks, use
+   the local knowledge routes in `docs/agent/knowledge_base_index.md` and open
+   only the returned source-of-truth files.
+5. If the user asks for CRM data, clients, cashboxes, repair orders, or
+   statistics, open `docs/agent/crm_manager_data_playbook.md` first. Return
+   safe summaries and quality signals only; keep raw client databases, cash
+   journals, full repair-order text, and board dumps in live CRM unless the
+   owner explicitly approves an exact private export.
 6. If the user asks about CRM state, use the existing AutoStop CRM MCP connector.
 7. If the user asks about email or inbox state, use the connected Gmail MCP
    tools first.
@@ -42,49 +39,53 @@ and as the working layer for Gmail inbox triage.
    `docs/agent/board_cleanup_autopilot_playbook.md`. Treat this as owner
    permission for non-destructive board hygiene; do not move or archive cards
    without a separate explicit owner command.
-12. If the task involves vehicle identification or VIN/chassis decoding, follow
+12. If the task combines a live CRM card, VIN/frame/body number, requested
+   part, OEM lookup, analogs/crosses, закупка/RF market price, and CRM
+   writeback, follow `docs/agent/crm_vin_oem_parts_lookup_playbook.md` and use
+   `plan_crm_vin_oem_parts_lookup` / `crm-vin-parts-plan` before writing.
+13. If the task involves vehicle identification or VIN/chassis decoding, follow
    `docs/agent/vehicle_identity_playbook.md` first, then
    `docs/agent/vin_oem_lookup_playbook.md` for OEM routing.
-13. If the task involves oils, operating fluids, fill capacities, maintenance
+14. If the task involves oils, operating fluids, fill capacities, maintenance
    service quantities, or ТО fluid planning, follow
    `docs/agent/fluid_maintenance_playbook.md` and use
    `recommend_fluid_maintenance_sources` before giving any capacity/spec.
-14. If the task involves gearbox or transmission diagnosis, clutch
+15. If the task involves gearbox or transmission diagnosis, clutch
    adaptation, or transmission-fluid service, follow
    `docs/agent/transmission_playbook.md` first.
-15. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
+16. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
    GR-FOUR, GRMN Yaris, 6MT EA67F, or 8AT UC80F, follow
    `docs/agent/toyota_gr_yaris_playbook.md` before answering.
-16. If the task involves general BMW repair, diagnostics, BMW fault memory,
+17. If the task involves general BMW repair, diagnostics, BMW fault memory,
     xDrive, ZF transmission, BMW body electronics, BMW HV, or BMW fluids and no
     more specific model skill already matches, search domain `bmw_repair` and
     use `docs/agent/bmw_repair_playbook.md`.
-17. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
+18. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
    wiring, fluids, torque specs, labor time, ADAS, SRS, HV, or programming,
    follow `docs/agent/automotive_repair_source_playbook.md` and use
    `docs/agent/automotive_sources/` for source routing before giving a
    technical fact.
-18. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
+19. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
     F15 electrical/electronics, injectors, drivetrain malfunction, misfires,
     oil consumption, or cooling, use `docs/agent/bmw_repair_playbook.md` and
     the indexed BMW repair source cache before answering.
-19. If the owner provides new files or asks to expand the knowledge base,
+20. If the owner provides new files or asks to expand the knowledge base,
     follow `docs/agent/knowledge_intake_playbook.md`, classify the source, and
     store only durable conclusions in memory.
-20. If the task involves workshop management in Krasnoyarsk, parts procurement
+21. If the task involves workshop management in Krasnoyarsk, parts procurement
     blockers, staff load, customer flow, finance control, or daily CRM control,
     follow `docs/agent/krasnoyarsk_service_management_playbook.md` and use
     `recommend_service_management_actions`.
-21. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
+22. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
     improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
     price comparison and replacement checks.
-22. Write only durable non-CRM context into AutostopManager memory.
-23. Use memory as context for judgment, not as a rigid template; preserve the
+23. Write only durable non-CRM context into AutostopManager memory.
+24. Use memory as context for judgment, not as a rigid template; preserve the
     owner's preference for intelligent, human-sounding card notes.
-24. After strong praise, criticism, a clear success, a clear failure, or an
+25. After strong praise, criticism, a clear success, a clear failure, or an
     owner request to do something differently, use `learn_from_feedback` to
     store a short reusable lesson instead of copying the full event.
-25. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
+26. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
     work, create a manager run ledger entry, record planned actions/skips/risks
     and writes, then finish it with verification evidence.
 
@@ -147,6 +148,9 @@ Keep in Gmail:
 When the owner asks to source parts:
 
 - normalize the part number and fitment from the CRM card first
+- if the request starts from a CRM card with VIN/frame/body number and needs
+  OEM/cross/price/writeback, route through
+  `docs/agent/crm_vin_oem_parts_lookup_playbook.md`
 - if the request is operational, start with `recommend_service_management_actions`
   for parts procurement and then drill into VIN/OEM and marketplace search
 - search Drom before ZZap, then Avito
@@ -155,9 +159,16 @@ When the owner asks to source parts:
 When the owner asks to identify a vehicle or decode a VIN/chassis number:
 
 - classify the identifier type first
+- call `decode_vehicle_identity` / `decode-vehicle` before OEM or parts work
+  when CRM data is incomplete, vPIC is partial, or the identifier is ROW/JDM
+- call `catalog_provider_status` or `plan_oem_parts_providers` before claiming
+  that live catalog/supplier APIs can complete the lookup automatically
 - use the market-appropriate decode path
 - route original catalog-number lookup through
   `docs/agent/vin_oem_lookup_playbook.md`
+- require PartsAPI, Parts-Catalogs, 17VIN, AUTOPOISK, partslink24, or brand EPC
+  when `decode_vehicle_identity` reports medium/low confidence for
+  VIN-critical parts
 - keep only the durable routing rule and compatibility caveats in memory
 
 When the owner asks for a technical repair recommendation:

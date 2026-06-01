@@ -10,10 +10,6 @@ from typing import Any
 from .config import PROJECT_ROOT
 from .storage import ManagerMemoryStore, _now
 
-
-OBSIDIAN_CLOUD_VAULT = Path("C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM")
-OBSIDIAN_DESKTOP_VAULT = Path("C:/Users/User/Desktop/Obsidian CRM/AutostopCRM")
-
 PROTECTED_AGENT_DOCS = {
     "crm_mcp_catalog.json",
     "knowledge_annotations.jsonl",
@@ -50,8 +46,6 @@ def build_cleanup_audit(
     *,
     project_root: Path | str = PROJECT_ROOT,
     store: ManagerMemoryStore | None = None,
-    obsidian_cloud_vault: Path | str = OBSIDIAN_CLOUD_VAULT,
-    obsidian_desktop_vault: Path | str = OBSIDIAN_DESKTOP_VAULT,
 ) -> dict[str, Any]:
     root = Path(project_root)
     memory = store or ManagerMemoryStore()
@@ -59,7 +53,6 @@ def build_cleanup_audit(
     candidates.extend(_ignored_cache_candidates(root))
     candidates.extend(_tracked_pdf_duplicate_candidates(root))
     candidates.extend(_unreferenced_agent_doc_candidates(root))
-    candidates.extend(_obsidian_duplicate_candidates(Path(obsidian_cloud_vault), Path(obsidian_desktop_vault)))
     local_db = _local_db_candidate(memory)
     if local_db is not None:
         candidates.append(local_db)
@@ -114,7 +107,7 @@ def _tracked_pdf_duplicate_candidates(root: Path) -> list[CleanupCandidate]:
                     path=_display_path(pdf_path, root),
                     size_bytes=_path_size(pdf_path),
                     risk="medium",
-                    recommended_action="exclude_from_obsidian_import",
+                    recommended_action="keep_text_equivalent",
                     requires_approval=True,
                     matched_by="source_cache PDF with Markdown or JSONL equivalent",
                 )
@@ -148,22 +141,6 @@ def _unreferenced_agent_doc_candidates(root: Path) -> list[CleanupCandidate]:
             )
         )
     return candidates
-
-
-def _obsidian_duplicate_candidates(cloud_vault: Path, desktop_vault: Path) -> list[CleanupCandidate]:
-    if not cloud_vault.exists() or not desktop_vault.exists():
-        return []
-    return [
-        CleanupCandidate(
-            category="obsidian_duplicate",
-            path=str(desktop_vault),
-            size_bytes=_path_size(desktop_vault),
-            risk="medium",
-            recommended_action="move_to_archive_after_approval",
-            requires_approval=True,
-            matched_by="desktop Obsidian mirror exists while cloud vault is primary",
-        )
-    ]
 
 
 def _local_db_candidate(store: ManagerMemoryStore) -> CleanupCandidate | None:

@@ -101,14 +101,9 @@
       "rule": "When a vehicle/model-specific corpus becomes substantial, store it as a focused Codex skill and add a route in docs/agent/automotive_sources/model_source_overrides.json, docs/agent/knowledge_base_index.md, and docs/agent/knowledge_map.json."
     },
     {
-      "id": "obsidian-crm-data-boundary",
+      "id": "crm-manager-data-boundary",
       "priority": 22,
-      "rule": "When adding CRM-derived manager information to Obsidian, follow docs/agent/crm_manager_data_playbook.md. Store safe snapshots and quality signals; keep raw client databases, phone lists, VIN/license-plate tables, cashbox ledgers, full repair-order text, and full board dumps in CRM unless the owner explicitly approves that exact cloud export."
-    },
-    {
-      "id": "obsidian-working-vault",
-      "priority": 22,
-      "rule": "Treat the AutoStop Obsidian vault as the human-facing working knowledge layer for CRM/MCP/connector/playbook tasks. Use docs/agent/obsidian_knowledge_vault_playbook.md; prefer C:/Users/User/Мой диск/Obsidian CRM/AutostopCRM when available, and fall back to C:/Users/User/Desktop/Obsidian CRM/AutostopCRM."
+      "rule": "When summarizing CRM-derived manager information, follow docs/agent/crm_manager_data_playbook.md. Return safe summaries and quality signals only; keep raw client databases, phone lists, VIN/license-plate tables, cashbox ledgers, full repair-order text, and full board dumps in live CRM unless the owner explicitly approves an exact private export."
     },
     {
       "id": "github-publication-privacy",
@@ -269,6 +264,31 @@
       "id": "journal-important-work",
       "priority": 50,
       "rule": "After important decisions, new source intake, or multi-step CRM work, write a short manager_journal entry."
+    },
+    {
+      "id": "crm-vin-oem-no-hallucination",
+      "priority": 35,
+      "rule": "For CRM VIN/OEM parts lookup, never invent OEM numbers, supersessions, crosses, applicability, stock, procurement prices, retail prices, or client sale prices. If the exact source-backed number is unavailable, write confidence: low/medium and list the missing check."
+    },
+    {
+      "id": "crm-vin-oem-source-confidence",
+      "priority": 35,
+      "rule": "High confidence for OEM/selected part requires VIN/frame-specific catalog or supplier confirmation plus at least one independent check such as OEM/EPC second source, TecDoc/CROSSBASE-style applicability, supplier fitment confirmation, or seller confirmation with article and vehicle evidence visible."
+    },
+    {
+      "id": "crm-vin-oem-price-separation",
+      "priority": 35,
+      "rule": "In parts quotes and CRM writeback, keep OEM reference, selected part, cross/analog, procurement price, public retail/RF market price, and client sale price as separate fields. Repair-order material rows must contain only the selected priced part, not a mixed OEM/analog reference line."
+    },
+    {
+      "id": "crm-vin-oem-crm-writeback-format",
+      "priority": 36,
+      "rule": "CRM VIN/OEM parts results must be written as a compact quote matrix in the card description: Auto, VIN/frame source, requested detail, OEM numbers, replacements, selected parts, закупка, RF market price, sources, confidence, and needs-confirmation. board_summary stays short and excludes raw VIN/client private data."
+    },
+    {
+      "id": "crm-vin-oem-privacy-boundary",
+      "priority": 36,
+      "rule": "Do not store raw customer VIN/frame/body numbers, client identities, card snapshots, supplier credentials, raw quote dumps, or attachment contents from CRM VIN/OEM parts lookup in durable memory or Git. Store only reusable rules, source routes, and non-private conclusions."
     }
   ]
 }

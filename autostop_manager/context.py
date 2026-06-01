@@ -9,6 +9,7 @@ from .storage import ManagerMemoryStore
 DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
     "bmw_f15_n63": ["VIN or chassis", "production date", "market", "BMW fault memory with module names"],
     "service_management": ["live CRM board state"],
+    "crm_vin_oem_parts_lookup": ["live CRM card id", "VIN or frame/body number", "requested part", "repair-order target if materials will be written"],
     "vehicle_identity_and_oem": ["VIN or chassis"],
     "fluids": ["VIN or chassis", "market", "engine code", "transmission code", "exact unit"],
 }
@@ -17,7 +18,7 @@ DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
 GENERAL_HOT_RULES = [
     "AutoStop CRM is the source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and live board state.",
     "AutostopManager memory stores only durable non-CRM context: owner preferences, rules, lessons, tasks, reminders, and short conclusions.",
-    "Use Obsidian as a human-readable knowledge layer only; do not store raw client databases, cash journals, full repair orders, full board dumps, secrets, or raw email threads there.",
+    "Do not store raw client databases, cash journals, full repair orders, full board dumps, secrets, or raw email threads in manager memory or docs.",
     "Before CRM writes, identify the exact target id, write patch-only confirmed fields, then reread the target and verify the result.",
 ]
 
@@ -76,7 +77,7 @@ DEFAULT_ALLOWED_ACTIONS = [
 ]
 
 DEFAULT_FORBIDDEN_ACTIONS = [
-    "write to CRM, Gmail, Obsidian, or files without task-specific owner intent",
+    "write to CRM, Gmail, or files without task-specific owner intent",
     "copy raw CRM records, cashbox ledgers, full repair orders, raw email threads, or secrets into memory or docs",
 ]
 
@@ -240,7 +241,6 @@ def build_agent_brief(
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
             "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
-            "obsidian": "human-readable knowledge layer and safe summaries only",
         },
         "hot_rules": _compact_hot_rules(domain, limit),
         "read_order": read_order,

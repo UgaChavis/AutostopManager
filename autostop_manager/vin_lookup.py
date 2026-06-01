@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .vin_sources import load_source_registry, sources_for_inputs, sources_for_make
@@ -126,21 +126,36 @@ def classify_identifier(raw: str) -> IdentifierClassification:
 def _extract_vpic_vehicle(result: dict[str, Any]) -> dict[str, Any]:
     keys = [
         "VIN",
+        "VehicleDescriptor",
         "Make",
+        "Manufacturer",
+        "ManufacturerName",
         "Model",
         "ModelYear",
         "Trim",
         "Series",
+        "Series2",
         "BodyClass",
         "VehicleType",
         "PlantCountry",
         "PlantCity",
+        "PlantCompanyName",
+        "PlantState",
         "EngineModel",
         "EngineConfiguration",
         "EngineCylinders",
+        "DisplacementL",
+        "DisplacementCC",
+        "EngineHP",
+        "FuelTypePrimary",
+        "FuelTypeSecondary",
+        "Turbo",
         "TransmissionStyle",
         "TransmissionSpeeds",
         "DriveType",
+        "Doors",
+        "Seats",
+        "GVWR",
     ]
     vehicle = {key.lower(): result.get(key) for key in keys if result.get(key) not in (None, "", "Not Applicable")}
     if "modelyear" in vehicle:
@@ -151,7 +166,21 @@ def _extract_vpic_vehicle(result: dict[str, Any]) -> dict[str, Any]:
     return vehicle
 
 
-def decode_vin_vpic(vin: str, *, model_year: int | None = None, timeout: float = 10.0) -> dict[str, Any]:
+def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None = None) -> dict[str, Any]:
+    request = Request(request_url, data=data, headers={"User-Agent": "AutostopManager/0.1"})
+    if data is not None:
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def decode_vin_vpic(
+    vin: str,
+    *,
+    model_year: int | None = None,
+    timeout: float = 10.0,
+    extended: bool = False,
+) -> dict[str, Any]:
     normalized = normalize_vin(vin)
     if len(normalized) < 8:
         return {
@@ -160,44 +189,138 @@ def decode_vin_vpic(vin: str, *, model_year: int | None = None, timeout: float =
             "error": "VIN is too short for vPIC decoding",
             "vin": normalized,
         }
-    base_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/{quote(normalized, safe='*')}"
+    endpoint = "DecodeVinValuesExtended" if extended else "DecodeVinValues"
+    base_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/{endpoint}/{quote(normalized, safe='*')}"
     params = ["format=json"]
     if model_year is not None:
         params.append(f"modelyear={int(model_year)}")
     request_url = f"{base_url}?{'&'.join(params)}"
 
-    request = Request(request_url, headers={"User-Agent": "AutostopManager/0.1"})
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = _vpic_request_json(request_url, timeout=timeout)
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {
             "ok": False,
-            "source": "NHTSA vPIC",
+            "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
             "request_url": request_url,
             "vin": normalized,
             "error": str(exc),
+            "extended": extended,
         }
 
     results = payload.get("Results") or []
     if not results:
         return {
             "ok": False,
-            "source": "NHTSA vPIC",
+            "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
             "request_url": request_url,
             "vin": normalized,
             "error": "vPIC returned no results",
             "payload": payload,
+            "extended": extended,
         }
 
     first = results[0]
     vehicle = _extract_vpic_vehicle(first)
     return {
         "ok": True,
-        "source": "NHTSA vPIC",
+        "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
         "request_url": request_url,
         "vin": normalized,
         "vehicle": vehicle,
+        "error_code": first.get("ErrorCode"),
+        "error_text": first.get("ErrorText"),
+        "payload": payload,
+        "extended": extended,
+    }
+
+
+def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
+    normalized = normalize_vin(wmi)[:3]
+    if len(normalized) != 3:
+        return {"ok": False, "source": "NHTSA vPIC WMI", "wmi": normalized, "error": "WMI must be 3 characters"}
+    request_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/{quote(normalized)}?format=json"
+    try:
+        payload = _vpic_request_json(request_url, timeout=timeout)
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        return {"ok": False, "source": "NHTSA vPIC WMI", "request_url": request_url, "wmi": normalized, "error": str(exc)}
+
+    results = payload.get("Results") or []
+    if not results:
+        return {"ok": False, "source": "NHTSA vPIC WMI", "request_url": request_url, "wmi": normalized, "error": "vPIC returned no WMI results", "payload": payload}
+
+    first = results[0]
+    return {
+        "ok": True,
+        "source": "NHTSA vPIC WMI",
+        "request_url": request_url,
+        "wmi": normalized,
+        "wmi_profile": {
+            key.lower(): value
+            for key, value in first.items()
+            if value not in (None, "", "Not Applicable")
+        },
+        "payload": payload,
+    }
+
+
+def _batch_item(item: str | dict[str, Any]) -> tuple[str, int | None]:
+    if isinstance(item, dict):
+        identifier = str(item.get("identifier") or item.get("vin") or "")
+        model_year = item.get("model_year") or item.get("production_year")
+    else:
+        identifier = str(item)
+        model_year = None
+    try:
+        year = int(model_year) if model_year not in (None, "") else None
+    except (TypeError, ValueError):
+        year = None
+    return normalize_vin(identifier), year
+
+
+def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float = 20.0) -> dict[str, Any]:
+    normalized_items = [_batch_item(item) for item in items]
+    vin_rows = [(vin, year) for vin, year in normalized_items if classify_identifier(vin).kind in {"vin", "vin_partial"}]
+    if not vin_rows:
+        return {"ok": True, "source": "NHTSA vPIC Batch", "count": 0, "results_by_vin": {}, "request_url": None}
+
+    data_rows = [f"{vin},{year}" if year is not None else vin for vin, year in vin_rows]
+    request_url = "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/"
+    body = urlencode({"format": "json", "data": ";".join(data_rows)}).encode("utf-8")
+    try:
+        payload = _vpic_request_json(request_url, timeout=timeout, data=body)
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        return {
+            "ok": False,
+            "source": "NHTSA vPIC Batch",
+            "request_url": request_url,
+            "count": len(vin_rows),
+            "error": str(exc),
+            "results_by_vin": {},
+        }
+
+    results_by_vin: dict[str, dict[str, Any]] = {}
+    for row in payload.get("Results") or []:
+        vin = normalize_vin(str(row.get("VIN") or ""))
+        if not vin:
+            continue
+        results_by_vin[vin] = {
+            "ok": True,
+            "source": "NHTSA vPIC Batch",
+            "request_url": request_url,
+            "vin": vin,
+            "vehicle": _extract_vpic_vehicle(row),
+            "error_code": row.get("ErrorCode"),
+            "error_text": row.get("ErrorText"),
+            "payload": {"Results": [row]},
+            "batch": True,
+        }
+    return {
+        "ok": True,
+        "source": "NHTSA vPIC Batch",
+        "request_url": request_url,
+        "count": len(vin_rows),
+        "results_by_vin": results_by_vin,
         "payload": payload,
     }
 

@@ -6,8 +6,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
+from .catalog_clients import (
+    lookup_oem_catalog_candidates,
+    partsapi_catalog_lookup,
+    public_aftermarket_catalog_lookup,
+    vin17_decode_vehicle,
+    vin17_search_part_number_by_vin,
+)
 from .cleanup_audit import build_cleanup_audit
 from .context import build_agent_brief, prepare_manager_context
+from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
@@ -23,6 +32,9 @@ from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
+from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
+from .vin_parts_benchmark import benchmark_vin_parts_lookup
+from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_lookup import lookup_original_parts
 
 
@@ -152,6 +164,148 @@ def build_parser() -> argparse.ArgumentParser:
     lookup.add_argument("--model-year", type=int, default=None)
     lookup.add_argument("--make", default=None)
 
+    vehicle_identity = sub.add_parser(
+        "decode-vehicle",
+        help="Build a source-aware vehicle identity dossier from a VIN/frame/body number and optional CRM context",
+    )
+    vehicle_identity.add_argument("identifier")
+    vehicle_identity.add_argument("--vehicle", default=None)
+    vehicle_identity.add_argument("--make", default=None)
+    vehicle_identity.add_argument("--model", default=None)
+    vehicle_identity.add_argument("--model-year", type=int, default=None)
+    vehicle_identity.add_argument("--engine", default=None)
+    vehicle_identity.add_argument("--transmission", default=None)
+    vehicle_identity.add_argument("--drivetrain", default=None)
+    vehicle_identity.add_argument("--market", default=None)
+    vehicle_identity.add_argument("--source-confidence", type=float, default=None)
+    vehicle_identity.add_argument("--no-live-vpic", action="store_true")
+
+    vehicle_identities = sub.add_parser(
+        "decode-vehicles",
+        help="Batch decode vehicle identity dossiers from a JSON array of VIN/frame items",
+    )
+    vehicle_identities.add_argument("--items-json", required=True)
+    vehicle_identities.add_argument("--no-live-vpic", action="store_true")
+    vehicle_identities.add_argument("--no-vpic-batch", action="store_true")
+
+    catalog_status = sub.add_parser("catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness")
+    catalog_status.add_argument("--stage", default=None)
+
+    oem_parts_provider_plan = sub.add_parser(
+        "oem-parts-provider-plan",
+        help="Build provider readiness plan for VIN/frame -> OEM -> crosses -> procurement price",
+    )
+    oem_parts_provider_plan.add_argument("identifier")
+    oem_parts_provider_plan.add_argument("--part", dest="requested_part", required=True)
+    oem_parts_provider_plan.add_argument("--vehicle-identity-json", default=None)
+    oem_parts_provider_plan.add_argument("--city", default="Красноярск")
+
+    vin17_decode = sub.add_parser(
+        "vin17-decode",
+        help="Call or dry-run the 17VIN VIN decoder adapter using VIN17_ACCOUNT/VIN17_SECRET",
+    )
+    vin17_decode.add_argument("identifier")
+    vin17_decode.add_argument("--dry-run", action="store_true")
+
+    vin17_part = sub.add_parser(
+        "vin17-search-part",
+        help="Call or dry-run 17VIN part-number-by-VIN search after the 3001 decode returns an EPC code",
+    )
+    vin17_part.add_argument("identifier")
+    vin17_part.add_argument("--epc", required=True)
+    vin17_part.add_argument("--part-number", required=True)
+    vin17_part.add_argument("--match-type", default="exact", choices=["exact", "inexact"])
+    vin17_part.add_argument("--dry-run", action="store_true")
+
+    partsapi = sub.add_parser(
+        "partsapi-lookup",
+        help="Call or dry-run PartsAPI VIN/OE/applicability/cross lookup using PARTSAPI_KEY/PARTSAPI_BASE_URL",
+    )
+    partsapi.add_argument(
+        "--operation",
+        required=True,
+        choices=["vin_decode_oe", "parts_by_vin", "oe_applicability", "crosses", "crosses_with_brand", "search_articles"],
+    )
+    partsapi.add_argument("--identifier", default=None)
+    partsapi.add_argument("--part-number", default=None)
+    partsapi.add_argument("--brand", default=None)
+    partsapi.add_argument("--part-type", default=None)
+    partsapi.add_argument("--category", default=None)
+    partsapi.add_argument("--lang-id", type=int, default=None)
+    partsapi.add_argument("--dry-run", action="store_true")
+
+    public_catalog = sub.add_parser(
+        "public-catalog-lookup",
+        help="Call public aftermarket catalogs such as MANN-FILTER and DENSO by part/OE number",
+    )
+    public_catalog.add_argument("--provider", required=True, choices=["mann_filter_catalog", "denso_aftermarket_catalog", "mann", "denso", "all"])
+    public_catalog.add_argument("--part-number", required=True)
+    public_catalog.add_argument("--page-size", type=int, default=5)
+    public_catalog.add_argument("--country", default="europe")
+    public_catalog.add_argument("--no-detail", action="store_true")
+    public_catalog.add_argument("--dry-run", action="store_true")
+
+    oem_catalog_lookup = sub.add_parser(
+        "oem-catalog-lookup",
+        help="Call or dry-run the three-provider OEM catalog lookup: Parts-Catalogs, PartsAPI, and 17VIN",
+    )
+    oem_catalog_lookup.add_argument("identifier")
+    oem_catalog_lookup.add_argument("--part", dest="requested_part", required=True)
+    oem_catalog_lookup.add_argument("--catalog-id", default=None)
+    oem_catalog_lookup.add_argument("--car-id", default=None)
+    oem_catalog_lookup.add_argument("--group-id", default=None)
+    oem_catalog_lookup.add_argument("--epc", default=None)
+    oem_catalog_lookup.add_argument("--partsapi-part-type", default="original")
+    oem_catalog_lookup.add_argument("--partsapi-category", default=None)
+    oem_catalog_lookup.add_argument("--timeout", type=float, default=20.0)
+    oem_catalog_lookup.add_argument("--dry-run", action="store_true")
+
+    crm_vin_parts = sub.add_parser(
+        "crm-vin-parts-plan",
+        help="Build the CRM VIN/frame -> OEM -> crosses -> quote -> writeback pipeline for one requested part",
+    )
+    crm_vin_parts.add_argument("--card-id", default=None)
+    crm_vin_parts.add_argument("--part", dest="requested_part", required=True)
+    crm_vin_parts.add_argument("--vin", default=None)
+    crm_vin_parts.add_argument("--frame", default=None)
+    crm_vin_parts.add_argument("--body-number", default=None)
+    crm_vin_parts.add_argument("--vehicle", default=None)
+    crm_vin_parts.add_argument("--make", default=None)
+    crm_vin_parts.add_argument("--model", default=None)
+    crm_vin_parts.add_argument("--model-year", type=int, default=None)
+    crm_vin_parts.add_argument("--market", default=None)
+    crm_vin_parts.add_argument("--engine", default=None)
+    crm_vin_parts.add_argument("--transmission", default=None)
+    crm_vin_parts.add_argument("--drivetrain", default=None)
+    crm_vin_parts.add_argument("--side", default=None)
+    crm_vin_parts.add_argument("--axle", default=None)
+    crm_vin_parts.add_argument("--position", default=None)
+    crm_vin_parts.add_argument("--urgency", default=None)
+    crm_vin_parts.add_argument("--city", default="Красноярск")
+    crm_vin_parts.add_argument("--limit", type=int, default=10)
+
+    vin_parts_benchmark = sub.add_parser(
+        "vin-parts-benchmark",
+        help="Benchmark a JSON batch of VIN/frame items for identity, part-intent, OEM/provider, and dry-run catalog readiness",
+    )
+    vin_parts_benchmark.add_argument("--items-json", required=True)
+    vin_parts_benchmark.add_argument("--part", dest="requested_part", required=True)
+    vin_parts_benchmark.add_argument("--city", default="Красноярск")
+    vin_parts_benchmark.add_argument("--no-live-vpic", action="store_true")
+    vin_parts_benchmark.add_argument("--no-vpic-batch", action="store_true")
+    vin_parts_benchmark.add_argument("--skip-partsapi-dry-run", action="store_true")
+    vin_parts_benchmark.add_argument("--skip-vin17-dry-run", action="store_true")
+
+    vin_parts_work_order = sub.add_parser(
+        "vin-parts-work-order",
+        help="Build per-card VIN/frame parts lookup work orders with OEM, cross, supplier, CRM writeback gates, and blockers",
+    )
+    vin_parts_work_order.add_argument("--items-json", required=True)
+    vin_parts_work_order.add_argument("--part", dest="requested_part", required=True)
+    vin_parts_work_order.add_argument("--city", default="Красноярск")
+    vin_parts_work_order.add_argument("--no-live-vpic", action="store_true")
+    vin_parts_work_order.add_argument("--no-vpic-batch", action="store_true")
+
     source_route = sub.add_parser("source-route", help="Recommend authoritative automotive repair sources")
     source_route.add_argument("--brand", default=None)
     source_route.add_argument("--data-type", default=None)
@@ -228,7 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("knowledge-audit", help="Audit the local knowledge map, route cards, files, and SQLite index")
 
-    sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, Obsidian, and knowledge cleanup candidates")
+    sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, and knowledge cleanup candidates")
 
     sub.add_parser("system-audit", help="Run the read-only AutoStop Manager health audit")
     sub.add_parser("doctor", help="Alias for system-audit")
@@ -433,6 +587,146 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "lookup-oem":
         _print_json(lookup_original_parts(args.identifier, model_year=args.model_year, make_hint=args.make))
+    elif args.command == "decode-vehicle":
+        _print_json(
+            decode_vehicle_identity(
+                args.identifier,
+                crm_context={
+                    "vehicle": args.vehicle,
+                    "make": args.make,
+                    "model": args.model,
+                    "model_year": args.model_year,
+                    "engine": args.engine,
+                    "transmission": args.transmission,
+                    "drivetrain": args.drivetrain,
+                    "market": args.market,
+                    "source_confidence": args.source_confidence,
+                },
+                model_year=args.model_year,
+                make_hint=args.make,
+                live_vpic=not args.no_live_vpic,
+            )
+        )
+    elif args.command == "decode-vehicles":
+        items = json.loads(args.items_json)
+        if not isinstance(items, list):
+            raise SystemExit("--items-json must be a JSON array")
+        _print_json(decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch))
+    elif args.command == "catalog-status":
+        _print_json(catalog_provider_status(stage=args.stage))
+    elif args.command == "oem-parts-provider-plan":
+        identity = json.loads(args.vehicle_identity_json) if args.vehicle_identity_json else None
+        _print_json(
+            build_oem_parts_provider_plan(
+                identifier=args.identifier,
+                requested_part=args.requested_part,
+                vehicle_identity=identity,
+                city=args.city,
+            )
+        )
+    elif args.command == "vin17-decode":
+        _print_json(vin17_decode_vehicle(args.identifier, dry_run=args.dry_run))
+    elif args.command == "vin17-search-part":
+        _print_json(
+            vin17_search_part_number_by_vin(
+                epc=args.epc,
+                identifier=args.identifier,
+                query_part_number=args.part_number,
+                query_match_type=args.match_type,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "partsapi-lookup":
+        _print_json(
+            partsapi_catalog_lookup(
+                operation=args.operation,
+                identifier=args.identifier,
+                part_number=args.part_number,
+                brand=args.brand,
+                part_type=args.part_type,
+                category=args.category,
+                lang_id=args.lang_id,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "public-catalog-lookup":
+        _print_json(
+            public_aftermarket_catalog_lookup(
+                provider=args.provider,
+                part_number=args.part_number,
+                page_size=args.page_size,
+                country=args.country,
+                include_detail=not args.no_detail,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "oem-catalog-lookup":
+        _print_json(
+            lookup_oem_catalog_candidates(
+                identifier=args.identifier,
+                requested_part=args.requested_part,
+                catalog_id=args.catalog_id,
+                car_id=args.car_id,
+                group_id=args.group_id,
+                epc=args.epc,
+                partsapi_part_type=args.partsapi_part_type,
+                partsapi_category=args.partsapi_category,
+                timeout=args.timeout,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "crm-vin-parts-plan":
+        _print_json(
+            build_crm_vin_parts_lookup_pipeline(
+                card_id=args.card_id,
+                requested_part=args.requested_part,
+                vin=args.vin,
+                frame=args.frame,
+                body_number=args.body_number,
+                vehicle=args.vehicle,
+                make=args.make,
+                model=args.model,
+                model_year=args.model_year,
+                market=args.market,
+                engine=args.engine,
+                transmission=args.transmission,
+                drivetrain=args.drivetrain,
+                side=args.side,
+                axle=args.axle,
+                position=args.position,
+                urgency=args.urgency,
+                city=args.city,
+                limit=args.limit,
+            )
+        )
+    elif args.command == "vin-parts-benchmark":
+        items = json.loads(args.items_json)
+        if not isinstance(items, list):
+            raise SystemExit("--items-json must be a JSON array")
+        _print_json(
+            benchmark_vin_parts_lookup(
+                items,
+                requested_part=args.requested_part,
+                city=args.city,
+                live_vpic=not args.no_live_vpic,
+                use_vpic_batch=not args.no_vpic_batch,
+                include_partsapi_dry_run=not args.skip_partsapi_dry_run,
+                include_vin17_dry_run=not args.skip_vin17_dry_run,
+            )
+        )
+    elif args.command == "vin-parts-work-order":
+        items = json.loads(args.items_json)
+        if not isinstance(items, list):
+            raise SystemExit("--items-json must be a JSON array")
+        _print_json(
+            build_vin_parts_work_order(
+                items,
+                requested_part=args.requested_part,
+                city=args.city,
+                live_vpic=not args.no_live_vpic,
+                use_vpic_batch=not args.no_vpic_batch,
+            )
+        )
     elif args.command == "source-route":
         _print_json(
             recommend_automotive_sources(

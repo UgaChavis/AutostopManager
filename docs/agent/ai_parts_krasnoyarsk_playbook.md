@@ -31,15 +31,15 @@ Purpose: route parts-search, local availability, supplier/API, used/contract par
 
 Core docs:
 
-- `docs/00_executive_summary_ru.md` - concept and minimum workflow.
-- `docs/02_data_sources_ru.md` - source matrix and trust levels.
-- `docs/03_part_identity_ru.md` - VIN/OEM/brand/article/fitment normalization.
-- `docs/04_search_workflows_ru.md` - local, supplier, marketplace, no-result, and escalation workflows.
-- `docs/06_scoring_and_decision_model_ru.md` - offer scoring model.
-- `docs/07_reporting_templates_ru.md` - manager-facing report templates.
-- `docs/08_krasnoyarsk_vendor_discovery_ru.md` - local seller discovery and vendor registry workflow.
-- `docs/09_compliance_limits_ru.md` - legal/terms boundaries.
-- `docs/14_pricing_and_averaging_model_ru.md` - median/outlier/local-premium and downtime cost model.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/00_executive_summary_ru.md` - concept and minimum workflow.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/02_data_sources_ru.md` - source matrix and trust levels.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/03_part_identity_ru.md` - VIN/OEM/brand/article/fitment normalization.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/04_search_workflows_ru.md` - local, supplier, marketplace, no-result, and escalation workflows.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/06_scoring_and_decision_model_ru.md` - offer scoring model.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/07_reporting_templates_ru.md` - manager-facing report templates.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/08_krasnoyarsk_vendor_discovery_ru.md` - local seller discovery and vendor registry workflow.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/09_compliance_limits_ru.md` - legal/terms boundaries.
+- `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/docs/14_pricing_and_averaging_model_ru.md` - median/outlier/local-premium and downtime cost model.
 
 ## Steering Rack Rule
 
@@ -64,6 +64,5 @@ Treat a steering rack request as high-risk and VIN-dependent:
 
 ```powershell
 python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
-python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 ```

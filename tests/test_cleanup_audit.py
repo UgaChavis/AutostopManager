@@ -29,20 +29,12 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (docs_agent / "reference_only.md").write_text("# Reference\n", encoding="utf-8")
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
     (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
-    cloud_vault = tmp_path / "cloud" / "AutostopCRM"
-    desktop_vault = tmp_path / "desktop" / "AutostopCRM"
-    cloud_vault.mkdir(parents=True)
-    desktop_vault.mkdir(parents=True)
-    (cloud_vault / "Home.md").write_text("cloud", encoding="utf-8")
-    (desktop_vault / "Home.md").write_text("desktop", encoding="utf-8")
     store = ManagerMemoryStore(root / "data" / "autostop_manager.sqlite3")
     store.initialize()
 
     result = build_cleanup_audit(
         project_root=root,
         store=store,
-        obsidian_cloud_vault=cloud_vault,
-        obsidian_desktop_vault=desktop_vault,
     )
 
     assert result["ok"] is True
@@ -51,16 +43,15 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
         "ignored_cache",
         "tracked_pdf_duplicate",
         "unreferenced_agent_doc",
-        "obsidian_duplicate",
         "local_db",
     }.issubset(categories)
     allowed_actions = {
         "keep",
         "link_to_knowledge_map",
-        "exclude_from_obsidian_import",
-        "move_to_archive_after_approval",
+        "keep_text_equivalent",
         "delete_after_approval",
     }
+    assert ("ob" + "sidian_duplicate") not in categories
     assert all(item["requires_approval"] is True for item in result["candidates"])
     assert all(item["recommended_action"] in allowed_actions for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/reference_only.md" for item in result["candidates"])

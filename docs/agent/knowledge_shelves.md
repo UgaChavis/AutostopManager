@@ -18,10 +18,7 @@ Use this loop before broad file reads:
 5. Use `search_knowledge_base --domain <best_domain>` only when the first file
    does not answer the task.
 6. Read raw source packs only after the route card and source-of-truth file.
-7. For human-readable CRM/MCP/connector operating context, inspect the Obsidian
-   vault through `docs/agent/obsidian_knowledge_vault_playbook.md`; prefer the
-   cloud path `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when available.
-8. After adding or changing durable knowledge, run `knowledge-sync`, then
+7. After adding or changing durable knowledge, run `knowledge-sync`, then
    `knowledge-audit` and `annotations-audit`.
 
 For non-trivial operational tasks, run `prepare_manager_context` first. It
@@ -38,7 +35,6 @@ decide whether the reusable route belongs in the intake flow.
 | --- | --- | --- | --- |
 | Manager behavior | `startup_and_identity` | `docs/agent/autostop_manager_skill.md` | startup routine, answer rules, memory boundaries, MCP catalogs |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_intake_playbook.md` | new files, indexing, shelf placement, route-card cleanup, source licensing |
-| Obsidian working vault | `obsidian_knowledge_vault` | `docs/agent/obsidian_knowledge_vault_playbook.md` | Obsidian vault path, cloud sync, Bases, Codex interaction note, manager data snapshots, and refresh workflow |
 | General repair sources | `automotive_repair` | `docs/agent/automotive_repair_source_playbook.md` | diagnostic source hierarchy, TSB/recall/wiring/torque/labor routes |
 | ECU programming | `ecu_calibration_programming` | `docs/agent/ecu_calibration_programming_playbook.md` | ECU flashing, coding, calibration formats, UDS/J2534, BMW KOMBI/legal limits |
 | BMW general repair | `bmw_repair` | `docs/agent/bmw_repair_playbook.md` | BMW diagnostics, DTC, xDrive, ZF, body electronics, HV, fluids |
@@ -47,6 +43,7 @@ decide whether the reusable route belongs in the intake flow.
 | Fluids | `fluids` | `docs/agent/fluid_maintenance_playbook.md` | oils, operating fluids, approvals, fill capacities, maintenance quantities |
 | Transmissions | `transmission` | `docs/agent/transmission_playbook.md` | gearbox/CVT/DCT/AMT/clutch symptoms, adaptation, service routing |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` | VIN/frame classification, OEM lookup, catalog routing |
+| CRM VIN/OEM parts lookup | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` | CRM card VIN/frame intake, OEM part lookup, crosses, закупка/market quote matrix, CRM writeback |
 | Business identity | `business_identity` | `docs/agent/business_identity_playbook.md` | private ИП/AutoStop requisites, company-card data, business document freshness |
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` | PDF/DOCX/XLSX invoices, acts, КП, requisites sheets, accounting-style files, render/audit gates |
 | Gmail operations | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail inbox search, labels, drafts, attachments, thread reads, write safety, email-derived memory |
@@ -65,17 +62,15 @@ Use these locations consistently:
 - `docs/agent/knowledge_shelves.md` - shelf map and placement rules.
 - `docs/agent/command_routes.json` - natural owner command aliases and
   open-first route overrides.
-- `docs/agent/obsidian_knowledge_vault_playbook.md` - Obsidian cloud/local
-  vault route and agent usage rules.
 - `docs/agent/crm_manager_data_playbook.md` - manager-facing CRM statistics,
-  client-quality, cashbox, and repair-order snapshot rules for Obsidian.
+  client-quality, cashbox, and repair-order summary rules.
 - `docs/agent/*_playbook.md` - task workflow or domain operating procedure.
 - `docs/agent/*_sources.json` - curated source catalogs and routing metadata.
 - `docs/agent/automotive_sources/*` - automotive source catalogs and ingestion
   guidance.
 - `docs/agent/automotive_sources/source_cache/<topic>_knowledge_pack/` - raw or
   owner-provided packs that should not be duplicated into memory.
-- `C:/Users/9860606/.codex/skills/<topic>/` - optional focused trigger skills
+- `C:/Users/User/.codex/skills/<topic>/` - optional focused trigger skills
   for large model-specific corpora when a local skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
   material that should usually stay out of Git.
@@ -96,8 +91,8 @@ Classify tracked documentation with these labels during cleanup:
   README/MANIFEST coverage and avoid rewriting raw source material.
 - `reference_only`: linked supporting files that must be audited but should not
   be fully indexed into SQLite search.
-- `archive_policy`: `docs/archive/` policy files; do not treat archived plans
-  as current instructions.
+- `archive_policy`: archived policy files only when an archive folder exists;
+  do not treat archived plans as current instructions.
 - `delete_candidate`: fully migrated plans, duplicate generated summaries,
   broken scratch files, or obsolete instructions with no active route.
 - `untracked_artifact`: local PDFs, runtime output, caches, SQLite databases,

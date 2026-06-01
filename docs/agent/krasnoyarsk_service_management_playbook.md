@@ -40,12 +40,15 @@ retail, and client sell prices separate.
 Use this order:
 
 1. Normalize vehicle identity and part identity from CRM.
-2. Confirm OEM or replacement number through VIN/OEM routing.
-3. Search exact number in Drom, ZZap, Emex/Exist/Autodoc, then local
+2. When the job starts from a CRM card VIN/frame/body number and must be
+   written back, use `crm_vin_oem_parts_lookup_playbook.md` for the full
+   read/OEM/cross/quote/write/verify pipeline.
+3. Confirm OEM or replacement number through VIN/OEM routing.
+4. Search exact number in Drom, ZZap, Emex/Exist/Autodoc, then local
    Krasnoyarsk suppliers.
-4. Rank by exact article, city pickup, delivery time, seller reliability,
+5. Rank by exact article, city pickup, delivery time, seller reliability,
    return terms, and total price.
-5. Record only the chosen offer and reusable search rule in memory.
+6. Record only the chosen offer and reusable search rule in memory.
 
 Urgency routing:
 

@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-05-11",
-  "tool_count": 32,
+  "last_verified": "2026-05-31",
+  "tool_count": 44,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -40,6 +40,18 @@
   ],
   "routing_tools": [
     "lookup_original_parts",
+    "decode_vehicle_identity",
+    "decode_vehicle_identities",
+    "catalog_provider_status",
+    "plan_oem_parts_providers",
+    "vin17_decode_vehicle",
+    "vin17_search_part_number_by_vin",
+    "partsapi_catalog_lookup",
+    "public_aftermarket_catalog_lookup",
+    "lookup_oem_catalog_candidates",
+    "plan_crm_vin_oem_parts_lookup",
+    "benchmark_vin_parts_lookup",
+    "build_vin_parts_work_order",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
     "recommend_service_management_actions",
@@ -95,6 +107,18 @@
     "finish_manager_run",
     "list_manager_runs",
     "lookup_original_parts",
+    "decode_vehicle_identity",
+    "decode_vehicle_identities",
+    "catalog_provider_status",
+    "plan_oem_parts_providers",
+    "vin17_decode_vehicle",
+    "vin17_search_part_number_by_vin",
+    "partsapi_catalog_lookup",
+    "public_aftermarket_catalog_lookup",
+    "lookup_oem_catalog_candidates",
+    "plan_crm_vin_oem_parts_lookup",
+    "benchmark_vin_parts_lookup",
+    "build_vin_parts_work_order",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
     "recommend_service_management_actions"
@@ -120,7 +144,7 @@
     "audit_knowledge_annotations": "Check docs/agent/knowledge_annotations.jsonl compact file-level annotations and their domain coverage.",
     "audit_skill_registry": "Check local Codex skill files linked from knowledge_map.json and report missing or unlinked skills.",
     "system_audit": "Run the canonical read-only AutoStop Manager health layer: knowledge audit, annotations audit, skills audit, cleanup dry-run summary, local SQLite stats, MCP catalog consistency, and tests_status=external.",
-    "cleanup_audit": "Run the dry-run cleanup audit for caches, duplicate PDFs, unreferenced agent docs, Obsidian mirror duplication, local DB size, and overindexed source packs; never deletes or moves files.",
+    "cleanup_audit": "Run the dry-run cleanup audit for caches, duplicate PDFs, unreferenced agent docs, local DB size, and overindexed source packs; never deletes or moves files.",
     "crm_health_plan": "Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads; never calls live CRM write tools and reports cards_moved=0 and cards_archived=0.",
     "audit_memory": "Check long-term manager memory for duplicate, expired, and superseded note/fact records before cleanup.",
     "curate_memory": "Non-destructively curate manager memory; with apply=true, archive duplicate note/fact copies instead of deleting source records.",
@@ -129,9 +153,21 @@
     "finish_manager_run": "Close a manager run with status, summary, and verification evidence.",
     "list_manager_runs": "List recent manager runs and optionally include their events.",
     "lookup_original_parts": "Classify VIN, chassis, or market code and return a source-aware OEM lookup route.",
+    "decode_vehicle_identity": "Build a source-aware vehicle identity dossier from VIN/frame/body number: identifier classification, check digit/model-year diagnostics, vPIC/WMI/platform evidence, CRM-context conflicts, confidence label, adapter status, and required EPC/API sources before VIN-critical parts lookup.",
+    "decode_vehicle_identities": "Batch vehicle identity dossiers for VIN/frame/body-number lists without durable raw VIN persistence; uses public vPIC batch when enabled and reports batch coverage for CRM board scans.",
+    "catalog_provider_status": "Report configured VIN/OEM/cross/procurement provider readiness by stage without exposing secret values; use before claiming live catalog or supplier API access.",
+    "plan_oem_parts_providers": "Build provider readiness and blocker plan for VIN/frame -> OEM candidates -> crosses/applicability -> procurement/RF market price. It redacts identifiers and does not call suppliers or write CRM.",
+    "vin17_decode_vehicle": "Call or dry-run the configured 17VIN API vehicle decoder using VIN17_ACCOUNT/VIN17_SECRET; expose only redacted request evidence and never expose token/secret.",
+    "vin17_search_part_number_by_vin": "Call or dry-run 17VIN search_part_number by VIN after a 17VIN decode returns an EPC code; use for read-only fitment checks, not supplier orders.",
+    "partsapi_catalog_lookup": "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup using PARTSAPI_KEY and PARTSAPI_BASE_URL; supports VINdecodeOE, getPartsbyVIN, getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles without exposing key values.",
+    "public_aftermarket_catalog_lookup": "Call public MANN-FILTER and DENSO Aftermarket catalogs by part/OE number; use for brand-scope catalog enrichment, not as VIN-specific OEM EPC proof or supplier price confirmation.",
+    "lookup_oem_catalog_candidates": "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part, combining Parts-Catalogs, PartsAPI, and 17VIN when credentials and routing ids are available; no CRM writes or supplier orders are created.",
+    "benchmark_vin_parts_lookup": "Read-only batch benchmark for CRM VIN/frame/body-number items: identity confidence, part-intent recognition, safe public search templates, provider blockers, and PartsAPI/17VIN dry-run readiness with raw identifiers redacted from output.",
+    "build_vin_parts_work_order": "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, cross/applicability steps, supplier routes, CRM writeback gates, blockers, and acceptance checklists with raw identifiers redacted from output.",
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
-    "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake."
+    "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake.",
+    "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, procurement/RF market quote matrix, selected-part material line policy, CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders."
   },
   "natural_language_commands": {
     "Приберись": {
@@ -181,10 +217,7 @@
     "entrypoint": "docs/agent/knowledge_base_index.md",
     "machine_map": "docs/agent/knowledge_map.json",
     "annotation_index": "docs/agent/knowledge_annotations.jsonl",
-    "obsidian_vault_playbook": "docs/agent/obsidian_knowledge_vault_playbook.md",
     "crm_manager_data_playbook": "docs/agent/crm_manager_data_playbook.md",
-    "obsidian_cloud_vault": "C:\\Users\\User\\Мой диск\\Obsidian CRM\\AutostopCRM",
-    "obsidian_desktop_mirror": "C:\\Users\\User\\Desktop\\Obsidian CRM\\AutostopCRM",
     "accepted_inputs": [
       "md",
       "txt",
@@ -198,8 +231,6 @@
     ],
     "workflow": [
       "inspect docs/agent/knowledge_base_index.md and docs/agent/knowledge_map.json",
-      "inspect docs/agent/obsidian_knowledge_vault_playbook.md when the owner asks to use Obsidian or when CRM/MCP/connector work needs human-readable operating knowledge",
-      "inspect docs/agent/crm_manager_data_playbook.md before writing client, cashbox, repair-order, or CRM-statistics summaries into Obsidian",
       "use probe_knowledge_base before broad file reads",
       "classify source and license",
       "extract durable conclusions",
@@ -209,9 +240,10 @@
       "run sync_knowledge_base after durable docs/catalog/skill changes",
       "run audit_knowledge_base after route-card or source changes",
       "run audit_knowledge_annotations after annotation changes",
-      "refresh the Obsidian vault import after source docs/agent changes that should appear in the vault",
       "store only reusable memory",
-      "journal the change"
+      "journal the change",
+      "inspect docs/agent/crm_manager_data_playbook.md before summarizing client, cashbox, repair-order, or CRM-statistics data",
+      "keep raw CRM data in live CRM or local private runtime files unless the owner explicitly approves an exact private export"
     ],
     "do_not_store": [
       "full manuals",
@@ -259,6 +291,13 @@
     "phone ChatGPT access uses the same CRM MCP endpoint when AutostopManager is mounted on the server",
     "route management, procurement, staff, customer, and finance work through docs/agent/krasnoyarsk_service_management_playbook.md",
     "route private ИП/AutoStop business identity and requisites through docs/agent/business_identity_playbook.md and data/private_knowledge",
-    "prefer explicit uncertainty over invented completeness"
-  ]
+    "prefer explicit uncertainty over invented completeness",
+    "route CRM VIN/frame/body-number parts lookup through docs/agent/crm_vin_oem_parts_lookup_playbook.md",
+    "use decode_vehicle_identity before OEM/parts lookup when CRM vehicle identity is incomplete, ROW/JDM, or confidence is unclear",
+    "use benchmark_vin_parts_lookup for 10-card or batch VIN/frame quality checks before claiming lookup coverage improved",
+    "use build_vin_parts_work_order after benchmark when the next step is actionable OEM/cross/supplier search by card",
+    "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
+    "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
+  ],
+  "all_tools_count": 42
 }

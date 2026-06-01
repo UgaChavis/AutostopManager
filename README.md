@@ -31,12 +31,8 @@ up to date.
 - knowledge-base machine map: `docs/agent/knowledge_map.json`
 - knowledge-base shelf map: `docs/agent/knowledge_shelves.md`
 - knowledge-base annotation index: `docs/agent/knowledge_annotations.jsonl`
-- Obsidian working vault route:
-  `docs/agent/obsidian_knowledge_vault_playbook.md`; prefer the cloud vault
-  at `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when available, with
-  the desktop mirror at `C:\Users\User\Desktop\Obsidian CRM\AutostopCRM`
-- CRM manager data route: `docs/agent/crm_manager_data_playbook.md`; Obsidian
-  may hold safe snapshots and quality signals, while raw client databases,
+- CRM manager data route: `docs/agent/crm_manager_data_playbook.md`; it defines
+  safe manager summaries and quality signals, while raw client databases,
   cashbox ledgers, repair orders, and full board dumps stay in AutoStop CRM
 - private business identity route: `docs/agent/business_identity_playbook.md`
   with local private facts under `data/private_knowledge/`
@@ -90,6 +86,11 @@ up to date.
 - VIN/OEM lookup: use `docs/agent/vin_oem_lookup_playbook.md` and
   `docs/agent/vin_oem_sources.json` for VIN, chassis, and original catalog
   number routing
+- CRM VIN/OEM parts lookup: use
+  `docs/agent/crm_vin_oem_parts_lookup_playbook.md` and
+  `python -m autostop_manager.cli crm-vin-parts-plan --part "<деталь>" ...`
+  when a CRM card has VIN/frame/body number, the owner needs OEM/cross/analog,
+  закупка, RF market price, and a structured writeback to the card
 - email work: use the connected Gmail MCP tools for inbox inspection,
   thread reading, triage, reply drafting, forwarding, and labels
 - vehicle identity: use `docs/agent/vehicle_identity_playbook.md` for VIN,
@@ -130,7 +131,18 @@ python -m autostop_manager.cli today
 python -m autostop_manager.cli journal "Проверил доску CRM, готовые машины требуют оплаты"
 python -m autostop_manager.cli init
 python -m autostop_manager.cli seed-rules
+python -m autostop_manager.cli catalog-status
+python -m autostop_manager.cli decode-vehicle MR41S123456 --make Suzuki --model Hustler --model-year 2018 --no-live-vpic
+python -m autostop_manager.cli decode-vehicles --items-json "[{\"identifier\":\"MR41S123456\",\"make\":\"Suzuki\",\"model\":\"Hustler\",\"model_year\":2018}]" --no-live-vpic
+python -m autostop_manager.cli oem-parts-provider-plan MR41S123456 --part "передние колодки"
+python -m autostop_manager.cli vin17-decode LFMGJE720DS070251 --dry-run
+python -m autostop_manager.cli vin17-search-part LFMGJE720DS070251 --epc toyota --part-number 091140G010 --dry-run
+python -m autostop_manager.cli partsapi-lookup --operation crosses_with_brand --part-number 04465-60280 --brand Toyota --dry-run
+python -m autostop_manager.cli public-catalog-lookup --provider all --part-number 90919-01275 --page-size 2
+python -m autostop_manager.cli vin-parts-benchmark --items-json "[{\"identifier\":\"MR41S123456\",\"make\":\"Suzuki\",\"model\":\"Hustler\",\"model_year\":2018}]" --part "передние колодки" --no-live-vpic
+python -m autostop_manager.cli vin-parts-work-order --items-json "[{\"identifier\":\"MR41S123456\",\"make\":\"Suzuki\",\"model\":\"Hustler\",\"model_year\":2018,\"requested_part\":\"шпилька колеса\"}]" --part "передние колодки" --no-live-vpic
 python -m autostop_manager.cli lookup-oem 1HGCM82633A004352 --model-year 2003
+python -m autostop_manager.cli crm-vin-parts-plan --card-id card_123 --vin 1HGCM82633A004352 --part "свечи зажигания" --make Honda --model-year 2003
 python -m autostop_manager.cli source-route --brand Toyota --data-type repair_manuals
 python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia
 python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
@@ -154,6 +166,35 @@ python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli memory-audit
 python -m autostop_manager.cli memory-curate --apply
 ```
+
+Use `decode-vehicle` before VIN-critical OEM or parts work. It classifies ISO
+VIN vs JDM/ROW frame-like identifiers, runs vPIC/WMI/platform evidence, merges
+CRM context, reports conflicts, shows paid adapter status, and lists the EPC/API
+sources still required for high-confidence parts lookup.
+Use `decode-vehicles` for CRM board batches; when live vPIC is enabled it uses
+the public vPIC batch endpoint for 17-character VINs and reports batch coverage.
+Use `catalog-status` and `oem-parts-provider-plan` before claiming that live
+catalog or supplier APIs are available; these commands report missing env names
+without printing secret values and include safe public search query templates
+that do not include raw customer VIN/frame values.
+Use `vin17-decode` and `vin17-search-part` only when `VIN17_ACCOUNT` and
+`VIN17_SECRET` are configured, or with `--dry-run` to validate the signed request
+shape without exposing secrets.
+Use `partsapi-lookup` only when `PARTSAPI_KEY` and `PARTSAPI_BASE_URL` are
+configured, or with `--dry-run` to validate the method/parameter shape for
+`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability`, and cross methods.
+Use `public-catalog-lookup` for live public MANN-FILTER and DENSO Aftermarket
+part/OE searches. Treat these as brand-scope aftermarket catalog enrichment,
+not VIN-specific OEM EPC proof and not supplier price confirmation.
+Use `vin-parts-benchmark` for 10-card or batch CRM checks: it redacts raw
+customer identifiers from output, reports identity/part-intent coverage, safe
+public query coverage, PartsAPI/17VIN dry-run readiness, and the exact missing
+env names blocking full live OEM and supplier lookup. Each JSON item may carry
+its own `requested_part`; `--part` is the fallback for items that omit it.
+Use `vin-parts-work-order` after the benchmark when the next step is actual
+search work: it returns per-card OEM/EPC routes, prepared API checks,
+cross/applicability steps, supplier sequence, CRM writeback gates, and
+acceptance checklists without echoing raw identifiers.
 
 ## MCP Tools
 

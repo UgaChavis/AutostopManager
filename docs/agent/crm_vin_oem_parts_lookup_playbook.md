@@ -1,0 +1,305 @@
+# CRM VIN OEM Parts Lookup Playbook
+
+Purpose: run the AutoStop CRM workflow where a card contains a vehicle and a
+VIN/frame/body number, the owner asks for a concrete part, and the manager must
+find the OEM catalog number, check replacements/crosses, quote procurement and
+Russian market prices, then write a structured result back to CRM.
+
+This is the orchestration layer. It does not replace:
+
+- `docs/agent/vehicle_identity_playbook.md` for identifier classification;
+- `docs/agent/vin_oem_lookup_playbook.md` for source-aware OEM routing;
+- `docs/agent/procurement_pricing_playbook.md` for закупка, retail, and CRM
+  material-price discipline;
+- live AutoStop CRM MCP tools for cards, repair orders, clients, and files.
+
+## Trigger
+
+Use this playbook when the task combines CRM, vehicle identity, part identity,
+OEM lookup, analogs/crosses, supplier prices, and writeback, for example:
+
+- `В карточке VIN, найди оригинальный номер свечей и аналоги`;
+- `по номеру кузова подбери колодки, закупка и рынок РФ, запиши в CRM`;
+- `найди OEM фильтра по VIN, проверь кроссы и добавь результат в карточку`;
+- `в карточке есть Korean VIN, нужна цена запчасти и выбранный аналог`.
+
+If the owner only asks to decode a VIN, use `vehicle_identity_and_oem`. If the
+owner already gives an OEM/article and only asks for price or availability, use
+`parts_sourcing`.
+
+## Non-Negotiable Rules
+
+- Do not invent OEM numbers, supersessions, crosses, applicability, prices, or
+  stock.
+- Do not present one weak marketplace or seller source as exact OEM
+  confirmation.
+- Keep these identities separate: `OEM reference`, `selected part`,
+  `cross/analog`, `procurement price`, `public retail/market price`, and
+  `client sale price`.
+- High confidence requires VIN/frame-specific confirmation plus at least one
+  independent check: OEM/EPC second source, supplier fitment confirmation,
+  TecDoc/CROSSBASE-style applicability, or seller confirmation with article and
+  vehicle data visible.
+- If the source is weak, write `confidence: medium` or `confidence: low` and
+  name what is missing.
+- Do not store raw customer VIN/frame, phone, client identity, CRM snapshots,
+  supplier secrets, raw quotes, or full card text in durable memory or Git.
+
+## CRM Intake
+
+1. Start with live CRM, not memory:
+   - `bootstrap_context` if connector state is uncertain;
+   - `get_card_context` or `get_card` for the exact `card_id`;
+   - `list_repair_orders` / `get_repair_order` only when materials will be
+     updated.
+2. Extract only the fields needed for the quote:
+   - `card_id`, title, vehicle fields, description snippets that name the part;
+   - VIN, Japanese frame/chassis number, body number, license only if needed to
+     find the card;
+   - make, model, market, model year or build window;
+   - engine, transmission, drivetrain, body, trim/grade/options if present;
+   - requested detail, side, axle, position, quantity, condition, urgency;
+   - existing OEM, article, old-part label, photos/files, repair-order rows.
+3. Preserve manual CRM fields. If fields conflict, do not overwrite them; add
+   a short uncertainty note.
+
+## Identifier Classification
+
+Classify before decoding.
+
+### 17-Character VIN
+
+- Normalize to uppercase and remove separators.
+- Validate 17 characters and no `I`, `O`, `Q`.
+- Use vPIC or a market-appropriate VIN decoder for base identity.
+- For OEM part lookup, vPIC alone is not enough: hand off to a VIN-capable EPC,
+  Parts-Catalogs, PartsAPI VINdecodeOE/getPartsbyVIN, 17VIN, dealer catalog,
+  or brand catalog.
+
+### Japanese Frame / Body Number
+
+- Treat the frame/chassis/body number as the primary key for JDM vehicles.
+- Keep the hyphenated form when the source expects it, e.g. `GXE10-0088644`.
+- Do not invent a global 17-character VIN.
+- Use manufacturer/Japan recall routes, Parts-Catalogs VIN/FRAME, epc-data,
+  PartSouq/Amayama-style catalog, or brand EPC to identify the exact catalog
+  vehicle.
+- Require model code, production date/month, engine, transmission, drive, and
+  grade when the catalog splits parts by production range or option.
+
+### Korean / KDM VIN
+
+- Most Korean/KDM vehicles use a normal 17-character VIN, but the useful result
+  is often a market-specific profile.
+- Confirm Hyundai/Kia make, model family, market, production window, engine,
+  transmission, and plant with a VIN/EPC source or supplier catalog.
+- Do not trust generic trim names for fitment unless the source supports the
+  exact KDM/Russian-market vehicle.
+
+## OEM Lookup Flow
+
+1. Resolve the vehicle profile from VIN/frame/body:
+   `make, model, market, year/build month, engine, transmission, drivetrain,
+   body/chassis, grade/options`.
+2. Normalize the requested part:
+   common name, catalog group, side/axis/position, quantity/unit, repair
+   operation, old part markings, photo evidence.
+   Use the local part-intent profile from `crm-vin-parts-plan` /
+   `oem-parts-provider-plan` to expand phrases such as `передние колодки` into
+   catalog search terms, critical fitment fields, quantity basis, and caveats.
+3. Search OEM in source order:
+   - official dealer/OEM EPC if available;
+   - Parts-Catalogs API/widget for VIN/FRAME and catalog groups;
+   - `lookup_oem_catalog_candidates` / `oem-catalog-lookup` when
+     Parts-Catalogs `catalog_id/car_id/group_id` and 17VIN `epc` are known,
+     to collect OEM candidates from Parts-Catalogs, PartsAPI, and 17VIN in one
+     read-only result;
+   - PartsAPI `partsapi_catalog_lookup` for VINdecodeOE, getPartsbyVIN,
+     getOEApplicability, getCrosses/getCrossesWithBrand, and searchArticles
+     (`PARTSAPI_KEY` + `PARTSAPI_BASE_URL`, or dry-run adapter check first);
+   - 17VIN VIN-based part category/list/search endpoints
+     (`VIN17_ACCOUNT` + `VIN17_SECRET`, or dry-run adapter check first);
+   - AUTOPOISK EPC/Cross tab under subscription;
+   - PartSouq/epc-data as manual fallback and visual verification;
+   - supplier manager/dealer quote when online evidence is insufficient.
+4. Verify applicability:
+   - VIN/frame-specific vehicle is selected;
+   - part group is correct;
+   - side/axis/position is correct;
+   - production date range includes the car;
+   - engine/transmission/drivetrain/body/grade/options match;
+   - quantity and kit composition are clear.
+5. Check replacements/supersession:
+   - old OEM -> current OEM;
+   - current OEM -> allowed replacements;
+   - blocked/obsolete/discontinued notes;
+   - whether the replacement changes kit contents or side/axis coverage.
+6. Check cross/analog:
+   - TecDoc/PartsAPI article crosses/applicability;
+   - CROSSBASE-style cross methods;
+   - supplier catalog replacements;
+   - ZZap replacements and seller notes only as market evidence until fitment
+     is independently confirmed.
+
+If supplier/catalog APIs are not configured, use the generated
+`manual_public_search_queries` only as search starting points. They intentionally
+exclude raw VIN/frame values and must not be treated as OEM or закупка proof.
+For 10-card or broad CRM quality checks, run `benchmark_vin_parts_lookup` /
+`vin-parts-benchmark` before claiming coverage. It reports identity confidence,
+part-intent recognition, safe public-query coverage, PartsAPI/17VIN dry-run
+readiness, and the exact missing live catalog/supplier credentials while
+redacting raw identifiers from output. Pass `requested_part` per item when each
+card asks for a different part; use the global part only as a fallback.
+After a benchmark, run `build_vin_parts_work_order` / `vin-parts-work-order`
+when the next step is actual lookup execution. It turns each card into a
+search work order: OEM/EPC routes, prepared PartsAPI/17VIN checks,
+cross/applicability steps, supplier sequence, CRM writeback gates, and
+acceptance checklist.
+
+## Price Flow
+
+Use `docs/agent/procurement_pricing_playbook.md` before writing prices.
+
+1. Quote only after OEM/reference identity is stable enough.
+2. For every candidate, capture:
+   - role: `OEM reference`, `selected part`, `cross/analog`, `rejected`,
+     `pending`;
+   - selected brand and article;
+   - OEM reference used for fitment;
+   - source, city/warehouse, stock, lead time, return terms;
+   - закупка, public retail/market price, client sale price if requested;
+   - package/kit/quantity basis;
+   - confidence and confirmation status.
+3. Procurement source order:
+   - ROSSKO, AutoEuro, Armtek, Autopiter, Emex, Exist, Autodoc, local
+     Krasnoyarsk suppliers when account/cabinet/API/export is available;
+   - Drom/Avito/FarPost for used/contract/local urgent parts;
+   - ZZap for market benchmark, replacement visibility, and average/stat price
+     checks;
+   - Moscow/Russia-wide suppliers when local Красноярск stock is weak.
+4. Market price:
+   - use 3-5 comparable current RF offers where possible;
+   - exclude out-of-stock, zero, placeholder, old, damaged, unclear-kit, and
+     foreign-only offers from the main average;
+   - record whether the number is закупка, retail upper bound, or client sale.
+
+## Quote Matrix
+
+Every nontrivial CRM writeback should include a compact quote matrix in the
+card description:
+
+```text
+VIN/OEM подбор:
+Авто: <make model, year/build, engine/transmission/market if confirmed>
+VIN/frame source: <CRM field / card description / file/photo>; <identifier type>
+Деталь: <requested part, side/axis/position/quantity>
+OEM reference:
+- <OEM>: <source + applicability evidence + replacement status>
+Replacements/supersession:
+- <old/current/replaced-by>: <source>
+Selected parts:
+- <brand article name>: закупка <price>, рынок РФ <range/avg>, срок <lead time>, source <supplier>, confidence <high|medium|low>
+Нужна проверка:
+- <missing supplier login / photo / production date / side / stock reserve>
+```
+
+Do not put phone numbers, full client names, raw VIN dumps, or long private
+source excerpts into `board_summary`.
+
+## CRM Material Lines
+
+Write repair-order material rows only for the selected part that has a price
+basis.
+
+Good material line:
+
+```text
+NGK 91568 свечи зажигания, комплект 4 шт
+quantity=1
+price=<total закупка for selected set>
+```
+
+Bad material line:
+
+```text
+Toyota 90919-01275 / NGK 91568
+```
+
+Keep OEM references, alternatives, rejected crosses, and source notes in the
+description/quote matrix, not in the priced material row. If the selected part
+is genuine OEM, the row may use the OEM brand/number because that is the priced
+selected part.
+
+## Writeback Pipeline
+
+1. Start a manager run for auditability when the job is multi-step.
+2. Read the target card and repair order.
+3. Build the vehicle identity and OEM lookup plan.
+4. Find OEM/replacements/crosses with source evidence.
+5. Quote procurement and market price.
+6. Build the quote matrix.
+7. Write card description with the matrix via `update_card`, preserving old
+   useful text.
+8. Update repair-order materials via `replace_repair_order_materials` only for
+   selected priced parts, not OEM references.
+9. Update `board_summary` with a short status without VIN/client private data:
+   `Подбор: OEM найден, выбран NGK 91568, закупка требует подтверждения ROSSKO`.
+10. Re-open the card and repair order with `get_card_context` /
+    `get_repair_order`.
+11. Verify description, board summary, material totals, quantity basis, and
+    confidence.
+12. Finish the manager run with verification evidence.
+
+## Confidence
+
+Use `high` only when:
+
+- VIN/frame-specific catalog or supplier output confirms the OEM/reference;
+- side/axis/position/date range/options are checked;
+- replacement/cross selected part has independent applicability confirmation;
+- price comes from supplier/account/API/export or current seller confirmation.
+
+Use `medium` when OEM is likely but one independent check or supplier
+confirmation is missing.
+
+Use `low` when the source is generic, marketplace-only, title-match-only, or
+missing VIN/frame applicability.
+
+## Integration Backlog
+
+Keep implementation candidates in:
+
+- `docs/agent/vin_oem_sources.json` for VIN/OEM/catalog/cross/applicability;
+- `docs/agent/procurement_price_sources.json` for закупка, stock, and RF market
+  price sources.
+
+MVP tool chain:
+
+1. `read CRM card vehicle data`: AutoStop CRM `get_card_context`, repair-order
+   reads, attachment reads for old-part photos.
+2. `identify vehicle by VIN/frame`: `decode_vehicle_identity` first, then
+   `lookup_original_parts` and Parts-Catalogs/PartsAPI/17VIN/AUTOPOISK or
+   brand EPC adapters when confidence is not high.
+3. `plan provider readiness`: `catalog_provider_status` and
+   `plan_oem_parts_providers`; if live OEM/supplier APIs are missing, record the
+   exact missing adapter/env requirement instead of pretending the lookup is
+   complete.
+4. `benchmark batch readiness`: `benchmark_vin_parts_lookup` when working with
+   10-card or board-wide VIN/frame sets, especially before reporting that
+   decoding or parts search quality improved.
+5. `build per-card work orders`: `build_vin_parts_work_order` to choose exact
+   OEM/EPC routes, prepared API checks, supplier sequence, writeback gates, and
+   acceptance checklist per card.
+6. `find OEM for requested part`: catalog group search and VIN/frame part
+   lookup.
+7. `find replacements/crosses`: supersession, TecDoc/CROSSBASE-style crosses,
+   ZZap replacements, supplier substitutions.
+8. `quote procurement and market retail prices`: normalized supplier quote
+   adapters with stale-price checks.
+9. `build quote matrix`: one structure for card description and owner report.
+10. `write structured result to CRM card`: description, selected material rows,
+   short board summary.
+11. `reopen/verify CRM write`: card/reorder reread and totals check.
+
+No adapter may place supplier orders or change financial CRM records without a
+separate explicit owner command.

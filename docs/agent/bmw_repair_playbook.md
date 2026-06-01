@@ -32,24 +32,24 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 
 Markdown sections:
 
-- `markdown/bmw_01_diagnostics_architecture_ru.md` - BMW diagnostic architecture, ISTA/AIR/TIS, control units, networks, minimum vehicle card.
-- `markdown/bmw_02_fault_codes_dtc_catalog_ru.md` - OBD II, BMW fault memory, high-value generic DTC patterns, subsystem code indexes.
-- `markdown/bmw_03_engines_common_service_topics_ru.md` - engine families, common service topics, symptom-to-system engine checks.
-- `markdown/bmw_04_transmission_xdrive_driveline_ru.md` - ZF 5HP/6HP/8HP, EGS, ATF level logic, xDrive transfer case, driveline.
-- `markdown/bmw_05_chassis_brakes_steering_ru.md` - suspension, brakes, DSC/ABS, steering, chassis-to-powertrain interaction.
-- `markdown/bmw_06_body_electrical_networks_ru.md` - terminals, body modules, sleep current, water ingress, CAN/FlexRay/network issues.
-- `markdown/bmw_07_hybrid_electric_high_voltage_ru.md` - BMW HV architecture, READY/charging symptoms, 12V dependency, safety boundary.
-- `markdown/bmw_08_service_fluids_maintenance_ru.md` - BMW Longlife logic, ZF fluids, xDrive transfer case oil, brake fluid, coolant, VIN dependency.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_01_diagnostics_architecture_ru.md` - BMW diagnostic architecture, ISTA/AIR/TIS, control units, networks, minimum vehicle card.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_02_fault_codes_dtc_catalog_ru.md` - OBD II, BMW fault memory, high-value generic DTC patterns, subsystem code indexes.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_03_engines_common_service_topics_ru.md` - engine families, common service topics, symptom-to-system engine checks.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_04_transmission_xdrive_driveline_ru.md` - ZF 5HP/6HP/8HP, EGS, ATF level logic, xDrive transfer case, driveline.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_05_chassis_brakes_steering_ru.md` - suspension, brakes, DSC/ABS, steering, chassis-to-powertrain interaction.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_06_body_electrical_networks_ru.md` - terminals, body modules, sleep current, water ingress, CAN/FlexRay/network issues.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_07_hybrid_electric_high_voltage_ru.md` - BMW HV architecture, READY/charging symptoms, 12V dependency, safety boundary.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/markdown/bmw_08_service_fluids_maintenance_ru.md` - BMW Longlife logic, ZF fluids, xDrive transfer case oil, brake fluid, coolant, VIN dependency.
 
 Data indexes:
 
-- `data/bmw_chassis_codes.jsonl` - BMW chassis/body-code lookup hints.
-- `data/bmw_control_units_glossary.jsonl` - BMW module abbreviations and diagnostic meaning.
-- `data/bmw_engine_families.jsonl` - engine families and common service topics.
-- `data/bmw_fault_memory_public_examples.jsonl` - public BMW fault-memory examples from bulletins.
-- `data/bmw_fluids_specification_logic.jsonl` - BMW fluid-specification decision logic and verification source.
-- `data/bmw_symptom_diagnostic_index.jsonl` - symptom-to-system and data-to-capture map.
-- `data/bmw_transmission_families.jsonl` - BMW/ZF transmission families.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_chassis_codes.jsonl` - BMW chassis/body-code lookup hints.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_control_units_glossary.jsonl` - BMW module abbreviations and diagnostic meaning.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_engine_families.jsonl` - engine families and common service topics.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_fault_memory_public_examples.jsonl` - public BMW fault-memory examples from bulletins.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_fluids_specification_logic.jsonl` - BMW fluid-specification decision logic and verification source.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_symptom_diagnostic_index.jsonl` - symptom-to-system and data-to-capture map.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_transmission_families.jsonl` - BMW/ZF transmission families.
 
 ## Operating Rules
 

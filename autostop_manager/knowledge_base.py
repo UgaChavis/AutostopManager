@@ -1292,6 +1292,7 @@ def _tokens(query: str) -> list[str]:
         "тойота": ["toyota"],
         "ярис": ["yaris"],
         "кузов": ["body", "chassis"],
+        "кузова": ["body", "chassis", "frame"],
         "мотор": ["engine"],
         "двигатель": ["engine"],
         "электрика": ["electrical", "electronics", "wiring"],
@@ -1325,6 +1326,22 @@ def _tokens(query: str) -> list[str]:
         "качество": ["quality"],
         "устаревшие": ["stale", "expired"],
         "дубли": ["duplicates", "duplicate"],
+        "свечи": ["spark", "plugs", "parts", "oem"],
+        "свеча": ["spark", "plug", "parts", "oem"],
+        "колодки": ["brake", "pads", "parts", "oem"],
+        "колодка": ["brake", "pad", "parts", "oem"],
+        "фильтр": ["filter", "parts", "oem"],
+        "фильтры": ["filters", "parts", "oem"],
+        "запчасти": ["parts", "spare_parts", "procurement"],
+        "запчасть": ["parts", "spare_part", "procurement"],
+        "закупка": ["procurement", "purchase_price"],
+        "закупочная": ["procurement", "purchase_price"],
+        "аналоги": ["analog", "cross", "replacements"],
+        "аналог": ["analog", "cross", "replacement"],
+        "кроссы": ["cross", "crosses", "replacements"],
+        "кросс": ["cross", "replacement"],
+        "оригинальный": ["oem", "original", "catalog"],
+        "каталожный": ["oem", "catalog", "part_number"],
     }
     tokens: list[str] = []
     for token in re.findall(r"[\w\-]+", query.lower(), flags=re.UNICODE):
@@ -1355,6 +1372,33 @@ def _domain_hints(query: str) -> dict[str, int]:
         hints["automotive_repair"] = 10
     if any(word in lowered for word in ["вин", "vin", "oem", "каталог", "кузов"]):
         hints["vehicle_identity_and_oem"] = 10
+    crm_vin_terms = ["crm", "карточк", "заказ-наряд", "зн", "writeback", "запиши", "записать"]
+    part_terms = [
+        "запчаст",
+        "детал",
+        "свеч",
+        "колод",
+        "фильтр",
+        "oem",
+        "каталож",
+        "оригиналь",
+        "аналог",
+        "кросс",
+        "закуп",
+        "цена",
+    ]
+    identifier_terms = ["вин", "vin", "frame", "кузов", "body number", "номер кузова"]
+    if (
+        any(word in lowered for word in identifier_terms)
+        and any(word in lowered for word in part_terms)
+        and (any(word in lowered for word in crm_vin_terms) or any(word in lowered for word in ["закуп", "цена", "аналог", "кросс"]))
+    ):
+        hints["crm_vin_oem_parts_lookup"] = max(hints.get("crm_vin_oem_parts_lookup", 0), 34)
+        hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 12)
+    if not any(word in lowered for word in identifier_terms) and any(
+        word in lowered for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
+    ):
+        hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 40)
     if any(word in lowered for word in ["bmw", "бмв", "n63", "f15", "e15", "x5"]):
         hints["bmw_repair"] = max(hints.get("bmw_repair", 0), 10)
     if any(word in lowered for word in ["f15", "e15", "n63", "x5"]):

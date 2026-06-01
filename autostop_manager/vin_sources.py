@@ -20,6 +20,15 @@ _MAKE_SOURCE_MAP: dict[str, list[str]] = {
     "HYUNDAI": ["Hyundai EPC Mirror", "partslink24 Mobile", "partslink24 Product Info"],
     "KIA": ["Kia EPC Mirror", "partslink24 Mobile", "partslink24 Product Info"],
     "RENAULT": ["Renault EPC Mirror", "partslink24 Mobile", "partslink24 Product Info"],
+    "SUZUKI": ["epc-data manual catalog", "PartSouq manual catalog", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU"],
+    "MITSUBISHI": ["epc-data manual catalog", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
+    "CHANGAN": ["Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
+    "JEEP": ["Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
+    "MERCEDESBENZ": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU"],
+    "MERCEDES": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU"],
+    "VOLKSWAGEN": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
+    "SKODA": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
+    "AUDI": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
 }
 
 

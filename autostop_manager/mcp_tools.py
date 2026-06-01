@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
+from .catalog_clients import (
+    lookup_oem_catalog_candidates,
+    partsapi_catalog_lookup,
+    public_aftermarket_catalog_lookup,
+    vin17_decode_vehicle,
+    vin17_search_part_number_by_vin,
+)
 from .cleanup_audit import build_cleanup_audit
 from .context import build_agent_brief, prepare_manager_context
+from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
@@ -19,6 +28,9 @@ from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
+from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
+from .vin_parts_benchmark import benchmark_vin_parts_lookup
+from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_lookup import lookup_original_parts
 
 
@@ -280,7 +292,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
 
     @server.tool(
         name="cleanup_audit",
-        description="Run the dry-run cleanup audit for cache, duplicate, Obsidian, and knowledge cleanup candidates without deleting files.",
+        description="Run the dry-run cleanup audit for cache, duplicate, and knowledge cleanup candidates without deleting files.",
     )
     def cleanup_audit_tool() -> dict[str, Any]:
         return build_cleanup_audit(store=memory)
@@ -392,6 +404,302 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         make_hint: str | None = None,
     ) -> dict[str, Any]:
         return lookup_original_parts(identifier, model_year=model_year, make_hint=make_hint)
+
+    @server.tool(
+        name="decode_vehicle_identity",
+        description=(
+            "Build a source-aware vehicle identity dossier from a VIN/frame/body number: "
+            "classification, check digit/model-year diagnostics, vPIC/WMI/platform evidence, "
+            "CRM-context conflicts, confidence, and required EPC/API sources for parts lookup."
+        ),
+    )
+    def decode_vehicle_identity_tool(
+        identifier: str,
+        vehicle: str | None = None,
+        make: str | None = None,
+        model: str | None = None,
+        model_year: int | None = None,
+        engine: str | None = None,
+        transmission: str | None = None,
+        drivetrain: str | None = None,
+        market: str | None = None,
+        source_confidence: float | None = None,
+        live_vpic: bool = True,
+    ) -> dict[str, Any]:
+        return decode_vehicle_identity(
+            identifier,
+            crm_context={
+                "vehicle": vehicle,
+                "make": make,
+                "model": model,
+                "model_year": model_year,
+                "engine": engine,
+                "transmission": transmission,
+                "drivetrain": drivetrain,
+                "market": market,
+                "source_confidence": source_confidence,
+            },
+            model_year=model_year,
+            make_hint=make,
+            live_vpic=live_vpic,
+        )
+
+    @server.tool(
+        name="decode_vehicle_identities",
+        description=(
+            "Batch vehicle identity dossiers for VIN/frame/body-number lists. "
+            "Returns per-identifier confidence, conflicts, adapter status, and required next EPC/API sources."
+        ),
+    )
+    def decode_vehicle_identities_tool(
+        items: list[dict[str, Any]],
+        live_vpic: bool = True,
+        use_vpic_batch: bool = True,
+    ) -> dict[str, Any]:
+        return decode_vehicle_identities(items, live_vpic=live_vpic, use_vpic_batch=use_vpic_batch)
+
+    @server.tool(
+        name="catalog_provider_status",
+        description=(
+            "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
+            "Use before claiming live catalog or supplier API access."
+        ),
+    )
+    def catalog_provider_status_tool(stage: str | None = None) -> dict[str, Any]:
+        return catalog_provider_status(stage=stage)
+
+    @server.tool(
+        name="plan_oem_parts_providers",
+        description=(
+            "Build provider readiness and blocker plan for VIN/frame -> OEM candidates -> crosses/applicability "
+            "-> procurement/RF market price. Does not call suppliers or write CRM."
+        ),
+    )
+    def plan_oem_parts_providers_tool(
+        identifier: str,
+        requested_part: str,
+        vehicle_identity: dict[str, Any] | None = None,
+        city: str = "Красноярск",
+    ) -> dict[str, Any]:
+        return build_oem_parts_provider_plan(
+            identifier=identifier,
+            requested_part=requested_part,
+            vehicle_identity=vehicle_identity,
+            city=city,
+        )
+
+    @server.tool(
+        name="vin17_decode_vehicle",
+        description=(
+            "Call or dry-run the configured 17VIN API vehicle decoder. Requires VIN17_ACCOUNT/VIN17_SECRET; "
+            "returns redacted request evidence and never exposes the token or secret."
+        ),
+    )
+    def vin17_decode_vehicle_tool(identifier: str, dry_run: bool = False) -> dict[str, Any]:
+        return vin17_decode_vehicle(identifier, dry_run=dry_run)
+
+    @server.tool(
+        name="vin17_search_part_number_by_vin",
+        description=(
+            "Call or dry-run 17VIN search_part_number by VIN after a 17VIN decode returns an EPC code. "
+            "Use only for read-only fitment checks; no supplier order is created."
+        ),
+    )
+    def vin17_search_part_number_by_vin_tool(
+        identifier: str,
+        epc: str,
+        query_part_number: str,
+        query_match_type: str = "exact",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return vin17_search_part_number_by_vin(
+            epc=epc,
+            identifier=identifier,
+            query_part_number=query_part_number,
+            query_match_type=query_match_type,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="partsapi_catalog_lookup",
+        description=(
+            "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup. Requires PARTSAPI_KEY and PARTSAPI_BASE_URL "
+            "for live calls; supports VINdecodeOE, getPartsbyVIN, getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles."
+        ),
+    )
+    def partsapi_catalog_lookup_tool(
+        operation: str,
+        identifier: str | None = None,
+        part_number: str | None = None,
+        brand: str | None = None,
+        part_type: str | None = None,
+        category: str | None = None,
+        lang_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return partsapi_catalog_lookup(
+            operation=operation,
+            identifier=identifier,
+            part_number=part_number,
+            brand=brand,
+            part_type=part_type,
+            category=category,
+            lang_id=lang_id,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="public_aftermarket_catalog_lookup",
+        description=(
+            "Call public aftermarket catalogs by part/OE number. Supports MANN-FILTER and DENSO live public endpoints; "
+            "use as catalog enrichment, not as VIN-specific OEM EPC proof or procurement pricing."
+        ),
+    )
+    def public_aftermarket_catalog_lookup_tool(
+        provider: str,
+        part_number: str,
+        page_size: int = 5,
+        country: str = "europe",
+        include_detail: bool = True,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return public_aftermarket_catalog_lookup(
+            provider=provider,
+            part_number=part_number,
+            page_size=page_size,
+            country=country,
+            include_detail=include_detail,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="lookup_oem_catalog_candidates",
+        description=(
+            "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part. "
+            "Combines Parts-Catalogs, PartsAPI, and 17VIN when their credentials and routing ids are available; no CRM writes or orders are created."
+        ),
+    )
+    def lookup_oem_catalog_candidates_tool(
+        identifier: str,
+        requested_part: str,
+        catalog_id: str | None = None,
+        car_id: str | None = None,
+        group_id: str | None = None,
+        epc: str | None = None,
+        partsapi_part_type: str = "original",
+        partsapi_category: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return lookup_oem_catalog_candidates(
+            identifier=identifier,
+            requested_part=requested_part,
+            catalog_id=catalog_id,
+            car_id=car_id,
+            group_id=group_id,
+            epc=epc,
+            partsapi_part_type=partsapi_part_type,
+            partsapi_category=partsapi_category,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="plan_crm_vin_oem_parts_lookup",
+        description=(
+            "Build the CRM card workflow for VIN/frame/body-number OEM lookup, replacements/crosses, "
+            "procurement/RF market pricing, structured CRM writeback, and verification."
+        ),
+    )
+    def plan_crm_vin_oem_parts_lookup_tool(
+        card_id: str | None = None,
+        requested_part: str | None = None,
+        vin: str | None = None,
+        frame: str | None = None,
+        body_number: str | None = None,
+        vehicle: str | None = None,
+        make: str | None = None,
+        model: str | None = None,
+        model_year: int | None = None,
+        market: str | None = None,
+        engine: str | None = None,
+        transmission: str | None = None,
+        drivetrain: str | None = None,
+        side: str | None = None,
+        axle: str | None = None,
+        position: str | None = None,
+        urgency: str | None = None,
+        city: str = "Красноярск",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return build_crm_vin_parts_lookup_pipeline(
+            card_id=card_id,
+            requested_part=requested_part,
+            vin=vin,
+            frame=frame,
+            body_number=body_number,
+            vehicle=vehicle,
+            make=make,
+            model=model,
+            model_year=model_year,
+            market=market,
+            engine=engine,
+            transmission=transmission,
+            drivetrain=drivetrain,
+            side=side,
+            axle=axle,
+            position=position,
+            urgency=urgency,
+            city=city,
+            limit=limit,
+        )
+
+    @server.tool(
+        name="benchmark_vin_parts_lookup",
+        description=(
+            "Read-only benchmark for a batch of CRM VIN/frame/body-number items: identity confidence, part-intent recognition, "
+            "safe public search templates, provider blockers, and PartsAPI/17VIN dry-run readiness. Raw identifiers are redacted from output."
+        ),
+    )
+    def benchmark_vin_parts_lookup_tool(
+        items: list[dict[str, Any]],
+        requested_part: str,
+        city: str = "Красноярск",
+        live_vpic: bool = True,
+        use_vpic_batch: bool = True,
+        include_partsapi_dry_run: bool = True,
+        include_vin17_dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return benchmark_vin_parts_lookup(
+            items,
+            requested_part=requested_part,
+            city=city,
+            live_vpic=live_vpic,
+            use_vpic_batch=use_vpic_batch,
+            include_partsapi_dry_run=include_partsapi_dry_run,
+            include_vin17_dry_run=include_vin17_dry_run,
+        )
+
+    @server.tool(
+        name="build_vin_parts_work_order",
+        description=(
+            "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, "
+            "cross/applicability steps, supplier routes, CRM writeback gates, blockers, and acceptance checklists. "
+            "Raw identifiers are redacted from output."
+        ),
+    )
+    def build_vin_parts_work_order_tool(
+        items: list[dict[str, Any]],
+        requested_part: str,
+        city: str = "Красноярск",
+        live_vpic: bool = True,
+        use_vpic_batch: bool = True,
+    ) -> dict[str, Any]:
+        return build_vin_parts_work_order(
+            items,
+            requested_part=requested_part,
+            city=city,
+            live_vpic=live_vpic,
+            use_vpic_batch=use_vpic_batch,
+        )
 
     @server.tool(
         name="recommend_automotive_sources",

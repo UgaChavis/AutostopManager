@@ -12,16 +12,13 @@ Purpose: one entry point for AutostopManager knowledge. Start here when the owne
 5. If the task is technical automotive work, collect VIN/chassis, market, engine, transmission, mileage, complaint, and scan results before giving facts.
 6. If adding new knowledge, follow `knowledge_intake_playbook.md`, update this index plus `knowledge_map.json`, then run `sync_knowledge_base`.
 7. Keep raw evidence out of memory and Git unless explicitly safe. Store durable rules, source routes, and short verified conclusions.
-8. For human-readable CRM/MCP/connector work, use the Obsidian route in
-   `obsidian_knowledge_vault_playbook.md`; prefer the cloud vault at
-   `C:\Users\User\Мой диск\Obsidian CRM\AutostopCRM` when it exists.
-9. For client/cashbox/repair-order manager summaries, use
-   `crm_manager_data_playbook.md`: Obsidian stores safe snapshots and quality
-   signals, while raw client data, cash journals, and repair orders stay in CRM.
+8. For client/cashbox/repair-order manager summaries, use
+   `crm_manager_data_playbook.md`: return safe summaries and quality signals,
+   while raw client data, cash journals, and repair orders stay in CRM.
 10. For system health, run `system-audit` or `doctor`; it aggregates local
     audits and reports `tests_status: external` without running pytest.
 11. For cleanup candidates, run `cleanup-audit`; it is dry-run only and never
-    deletes files, edits Obsidian, or writes to CRM.
+    deletes files or writes to CRM.
 12. For CRM board health planning, use `crm-health-plan` with saved
     `board_review`, `board_context`, and `today_context` JSON payloads; it is
     read-only and reports zero card moves/archives.
@@ -35,10 +32,10 @@ python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-probe "BMW X5 кузов E15 мотор N63 электрика"
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
 python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
+python -m autostop_manager.cli knowledge-probe "в карточке CRM VIN найти OEM свечей аналоги закупка записать"
 python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
 python -m autostop_manager.cli knowledge-probe "сделать счет или КП в PDF Word Excel и проверить оформление"
 python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения черновики"
-python -m autostop_manager.cli knowledge-probe "Obsidian база знаний vault cloud MCP connector"
 python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
 python -m autostop_manager.cli knowledge-search "рейка Красноярск vendor discovery offer scoring call confirmation" --domain parts_sourcing
 python -m autostop_manager.cli knowledge-search "счет акт КП НДС реквизиты render audit" --domain business_documents
@@ -77,10 +74,45 @@ Use these MCP tools when working through the manager:
   annotations audit, skills audit, cleanup dry-run summary, local SQLite stats,
   manager MCP catalog consistency, and external test status.
 - `cleanup_audit` - dry-run cleanup candidate report; it recommends actions
-  but never deletes, moves, archives, or edits files/Obsidian/CRM.
+  but never deletes, moves, archives, or edits files/CRM.
 - `crm_health_plan` - read-only CRM health plan from already fetched
   `board_context`, `board_review`, and `today_context` payloads; it never calls
   live write tools and reports `cards_moved=0` and `cards_archived=0`.
+- `decode_vehicle_identity` - source-aware VIN/frame/body-number identity
+  dossier: classification, check digit/model-year diagnostics, vPIC/WMI/platform
+  evidence, CRM conflicts, confidence, adapter status, and required EPC/API
+  sources before VIN-critical parts lookup.
+- `decode_vehicle_identities` - batch version for CRM board scans and
+  multi-card VIN/frame quality reports; uses public vPIC batch when live vPIC is
+  enabled, reports batch coverage, and keeps raw customer identifiers out of
+  durable memory and fixtures.
+- `catalog_provider_status` - read-only readiness report for VIN/OEM/cross and
+  procurement providers; never prints secret values, only configured/missing
+  env names.
+- `plan_oem_parts_providers` - provider/blocker plan for VIN/frame -> OEM ->
+  crosses/applicability -> procurement/RF market price; redacts identifiers and
+  does not call suppliers or write CRM.
+- `vin17_decode_vehicle` - read-only 17VIN adapter/dry-run for vehicle decode
+  after `VIN17_ACCOUNT` and `VIN17_SECRET` are configured; never exposes token
+  or secret values.
+- `vin17_search_part_number_by_vin` - read-only 17VIN part-number-by-VIN
+  adapter/dry-run after a 17VIN decode has returned an EPC code.
+- `partsapi_catalog_lookup` - read-only PartsAPI adapter/dry-run for
+  `VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability`, `getCrosses`,
+  `getCrossesWithBrand`, and `searchArticles`; requires `PARTSAPI_KEY` and
+  `PARTSAPI_BASE_URL` for live calls.
+- `benchmark_vin_parts_lookup` - read-only batch benchmark for 10-card or CRM
+  VIN/frame/body-number quality checks: identity confidence, part-intent
+  recognition, safe public query coverage, PartsAPI/17VIN dry-run readiness,
+  and missing live catalog/supplier env names with raw identifiers redacted.
+- `build_vin_parts_work_order` - read-only per-card work order after benchmark:
+  OEM/EPC routes, prepared API checks, cross/applicability steps, supplier
+  sequence, CRM writeback gates, and acceptance checklists with raw identifiers
+  redacted.
+- `plan_crm_vin_oem_parts_lookup` - deterministic workflow planner for CRM
+  card VIN/frame/body-number parts lookup: card intake, vehicle identity, OEM,
+  supersession/cross, закупка/RF market quote matrix, selected-part CRM material
+  rows, and reread verification.
 
 ## Route Cards
 
@@ -107,11 +139,9 @@ should not produce full section matches in normal search.
 - `autostop_manager_skill.md` - agent startup routine, role, memory boundaries, and canonical behavior.
 - `manager_rules.json` - durable operating rules with priorities.
 - `knowledge_shelves.md` - shelf map, file placement rules, route-card contract, and maintenance checklist.
-- `obsidian_knowledge_vault_playbook.md` - Obsidian vault path, cloud sync,
-  refresh workflow, and safety boundary for manager-agent knowledge work.
 - `crm_manager_data_playbook.md` - safety boundary and refresh workflow for
   manager-facing CRM statistics, client-quality signals, cashbox overviews, and
-  repair-order summaries in Obsidian.
+  repair-order summaries.
 - `manager_mcp_catalog.json` - local AutostopManager MCP tool surface.
 - `crm_mcp_catalog.json` - AutoStop CRM connector tool surface.
 - `gmail_workflow_playbook.md` - Gmail workflow, read/write safety, query
@@ -124,6 +154,21 @@ should not produce full section matches in normal search.
 - `knowledge_annotations.jsonl` - compact file-level annotations with domain,
   summary, keywords, source type, refresh cadence, safety flags, and related
   skills for fast routing.
+
+## 3D Printing CAD
+
+- `3d_printing_cad_playbook.md` - route for photo/description to CAD model,
+  STL validation, Anycubic Kobra S1 print preparation, slicer handoff, and the
+  boundary between source geometry, generated STL, and generated G-code.
+- `C:/Users/User/Desktop/3д/` - local CAD/STL workspace with OpenSCAD/BOSL2
+  models, printer profile, calibration measurements, export reports, and
+  helper scripts.
+
+For 3D printing / Anycubic / STL / OpenSCAD / bolts / clips / clamps requests,
+search `3d_printing_cad` first. Use the local CAD project rules, then build and
+validate the target model before opening it in Anycubic Slicer Next. Do not
+install custom firmware, generate G-code, or start a print without explicit
+owner intent for that step.
 
 ## Knowledge Intake
 
@@ -220,6 +265,7 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 
 ## Vehicle Identity and OEM Parts
 
+- `crm_vin_oem_parts_lookup_playbook.md` - end-to-end CRM card VIN/frame/body-number -> OEM -> replacements/crosses -> закупка/RF market prices -> structured CRM writeback workflow.
 - `vehicle_identity_playbook.md` - classify VIN, Japanese frame/chassis number, Korean VIN, and market-specific codes.
 - `vin_oem_lookup_playbook.md` - original catalog number lookup routing.
 - `vin_oem_sources.json` - VIN/OEM source catalog.
@@ -295,7 +341,7 @@ approval for the exact action.
 
 - `krasnoyarsk_service_management_playbook.md` - daily workshop control, procurement, repair triage, customer flow, staff, finance, and source intake.
 - `crm_manager_data_playbook.md` - what operational CRM data can be summarized
-  in Obsidian and what must remain live-only in CRM.
+  and what must remain live-only in CRM.
 - `service_management_sources.json` - source routing for Krasnoyarsk procurement, personnel, management, and local market context.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
@@ -326,6 +372,7 @@ rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|чер�
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
 rg -n "Приберись|прибейсь|переберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent
+rg -n "3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|clip|clamp|thread|болт|гайк|клипс|хомут" docs/agent/3d_printing_cad_playbook.md C:/Users/User/Desktop/3д/docs C:/Users/User/Desktop/3д/AGENTS.md
 ```
 
 ## Update Checklist

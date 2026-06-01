@@ -34,30 +34,30 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 
 Markdown modules:
 
-- `md/00_scope_and_boundaries_ru.md` - legal/safety boundaries, permitted learning scope, forbidden shortcuts.
-- `md/01_ecu_fundamentals_ru.md` - ECU memory layers, firmware/calibration/coding/adaptation, NVM/EEPROM, flash segments.
-- `md/02_networks_uds_obd_ru.md` - CAN, DoIP, UDS, OBD, diagnostic sessions, security-access concepts, J2534.
-- `md/03_file_formats_ru.md` - BIN, Intel HEX, Motorola S-record, A2L, DCM, CDF/CDFX, ODX/PDX, MDF/MF4, BLF/ASC/DBC.
-- `md/04_calibration_theory_ru.md` - calibration maps, axes, units, interpolation, validation and risk boundaries.
-- `md/05_oem_programming_workflow_ru.md` - precheck, power supply, programming plan, coding, adaptation, DTC/readiness handling, report content.
-- `md/06_bmw_programming_overview_ru.md` - BMW ISTA/AOS/AIR workflow, I-level, VO/FA, measures plan, DME/DDE/EGS/BDC/FEM/CAS/EWS/KOMBI.
-- `md/07_emissions_diagnostics_ru.md` - legal diagnostics of EGR/DPF/GPF/SCR/readiness without delete/tampering.
-- `md/08_flash_failures_recovery_ru.md` - failed flash triage, recovery/resume, bootloader response, replacement-block workflow.
-- `md/09_validation_logging_ru.md` - logs, road-test validation, report fields, source freshness rule.
-- `md/10_service_scenarios_ru.md` - safe scenario cards for post-flash loss of power, no-response ECU, contract ECU, readiness, customer delete requests, unknown tuned file.
-- `md/99_index_ru.md` - pack index.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/00_scope_and_boundaries_ru.md` - legal/safety boundaries, permitted learning scope, forbidden shortcuts.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/01_ecu_fundamentals_ru.md` - ECU memory layers, firmware/calibration/coding/adaptation, NVM/EEPROM, flash segments.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/02_networks_uds_obd_ru.md` - CAN, DoIP, UDS, OBD, diagnostic sessions, security-access concepts, J2534.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/03_file_formats_ru.md` - BIN, Intel HEX, Motorola S-record, A2L, DCM, CDF/CDFX, ODX/PDX, MDF/MF4, BLF/ASC/DBC.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/04_calibration_theory_ru.md` - calibration maps, axes, units, interpolation, validation and risk boundaries.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/05_oem_programming_workflow_ru.md` - precheck, power supply, programming plan, coding, adaptation, DTC/readiness handling, report content.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/06_bmw_programming_overview_ru.md` - BMW ISTA/AOS/AIR workflow, I-level, VO/FA, measures plan, DME/DDE/EGS/BDC/FEM/CAS/EWS/KOMBI.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/07_emissions_diagnostics_ru.md` - legal diagnostics of EGR/DPF/GPF/SCR/readiness without delete/tampering.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/08_flash_failures_recovery_ru.md` - failed flash triage, recovery/resume, bootloader response, replacement-block workflow.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/09_validation_logging_ru.md` - logs, road-test validation, report fields, source freshness rule.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/10_service_scenarios_ru.md` - safe scenario cards for post-flash loss of power, no-response ECU, contract ECU, readiness, customer delete requests, unknown tuned file.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/md/99_index_ru.md` - pack index.
 
 Data indexes:
 
-- `data/glossary_ecu_programming.jsonl` - ECU/programming abbreviations and Russian explanations.
-- `data/uds_services_reference.csv` - UDS services by service ID and safe role.
-- `data/file_format_index.csv` - format names, meaning, and caveats.
-- `data/generic_dtc_examples_emissions_network.csv` - generic emissions/network DTC examples for diagnostic routing.
-- `data/bmw_ecu_module_dictionary.csv` - BMW module abbreviations including KOMBI/instrument cluster.
-- `data/programming_precheck_matrix.csv` - programming precheck matrix.
-- `data/risk_register.jsonl` - programming/coding risk register.
-- `data/repair_scenario_cards.jsonl` - scenario cards for repair knowledge workflows.
-- `sources/citations_and_standards.md` and `sources/public_source_catalog.csv` - public standards/source routes.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl` - ECU/programming abbreviations and Russian explanations.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/uds_services_reference.csv` - UDS services by service ID and safe role.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/file_format_index.csv` - format names, meaning, and caveats.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/generic_dtc_examples_emissions_network.csv` - generic emissions/network DTC examples for diagnostic routing.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/bmw_ecu_module_dictionary.csv` - BMW module abbreviations including KOMBI/instrument cluster.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/programming_precheck_matrix.csv` - programming precheck matrix.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl` - programming/coding risk register.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl` - scenario cards for repair knowledge workflows.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md` and `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv` - public standards/source routes.
 
 ## Operating Rules
 

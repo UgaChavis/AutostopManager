@@ -1,4 +1,5 @@
 .venv/
+.codex-remote-attachments/
 __pycache__/
 .pytest_cache/
 *.pyc

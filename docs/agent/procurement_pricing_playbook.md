@@ -14,9 +14,15 @@ Use this playbook when the owner asks for:
 - estimate parts for a repair order
 - compare supplier offers
 - prepare a purchase-oriented ЗН
+- CRM VIN/frame/body-number parts lookup with OEM/cross/analog and writeback
 
 Also use it before filling CRM repair-order materials when prices are not
 already confirmed by an internal supplier invoice or chat.
+
+If the task starts from a live CRM card and needs VIN/frame -> OEM ->
+cross/analog -> закупка/RF market price -> CRM writeback, open
+`docs/agent/crm_vin_oem_parts_lookup_playbook.md` first, then use this file for
+price and material-line discipline.
 
 ## Core Rule
 

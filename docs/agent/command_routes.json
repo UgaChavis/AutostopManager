@@ -76,53 +76,6 @@
       ]
     },
     {
-      "command_id": "obsidian_knowledge_vault",
-      "intent": "knowledge_vault",
-      "domain": "obsidian_knowledge_vault",
-      "open_first": "docs/agent/obsidian_knowledge_vault_playbook.md",
-      "aliases": [
-        "обнови Obsidian",
-        "обнови обсидиан",
-        "открой базу знаний Obsidian",
-        "синхронизируй Obsidian",
-        "добавь в Obsidian",
-        "перенеси в Obsidian",
-        "база знаний Obsidian",
-        "подключи Obsidian",
-        "занеси клиентов в Obsidian",
-        "добавь кассы в Obsidian",
-        "статистика CRM в Obsidian"
-      ],
-      "keywords": [
-        "Obsidian",
-        "обсидиан",
-        "vault",
-        "база знаний",
-        "Google Drive",
-        "Мой диск",
-        "cloud",
-        "рабочий ПК",
-        "Codex interaction",
-        "clients overview",
-        "cashbox overview",
-        "repair orders overview",
-        "CRM manager workspace"
-      ],
-      "memory_queries": [
-        "obsidian",
-        "knowledge-vault",
-        "cloud-vault",
-        "Codex interaction"
-      ],
-      "next_actions": [
-        "open the Obsidian vault playbook",
-        "prefer the Google Drive cloud vault when present",
-        "refresh imported docs/agent content when source docs changed",
-        "use crm_manager_data_playbook.md before writing CRM-derived manager snapshots",
-        "avoid storing raw client databases, cashbox ledgers, email threads, credentials, or secrets"
-      ]
-    },
-    {
       "command_id": "manager_documentation_hygiene",
       "intent": "documentation_hygiene",
       "domain": "knowledge_intake",
@@ -157,6 +110,88 @@
         "remove stale absolute paths and duplicate active instructions",
         "update knowledge_map, knowledge_annotations, and navigation docs",
         "run knowledge-sync, knowledge-audit, annotations-audit, and focused tests"
+      ]
+    },
+    {
+      "command_id": "vehicle_identity_decode",
+      "intent": "vehicle_identity_decode",
+      "domain": "vehicle_identity_and_oem",
+      "open_first": "docs/agent/vehicle_identity_playbook.md",
+      "aliases": [
+        "расшифруй VIN",
+        "расшифруй номер кузова",
+        "проверь VIN",
+        "определи машину по VIN",
+        "определи авто по номеру кузова",
+        "vehicle identity decode"
+      ],
+      "keywords": [
+        "VIN decode",
+        "расшифровать VIN",
+        "номер кузова",
+        "frame number",
+        "JDM frame",
+        "vPIC",
+        "WMI",
+        "модель по VIN",
+        "год по VIN",
+        "двигатель по VIN"
+      ],
+      "memory_queries": [
+        "vehicle_identity_and_oem",
+        "decode_vehicle_identity",
+        "VIN frame route",
+        "ROW JDM VIN caveats"
+      ],
+      "next_actions": [
+        "run decode_vehicle_identity or decode_vehicle_identities",
+        "check vPIC/WMI/platform evidence and CRM context conflicts",
+        "report confidence and required EPC/API source before VIN-critical parts lookup",
+        "do not store raw customer VIN/frame in durable memory or Git"
+      ]
+    },
+    {
+      "command_id": "crm_vin_oem_parts_lookup",
+      "intent": "crm_vin_oem_parts_lookup",
+      "domain": "crm_vin_oem_parts_lookup",
+      "open_first": "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
+      "aliases": [
+        "найди по VIN и запиши в карточку",
+        "подбери запчасть по VIN в CRM",
+        "найди OEM по номеру кузова и запиши в CRM",
+        "подбери свечи по VIN",
+        "подбери колодки по VIN",
+        "подбери фильтр по VIN",
+        "найди каталожный номер и аналоги",
+        "VIN OEM quote matrix"
+      ],
+      "keywords": [
+        "VIN",
+        "frame",
+        "body number",
+        "номер кузова",
+        "карточка CRM",
+        "запиши в карточку",
+        "writeback",
+        "свечи по VIN",
+        "колодки по VIN",
+        "фильтр по VIN",
+        "OEM по VIN",
+        "каталожный номер по VIN",
+        "номер кузова запчасти"
+      ],
+      "memory_queries": [
+        "crm_vin_oem_parts_lookup",
+        "VIN OEM parts CRM writeback",
+        "selected part price basis",
+        "OEM no invention"
+      ],
+      "next_actions": [
+        "read exact live CRM card and repair order context",
+        "classify VIN/frame/body number and identify vehicle by market",
+        "find source-backed OEM number for requested part and verify applicability",
+        "find supersession, crosses, analogs, procurement price, and RF market range",
+        "write quote matrix to card description, selected priced part only to materials, then reread CRM and verify"
       ]
     }
   ]
