@@ -237,6 +237,10 @@ selected part.
 3. Build the vehicle identity and OEM lookup plan.
 4. Find OEM/replacements/crosses with source evidence.
 5. Quote procurement and market price.
+   Use Exist only as `public_retail_reference`: source `Exist`, office `905`,
+   price/lead-time/analog summary, confidence, and `requires_confirmation`.
+   Do not write basket links, add-to-cart URLs, private-cabinet data, or raw
+   HTML into the CRM card.
 6. Build the quote matrix.
 7. Write card description with the matrix via `update_card`, preserving old
    useful text.

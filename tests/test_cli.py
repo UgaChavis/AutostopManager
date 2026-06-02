@@ -53,6 +53,11 @@ def test_cli_parser_has_core_commands():
     assert args.command == "catalog-status"
     assert args.stage == "oem_catalog"
 
+    args = parser.parse_args(["provider-smoke", "--provider", "all", "--mode", "dry-run"])
+    assert args.command == "provider-smoke"
+    assert args.provider == "all"
+    assert args.mode == "dry-run"
+
     args = parser.parse_args(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки"])
     assert args.command == "oem-parts-provider-plan"
     assert args.identifier == "MR41S123456"
@@ -104,6 +109,26 @@ def test_cli_parser_has_core_commands():
     assert args.part_number == "90919-01275"
     assert args.page_size == 2
     assert args.no_detail is True
+
+    args = parser.parse_args(
+        [
+            "exist-price-lookup",
+            "--part-number",
+            "9091901164",
+            "--brand",
+            "Toyota",
+            "--office-id",
+            "905",
+            "--include-more-offers",
+            "--dry-run",
+        ]
+    )
+    assert args.command == "exist-price-lookup"
+    assert args.part_number == "9091901164"
+    assert args.brand == "Toyota"
+    assert args.office_id == 905
+    assert args.include_more_offers is True
+    assert args.dry_run is True
 
     args = parser.parse_args(
         [
@@ -230,6 +255,30 @@ def test_cli_parser_has_core_commands():
     assert args.command == "maintenance-fluids"
     assert args.unit == "engine_oil"
     assert args.engine_code == "A25A-FKS"
+
+    args = parser.parse_args(["control-report", "--format", "markdown", "--output", "reports/control-report.md"])
+    assert args.command == "control-report"
+    assert args.format == "markdown"
+    assert args.output == "reports/control-report.md"
+
+    args = parser.parse_args(["environment-report", "--format", "json", "--output", "reports/environment-report.json"])
+    assert args.command == "environment-report"
+    assert args.format == "json"
+    assert args.output == "reports/environment-report.json"
+
+    args = parser.parse_args(["memory-review"])
+    assert args.command == "memory-review"
+
+    args = parser.parse_args(["memory-review-apply", "--id", "duplicate:note:1-2", "--action", "archive_duplicate"])
+    assert args.command == "memory-review-apply"
+    assert args.id == "duplicate:note:1-2"
+    assert args.action == "archive_duplicate"
+
+    args = parser.parse_args(["knowledge-intake", "--path", "docs/agent/knowledge_map.json", "--dry-run"])
+    assert args.command == "knowledge-intake"
+    assert args.path == "docs/agent/knowledge_map.json"
+    assert args.dry_run is True
+    assert args.apply is False
 
     args = parser.parse_args(
         [

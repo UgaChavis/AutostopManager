@@ -13,6 +13,23 @@ def test_normalize_part_intent_recognizes_front_brake_pads():
     assert result["quantity_basis"] == "axle_set"
 
 
+def test_normalize_part_intent_recognizes_brake_pad_phrases_with_brake_word():
+    front_cases = ["передние тормозные колодки", "колодки тормозные передние"]
+    rear_cases = ["задние тормозные колодки", "колодки тормозные задние"]
+
+    for phrase in front_cases:
+        result = normalize_part_intent(phrase)
+
+        assert result["recognized"] is True
+        assert result["intent_id"] == "front_brake_pads"
+
+    for phrase in rear_cases:
+        result = normalize_part_intent(phrase)
+
+        assert result["recognized"] is True
+        assert result["intent_id"] == "rear_brake_pads"
+
+
 def test_normalize_part_intent_unknown_keeps_search_text():
     result = normalize_part_intent("редкая штука", axle="front")
 

@@ -8,6 +8,8 @@ from typing import Any
 
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
+    emex_price_lookup,
+    exist_price_lookup,
     lookup_oem_catalog_candidates,
     partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
@@ -15,6 +17,7 @@ from .catalog_clients import (
     vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
+from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
@@ -26,8 +29,11 @@ from .knowledge_base import (
     search_knowledge_base,
     sync_knowledge_base,
 )
+from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
+from .memory_review import apply_memory_review_item, build_memory_review
 from .partsapi_smoke import build_partsapi_vin_smoke_report, select_crm_partsapi_smoke_case
+from .provider_smoke import build_provider_smoke_report
 from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
@@ -51,6 +57,21 @@ def _print_json(payload: dict[str, Any]) -> None:
     if stdout_reconfigure is not None:
         stdout_reconfigure(encoding="utf-8")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _print_text(payload: str) -> None:
+    stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if stdout_reconfigure is not None:
+        stdout_reconfigure(encoding="utf-8")
+    print(payload, end="" if payload.endswith("\n") else "\n")
+
+
+def _write_output(raw_path: str | None, payload: str) -> None:
+    if not raw_path:
+        return
+    path = Path(raw_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload, encoding="utf-8")
 
 
 def _json_object(raw: str | None) -> dict[str, Any]:
@@ -202,6 +223,13 @@ def build_parser() -> argparse.ArgumentParser:
     catalog_status = sub.add_parser("catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness")
     catalog_status.add_argument("--stage", default=None)
 
+    provider_smoke = sub.add_parser(
+        "provider-smoke",
+        help="Run safe provider readiness smoke checks without supplier orders, baskets, or CRM writeback",
+    )
+    provider_smoke.add_argument("--provider", default="all")
+    provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
+
     oem_parts_provider_plan = sub.add_parser(
         "oem-parts-provider-plan",
         help="Build provider readiness plan for VIN/frame -> OEM -> crosses -> procurement price",
@@ -264,6 +292,42 @@ def build_parser() -> argparse.ArgumentParser:
     public_catalog.add_argument("--country", default="europe")
     public_catalog.add_argument("--no-detail", action="store_true")
     public_catalog.add_argument("--dry-run", action="store_true")
+
+    emex_lookup = sub.add_parser(
+        "emex-price-lookup",
+        help="Call or dry-run official Emex SOAP FindDetailAdv5 price/stock lookup using EMEX_LOGIN/EMEX_PASSWORD",
+    )
+    emex_lookup.add_argument("--part-number", required=True)
+    emex_lookup.add_argument("--brand", default=None, help="Emex makeLogo/brand code, optional")
+    emex_lookup.add_argument("--subst-level", default="All", choices=["All", "OriginalOnly"])
+    emex_lookup.add_argument(
+        "--subst-filter",
+        default="None",
+        choices=["None", "FilterOriginalAndReplacements", "FilterOriginalAndAnalogs"],
+    )
+    emex_lookup.add_argument("--delivery-region-type", default="PRI", choices=["PRI", "ALT"])
+    emex_lookup.add_argument("--min-delivery-percent", type=int, default=None)
+    emex_lookup.add_argument("--max-delivery-days", type=int, default=None)
+    emex_lookup.add_argument("--min-quantity", type=int, default=None)
+    emex_lookup.add_argument("--max-result-price", type=float, default=None)
+    emex_lookup.add_argument("--max-one-detail-offers-count", type=int, default=10)
+    emex_lookup.add_argument("--detail-nums-to-load", default="")
+    emex_lookup.add_argument("--timeout", type=float, default=20.0)
+    emex_lookup.add_argument("--dry-run", action="store_true")
+
+    exist_lookup = sub.add_parser(
+        "exist-price-lookup",
+        help="Call or dry-run public read-only Exist article price/catalog lookup for retail benchmark",
+    )
+    exist_lookup.add_argument("--part-number", required=True)
+    exist_lookup.add_argument("--brand", default=None)
+    exist_lookup.add_argument("--pid", default=None)
+    exist_lookup.add_argument("--office-id", type=int, default=905)
+    exist_lookup.add_argument("--max-candidates", type=int, default=5)
+    exist_lookup.add_argument("--max-offers", type=int, default=10)
+    exist_lookup.add_argument("--include-more-offers", action="store_true")
+    exist_lookup.add_argument("--timeout", type=float, default=20.0)
+    exist_lookup.add_argument("--dry-run", action="store_true")
 
     oem_catalog_lookup = sub.add_parser(
         "oem-catalog-lookup",
@@ -424,6 +488,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("knowledge-sync", help="Index the local knowledge map into SQLite")
 
+    knowledge_intake = sub.add_parser(
+        "knowledge-intake",
+        help="Classify a source file and plan safe knowledge metadata updates",
+    )
+    knowledge_intake.add_argument("--path", required=True)
+    knowledge_intake_mode = knowledge_intake.add_mutually_exclusive_group()
+    knowledge_intake_mode.add_argument("--dry-run", action="store_true")
+    knowledge_intake_mode.add_argument("--apply", action="store_true")
+
     knowledge_probe = sub.add_parser(
         "knowledge-probe",
         help="Quickly check whether local knowledge exists and return the first source-of-truth route",
@@ -443,6 +516,20 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("system-audit", help="Run the read-only AutoStop Manager health audit")
     sub.add_parser("doctor", help="Alias for system-audit")
 
+    control_report = sub.add_parser(
+        "control-report",
+        help="Generate the Control Center V1 report as safe JSON or Markdown",
+    )
+    control_report.add_argument("--format", choices=["json", "markdown"], default="json")
+    control_report.add_argument("--output", default=None)
+
+    environment_report = sub.add_parser(
+        "environment-report",
+        help="Generate the deep server/Codex/Manager/CRM environment report as safe JSON or Markdown",
+    )
+    environment_report.add_argument("--format", choices=["json", "markdown"], default="json")
+    environment_report.add_argument("--output", default=None)
+
     crm_health = sub.add_parser("crm-health-plan", help="Build a read-only CRM health plan from saved JSON payloads")
     crm_health.add_argument("--board-context-json", default=None)
     crm_health.add_argument("--board-review-json", default=None)
@@ -456,6 +543,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     memory_curate = sub.add_parser("memory-curate", help="Curate long-term memory without deleting source records")
     memory_curate.add_argument("--apply", action="store_true")
+
+    sub.add_parser("memory-review", help="Generate rule-based, non-destructive memory review proposals")
+
+    memory_review_apply = sub.add_parser("memory-review-apply", help="Accept, reject, or archive duplicate memory review items")
+    memory_review_apply.add_argument("--id", required=True)
+    memory_review_apply.add_argument("--action", required=True, choices=["accept", "reject", "archive_duplicate"])
 
     run_start = sub.add_parser("run-start", help="Start an auditable manager operation run")
     run_start.add_argument("query")
@@ -496,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(store.seed_default_rules())
     elif args.command == "knowledge-sync":
         _print_json(sync_knowledge_base(store))
+    elif args.command == "knowledge-intake":
+        _print_json(build_knowledge_intake_plan(args.path, apply=args.apply))
     elif args.command == "knowledge-probe":
         _print_json(probe_knowledge_base(store, args.query, limit=args.limit))
     elif args.command == "knowledge-search":
@@ -506,6 +601,16 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(build_cleanup_audit(store=store))
     elif args.command in {"system-audit", "doctor"}:
         _print_json(build_system_audit(store=store))
+    elif args.command in {"control-report", "environment-report"}:
+        report = build_control_report(store=store)
+        if args.format == "markdown":
+            rendered = format_control_report_markdown(report)
+            _write_output(args.output, rendered)
+            _print_text(rendered)
+        else:
+            rendered = json.dumps(report, ensure_ascii=False, indent=2)
+            _write_output(args.output, rendered + "\n")
+            _print_json(report)
     elif args.command == "crm-health-plan":
         _print_json(
             build_crm_health_plan(
@@ -522,6 +627,10 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(audit_memory(store))
     elif args.command == "memory-curate":
         _print_json(curate_memory(store, apply=args.apply))
+    elif args.command == "memory-review":
+        _print_json(build_memory_review(store))
+    elif args.command == "memory-review-apply":
+        _print_json(apply_memory_review_item(args.id, args.action, store=store))
     elif args.command == "run-start":
         _print_json(
             store.start_manager_run(
@@ -685,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch))
     elif args.command == "catalog-status":
         _print_json(catalog_provider_status(stage=args.stage))
+    elif args.command == "provider-smoke":
+        _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
     elif args.command == "oem-parts-provider-plan":
         identity = json.loads(args.vehicle_identity_json) if args.vehicle_identity_json else None
         _print_json(
@@ -729,6 +840,38 @@ def main(argv: list[str] | None = None) -> int:
                 page_size=args.page_size,
                 country=args.country,
                 include_detail=not args.no_detail,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "emex-price-lookup":
+        _print_json(
+            emex_price_lookup(
+                part_number=args.part_number,
+                brand=args.brand,
+                subst_level=args.subst_level,
+                subst_filter=args.subst_filter,
+                delivery_region_type=args.delivery_region_type,
+                min_delivery_percent=args.min_delivery_percent,
+                max_delivery_days=args.max_delivery_days,
+                min_quantity=args.min_quantity,
+                max_result_price=args.max_result_price,
+                max_one_detail_offers_count=args.max_one_detail_offers_count,
+                detail_nums_to_load=_tags(args.detail_nums_to_load),
+                timeout=args.timeout,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "exist-price-lookup":
+        _print_json(
+            exist_price_lookup(
+                part_number=args.part_number,
+                brand=args.brand,
+                pid=args.pid,
+                office_id=args.office_id,
+                max_candidates=args.max_candidates,
+                max_offers=args.max_offers,
+                include_more_offers=args.include_more_offers,
+                timeout=args.timeout,
                 dry_run=args.dry_run,
             )
         )

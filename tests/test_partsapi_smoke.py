@@ -96,6 +96,49 @@ def test_partsapi_vin_smoke_pipeline_with_numeric_category(monkeypatch):
     assert "XW7***161" in serialized
 
 
+def test_partsapi_vin_smoke_treats_generic_vin_decode_as_optional(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.partsapi_smoke.decode_vehicle_identity",
+        lambda **kwargs: {
+            "confidence": 0.8,
+            "confidence_label": "medium",
+            "parts_lookup_readiness": {"ready_for_oem_lookup": True},
+            "vehicle_profile": {"make": "Mitsubishi", "model": "Outlander"},
+            "warnings": [],
+            "conflicts": [],
+        },
+    )
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        operation = kwargs["operation"]
+        base = {
+            "provider": "partsapi_ru",
+            "operation": operation,
+            "partsapi_method": operation,
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+        }
+        if operation == "vin_decode":
+            return {**base, "ok": False, "missing_env_names": ["PARTSAPI_KEY"]}
+        if operation == "vin_decode_oe":
+            return {**base, "ok": True, "vehicle_profiles": [{"make": "Mitsubishi"}]}
+        if operation == "parts_by_vin":
+            return {**base, "ok": False, "error": "The read operation timed out"}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr("autostop_manager.partsapi_smoke.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+
+    report = build_partsapi_vin_smoke_report(
+        {"vin": "Z8TXLCW6WCM902224", "vehicle": "Mitsubishi Outlander", "requested_part": "передние колодки"},
+        partsapi_category="1191",
+        timeout=10,
+    )
+
+    assert report["ok"] is False
+    assert report["missing_env_names"] == []
+    assert report["optional_missing_env_names"] == ["PARTSAPI_KEY"]
+    assert report["failed_required_calls"][0]["operation"] == "parts_by_vin"
+
+
 def test_partsapi_vin_smoke_reports_text_category_without_live_parts_call(monkeypatch):
     calls: list[str] = []
 

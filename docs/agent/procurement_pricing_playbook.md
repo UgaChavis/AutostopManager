@@ -116,6 +116,15 @@ High-priority API candidates:
   confirmation, order creation, and order status after API activation.
 - Autopiter: supplier web-service route is available after account/application;
   use as Russia-wide order and wholesale benchmark candidate.
+- Emex: use manual account/cabinet as a benchmark now; the official SOAP
+  `FindDetailAdv5` read-only adapter is available in AutostopManager as
+  `emex-price-lookup`, but live use requires `EMEX_LOGIN`, `EMEX_PASSWORD`,
+  Emex service approval, and production server IP whitelist.
+- Exist: use the public read-only `exist-price-lookup` adapter for exact
+  article/catalog disambiguation, analog visibility, retail price, and lead
+  time with Krasnoyarsk office `905` (`_go=905`). Treat every Exist result as
+  `public_retail_reference` and `requires_confirmation`; do not use login,
+  basket/order links, private cabinet routes, or raw HTML.
 - Armtek: treat as B2B/ETP account route until API access is confirmed for
   AutoStop.
 - ZZap: use public search for market comparison; partner API requires request

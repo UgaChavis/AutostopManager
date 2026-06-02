@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AutoStop Control Center</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">AutoStopManager</p>
+          <h1>Control Center</h1>
+        </div>
+        <div id="statusBadge" class="status status-unknown">unknown</div>
+      </header>
+
+      <section id="summaryGrid" class="summary-grid" aria-label="Summary"></section>
+
+      <section class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Risks</h2>
+            <span id="riskCount" class="counter">0</span>
+          </div>
+          <div id="risks" class="risk-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Git</h2>
+            <span id="gitState" class="counter">unknown</span>
+          </div>
+          <pre id="gitLines" class="code-block"></pre>
+        </div>
+      </section>
+
+      <section class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Providers</h2>
+            <span id="providerRatio" class="counter">0/0</span>
+          </div>
+          <div id="providers" class="matrix"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Knowledge & Memory</h2>
+            <span id="memoryTotal" class="counter">0</span>
+          </div>
+          <div id="knowledgeMemory" class="metric-list"></div>
+        </div>
+      </section>
+
+      <section class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>MCP</h2>
+            <span id="mcpCount" class="counter">0</span>
+          </div>
+          <div id="mcp" class="metric-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Ports</h2>
+            <span id="portCount" class="counter">0</span>
+          </div>
+          <div id="ports" class="port-list"></div>
+        </div>
+      </section>
+
+      <section class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Environment</h2>
+            <span id="environmentState" class="counter">unknown</span>
+          </div>
+          <div id="environment" class="metric-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Runtime & Production</h2>
+            <span id="runtimeState" class="counter">unknown</span>
+          </div>
+          <div id="runtimeProduction" class="metric-list"></div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span id="generatedAt">No report loaded</span>
+      </footer>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

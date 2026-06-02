@@ -1,22 +1,48 @@
 from __future__ import annotations
 
+from autostop_manager import config as manager_config
 from autostop_manager.catalog_clients import (
     build_17vin_signed_request,
     build_17vin_token,
     build_denso_aftermarket_search_request,
+    build_emex_find_detail_request,
+    build_exist_price_lookup_request,
     build_mann_filter_catalog_request,
     build_partsapi_request,
     denso_aftermarket_catalog_lookup,
+    emex_price_lookup,
+    exist_price_lookup,
     extract_partsapi_article_candidates,
     extract_partsapi_cross_candidates,
     extract_partsapi_parts_by_vin_candidates,
     extract_partsapi_vehicle_profiles,
     mann_filter_catalog_lookup,
+    parse_emex_find_detail_response,
+    parse_exist_catalog_candidates,
+    parse_exist_price_page,
     partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
     resolve_partsapi_category,
     vin17_decode_vehicle,
 )
+
+
+PARTSAPI_METHOD_ENV_NAMES = [
+    "PARTSAPI_VINDECODE_KEY",
+    "PARTSAPI_VINDECODE_OE_KEY",
+    "PARTSAPI_PARTS_BY_VIN_KEY",
+    "PARTSAPI_OE_APPLICABILITY_KEY",
+    "PARTSAPI_CROSSES_KEY",
+    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_SEARCH_ARTICLES_KEY",
+]
+
+
+def _clear_partsapi_method_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    for name in PARTSAPI_METHOD_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
 
 
 class _FakeResponse:
@@ -33,6 +59,80 @@ class _FakeResponse:
         import json
 
         return json.dumps(self.payload).encode("utf-8")
+
+
+class _FakeRawResponse:
+    def __init__(self, payload: str | bytes):
+        self.payload = payload.encode("utf-8") if isinstance(payload, str) else payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self.payload
+
+
+EXIST_CATALOG_HTML = """
+<html><body>
+  <a class="cat" href="/Price/?pid=D6C13490"><b>Bosch</b> 9 091 901 164 <dd>Свеча зажигания</dd></a>
+  <a class="cat" href="/Price/?pid=78A0DDFF"><b>Denso</b> 909190-1164 <dd>Свеча зажигания</dd></a>
+  <a class="cat" href="/Price/?pid=02201730"><b>Toyota</b> 90919-01164 <dd>Свеча зажигания &quot;K16R-U11&quot;</dd></a>
+</body></html>
+"""
+
+
+def _exist_price_html() -> str:
+    import json
+
+    data = [
+        {
+            "CatalogName": "Toyota",
+            "ProductIdEnc": "02201730",
+            "PartNumber": "90919-01164",
+            "PartName": 'Свеча зажигания "K16R-U11"',
+            "BlockName": "Свечи зажигания",
+            "BlockTypeId": 1,
+            "PriceCount": 86,
+            "MinPriceString": "309 ₽",
+            "MinDeliveryDaysString": "Завтра",
+            "AggregatedParts": [
+                {
+                    "price": 310,
+                    "priceString": "от 310 ₽",
+                    "minutes": 6390,
+                    "StatisticHTML": '<a title="06.06.2026">Сб 10:30<span></span></a>',
+                    "availString": '<a title="Склад поставщика.Заказывайте в необходимом количестве" class="gal"></a>',
+                    "basketHTML": '<a class="basket" href="/Profile/Orders/Basket.aspx?in=SECRET"></a>',
+                    "InlineProductId": "secret-inline-id",
+                    "notReturn": False,
+                    "highlightColor": "D3E8CF",
+                }
+            ],
+            "DirectOffers": [
+                {
+                    "price": 416,
+                    "priceString": "416 ₽",
+                    "minutes": 1440,
+                    "StatisticHTML": '<a title="03.06.2026">Завтра</a>',
+                    "availString": '<span title="Офис Красноярск"></span>',
+                    "notReturn": True,
+                    "highlightColor": "FFE6ED",
+                }
+            ],
+        }
+    ]
+    return f"""
+    <html><body>
+      <input id="hdnPid" value="02201730"/>
+      <input id="hfPidHash" value="9435e4a9d3431d285eed09d18eb382a7"/>
+      <input id="hfSrcId" value="RawPartNumber"/>
+      <div>Нашлось предложений: 99 за 1.0</div>
+      <script>var _data = {json.dumps(data, ensure_ascii=False)}; var _favs = [];</script>
+    </body></html>
+    """
 
 
 def test_build_17vin_token_matches_documented_algorithm():
@@ -86,6 +186,7 @@ def test_partsapi_request_redacts_key(monkeypatch):
 
 
 def test_partsapi_lookup_reports_missing_env(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
 
@@ -98,6 +199,7 @@ def test_partsapi_lookup_reports_missing_env(monkeypatch):
 
 
 def test_partsapi_lookup_can_use_method_specific_test_key(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     monkeypatch.setenv("PARTSAPI_VINDECODE_KEY", "method-secret")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
@@ -115,6 +217,7 @@ def test_partsapi_lookup_can_use_method_specific_test_key(monkeypatch):
 
 
 def test_partsapi_lookup_dry_run_with_configured_env(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -132,6 +235,7 @@ def test_partsapi_lookup_dry_run_with_configured_env(monkeypatch):
 
 
 def test_partsapi_vin_decode_defaults_to_russian_lang(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -151,6 +255,7 @@ def test_partsapi_vin_decode_defaults_to_russian_lang(monkeypatch):
 
 
 def test_partsapi_parts_by_vin_defaults_to_oem_type(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -164,6 +269,200 @@ def test_partsapi_parts_by_vin_defaults_to_oem_type(monkeypatch):
     assert result["ok"] is True
     assert result["request_plan"]["params"]["type"] == "oem"
     assert result["request_plan"]["params"]["cat"] == "1191"
+
+
+def test_emex_lookup_reports_missing_credentials(monkeypatch):
+    monkeypatch.delenv("EMEX_LOGIN", raising=False)
+    monkeypatch.delenv("EMEX_PASSWORD", raising=False)
+
+    result = emex_price_lookup(part_number="9091901164", dry_run=True)
+
+    assert result["ok"] is False
+    assert result["missing_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD"]
+    assert result["request_plan"]["secret_exposed"] is False
+
+
+def test_emex_request_redacts_credentials(monkeypatch):
+    monkeypatch.setenv("EMEX_LOGIN", "client-login")
+    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+
+    request = build_emex_find_detail_request(part_number="9091901164", brand="TY")
+
+    assert request["ok"] is True
+    assert request["secret_exposed"] is False
+    assert request["params"]["login"] == "cl***in"
+    assert request["params"]["password"] == "***"
+    assert "client-password" in request["body"]
+    assert "client-password" not in request["body_sha256"]
+
+
+def test_emex_lookup_dry_run_with_configured_env(monkeypatch):
+    monkeypatch.setenv("EMEX_LOGIN", "client-login")
+    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+
+    result = emex_price_lookup(part_number="9091901164", dry_run=True)
+
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["emex_method"] == "FindDetailAdv5"
+    assert result["request_plan"]["params"]["password"] == "***"
+
+
+def test_parse_emex_find_detail_response_extracts_detail_items():
+    parsed = parse_emex_find_detail_response(
+        """<?xml version="1.0" encoding="utf-8"?>
+        <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+          <soap:Body>
+            <FindDetailAdv5Response xmlns="http://tempuri.org/">
+              <FindDetailAdv5Result>
+                <IsSuccess>true</IsSuccess>
+                <ErrorMessage />
+                <Details>
+                  <DetailItem>
+                    <PriceGroup>Original</PriceGroup>
+                    <MakeLogo>TY</MakeLogo>
+                    <MakeName>Toyota</MakeName>
+                    <DetailNum>9091901164</DetailNum>
+                    <DetailNameRus>Свеча зажигания</DetailNameRus>
+                    <Quantity>5</Quantity>
+                    <ADDays>2</ADDays>
+                    <DDPercent>90.0</DDPercent>
+                    <ResultPrice>437.2300</ResultPrice>
+                    <DeliveryRegionType>PRI</DeliveryRegionType>
+                  </DetailItem>
+                </Details>
+              </FindDetailAdv5Result>
+            </FindDetailAdv5Response>
+          </soap:Body>
+        </soap:Envelope>"""
+    )
+
+    assert parsed["is_success"] is True
+    assert parsed["details"][0]["brand"] == "Toyota"
+    assert parsed["details"][0]["part_number"] == "9091901164"
+    assert parsed["details"][0]["quantity"] == 5
+    assert parsed["details"][0]["price_rub"] == 437.23
+
+
+def test_exist_request_builds_public_read_only_dry_run_plan():
+    request = build_exist_price_lookup_request(part_number="9091901164", brand="Toyota", office_id=905)
+
+    assert request["ok"] is True
+    assert request["provider"] == "exist"
+    assert request["access_mode"] == "public_site_read_only"
+    assert request["office_cookie"] == "_go=905"
+    assert "pcode=9091901164" in request["pcode_url"]
+    assert request["secret_exposed"] is False
+
+
+def test_parse_exist_catalog_candidates_extracts_brand_part_and_pid():
+    parsed = parse_exist_catalog_candidates(EXIST_CATALOG_HTML, max_candidates=5)
+
+    assert parsed["candidate_count"] == 3
+    assert [candidate["brand"] for candidate in parsed["candidates"]] == ["Bosch", "Denso", "Toyota"]
+    toyota = parsed["candidates"][2]
+    assert toyota["part_number"] == "90919-01164"
+    assert toyota["name"] == 'Свеча зажигания "K16R-U11"'
+    assert toyota["pid"] == "02201730"
+    assert toyota["url"] == "https://www.exist.ru/Price/?pid=02201730"
+
+
+def test_parse_exist_price_page_normalizes_items_and_strips_basket_html():
+    parsed = parse_exist_price_page(_exist_price_html(), max_offers=10)
+
+    assert parsed["ok"] is True
+    assert parsed["total_offers"] == 99
+    assert parsed["hidden_fields"]["hfSrcId"] == "RawPartNumber"
+    item = parsed["items"][0]
+    assert item["brand"] == "Toyota"
+    assert item["part_number"] == "90919-01164"
+    assert item["price_count"] == 86
+    assert item["min_price_rub"] == 309
+    assert item["min_delivery_label"] == "Завтра"
+    assert item["offers"][0]["price_rub"] == 310
+    assert item["offers"][0]["lead_time_minutes"] == 6390
+    assert item["offers"][0]["lead_time_label"] == "Сб 10:30"
+    assert item["offers"][0]["availability_label"].startswith("Склад поставщика")
+    assert item["offers"][0]["warehouse_hint"] == "central_exist_stock"
+    assert item["offers"][1]["not_return"] is True
+    serialized = str(item)
+    assert "basketHTML" not in serialized
+    assert "InlineProductId" not in serialized
+    assert "Basket.aspx" not in serialized
+
+
+def test_exist_lookup_returns_disambiguation_when_brand_missing(monkeypatch):
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=20.0):
+        url = request.full_url
+        calls.append(url)
+        if "/Api/Parts/Search" in url:
+            return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
+        if "pcode=9091901164" in url:
+            return _FakeRawResponse(EXIST_CATALOG_HTML)
+        raise AssertionError(f"unexpected Exist URL: {url}")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = exist_price_lookup(part_number="9091901164")
+
+    assert result["ok"] is True
+    assert result["needs_disambiguation"] is True
+    assert result["selected_item"] is None
+    assert {candidate["brand"] for candidate in result["candidates"]} == {"Bosch", "Denso", "Toyota"}
+    assert not any("pid=02201730" in url for url in calls)
+
+
+def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
+    def fake_urlopen(request, timeout=20.0):
+        url = request.full_url
+        if "/Api/Parts/Search" in url:
+            return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
+        if "pcode=9091901164" in url:
+            return _FakeRawResponse(EXIST_CATALOG_HTML)
+        if "pid=02201730" in url:
+            return _FakeRawResponse(_exist_price_html())
+        raise AssertionError(f"unexpected Exist URL: {url}")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = exist_price_lookup(part_number="9091901164", brand="Toyota", office_id=905)
+
+    assert result["ok"] is True
+    assert result["needs_disambiguation"] is False
+    assert result["benchmark_kind"] == "public_retail_reference"
+    assert result["office"]["id"] == 905
+    assert result["selected_item"]["brand"] == "Toyota"
+    assert result["selected_item"]["part_number"] == "90919-01164"
+    assert result["selected_item"]["catalog_candidate"]["pid"] == "02201730"
+
+
+def test_exist_lookup_dry_run_does_not_call_network(monkeypatch):
+    def fail_urlopen(request, timeout=20.0):
+        raise AssertionError("dry-run must not call Exist")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+
+    result = exist_price_lookup(part_number="9091901164", dry_run=True)
+
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["request_plan"]["office_cookie"] == "_go=905"
+    assert result["request_plan"]["search_url"].endswith("searchString=9091901164")
+
+
+def test_exist_lookup_network_error_returns_json_error(monkeypatch):
+    def fake_urlopen(request, timeout=20.0):
+        raise TimeoutError("network timeout")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = exist_price_lookup(part_number="9091901164")
+
+    assert result["ok"] is False
+    assert result["provider"] == "exist"
+    assert "network timeout" in result["error"]
 
 
 def test_resolve_partsapi_category_distinguishes_numeric_and_text_candidates():
@@ -254,6 +553,7 @@ def test_extract_partsapi_parts_by_vin_candidates_splits_brand_article_pairs():
 
 
 def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -288,6 +588,7 @@ def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
 
 
 def test_partsapi_oe_applicability_allows_empty_payload(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -330,6 +631,7 @@ def test_extract_partsapi_cross_candidates_handles_with_brand_payload():
 
 
 def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -364,6 +666,7 @@ def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
 
 
 def test_partsapi_crosses_uses_cross_candidates_not_oem(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -417,6 +720,7 @@ def test_extract_partsapi_article_candidates_handles_search_articles_payload():
 
 
 def test_partsapi_search_articles_uses_article_candidates_not_oem(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 

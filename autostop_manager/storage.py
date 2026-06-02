@@ -359,11 +359,26 @@ class ManagerMemoryStore:
                     FOREIGN KEY(run_id) REFERENCES manager_runs(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS memory_review_items (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    source_ref TEXT NOT NULL DEFAULT '',
+                    proposal_json TEXT NOT NULL DEFAULT '{}',
+                    reason TEXT NOT NULL DEFAULT '',
+                    risk TEXT NOT NULL DEFAULT 'low',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    decided_at TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_manager_runs_status
                     ON manager_runs(status, started_at);
 
                 CREATE INDEX IF NOT EXISTS idx_manager_run_events_run_id
                     ON manager_run_events(run_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
+                    ON memory_review_items(status, created_at);
                 """
             )
             self._ensure_columns(conn)

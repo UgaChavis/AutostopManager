@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+from html import unescape
+from html.parser import HTMLParser
 import json
 import os
+import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree
+from xml.sax.saxutils import escape as xml_escape
 
+from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .vin_lookup import normalize_vin
 
@@ -18,6 +24,13 @@ PARTSAPI_DOCS_URL = "https://partsapi.ru/docs"
 MANN_FILTER_GRAPHQL_ENDPOINT = "https://www.mann-filter.com/api/graphql/catalog-prod"
 MANN_FILTER_STORE = "pcat_mf_us_store_en"
 DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"
+EMEX_SEARCH_SERVICE_URL = "http://ws.emex.ru/EmExService.asmx"
+EMEX_SEARCH_DOCS_URL = "http://wsdoc.emex.ru/FindDetailAdv5.html"
+EMEX_SOAP_NAMESPACE = "http://tempuri.org/"
+EXIST_BASE_URL = "https://www.exist.ru"
+EXIST_OPEN_SEARCH_DOCS_URL = "https://s.exist.ru/xml/osd.xml"
+EXIST_DEFAULT_OFFICE_ID = 905
+EXIST_DEFAULT_OFFICE_NAME = "Красноярск, ул. Гайдашовка, д.3"
 
 MANN_FILTER_PART_SEARCH_QUERY = """
 query ($search: String!, $currentPage: Int!, $pageSize: Int!) {
@@ -518,7 +531,909 @@ def public_aftermarket_catalog_lookup(
     }
 
 
+def _emex_xml_value(name: str, value: Any) -> str:
+    if value in (None, ""):
+        return f"<{name} xsi:nil=\"true\" />"
+    if isinstance(value, (list, tuple)):
+        items = "".join(f"<string>{xml_escape(str(item))}</string>" for item in value if item not in (None, ""))
+        return f"<{name}>{items}</{name}>" if items else f"<{name} xsi:nil=\"true\" />"
+    return f"<{name}>{xml_escape(str(value))}</{name}>"
+
+
+def build_emex_find_detail_request(
+    *,
+    part_number: str,
+    brand: str | None = None,
+    subst_level: str = "All",
+    subst_filter: str = "None",
+    delivery_region_type: str = "PRI",
+    min_delivery_percent: int | None = None,
+    max_delivery_days: int | None = None,
+    min_quantity: int | None = None,
+    max_result_price: float | None = None,
+    max_one_detail_offers_count: int | None = 10,
+    detail_nums_to_load: list[str] | None = None,
+    login: str | None = None,
+    password: str | None = None,
+    service_url: str | None = None,
+) -> dict[str, Any]:
+    credentials = _emex_credentials()
+    actual_login = login if login is not None else credentials["login"]
+    actual_password = password if password is not None else credentials["password"]
+    actual_service_url = service_url or credentials["service_url"]
+    clean_part = str(part_number or "").strip()
+    clean_brand = str(brand or "").strip() or None
+    missing = []
+    if not actual_login:
+        missing.append("EMEX_LOGIN")
+    if not actual_password:
+        missing.append("EMEX_PASSWORD")
+    if not clean_part:
+        missing.append("part_number")
+
+    params = {
+        "login": actual_login,
+        "password": actual_password,
+        "makeLogo": clean_brand,
+        "detailNum": clean_part,
+        "substLevel": subst_level or "All",
+        "substFilter": subst_filter or "None",
+        "deliveryRegionType": delivery_region_type or "PRI",
+        "minDeliveryPercent": min_delivery_percent,
+        "maxADDays": max_delivery_days,
+        "minQuantity": min_quantity,
+        "maxResultPrice": max_result_price,
+        "maxOneDetailOffersCount": max_one_detail_offers_count,
+        "detailNumsToLoad": detail_nums_to_load,
+    }
+    body_params = "".join(_emex_xml_value(name, value) for name, value in params.items())
+    soap_body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+        "<soap:Body>"
+        f'<FindDetailAdv5 xmlns="{EMEX_SOAP_NAMESPACE}">'
+        f"{body_params}"
+        "</FindDetailAdv5>"
+        "</soap:Body>"
+        "</soap:Envelope>"
+    )
+    safe_params = {
+        key: ("***" if key == "password" and value else _redact_account(str(value)) if key == "login" and value else value)
+        for key, value in params.items()
+        if value not in (None, "")
+    }
+    return {
+        "ok": not missing,
+        "provider": "emex",
+        "configured": not any(name in {"EMEX_LOGIN", "EMEX_PASSWORD"} for name in missing),
+        "method": "POST",
+        "emex_method": "FindDetailAdv5",
+        "endpoint": actual_service_url,
+        "soap_action": f"{EMEX_SOAP_NAMESPACE}FindDetailAdv5",
+        "params": safe_params,
+        "missing_env_names": [name for name in missing if name.startswith("EMEX_")],
+        "missing_params": [name for name in missing if not name.startswith("EMEX_")],
+        "body": soap_body if not missing else None,
+        "body_sha256": hashlib.sha256(soap_body.encode("utf-8")).hexdigest() if not missing else None,
+        "secret_exposed": False,
+    }
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _xml_child_text(element: ElementTree.Element, name: str) -> str | None:
+    for child in list(element):
+        if _xml_local_name(child.tag) == name:
+            return child.text
+    return None
+
+
+def _xml_text_as_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def _xml_text_as_number(value: str | None) -> int | float | None:
+    if value in (None, ""):
+        return None
+    raw = str(value).strip().replace(",", ".")
+    try:
+        number = float(raw)
+    except ValueError:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _emex_detail_item(element: ElementTree.Element) -> dict[str, Any]:
+    field_map = {
+        "GroupId": "group_id",
+        "PriceGroup": "price_group",
+        "MakeLogo": "brand_logo",
+        "MakeName": "brand",
+        "DetailNum": "part_number",
+        "NewDetailNum": "new_part_number",
+        "DetailNameRus": "name",
+        "PriceLogo": "price_logo",
+        "DestinationLogo": "destination_logo",
+        "PriceCountry": "price_country",
+        "LotQuantity": "lot_quantity",
+        "Quantity": "quantity",
+        "DDPercent": "delivery_probability_percent",
+        "ADDays": "average_delivery_days",
+        "DeliverTimeGuaranteed": "delivery_time_guaranteed",
+        "ResultPrice": "price_rub",
+        "DeliveryRegionType": "delivery_region_type",
+    }
+    numeric_fields = {
+        "GroupId",
+        "LotQuantity",
+        "Quantity",
+        "DDPercent",
+        "ADDays",
+        "DeliverTimeGuaranteed",
+        "ResultPrice",
+    }
+    item: dict[str, Any] = {}
+    for child in list(element):
+        source_name = _xml_local_name(child.tag)
+        target_name = field_map.get(source_name)
+        if not target_name:
+            continue
+        item[target_name] = _xml_text_as_number(child.text) if source_name in numeric_fields else (child.text or "")
+    return item
+
+
+def parse_emex_find_detail_response(raw_xml: str) -> dict[str, Any]:
+    root = ElementTree.fromstring(raw_xml)
+    result = None
+    for element in root.iter():
+        if _xml_local_name(element.tag) == "FindDetailAdv5Result":
+            result = element
+            break
+    if result is None:
+        detail_nodes = [element for element in root.iter() if _xml_local_name(element.tag) in {"DetailItem", "FindDetailAdv5Result"}]
+        return {
+            "is_success": bool(detail_nodes),
+            "error_message": None if detail_nodes else "FindDetailAdv5Result not found in SOAP response.",
+            "block_date_end": None,
+            "details": [_emex_detail_item(element) for element in detail_nodes if list(element)],
+        }
+
+    details = []
+    for element in result.iter():
+        if _xml_local_name(element.tag) == "DetailItem":
+            item = _emex_detail_item(element)
+            if item:
+                details.append(item)
+    return {
+        "is_success": _xml_text_as_bool(_xml_child_text(result, "IsSuccess")),
+        "error_message": _xml_child_text(result, "ErrorMessage"),
+        "block_date_end": _xml_child_text(result, "BlockDateEnd"),
+        "details": details,
+    }
+
+
+def emex_price_lookup(
+    *,
+    part_number: str,
+    brand: str | None = None,
+    subst_level: str = "All",
+    subst_filter: str = "None",
+    delivery_region_type: str = "PRI",
+    min_delivery_percent: int | None = None,
+    max_delivery_days: int | None = None,
+    min_quantity: int | None = None,
+    max_result_price: float | None = None,
+    max_one_detail_offers_count: int | None = 10,
+    detail_nums_to_load: list[str] | None = None,
+    timeout: float = 20.0,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    request_plan = build_emex_find_detail_request(
+        part_number=part_number,
+        brand=brand,
+        subst_level=subst_level,
+        subst_filter=subst_filter,
+        delivery_region_type=delivery_region_type,
+        min_delivery_percent=min_delivery_percent,
+        max_delivery_days=max_delivery_days,
+        min_quantity=min_quantity,
+        max_result_price=max_result_price,
+        max_one_detail_offers_count=max_one_detail_offers_count,
+        detail_nums_to_load=detail_nums_to_load,
+    )
+    base = {
+        "provider": "emex",
+        "operation": "price_lookup",
+        "emex_method": "FindDetailAdv5",
+        "docs_url": EMEX_SEARCH_DOCS_URL,
+        "role": "Official Emex SOAP read-only price/stock/lead-time lookup by exact article.",
+        "request_plan": {key: value for key, value in request_plan.items() if key != "body"},
+        "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
+    }
+    if request_plan["missing_params"]:
+        return {**base, "ok": False, "missing_params": request_plan["missing_params"], "error": "part_number is required."}
+    if request_plan["missing_env_names"]:
+        return {
+            **base,
+            "ok": False,
+            "missing_env_names": request_plan["missing_env_names"],
+            "error": "EMEX_LOGIN and EMEX_PASSWORD are required for live Emex SOAP requests; Emex must also whitelist the server IP.",
+        }
+    if dry_run:
+        return {**base, "ok": True, "dry_run": True}
+
+    request = Request(
+        request_plan["endpoint"],
+        data=str(request_plan["body"]).encode("utf-8"),
+        headers={
+            "User-Agent": "AutostopManager/0.1",
+            "Content-Type": "text/xml; charset=utf-8",
+            "SOAPAction": request_plan["soap_action"],
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw_xml = response.read().decode("utf-8", errors="replace")
+        parsed = parse_emex_find_detail_response(raw_xml)
+    except (HTTPError, URLError, TimeoutError, ElementTree.ParseError, ValueError) as exc:
+        return {**base, "ok": False, "error": str(exc)}
+
+    return {
+        **base,
+        "ok": bool(parsed.get("is_success")),
+        "is_success": parsed.get("is_success"),
+        "error_message": parsed.get("error_message"),
+        "block_date_end": parsed.get("block_date_end"),
+        "items": parsed.get("details") or [],
+    }
+
+
+def _exist_office_id(office_id: int | str | None) -> int:
+    try:
+        return int(office_id or EXIST_DEFAULT_OFFICE_ID)
+    except (TypeError, ValueError):
+        return EXIST_DEFAULT_OFFICE_ID
+
+
+def _exist_base_url(base_url: str | None = None) -> str:
+    return (base_url or os.getenv("EXIST_BASE_URL") or EXIST_BASE_URL).rstrip("/")
+
+
+def _clean_exist_text(value: Any) -> str:
+    text = unescape(str(value or "")).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _exist_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    match = re.search(r"-?\d+", str(value or "").replace("\xa0", " "))
+    return int(match.group(0)) if match else None
+
+
+def _exist_number(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value) if float(value).is_integer() else value
+    raw = str(value or "").replace("\xa0", "").replace(" ", "").replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", raw)
+    if not match:
+        return None
+    number = float(match.group(0))
+    return int(number) if number.is_integer() else number
+
+
+def _exist_absolute_url(url: str | None, *, base_url: str | None = None) -> str | None:
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        return None
+    if clean_url.startswith(("http://", "https://")):
+        return clean_url
+    if clean_url.startswith("/"):
+        return f"{_exist_base_url(base_url)}{clean_url}"
+    return f"{_exist_base_url(base_url)}/{clean_url}"
+
+
+def _exist_pid_from_url(url: str | None) -> str | None:
+    parsed = urlsplit(str(url or ""))
+    for key, value in parse_qsl(parsed.query):
+        if key.lower() == "pid" and value:
+            return value
+    return None
+
+
+class _ExistCatalogCandidateParser(HTMLParser):
+    def __init__(self, *, base_url: str | None = None) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.candidates: list[dict[str, Any]] = []
+        self._current: dict[str, Any] | None = None
+        self._anchor_depth = 0
+        self._brand_depth = 0
+        self._name_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key.lower(): value or "" for key, value in attrs}
+        if tag.lower() == "a" and self._current is None:
+            href = attr_map.get("href", "")
+            if "/Price/" in href and "pid=" in href:
+                self._current = {"href": href, "text": [], "brand": [], "name": []}
+                self._anchor_depth = 1
+            return
+        if self._current is None:
+            return
+        if tag.lower() == "a":
+            self._anchor_depth += 1
+        if tag.lower() in {"b", "strong"}:
+            self._brand_depth += 1
+        if tag.lower() == "dd":
+            self._name_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._current is None:
+            return
+        if tag.lower() in {"b", "strong"}:
+            self._brand_depth = max(0, self._brand_depth - 1)
+        if tag.lower() == "dd":
+            self._name_depth = max(0, self._name_depth - 1)
+        if tag.lower() == "a":
+            self._anchor_depth -= 1
+            if self._anchor_depth <= 0:
+                self._finish_current()
+
+    def handle_data(self, data: str) -> None:
+        if self._current is None:
+            return
+        self._current["text"].append(data)
+        if self._brand_depth:
+            self._current["brand"].append(data)
+        if self._name_depth:
+            self._current["name"].append(data)
+
+    def _finish_current(self) -> None:
+        current = self._current or {}
+        href = str(current.get("href") or "")
+        brand = _clean_exist_text(" ".join(current.get("brand") or [])) or None
+        name = _clean_exist_text(" ".join(current.get("name") or [])) or None
+        all_text = _clean_exist_text(" ".join(current.get("text") or []))
+        part_number = all_text
+        for value in (brand, name):
+            if value:
+                part_number = re.sub(re.escape(value), " ", part_number, count=1, flags=re.IGNORECASE)
+        part_number = _clean_exist_text(part_number)
+        pid = _exist_pid_from_url(href)
+        if pid:
+            self.candidates.append(
+                {
+                    "brand": brand,
+                    "part_number": part_number or None,
+                    "name": name,
+                    "pid": pid,
+                    "url": _exist_absolute_url(href, base_url=self.base_url),
+                }
+            )
+        self._current = None
+        self._anchor_depth = 0
+        self._brand_depth = 0
+        self._name_depth = 0
+
+
+class _ExistTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.text_parts: list[str] = []
+        self.titles: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        for key, value in attrs:
+            if key.lower() == "title" and value:
+                self.titles.append(_clean_exist_text(value))
+
+    def handle_data(self, data: str) -> None:
+        self.text_parts.append(data)
+
+    @property
+    def text(self) -> str:
+        return _clean_exist_text(" ".join(self.text_parts))
+
+
+class _ExistInputParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.values: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "input":
+            return
+        attr_map = {key.lower(): value or "" for key, value in attrs}
+        key = attr_map.get("id") or attr_map.get("name")
+        if key:
+            self.values[key] = attr_map.get("value", "")
+
+
+def _exist_html_text(fragment: Any) -> str | None:
+    if fragment in (None, ""):
+        return None
+    parser = _ExistTextParser()
+    parser.feed(str(fragment))
+    return parser.text or None
+
+
+def _exist_first_html_title(fragment: Any) -> str | None:
+    if fragment in (None, ""):
+        return None
+    parser = _ExistTextParser()
+    parser.feed(str(fragment))
+    return parser.titles[0] if parser.titles else None
+
+
+def _extract_exist_data_array_text(html_text: str) -> str | None:
+    match = re.search(r"\bvar\s+_data\s*=", html_text)
+    if not match:
+        return None
+    start = html_text.find("[", match.end())
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    quote_char = ""
+    escaped = False
+    for index in range(start, len(html_text)):
+        char = html_text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                in_string = False
+            continue
+        if char in {'"', "'"}:
+            in_string = True
+            quote_char = char
+            continue
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return html_text[start : index + 1]
+    return None
+
+
+def _exist_hidden_fields(html_text: str) -> dict[str, str]:
+    parser = _ExistInputParser()
+    parser.feed(html_text)
+    return {
+        key: parser.values[key]
+        for key in ("hdnPid", "hfPidHash", "hfSrcId")
+        if parser.values.get(key) not in (None, "")
+    }
+
+
+def _exist_total_offers(html_text: str) -> int | None:
+    match = re.search(r"Нашлось\s+предложений\s*:\s*(\d+)", html_text, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _exist_warehouse_hint(raw_offer: dict[str, Any]) -> str | None:
+    color = str(raw_offer.get("highlightColor") or raw_offer.get("HighlightColor") or "").strip().upper()
+    hints = {
+        "D3E8CF": "central_exist_stock",
+        "E9E9E9": "verified_original_supplier",
+        "FFE6ED": "selected_office_stock",
+    }
+    return hints.get(color)
+
+
+def _exist_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "да"}:
+        return True
+    if normalized in {"false", "0", "no", "нет"}:
+        return False
+    return None
+
+
+def _exist_offer(raw_offer: dict[str, Any], *, offer_type: str) -> dict[str, Any]:
+    statistic_html = raw_offer.get("StatisticHTML") or raw_offer.get("statisticHTML") or raw_offer.get("deliveryHTML")
+    availability_html = raw_offer.get("availString") or raw_offer.get("AvailString") or raw_offer.get("availabilityHTML")
+    price_label = (
+        raw_offer.get("priceString")
+        or raw_offer.get("PriceString")
+        or raw_offer.get("priceLabel")
+        or raw_offer.get("PriceLabel")
+    )
+    lead_time_label = (
+        _exist_html_text(statistic_html)
+        or _clean_exist_text(raw_offer.get("deliveryString") or raw_offer.get("DeliveryString"))
+        or None
+    )
+    availability_label = (
+        _exist_first_html_title(availability_html)
+        or _exist_html_text(availability_html)
+        or _clean_exist_text(raw_offer.get("availability") or raw_offer.get("Availability"))
+        or None
+    )
+    return {
+        "offer_type": offer_type,
+        "price_rub": _exist_number(raw_offer.get("price") or raw_offer.get("Price") or raw_offer.get("priceRub")),
+        "price_label": _clean_exist_text(price_label) or None,
+        "lead_time_minutes": _exist_int(raw_offer.get("minutes") or raw_offer.get("Minutes") or raw_offer.get("deliveryMinutes")),
+        "lead_time_label": lead_time_label,
+        "lead_time_date": _exist_first_html_title(statistic_html),
+        "availability_label": availability_label,
+        "pack": raw_offer.get("pack") or raw_offer.get("Pack") or raw_offer.get("lotQuantity") or raw_offer.get("LotQuantity"),
+        "not_return": _exist_bool(raw_offer.get("notReturn") if "notReturn" in raw_offer else raw_offer.get("NotReturn")),
+        "warehouse_hint": _exist_warehouse_hint(raw_offer),
+    }
+
+
+def _exist_raw_offer_list(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, list):
+        return []
+    return [item for item in raw_value if isinstance(item, dict)]
+
+
+def _exist_item(raw_item: dict[str, Any], *, max_offers: int = 10, base_url: str | None = None) -> dict[str, Any]:
+    pid = (
+        raw_item.get("ProductIdEnc")
+        or raw_item.get("productIdEnc")
+        or raw_item.get("ProductID")
+        or raw_item.get("ProductId")
+        or raw_item.get("pid")
+    )
+    aggregated = _exist_raw_offer_list(raw_item.get("AggregatedParts") or raw_item.get("aggregatedParts"))
+    direct = _exist_raw_offer_list(raw_item.get("DirectOffers") or raw_item.get("directOffers"))
+    offers = [
+        *[_exist_offer(offer, offer_type="aggregated") for offer in aggregated],
+        *[_exist_offer(offer, offer_type="direct") for offer in direct],
+    ][:_clamp_page_size(max_offers, default=10, maximum=50)]
+    is_original = _exist_bool(raw_item.get("IsOriginal") if "IsOriginal" in raw_item else raw_item.get("isOriginal"))
+    return {
+        "brand": raw_item.get("CatalogName") or raw_item.get("catalogName") or raw_item.get("Brand") or raw_item.get("brand"),
+        "part_number": raw_item.get("PartNumber") or raw_item.get("partNumber"),
+        "name": raw_item.get("PartName") or raw_item.get("Name") or raw_item.get("Description") or raw_item.get("partName"),
+        "pid": str(pid) if pid not in (None, "") else None,
+        "product_url": f"{_exist_base_url(base_url)}/Price/?{urlencode({'pid': str(pid)})}" if pid not in (None, "") else None,
+        "is_original": is_original,
+        "block_text": raw_item.get("BlockName") or raw_item.get("BlockText") or raw_item.get("Block") or raw_item.get("blockName"),
+        "block_type_id": _exist_int(raw_item.get("BlockTypeId") or raw_item.get("blockTypeId")),
+        "price_count": _exist_int(raw_item.get("PriceCount") or raw_item.get("priceCount")),
+        "min_price_rub": _exist_number(raw_item.get("MinPrice") or raw_item.get("MinPriceString") or raw_item.get("minPriceString")),
+        "min_price_label": _clean_exist_text(raw_item.get("MinPriceString") or raw_item.get("minPriceString")) or None,
+        "min_delivery_label": _clean_exist_text(
+            raw_item.get("MinDeliveryDaysString") or raw_item.get("DeliveryDaysString") or raw_item.get("minDeliveryDaysString")
+        )
+        or None,
+        "offers": offers,
+    }
+
+
+def parse_exist_catalog_candidates(
+    html_text: str,
+    *,
+    base_url: str | None = None,
+    max_candidates: int = 5,
+) -> dict[str, Any]:
+    parser = _ExistCatalogCandidateParser(base_url=base_url)
+    parser.feed(html_text)
+    candidates = parser.candidates[: _clamp_page_size(max_candidates, default=5, maximum=50)]
+    return {"ok": True, "candidates": candidates, "candidate_count": len(parser.candidates)}
+
+
+def parse_exist_price_page(
+    html_text: str,
+    *,
+    base_url: str | None = None,
+    max_offers: int = 10,
+) -> dict[str, Any]:
+    array_text = _extract_exist_data_array_text(html_text)
+    if array_text is None:
+        return {
+            "ok": False,
+            "items": [],
+            "hidden_fields": _exist_hidden_fields(html_text),
+            "total_offers": _exist_total_offers(html_text),
+            "error": "Exist _data array not found.",
+        }
+    raw_items = json.loads(array_text)
+    if not isinstance(raw_items, list):
+        raw_items = []
+    return {
+        "ok": True,
+        "items": [_exist_item(item, max_offers=max_offers, base_url=base_url) for item in raw_items if isinstance(item, dict)],
+        "hidden_fields": _exist_hidden_fields(html_text),
+        "total_offers": _exist_total_offers(html_text),
+    }
+
+
+def build_exist_price_lookup_request(
+    *,
+    part_number: str | None = None,
+    brand: str | None = None,
+    pid: str | None = None,
+    office_id: int | str = EXIST_DEFAULT_OFFICE_ID,
+    max_candidates: int = 5,
+    max_offers: int = 10,
+    include_more_offers: bool = False,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    clean_part = str(part_number or "").strip()
+    clean_brand = str(brand or "").strip() or None
+    clean_pid = str(pid or "").strip()
+    actual_base_url = _exist_base_url(base_url)
+    actual_office_id = _exist_office_id(office_id)
+    search_url = f"{actual_base_url}/Api/Parts/Search?{urlencode({'searchString': clean_part})}" if clean_part else None
+    pcode_url = f"{actual_base_url}/Price/?{urlencode({'pcode': clean_part})}" if clean_part else None
+    pid_url = f"{actual_base_url}/Price/?{urlencode({'pid': clean_pid})}" if clean_pid else None
+    return {
+        "ok": bool(clean_part or clean_pid),
+        "provider": "exist",
+        "method": "GET",
+        "office_id": actual_office_id,
+        "office_cookie": f"_go={actual_office_id}",
+        "base_url": actual_base_url,
+        "search_url": search_url,
+        "pcode_url": pcode_url,
+        "pid_url": pid_url,
+        "more_offers_endpoint": f"{actual_base_url}/Price/Default.aspx/GetQuery",
+        "params": {
+            "part_number": clean_part or None,
+            "brand": clean_brand,
+            "pid": clean_pid or None,
+            "max_candidates": _clamp_page_size(max_candidates, default=5, maximum=50),
+            "max_offers": _clamp_page_size(max_offers, default=10, maximum=50),
+            "include_more_offers": bool(include_more_offers),
+        },
+        "access_mode": "public_site_read_only",
+        "secret_exposed": False,
+    }
+
+
+def _exist_headers(*, office_id: int, accept: str) -> dict[str, str]:
+    return {
+        "User-Agent": "AutostopManager/0.1",
+        "Accept": accept,
+        "Cookie": f"_go={office_id}",
+    }
+
+
+def _exist_read_text(url: str, *, office_id: int, timeout: float) -> str:
+    request = Request(url, headers=_exist_headers(office_id=office_id, accept="text/html,application/xhtml+xml"))
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def _exist_read_json(url: str, *, office_id: int, timeout: float) -> Any:
+    request = Request(url, headers=_exist_headers(office_id=office_id, accept="application/json"))
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def _exist_search_suggestions(payload: Any, *, base_url: str | None = None) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        return []
+    suggestions = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        suggestions.append(
+            {
+                "header_text": item.get("HeaderText"),
+                "name": item.get("Name"),
+                "input_text": item.get("InputText"),
+                "navigate_url": _exist_absolute_url(item.get("NavigateUrl"), base_url=base_url),
+                "relevance": item.get("Relevance"),
+            }
+        )
+    return suggestions
+
+
+def _exist_brand_key(value: Any) -> str:
+    return re.sub(r"[^0-9a-zа-яё]+", "", str(value or "").strip().lower())
+
+
+def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | None) -> dict[str, Any] | None:
+    if not candidates:
+        return None
+    if not brand:
+        return candidates[0] if len(candidates) == 1 else None
+    requested = _exist_brand_key(brand)
+    for candidate in candidates:
+        if _exist_brand_key(candidate.get("brand")) == requested:
+            return candidate
+    for candidate in candidates:
+        candidate_key = _exist_brand_key(candidate.get("brand"))
+        if requested and (requested in candidate_key or candidate_key in requested):
+            return candidate
+    return None
+
+
+def _exist_more_offers(
+    *,
+    request_plan: dict[str, Any],
+    pid: str,
+    hidden_fields: dict[str, str],
+    office_id: int,
+    max_offers: int,
+    timeout: float,
+) -> dict[str, Any]:
+    text_value = hidden_fields.get("hfPidHash")
+    src_id = hidden_fields.get("hfSrcId") or "RawPartNumber"
+    actual_pid = hidden_fields.get("hdnPid") or pid
+    if not text_value or not actual_pid:
+        return {"ok": False, "offers": [], "error": "Exist more-offers hidden fields are missing."}
+    payload = json.dumps(
+        {
+            "ProductID": actual_pid,
+            "OriginalProductID": pid,
+            "textValue": text_value,
+            "srcId": src_id,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        request_plan["more_offers_endpoint"],
+        data=payload,
+        headers={
+            **_exist_headers(office_id=office_id, accept="application/json"),
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        wrapper = json.loads(response.read().decode("utf-8", errors="replace"))
+    raw_offers = json.loads(wrapper.get("d") or "[]") if isinstance(wrapper, dict) else []
+    offers = [
+        _exist_offer(offer, offer_type="direct")
+        for offer in _exist_raw_offer_list(raw_offers)
+    ][:_clamp_page_size(max_offers, default=10, maximum=50)]
+    return {"ok": True, "offers": offers, "offer_count": len(_exist_raw_offer_list(raw_offers))}
+
+
+def exist_price_lookup(
+    *,
+    part_number: str | None = None,
+    brand: str | None = None,
+    pid: str | None = None,
+    office_id: int | str = EXIST_DEFAULT_OFFICE_ID,
+    max_candidates: int = 5,
+    max_offers: int = 10,
+    include_more_offers: bool = False,
+    timeout: float = 20.0,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    request_plan = build_exist_price_lookup_request(
+        part_number=part_number,
+        brand=brand,
+        pid=pid,
+        office_id=office_id,
+        max_candidates=max_candidates,
+        max_offers=max_offers,
+        include_more_offers=include_more_offers,
+    )
+    base = {
+        "provider": "exist",
+        "operation": "price_lookup",
+        "docs_url": EXIST_OPEN_SEARCH_DOCS_URL,
+        "role": "Public read-only Exist exact article catalog/price lookup for retail benchmark, lead time, and analog visibility.",
+        "office": {
+            "id": request_plan["office_id"],
+            "name": EXIST_DEFAULT_OFFICE_NAME if request_plan["office_id"] == EXIST_DEFAULT_OFFICE_ID else None,
+        },
+        "benchmark_kind": "public_retail_reference",
+        "requires_confirmation": True,
+        "request_plan": request_plan,
+        "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False, "returns_raw_html": False},
+    }
+    if not request_plan["ok"]:
+        return {**base, "ok": False, "error": "part_number or pid is required."}
+    if dry_run:
+        return {**base, "ok": True, "dry_run": True}
+
+    max_candidates_value = request_plan["params"]["max_candidates"]
+    max_offers_value = request_plan["params"]["max_offers"]
+    office = request_plan["office_id"]
+    suggestions: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    selected_candidate: dict[str, Any] | None = None
+
+    try:
+        price_url = request_plan["pid_url"]
+        if not price_url:
+            search_payload = _exist_read_json(request_plan["search_url"], office_id=office, timeout=timeout)
+            suggestions = _exist_search_suggestions(search_payload, base_url=request_plan["base_url"])
+            pcode_html = _exist_read_text(request_plan["pcode_url"], office_id=office, timeout=timeout)
+            candidate_result = parse_exist_catalog_candidates(
+                pcode_html,
+                base_url=request_plan["base_url"],
+                max_candidates=max_candidates_value,
+            )
+            candidates = candidate_result["candidates"]
+            if candidates:
+                selected_candidate = _select_exist_candidate(candidates, brand=brand)
+                if selected_candidate is None:
+                    return {
+                        **base,
+                        "ok": True,
+                        "search_suggestions": suggestions,
+                        "candidates": candidates,
+                        "candidate_count": candidate_result["candidate_count"],
+                        "needs_disambiguation": True,
+                        "selected_item": None,
+                        "error": "Multiple Exist catalog candidates found; pass --brand to select one.",
+                    }
+                price_url = selected_candidate["url"]
+            else:
+                parsed_pcode = parse_exist_price_page(pcode_html, base_url=request_plan["base_url"], max_offers=max_offers_value)
+                selected_item = parsed_pcode["items"][0] if parsed_pcode.get("items") else None
+                return {
+                    **base,
+                    "ok": parsed_pcode["ok"],
+                    "search_suggestions": suggestions,
+                    "candidates": [],
+                    "needs_disambiguation": False,
+                    "selected_item": selected_item,
+                    "items": parsed_pcode.get("items", []),
+                    "total_offers": parsed_pcode.get("total_offers"),
+                    "error": parsed_pcode.get("error"),
+                }
+
+        price_html = _exist_read_text(price_url, office_id=office, timeout=timeout)
+        parsed_price = parse_exist_price_page(price_html, base_url=request_plan["base_url"], max_offers=max_offers_value)
+        selected_item = parsed_price["items"][0] if parsed_price.get("items") else None
+        if selected_item and selected_candidate:
+            selected_item["catalog_candidate"] = selected_candidate
+        if selected_item and include_more_offers and selected_item.get("pid"):
+            more_offers = _exist_more_offers(
+                request_plan=request_plan,
+                pid=str(selected_item["pid"]),
+                hidden_fields=parsed_price.get("hidden_fields") or {},
+                office_id=office,
+                max_offers=max_offers_value,
+                timeout=timeout,
+            )
+            selected_item["more_offers_loaded"] = more_offers.get("ok") is True
+            selected_item["more_offers_count"] = more_offers.get("offer_count", 0)
+            if more_offers.get("ok"):
+                selected_item["offers"] = more_offers["offers"]
+            else:
+                selected_item["more_offers_error"] = more_offers.get("error")
+        return {
+            **base,
+            "ok": parsed_price["ok"],
+            "search_suggestions": suggestions,
+            "candidates": candidates,
+            "needs_disambiguation": False,
+            "selected_item": selected_item,
+            "items": parsed_price.get("items", []),
+            "total_offers": parsed_price.get("total_offers"),
+            "error": parsed_price.get("error"),
+        }
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return {**base, "ok": False, "search_suggestions": suggestions, "candidates": candidates, "error": str(exc)}
+
+
 def _vin17_credentials() -> dict[str, Any]:
+    load_runtime_env()
     user = os.getenv("VIN17_ACCOUNT") or ""
     secret = os.getenv("VIN17_SECRET") or ""
     missing = [name for name, value in {"VIN17_ACCOUNT": user, "VIN17_SECRET": secret}.items() if not value]
@@ -526,6 +1441,7 @@ def _vin17_credentials() -> dict[str, Any]:
 
 
 def _partsapi_credentials() -> dict[str, Any]:
+    load_runtime_env()
     key = os.getenv("PARTSAPI_KEY") or ""
     base_url = os.getenv("PARTSAPI_BASE_URL") or ""
     missing = [name for name, value in {"PARTSAPI_KEY": key, "PARTSAPI_BASE_URL": base_url}.items() if not value]
@@ -545,10 +1461,35 @@ def _partsapi_method_key(method: str) -> tuple[str, str | None]:
 
 
 def _parts_catalogs_credentials() -> dict[str, Any]:
+    load_runtime_env()
     key = os.getenv("PARTS_CATALOGS_API_KEY") or ""
     base_url = os.getenv("PARTS_CATALOGS_BASE_URL") or ""
     missing = [name for name, value in {"PARTS_CATALOGS_API_KEY": key, "PARTS_CATALOGS_BASE_URL": base_url}.items() if not value]
     return {"configured": not missing, "key": key, "base_url": base_url, "missing_env_names": missing}
+
+
+def _emex_credentials() -> dict[str, Any]:
+    load_runtime_env()
+    login = os.getenv("EMEX_LOGIN") or ""
+    password = os.getenv("EMEX_PASSWORD") or ""
+    service_url = os.getenv("EMEX_SERVICE_URL") or os.getenv("EMEX_SEARCH_SERVICE_URL") or EMEX_SEARCH_SERVICE_URL
+    missing = [name for name, value in {"EMEX_LOGIN": login, "EMEX_PASSWORD": password}.items() if not value]
+    return {
+        "configured": not missing,
+        "login": login,
+        "password": password,
+        "service_url": service_url,
+        "missing_env_names": missing,
+    }
+
+
+def _redact_account(value: str) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        return ""
+    if len(clean) <= 4:
+        return f"{clean[:1]}***"
+    return f"{clean[:2]}***{clean[-2:]}"
 
 
 def _first_value(item: dict[str, Any], keys: tuple[str, ...]) -> Any:
@@ -1479,13 +2420,22 @@ def lookup_oem_catalog_candidates(
             )
         )
     else:
+        provider_results.append(
+            partsapi_catalog_lookup(
+                operation="vin_decode_oe",
+                identifier=identifier,
+                timeout=timeout,
+                dry_run=dry_run,
+            )
+        )
         blockers.append(
             {
                 "provider": "partsapi_ru",
                 "operation": "parts_by_vin",
                 "missing_params": ["cat"] if not category else [],
                 "category_resolution": partsapi_category_resolution,
-                "error": "PartsAPI getPartsbyVIN live lookup requires a numeric cat id; text category candidates are retained as routing hints.",
+                "fallback_operation": "vin_decode_oe",
+                "error": "PartsAPI getPartsbyVIN live lookup requires a numeric cat id; VINdecodeOE fallback is attempted for vehicle/OE catalog identity.",
             }
         )
 

@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-06-01",
-  "tool_count": 45,
+  "last_verified": "2026-06-02",
+  "tool_count": 51,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -49,6 +49,7 @@
     "vin17_search_part_number_by_vin",
     "partsapi_catalog_lookup",
     "public_aftermarket_catalog_lookup",
+    "exist_price_lookup",
     "lookup_oem_catalog_candidates",
     "plan_crm_vin_oem_parts_lookup",
     "benchmark_vin_parts_lookup",
@@ -61,16 +62,21 @@
     "search_knowledge_base",
     "audit_knowledge_base",
     "audit_knowledge_annotations",
-    "audit_skill_registry"
+    "audit_skill_registry",
+    "knowledge_intake_plan",
+    "provider_smoke_report"
   ],
   "health_tools": [
     "system_audit",
     "cleanup_audit",
-    "crm_health_plan"
+    "crm_health_plan",
+    "control_report"
   ],
   "memory_quality_tools": [
     "audit_memory",
-    "curate_memory"
+    "curate_memory",
+    "memory_review",
+    "memory_review_apply"
   ],
   "operation_tools": [
     "start_manager_run",
@@ -117,13 +123,19 @@
     "vin17_search_part_number_by_vin",
     "partsapi_catalog_lookup",
     "public_aftermarket_catalog_lookup",
+    "exist_price_lookup",
     "lookup_oem_catalog_candidates",
     "plan_crm_vin_oem_parts_lookup",
     "benchmark_vin_parts_lookup",
     "build_vin_parts_work_order",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
-    "recommend_service_management_actions"
+    "recommend_service_management_actions",
+    "control_report",
+    "memory_review",
+    "memory_review_apply",
+    "knowledge_intake_plan",
+    "provider_smoke_report"
   ],
   "tool_contracts": {
     "remember": "Store long-term manager memory that does not belong in AutoStop CRM cards; prefer distilled conclusions over raw source copies; facts may carry confidence.",
@@ -163,6 +175,7 @@
     "vin17_search_part_number_by_vin": "Call or dry-run 17VIN search_part_number by VIN after a 17VIN decode returns an EPC code; use for read-only fitment checks, not supplier orders.",
     "partsapi_catalog_lookup": "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup using PARTSAPI_BASE_URL plus PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles without exposing key values.",
     "public_aftermarket_catalog_lookup": "Call public MANN-FILTER and DENSO Aftermarket catalogs by part/OE number; use for brand-scope catalog enrichment, not as VIN-specific OEM EPC proof or supplier price confirmation.",
+    "exist_price_lookup": "Call or dry-run public read-only Exist article lookup for catalog disambiguation, analog visibility, retail price benchmark, and lead time with Krasnoyarsk office 905 by default; returns public_retail_reference only and never supplier-order data.",
     "lookup_oem_catalog_candidates": "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part, combining Parts-Catalogs, PartsAPI, and 17VIN when credentials and routing ids are available; no CRM writes or supplier orders are created.",
     "benchmark_vin_parts_lookup": "Read-only batch benchmark for CRM VIN/frame/body-number items: identity confidence, part-intent recognition, safe public search templates, provider blockers, and PartsAPI/17VIN dry-run readiness with raw identifiers redacted from output.",
     "build_vin_parts_work_order": "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, cross/applicability steps, supplier routes, CRM writeback gates, blockers, and acceptance checklists with raw identifiers redacted from output.",
@@ -170,7 +183,12 @@
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
     "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake.",
     "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, procurement/RF market quote matrix, selected-part material line policy, CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders.",
-    "estimate_repair_work_cost": "Build a read-only labor estimate from vehicle/work items, public Russia STO labor-only prices, and a public norm-hours/labor-time plausibility layer; returns normalized operations, market sample, labor-time checks, Russia average, AutoStop +50% price, confidence, missing context, and next actions without writing repair orders."
+    "estimate_repair_work_cost": "Build a read-only labor estimate from vehicle/work items, public Russia STO labor-only prices, and a public norm-hours/labor-time plausibility layer; returns normalized operations, market sample, labor-time checks, Russia average, AutoStop +50% price, confidence, missing context, and next actions without writing repair orders.",
+    "control_report": "Generate ControlReportV1 with server/runtime/Codex readiness, system health, git state, tests/doctor route, memory/knowledge/MCP/provider readiness, production ops gates, ports, risks, and last run ledger; read-only and secrets-redacted.",
+    "memory_review": "Generate rule-based MemoryReviewItem proposals for duplicates, expired/superseded items, weak confidence, and run-ledger lesson candidates without copying raw CRM, email, or secret content.",
+    "memory_review_apply": "Apply a MemoryReviewItem decision: accept, reject, or archive_duplicate. Duplicate archival is non-destructive and never deletes source memory records.",
+    "knowledge_intake_plan": "Classify a source file into KnowledgeIntakeDraft with domain, source type, safety flags, target metadata updates, and required follow-up audits; apply mode is review-gated and does not commit raw private files.",
+    "provider_smoke_report": "Generate ProviderSmokeResult readiness checks for one provider or all providers in dry-run or live-readonly mode without order, basket, supplier write, or CRM writeback endpoints."
   },
   "natural_language_commands": {
     "Приберись": {
@@ -302,5 +320,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 45
+  "all_tools_count": 51
 }

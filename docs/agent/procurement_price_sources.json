@@ -358,10 +358,15 @@
         "analogs",
         "delivery_price_benchmark"
       ],
-      "access_mode": "account_or_public_site",
-      "api_status": "not_confirmed_for_autostop; treat as cabinet/manual until contract exists",
+      "access_mode": "account_or_public_site_or_official_soap_after_whitelist",
+      "api_status": "official SOAP documentation found at wsdoc.emex.ru; AutostopManager FindDetailAdv5 adapter is ready, but live use needs EMEX_LOGIN, EMEX_PASSWORD, Emex service approval, and server IP whitelist",
+      "api_evidence_urls": [
+        "http://wsdoc.emex.ru/",
+        "http://wsdoc.emex.ru/FindDetailAdv5.html",
+        "http://wsdoc.emex.ru/EmExService.html"
+      ],
       "integration_priority": "medium",
-      "verification": "Use city/account settings and compare exact article, delivery time, and return terms."
+      "verification": "Use city/account settings and compare exact article, delivery time, delivery probability, quantity, price, and return terms. Do not scrape closed cabinet/API pages."
     },
     {
       "source_id": "exist",
@@ -372,12 +377,27 @@
       "use_for": [
         "oem_parts",
         "catalog_cross_check",
-        "new_parts"
+        "new_parts",
+        "retail_price_benchmark",
+        "analogs",
+        "catalog_disambiguation"
       ],
-      "access_mode": "account_or_public_site",
-      "api_status": "not_confirmed_for_autostop; treat as cabinet/manual until contract exists",
+      "access_mode": "public_site_read_only_or_future_account_route",
+      "api_status": "AutostopManager has a public read-only Exist adapter using /Api/Parts/Search, /Price/?pcode=..., /Price/?pid=..., and office cookie _go=905; treat output as public_retail_reference, not confirmed закупка",
+      "api_evidence_urls": [
+        "https://s.exist.ru/xml/osd.xml",
+        "https://www.exist.ru/help/default.aspx?id=1",
+        "https://exist.ru/Help/?ID=148",
+        "https://www.exist.ru/About/Contacts?id=905"
+      ],
+      "default_office": {
+        "id": 905,
+        "city": "Красноярск",
+        "address": "ул. Гайдашовка, д.3",
+        "cookie": "_go=905"
+      },
       "integration_priority": "medium",
-      "verification": "Use VIN/catalog route first, then exact article price and delivery check."
+      "verification": "Use VIN/catalog route first, then exact article price and delivery check. Write Exist to CRM only as public_retail_reference with confidence and requires-confirmation flag; do not use login, basket, order, private cabinet, or raw HTML."
     },
     {
       "source_id": "autodoc",
@@ -636,14 +656,16 @@
     },
     {
       "source_id": "emex",
-      "role": "Russia-wide/manual cabinet benchmark for exact article and delivery.",
-      "access": "Account or public site; API not confirmed for AutoStop.",
+      "role": "Russia-wide cabinet benchmark and official SOAP price/stock candidate for exact article and delivery.",
+      "access": "Account or public site manually; official SOAP FindDetailAdv5 after EMEX_LOGIN/EMEX_PASSWORD, service approval, and server IP whitelist.",
       "data": [
         "exact article price",
         "delivery time",
+        "delivery probability",
+        "quantity",
         "analogs/catalog hints"
       ],
-      "limits": "Manual/cabinet until contract/API/export exists; do not scrape closed pages.",
+      "limits": "AutostopManager has an Emex dry-run/read-only adapter, but ws.emex.ru timed out from the production server before whitelist. Do not scrape closed cabinet, basket, or /api pages.",
       "env_names": [
         "EMEX_LOGIN",
         "EMEX_PASSWORD"
@@ -657,15 +679,17 @@
     },
     {
       "source_id": "exist",
-      "role": "OEM/catalog and public/account retail benchmark.",
-      "access": "Account or public site; API/export not confirmed for AutoStop.",
+      "role": "Public read-only Exist retail benchmark, catalog disambiguation, analog visibility, and lead-time reference for exact article checks.",
+      "access": "Public site read-only route is implemented for /Api/Parts/Search, /Price/?pcode=..., /Price/?pid=..., and Krasnoyarsk office cookie _go=905; account route remains future work only.",
       "data": [
-        "OEM/catalog lookup",
-        "exact article price/delivery",
-        "analogs"
+        "brand/article catalog disambiguation",
+        "exact article retail price/delivery",
+        "analogs/replacements",
+        "Krasnoyarsk public retail benchmark"
       ],
-      "limits": "Use as manual verification/retail benchmark until a contracted integration exists.",
-      "env_names": [
+      "limits": "Use as public_retail_reference, not confirmed закупка. Do not use login, private cabinet, basket/order links, closed APIs, or raw HTML in CRM writeback.",
+      "env_names": [],
+      "future_env_names": [
         "EXIST_LOGIN",
         "EXIST_PASSWORD"
       ],

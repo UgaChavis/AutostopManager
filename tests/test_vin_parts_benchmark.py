@@ -2,13 +2,33 @@ from __future__ import annotations
 
 import json
 
+from autostop_manager import config as manager_config
 from autostop_manager.vin_parts_benchmark import benchmark_vin_parts_lookup
 
 
+PARTSAPI_ENV_NAMES = [
+    "PARTSAPI_KEY",
+    "PARTSAPI_VINDECODE_KEY",
+    "PARTSAPI_VINDECODE_OE_KEY",
+    "PARTSAPI_PARTS_BY_VIN_KEY",
+    "PARTSAPI_OE_APPLICABILITY_KEY",
+    "PARTSAPI_CROSSES_KEY",
+    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_BASE_URL",
+]
+
+
+def _clear_partsapi_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    for name in PARTSAPI_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
     for name in [
-        "PARTSAPI_KEY",
-        "PARTSAPI_BASE_URL",
         "PARTS_CATALOGS_API_KEY",
         "PARTS_CATALOGS_BASE_URL",
         "VIN17_ACCOUNT",
@@ -67,8 +87,7 @@ def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch
 
 
 def test_vin_parts_benchmark_status_tracks_identity_ready_but_missing_live_sources(monkeypatch):
-    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
-    monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
+    _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("PARTS_CATALOGS_API_KEY", raising=False)
     monkeypatch.delenv("PARTS_CATALOGS_BASE_URL", raising=False)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
@@ -96,6 +115,7 @@ def test_vin_parts_benchmark_status_tracks_identity_ready_but_missing_live_sourc
 
 
 def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTS_CATALOGS_API_KEY", "pc-secret")
     monkeypatch.setenv("PARTS_CATALOGS_BASE_URL", "https://api.parts-catalogs.example/v1")
     monkeypatch.setenv("PARTSAPI_KEY", "partsapi-secret")

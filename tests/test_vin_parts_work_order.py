@@ -2,13 +2,33 @@ from __future__ import annotations
 
 import json
 
+from autostop_manager import config as manager_config
 from autostop_manager.vin_parts_work_order import build_vin_parts_work_order
 
 
+PARTSAPI_ENV_NAMES = [
+    "PARTSAPI_KEY",
+    "PARTSAPI_VINDECODE_KEY",
+    "PARTSAPI_VINDECODE_OE_KEY",
+    "PARTSAPI_PARTS_BY_VIN_KEY",
+    "PARTSAPI_OE_APPLICABILITY_KEY",
+    "PARTSAPI_CROSSES_KEY",
+    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_BASE_URL",
+]
+
+
+def _clear_partsapi_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    for name in PARTSAPI_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_vin_parts_work_order_builds_actionable_routes_without_raw_identifier(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
     for name in [
-        "PARTSAPI_KEY",
-        "PARTSAPI_BASE_URL",
         "PARTS_CATALOGS_API_KEY",
         "PARTS_CATALOGS_BASE_URL",
         "VIN17_ACCOUNT",

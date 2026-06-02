@@ -1,11 +1,33 @@
 from __future__ import annotations
 
+from autostop_manager import config as manager_config
 from autostop_manager.catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from autostop_manager.vehicle_identity import decode_vehicle_identity
 
 
+PARTSAPI_ENV_NAMES = [
+    "PARTSAPI_KEY",
+    "PARTSAPI_VINDECODE_KEY",
+    "PARTSAPI_VINDECODE_OE_KEY",
+    "PARTSAPI_PARTS_BY_VIN_KEY",
+    "PARTSAPI_OE_APPLICABILITY_KEY",
+    "PARTSAPI_CROSSES_KEY",
+    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_BASE_URL",
+]
+
+
+def _clear_partsapi_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    for name in PARTSAPI_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
-    for name in ["PARTSAPI_KEY", "PARTSAPI_BASE_URL", "PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
+    _clear_partsapi_env(monkeypatch)
+    for name in ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
         monkeypatch.delenv(name, raising=False)
 
     status = catalog_provider_status()
@@ -32,6 +54,7 @@ def test_aftermarket_catalog_status_has_two_public_live_sources():
 
 
 def test_catalog_provider_status_detects_configured_partsapi(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "test-secret")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -44,7 +67,7 @@ def test_catalog_provider_status_detects_configured_partsapi(monkeypatch):
 
 
 def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypatch):
-    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_PARTS_BY_VIN_KEY", "test-secret")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
@@ -68,8 +91,51 @@ def test_catalog_provider_status_detects_configured_17vin_account(monkeypatch):
     assert vin17["present_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
 
 
+def test_catalog_provider_status_detects_emex_account(monkeypatch):
+    monkeypatch.setenv("EMEX_LOGIN", "test-user")
+    monkeypatch.setenv("EMEX_PASSWORD", "test-secret")
+
+    status = catalog_provider_status(stage="procurement_price")
+    emex = next(provider for provider in status["providers"] if provider["source_id"] == "emex")
+
+    assert emex["configured"] is True
+    assert emex["live_callable_now"] is True
+    assert emex["present_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD"]
+    assert "whitelist" in emex["limits"]
+
+
+def test_catalog_provider_status_accepts_rossko_app_key_aliases(monkeypatch):
+    monkeypatch.delenv("ROSSKO_KEY1", raising=False)
+    monkeypatch.delenv("ROSSKO_KEY2", raising=False)
+    monkeypatch.setenv("ROSSKO_API_KEY1", "test-key-1")
+    monkeypatch.setenv("ROSSKO_API_KEY2", "test-key-2")
+
+    status = catalog_provider_status(stage="procurement_price")
+    rossko = next(provider for provider in status["providers"] if provider["source_id"] == "rossko")
+
+    assert rossko["configured"] is True
+    assert rossko["live_callable_now"] is True
+    assert rossko["present_env_names"] == ["ROSSKO_API_KEY1", "ROSSKO_API_KEY2"]
+
+
+def test_catalog_provider_status_marks_exist_public_route_live(monkeypatch):
+    monkeypatch.delenv("EXIST_LOGIN", raising=False)
+    monkeypatch.delenv("EXIST_PASSWORD", raising=False)
+
+    status = catalog_provider_status(stage="procurement_price")
+    exist = next(provider for provider in status["providers"] if provider["source_id"] == "exist")
+
+    assert exist["configured"] is True
+    assert exist["live_callable_now"] is True
+    assert exist["access_mode"] == "public_site_read_only"
+    assert exist["env_names"] == []
+    assert exist["missing_env_names"] == []
+    assert "retail_price_benchmark" in exist["capabilities"]
+
+
 def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeypatch):
-    for name in ["PARTSAPI_KEY", "PARTSAPI_BASE_URL", "PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
+    _clear_partsapi_env(monkeypatch)
+    for name in ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
         monkeypatch.delenv(name, raising=False)
 
     identity = decode_vehicle_identity(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from .catalog_adapters import build_oem_parts_provider_plan
@@ -237,7 +236,18 @@ def build_crm_vin_parts_lookup_pipeline(
             {
                 "step": "quote_procurement_and_market_prices",
                 "sources": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter", "Emex", "Exist", "Autodoc", "ZZap", "Drom", "Avito"],
-                "checks": ["procurement vs retail vs client sale", "stock", "lead time", "return terms", "package basis"],
+                "source_roles": {
+                    "procurement_first": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter", "Emex"],
+                    "public_retail_reference": ["Exist", "Autodoc", "ZZap", "Drom", "Avito"],
+                },
+                "checks": [
+                    "procurement vs retail vs client sale",
+                    "stock",
+                    "lead time",
+                    "return terms",
+                    "package basis",
+                    "Exist writes only source Exist, office 905, price/lead-time/analog summary, confidence, and requires-confirmation",
+                ],
             },
             {
                 "step": "build_quote_matrix",

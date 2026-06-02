@@ -212,6 +212,41 @@ def test_lookup_oem_catalog_candidates_combines_three_catalogs(monkeypatch):
     assert result["oem_candidates"][0]["part_number"] == "04465-60280"
 
 
+def test_lookup_oem_catalog_candidates_uses_partsapi_vin_decode_oe_fallback(monkeypatch):
+    calls = []
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        calls.append(kwargs)
+        return {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": kwargs["operation"],
+            "payload": {
+                "data": {
+                    "array": {
+                        "oem": "30520-RRA-007",
+                        "name": "Ignition coil",
+                        "brand": "HONDA",
+                        "applicability": "VIN/OE decoded vehicle profile",
+                    }
+                }
+            },
+        }
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+
+    result = lookup_oem_catalog_candidates(
+        identifier="JHLRD58503C000000",
+        requested_part="катушка зажигания",
+        dry_run=False,
+    )
+
+    assert [call["operation"] for call in calls] == ["vin_decode_oe"]
+    assert result["provider_count"] == 1
+    assert result["oem_candidates"][0]["part_number"] == "30520-RRA-007"
+    assert any(blocker.get("fallback_operation") == "vin_decode_oe" for blocker in result["blockers"])
+
+
 def test_lookup_oem_catalog_candidates_redacts_raw_identifier_from_dry_run(monkeypatch):
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)

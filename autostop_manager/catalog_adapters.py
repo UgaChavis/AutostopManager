@@ -5,6 +5,7 @@ import os
 from typing import Any
 from urllib.parse import quote_plus
 
+from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .vin_lookup import classify_identifier
 
@@ -152,7 +153,8 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         name="ROSSKO",
         stage="procurement_price",
         access_mode="account_api",
-        env_names=("ROSSKO_KEY1", "ROSSKO_KEY2"),
+        env_names=(),
+        env_any_groups=(("ROSSKO_KEY1", "ROSSKO_KEY2"), ("ROSSKO_API_KEY1", "ROSSKO_API_KEY2")),
         capabilities=("supplier_search", "stock", "procurement_price", "delivery", "order_status"),
         priority="high",
         role="Krasnoyarsk-first procurement price/stock source after account keys are available.",
@@ -208,6 +210,32 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         limits="Wholesale terms require account; public website is retail/benchmark only.",
         docs_url="https://docum.autopiter.ru/",
     ),
+    CatalogProvider(
+        source_id="emex",
+        name="Emex",
+        stage="procurement_price",
+        access_mode="account_webservice_ip_whitelist",
+        env_names=("EMEX_LOGIN", "EMEX_PASSWORD"),
+        capabilities=("brand_article_search", "stock", "lead_time", "procurement_price", "delivery_probability"),
+        priority="medium",
+        role="Russia-wide supplier benchmark and procurement candidate through official SOAP web-service after account and IP whitelist.",
+        limits="Requires Emex account, service access request, and whitelisted server IP; do not scrape private cabinet, basket, or /api pages.",
+        docs_url="http://wsdoc.emex.ru/FindDetailAdv5.html",
+        manual_allowed=True,
+    ),
+    CatalogProvider(
+        source_id="exist",
+        name="Exist",
+        stage="procurement_price",
+        access_mode="public_site_read_only",
+        env_names=(),
+        capabilities=("brand_article_search", "retail_price_benchmark", "lead_time", "replacements", "catalog_disambiguation"),
+        priority="medium",
+        role="Public read-only retail benchmark and catalog disambiguation route for exact article checks in Krasnoyarsk office 905.",
+        limits="Use as public_retail_reference only; do not use login, cabinet, basket, orders, private APIs, or raw HTML as procurement confirmation.",
+        docs_url="https://s.exist.ru/xml/osd.xml",
+        manual_allowed=True,
+    ),
 )
 
 
@@ -232,13 +260,14 @@ def _env_configured(names: tuple[str, ...], any_groups: tuple[tuple[str, ...], .
 
 
 def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
+    load_runtime_env()
     providers = []
     for provider in PROVIDERS:
         if stage and provider.stage != stage:
             continue
         configured, present, missing, missing_groups = _env_configured(provider.env_names, provider.env_any_groups)
         if not provider.env_names:
-            configured = bool(provider.env_any_groups and configured) or provider.access_mode in {"public_api", "local_rules"}
+            configured = bool(provider.env_any_groups and configured) or provider.access_mode in {"public_api", "public_site_read_only", "local_rules"}
         providers.append(
             {
                 **asdict(provider),
@@ -252,14 +281,45 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
                 "live_callable_now": configured and provider.access_mode not in {"manual_subscription", "subscription_or_manual", "partner_or_manual", "local_rules"},
             }
         )
+    stage_matrix = _provider_stage_matrix(providers)
     return {
         "ok": True,
         "stage": stage,
         "providers": providers,
+        "stage_matrix": stage_matrix,
         "configured_count": sum(1 for provider in providers if provider["configured"]),
         "live_callable_count": sum(1 for provider in providers if provider["live_callable_now"]),
         "missing_provider_ids": [provider["source_id"] for provider in providers if not provider["configured"]],
     }
+
+
+def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stage_order = ["identity", "oem_catalog", "catalog_cross", "aftermarket_catalog", "procurement_price", "market_price"]
+    stage_labels = {
+        "identity": "identity",
+        "oem_catalog": "OEM",
+        "catalog_cross": "cross",
+        "aftermarket_catalog": "aftermarket",
+        "procurement_price": "procurement",
+        "market_price": "market benchmark",
+    }
+    matrix: list[dict[str, Any]] = []
+    by_stage = {stage: [provider for provider in providers if provider["stage"] == stage] for stage in stage_order}
+    for provider_stage in stage_order:
+        stage_providers = by_stage.get(provider_stage, [])
+        if not stage_providers:
+            continue
+        matrix.append(
+            {
+                "stage": provider_stage,
+                "label": stage_labels[provider_stage],
+                "provider_ids": [provider["source_id"] for provider in stage_providers],
+                "configured_count": sum(1 for provider in stage_providers if provider["configured"]),
+                "live_callable_count": sum(1 for provider in stage_providers if provider["live_callable_now"]),
+                "missing_provider_ids": [provider["source_id"] for provider in stage_providers if not provider["configured"]],
+            }
+        )
+    return matrix
 
 
 def _providers_for_stage(stage: str) -> list[dict[str, Any]]:
@@ -348,7 +408,13 @@ def build_oem_parts_provider_plan(
     oem_capable_source_ids = {"parts_catalogs_api", "vin17_api", "partsapi_ru"}
     live_oem = [provider for provider in oem_providers + cross_providers if provider["live_callable_now"] and provider["source_id"] in oem_capable_source_ids]
     live_aftermarket = [provider for provider in aftermarket_providers if provider["live_callable_now"]]
-    live_procurement = [provider for provider in procurement_providers if provider["live_callable_now"]]
+    live_price_references = [provider for provider in procurement_providers if provider["live_callable_now"]]
+    live_procurement = [
+        provider
+        for provider in live_price_references
+        if provider["access_mode"] != "public_site_read_only"
+        and "retail_price_benchmark" not in provider.get("capabilities", [])
+    ]
 
     blockers: list[dict[str, Any]] = []
     if not live_oem:
@@ -395,6 +461,8 @@ def build_oem_parts_provider_plan(
             "identity_ready_for_parts": identity_ready,
             "live_oem_catalog_available": bool(live_oem),
             "live_aftermarket_catalog_available": bool(live_aftermarket),
+            "live_price_reference_available": bool(live_price_references),
+            "live_public_retail_reference_available": any(provider["source_id"] == "exist" for provider in live_price_references),
             "live_procurement_available": bool(live_procurement),
             "can_complete_full_auto_lookup_now": identity_ready and bool(live_oem) and bool(live_procurement),
         },

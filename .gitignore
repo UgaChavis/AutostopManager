@@ -1,10 +1,13 @@
 .venv/
+.env
+.env.local
 .codex-remote-attachments/
 __pycache__/
 .pytest_cache/
 *.pyc
 tmp/
 output/
+frontend/control-center/control-report.json
 generated_invoices/
 data/
 data/*.sqlite3

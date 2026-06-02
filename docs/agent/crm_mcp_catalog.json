@@ -5,11 +5,11 @@
   "local_repo": "C:/Users/User/Desktop/AutostopCRM-V1",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-06-01",
+  "last_verified": "2026-06-02",
   "tool_counts": {
     "crm_base_tools": 71,
-    "optional_autostop_manager_tools": 45,
-    "production_tools_with_manager_mounted": 116
+    "optional_autostop_manager_tools": 51,
+    "production_tools_with_manager_mounted": 122
   },
   "source_documents": [
     "README.md",
@@ -180,6 +180,7 @@
       "vin17_search_part_number_by_vin",
       "partsapi_catalog_lookup",
       "public_aftermarket_catalog_lookup",
+      "exist_price_lookup",
       "plan_crm_vin_oem_parts_lookup",
       "benchmark_vin_parts_lookup",
       "build_vin_parts_work_order",
@@ -187,7 +188,12 @@
       "recommend_fluid_maintenance_sources",
       "recommend_service_management_actions",
       "estimate_repair_work_cost",
-      "lookup_oem_catalog_candidates"
+      "lookup_oem_catalog_candidates",
+      "control_report",
+      "memory_review",
+      "memory_review_apply",
+      "knowledge_intake_plan",
+      "provider_smoke_report"
     ]
   },
   "live_tools_verified": [
@@ -204,6 +210,7 @@
     "bulk_move_cards",
     "catalog_provider_status",
     "cleanup_audit",
+    "control_report",
     "create_card",
     "create_cash_transaction",
     "create_cashbox",
@@ -223,6 +230,7 @@
     "download_repair_order_print_pdf",
     "download_shared_file",
     "estimate_repair_work_cost",
+    "exist_price_lookup",
     "finish_manager_run",
     "get_board_content",
     "get_board_context",
@@ -243,6 +251,7 @@
     "get_repair_order_text",
     "get_runtime_status",
     "get_shared_file_info",
+    "knowledge_intake_plan",
     "learn_from_feedback",
     "link_card_to_client",
     "list_archived_cards",
@@ -261,6 +270,8 @@
     "memory_context_for",
     "memory_gaps",
     "memory_map",
+    "memory_review",
+    "memory_review_apply",
     "memory_topics",
     "move_card",
     "move_sticky",
@@ -270,6 +281,7 @@
     "plan_oem_parts_providers",
     "prepare_manager_context",
     "probe_knowledge_base",
+    "provider_smoke_report",
     "public_aftermarket_catalog_lookup",
     "read_card_attachment",
     "recall",
@@ -324,7 +336,7 @@
     "Do not move or archive cards during routine cleanup unless the owner gives a separate explicit target/action.",
     "If a VIN/chassis/frame number exists and vehicle_profile engine_model, gearbox_model, or drivetrain is empty, enrich only from source-backed data and preserve manual_fields.",
     "Use decode_vehicle_identity locally before VIN-critical parts lookup when the vehicle is ROW/JDM, vPIC is partial, or CRM/manual data conflicts; verify production CRM server has the updated AutostopManager mount before relying on it through the CRM MCP endpoint.",
-    "Use catalog_provider_status and plan_oem_parts_providers locally before claiming live VIN/OEM/supplier API access; use public_aftermarket_catalog_lookup for MANN-FILTER/DENSO brand-scope catalog enrichment; use partsapi_catalog_lookup only when PARTSAPI_KEY/PARTSAPI_BASE_URL are configured or dry-run is enough; use vin17_decode_vehicle and vin17_search_part_number_by_vin only when VIN17_ACCOUNT/VIN17_SECRET are configured or dry-run is enough; verify production CRM server has the updated AutostopManager mount before relying on these through the CRM MCP endpoint.",
+    "Use catalog_provider_status and plan_oem_parts_providers locally before claiming live VIN/OEM/supplier API access; use public_aftermarket_catalog_lookup for MANN-FILTER/DENSO brand-scope catalog enrichment; use exist_price_lookup for Exist public_retail_reference only, office 905 by default, without basket/private-cabinet data; use partsapi_catalog_lookup only when PARTSAPI_KEY/PARTSAPI_BASE_URL are configured or dry-run is enough; use vin17_decode_vehicle and vin17_search_part_number_by_vin only when VIN17_ACCOUNT/VIN17_SECRET are configured or dry-run is enough; verify production CRM server has the updated AutostopManager mount before relying on these through the CRM MCP endpoint.",
     "Use benchmark_vin_parts_lookup locally for 10-card or batch VIN/frame quality checks; it redacts raw identifiers and reports identity coverage, safe public query coverage, dry-run adapter readiness, and missing live catalog/supplier credentials.",
     "Use build_vin_parts_work_order locally after benchmark to get per-card OEM/EPC routes, prepared API checks, cross/applicability steps, supplier sequence, CRM writeback gates, and acceptance checklists before doing live lookups.",
     "Use today_context/memory_context_for/recall/remember/learn_from_feedback only for durable non-CRM manager memory and lessons.",

@@ -124,6 +124,15 @@ SUPPLIER_ROUTES = [
         "acceptance": "Russia-wide price, stock, delivery to Krasnoyarsk, and brand disambiguation are visible.",
     },
     {
+        "source_id": "exist",
+        "name": "Exist",
+        "stage": "procurement_price",
+        "env_names": [],
+        "query_after": "selected brand/article or OEM reference",
+        "adapter": "exist-price-lookup",
+        "acceptance": "Public retail reference only: office 905, price/lead-time/analog summary, confidence, and requires-confirmation are visible; no basket/private-cabinet data.",
+    },
+    {
         "source_id": "zzap",
         "name": "ZZap",
         "stage": "market_price",

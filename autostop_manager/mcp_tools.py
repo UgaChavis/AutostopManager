@@ -4,6 +4,7 @@ from typing import Any
 
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
+    exist_price_lookup,
     lookup_oem_catalog_candidates,
     partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
@@ -11,6 +12,7 @@ from .catalog_clients import (
     vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
+from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
@@ -22,8 +24,11 @@ from .knowledge_base import (
     search_knowledge_base,
     sync_knowledge_base,
 )
+from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
+from .memory_review import apply_memory_review_item, build_memory_review
 from .service_management import build_service_management_plan
+from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -306,6 +311,20 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return build_system_audit(store=memory, registered_tool_names=_registered_tool_names(server))
 
     @server.tool(
+        name="control_report",
+        description=(
+            "Generate ControlReportV1: server/runtime/Codex readiness, system health, git state, tests/doctor route, "
+            "memory/knowledge/MCP/provider readiness, production ops gates, public ports, risks, and last run ledger. "
+            "Read-only and secrets-redacted."
+        ),
+    )
+    def control_report_tool(format: str = "json") -> dict[str, Any]:
+        report = build_control_report(store=memory)
+        if format == "markdown":
+            return {"ok": True, "format": "markdown", "markdown": format_control_report_markdown(report), "report": report}
+        return report
+
+    @server.tool(
         name="crm_health_plan",
         description="Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads.",
     )
@@ -333,6 +352,42 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     )
     def curate_memory_tool(apply: bool = False) -> dict[str, Any]:
         return curate_memory(memory, apply=apply)
+
+    @server.tool(
+        name="memory_review",
+        description="Generate rule-based MemoryReviewItem proposals without copying raw CRM, email, or secret content.",
+    )
+    def memory_review_tool() -> dict[str, Any]:
+        return build_memory_review(memory)
+
+    @server.tool(
+        name="memory_review_apply",
+        description=(
+            "Apply a MemoryReviewItem decision. Supports accept, reject, or archive_duplicate; never deletes source memory records."
+        ),
+    )
+    def memory_review_apply_tool(item_id: str, action: str) -> dict[str, Any]:
+        return apply_memory_review_item(item_id, action, store=memory)
+
+    @server.tool(
+        name="knowledge_intake_plan",
+        description=(
+            "Classify a source file into KnowledgeIntakeDraft with safety flags and target metadata updates. "
+            "Apply mode is review-gated and does not commit raw private files."
+        ),
+    )
+    def knowledge_intake_plan_tool(path: str, apply: bool = False) -> dict[str, Any]:
+        return build_knowledge_intake_plan(path, apply=apply)
+
+    @server.tool(
+        name="provider_smoke_report",
+        description=(
+            "Run safe ProviderSmokeResult readiness checks for one provider or all providers. "
+            "Dry-run and live-readonly modes never call order, basket, or CRM writeback endpoints."
+        ),
+    )
+    def provider_smoke_report_tool(provider: str = "all", mode: str = "dry-run") -> dict[str, Any]:
+        return build_provider_smoke_report(provider=provider, mode=mode)
 
     @server.tool(
         name="start_manager_run",
@@ -636,6 +691,34 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             page_size=page_size,
             country=country,
             include_detail=include_detail,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="exist_price_lookup",
+        description=(
+            "Call or dry-run public read-only Exist article lookup for catalog disambiguation, analog visibility, "
+            "retail price benchmark, and lead time. Uses office 905 by default; returns public_retail_reference only."
+        ),
+    )
+    def exist_price_lookup_tool(
+        part_number: str,
+        brand: str | None = None,
+        pid: str | None = None,
+        office_id: int = 905,
+        max_candidates: int = 5,
+        max_offers: int = 10,
+        include_more_offers: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return exist_price_lookup(
+            part_number=part_number,
+            brand=brand,
+            pid=pid,
+            office_id=office_id,
+            max_candidates=max_candidates,
+            max_offers=max_offers,
+            include_more_offers=include_more_offers,
             dry_run=dry_run,
         )
 

@@ -3,11 +3,30 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from autostop_manager import config as manager_config
 from autostop_manager.mcp_tools import register_manager_memory_tools
 from autostop_manager.storage import ManagerMemoryStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PARTSAPI_ENV_NAMES = [
+    "PARTSAPI_KEY",
+    "PARTSAPI_VINDECODE_KEY",
+    "PARTSAPI_VINDECODE_OE_KEY",
+    "PARTSAPI_PARTS_BY_VIN_KEY",
+    "PARTSAPI_OE_APPLICABILITY_KEY",
+    "PARTSAPI_CROSSES_KEY",
+    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_BASE_URL",
+]
+
+
+def _clear_partsapi_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    for name in PARTSAPI_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
 
 
 class _FakeServer:
@@ -97,6 +116,41 @@ def test_catalog_provider_tools_are_registered(tmp_path):
     assert any(step["step"] == "find_oem_candidates" for step in plan["pipeline"])
 
 
+def test_control_center_and_review_tools_are_registered(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    expected = {
+        "control_report",
+        "memory_review",
+        "memory_review_apply",
+        "knowledge_intake_plan",
+        "provider_smoke_report",
+    }
+    assert expected.issubset(server.tools)
+
+    control = server.tools["control_report"]()
+    assert control["schema"] == "ControlReportV1"
+    assert control["privacy"]["secrets_redacted"] is True
+    assert "server_environment" in control
+    assert "codex_readiness" in control
+    assert "runtime_readiness" in control
+    assert "production_ops" in control
+    assert control["provider_readiness"]["safety"]["orders_blocked"] is True
+
+    review = server.tools["memory_review"]()
+    assert review["schema"] == "MemoryReviewItem"
+
+    intake = server.tools["knowledge_intake_plan"]("docs/agent/knowledge_map.json")
+    assert intake["schema"] == "KnowledgeIntakeDraft"
+
+    smoke = server.tools["provider_smoke_report"](provider="all", mode="dry-run")
+    assert smoke["schema"] == "ProviderSmokeResult"
+    assert smoke["summary"]["no_order_guarantee"] is True
+
+
 def test_vin17_adapter_tools_are_registered(tmp_path, monkeypatch):
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
@@ -113,8 +167,7 @@ def test_vin17_adapter_tools_are_registered(tmp_path, monkeypatch):
 
 
 def test_partsapi_adapter_tool_is_registered(tmp_path, monkeypatch):
-    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
-    monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
+    _clear_partsapi_env(monkeypatch)
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -142,7 +195,22 @@ def test_public_aftermarket_catalog_tool_is_registered(tmp_path):
     assert [item["provider"] for item in result["results"]] == ["mann_filter_catalog", "denso_aftermarket_catalog"]
 
 
+def test_exist_price_lookup_tool_is_registered(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    assert "exist_price_lookup" in server.tools
+    result = server.tools["exist_price_lookup"](part_number="9091901164", dry_run=True)
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["benchmark_kind"] == "public_retail_reference"
+    assert result["request_plan"]["office_cookie"] == "_go=905"
+
+
 def test_oem_catalog_lookup_tool_is_registered(tmp_path, monkeypatch):
+    _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTS_CATALOGS_API_KEY", "pc-secret")
     monkeypatch.setenv("PARTS_CATALOGS_BASE_URL", "https://api.parts-catalogs.example/v1")
     monkeypatch.setenv("PARTSAPI_KEY", "partsapi-secret")
@@ -188,8 +256,7 @@ def test_plan_crm_vin_oem_parts_lookup_tool_is_registered(tmp_path):
 
 
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
-    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
-    monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
+    _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
     server = _FakeServer()
@@ -213,8 +280,7 @@ def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
 
 
 def test_build_vin_parts_work_order_tool_is_registered(tmp_path, monkeypatch):
-    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
-    monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
+    _clear_partsapi_env(monkeypatch)
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -504,9 +570,9 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert catalog["tool_counts"]["crm_base_tools"] == 71
-    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 45
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 116
-    assert len(catalog["live_tools_verified"]) == 116
+    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 51
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 122
+    assert len(catalog["live_tools_verified"]) == 122
     assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identities" in catalog["tool_families"]["optional_manager_memory_and_routing"]
@@ -516,9 +582,15 @@ def test_crm_mcp_catalog_counts_are_current():
     assert "vin17_search_part_number_by_vin" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "partsapi_catalog_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "public_aftermarket_catalog_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "exist_price_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "plan_crm_vin_oem_parts_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "benchmark_vin_parts_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "build_vin_parts_work_order" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "control_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "memory_review" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "memory_review_apply" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "knowledge_intake_plan" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "provider_smoke_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert any("decode_vehicle_identity" in note for note in catalog["operation_notes"])
     assert any("plan_crm_vin_oem_parts_lookup" in note for note in catalog["operation_notes"])
     assert any("estimate_repair_work_cost" in note for note in catalog["operation_notes"])

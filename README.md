@@ -53,14 +53,35 @@ python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli cleanup-audit
 python -m autostop_manager.cli system-audit
 python -m autostop_manager.cli doctor
+python -m autostop_manager.cli control-report --format json --output frontend/control-center/control-report.json
+python -m autostop_manager.cli environment-report --format markdown --output reports/environment-report.md
+./scripts/doctor.sh
+./scripts/doctor.sh --full
 python -m autostop_manager.cli skills-audit
 python -m autostop_manager.cli memory-audit
+python -m autostop_manager.cli memory-review
 python -m autostop_manager.cli memory-curate --apply
+python -m autostop_manager.cli knowledge-intake --path docs/agent/knowledge_map.json --dry-run
+python -m autostop_manager.cli provider-smoke --provider all --mode dry-run
 ```
 
 `system-audit` is read-only and aggregates knowledge, annotation, skill,
 cleanup, SQLite, and manager MCP catalog checks. It reports test status as
 external; run pytest separately when changing docs/contracts.
+
+`scripts/doctor.sh` is the unified environment route for this host. The default
+run checks system tools, `/tmp`, both virtualenvs, MCP imports, pre-commit
+hooks, Chromium/Playwright, lint/audits, CRM browser smoke, and read-only
+production health, plus Control Center, environment report, memory review,
+provider smoke, and knowledge-intake smoke checks. Use `--full` before handoff
+or releases to add both pytest suites.
+
+`control-report` writes the local Control Center payload. `environment-report`
+is a CLI alias over the same safe data with emphasis on server/Codex/runtime
+readiness: OS, disk, memory, public ports, core tools, skills/plugins, git
+hooks, venv packages, env key presence without values, provider readiness, and
+production ops gates. Open `frontend/control-center/index.html` after
+generating `frontend/control-center/control-report.json`.
 
 ## Manager MCP Tools
 
@@ -77,8 +98,12 @@ Current families:
   `search_knowledge_base`, `audit_knowledge_base`,
   `audit_knowledge_annotations`, `audit_skill_registry`;
 - health: `system_audit`, `cleanup_audit`, `crm_health_plan`;
+- control center: `control_report`, `provider_smoke_report`;
 - operations: `start_manager_run`, `record_manager_run_event`,
   `finish_manager_run`, `list_manager_runs`;
+- memory quality: `audit_memory`, `curate_memory`, `memory_review`,
+  `memory_review_apply`;
+- knowledge intake: `knowledge_intake_plan`;
 - automotive helpers: `lookup_original_parts`, `decode_vehicle_identity`,
   `catalog_provider_status`, `lookup_oem_catalog_candidates`,
   `plan_crm_vin_oem_parts_lookup`, `benchmark_vin_parts_lookup`,

@@ -68,6 +68,11 @@ def _safe_call_digest(call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _call_missing_env_names(call: dict[str, Any]) -> list[str]:
+    request_plan = call.get("request_plan") or {}
+    return call.get("missing_env_names") or request_plan.get("missing_env_names") or []
+
+
 def _candidate_digest(candidate: dict[str, Any]) -> dict[str, Any]:
     return {
         "provider": candidate.get("provider"),
@@ -236,9 +241,16 @@ def build_partsapi_vin_smoke_report(
             }
         )
 
-    missing_env_names = sorted({name for call in calls for name in (call.get("missing_env_names") or (call.get("request_plan") or {}).get("missing_env_names") or [])})
+    required_operations = {"vin_decode_oe"}
+    if can_call_parts_by_vin:
+        required_operations.add("parts_by_vin")
+    required_calls = [call for call in calls if call.get("operation") in required_operations]
+    optional_calls = [call for call in calls if call.get("operation") not in required_operations]
+    missing_env_names = sorted({name for call in required_calls for name in _call_missing_env_names(call)})
+    optional_missing_env_names = sorted({name for call in optional_calls for name in _call_missing_env_names(call)})
+    failed_required_calls = [call for call in required_calls if not call.get("ok")]
     report = {
-        "ok": not missing_env_names and not blockers,
+        "ok": not missing_env_names and not blockers and not failed_required_calls,
         "provider": "partsapi_vin_smoke",
         "crm_order": {
             "number": item.get("number"),
@@ -265,7 +277,9 @@ def build_partsapi_vin_smoke_report(
         "oem_candidates": [_candidate_digest(candidate) for candidate in oem_candidates[:max_candidates]],
         "enrichment": enriched[:max_candidates],
         "blockers": blockers,
+        "failed_required_calls": [_safe_call_digest(call) for call in failed_required_calls],
         "missing_env_names": missing_env_names,
+        "optional_missing_env_names": optional_missing_env_names,
         "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False},
     }
     return report

@@ -109,7 +109,6 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
         for domain, route in domains.items():
             use_when = [str(item) for item in route.get("use_when", [])]
             primary_files = [str(item) for item in route.get("primary_files", [])]
-            reference_files = _unique_strings([str(item) for item in route.get("reference_files", [])])
             optional_runtime_files = _optional_runtime_files(route)
             optional_status = {
                 raw_path: (_resolve_path(raw_path).exists() and _resolve_path(raw_path).is_file())
