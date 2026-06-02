@@ -98,9 +98,10 @@ Use these MCP tools when working through the manager:
 - `vin17_search_part_number_by_vin` - read-only 17VIN part-number-by-VIN
   adapter/dry-run after a 17VIN decode has returned an EPC code.
 - `partsapi_catalog_lookup` - read-only PartsAPI adapter/dry-run for
-  `VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability`, `getCrosses`,
-  `getCrossesWithBrand`, and `searchArticles`; requires `PARTSAPI_KEY` and
-  `PARTSAPI_BASE_URL` for live calls.
+  `VINdecode`, `VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability`, `getCrosses`,
+  `getCrossesWithBrand`, and `searchArticles`; live calls require
+  `PARTSAPI_BASE_URL` plus either `PARTSAPI_KEY` or a method-specific
+  `PARTSAPI_*_KEY`.
 - `benchmark_vin_parts_lookup` - read-only batch benchmark for 10-card or CRM
   VIN/frame/body-number quality checks: identity confidence, part-intent
   recognition, safe public query coverage, PartsAPI/17VIN dry-run readiness,
@@ -268,6 +269,7 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 - `crm_vin_oem_parts_lookup_playbook.md` - end-to-end CRM card VIN/frame/body-number -> OEM -> replacements/crosses -> закупка/RF market prices -> structured CRM writeback workflow.
 - `vehicle_identity_playbook.md` - classify VIN, Japanese frame/chassis number, Korean VIN, and market-specific codes.
 - `vin_oem_lookup_playbook.md` - original catalog number lookup routing.
+- `partsapi_method_contracts.md` - PartsAPI method inputs, normalized output buckets, and smoke-test notes for VIN/OEM lookup.
 - `vin_oem_sources.json` - VIN/OEM source catalog.
 - `parts_search_playbook.md` - Drom/marketplace sourcing workflow.
 - `zzap_search_playbook.md` - ZZap price comparison, replacements, and local-region checks.

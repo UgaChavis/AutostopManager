@@ -16,7 +16,10 @@ def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
     assert any(provider["source_id"] == "denso_aftermarket_catalog" and provider["live_callable_now"] for provider in status["providers"])
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
     assert partsapi["configured"] is False
-    assert partsapi["missing_env_names"] == ["PARTSAPI_KEY", "PARTSAPI_BASE_URL"]
+    assert "PARTSAPI_BASE_URL" in partsapi["missing_env_names"]
+    assert "PARTSAPI_KEY" in partsapi["missing_env_names"]
+    assert ["PARTSAPI_KEY"] in partsapi["missing_env_groups"]
+    assert ["PARTSAPI_PARTS_BY_VIN_KEY"] in partsapi["missing_env_groups"]
 
 
 def test_aftermarket_catalog_status_has_two_public_live_sources():
@@ -37,7 +40,20 @@ def test_catalog_provider_status_detects_configured_partsapi(monkeypatch):
 
     assert partsapi["configured"] is True
     assert partsapi["live_callable_now"] is True
-    assert partsapi["present_env_names"] == ["PARTSAPI_KEY", "PARTSAPI_BASE_URL"]
+    assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_KEY"]
+
+
+def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypatch):
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_PARTS_BY_VIN_KEY", "test-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    status = catalog_provider_status(stage="catalog_cross")
+    partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
+
+    assert partsapi["configured"] is True
+    assert partsapi["live_callable_now"] is True
+    assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_PARTS_BY_VIN_KEY"]
 
 
 def test_catalog_provider_status_detects_configured_17vin_account(monkeypatch):

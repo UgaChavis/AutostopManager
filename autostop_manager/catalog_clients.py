@@ -49,6 +49,14 @@ query ($search: String!, $currentPage: Int!, $pageSize: Int!) {
 """.strip()
 
 PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
+    "vin_decode": {
+        "method": "VINdecode",
+        "required": ("identifier", "lang"),
+        "params": {"vin": "identifier", "lang": "lang"},
+        "defaults": {"lang": "ru"},
+        "docs_url": "https://partsapi.ru/method/doc/VINdecode",
+        "role": "VIN decode into TecDoc/TecRMI vehicle identity and characteristics.",
+    },
     "vin_decode_oe": {
         "method": "VINdecodeOE",
         "required": ("identifier",),
@@ -60,6 +68,7 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "method": "getPartsbyVIN",
         "required": ("identifier", "part_type", "category"),
         "params": {"vin": "identifier", "type": "part_type", "cat": "category"},
+        "defaults": {"part_type": "oem"},
         "docs_url": "https://partsapi.ru/method/doc/getPartsbyVIN",
         "role": "OEM/non-OEM parts list by VIN and part group.",
     },
@@ -92,6 +101,16 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "docs_url": "https://partsapi.ru/method/doc/searchArticles",
         "role": "TecDoc article search by any part-number form.",
     },
+}
+
+PARTSAPI_METHOD_KEY_ENV_NAMES = {
+    "VINdecode": "PARTSAPI_VINDECODE_KEY",
+    "VINdecodeOE": "PARTSAPI_VINDECODE_OE_KEY",
+    "getPartsbyVIN": "PARTSAPI_PARTS_BY_VIN_KEY",
+    "getOEApplicability": "PARTSAPI_OE_APPLICABILITY_KEY",
+    "getCrosses": "PARTSAPI_CROSSES_KEY",
+    "getCrossesWithBrand": "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "searchArticles": "PARTSAPI_SEARCH_ARTICLES_KEY",
 }
 
 PARTS_CATALOGS_OPERATIONS: dict[str, dict[str, Any]] = {
@@ -520,6 +539,11 @@ def _partsapi_credentials() -> dict[str, Any]:
     }
 
 
+def _partsapi_method_key(method: str) -> tuple[str, str | None]:
+    env_name = PARTSAPI_METHOD_KEY_ENV_NAMES.get(method)
+    return (os.getenv(env_name) or "", env_name) if env_name else ("", None)
+
+
 def _parts_catalogs_credentials() -> dict[str, Any]:
     key = os.getenv("PARTS_CATALOGS_API_KEY") or ""
     base_url = os.getenv("PARTS_CATALOGS_BASE_URL") or ""
@@ -594,6 +618,242 @@ def extract_oem_candidates(*, provider: str, payload: dict[str, Any], operation:
             continue
         seen.add(identity)
         candidates.append(normalized)
+    return candidates
+
+
+_PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
+    "make": ("manuName", "manuShortName", "brand", "brend"),
+    "catalog": ("catalog", "katalog"),
+    "model": ("modelName", "model", "modely"),
+    "engine": ("motorCodes", "motorType", "engine", "dvigately"),
+    "modification": ("typeName", "modification", "modifikacii"),
+    "market": ("market", "rynok"),
+    "production_date": ("date", "data_vypuska"),
+    "options": ("options", "opcii"),
+    "body": ("bodyStyle", "bodystyle", "kuzov", "kuzova"),
+    "grade": ("grade", "komplektaciya"),
+    "transmission": ("kp", "kpp"),
+    "tecdoc_car_id": ("carId", "typeNumber"),
+    "tecdoc_external_id": ("TecDocExternalId",),
+    "tecrmi_external_id": ("TecRmiExternalId",),
+    "model_year_from": ("yearOfConstrFrom", "modelyearfrom"),
+    "model_year_to": ("yearOfConstrTo", "modelyearto"),
+    "plant": ("plant",),
+    "frame_color": ("framecolor", "cvet_kuzova"),
+    "trim_color": ("trimcolor", "cvet_salona"),
+    "paint_type": ("painttype",),
+    "fuel_type": ("fuelType",),
+    "brake_system": ("brakeSystem", "brakeType"),
+    "displacement_cc": ("cylinderCapacityCcm", "ccmTech"),
+    "power_hp_from": ("powerHpFrom",),
+    "power_hp_to": ("powerHpTo",),
+    "power_kw_from": ("powerKwFrom",),
+    "power_kw_to": ("powerKwTo",),
+}
+
+
+def _partsapi_vehicle_profile_from_item(item: dict[str, Any], *, operation: str | None = None) -> dict[str, Any]:
+    profile = {
+        "provider": "partsapi_ru",
+        "source_operation": operation,
+        "raw_keys": sorted(str(key) for key in item.keys()),
+    }
+    for normalized_key, source_keys in _PARTSAPI_PROFILE_FIELDS.items():
+        value = _first_value(item, source_keys)
+        if value not in (None, ""):
+            profile[normalized_key] = value
+
+    identifier = _first_value(item, ("vin", "VIN", "frame", "FRAME"))
+    if identifier not in (None, ""):
+        profile["redacted_identifier"] = _redact_identifier(str(identifier))
+    return profile
+
+
+def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str | None = None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+
+    items: list[dict[str, Any]] = []
+    if operation == "vin_decode":
+        result = payload.get("result")
+        if isinstance(result, dict):
+            items.extend(item for item in result.values() if isinstance(item, dict))
+        elif isinstance(result, list):
+            items.extend(item for item in result if isinstance(item, dict))
+    elif operation == "vin_decode_oe":
+        data = payload.get("data")
+        array = data.get("array") if isinstance(data, dict) else None
+        if isinstance(array, dict):
+            items.append(array)
+        elif isinstance(array, list):
+            items.extend(item for item in array if isinstance(item, dict))
+
+    return [_partsapi_vehicle_profile_from_item(item, operation=operation) for item in items]
+
+
+def _partsapi_parts_by_vin_records(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    if isinstance(payload.get("parts"), str):
+        return [payload]
+    records: list[dict[str, Any]] = []
+    for key in ("result", "data", "items"):
+        nested = payload.get(key)
+        if isinstance(nested, list):
+            records.extend(item for item in nested if isinstance(item, dict))
+        elif isinstance(nested, dict):
+            records.extend(_partsapi_parts_by_vin_records(nested))
+    return records
+
+
+def extract_partsapi_parts_by_vin_candidates(*, payload: Any, operation: str | None = "parts_by_vin") -> list[dict[str, Any]]:
+    candidates = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+    for item in _partsapi_parts_by_vin_records(payload):
+        raw_parts = str(item.get("parts") or "").strip()
+        if not raw_parts:
+            continue
+        tokens = [token.strip() for token in raw_parts.split("|") if token.strip()]
+        if not tokens:
+            continue
+
+        pairs: list[tuple[str | None, str]] = []
+        if len(tokens) == 1:
+            pairs.append((None, tokens[0]))
+        else:
+            for index in range(0, len(tokens) - 1, 2):
+                pairs.append((tokens[index], tokens[index + 1]))
+            if len(tokens) % 2:
+                pairs.append((None, tokens[-1]))
+
+        evidence = {
+            "group": item.get("group"),
+            "category_name": item.get("name"),
+            "shortname": item.get("shortname"),
+            "is_fit_for_this_vin": True,
+        }
+        evidence = {key: value for key, value in evidence.items() if value not in (None, "")}
+        for brand, part_number in pairs:
+            normalized_part_number = str(part_number or "").strip()
+            if not normalized_part_number:
+                continue
+            identity = (normalized_part_number, brand, item.get("shortname") or item.get("name"))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append(
+                {
+                    "provider": "partsapi_ru",
+                    "part_number": normalized_part_number,
+                    "brand": brand,
+                    "name": item.get("shortname") or item.get("name"),
+                    "source_operation": operation,
+                    "fitment_evidence": evidence,
+                    "confidence": _candidate_confidence({"is_fit_for_this_vin": True}, evidence),
+                    "raw_keys": sorted(str(key) for key in item.keys()),
+                }
+            )
+    return candidates
+
+
+def _partsapi_cross_records(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    if any(key in payload for key in ("crossBrand", "crossNumber", "partNumber")):
+        return [payload]
+    records: list[dict[str, Any]] = []
+    for key in ("result", "data", "items", "crosses"):
+        nested = payload.get(key)
+        if isinstance(nested, list):
+            records.extend(item for item in nested if isinstance(item, dict))
+        elif isinstance(nested, dict):
+            records.extend(_partsapi_cross_records(nested))
+    return records
+
+
+def extract_partsapi_cross_candidates(*, payload: Any, operation: str | None = None) -> list[dict[str, Any]]:
+    candidates = []
+    seen: set[tuple[str | None, str, str | None, str | None]] = set()
+    for item in _partsapi_cross_records(payload):
+        cross_number = _first_value(item, ("crossNumber", "cross_number", "replacementNumber", "replacement_number"))
+        if cross_number in (None, ""):
+            continue
+        source_brand = _first_value(item, ("brand", "partBrand", "sourceBrand"))
+        source_part_number = _first_value(item, ("partNumber", "part_number", "number", "sourceNumber"))
+        cross_brand = _first_value(item, ("crossBrand", "cross_brand", "replacementBrand", "replacement_brand", "brandName"))
+        normalized_cross_number = str(cross_number).strip()
+        identity = (cross_brand, normalized_cross_number, source_brand, source_part_number)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidates.append(
+            {
+                "provider": "partsapi_ru",
+                "source_operation": operation,
+                "relationship": "cross",
+                "brand": cross_brand,
+                "part_number": normalized_cross_number,
+                "source_brand": source_brand,
+                "source_part_number": source_part_number,
+                "fitment_evidence": {
+                    "source": "CROSSBASE.RU",
+                    "fitment_confirmed": False,
+                },
+                "confidence": 0.6,
+                "raw_keys": sorted(str(key) for key in item.keys()),
+            }
+        )
+    return candidates
+
+
+def _partsapi_article_records(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    if any(key in payload for key in ("ART_ID", "ART_ARTICLE_NR", "ART_SUP_BRAND")):
+        return [payload]
+    records: list[dict[str, Any]] = []
+    for key in ("result", "data", "items", "articles"):
+        nested = payload.get(key)
+        if isinstance(nested, list):
+            records.extend(item for item in nested if isinstance(item, dict))
+        elif isinstance(nested, dict):
+            records.extend(_partsapi_article_records(nested))
+    return records
+
+
+def extract_partsapi_article_candidates(*, payload: Any, operation: str | None = "search_articles") -> list[dict[str, Any]]:
+    candidates = []
+    seen: set[tuple[str | None, str | None, str | None]] = set()
+    for item in _partsapi_article_records(payload):
+        part_number = _first_value(item, ("ART_ARTICLE_NR", "articleNumber", "article_number", "number"))
+        article_id = _first_value(item, ("ART_ID", "articleId", "article_id"))
+        brand = _first_value(item, ("ART_SUP_BRAND", "brand", "supplierBrand"))
+        if part_number in (None, "") and article_id in (None, ""):
+            continue
+        identity = (str(article_id) if article_id not in (None, "") else None, str(part_number) if part_number not in (None, "") else None, str(brand) if brand not in (None, "") else None)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidates.append(
+            {
+                "provider": "partsapi_ru",
+                "source_operation": operation,
+                "article_id": article_id,
+                "part_number": str(part_number).strip() if part_number not in (None, "") else None,
+                "brand": brand,
+                "product_name": _first_value(item, ("ART_PRODUCT_NAME", "productName", "product_name", "name")),
+                "found_via": _first_value(item, ("FOUND_VIA", "foundVia", "found_via")),
+                "fitment_evidence": {"fitment_confirmed": False},
+                "confidence": 0.5,
+                "raw_keys": sorted(str(key) for key in item.keys()),
+            }
+        )
     return candidates
 
 
@@ -746,7 +1006,8 @@ def build_partsapi_request(
     method_param: str | None = None,
 ) -> dict[str, Any]:
     credentials = _partsapi_credentials()
-    actual_key = key if key is not None else credentials["key"]
+    method_key, method_key_env_name = _partsapi_method_key(method)
+    actual_key = key if key is not None else method_key or credentials["key"]
     actual_base_url = (base_url if base_url is not None else credentials["base_url"]).rstrip("?&")
     actual_key_param = key_param or credentials["key_param"]
     actual_method_param = method_param or credentials["method_param"]
@@ -772,6 +1033,7 @@ def build_partsapi_request(
         "partsapi_method": method,
         "params": {key: value for key, value in params.items() if value not in (None, "")},
         "base_url_configured": bool(actual_base_url),
+        "method_key_env_name": method_key_env_name if method_key else None,
         "key_param": actual_key_param,
         "method_param": actual_method_param,
         "missing_env_names": missing,
@@ -789,6 +1051,7 @@ def _partsapi_operation_params(
     brand: str | None = None,
     part_type: str | None = None,
     category: str | None = None,
+    lang: str | None = None,
     lang_id: int | None = None,
 ) -> dict[str, Any]:
     spec = PARTSAPI_OPERATIONS[operation]
@@ -802,6 +1065,7 @@ def _partsapi_operation_params(
                 "brand": brand,
                 "part_type": part_type,
                 "category": category,
+                "lang": lang,
                 "lang_id": lang_id,
             }.items()
             if value not in (None, "")
@@ -821,6 +1085,7 @@ def partsapi_catalog_lookup(
     brand: str | None = None,
     part_type: str | None = None,
     category: str | None = None,
+    lang: str | None = None,
     lang_id: int | None = None,
     timeout: float = 20.0,
     dry_run: bool = False,
@@ -845,6 +1110,7 @@ def partsapi_catalog_lookup(
                 "brand": brand,
                 "part_type": part_type,
                 "category": category,
+                "lang": lang,
                 "lang_id": lang_id,
             }.items()
             if value not in (None, "")
@@ -858,6 +1124,7 @@ def partsapi_catalog_lookup(
         brand=brand,
         part_type=part_type,
         category=category,
+        lang=lang,
         lang_id=lang_id,
     )
     request_plan = build_partsapi_request(method=spec["method"], params=params)
@@ -890,11 +1157,33 @@ def partsapi_catalog_lookup(
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
+    cross_candidates = (
+        extract_partsapi_cross_candidates(payload=payload, operation=operation)
+        if operation in {"crosses", "crosses_with_brand"}
+        else []
+    )
+    article_candidates = (
+        extract_partsapi_article_candidates(payload=payload, operation=operation)
+        if operation == "search_articles"
+        else []
+    )
+    oem_candidates = (
+        []
+        if operation in {"crosses", "crosses_with_brand", "search_articles"}
+        else extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation)
+    )
+    if operation == "parts_by_vin":
+        oem_candidates.extend(extract_partsapi_parts_by_vin_candidates(payload=payload, operation=operation))
+
     return {
         **base,
         "ok": True,
         "payload": payload,
-        "oem_candidates": extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation),
+        "empty_payload": payload in (None, [], {}),
+        "vehicle_profiles": extract_partsapi_vehicle_profiles(payload=payload, operation=operation),
+        "oem_candidates": oem_candidates,
+        "cross_candidates": cross_candidates,
+        "article_candidates": article_candidates,
     }
 
 
@@ -1048,10 +1337,71 @@ def _result_oem_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _compact_provider_result(result: dict[str, Any]) -> dict[str, Any]:
     compact = {key: value for key, value in result.items() if key not in {"payload"}}
-    if "oem_candidates" in compact:
-        compact["candidate_count"] = len(compact["oem_candidates"]) if isinstance(compact["oem_candidates"], list) else 0
-        compact.pop("oem_candidates", None)
+    for bucket in ("oem_candidates", "cross_candidates", "article_candidates", "vehicle_profiles"):
+        if bucket in compact:
+            count_name = f"{bucket.removesuffix('s')}_count"
+            compact[count_name] = len(compact[bucket]) if isinstance(compact[bucket], list) else 0
+            compact.pop(bucket, None)
     return compact
+
+
+def resolve_partsapi_category(requested_part: str | None, explicit_category: str | None = None) -> dict[str, Any]:
+    part_profile = normalize_part_intent(requested_part)
+    raw_candidates = [str(value).strip() for value in part_profile.get("partsapi_cat_candidates", []) if str(value).strip()]
+    numeric_candidates = [value for value in raw_candidates if value.isdigit()]
+    text_candidates = [value for value in raw_candidates if not value.isdigit()]
+
+    def _profile_digest() -> dict[str, Any]:
+        return {
+            "recognized": bool(part_profile.get("recognized")),
+            "intent_id": part_profile.get("intent_id"),
+            "canonical_name_ru": part_profile.get("canonical_name_ru"),
+        }
+
+    explicit = str(explicit_category or "").strip()
+    if explicit:
+        kind = "numeric_id" if explicit.isdigit() else "text_candidate"
+        return {
+            "category": explicit,
+            "category_kind": kind,
+            "category_unresolved": kind != "numeric_id",
+            "source": "explicit",
+            "numeric_candidates": numeric_candidates,
+            "text_candidates": text_candidates,
+            "part_intent": _profile_digest(),
+        }
+
+    if numeric_candidates:
+        return {
+            "category": numeric_candidates[0],
+            "category_kind": "numeric_id",
+            "category_unresolved": False,
+            "source": "parts_intent_numeric_candidate",
+            "numeric_candidates": numeric_candidates,
+            "text_candidates": text_candidates,
+            "part_intent": _profile_digest(),
+        }
+
+    if text_candidates:
+        return {
+            "category": text_candidates[0],
+            "category_kind": "text_candidate",
+            "category_unresolved": True,
+            "source": "parts_intent_text_candidate",
+            "numeric_candidates": numeric_candidates,
+            "text_candidates": text_candidates,
+            "part_intent": _profile_digest(),
+        }
+
+    return {
+        "category": None,
+        "category_kind": "unresolved",
+        "category_unresolved": True,
+        "source": "none",
+        "numeric_candidates": [],
+        "text_candidates": [],
+        "part_intent": _profile_digest(),
+    }
 
 
 def _provider_blocker(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -1077,7 +1427,7 @@ def lookup_oem_catalog_candidates(
     car_id: str | None = None,
     group_id: str | None = None,
     epc: str | None = None,
-    partsapi_part_type: str = "original",
+    partsapi_part_type: str = "oem",
     partsapi_category: str | None = None,
     timeout: float = 20.0,
     dry_run: bool = False,
@@ -1085,8 +1435,8 @@ def lookup_oem_catalog_candidates(
     part_profile = normalize_part_intent(requested_part)
     terms = [str(term).strip() for term in part_profile.get("catalog_search_terms", []) if str(term).strip()]
     primary_term = terms[0] if terms else requested_part
-    partsapi_terms = part_profile.get("partsapi_cat_candidates") or []
-    category = partsapi_category or (partsapi_terms[0] if partsapi_terms else primary_term)
+    partsapi_category_resolution = resolve_partsapi_category(requested_part, explicit_category=partsapi_category)
+    category = partsapi_category_resolution.get("category")
 
     provider_results: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
@@ -1117,16 +1467,27 @@ def lookup_oem_catalog_candidates(
             }
         )
 
-    provider_results.append(
-        partsapi_catalog_lookup(
-            operation="parts_by_vin",
-            identifier=identifier,
-            part_type=partsapi_part_type,
-            category=category,
-            timeout=timeout,
-            dry_run=dry_run,
+    if category and (dry_run or partsapi_category_resolution.get("category_kind") == "numeric_id"):
+        provider_results.append(
+            partsapi_catalog_lookup(
+                operation="parts_by_vin",
+                identifier=identifier,
+                part_type=partsapi_part_type,
+                category=category,
+                timeout=timeout,
+                dry_run=dry_run,
+            )
         )
-    )
+    else:
+        blockers.append(
+            {
+                "provider": "partsapi_ru",
+                "operation": "parts_by_vin",
+                "missing_params": ["cat"] if not category else [],
+                "category_resolution": partsapi_category_resolution,
+                "error": "PartsAPI getPartsbyVIN live lookup requires a numeric cat id; text category candidates are retained as routing hints.",
+            }
+        )
 
     if epc:
         provider_results.append(
@@ -1164,6 +1525,7 @@ def lookup_oem_catalog_candidates(
         "provider_count": len(provider_results),
         "candidate_count": len(oem_candidates),
         "provider_results": [_compact_provider_result(result) for result in provider_results],
+        "partsapi_category_resolution": partsapi_category_resolution,
         "oem_candidates": oem_candidates,
         "blockers": blockers,
         "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False},

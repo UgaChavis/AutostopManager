@@ -27,6 +27,7 @@ from .knowledge_base import (
     sync_knowledge_base,
 )
 from .memory_curator import audit_memory, curate_memory
+from .partsapi_smoke import build_partsapi_vin_smoke_report, select_crm_partsapi_smoke_case
 from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
@@ -234,13 +235,22 @@ def build_parser() -> argparse.ArgumentParser:
     partsapi.add_argument(
         "--operation",
         required=True,
-        choices=["vin_decode_oe", "parts_by_vin", "oe_applicability", "crosses", "crosses_with_brand", "search_articles"],
+        choices=[
+            "vin_decode",
+            "vin_decode_oe",
+            "parts_by_vin",
+            "oe_applicability",
+            "crosses",
+            "crosses_with_brand",
+            "search_articles",
+        ],
     )
     partsapi.add_argument("--identifier", default=None)
     partsapi.add_argument("--part-number", default=None)
     partsapi.add_argument("--brand", default=None)
     partsapi.add_argument("--part-type", default=None)
     partsapi.add_argument("--category", default=None)
+    partsapi.add_argument("--lang", default=None)
     partsapi.add_argument("--lang-id", type=int, default=None)
     partsapi.add_argument("--dry-run", action="store_true")
 
@@ -265,10 +275,27 @@ def build_parser() -> argparse.ArgumentParser:
     oem_catalog_lookup.add_argument("--car-id", default=None)
     oem_catalog_lookup.add_argument("--group-id", default=None)
     oem_catalog_lookup.add_argument("--epc", default=None)
-    oem_catalog_lookup.add_argument("--partsapi-part-type", default="original")
+    oem_catalog_lookup.add_argument("--partsapi-part-type", default="oem")
     oem_catalog_lookup.add_argument("--partsapi-category", default=None)
     oem_catalog_lookup.add_argument("--timeout", type=float, default=20.0)
     oem_catalog_lookup.add_argument("--dry-run", action="store_true")
+
+    partsapi_vin_smoke = sub.add_parser(
+        "partsapi-vin-smoke",
+        help="Run a bounded read-only PartsAPI VIN/OEM smoke report for one CRM-like item",
+    )
+    partsapi_vin_smoke.add_argument("--item-json", default=None)
+    partsapi_vin_smoke.add_argument("--repair-orders-json", default=None)
+    partsapi_vin_smoke.add_argument("--identifier", default=None)
+    partsapi_vin_smoke.add_argument("--vehicle", default=None)
+    partsapi_vin_smoke.add_argument("--requested-part", default=None)
+    partsapi_vin_smoke.add_argument("--partsapi-category", default=None)
+    partsapi_vin_smoke.add_argument("--part-type", default="oem")
+    partsapi_vin_smoke.add_argument("--max-candidates", type=int, default=3)
+    partsapi_vin_smoke.add_argument("--timeout", type=float, default=20.0)
+    partsapi_vin_smoke.add_argument("--random-seed", type=int, default=0)
+    partsapi_vin_smoke.add_argument("--no-live-vpic", action="store_true")
+    partsapi_vin_smoke.add_argument("--dry-run", action="store_true")
 
     crm_vin_parts = sub.add_parser(
         "crm-vin-parts-plan",
@@ -689,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
                 brand=args.brand,
                 part_type=args.part_type,
                 category=args.category,
+                lang=args.lang,
                 lang_id=args.lang_id,
                 dry_run=args.dry_run,
             )
@@ -716,6 +744,40 @@ def main(argv: list[str] | None = None) -> int:
                 partsapi_part_type=args.partsapi_part_type,
                 partsapi_category=args.partsapi_category,
                 timeout=args.timeout,
+                dry_run=args.dry_run,
+            )
+        )
+    elif args.command == "partsapi-vin-smoke":
+        if args.repair_orders_json:
+            raw_orders = json.loads(args.repair_orders_json)
+            if isinstance(raw_orders, dict):
+                raw_orders = ((raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or [])
+            if not isinstance(raw_orders, list):
+                raise SystemExit("--repair-orders-json must be a JSON array or connector response object")
+            selected = select_crm_partsapi_smoke_case(raw_orders, random_seed=args.random_seed)
+            if not selected.get("ok"):
+                _print_json(selected)
+                return 0
+            item = selected["selected"]
+        elif args.item_json:
+            item = json.loads(args.item_json)
+            if not isinstance(item, dict):
+                raise SystemExit("--item-json must be a JSON object")
+        else:
+            item = {
+                "identifier": args.identifier,
+                "vehicle": args.vehicle,
+                "requested_part": args.requested_part,
+            }
+        _print_json(
+            build_partsapi_vin_smoke_report(
+                item,
+                requested_part=args.requested_part,
+                partsapi_category=args.partsapi_category,
+                part_type=args.part_type,
+                max_candidates=args.max_candidates,
+                timeout=args.timeout,
+                live_vpic=not args.no_live_vpic,
                 dry_run=args.dry_run,
             )
         )

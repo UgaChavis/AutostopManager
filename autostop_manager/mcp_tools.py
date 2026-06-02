@@ -587,8 +587,9 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     @server.tool(
         name="partsapi_catalog_lookup",
         description=(
-            "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup. Requires PARTSAPI_KEY and PARTSAPI_BASE_URL "
-            "for live calls; supports VINdecodeOE, getPartsbyVIN, getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles."
+            "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup. Live calls require PARTSAPI_BASE_URL plus "
+            "PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, "
+            "getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles."
         ),
     )
     def partsapi_catalog_lookup_tool(
@@ -598,6 +599,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         brand: str | None = None,
         part_type: str | None = None,
         category: str | None = None,
+        lang: str | None = None,
         lang_id: int | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
@@ -608,6 +610,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             brand=brand,
             part_type=part_type,
             category=category,
+            lang=lang,
             lang_id=lang_id,
             dry_run=dry_run,
         )
@@ -650,7 +653,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         car_id: str | None = None,
         group_id: str | None = None,
         epc: str | None = None,
-        partsapi_part_type: str = "original",
+        partsapi_part_type: str = "oem",
         partsapi_category: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:

@@ -29,6 +29,7 @@ def test_normalize_part_intent_recognizes_current_crm_part_phrases():
         "замена ГРМ": "timing_chain_kit",
         "двигатель": "engine_assembly",
         "камера заднего вида": "rear_view_camera",
+        "передняя правая ступица": "wheel_hub",
     }
 
     for phrase, intent_id in cases.items():

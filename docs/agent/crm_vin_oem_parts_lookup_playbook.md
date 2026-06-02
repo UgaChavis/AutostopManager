@@ -114,9 +114,9 @@ Classify before decoding.
      Parts-Catalogs `catalog_id/car_id/group_id` and 17VIN `epc` are known,
      to collect OEM candidates from Parts-Catalogs, PartsAPI, and 17VIN in one
      read-only result;
-   - PartsAPI `partsapi_catalog_lookup` for VINdecodeOE, getPartsbyVIN,
-     getOEApplicability, getCrosses/getCrossesWithBrand, and searchArticles
-     (`PARTSAPI_KEY` + `PARTSAPI_BASE_URL`, or dry-run adapter check first);
+   - PartsAPI `partsapi_catalog_lookup` for the normalized method set in
+     `partsapi_method_contracts.md` (`PARTSAPI_KEY` + `PARTSAPI_BASE_URL`, or
+     dry-run adapter check first);
    - 17VIN VIN-based part category/list/search endpoints
      (`VIN17_ACCOUNT` + `VIN17_SECRET`, or dry-run adapter check first);
    - AUTOPOISK EPC/Cross tab under subscription;

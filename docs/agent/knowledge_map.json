@@ -1029,11 +1029,13 @@
       "source_of_truth_files": [
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/partsapi_method_contracts.md",
         "docs/agent/vin_oem_sources.json"
       ],
       "primary_files": [
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/partsapi_method_contracts.md",
         "docs/agent/vin_oem_sources.json"
       ]
     },
@@ -1453,6 +1455,7 @@
         "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/partsapi_method_contracts.md",
         "docs/agent/vin_oem_sources.json",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
@@ -1462,6 +1465,7 @@
         "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
+        "docs/agent/partsapi_method_contracts.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json"
       ]

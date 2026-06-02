@@ -196,11 +196,13 @@ def test_lookup_oem_catalog_candidates_combines_three_catalogs(monkeypatch):
         car_id="car-1",
         group_id="front-brake",
         epc="toyota",
+        partsapi_category="100",
         dry_run=False,
     )
 
     assert result["ok"] is True
     assert result["provider_count"] == 3
+    assert result["partsapi_category_resolution"]["category_kind"] == "numeric_id"
     assert {item["provider"] for item in result["provider_results"]} == {
         "parts_catalogs_api",
         "partsapi_ru",

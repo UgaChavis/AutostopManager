@@ -347,7 +347,8 @@
         "getArticleCrosses",
         "getApplicability",
         "getCrosses",
-        "getCrossesWithBrand"
+        "getCrossesWithBrand",
+        "searchArticles"
       ],
       "limits": "Not a закупка source by itself unless connected price/stock data is explicitly available; validate license and regional data freshness.",
       "env_names": [
@@ -508,7 +509,7 @@
       "source_id": "partsapi_ru",
       "role": "Cross/applicability and VIN/OE decode candidate.",
       "mvp_priority": "high",
-      "adapter": "read-only VINdecodeOE/getPartsbyVIN/getOEApplicability/getCrosses normalizer.",
+      "adapter": "read-only VINdecode/VINdecodeOE/getPartsbyVIN/getOEApplicability/getCrosses/getCrossesWithBrand/searchArticles normalizer.",
       "acceptance": "For each test OEM, return applicability, crosses, and confidence flags without treating crosses as fitment-confirmed by default."
     },
     {

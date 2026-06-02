@@ -173,7 +173,7 @@ def _partsapi_dry_run_calls(identifier: str, part_profile: dict[str, Any]) -> li
             partsapi_catalog_lookup(
                 operation="parts_by_vin",
                 identifier=identifier,
-                part_type="original",
+                part_type="oem",
                 category=str(categories[0]),
                 dry_run=True,
             )

@@ -55,8 +55,18 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         name="PARTSAPI.RU",
         stage="catalog_cross",
         access_mode="api_key",
-        env_names=("PARTSAPI_KEY", "PARTSAPI_BASE_URL"),
-        capabilities=("vin_decode_oe", "parts_by_vin", "oe_applicability", "article_crosses", "crosses_with_brand"),
+        env_names=("PARTSAPI_BASE_URL",),
+        env_any_groups=(
+            ("PARTSAPI_KEY",),
+            ("PARTSAPI_VINDECODE_KEY",),
+            ("PARTSAPI_VINDECODE_OE_KEY",),
+            ("PARTSAPI_PARTS_BY_VIN_KEY",),
+            ("PARTSAPI_OE_APPLICABILITY_KEY",),
+            ("PARTSAPI_CROSSES_KEY",),
+            ("PARTSAPI_CROSSES_WITH_BRAND_KEY",),
+            ("PARTSAPI_SEARCH_ARTICLES_KEY",),
+        ),
+        capabilities=("vin_decode", "vin_decode_oe", "parts_by_vin", "oe_applicability", "search_articles", "crosses", "article_crosses", "crosses_with_brand"),
         priority="high",
         role="Primary MVP candidate for VIN/OE decode, applicability, and cross/analog checks.",
         limits="Needs account/API key; not a confirmed procurement stock source unless supplier prices are connected.",
@@ -210,7 +220,14 @@ def _env_configured(names: tuple[str, ...], any_groups: tuple[tuple[str, ...], .
         group_names = [name for group in any_groups for name in group]
         group_present = [name for name in group_names if os.getenv(name)]
         group_missing_flat = sorted({name for group in missing_groups for name in group})
-        return (len(missing) == 0 and group_configured, sorted(set(present + group_present)), group_missing_flat, missing_groups)
+        effective_group_missing = [] if group_configured else group_missing_flat
+        effective_missing_groups = [] if group_configured else missing_groups
+        return (
+            len(missing) == 0 and group_configured,
+            sorted(set(present + group_present)),
+            sorted(set(missing + effective_group_missing)),
+            effective_missing_groups,
+        )
     return (len(missing) == 0, present, missing, missing_groups)
 
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import re
 import subprocess
+
+from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,5 +143,43 @@ def test_source_pack_playbook_navigation_uses_repo_relative_paths():
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if any(prefix in line for prefix in ambiguous_prefixes):
                 offenders.append(f"{path.relative_to(ROOT)}:{line_number}")
+
+    assert offenders == []
+
+
+def test_partsapi_contract_docs_match_adapter_operations():
+    contract = (ROOT / "docs" / "agent" / "partsapi_method_contracts.md").read_text(encoding="utf-8")
+    source_registry = json.loads((ROOT / "docs" / "agent" / "vin_oem_sources.json").read_text(encoding="utf-8"))
+    source_text = json.dumps(source_registry, ensure_ascii=False)
+
+    for operation, spec in PARTSAPI_OPERATIONS.items():
+        assert operation in contract
+        assert spec["method"] in contract
+        assert spec["method"] in source_text
+
+
+def test_agent_docs_do_not_expose_partsapi_test_keys_or_crm_contacts():
+    tracked_docs = subprocess.run(
+        ["git", "ls-files", "docs/agent"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    offenders: list[str] = []
+    blocked_patterns = [
+        re.compile(r"Тестовый ключ", re.IGNORECASE),
+        re.compile(r"key=[0-9a-f]{30,}", re.IGNORECASE),
+        re.compile(r"PARTSAPI_KEY=(?!<|\$|your|YOUR|xxx|\*)\S+", re.IGNORECASE),
+        re.compile(r"(?<!\d)(?:\+?7|8)\s?[\d\s() -]{9,18}"),
+    ]
+    for raw_path in tracked_docs:
+        path = ROOT / raw_path
+        if not path.is_file():
+            continue
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        if any(pattern.search(content) for pattern in blocked_patterns):
+            offenders.append(raw_path)
 
     assert offenders == []
