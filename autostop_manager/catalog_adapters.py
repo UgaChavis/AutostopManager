@@ -65,9 +65,31 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
             ("PARTSAPI_OE_APPLICABILITY_KEY",),
             ("PARTSAPI_CROSSES_KEY",),
             ("PARTSAPI_CROSSES_WITH_BRAND_KEY",),
+            ("PARTSAPI_CROSSES_TITLE_KEY",),
+            ("PARTSAPI_ARTICLE_CROSSES_KEY",),
             ("PARTSAPI_SEARCH_ARTICLES_KEY",),
+            ("PARTSAPI_GET_ENGINE_KEY",),
+            ("PARTSAPI_SEARCH_TREE_KEY",),
+            ("PARTSAPI_ARTICLES_KEY",),
+            ("PARTSAPI_ARTICLE_KEY",),
+            ("PARTSAPI_ARTICLE_CRITERIA_KEY",),
         ),
-        capabilities=("vin_decode", "vin_decode_oe", "parts_by_vin", "oe_applicability", "search_articles", "crosses", "article_crosses", "crosses_with_brand"),
+        capabilities=(
+            "vin_decode",
+            "vin_decode_oe",
+            "parts_by_vin",
+            "oe_applicability",
+            "search_articles",
+            "crosses",
+            "article_crosses",
+            "crosses_with_brand",
+            "crosses_title",
+            "engine_info",
+            "search_tree",
+            "articles",
+            "article",
+            "article_criteria",
+        ),
         priority="high",
         role="Primary MVP candidate for VIN/OE decode, applicability, and cross/analog checks.",
         limits="Needs account/API key; not a confirmed procurement stock source unless supplier prices are connected.",
@@ -394,9 +416,12 @@ def build_oem_parts_provider_plan(
     identity = vehicle_identity or {}
     profile = identity.get("vehicle_profile") or {}
     confidence_label = identity.get("confidence_label") or "unknown"
-    identity_ready = confidence_label == "high" and not any(
+    strict_identity_ready = confidence_label == "high" and not any(
         conflict.get("severity") == "high" for conflict in identity.get("conflicts", [])
     )
+    readiness = identity.get("parts_lookup_readiness") or {}
+    identity_ready = bool(readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup", strict_identity_ready)))
+    writeback_ready = bool(readiness.get("ready_for_crm_writeback", strict_identity_ready))
 
     identity_providers = _pick_configured(_providers_for_stage("identity"))
     oem_providers = _pick_configured(_providers_for_stage("oem_catalog"))
@@ -459,12 +484,14 @@ def build_oem_parts_provider_plan(
         "identity_confidence": confidence_label,
         "live_capability": {
             "identity_ready_for_parts": identity_ready,
+            "identity_ready_for_oem_candidate_lookup": identity_ready,
+            "identity_ready_for_crm_writeback": writeback_ready,
             "live_oem_catalog_available": bool(live_oem),
             "live_aftermarket_catalog_available": bool(live_aftermarket),
             "live_price_reference_available": bool(live_price_references),
             "live_public_retail_reference_available": any(provider["source_id"] == "exist" for provider in live_price_references),
             "live_procurement_available": bool(live_procurement),
-            "can_complete_full_auto_lookup_now": identity_ready and bool(live_oem) and bool(live_procurement),
+            "can_complete_full_auto_lookup_now": writeback_ready and bool(live_oem) and bool(live_procurement),
         },
         "pipeline": [
             {

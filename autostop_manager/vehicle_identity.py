@@ -723,7 +723,13 @@ def decode_vehicle_identity(
         for provider in catalog_provider_status()["providers"]
         if provider["stage"] in {"oem_catalog", "catalog_cross"}
     ]
-    ready_for_parts = _confidence_label(score) == "high" and not any(item["severity"] == "high" for item in conflicts)
+    has_high_conflict = any(item["severity"] == "high" for item in conflicts)
+    ready_for_parts = _confidence_label(score) == "high" and not has_high_conflict
+    blocking_reasons = []
+    if has_high_conflict:
+        blocking_reasons.append("high_severity_identity_conflict")
+    if _confidence_label(score) != "high":
+        blocking_reasons.append("identity_confidence_below_high")
 
     return {
         "ok": True,
@@ -739,6 +745,15 @@ def decode_vehicle_identity(
         "confidence_label": _confidence_label(score),
         "parts_lookup_readiness": {
             "ready_for_oem_lookup": ready_for_parts,
+            "ready_for_oem_candidate_lookup": ready_for_parts,
+            "ready_for_crm_writeback": ready_for_parts,
+            "cross_source_agreement": {
+                "status": "not_checked",
+                "sources": ["NHTSA vPIC", "PartsAPI VINdecodeOE"],
+                "matched_fields": [],
+                "conflicting_fields": [],
+            },
+            "blocking_reasons": blocking_reasons,
             "reason": "High-confidence identity without high-severity conflicts is required before OEM/parts writeback."
             if not ready_for_parts
             else "Identity is sufficient for OEM lookup, but part fitment still requires EPC/source attribution.",
@@ -796,6 +811,8 @@ def decode_vehicle_identities(items: list[dict[str, Any]], *, live_vpic: bool = 
     medium = sum(1 for item in results if item["confidence_label"] == "medium")
     low = sum(1 for item in results if item["confidence_label"] == "low")
     ready_oem = sum(1 for item in results if item["parts_lookup_readiness"]["ready_for_oem_lookup"])
+    ready_candidate = sum(1 for item in results if item["parts_lookup_readiness"].get("ready_for_oem_candidate_lookup"))
+    ready_writeback = sum(1 for item in results if item["parts_lookup_readiness"].get("ready_for_crm_writeback"))
     return {
         "ok": True,
         "count": len(results),
@@ -805,6 +822,8 @@ def decode_vehicle_identities(items: list[dict[str, Any]], *, live_vpic: bool = 
         "identity_coverage": {
             "high_ratio": round(high / len(results), 2) if results else 0,
             "ready_for_oem_lookup_count": ready_oem,
+            "ready_for_oem_candidate_lookup_count": ready_candidate,
+            "ready_for_crm_writeback_count": ready_writeback,
             "needs_epc_or_document_check_count": sum(1 for item in results if item["required_next_sources"]),
         },
         "vpic_batch": {

@@ -28,13 +28,76 @@ use `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
 4. Public EPC mirror only as fallback.
 5. Marketplace only after the OEM or replacement number is known.
 
+## Official Catalog Boundaries
+
+- MAN commercial vehicles: use MAN Service Portal/webMANTIS or MAN
+  partslink24 first. webMANTIS is the spare-parts catalogue route for MAN
+  Genuine Parts and accepts the MAN vehicle production number or a 17-character
+  VIN through the Service Portal flow. partslink24 is an official ordering
+  route for MAN Genuine Parts and identifies parts with the VIN, but it requires
+  registration/customer data and may be trial or paid access.
+- Do not use downloadable MANTIS/EPC installers from third-party shops,
+  torrents, or forum mirrors as an official source. If such a page is the only
+  hit, mark the route as `blocked: legal_epc_access_required` and ask for
+  authorized MAN/webMANTIS, partslink24, dealer, or supplier confirmation.
+- MAHLE, Bosch, MANN-FILTER, Hengst, Donaldson, Fleetguard, NGK/NTK, and
+  similar manufacturer catalogs are aftermarket/OE-supplier catalogs. Use them
+  to confirm supplier article numbers, filters, plugs, sensors, crosses,
+  dimensions, replacements, and applicability. They can raise confidence for a
+  selected analog, but they do not by themselves prove the vehicle-specific OEM
+  number unless the catalog explicitly exposes an OEM reference and it is checked
+  against the VIN/frame EPC result.
+- TecDoc/TecAlliance data is a strong aftermarket identity layer for vehicle
+  type, article, OE-reference, cross, supersession, and applicability checks.
+  Treat it as cross/applicability evidence, not as the sole source of an OEM
+  EPC decision when the part is configuration-sensitive.
+- Freely downloadable official PDF catalogs are source records and manual
+  reference material. Do not commit full catalog PDFs or database exports to
+  Git unless the license, size, and owner intent are explicit. Prefer storing
+  source URL, publisher, catalog title/version, product scope, and date checked;
+  if a local copy is necessary, keep it in an untracked cache and cite the source
+  record in the CRM note.
+
+## Offline Catalog Cache
+
+Use the local offline cache when it exists:
+
+- source pack:
+  `docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/`;
+- runtime index: `data/offline_parts_catalogs/catalog_index.json`;
+- extracted searchable text: `data/offline_parts_catalogs/text/`.
+
+The cache is a supporting evidence layer for official downloadable
+aftermarket/catalog PDFs and spreadsheets. It is useful for filters, plugs,
+commercial-vehicle service parts, OE-reference rows, competitor crosses,
+dimensions, product notes, and kit/application footnotes.
+
+Recommended local check:
+
+```bash
+rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text
+```
+
+When using a hit, name the `catalog_id`, publisher, title, source URL,
+retrieved date, and checked number. Do not paste tables. Do not treat an
+offline MAHLE/Bosch/MANN/Donaldson/NGK/ZF match as a VIN-specific OEM result
+unless the OEM number was already confirmed through VIN/frame EPC or authorized
+dealer/catalog evidence.
+
+MAN boundary: no legal public offline MAN EPC is in the local cache. MAN OEM
+numbers still require authorized MAN Service Portal/webMANTIS, MAN
+PartsBase/partslink24, dealer, supplier, or configured catalog-provider
+confirmation. If only third-party MANTIS installers/mirrors appear, mark the
+route blocked until authorized evidence is available.
+
 ## Workflow
 
 1. Classify and normalize the identifier with `decode_vehicle_identity`.
    vPIC is vehicle identity only; it is not an OEM-parts catalog.
 2. Recognize the requested part with `normalize_part_intent`; capture axle,
    side, position, quantity basis, old number, and label photo when relevant.
-3. Select a catalog route from `vin_oem_sources.json`.
+3. Select a catalog route from `vin_oem_sources.json` and resolve numeric
+   PartsAPI group ids through `partsapi_category_index`.
 4. Use PartsAPI as the current MVP route:
    - `vin_decode` / `VINdecode` -> TecDoc/TecRMI identity and `carId`.
    - `vin_decode_oe` / `VINdecodeOE` -> OE-catalog vehicle identity.
@@ -42,11 +105,26 @@ use `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
      calls require numeric `cat` id and default to `type=oem`.
    - `oe_applicability` -> extra applicability evidence only; empty output is
      not a negative fitment proof.
-   - `crosses` / `crosses_with_brand` -> replacements in `cross_candidates`.
+   - `crosses` / `crosses_with_brand` / `crosses_title` -> replacements in
+     `cross_candidates`; `crosses_title` also carries localized `partname`.
    - `search_articles` -> TecDoc metadata in `article_candidates`.
+   - `article_crosses` / `getArticleCrosses` -> related TecDoc cross articles
+     after `search_articles` has returned an `ART_ID`.
+   - `search_tree` / `getSearchTree` -> refresh/validate numeric category
+     routing for live `getPartsbyVIN`.
 5. Record OEM candidates only from VIN/frame-specific catalog evidence. Keep
    cross and article metadata as enrichment until applicability is confirmed.
-6. Start supplier/market price lookup only after the OEM reference or selected
+6. For filters, plugs, belts, wipers, sensors, and other common wear parts,
+   use manufacturer aftermarket catalogs after the VIN/EPC step:
+   - check the local offline cache first when
+     `data/offline_parts_catalogs/catalog_index.json` exists;
+   - search the confirmed OEM/reference and normalized vehicle profile in
+     MAHLE/Bosch/MANN-FILTER/Hengst/NGK/Donaldson/Fleetguard as relevant;
+   - compare product category, dimensions, notes, production range, side/axis,
+     engine code, and kit contents;
+   - keep the aftermarket article in `cross_candidates` or `selected_part`,
+     not in `oem_candidates`, unless the source is the genuine OEM EPC.
+7. Start supplier/market price lookup only after the OEM reference or selected
    replacement is stable.
 
 ## PartsAPI Output Buckets

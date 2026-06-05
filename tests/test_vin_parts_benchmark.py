@@ -14,7 +14,14 @@ PARTSAPI_ENV_NAMES = [
     "PARTSAPI_OE_APPLICABILITY_KEY",
     "PARTSAPI_CROSSES_KEY",
     "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_CROSSES_TITLE_KEY",
+    "PARTSAPI_ARTICLE_CROSSES_KEY",
     "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_GET_ENGINE_KEY",
+    "PARTSAPI_SEARCH_TREE_KEY",
+    "PARTSAPI_ARTICLES_KEY",
+    "PARTSAPI_ARTICLE_KEY",
+    "PARTSAPI_ARTICLE_CRITERIA_KEY",
     "PARTSAPI_BASE_URL",
 ]
 
@@ -114,6 +121,137 @@ def test_vin_parts_benchmark_status_tracks_identity_ready_but_missing_live_sourc
     assert result["privacy"]["raw_identifier_redacted_from_output"] is True
 
 
+def test_vin_parts_benchmark_allows_read_only_lookup_after_partsapi_oe_agreement(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.decode_vehicle_identities",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "count": 1,
+            "high_confidence_count": 0,
+            "medium_confidence_count": 1,
+            "low_confidence_count": 0,
+            "identity_coverage": {},
+            "vpic_batch": {},
+            "results": [
+                {
+                    "confidence": 0.7,
+                    "confidence_label": "medium",
+                    "parts_lookup_readiness": {
+                        "ready_for_oem_lookup": False,
+                        "ready_for_oem_candidate_lookup": False,
+                        "ready_for_crm_writeback": False,
+                        "blocking_reasons": ["identity_confidence_below_high"],
+                    },
+                    "vehicle_profile": {"make": "HONDA", "model": "Accord", "model_year": 2003},
+                    "diagnostics": {},
+                    "warnings": [],
+                    "conflicts": [],
+                    "required_next_sources": [],
+                    "evidence_sources": [],
+                }
+            ],
+        },
+    )
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        operation = kwargs["operation"]
+        if operation == "vin_decode_oe":
+            return {
+                "ok": True,
+                "provider": "partsapi_ru",
+                "operation": operation,
+                "partsapi_method": "VINdecodeOE",
+                "request_plan": {"configured": True, "params": {"vin": "1HG***352"}, "redacted_url": "https://api.partsapi.ru?key=***"},
+                "vehicle_profiles": [{"make": "HONDA", "catalog": "HONDA2017", "grade": "EXV6"}],
+            }
+        return {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": operation,
+            "partsapi_method": operation,
+            "dry_run": True,
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+        }
+
+    monkeypatch.setattr("autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": "1HGCM82633A004352", "requested_part": "передние колодки"}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        include_vin17_dry_run=False,
+        include_oem_catalog_dry_run=False,
+        live_partsapi_identity=True,
+    )
+
+    identity = result["items"][0]["identity"]
+    assert identity["ready_for_oem_candidate_lookup"] is True
+    assert identity["ready_for_crm_writeback"] is False
+    assert identity["cross_source_agreement"]["status"] == "matched"
+    assert result["summary"]["ready_for_oem_candidate_lookup_count"] == 1
+    assert result["summary"]["ready_for_crm_writeback_count"] == 0
+
+
+def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.decode_vehicle_identities",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "count": 1,
+            "high_confidence_count": 0,
+            "medium_confidence_count": 1,
+            "low_confidence_count": 0,
+            "identity_coverage": {},
+            "vpic_batch": {},
+            "results": [
+                {
+                    "confidence": 0.7,
+                    "confidence_label": "medium",
+                    "parts_lookup_readiness": {"ready_for_oem_lookup": False, "ready_for_oem_candidate_lookup": False, "ready_for_crm_writeback": False},
+                    "vehicle_profile": {"make": "HONDA", "model": "Accord"},
+                    "diagnostics": {},
+                    "warnings": [],
+                    "conflicts": [],
+                    "required_next_sources": [],
+                    "evidence_sources": [],
+                }
+            ],
+        },
+    )
+
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup",
+        lambda **kwargs: {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": kwargs["operation"],
+            "partsapi_method": "VINdecodeOE",
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+            "vehicle_profiles": [{"make": "TOYOTA", "catalog": "TOYOTA"}],
+        },
+    )
+
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": "1HGCM82633A004352", "requested_part": "передние колодки"}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        include_vin17_dry_run=False,
+        include_oem_catalog_dry_run=False,
+        live_partsapi_identity=True,
+    )
+
+    identity = result["items"][0]["identity"]
+    assert identity["ready_for_oem_candidate_lookup"] is False
+    assert identity["cross_source_agreement"]["status"] == "conflict"
+    assert "partsapi_oe_identity_conflict" in identity["blocking_reasons"]
+
+
 def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTS_CATALOGS_API_KEY", "pc-secret")
@@ -151,3 +289,39 @@ def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
     assert smoke["ok"] is True
     assert smoke["blockers"] == []
     assert "JTEBU3FJX05027767" not in rendered
+
+
+def test_vin_parts_benchmark_can_attach_oem_resolution(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+
+    def fake_resolver(**kwargs):
+        return {
+            "schema": "VinOemResolution",
+            "status": "ready_for_live_oem_candidate_lookup",
+            "identity": {
+                "confidence_label": "high",
+                "ready_for_oem_lookup": True,
+                "ready_for_oem_candidate_lookup": True,
+                "ready_for_crm_writeback": False,
+                "vehicle_profile": {"make": "Honda"},
+            },
+            "candidate_count": 0,
+            "calls": [],
+            "manual_actions": [{"code": "run_live_get_parts_by_vin", "message": "call"}],
+        }
+
+    monkeypatch.setattr("autostop_manager.vin_parts_benchmark.resolve_vin_oem_parts", fake_resolver)
+
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": "1HGCM82633A004352", "requested_part": "передние колодки"}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        include_vin17_dry_run=False,
+        include_oem_catalog_dry_run=False,
+        resolve_oem=True,
+    )
+
+    assert result["summary"]["oem_resolution_count"] == 1
+    assert result["items"][0]["oem_resolution"]["schema"] == "VinOemResolution"
+    assert result["items"][0]["identity"]["ready_for_oem_candidate_lookup"] is True

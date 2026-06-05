@@ -14,7 +14,10 @@ PARTSAPI_ENV_NAMES = [
     "PARTSAPI_OE_APPLICABILITY_KEY",
     "PARTSAPI_CROSSES_KEY",
     "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_CROSSES_TITLE_KEY",
+    "PARTSAPI_ARTICLE_CROSSES_KEY",
     "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_GET_ENGINE_KEY",
     "PARTSAPI_BASE_URL",
 ]
 
@@ -92,3 +95,102 @@ def test_vin_parts_work_order_marks_part_clarification_gap():
     assert result["work_order_summary"]["needs_part_intent_clarification_count"] == 1
     assert result["items"][0]["status"] == "needs_part_intent_clarification_before_catalog_search"
     assert result["items"][0]["requested_part"]["intent_id"] == "unknown"
+
+
+def test_vin_parts_work_order_marks_position_clarification_for_generic_brake_pads():
+    result = build_vin_parts_work_order(
+        [
+            {
+                "identifier": "1C4RJFCT9CC000000",
+                "make": "Jeep",
+                "model": "Grand Cherokee",
+                "model_year": 2012,
+                "engine": "5.7 V8",
+                "requested_part": "тормозные колодки",
+            }
+        ],
+        requested_part="тормозные колодки",
+        live_vpic=False,
+    )
+
+    assert result["work_order_summary"]["needs_part_position_clarification_count"] == 1
+    assert result["items"][0]["status"] == "needs_part_position_clarification_before_catalog_search"
+    assert result["items"][0]["requested_part"]["intent_id"] == "brake_pads_unspecified_axle"
+    assert result["items"][0]["requested_part"]["clarification_fields"] == ["axle"]
+
+
+def test_vin_parts_work_order_marks_read_only_candidate_lookup_needs_manual_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_work_order.benchmark_vin_parts_lookup",
+        lambda *args, **kwargs: {
+            "summary": {"count": 1, "full_auto_lookup_count": 0},
+            "privacy": {"raw_identifier_redacted_from_output": True},
+            "items": [
+                {
+                    "index": 1,
+                    "identifier": {"redacted": {"display": "1HG***352"}, "kind": "vin"},
+                    "identity": {
+                        "ready_for_oem_lookup": True,
+                        "ready_for_oem_candidate_lookup": True,
+                        "ready_for_crm_writeback": False,
+                        "vehicle_profile": {"make": "HONDA", "model": "Accord"},
+                    },
+                    "requested_part": {
+                        "recognized": True,
+                        "intent_id": "front_brake_pads",
+                        "catalog_search_terms": ["передние колодки"],
+                        "clarification_required": False,
+                    },
+                    "live_capability": {"can_complete_full_auto_lookup_now": False},
+                    "blockers": [],
+                    "prepared_calls": {},
+                    "manual_public_search": {"queries": []},
+                }
+            ],
+        },
+    )
+
+    result = build_vin_parts_work_order([], requested_part="передние колодки")
+
+    assert result["work_order_summary"]["ready_for_oem_candidate_lookup_needs_manual_confirmation_count"] == 1
+    assert result["items"][0]["status"] == "ready_for_oem_candidate_lookup_needs_manual_confirmation"
+    assert result["items"][0]["crm_writeback_gate"]["can_run_read_only_oem_candidate_lookup"] is True
+    assert result["items"][0]["crm_writeback_gate"]["requires_manual_confirmation_before_writeback"] is True
+
+
+def test_vin_parts_work_order_uses_oem_resolution_status(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_work_order.benchmark_vin_parts_lookup",
+        lambda *args, **kwargs: {
+            "summary": {"count": 1, "full_auto_lookup_count": 0},
+            "privacy": {"raw_identifier_redacted_from_output": True},
+            "items": [
+                {
+                    "index": 1,
+                    "identifier": {"redacted": {"display": "1HG***352"}, "kind": "vin"},
+                    "identity": {"vehicle_profile": {"make": "HONDA"}, "ready_for_oem_candidate_lookup": True},
+                    "requested_part": {"recognized": True, "catalog_search_terms": ["передние колодки"], "clarification_required": False},
+                    "live_capability": {},
+                    "blockers": [],
+                    "prepared_calls": {},
+                    "manual_public_search": {"queries": []},
+                    "oem_resolution": {
+                        "status": "ready_for_live_oem_candidate_lookup",
+                        "manual_actions": [{"code": "run_live_get_parts_by_vin", "message": "call"}],
+                        "readiness": {"ready_for_oem_candidate_lookup": True},
+                        "crm_writeback_gate": {
+                            "can_write_final_material_line_now": False,
+                            "can_prepare_manual_writeback": False,
+                            "requires_manual_confirmation_before_writeback": True,
+                        },
+                    },
+                }
+            ],
+        },
+    )
+
+    result = build_vin_parts_work_order([], requested_part="передние колодки", resolve_oem=True)
+
+    assert result["work_order_summary"]["ready_for_live_oem_candidate_lookup_count"] == 1
+    assert result["items"][0]["status"] == "ready_for_live_oem_candidate_lookup"
+    assert result["items"][0]["next_manual_actions"][0]["code"] == "run_live_get_parts_by_vin"

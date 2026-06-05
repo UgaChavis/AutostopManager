@@ -27,6 +27,7 @@ from .knowledge_base import (
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
 from .memory_review import apply_memory_review_item, build_memory_review
+from .partsapi_category_index import explain_partsapi_category_for_intent, search_partsapi_category_index, validate_partsapi_category_index
 from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
@@ -36,6 +37,7 @@ from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
+from .vin_oem_resolver import resolve_vin_oem_parts
 from .vin_lookup import lookup_original_parts
 from .work_pricing import estimate_repair_work_cost
 
@@ -644,31 +646,72 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         description=(
             "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup. Live calls require PARTSAPI_BASE_URL plus "
             "PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, "
-            "getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles."
+            "getOEApplicability, getCrosses, getCrossesWithBrand, getCrossesTitle, getArticleCrosses, searchArticles, and getEngine. For getPartsbyVIN, "
+            "part_type defaults to oem; use omit/non-oem to skip the type query parameter."
         ),
     )
     def partsapi_catalog_lookup_tool(
         operation: str,
         identifier: str | None = None,
         part_number: str | None = None,
+        article_id: str | int | None = None,
         brand: str | None = None,
         part_type: str | None = None,
         category: str | None = None,
+        vehicle_type: str | None = None,
+        type_id: str | None = None,
         lang: str | None = None,
         lang_id: int | None = None,
+        timeout: float = 20.0,
+        max_attempts: int = 1,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         return partsapi_catalog_lookup(
             operation=operation,
             identifier=identifier,
             part_number=part_number,
+            article_id=article_id,
             brand=brand,
             part_type=part_type,
             category=category,
+            vehicle_type=vehicle_type,
+            type_id=type_id,
             lang=lang,
             lang_id=lang_id,
+            timeout=timeout,
+            max_attempts=max_attempts,
             dry_run=dry_run,
         )
+
+    @server.tool(
+        name="search_partsapi_category_index",
+        description="Search the local PartsAPI numeric category index by query/intent without live calls or secrets.",
+    )
+    def search_partsapi_category_index_tool(
+        query: str,
+        intent_id: str | None = None,
+        path: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        return search_partsapi_category_index(query, intent_id=intent_id, path=path, limit=limit)
+
+    @server.tool(
+        name="explain_partsapi_category_for_intent",
+        description="Explain why a PartsAPI numeric category was selected for a part intent.",
+    )
+    def explain_partsapi_category_for_intent_tool(
+        intent_id: str,
+        query: str | None = None,
+        path: str | None = None,
+    ) -> dict[str, Any]:
+        return explain_partsapi_category_for_intent(intent_id, query=query, path=path)
+
+    @server.tool(
+        name="validate_partsapi_category_index",
+        description="Validate the tracked local PartsAPI category index fixture without exposing secrets or identifiers.",
+    )
+    def validate_partsapi_category_index_tool(path: str | None = None) -> dict[str, Any]:
+        return validate_partsapi_category_index(path=path)
 
     @server.tool(
         name="public_aftermarket_catalog_lookup",
@@ -738,6 +781,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         epc: str | None = None,
         partsapi_part_type: str = "oem",
         partsapi_category: str | None = None,
+        timeout: float = 20.0,
+        max_attempts: int = 1,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         return lookup_oem_catalog_candidates(
@@ -749,6 +794,62 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             epc=epc,
             partsapi_part_type=partsapi_part_type,
             partsapi_category=partsapi_category,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="resolve_vin_oem_parts",
+        description=(
+            "Resolve one VIN/frame/body-number and requested part into a read-only VinOemResolution: "
+            "identity, part intent, PartsAPI category, OEM candidates, enrichment, readiness gates, manual actions, and CRM gate."
+        ),
+    )
+    def resolve_vin_oem_parts_tool(
+        identifier: str,
+        requested_part: str,
+        make: str | None = None,
+        model: str | None = None,
+        model_year: int | None = None,
+        engine: str | None = None,
+        transmission: str | None = None,
+        market: str | None = None,
+        drivetrain: str | None = None,
+        axle: str | None = None,
+        side: str | None = None,
+        position: str | None = None,
+        live_vpic: bool = True,
+        live_partsapi_identity: bool = False,
+        live_partsapi_oem: bool = False,
+        max_live_calls: int = 3,
+        max_candidates: int = 3,
+        timeout: float = 20.0,
+        max_attempts: int = 1,
+        partsapi_category_index: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return resolve_vin_oem_parts(
+            identifier=identifier,
+            requested_part=requested_part,
+            make=make,
+            model=model,
+            model_year=model_year,
+            engine=engine,
+            transmission=transmission,
+            market=market,
+            drivetrain=drivetrain,
+            axle=axle,
+            side=side,
+            position=position,
+            live_vpic=live_vpic,
+            live_partsapi_identity=live_partsapi_identity,
+            live_partsapi_oem=live_partsapi_oem,
+            max_live_calls=max_live_calls,
+            max_candidates=max_candidates,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            partsapi_category_index=partsapi_category_index,
             dry_run=dry_run,
         )
 
@@ -779,6 +880,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         urgency: str | None = None,
         city: str = "Красноярск",
         limit: int = 10,
+        vin_oem_resolution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return build_crm_vin_parts_lookup_pipeline(
             card_id=card_id,
@@ -800,6 +902,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             urgency=urgency,
             city=city,
             limit=limit,
+            vin_oem_resolution=vin_oem_resolution,
         )
 
     @server.tool(
@@ -817,6 +920,12 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         use_vpic_batch: bool = True,
         include_partsapi_dry_run: bool = True,
         include_vin17_dry_run: bool = True,
+        live_partsapi_identity: bool = False,
+        live_partsapi_oem: bool = False,
+        resolve_oem: bool = False,
+        max_live_calls: int = 3,
+        max_candidates: int = 3,
+        partsapi_category_index: str | None = None,
     ) -> dict[str, Any]:
         return benchmark_vin_parts_lookup(
             items,
@@ -826,6 +935,12 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             use_vpic_batch=use_vpic_batch,
             include_partsapi_dry_run=include_partsapi_dry_run,
             include_vin17_dry_run=include_vin17_dry_run,
+            live_partsapi_identity=live_partsapi_identity,
+            live_partsapi_oem=live_partsapi_oem,
+            resolve_oem=resolve_oem,
+            max_live_calls=max_live_calls,
+            max_candidates=max_candidates,
+            partsapi_category_index=partsapi_category_index,
         )
 
     @server.tool(
@@ -842,6 +957,12 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         city: str = "Красноярск",
         live_vpic: bool = True,
         use_vpic_batch: bool = True,
+        live_partsapi_identity: bool = False,
+        live_partsapi_oem: bool = False,
+        resolve_oem: bool = False,
+        max_live_calls: int = 3,
+        max_candidates: int = 3,
+        partsapi_category_index: str | None = None,
     ) -> dict[str, Any]:
         return build_vin_parts_work_order(
             items,
@@ -849,6 +970,12 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             city=city,
             live_vpic=live_vpic,
             use_vpic_batch=use_vpic_batch,
+            live_partsapi_identity=live_partsapi_identity,
+            live_partsapi_oem=live_partsapi_oem,
+            resolve_oem=resolve_oem,
+            max_live_calls=max_live_calls,
+            max_candidates=max_candidates,
+            partsapi_category_index=partsapi_category_index,
         )
 
     @server.tool(

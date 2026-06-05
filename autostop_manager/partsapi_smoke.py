@@ -34,10 +34,15 @@ def _item_requested_part(item: dict[str, Any]) -> str:
 
 def _identity_digest(identity: dict[str, Any]) -> dict[str, Any]:
     profile = identity.get("vehicle_profile") or {}
+    readiness = identity.get("parts_lookup_readiness") or {}
     return {
         "confidence": identity.get("confidence"),
         "confidence_label": identity.get("confidence_label"),
-        "ready_for_oem_lookup": (identity.get("parts_lookup_readiness") or {}).get("ready_for_oem_lookup"),
+        "ready_for_oem_lookup": readiness.get("ready_for_oem_lookup"),
+        "ready_for_oem_candidate_lookup": readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")),
+        "ready_for_crm_writeback": readiness.get("ready_for_crm_writeback", readiness.get("ready_for_oem_lookup")),
+        "cross_source_agreement": readiness.get("cross_source_agreement") or {},
+        "blocking_reasons": readiness.get("blocking_reasons") or [],
         "vehicle_profile": {
             key: profile.get(key)
             for key in ("make", "model", "model_family", "platform", "model_year", "engine", "transmission", "market")
@@ -205,10 +210,20 @@ def build_partsapi_vin_smoke_report(
         brand = str(candidate.get("brand") or "").strip()
         if not part_number:
             continue
-        candidate_calls = [
-            partsapi_catalog_lookup(operation="search_articles", part_number=part_number, timeout=timeout, dry_run=dry_run),
-            partsapi_catalog_lookup(operation="oe_applicability", part_number=part_number, timeout=timeout, dry_run=dry_run),
-        ]
+        search_call = partsapi_catalog_lookup(operation="search_articles", part_number=part_number, timeout=timeout, dry_run=dry_run)
+        candidate_calls = [search_call]
+        for article in (search_call.get("article_candidates") or [])[:max_candidates]:
+            article_id = article.get("article_id") if isinstance(article, dict) else None
+            if article_id not in (None, ""):
+                candidate_calls.append(
+                    partsapi_catalog_lookup(operation="article_crosses", article_id=article_id, timeout=timeout, dry_run=dry_run)
+                )
+        candidate_calls.extend(
+            [
+                partsapi_catalog_lookup(operation="oe_applicability", part_number=part_number, timeout=timeout, dry_run=dry_run),
+                partsapi_catalog_lookup(operation="crosses_title", part_number=part_number, timeout=timeout, dry_run=dry_run),
+            ]
+        )
         if brand:
             candidate_calls.append(
                 partsapi_catalog_lookup(

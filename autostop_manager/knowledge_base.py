@@ -1333,6 +1333,16 @@ def _tokens(query: str) -> list[str]:
         "фильтры": ["filters", "parts", "oem"],
         "запчасти": ["parts", "spare_parts", "procurement"],
         "запчасть": ["parts", "spare_part", "procurement"],
+        "рулевую": ["рулевая", "steering"],
+        "рулевая": ["steering"],
+        "рейку": ["рейка", "rack", "steering_rack"],
+        "рейка": ["rack", "steering_rack"],
+        "рейки": ["рейка", "rack", "steering_rack"],
+        "контрактную": ["контрактная", "contract", "used"],
+        "контрактная": ["contract", "used"],
+        "контрактные": ["contract", "used"],
+        "красноярске": ["красноярск", "krasnoyarsk"],
+        "красноярск": ["krasnoyarsk"],
         "закупка": ["procurement", "purchase_price"],
         "закупочная": ["procurement", "purchase_price"],
         "аналоги": ["analog", "cross", "replacements"],
@@ -1365,6 +1375,36 @@ def _knowledge_fts_query(tokens: list[str]) -> str:
 def _domain_hints(query: str) -> dict[str, int]:
     lowered = query.lower()
     hints: dict[str, int] = {}
+    knowledge_intake_terms = [
+        "база знаний",
+        "базу знаний",
+        "базе знаний",
+        "knowledge base",
+        "knowledge",
+        "индексац",
+        "аннотац",
+        "разметк",
+        "полк",
+        "source pack",
+    ]
+    knowledge_intake_actions = [
+        "обнови",
+        "добавь",
+        "добавить",
+        "сохрани",
+        "сохранить",
+        "внеси",
+        "внести",
+        "усиль",
+        "усилить",
+        "структур",
+        "систематиз",
+        "проиндекс",
+    ]
+    if any(term in lowered for term in knowledge_intake_terms) and any(
+        action in lowered for action in knowledge_intake_actions
+    ):
+        hints["knowledge_intake"] = max(hints.get("knowledge_intake", 0), 55)
     if any(word in lowered for word in ["масло", "моторное", "жидк", "заправ", " то "]):
         hints["fluids"] = 20
     if any(word in lowered for word in ["диагност", "ошиб", "dtc", "скан"]):
@@ -1398,6 +1438,24 @@ def _domain_hints(query: str) -> dict[str, int]:
         word in lowered for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
     ):
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 40)
+    if any(
+        word in lowered
+        for word in [
+            "красноярск",
+            "дром",
+            "zzap",
+            "ззап",
+            "avito",
+            "авито",
+            "контракт",
+            "разбор",
+            "наличие",
+            "поставщик",
+            "рулев",
+            "рейк",
+        ]
+    ):
+        hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 36)
     if any(word in lowered for word in ["bmw", "бмв", "n63", "f15", "e15", "x5"]):
         hints["bmw_repair"] = max(hints.get("bmw_repair", 0), 10)
     if any(word in lowered for word in ["f15", "e15", "n63", "x5"]):

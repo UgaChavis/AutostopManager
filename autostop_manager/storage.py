@@ -31,7 +31,31 @@ def _decode_json(value: str | None, fallback: Any) -> Any:
 
 
 def _tokens(value: str) -> list[str]:
-    return list(dict.fromkeys(re.findall(r"[\w\-]+", value.casefold(), flags=re.UNICODE)))
+    aliases = {
+        "вин": ["vin"],
+        "кузов": ["chassis", "frame"],
+        "кузова": ["chassis", "frame"],
+        "оригинальный": ["oem", "catalog"],
+        "оригинального": ["oem", "catalog"],
+        "каталожный": ["catalog", "part_number"],
+        "каталожного": ["catalog", "part_number"],
+        "фильтра": ["фильтр", "filter"],
+        "фильтр": ["filter"],
+        "фильтры": ["фильтр", "filter"],
+        "запчасти": ["parts", "procurement"],
+        "запчасть": ["parts", "procurement"],
+        "детали": ["деталь", "part"],
+        "деталь": ["part"],
+        "рулевую": ["рулевая", "steering"],
+        "рейку": ["рейка", "rack", "steering_rack"],
+        "контрактную": ["контрактная", "contract", "used"],
+        "красноярске": ["красноярск", "krasnoyarsk"],
+    }
+    tokens: list[str] = []
+    for token in re.findall(r"[\w\-]+", value.casefold(), flags=re.UNICODE):
+        tokens.append(token)
+        tokens.extend(aliases.get(token, []))
+    return list(dict.fromkeys(tokens))
 
 
 def _matches_filter(value: str | None, expected: str | None) -> bool:
@@ -79,6 +103,183 @@ def _memory_tokens(query: str) -> list[str]:
             continue
         tokens.append(token)
     return list(dict.fromkeys(tokens))
+
+
+def _memory_context_queries(task: str) -> list[str]:
+    lowered = task.casefold()
+    queries: list[str] = []
+    if any(term in lowered for term in ["vin", "вин", "oem", "каталож", "оригиналь", "номер кузова"]):
+        queries.append("vin-oem-lookup-workflow original catalog numbers VIN OEM catalog")
+    if any(term in lowered for term in ["рейк", "контракт", "красноярск", "закуп", "наличие", "дром", "zzap", "ззап"]):
+        queries.append("parts_sourcing закупочная цена запчастей Красноярск selected part")
+    if any(term in lowered for term in ["база знаний", "базу знаний", "knowledge", "индексац", "аннотац"]):
+        queries.append("knowledge-intake-boundary knowledge-annotation-index memory-mcp-sync")
+    queries.append(task)
+    return list(dict.fromkeys(query for query in queries if query.strip()))
+
+
+def _suppress_board_cleanup_context(task: str) -> bool:
+    lowered = task.casefold()
+    automotive_lookup = any(
+        term in lowered
+        for term in [
+            "vin",
+            "вин",
+            "oem",
+            "каталож",
+            "оригиналь",
+            "номер кузова",
+            "фильтр",
+            "детал",
+            "запчаст",
+            "рейк",
+            "контракт",
+            "аналоги",
+        ]
+    )
+    explicit_cleanup = any(
+        term in lowered
+        for term in [
+            "приберись",
+            "переберись",
+            "перебери",
+            "уборк",
+            "очист",
+            "доску",
+            "board cleanup",
+            "cleanup",
+            "card cleanup",
+        ]
+    )
+    return automotive_lookup and not explicit_cleanup
+
+
+def _suppress_admin_context(task: str) -> bool:
+    lowered = task.casefold()
+    automotive_lookup = any(
+        term in lowered
+        for term in [
+            "vin",
+            "вин",
+            "oem",
+            "каталож",
+            "оригиналь",
+            "номер кузова",
+            "фильтр",
+            "детал",
+            "запчаст",
+            "рейк",
+            "контракт",
+            "аналоги",
+        ]
+    )
+    explicit_admin = any(
+        term in lowered
+        for term in [
+            "база знаний",
+            "базу знаний",
+            "knowledge",
+            "индексац",
+            "аннотац",
+            "github",
+            "публикац",
+            "коммит",
+            "репозитор",
+        ]
+    )
+    return automotive_lookup and not explicit_admin
+
+
+def _suppress_style_context(task: str) -> bool:
+    lowered = task.casefold()
+    automotive_lookup = any(
+        term in lowered
+        for term in [
+            "vin",
+            "вин",
+            "oem",
+            "каталож",
+            "оригиналь",
+            "номер кузова",
+            "фильтр",
+            "детал",
+            "запчаст",
+            "рейк",
+            "контракт",
+            "аналоги",
+        ]
+    )
+    explicit_text_work = any(
+        term in lowered
+        for term in [
+            "переберись",
+            "перебери",
+            "приберись",
+            "описание",
+            "оформи",
+            "текст",
+            "напиши",
+            "сообщение",
+            "комментарий",
+        ]
+    )
+    return automotive_lookup and not explicit_text_work
+
+
+def _memory_item_text(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("title") or ""),
+        str(item.get("content") or item.get("event") or item.get("rule") or item.get("details") or ""),
+        str(item.get("category") or item.get("applies_to") or item.get("scope") or ""),
+        str(item.get("source") or ""),
+        " ".join(str(tag) for tag in item.get("tags", [])),
+    ]
+    return " ".join(parts).casefold()
+
+
+def _is_context_noise(
+    item: dict[str, Any],
+    *,
+    task_text: str,
+    suppress_board_cleanup: bool,
+    suppress_admin_context: bool,
+    suppress_style_context: bool,
+) -> bool:
+    text = _memory_item_text(item)
+    category = str(item.get("category") or item.get("applies_to") or item.get("scope") or "").casefold()
+    title = str(item.get("title") or "").casefold()
+    if suppress_board_cleanup:
+        if category in {"board_cleanup", "board_cleanup_autopilot"}:
+            return True
+        if title.startswith("board-cleanup"):
+            return True
+        if any(marker in text for marker in ["board cleanup", "board_cleanup", "приберись", "переберись"]):
+            return True
+    if suppress_style_context and category in {"crm_style", "style"}:
+        return True
+    if suppress_admin_context and title.startswith(("knowledge-", "github-", "documentation-", "memory-")):
+        return True
+    if suppress_admin_context:
+        vehicle_families = [
+            (["toyota gr yaris", "yaris gr", "gxpa16", "g16e-gts"], ["toyota", "yaris", "gxpa16", "g16e"]),
+            (["bmw f15", "n63"], ["bmw", "f15", "n63", "x5"]),
+        ]
+        for item_markers, task_markers in vehicle_families:
+            if any(marker in text for marker in item_markers) and not any(marker in task_text for marker in task_markers):
+                return True
+    return False
+
+
+def _unique_memory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in items:
+        key = (str(item.get("kind") or ""), int(item.get("id") or 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def _fts_query(tokens: list[str]) -> str:
@@ -720,11 +921,11 @@ class ManagerMemoryStore:
                     if not _matches_tags(item.get("tags", []), tags):
                         continue
                     score, matched_fields = self._score_memory_item(item, query, query_tokens)
+                    if query_tokens and score <= 0:
+                        continue
                     score += int(float(item.get("importance") or 0.5) * 8)
                     if row_kind == "fact":
                         score += int(float(item.get("confidence") or 0.0) * 3)
-                    if query_tokens and score <= 0:
-                        continue
                     item["score"] = score
                     item["matched_fields"] = matched_fields
                     results.append(item)
@@ -755,13 +956,13 @@ class ManagerMemoryStore:
                     if not _matches_tags(item.get("tags", []), tags):
                         continue
                     score, matched_fields = self._score_memory_item(item, query, query_tokens)
+                    if query_tokens and score <= 0:
+                        continue
                     if row_kind == "rule":
                         score += max(0, 30 - int(item.get("priority") or 100)) // 2
                     if row_kind == "lesson":
                         score += int(float(item.get("importance") or 0) * 8)
                         score += int(float(item.get("confidence") or 0) * 3)
-                    if query_tokens and score <= 0:
-                        continue
                     item["score"] = score
                     item["matched_fields"] = matched_fields
                     results.append(item)
@@ -909,11 +1110,60 @@ class ManagerMemoryStore:
         self.initialize()
         task = task.strip()
         limit = max(1, min(limit, 20))
-        lessons = self.recall_lessons(task, limit=limit)["items"]
-        if not lessons:
-            lessons = self.recall_lessons("", limit=min(limit, 3))["items"]
+        context_queries = _memory_context_queries(task)
+        suppress_board_cleanup = _suppress_board_cleanup_context(task)
+        suppress_admin_context = _suppress_admin_context(task)
+        suppress_style_context = _suppress_style_context(task)
+        task_text = task.casefold()
+        lesson_queries = context_queries[:1] if len(context_queries) > 1 else context_queries
+        lessons = [
+            item
+            for item in _unique_memory_items(
+                [
+                    item
+                    for query in lesson_queries
+                    for item in self.recall_lessons(query, limit=limit)["items"]
+                ]
+            )
+            if not _is_context_noise(
+                item,
+                task_text=task_text,
+                suppress_board_cleanup=suppress_board_cleanup,
+                suppress_admin_context=suppress_admin_context,
+                suppress_style_context=suppress_style_context,
+            )
+        ][:limit]
+        if not lessons and len(context_queries) == 1:
+            lessons = [
+                item
+                for item in self.recall_lessons("", limit=min(limit, 3))["items"]
+                if not _is_context_noise(
+                    item,
+                    task_text=task_text,
+                    suppress_board_cleanup=suppress_board_cleanup,
+                    suppress_admin_context=suppress_admin_context,
+                    suppress_style_context=suppress_style_context,
+                )
+            ]
 
-        recalled = self.recall(task, limit=limit * 3)["items"]
+        recalled = _unique_memory_items(
+            [
+                item
+                for query in context_queries
+                for item in self.recall(query, limit=limit * 3)["items"]
+            ]
+        )
+        recalled = [
+            item
+            for item in recalled
+            if not _is_context_noise(
+                item,
+                task_text=task_text,
+                suppress_board_cleanup=suppress_board_cleanup,
+                suppress_admin_context=suppress_admin_context,
+                suppress_style_context=suppress_style_context,
+            )
+        ]
         preferences_or_facts = [
             item
             for item in recalled

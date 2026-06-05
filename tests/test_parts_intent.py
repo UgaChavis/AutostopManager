@@ -30,12 +30,33 @@ def test_normalize_part_intent_recognizes_brake_pad_phrases_with_brake_word():
         assert result["intent_id"] == "rear_brake_pads"
 
 
+def test_normalize_part_intent_recognizes_unspecified_brake_pads_as_clarification():
+    result = normalize_part_intent("тормозные колодки")
+
+    assert result["recognized"] is True
+    assert result["intent_id"] == "brake_pads_unspecified_axle"
+    assert result["clarification_required"] is True
+    assert result["clarification_fields"] == ["axle"]
+    assert "передние или задние" in result["clarification_prompt"]
+
+
+def test_normalize_part_intent_recognizes_drive_shaft_with_position_clarification():
+    result = normalize_part_intent("приводной вал")
+
+    assert result["recognized"] is True
+    assert result["intent_id"] == "drive_shaft"
+    assert result["clarification_required"] is True
+    assert "side" in result["clarification_fields"]
+    assert "axle" in result["clarification_fields"]
+
+
 def test_normalize_part_intent_unknown_keeps_search_text():
     result = normalize_part_intent("редкая штука", axle="front")
 
     assert result["recognized"] is False
     assert result["catalog_search_terms"] == ["редкая штука"]
     assert result["positions"] == ["front"]
+    assert result["clarification_required"] is True
 
 
 def test_normalize_part_intent_recognizes_current_crm_part_phrases():

@@ -65,3 +65,58 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert any("archive" in action for action in result["forbidden_actions"])
     assert any("delete" in action for action in result["forbidden_actions"])
     assert any("board_summary_stale=false" in check for check in result["verification"])
+
+
+def test_agent_brief_exposes_optional_runtime_catalog_cache_and_part_context(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(
+        store,
+        "в карточке CRM VIN найти OEM фильтра и сверить по локальному каталогу PDF",
+        limit=8,
+    )
+
+    assert result["ok"] is True
+    assert result["route"]["domain"] == "crm_vin_oem_parts_lookup"
+    assert "requested part" not in result["missing_context"]
+    assert "data/offline_parts_catalogs/catalog_index.json" in result["route"]["optional_runtime_files"]
+    assert "reference_files" in result["route"]
+
+
+def test_prepare_context_uses_focused_memory_for_vin_oem_parts_lookup(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    sync_knowledge_base(store)
+    store.remember(
+        "Когда владелец просит «переберись» в карточке, нужно богато оформить описание CRM.",
+        kind="note",
+        title="Команда «переберись»: оформление описаний карточек",
+        category="crm_style",
+        tags=["crm", "vin"],
+        importance=5.0,
+    )
+    store.remember(
+        "Приберись: проверять CRM карточки, VIN и оформление описаний.",
+        kind="note",
+        title="Приберись: formatted descriptions and vehicle passport",
+        category="board_cleanup",
+        tags=["crm", "vin"],
+        importance=5.0,
+    )
+
+    result = prepare_manager_context(
+        store,
+        "в карточке CRM по VIN найди OEM каталожный номер фильтра и аналоги",
+        limit=8,
+    )
+
+    assert result["knowledge"]["best_domain"] == "crm_vin_oem_parts_lookup"
+    context_text = "\n".join(
+        str(item.get("title") or item.get("content") or item.get("rule") or "")
+        for item in result["relevant_memory"]
+    ).casefold()
+    assert "vin-oem-lookup-workflow" in context_text
+    assert "board-cleanup" not in context_text
+    assert "приберись" not in context_text
+    assert "переберись" not in context_text

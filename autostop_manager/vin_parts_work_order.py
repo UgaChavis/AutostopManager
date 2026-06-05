@@ -195,9 +195,15 @@ def _missing_env_for_stage(blockers: list[dict[str, Any]], stage: str) -> list[s
 def _item_status(item: dict[str, Any]) -> str:
     if item["live_capability"].get("can_complete_full_auto_lookup_now"):
         return "ready_for_live_auto_oem_cross_and_price_lookup"
-    if item["identity"].get("ready_for_oem_lookup") and item["requested_part"].get("recognized"):
+    if not item["requested_part"].get("recognized"):
+        return "needs_part_intent_clarification_before_catalog_search"
+    if item["requested_part"].get("clarification_required"):
+        return "needs_part_position_clarification_before_catalog_search"
+    if item["identity"].get("ready_for_oem_candidate_lookup") and item["requested_part"].get("recognized"):
+        if not item["identity"].get("ready_for_crm_writeback"):
+            return "ready_for_oem_candidate_lookup_needs_manual_confirmation"
         return "ready_for_manual_epc_and_market_search_but_live_credentials_missing"
-    if not item["identity"].get("ready_for_oem_lookup"):
+    if not item["identity"].get("ready_for_oem_candidate_lookup"):
         return "needs_identity_confirmation_before_parts_search"
     return "needs_part_intent_clarification_before_catalog_search"
 
@@ -224,9 +230,11 @@ def _search_terms(item: dict[str, Any]) -> list[str]:
 def _work_order_item(item: dict[str, Any]) -> dict[str, Any]:
     vehicle_profile = item["identity"].get("vehicle_profile") or {}
     identifier_kind = item["identifier"].get("kind") or "unknown"
-    status = _item_status(item)
+    oem_resolution = item.get("oem_resolution") or {}
+    status = oem_resolution.get("status") or _item_status(item)
     oem_missing = _missing_env_for_stage(item.get("blockers", []), "oem_catalog")
     price_missing = _missing_env_for_stage(item.get("blockers", []), "procurement_price")
+    resolver_gate = oem_resolution.get("crm_writeback_gate") or {}
     return {
         "index": item["index"],
         "identifier": item["identifier"],
@@ -240,6 +248,8 @@ def _work_order_item(item: dict[str, Any]) -> dict[str, Any]:
             "missing_live_env_names": oem_missing,
         },
         "prepared_api_checks": item["prepared_calls"],
+        "oem_resolution": oem_resolution or None,
+        "next_manual_actions": oem_resolution.get("manual_actions", []),
         "cross_and_applicability_checks": [
             {
                 "step": "confirm_oem_applicability",
@@ -260,7 +270,18 @@ def _work_order_item(item: dict[str, Any]) -> dict[str, Any]:
             "public_market_queries": item["manual_public_search"]["queries"],
         },
         "crm_writeback_gate": {
-            "can_write_final_material_line_now": bool(item["live_capability"].get("can_complete_full_auto_lookup_now")),
+            "can_write_final_material_line_now": bool(resolver_gate.get("can_write_final_material_line_now"))
+            if resolver_gate
+            else bool(item["live_capability"].get("can_complete_full_auto_lookup_now")),
+            "can_run_read_only_oem_candidate_lookup": bool(
+                oem_resolution.get("readiness", {}).get("ready_for_oem_candidate_lookup")
+                if oem_resolution
+                else item["identity"].get("ready_for_oem_candidate_lookup") and item["requested_part"].get("recognized")
+            ),
+            "requires_manual_confirmation_before_writeback": bool(resolver_gate.get("requires_manual_confirmation_before_writeback", True))
+            if resolver_gate
+            else not bool(item["identity"].get("ready_for_crm_writeback")),
+            "can_prepare_manual_writeback": bool(resolver_gate.get("can_prepare_manual_writeback", False)),
             "allowed_without_live_credentials": "Write only a preliminary quote matrix/status with needs-confirmation; do not write final selected material price.",
             "final_material_requires": [
                 "VIN/frame-specific OEM or selected-part applicability evidence",
@@ -287,6 +308,12 @@ def build_vin_parts_work_order(
     city: str = "Красноярск",
     live_vpic: bool = True,
     use_vpic_batch: bool = True,
+    live_partsapi_identity: bool = False,
+    live_partsapi_oem: bool = False,
+    resolve_oem: bool = False,
+    max_live_calls: int = 3,
+    max_candidates: int = 3,
+    partsapi_category_index: str | None = None,
 ) -> dict[str, Any]:
     benchmark = benchmark_vin_parts_lookup(
         items,
@@ -294,6 +321,12 @@ def build_vin_parts_work_order(
         city=city,
         live_vpic=live_vpic,
         use_vpic_batch=use_vpic_batch,
+        live_partsapi_identity=live_partsapi_identity,
+        live_partsapi_oem=live_partsapi_oem,
+        resolve_oem=resolve_oem,
+        max_live_calls=max_live_calls,
+        max_candidates=max_candidates,
+        partsapi_category_index=partsapi_category_index,
     )
     work_items = [_work_order_item(item) for item in benchmark["items"]]
     return {
@@ -306,6 +339,9 @@ def build_vin_parts_work_order(
             "ready_for_manual_epc_and_market_search_count": sum(
                 1 for item in work_items if item["status"] == "ready_for_manual_epc_and_market_search_but_live_credentials_missing"
             ),
+            "ready_for_oem_candidate_lookup_needs_manual_confirmation_count": sum(
+                1 for item in work_items if item["status"] == "ready_for_oem_candidate_lookup_needs_manual_confirmation"
+            ),
             "ready_for_live_auto_lookup_count": sum(
                 1 for item in work_items if item["status"] == "ready_for_live_auto_oem_cross_and_price_lookup"
             ),
@@ -315,6 +351,21 @@ def build_vin_parts_work_order(
             "needs_part_intent_clarification_count": sum(
                 1 for item in work_items if item["status"] == "needs_part_intent_clarification_before_catalog_search"
             ),
+            "needs_part_position_clarification_count": sum(
+                1 for item in work_items if item["status"] == "needs_part_position_clarification_before_catalog_search"
+            ),
+            "needs_vin_or_frame_count": sum(1 for item in work_items if item["status"] == "needs_vin_or_frame"),
+            "needs_identity_confirmation_resolver_count": sum(1 for item in work_items if item["status"] == "needs_identity_confirmation"),
+            "needs_part_clarification_resolver_count": sum(1 for item in work_items if item["status"] == "needs_part_clarification"),
+            "needs_partsapi_category_mapping_count": sum(1 for item in work_items if item["status"] == "needs_partsapi_category_mapping"),
+            "ready_for_live_oem_candidate_lookup_count": sum(1 for item in work_items if item["status"] == "ready_for_live_oem_candidate_lookup"),
+            "oem_candidates_found_needs_manual_confirmation_count": sum(
+                1 for item in work_items if item["status"] == "oem_candidates_found_needs_manual_confirmation"
+            ),
+            "no_oem_candidate_found_needs_manual_epc_count": sum(
+                1 for item in work_items if item["status"] == "no_oem_candidate_found_needs_manual_epc"
+            ),
+            "confirmed_for_manual_crm_writeback_count": sum(1 for item in work_items if item["status"] == "confirmed_for_manual_crm_writeback"),
         },
         "next_decision": (
             "Configure live OEM catalog and supplier credentials to move from manual-ready work orders to full automated lookup."

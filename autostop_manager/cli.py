@@ -33,6 +33,12 @@ from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
 from .memory_review import apply_memory_review_item, build_memory_review
 from .partsapi_smoke import build_partsapi_vin_smoke_report, select_crm_partsapi_smoke_case
+from .partsapi_category_index import (
+    build_partsapi_category_index_plan,
+    explain_partsapi_category_for_intent,
+    search_partsapi_category_index,
+    validate_partsapi_category_index,
+)
 from .provider_smoke import build_provider_smoke_report
 from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
@@ -42,6 +48,7 @@ from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
+from .vin_oem_resolver import resolve_vin_oem_parts
 from .vin_lookup import lookup_original_parts
 from .work_pricing import estimate_repair_work_cost
 
@@ -270,17 +277,54 @@ def build_parser() -> argparse.ArgumentParser:
             "oe_applicability",
             "crosses",
             "crosses_with_brand",
+            "crosses_title",
+            "article_crosses",
             "search_articles",
+            "engine_info",
+            "search_tree",
+            "articles",
+            "article",
+            "article_criteria",
         ],
     )
     partsapi.add_argument("--identifier", default=None)
     partsapi.add_argument("--part-number", default=None)
+    partsapi.add_argument("--article-id", default=None)
     partsapi.add_argument("--brand", default=None)
-    partsapi.add_argument("--part-type", default=None)
+    partsapi.add_argument(
+        "--part-type",
+        default=None,
+        help="PartsAPI type parameter; default is oem for parts_by_vin, use omit/non-oem to skip type.",
+    )
     partsapi.add_argument("--category", default=None)
+    partsapi.add_argument("--vehicle-type", default=None)
+    partsapi.add_argument("--type-id", default=None)
     partsapi.add_argument("--lang", default=None)
     partsapi.add_argument("--lang-id", type=int, default=None)
+    partsapi.add_argument("--timeout", type=float, default=20.0)
+    partsapi.add_argument("--max-attempts", type=int, default=1)
     partsapi.add_argument("--dry-run", action="store_true")
+
+    category_index = sub.add_parser("partsapi-category-index", help="Inspect the local PartsAPI numeric category index")
+    category_index_sub = category_index.add_subparsers(dest="category_index_command", required=True)
+    category_build = category_index_sub.add_parser("build", help="Return the read-only PartsAPI search_tree build plan")
+    category_build.add_argument("--live", action="store_true")
+    category_build.add_argument("--vehicle-type", default="PC")
+    category_build.add_argument("--type-id", default=None)
+    category_build.add_argument("--lang-id", type=int, default=16)
+    category_build.add_argument("--timeout", type=float, default=20.0)
+    category_build.add_argument("--max-attempts", type=int, default=1)
+    category_search = category_index_sub.add_parser("search", help="Search the local category index by text")
+    category_search.add_argument("--query", required=True)
+    category_search.add_argument("--intent", dest="intent_id", default=None)
+    category_search.add_argument("--path", default=None)
+    category_search.add_argument("--limit", type=int, default=8)
+    category_explain = category_index_sub.add_parser("explain", help="Explain category routing for one intent")
+    category_explain.add_argument("--intent", dest="intent_id", required=True)
+    category_explain.add_argument("--query", default=None)
+    category_explain.add_argument("--path", default=None)
+    category_validate = category_index_sub.add_parser("validate", help="Validate the tracked category index fixture")
+    category_validate.add_argument("--path", default=None)
 
     public_catalog = sub.add_parser(
         "public-catalog-lookup",
@@ -342,6 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
     oem_catalog_lookup.add_argument("--partsapi-part-type", default="oem")
     oem_catalog_lookup.add_argument("--partsapi-category", default=None)
     oem_catalog_lookup.add_argument("--timeout", type=float, default=20.0)
+    oem_catalog_lookup.add_argument("--max-attempts", type=int, default=1)
     oem_catalog_lookup.add_argument("--dry-run", action="store_true")
 
     partsapi_vin_smoke = sub.add_parser(
@@ -384,6 +429,33 @@ def build_parser() -> argparse.ArgumentParser:
     crm_vin_parts.add_argument("--urgency", default=None)
     crm_vin_parts.add_argument("--city", default="Красноярск")
     crm_vin_parts.add_argument("--limit", type=int, default=10)
+    crm_vin_parts.add_argument("--vin-oem-resolution-json", default=None)
+
+    resolve_oem_parts = sub.add_parser(
+        "resolve-vin-oem-parts",
+        help="Resolve one VIN/frame and requested part into read-only OEM candidates, enrichment, gates, and manual actions",
+    )
+    resolve_oem_parts.add_argument("identifier")
+    resolve_oem_parts.add_argument("--part", dest="requested_part", required=True)
+    resolve_oem_parts.add_argument("--make", default=None)
+    resolve_oem_parts.add_argument("--model", default=None)
+    resolve_oem_parts.add_argument("--model-year", type=int, default=None)
+    resolve_oem_parts.add_argument("--engine", default=None)
+    resolve_oem_parts.add_argument("--transmission", default=None)
+    resolve_oem_parts.add_argument("--market", default=None)
+    resolve_oem_parts.add_argument("--drivetrain", default=None)
+    resolve_oem_parts.add_argument("--axle", default=None)
+    resolve_oem_parts.add_argument("--side", default=None)
+    resolve_oem_parts.add_argument("--position", default=None)
+    resolve_oem_parts.add_argument("--no-live-vpic", action="store_true")
+    resolve_oem_parts.add_argument("--live-partsapi-identity", action="store_true")
+    resolve_oem_parts.add_argument("--live-partsapi-oem", action="store_true")
+    resolve_oem_parts.add_argument("--max-live-calls", type=int, default=3)
+    resolve_oem_parts.add_argument("--max-candidates", type=int, default=3)
+    resolve_oem_parts.add_argument("--timeout", type=float, default=20.0)
+    resolve_oem_parts.add_argument("--max-attempts", type=int, default=1)
+    resolve_oem_parts.add_argument("--partsapi-category-index", default=None)
+    resolve_oem_parts.add_argument("--dry-run", action="store_true")
 
     vin_parts_benchmark = sub.add_parser(
         "vin-parts-benchmark",
@@ -396,6 +468,12 @@ def build_parser() -> argparse.ArgumentParser:
     vin_parts_benchmark.add_argument("--no-vpic-batch", action="store_true")
     vin_parts_benchmark.add_argument("--skip-partsapi-dry-run", action="store_true")
     vin_parts_benchmark.add_argument("--skip-vin17-dry-run", action="store_true")
+    vin_parts_benchmark.add_argument("--live-partsapi-identity", action="store_true")
+    vin_parts_benchmark.add_argument("--live-partsapi-oem", action="store_true")
+    vin_parts_benchmark.add_argument("--resolve-oem", action="store_true")
+    vin_parts_benchmark.add_argument("--max-live-calls", type=int, default=3)
+    vin_parts_benchmark.add_argument("--max-candidates", type=int, default=3)
+    vin_parts_benchmark.add_argument("--partsapi-category-index", default=None)
 
     vin_parts_work_order = sub.add_parser(
         "vin-parts-work-order",
@@ -406,6 +484,12 @@ def build_parser() -> argparse.ArgumentParser:
     vin_parts_work_order.add_argument("--city", default="Красноярск")
     vin_parts_work_order.add_argument("--no-live-vpic", action="store_true")
     vin_parts_work_order.add_argument("--no-vpic-batch", action="store_true")
+    vin_parts_work_order.add_argument("--live-partsapi-identity", action="store_true")
+    vin_parts_work_order.add_argument("--live-partsapi-oem", action="store_true")
+    vin_parts_work_order.add_argument("--resolve-oem", action="store_true")
+    vin_parts_work_order.add_argument("--max-live-calls", type=int, default=3)
+    vin_parts_work_order.add_argument("--max-candidates", type=int, default=3)
+    vin_parts_work_order.add_argument("--partsapi-category-index", default=None)
 
     source_route = sub.add_parser("source-route", help="Recommend authoritative automotive repair sources")
     source_route.add_argument("--brand", default=None)
@@ -824,14 +908,37 @@ def main(argv: list[str] | None = None) -> int:
                 operation=args.operation,
                 identifier=args.identifier,
                 part_number=args.part_number,
+                article_id=args.article_id,
                 brand=args.brand,
                 part_type=args.part_type,
                 category=args.category,
+                vehicle_type=args.vehicle_type,
+                type_id=args.type_id,
                 lang=args.lang,
                 lang_id=args.lang_id,
+                timeout=args.timeout,
+                max_attempts=args.max_attempts,
                 dry_run=args.dry_run,
             )
         )
+    elif args.command == "partsapi-category-index":
+        if args.category_index_command == "build":
+            _print_json(
+                build_partsapi_category_index_plan(
+                    live=args.live,
+                    vehicle_type=args.vehicle_type,
+                    type_id=args.type_id,
+                    lang_id=args.lang_id,
+                    timeout=args.timeout,
+                    max_attempts=args.max_attempts,
+                )
+            )
+        elif args.category_index_command == "search":
+            _print_json(search_partsapi_category_index(args.query, intent_id=args.intent_id, path=args.path, limit=args.limit))
+        elif args.category_index_command == "explain":
+            _print_json(explain_partsapi_category_for_intent(args.intent_id, query=args.query, path=args.path))
+        elif args.category_index_command == "validate":
+            _print_json(validate_partsapi_category_index(path=args.path))
     elif args.command == "public-catalog-lookup":
         _print_json(
             public_aftermarket_catalog_lookup(
@@ -887,6 +994,7 @@ def main(argv: list[str] | None = None) -> int:
                 partsapi_part_type=args.partsapi_part_type,
                 partsapi_category=args.partsapi_category,
                 timeout=args.timeout,
+                max_attempts=args.max_attempts,
                 dry_run=args.dry_run,
             )
         )
@@ -925,6 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.command == "crm-vin-parts-plan":
+        vin_oem_resolution = json.loads(args.vin_oem_resolution_json) if args.vin_oem_resolution_json else None
         _print_json(
             build_crm_vin_parts_lookup_pipeline(
                 card_id=args.card_id,
@@ -946,6 +1055,33 @@ def main(argv: list[str] | None = None) -> int:
                 urgency=args.urgency,
                 city=args.city,
                 limit=args.limit,
+                vin_oem_resolution=vin_oem_resolution,
+            )
+        )
+    elif args.command == "resolve-vin-oem-parts":
+        _print_json(
+            resolve_vin_oem_parts(
+                identifier=args.identifier,
+                requested_part=args.requested_part,
+                make=args.make,
+                model=args.model,
+                model_year=args.model_year,
+                engine=args.engine,
+                transmission=args.transmission,
+                market=args.market,
+                drivetrain=args.drivetrain,
+                axle=args.axle,
+                side=args.side,
+                position=args.position,
+                live_vpic=not args.no_live_vpic,
+                live_partsapi_identity=args.live_partsapi_identity,
+                live_partsapi_oem=args.live_partsapi_oem,
+                max_live_calls=args.max_live_calls,
+                max_candidates=args.max_candidates,
+                timeout=args.timeout,
+                max_attempts=args.max_attempts,
+                partsapi_category_index=args.partsapi_category_index,
+                dry_run=args.dry_run,
             )
         )
     elif args.command == "vin-parts-benchmark":
@@ -961,6 +1097,12 @@ def main(argv: list[str] | None = None) -> int:
                 use_vpic_batch=not args.no_vpic_batch,
                 include_partsapi_dry_run=not args.skip_partsapi_dry_run,
                 include_vin17_dry_run=not args.skip_vin17_dry_run,
+                live_partsapi_identity=args.live_partsapi_identity,
+                live_partsapi_oem=args.live_partsapi_oem,
+                resolve_oem=args.resolve_oem,
+                max_live_calls=args.max_live_calls,
+                max_candidates=args.max_candidates,
+                partsapi_category_index=args.partsapi_category_index,
             )
         )
     elif args.command == "vin-parts-work-order":
@@ -974,6 +1116,12 @@ def main(argv: list[str] | None = None) -> int:
                 city=args.city,
                 live_vpic=not args.no_live_vpic,
                 use_vpic_batch=not args.no_vpic_batch,
+                live_partsapi_identity=args.live_partsapi_identity,
+                live_partsapi_oem=args.live_partsapi_oem,
+                resolve_oem=args.resolve_oem,
+                max_live_calls=args.max_live_calls,
+                max_candidates=args.max_candidates,
+                partsapi_category_index=args.partsapi_category_index,
             )
         )
     elif args.command == "source-route":

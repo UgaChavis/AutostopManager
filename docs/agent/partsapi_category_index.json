@@ -1,0 +1,60 @@
+{
+  "schema": "PartsApiCategoryIndexV1",
+  "version": 1,
+  "updated_at": "2026-06-03",
+  "notes": [
+    "Tracked fixture contains only public category routing metadata: no VINs, no keys, no client data.",
+    "Numeric cat ids are routing hints for read-only getPartsbyVIN candidate lookup; CRM writeback still requires manual confirmation."
+  ],
+  "categories": [
+    {
+      "cat_id": "1191",
+      "names_ru": [
+        "тормозные колодки",
+        "колодки тормозные"
+      ],
+      "names_en": [
+        "brake pads",
+        "disc brake pads"
+      ],
+      "parent_ru": "тормозная система",
+      "parent_en": "brake system",
+      "synonyms": [
+        "передние колодки",
+        "задние колодки",
+        "front brake pads",
+        "rear brake pads"
+      ],
+      "intent_ids": [
+        "front_brake_pads",
+        "rear_brake_pads",
+        "brake_pads_unspecified_axle"
+      ],
+      "source": "seeded_partsapi_category_fixture",
+      "confidence": 0.72,
+      "validation_required": true
+    },
+    {
+      "cat_id": "1049",
+      "names_ru": [
+        "стойка стабилизатора"
+      ],
+      "names_en": [
+        "stabilizer link",
+        "sway bar link"
+      ],
+      "parent_ru": "подвеска",
+      "parent_en": "suspension",
+      "synonyms": [
+        "линк",
+        "тяга стабилизатора"
+      ],
+      "intent_ids": [
+        "stabilizer_link"
+      ],
+      "source": "seeded_partsapi_category_fixture",
+      "confidence": 0.62,
+      "validation_required": true
+    }
+  ]
+}

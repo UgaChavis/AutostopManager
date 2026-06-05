@@ -1010,7 +1010,18 @@
         "CRM VIN OEM parts lookup",
         "KDM VIN",
         "JDM frame",
-        "catalog number by VIN"
+        "catalog number by VIN",
+        "MAN webMANTIS",
+        "MAN partslink24",
+        "MAHLE catalog",
+        "Bosch eCat",
+        "MANN-FILTER catalog",
+        "Hengst catalog",
+        "offline parts catalog",
+        "offline PDF catalog",
+        "local catalog cache",
+        "офлайн каталог",
+        "PDF каталог"
       ],
       "keywords": [
         "vPIC",
@@ -1019,24 +1030,61 @@
         "trim",
         "option",
         "part number",
-        "fitment"
+        "fitment",
+        "MAN",
+        "webMANTIS",
+        "partslink24",
+        "MAHLE",
+        "Bosch",
+        "MANN-FILTER",
+        "Hengst",
+        "Donaldson",
+        "Fleetguard",
+        "NGK",
+        "TecDoc",
+        "offline_parts_catalogs",
+        "catalog_index.json",
+        "PDF catalog",
+        "XLSX interchange",
+        "cross reference",
+        "каталожный номер по VIN",
+        "расходники по VIN",
+        "фильтр по VIN"
       ],
       "questions": [
         "как расшифровать VIN или номер кузова",
         "где искать оригинальный номер детали",
-        "как определить рынок и комплектацию"
+        "как определить рынок и комплектацию",
+        "где искать оригинальные номера MAN по VIN",
+        "какие официальные каталоги использовать для фильтров и расходников",
+        "как проверить локальный офлайн PDF каталог запчастей",
+        "как отделить OEM EPC от MAHLE Bosch MANN Hengst кроссов"
       ],
       "source_of_truth_files": [
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
         "docs/agent/partsapi_method_contracts.md",
-        "docs/agent/vin_oem_sources.json"
+        "docs/agent/partsapi_category_index.json",
+        "docs/agent/vin_oem_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md"
       ],
       "primary_files": [
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
         "docs/agent/partsapi_method_contracts.md",
-        "docs/agent/vin_oem_sources.json"
+        "docs/agent/partsapi_category_index.json",
+        "docs/agent/vin_oem_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/citations.md"
+      ],
+      "optional_runtime_files": [
+        "data/offline_parts_catalogs/catalog_index.json",
+        "data/offline_parts_catalogs/README.md"
       ]
     },
     "parts_sourcing": {
@@ -1115,7 +1163,10 @@
         "разборка",
         "авторазбор",
         "б/у запчасти",
-        "агрегатная запчасть"
+        "агрегатная запчасть",
+        "offline parts catalog",
+        "offline PDF catalog",
+        "офлайн каталог запчастей"
       ],
       "keywords": [
         "OEM number",
@@ -1133,6 +1184,12 @@
         "selected part",
         "OEM reference",
         "price basis",
+        "заказ-наряд",
+        "ЗН",
+        "оригинальный номер",
+        "заменитель",
+        "цена непонятна",
+        "материалы ЗН",
         "supplier API",
         "price-list export",
         "ROSSKO",
@@ -1161,7 +1218,12 @@
         "Yandex Maps",
         "Forum-Auto",
         "Laximo",
-        "TecDoc"
+        "TecDoc",
+        "offline_parts_catalogs",
+        "catalog_index.json",
+        "PDF catalog",
+        "XLSX interchange",
+        "cross reference"
       ],
       "questions": [
         "где искать запчасть",
@@ -1182,6 +1244,7 @@
         "как оценить предложения по запчасти с учетом наличия срока гарантии и риска",
         "как построить отчет по найденным запчастям",
         "как вести локальную базу продавцов Красноярска",
+        "как проверить аналог по локальному офлайн каталогу перед поиском цены",
         "какие workflow docs использовать для поиска и оценки предложений по запчастям"
       ],
       "source_of_truth_files": [
@@ -1191,7 +1254,8 @@
         "docs/agent/parts_search_playbook.md",
         "docs/agent/zzap_search_playbook.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md"
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md"
       ],
       "primary_files": [
         "docs/agent/ai_parts_krasnoyarsk_playbook.md",
@@ -1199,11 +1263,20 @@
         "docs/agent/procurement_price_sources.json",
         "docs/agent/parts_search_playbook.md",
         "docs/agent/zzap_search_playbook.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md"
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl"
       ],
       "reference_files": [
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
-        "docs/agent/labor_pricing_sources.json"
+        "docs/agent/labor_pricing_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/citations.md"
+      ],
+      "optional_runtime_files": [
+        "data/offline_parts_catalogs/catalog_index.json",
+        "data/offline_parts_catalogs/README.md"
       ]
     },
     "board_cleanup_autopilot": {
@@ -1401,7 +1474,19 @@
         "фильтр по VIN",
         "закупка по VIN",
         "аналоги по VIN",
-        "кроссы по VIN"
+        "кроссы по VIN",
+        "MAN webMANTIS",
+        "MAN partslink24",
+        "MAHLE catalog",
+        "Bosch eCat",
+        "MANN-FILTER",
+        "Hengst",
+        "Donaldson",
+        "Fleetguard",
+        "NGK Part Finder",
+        "offline PDF catalog",
+        "local catalog cache",
+        "офлайн каталог запчастей"
       ],
       "keywords": [
         "CRM",
@@ -1443,20 +1528,29 @@
         "кроссы",
         "аналоги",
         "применяемость",
-        "запись в CRM"
+        "запись в CRM",
+        "offline_parts_catalogs",
+        "catalog_index.json",
+        "PDF catalog",
+        "XLSX interchange"
       ],
       "questions": [
         "как найти оригинальный номер детали по VIN из карточки CRM",
         "как проверить OEM, замену, кросс и применяемость перед записью в CRM",
         "как разделить закупку, рынок РФ и цену клиенту в карточке CRM",
-        "как записать выбранную деталь в материалы ЗН без смешивания OEM и аналога"
+        "как записать выбранную деталь в материалы ЗН без смешивания OEM и аналога",
+        "как найти MAN фильтра по VIN и проверить аналоги MAHLE Bosch MANN Hengst",
+        "как сверить подбор по локальным офлайн PDF каталогам перед записью в CRM",
+        "как использовать официальные каталоги расходников после OEM подбора"
       ],
       "source_of_truth_files": [
         "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
         "docs/agent/partsapi_method_contracts.md",
+        "docs/agent/partsapi_category_index.json",
         "docs/agent/vin_oem_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/crm_mcp_catalog.json"
@@ -1466,8 +1560,20 @@
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/vin_oem_lookup_playbook.md",
         "docs/agent/partsapi_method_contracts.md",
+        "docs/agent/partsapi_category_index.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/citations.md"
+      ],
+      "optional_runtime_files": [
+        "data/offline_parts_catalogs/catalog_index.json",
+        "data/offline_parts_catalogs/README.md"
       ]
     },
     "3d_printing_cad": {

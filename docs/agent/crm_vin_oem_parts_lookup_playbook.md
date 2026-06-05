@@ -109,6 +109,9 @@ Classify before decoding.
    catalog search terms, critical fitment fields, quantity basis, and caveats.
 3. Search OEM in source order:
    - official dealer/OEM EPC if available;
+   - for MAN trucks, buses, vans, and industrial engines: MAN Service
+     Portal/webMANTIS or MAN partslink24 with authorized access; do not treat
+     third-party MANTIS downloads as official evidence;
    - Parts-Catalogs API/widget for VIN/FRAME and catalog groups;
    - `lookup_oem_catalog_candidates` / `oem-catalog-lookup` when
      Parts-Catalogs `catalog_id/car_id/group_id` and 17VIN `epc` are known,
@@ -140,6 +143,32 @@ Classify before decoding.
    - supplier catalog replacements;
    - ZZap replacements and seller notes only as market evidence until fitment
      is independently confirmed.
+
+### MAN And Common Wear Parts
+
+- If the card is a MAN vehicle and the request is for ТО filters, belts,
+  brake wear parts, sensors, or engine service kits, first obtain the MAN
+  vehicle identity and genuine reference through MAN webMANTIS/partslink24,
+  Parts-Catalogs, PartsAPI, 17VIN, or a dealer/supplier quote.
+- After the MAN/OEM reference is stable, use official manufacturer aftermarket
+  catalogs for analog selection: MANN-FILTER, MAHLE/Knecht, Hengst, Bosch,
+  Donaldson, Fleetguard, NGK/NTK, ZF Aftermarket, or TecDoc-backed catalogs.
+- Verify analogs against category, engine, production range, dimensions,
+  side/axis, kit content, and replacement notes. A filter cross-reference is
+  not enough by itself when the service kit differs by engine, market, cab,
+  wheelbase, emissions package, or build date.
+- Official PDFs from MAHLE/Bosch/MANN/Donaldson-style catalogs can support a
+  manual check, but keep the CRM note compact: source title, publisher, date or
+  version, and checked number. Do not paste catalog tables or store raw catalog
+  dumps in the card, memory, or Git.
+- If `data/offline_parts_catalogs/catalog_index.json` exists, check the local
+  offline cache before broad web searching:
+  `rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text`.
+  Use the matching `catalog_id` and source record from
+  `docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/`.
+  This is a cross/applicability layer only; MAN OEM references still require
+  MAN webMANTIS/PartsBase/partslink24, a dealer, supplier, or configured EPC/API
+  evidence.
 
 If supplier/catalog APIs are not configured, use the generated
 `manual_public_search_queries` only as search starting points. They intentionally

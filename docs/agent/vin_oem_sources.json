@@ -185,6 +185,413 @@
       "notes": "Explains VIN access and original parts access for authorized dealers."
     },
     {
+      "source_id": "man_service_portal_webmantis",
+      "name": "MAN Service Portal / webMANTIS",
+      "kind": "manufacturer_parts_catalog",
+      "authority": "manufacturer",
+      "inputs": [
+        "vin",
+        "man_vehicle_production_number",
+        "series",
+        "type",
+        "engine"
+      ],
+      "requires_login": true,
+      "outputs": [
+        "vehicle_identity",
+        "oem_part_numbers",
+        "supersessions",
+        "service_information",
+        "standard_times",
+        "circuit_diagrams"
+      ],
+      "brands": [
+        "MAN"
+      ],
+      "url": "https://public.man.eu/media/service/asp/media/uk/86485.pdf",
+      "role": "Authorized MAN route for VIN- or production-number-specific MAN Genuine Parts identification through webMANTIS and Service Portal vehicle information packages.",
+      "access": "MAN Service Portal/web shop access; products can be purchased for short durations or via flat rate depending on contract.",
+      "limits": "Use only with authorized access. Do not use third-party MANTIS installer downloads, cracked EPC databases, or forum mirrors as official evidence.",
+      "mvp_priority": "high",
+      "test_vin_checks": [
+        "MAN 17-character VIN",
+        "7-digit MAN vehicle production number",
+        "service kit/filter group",
+        "brake wear part group"
+      ],
+      "notes": "Primary MAN OEM route when CRM asks for original catalog numbers or MAN service-kit contents."
+    },
+    {
+      "source_id": "man_partslink24",
+      "name": "MAN online ordering service powered by partslink24",
+      "kind": "manufacturer_ordering_portal",
+      "authority": "manufacturer",
+      "inputs": [
+        "vin",
+        "man_customer_number",
+        "part_number"
+      ],
+      "requires_login": true,
+      "outputs": [
+        "man_genuine_parts",
+        "vin_identified_parts",
+        "local_distributor_inventory",
+        "shopping_basket",
+        "mantis_export"
+      ],
+      "brands": [
+        "MAN"
+      ],
+      "url": "https://www.man.eu/global/en/service/online-ordering-service.html",
+      "role": "Official MAN Genuine Parts ordering route for independent workshops and fleet operators, with VIN-based part identification and MANTIS basket handoff.",
+      "access": "Registration at partslink24 plus MAN service outlet/customer number; MAN advertises possible one-month trial access.",
+      "limits": "Ordering and availability evidence, not a public offline database. Keep credentials/customer data outside Git and CRM summaries.",
+      "mvp_priority": "high",
+      "notes": "Use together with webMANTIS or dealer confirmation for MAN OEM lookup and procurement handoff."
+    },
+    {
+      "source_id": "tecalliance_tecdoc_catalog",
+      "name": "TecAlliance TecDoc Catalogue",
+      "kind": "commercial_aftermarket_catalog",
+      "authority": "commercial_aftermarket_standard",
+      "inputs": [
+        "vin",
+        "vrm",
+        "tecdoc_type_id",
+        "oe_number",
+        "article_number",
+        "trade_number",
+        "barcode",
+        "vehicle_parameters"
+      ],
+      "requires_login": true,
+      "outputs": [
+        "article_numbers",
+        "oe_references",
+        "crosses",
+        "superseding_articles",
+        "vehicle_linkages",
+        "linkage_attributes",
+        "article_criteria",
+        "graphics_documents"
+      ],
+      "brands": [
+        "Multi-brand"
+      ],
+      "url": "https://www.tecalliance.net/tecdoc-catalogue/",
+      "role": "Licensed aftermarket catalog and data layer for article/OE-reference/cross/applicability checks after vehicle identity is known.",
+      "access": "Commercial TecDoc Catalogue or TecDoc data user license.",
+      "limits": "Aftermarket data; do not treat as the sole OEM EPC proof for configuration-sensitive original numbers.",
+      "mvp_priority": "high",
+      "notes": "Useful second layer behind PartsAPI/TecDoc-style adapters and supplier catalogs."
+    },
+    {
+      "source_id": "mahle_aftermarket_ecat",
+      "name": "MAHLE Aftermarket eCat",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "vehicle_parameters",
+        "oe_number",
+        "article_number",
+        "part_name",
+        "product_category"
+      ],
+      "outputs": [
+        "mahle_article_numbers",
+        "knecht_article_numbers",
+        "behr_article_numbers",
+        "vehicle_applicability",
+        "oe_references",
+        "product_notes"
+      ],
+      "brands": [
+        "MAHLE",
+        "Knecht",
+        "Behr",
+        "Clevite"
+      ],
+      "url": "https://www.mahle-aftermarket.com/eu/en/catalog/",
+      "role": "Official MAHLE/Knecht/Behr catalog for filters, engine components, thermal management, starters/alternators, and related aftermarket parts.",
+      "access": "Public web catalog; some regional/customer features may depend on TecAlliance or account access.",
+      "limits": "Use as analog/cross/applicability evidence. Keep OEM candidates separate unless an OEM reference is independently confirmed by a VIN/frame EPC.",
+      "mvp_priority": "medium",
+      "notes": "MAHLE states its online catalog provides TecDoc-standard spare-parts information."
+    },
+    {
+      "source_id": "mahle_official_catalog_pdfs",
+      "name": "MAHLE Aftermarket official catalog PDFs",
+      "kind": "manufacturer_aftermarket_pdf_catalogs",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "article_number",
+        "vehicle_parameters",
+        "product_category"
+      ],
+      "outputs": [
+        "catalog_tables",
+        "article_numbers",
+        "vehicle_applications",
+        "product_scope"
+      ],
+      "brands": [
+        "MAHLE",
+        "Knecht",
+        "Behr",
+        "Clevite"
+      ],
+      "url": "https://www.mahle-aftermarket.com/na/en/catalogs-and-literature/catalog-pdfs/",
+      "role": "Official downloadable PDF catalogs for MAHLE filters, gaskets, pistons, rings, thermostats, diesel, and heavy-duty products.",
+      "access": "Free official downloads; link-only ingestion by default.",
+      "limits": "Do not commit full PDFs/catalog tables unless owner confirms license and storage intent. Prefer source metadata plus manual citation.",
+      "mvp_priority": "low",
+      "notes": "Good offline/manual fallback for filters and heavy-duty catalog checks when live eCat is not convenient."
+    },
+    {
+      "source_id": "offline_parts_catalog_cache",
+      "name": "Local offline parts catalog cache",
+      "kind": "local_aftermarket_pdf_xlsx_cache",
+      "authority": "official_aftermarket_source_pack",
+      "inputs": [
+        "confirmed_oem_reference",
+        "aftermarket_article",
+        "competitor_article",
+        "engine_code",
+        "vehicle_parameters",
+        "product_category"
+      ],
+      "outputs": [
+        "catalog_id",
+        "source_url",
+        "publisher_title",
+        "retrieved_date",
+        "article_numbers",
+        "cross_references",
+        "vehicle_applications",
+        "dimensions",
+        "fitment_footnotes"
+      ],
+      "brands": [
+        "MAHLE",
+        "Knecht",
+        "Bosch",
+        "MANN-FILTER",
+        "NGK",
+        "NTK",
+        "Donaldson",
+        "SACHS",
+        "ZF"
+      ],
+      "local_index": "data/offline_parts_catalogs/catalog_index.json",
+      "source_pack": "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
+      "role": "Local untracked cache of official public PDF/XLSX catalogs and extracted text for offline cross/applicability checks after VIN/EPC or exact vehicle profile is known.",
+      "access": "Available only when the ignored runtime cache exists; search extracted text with rg under data/offline_parts_catalogs/text.",
+      "limits": "Aftermarket/cross/application evidence only. Do not treat local PDF/XLSX hits as VIN-specific OEM proof, and do not paste catalog tables into CRM or durable memory.",
+      "mvp_priority": "medium",
+      "notes": "Built on 2026-06-05 with MAHLE, Bosch, MANN-FILTER, NGK, Donaldson, and ZF/SACHS official downloadable sources. MAN OEM remains authorized webMANTIS/PartsBase/partslink24/dealer route, not an offline cache."
+    },
+    {
+      "source_id": "bosch_aftermarket_ecat",
+      "name": "Bosch Mobility Aftermarket catalog / eCat",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "vehicle_parameters",
+        "part_number",
+        "oe_cross_reference",
+        "product_category"
+      ],
+      "outputs": [
+        "bosch_part_numbers",
+        "vehicle_applicability",
+        "oe_cross_references",
+        "product_information",
+        "service_notes"
+      ],
+      "brands": [
+        "Bosch"
+      ],
+      "url": "https://www.boschaftermarket.com/gb/en/parts/products/overview/",
+      "role": "Official Bosch aftermarket catalog/product route for spare parts and vehicle accessories, with regional eCat/AutoParts Catalogue variants.",
+      "access": "Public regional web catalog; availability and interface vary by country.",
+      "limits": "Bosch article/applicability evidence, not a brand OEM EPC. Confirm OEM reference separately for VIN-critical work.",
+      "mvp_priority": "medium",
+      "notes": "Use for plugs, sensors, filters, wipers, brakes, rotating electrics, diesel components, and product verification."
+    },
+    {
+      "source_id": "bosch_filter_catalog_pdf",
+      "name": "Bosch official filter catalogue PDF",
+      "kind": "manufacturer_aftermarket_pdf_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "vehicle_parameters",
+        "bosch_part_number",
+        "filter_category"
+      ],
+      "outputs": [
+        "bosch_filter_numbers",
+        "vehicle_applications",
+        "oe_notes",
+        "fitment_footnotes"
+      ],
+      "brands": [
+        "Bosch"
+      ],
+      "url": "https://www.boschaftermarket.com/xrm/media/images/services/downloads/parts_14/filter/filter-catalogue.pdf",
+      "role": "Official Bosch filter catalog PDF for manual offline lookup and footnote checks.",
+      "access": "Free official PDF download; link-only ingestion by default.",
+      "limits": "Large PDF reference; do not paste tables into CRM or commit raw catalog dumps without explicit owner approval.",
+      "mvp_priority": "low",
+      "notes": "Use when Bosch eCat is unavailable or a PDF footnote confirms a filter split."
+    },
+    {
+      "source_id": "mann_filter_catalog",
+      "name": "MANN-FILTER Online Catalog",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "vehicle_parameters",
+        "vin",
+        "product_type",
+        "part_number",
+        "cross_reference",
+        "dimensions"
+      ],
+      "outputs": [
+        "mann_filter_numbers",
+        "vehicle_applications",
+        "cross_references",
+        "dimensions",
+        "new_products",
+        "discontinued_replacements"
+      ],
+      "brands": [
+        "MANN-FILTER",
+        "MANN+HUMMEL"
+      ],
+      "url": "https://www.mann-filter.com/en/catalog.html",
+      "role": "Official MANN-FILTER route for filter selection, cross-reference, dimensions, and replacement/discontinued checks.",
+      "access": "Public online catalog; VIN search appears in selected countries/regions.",
+      "limits": "Filter analog/applicability source. For OEM by VIN, first confirm the genuine reference through EPC or dealer route.",
+      "mvp_priority": "medium",
+      "notes": "MANN+HUMMEL describes daily-updated catalog data and cross-reference/VIN search capabilities."
+    },
+    {
+      "source_id": "hengst_online_catalog",
+      "name": "Hengst Online Catalogue",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "vehicle_parameters",
+        "product_search",
+        "cross_reference",
+        "kba_number",
+        "model_year"
+      ],
+      "outputs": [
+        "hengst_filter_numbers",
+        "vehicle_applications",
+        "cross_references",
+        "product_notes"
+      ],
+      "brands": [
+        "Hengst"
+      ],
+      "url": "https://catalog.hengst.com/en/online-catalog/search/",
+      "role": "Official Hengst catalog for filter vehicle search, product search, and cross-reference lookup.",
+      "access": "Public online catalog.",
+      "limits": "Use as filter analog/applicability evidence, not as sole OEM EPC evidence.",
+      "mvp_priority": "medium",
+      "notes": "Catalog page identifies Hengst as a TecDoc data supplier and exposes vehicle/product/cross-reference search."
+    },
+    {
+      "source_id": "donaldson_shop_catalog",
+      "name": "Donaldson Shop / official filter catalog",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "part_number",
+        "cross_reference",
+        "equipment",
+        "attribute_search",
+        "vin"
+      ],
+      "outputs": [
+        "donaldson_filter_numbers",
+        "cross_references",
+        "equipment_applications",
+        "attributes",
+        "product_literature"
+      ],
+      "brands": [
+        "Donaldson"
+      ],
+      "url": "https://shop.donaldson.com/store/en-us/home",
+      "role": "Official Donaldson route for filter part search, cross-reference, equipment search, attribute search, and product literature.",
+      "access": "Public browsing plus account features depending on region.",
+      "limits": "Use for filter/filtration analog confirmation. Verify heavy-duty VIN/service-kit splits against OEM EPC or supplier evidence.",
+      "mvp_priority": "medium",
+      "notes": "Useful for trucks, off-highway, hydraulics, air, oil, fuel, and specialty filtration."
+    },
+    {
+      "source_id": "fleetguard_catalog",
+      "name": "Fleetguard official catalog and product search",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "part_number",
+        "cross_reference",
+        "equipment",
+        "product_literature"
+      ],
+      "outputs": [
+        "fleetguard_filter_numbers",
+        "cross_references",
+        "product_literature",
+        "dealer_route"
+      ],
+      "brands": [
+        "Fleetguard",
+        "Cummins Filtration"
+      ],
+      "url": "https://www.fleetguard.com/",
+      "role": "Official Fleetguard route for filters, product literature, dealer lookup, and heavy-duty filtration checks.",
+      "access": "Public product search plus portal/account features.",
+      "limits": "Use as heavy-duty filter analog/applicability evidence; confirm OEM service-kit contents separately.",
+      "mvp_priority": "medium",
+      "notes": "Good layer for Cummins and heavy-duty filter cross checks after OEM/reference number is known."
+    },
+    {
+      "source_id": "ngk_ntk_part_finder",
+      "name": "NGK/NTK Part Finder",
+      "kind": "manufacturer_aftermarket_catalog",
+      "authority": "manufacturer_aftermarket",
+      "inputs": [
+        "vehicle_parameters",
+        "article_number",
+        "cross_reference",
+        "product_category"
+      ],
+      "outputs": [
+        "ngk_article_numbers",
+        "ntk_article_numbers",
+        "vehicle_applications",
+        "cross_list",
+        "product_notes"
+      ],
+      "brands": [
+        "NGK",
+        "NTK",
+        "Niterra"
+      ],
+      "url": "https://www.ngkntk.com/ae/part-finder/",
+      "role": "Official NGK/NTK route for spark plugs, glow plugs, ignition, oxygen sensors, exhaust sensors, MAF/MAP sensors, EGR, speed/position sensors, and cross lists.",
+      "access": "Public regional part finder; country coverage and disclaimers vary.",
+      "limits": "Use for ignition/sensor analog and applicability checks after exact vehicle profile is known.",
+      "mvp_priority": "medium",
+      "notes": "Catalog explicitly exposes product catalogue, article-name search, and cross-list routes."
+    },
+    {
       "source_id": "bmw_air_etk_aos",
       "name": "BMW AIR/ETK via AOS",
       "kind": "manufacturer_service_catalog",
@@ -346,8 +753,10 @@
         "getOEApplicability",
         "getArticleCrosses",
         "getApplicability",
+        "getEngine",
         "getCrosses",
         "getCrossesWithBrand",
+        "getCrossesTitle",
         "searchArticles"
       ],
       "limits": "Not a закупка source by itself unless connected price/stock data is explicitly available; validate license and regional data freshness.",
@@ -509,7 +918,7 @@
       "source_id": "partsapi_ru",
       "role": "Cross/applicability and VIN/OE decode candidate.",
       "mvp_priority": "high",
-      "adapter": "read-only VINdecode/VINdecodeOE/getPartsbyVIN/getOEApplicability/getCrosses/getCrossesWithBrand/searchArticles normalizer.",
+      "adapter": "read-only VINdecode/VINdecodeOE/getPartsbyVIN/getOEApplicability/getCrosses/getCrossesWithBrand/getCrossesTitle/getArticleCrosses/searchArticles/getEngine/getSearchTree/getArticles/getArticle/getArticleCriteria normalizer.",
       "acceptance": "For each test OEM, return applicability, crosses, and confidence flags without treating crosses as fitment-confirmed by default."
     },
     {
@@ -525,6 +934,34 @@
       "mvp_priority": "medium",
       "adapter": "manual workflow first; API only after legal-entity subscription/demo confirms access.",
       "acceptance": "Show exact vehicle equipment and OEM/cross evidence for test VIN/frame without storing raw customer identifiers."
+    },
+    {
+      "source_id": "man_service_portal_webmantis",
+      "role": "Primary authorized MAN OEM route for MAN trucks, buses, vans, and engines.",
+      "mvp_priority": "high",
+      "adapter": "manual authorized-access checklist first; no scraping, no third-party MANTIS dumps.",
+      "acceptance": "Given an authorized MAN VIN or production number, confirm service-kit/filter/brake OEM candidates and cite only compact source metadata."
+    },
+    {
+      "source_id": "man_partslink24",
+      "role": "Official MAN Genuine Parts ordering and inventory handoff after OEM identification.",
+      "mvp_priority": "high",
+      "adapter": "manual portal workflow; keep customer number, login, baskets, and screenshots outside Git.",
+      "acceptance": "Identify MAN Genuine Parts by VIN and verify local distributor/order route without leaking credentials or raw VIN."
+    },
+    {
+      "source_id": "tecalliance_tecdoc_catalog",
+      "role": "Licensed aftermarket article, OE-reference, cross, and applicability layer.",
+      "mvp_priority": "high",
+      "adapter": "contract/API review or use through existing PartsAPI/TecDoc-style provider before direct integration.",
+      "acceptance": "For filters/plugs/sensors/brakes, return article, OE reference, linkage attributes, and confidence flags without promoting crosses to OEM."
+    },
+    {
+      "source_id": "manufacturer_aftermarket_catalogs",
+      "role": "Official MAHLE/Bosch/MANN/Hengst/Donaldson/Fleetguard/NGK analog and consumables verification.",
+      "mvp_priority": "medium",
+      "adapter": "manual source-route table first; direct API only when official terms allow it.",
+      "acceptance": "For common wear parts, confirm selected analogs against official manufacturer catalog evidence and preserve OEM/reference separation."
     },
     {
       "source_id": "partsouq_manual",

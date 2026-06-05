@@ -35,6 +35,9 @@ def test_decode_vehicle_identity_builds_high_confidence_clean_us_vin(monkeypatch
     assert result["vehicle_profile"]["engine"] == "5.7 V8 gasoline"
     assert result["diagnostics"]["check_digit"]["status"] == "pass"
     assert result["parts_lookup_readiness"]["ready_for_oem_lookup"] is True
+    assert result["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] is True
+    assert result["parts_lookup_readiness"]["ready_for_crm_writeback"] is True
+    assert result["parts_lookup_readiness"]["cross_source_agreement"]["status"] == "not_checked"
 
 
 def test_decode_vehicle_identity_handles_jdm_frame_without_pretending_it_is_iso_vin():

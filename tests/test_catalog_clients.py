@@ -34,7 +34,14 @@ PARTSAPI_METHOD_ENV_NAMES = [
     "PARTSAPI_OE_APPLICABILITY_KEY",
     "PARTSAPI_CROSSES_KEY",
     "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_CROSSES_TITLE_KEY",
+    "PARTSAPI_ARTICLE_CROSSES_KEY",
     "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_GET_ENGINE_KEY",
+    "PARTSAPI_SEARCH_TREE_KEY",
+    "PARTSAPI_ARTICLES_KEY",
+    "PARTSAPI_ARTICLE_KEY",
+    "PARTSAPI_ARTICLE_CRITERIA_KEY",
 ]
 
 
@@ -271,6 +278,99 @@ def test_partsapi_parts_by_vin_defaults_to_oem_type(monkeypatch):
     assert result["request_plan"]["params"]["cat"] == "1191"
 
 
+def test_partsapi_parts_by_vin_can_omit_type_for_non_oem(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    result = partsapi_catalog_lookup(
+        operation="parts_by_vin",
+        identifier="XW7BF4FK60S145161",
+        part_type="non-oem",
+        category="1191",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert "type" not in result["request_plan"]["params"]
+    assert "type=" not in result["request_plan"]["redacted_url"]
+    assert result["request_plan"]["params"]["cat"] == "1191"
+
+
+def test_partsapi_engine_info_uses_tecdoc_type_params_and_method_key(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_GET_ENGINE_KEY", "method-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    result = partsapi_catalog_lookup(
+        operation="engine_info",
+        type_id="1404",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["partsapi_method"] == "getEngine"
+    assert result["request_plan"]["method_key_env_name"] == "PARTSAPI_GET_ENGINE_KEY"
+    assert result["request_plan"]["params"] == {"TYPE": "PC", "TYPE_ID": "1404", "LANG": 16}
+    assert "method=getEngine" in result["request_plan"]["redacted_url"]
+    assert "TYPE=PC" in result["request_plan"]["redacted_url"]
+    assert "TYPE_ID=1404" in result["request_plan"]["redacted_url"]
+    assert "method-secret" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_search_tree_and_article_operations_use_safe_params(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_SEARCH_TREE_KEY", "tree-secret")
+    monkeypatch.setenv("PARTSAPI_ARTICLE_CRITERIA_KEY", "criteria-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    tree = partsapi_catalog_lookup(operation="search_tree", type_id="1404", dry_run=True)
+    criteria = partsapi_catalog_lookup(operation="article_criteria", article_id="1878343", dry_run=True)
+
+    assert tree["ok"] is True
+    assert tree["partsapi_method"] == "getSearchTree"
+    assert tree["request_plan"]["params"] == {"TYPE": "PC", "TYPE_ID": "1404", "LANG": 16}
+    assert "tree-secret" not in tree["request_plan"]["redacted_url"]
+    assert criteria["ok"] is True
+    assert criteria["partsapi_method"] == "getArticleCriteria"
+    assert criteria["request_plan"]["params"] == {"ART_ID": "1878343", "LANG": 16}
+    assert "criteria-secret" not in criteria["request_plan"]["redacted_url"]
+
+
+def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
+    profiles = extract_partsapi_vehicle_profiles(
+        operation="engine_info",
+        payload={
+            "data": {
+                "array": {
+                    "ENG_ID": "15",
+                    "ENG_CODE": "CZDA",
+                    "ENG_NAME": "1.4 TSI",
+                    "fuelType": "Petrol",
+                    "cylinderCapacityCcm": "1395",
+                    "powerHpFrom": "150",
+                }
+            }
+        },
+    )
+
+    assert profiles == [
+        {
+            "provider": "partsapi_ru",
+            "source_operation": "engine_info",
+            "raw_keys": ["ENG_CODE", "ENG_ID", "ENG_NAME", "cylinderCapacityCcm", "fuelType", "powerHpFrom"],
+            "engine_id": "15",
+            "engine_code": "CZDA",
+            "engine_name": "1.4 TSI",
+            "fuel_type": "Petrol",
+            "displacement_cc": "1395",
+            "power_hp_from": "150",
+        }
+    ]
+
+
 def test_emex_lookup_reports_missing_credentials(monkeypatch):
     monkeypatch.delenv("EMEX_LOGIN", raising=False)
     monkeypatch.delenv("EMEX_PASSWORD", raising=False)
@@ -472,8 +572,9 @@ def test_resolve_partsapi_category_distinguishes_numeric_and_text_candidates():
 
     assert explicit["category_kind"] == "numeric_id"
     assert explicit["category_unresolved"] is False
-    assert text["category_kind"] == "text_candidate"
-    assert text["category_unresolved"] is True
+    assert text["category_kind"] == "numeric_id"
+    assert text["category_unresolved"] is False
+    assert text["source"] == "partsapi_category_index"
     assert "stabilizer link" in text["text_candidates"]
     assert unknown["category_kind"] == "unresolved"
 
@@ -587,6 +688,36 @@ def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
+def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    calls = []
+
+    def fake_urlopen(request, timeout=20.0):
+        calls.append(request.full_url)
+        raise TimeoutError("network timeout")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = partsapi_catalog_lookup(
+        operation="parts_by_vin",
+        identifier="XW7BF4FK60S145161",
+        part_type="oem",
+        category="1191",
+        max_attempts=2,
+    )
+
+    assert result["ok"] is False
+    assert result["attempt_count"] == 2
+    assert result["max_attempts"] == 2
+    assert [attempt["ok"] for attempt in result["attempts"]] == [False, False]
+    assert "network timeout" in result["error"]
+    assert "secret-key" not in result["request_plan"]["redacted_url"]
+    assert len(calls) == 2
+
+
 def test_partsapi_oe_applicability_allows_empty_payload(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
@@ -662,6 +793,61 @@ def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
     assert result["oem_candidates"] == []
     assert result["cross_candidates"][0]["brand"] == "KYB"
     assert result["cross_candidates"][0]["part_number"] == "341123"
+    assert "secret-key" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_crosses_title_uses_method_key_and_lang(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_CROSSES_TITLE_KEY", "method-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    result = partsapi_catalog_lookup(
+        operation="crosses_title",
+        part_number="06D109244E",
+        lang="en",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["partsapi_method"] == "getCrossesTitle"
+    assert result["request_plan"]["method_key_env_name"] == "PARTSAPI_CROSSES_TITLE_KEY"
+    assert result["request_plan"]["params"] == {"lang": "en", "number": "06D109244E"}
+    assert "method=getCrossesTitle" in result["request_plan"]["redacted_url"]
+    assert "method-secret" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_crosses_title_normalizes_partname(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def fake_urlopen(request, timeout=20.0):
+        assert "method=getCrossesTitle" in request.full_url
+        assert "lang=en" in request.full_url
+        assert "number=06D109244E" in request.full_url
+        return _FakeResponse(
+            [
+                {
+                    "brand": "VAG",
+                    "crossBrand": "INA",
+                    "crossNumber": "420008610",
+                    "partname": "Timing Chain",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = partsapi_catalog_lookup(operation="crosses_title", part_number="06D109244E", lang="en")
+
+    assert result["ok"] is True
+    assert result["oem_candidates"] == []
+    assert result["cross_candidates"][0]["source_brand"] == "VAG"
+    assert result["cross_candidates"][0]["brand"] == "INA"
+    assert result["cross_candidates"][0]["part_number"] == "420008610"
+    assert result["cross_candidates"][0]["name"] == "Timing Chain"
+    assert result["cross_candidates"][0]["fitment_evidence"]["partname"] == "Timing Chain"
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
@@ -750,6 +936,90 @@ def test_partsapi_search_articles_uses_article_candidates_not_oem(monkeypatch):
     assert result["article_candidates"][0]["brand"] == "3RG"
     assert result["article_candidates"][0]["part_number"] == "40219"
     assert "secret-key" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_article_crosses_uses_article_id_and_method_key(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_ARTICLE_CROSSES_KEY", "method-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    result = partsapi_catalog_lookup(
+        operation="article_crosses",
+        article_id="1878343",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["partsapi_method"] == "getArticleCrosses"
+    assert result["request_plan"]["method_key_env_name"] == "PARTSAPI_ARTICLE_CROSSES_KEY"
+    assert result["request_plan"]["params"] == {"ART_ID": "1878343", "LANG": 16}
+    assert "method=getArticleCrosses" in result["request_plan"]["redacted_url"]
+    assert "ART_ID=1878343" in result["request_plan"]["redacted_url"]
+    assert "LANG=16" in result["request_plan"]["redacted_url"]
+    assert "method-secret" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_article_crosses_uses_article_candidates_not_oem(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def fake_urlopen(request, timeout=20.0):
+        assert "method=getArticleCrosses" in request.full_url
+        assert "ART_ID=1878343" in request.full_url
+        assert "LANG=16" in request.full_url
+        return _FakeResponse(
+            [
+                {
+                    "ART_ID": 3122568,
+                    "ART_ARTICLE_NR": "40219",
+                    "ART_SUP_BRAND": "3RG",
+                    "ART_PRODUCT_NAME": "Подвеска, двигатель",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = partsapi_catalog_lookup(operation="article_crosses", article_id="1878343")
+
+    assert result["ok"] is True
+    assert result["oem_candidates"] == []
+    assert result["article_candidates"][0]["article_id"] == 3122568
+    assert result["article_candidates"][0]["brand"] == "3RG"
+    assert result["article_candidates"][0]["part_number"] == "40219"
+    assert result["article_candidates"][0]["product_name"] == "Подвеска, двигатель"
+    assert "secret-key" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_article_crosses_normalizes_arl_payload(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def fake_urlopen(request, timeout=20.0):
+        assert "method=getArticleCrosses" in request.full_url
+        return _FakeResponse(
+            [
+                {
+                    "ARL_ART_ID": 2558558,
+                    "ARL_BRA_BRAND": "LOBRO",
+                    "ARL_DISPLAY_NR": "300641",
+                    "ART_PRODUCT_NAME": "Приводной вал",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = partsapi_catalog_lookup(operation="article_crosses", article_id="1878343")
+
+    assert result["ok"] is True
+    assert result["article_candidates"][0]["article_id"] == 2558558
+    assert result["article_candidates"][0]["brand"] == "LOBRO"
+    assert result["article_candidates"][0]["part_number"] == "300641"
+    assert result["article_candidates"][0]["product_name"] == "Приводной вал"
 
 
 def test_mann_filter_request_uses_public_graphql_without_secret():

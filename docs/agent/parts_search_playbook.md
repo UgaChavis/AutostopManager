@@ -26,6 +26,23 @@ The OEM-number workflow is: VIN decode -> catalog vehicle selection -> part
 group lookup -> OEM candidate validation -> only then market price search.
 For BMW/VAG, prefer legal paid/official EPC routes such as partslink24,
 BMW AOS/AIR/ETK, or VAG ETKA; public EPC mirrors are fallback evidence only.
+For MAN, prefer MAN Service Portal/webMANTIS or MAN partslink24 for
+VIN-specific OEM references. MAHLE, Bosch, MANN-FILTER, Hengst, Donaldson,
+Fleetguard, NGK/NTK, and TecDoc-backed catalogs are official aftermarket/cross
+layers: useful for selecting расходники and analogs after the genuine reference
+or exact vehicle profile is known, but not enough on their own to claim an OEM
+number by VIN.
+When `data/offline_parts_catalogs/catalog_index.json` exists, search the local
+offline catalog text before marketplace browsing for filter/plug/commercial
+service-part crosses:
+
+```bash
+rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text
+```
+
+Treat local PDF/XLSX hits as source-backed fitment/cross evidence, then move to
+supplier/marketplace price checks only after the OEM reference or selected
+replacement remains stable.
 
 If the owner asks for закупочная цена, local availability, repair-order
 materials pricing, or cost correction, load

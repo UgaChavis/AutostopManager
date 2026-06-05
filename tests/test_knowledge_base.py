@@ -274,6 +274,18 @@ def test_probe_routes_steering_rack_parts_request_to_ai_parts_pack(tmp_path):
     assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["source_of_truth"])
 
 
+def test_probe_routes_inflected_contract_steering_rack_with_analogs_to_parts_sourcing(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "найди рулевую рейку контрактную в Красноярске и проверь аналоги")
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "parts_sourcing"
+    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["source_of_truth"])
+
+
 def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
@@ -284,6 +296,19 @@ def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "knowledge_intake"
     assert any("knowledge_shelves.md" in path for path in result["source_of_truth"])
+
+
+def test_probe_routes_pdf_catalog_knowledge_update_to_intake(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "обнови базу знаний добавь PDF каталог")
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "knowledge_intake"
+    assert result["open_first"] == "docs/agent/knowledge_shelves.md"
+    assert result["command_route"]["command_id"] == "manager_documentation_hygiene"
 
 
 def test_search_finds_ai_parts_playbook_for_local_vendor_scoring(tmp_path):

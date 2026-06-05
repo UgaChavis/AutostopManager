@@ -119,8 +119,41 @@ def _unique_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _query_has_context(query: str, context_name: str) -> bool:
     lowered = query.casefold()
     name = context_name.casefold()
+    if "live crm card id" in name:
+        return bool(
+            "card_id" in lowered
+            or "card id" in lowered
+            or "карточка #" in lowered
+            or "карточка №" in lowered
+            or "card #" in lowered
+        )
     if "vin" in name or "chassis" in name:
         return "vin" in lowered or "кузов" in lowered or "frame" in lowered or "chassis" in lowered
+    if "requested part" in name:
+        return any(
+            term in lowered
+            for term in [
+                "детал",
+                "запчаст",
+                "свеч",
+                "колод",
+                "фильтр",
+                "рейк",
+                "сцеплен",
+                "датчик",
+                "ремень",
+                "насос",
+                "part",
+                "filter",
+                "plug",
+                "pads",
+                "rack",
+                "clutch",
+                "sensor",
+            ]
+        )
+    if "repair-order" in name or "materials" in name:
+        return any(term in lowered for term in ["repair order", "заказ-наряд", "зн", "материал"])
     if "market" in name:
         return "market" in lowered or "рынок" in lowered
     if "engine" in name:
@@ -152,11 +185,14 @@ def prepare_manager_context(
         knowledge["open_first"] = command_route.get("open_first") or knowledge.get("open_first")
         knowledge["has_knowledge"] = True
         knowledge["command_route"] = command_route
-    recall_queries.append(query)
     if intent:
         recall_queries.append(intent)
 
-    relevant: list[dict[str, Any]] = []
+    memory_context = memory.memory_context_for(query, limit=limit)
+    relevant: list[dict[str, Any]] = [
+        *memory_context.get("preferences_or_facts", []),
+        *memory_context.get("lessons", []),
+    ]
     for recall_query in dict.fromkeys(item for item in recall_queries if item):
         relevant.extend(memory.recall(recall_query, limit=limit).get("items", []))
     relevant = _unique_items(relevant)[:limit]
@@ -181,6 +217,12 @@ def prepare_manager_context(
             "open_first": knowledge.get("open_first"),
             "confidence": knowledge.get("confidence"),
             "source_of_truth": knowledge.get("source_of_truth", []),
+            "reference_files": knowledge.get("reference_files", []),
+            "optional_runtime_files": knowledge.get("optional_runtime_files", []),
+            "optional_available_files": knowledge.get("optional_available_files", []),
+            "optional_missing_files": knowledge.get("optional_missing_files", []),
+            "optional_runtime_available": knowledge.get("optional_runtime_available", False),
+            "optional_runtime_note": knowledge.get("optional_runtime_note", ""),
             "routes": knowledge.get("routes", []),
         },
         "relevant_memory": relevant,
@@ -240,6 +282,12 @@ def build_agent_brief(
             "domain": domain or None,
             "open_first": knowledge.get("open_first"),
             "source_of_truth": knowledge.get("source_of_truth", []),
+            "reference_files": knowledge.get("reference_files", []),
+            "optional_runtime_files": knowledge.get("optional_runtime_files", []),
+            "optional_available_files": knowledge.get("optional_available_files", []),
+            "optional_missing_files": knowledge.get("optional_missing_files", []),
+            "optional_runtime_available": knowledge.get("optional_runtime_available", False),
+            "optional_runtime_note": knowledge.get("optional_runtime_note", ""),
             "confidence": knowledge.get("confidence"),
         },
         "source_boundaries": {

@@ -53,6 +53,110 @@ def test_recall_filters_and_scores_russian_memory(tmp_path):
     assert result["items"][0]["matched_fields"]
 
 
+def test_recall_query_requires_text_match_before_importance_boost(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    store.remember(
+        "Очень важная заметка про уборку карточек CRM и форматирование описания.",
+        kind="note",
+        category="board_cleanup",
+        tags=["crm", "card_description"],
+        importance=5.0,
+    )
+
+    result = store.recall("VIN OEM фильтра", limit=5)
+
+    titles = [str(item.get("title") or "") for item in result["items"]]
+    assert "vin-oem-lookup-workflow" in titles
+    assert all(item["matched_fields"] for item in result["items"])
+    assert not any(item.get("category") == "board_cleanup" for item in result["items"])
+
+
+def test_memory_context_uses_focused_vin_oem_query_before_generic_crm_noise(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    store.remember(
+        "Очень важная заметка про уборку карточек CRM и форматирование описания.",
+        kind="note",
+        category="board_cleanup",
+        tags=["crm", "card_description"],
+        importance=5.0,
+    )
+    store.remember(
+        "По команде владельца «Приберись» нужно проверять VIN и профиль автомобиля в CRM.",
+        kind="fact",
+        category="crm_operations",
+        tags=["crm", "vin"],
+        importance=5.0,
+    )
+    store.remember(
+        "Когда владелец просит «переберись» в карточке, нужно богато оформить описание CRM.",
+        kind="note",
+        title="Команда «переберись»: оформление описаний карточек",
+        category="crm_style",
+        tags=["crm", "карточки"],
+        importance=5.0,
+    )
+    store.remember(
+        "For Toyota GR Yaris tasks, verify VIN, market, grade, and OEM part conclusions.",
+        kind="note",
+        title="Toyota GR Yaris knowledge route",
+        category="automotive_repair",
+        tags=["toyota", "vin", "oem"],
+        importance=5.0,
+    )
+
+    result = store.memory_context_for("в карточке CRM VIN найти OEM фильтра", limit=5)
+
+    assert result["preferences_or_facts"]
+    assert result["preferences_or_facts"][0]["kind"] == "rule"
+    assert result["preferences_or_facts"][0]["title"] == "vin-oem-lookup-workflow"
+    context_text = "\n".join(
+        str(item.get("title") or item.get("content") or item.get("rule") or "")
+        for item in result["preferences_or_facts"]
+    ).casefold()
+    assert "board-cleanup" not in context_text
+    assert "приберись" not in context_text
+    assert "переберись" not in context_text
+    assert "knowledge-catalog-sync" not in context_text
+    assert "github-publication-privacy" not in context_text
+    assert "toyota gr yaris" not in context_text
+
+
+def test_memory_context_keeps_board_cleanup_rules_for_explicit_cleanup_query(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    store.remember(
+        "Когда владелец просит «переберись» в карточке, нужно богато оформить описание CRM.",
+        kind="note",
+        title="Команда «переберись»: оформление описаний карточек",
+        category="crm_style",
+        tags=["crm", "карточки"],
+        importance=5.0,
+    )
+
+    result = store.memory_context_for("Переберись: оформи описание CRM карточки с VIN", limit=20)
+
+    context_text = "\n".join(
+        str(item.get("title") or item.get("content") or item.get("rule") or "")
+        for item in result["preferences_or_facts"]
+    ).casefold()
+    assert "board-cleanup" in context_text or "переберись" in context_text
+
+
+def test_memory_context_keeps_admin_rules_for_explicit_knowledge_query(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+
+    result = store.memory_context_for("обнови базу знаний и синхронизируй catalog", limit=20)
+
+    context_text = "\n".join(
+        str(item.get("title") or item.get("content") or item.get("rule") or "")
+        for item in result["preferences_or_facts"]
+    ).casefold()
+    assert "knowledge-catalog-sync" in context_text
+
+
 def test_learn_from_feedback_creates_searchable_lesson(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 

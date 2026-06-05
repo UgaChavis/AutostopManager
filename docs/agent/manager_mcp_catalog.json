@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-06-02",
-  "tool_count": 51,
+  "last_verified": "2026-06-03",
+  "tool_count": 55,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -48,9 +48,13 @@
     "vin17_decode_vehicle",
     "vin17_search_part_number_by_vin",
     "partsapi_catalog_lookup",
+    "search_partsapi_category_index",
+    "explain_partsapi_category_for_intent",
+    "validate_partsapi_category_index",
     "public_aftermarket_catalog_lookup",
     "exist_price_lookup",
     "lookup_oem_catalog_candidates",
+    "resolve_vin_oem_parts",
     "plan_crm_vin_oem_parts_lookup",
     "benchmark_vin_parts_lookup",
     "build_vin_parts_work_order",
@@ -122,9 +126,13 @@
     "vin17_decode_vehicle",
     "vin17_search_part_number_by_vin",
     "partsapi_catalog_lookup",
+    "search_partsapi_category_index",
+    "explain_partsapi_category_for_intent",
+    "validate_partsapi_category_index",
     "public_aftermarket_catalog_lookup",
     "exist_price_lookup",
     "lookup_oem_catalog_candidates",
+    "resolve_vin_oem_parts",
     "plan_crm_vin_oem_parts_lookup",
     "benchmark_vin_parts_lookup",
     "build_vin_parts_work_order",
@@ -173,12 +181,16 @@
     "plan_oem_parts_providers": "Build provider readiness and blocker plan for VIN/frame -> OEM candidates -> crosses/applicability -> procurement/RF market price. It redacts identifiers and does not call suppliers or write CRM.",
     "vin17_decode_vehicle": "Call or dry-run the configured 17VIN API vehicle decoder using VIN17_ACCOUNT/VIN17_SECRET; expose only redacted request evidence and never expose token/secret.",
     "vin17_search_part_number_by_vin": "Call or dry-run 17VIN search_part_number by VIN after a 17VIN decode returns an EPC code; use for read-only fitment checks, not supplier orders.",
-    "partsapi_catalog_lookup": "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup using PARTSAPI_BASE_URL plus PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, getOEApplicability, getCrosses, getCrossesWithBrand, and searchArticles without exposing key values.",
+    "partsapi_catalog_lookup": "Call or dry-run PartsAPI VIN/OE/applicability/cross/engine/category/article lookup using PARTSAPI_BASE_URL plus PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, getOEApplicability, getCrosses, getCrossesWithBrand, getCrossesTitle, getArticleCrosses, searchArticles, getEngine, getSearchTree, getArticles, getArticle, and getArticleCriteria without exposing key values. For getPartsbyVIN, part_type defaults to oem; use omit/non-oem to skip the type query parameter; timeout and max_attempts are configurable for slow live reads.",
+    "search_partsapi_category_index": "Search the local PartsAPI numeric category index by query/intent without live calls or secrets.",
+    "explain_partsapi_category_for_intent": "Explain why a local PartsAPI numeric category was selected for a part intent.",
+    "validate_partsapi_category_index": "Validate the tracked local PartsAPI category index fixture without exposing secrets or identifiers.",
     "public_aftermarket_catalog_lookup": "Call public MANN-FILTER and DENSO Aftermarket catalogs by part/OE number; use for brand-scope catalog enrichment, not as VIN-specific OEM EPC proof or supplier price confirmation.",
     "exist_price_lookup": "Call or dry-run public read-only Exist article lookup for catalog disambiguation, analog visibility, retail price benchmark, and lead time with Krasnoyarsk office 905 by default; returns public_retail_reference only and never supplier-order data.",
     "lookup_oem_catalog_candidates": "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part, combining Parts-Catalogs, PartsAPI, and 17VIN when credentials and routing ids are available; no CRM writes or supplier orders are created.",
-    "benchmark_vin_parts_lookup": "Read-only batch benchmark for CRM VIN/frame/body-number items: identity confidence, part-intent recognition, safe public search templates, provider blockers, and PartsAPI/17VIN dry-run readiness with raw identifiers redacted from output.",
-    "build_vin_parts_work_order": "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, cross/applicability steps, supplier routes, CRM writeback gates, blockers, and acceptance checklists with raw identifiers redacted from output.",
+    "resolve_vin_oem_parts": "Resolve one VIN/frame/body-number and requested part into a read-only VinOemResolution: identity, part intent, PartsAPI category, OEM candidates, enrichment, readiness gates, manual actions, and CRM gate.",
+    "benchmark_vin_parts_lookup": "Read-only batch benchmark for CRM VIN/frame/body-number items: identity confidence, part-intent recognition, safe public search templates, provider blockers, PartsAPI/17VIN dry-run readiness, and opt-in live PartsAPI OE identity/OEM checks with raw identifiers redacted from output.",
+    "build_vin_parts_work_order": "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, cross/applicability steps, supplier routes, read-only candidate lookup vs CRM writeback gates, blockers, and acceptance checklists with raw identifiers redacted from output.",
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
     "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake.",
@@ -193,13 +205,11 @@
   "natural_language_commands": {
     "Приберись": {
       "aliases": [
-        "прибейсь",
         "прибери доску",
         "обслужи доску",
         "актуализируй доску",
         "проведи уборку доски",
-        "проверь доску",
-        "переберись"
+        "проверь доску"
       ],
       "playbook": "docs/agent/board_cleanup_autopilot_playbook.md",
       "authority": "full board-management autopilot with strict preservation of user-entered CRM data",
@@ -320,5 +330,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 51
+  "all_tools_count": 55
 }

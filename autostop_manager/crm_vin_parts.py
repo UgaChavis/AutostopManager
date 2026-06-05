@@ -130,6 +130,32 @@ def _quote_matrix_schema() -> list[str]:
     ]
 
 
+def _manual_writeback_package(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not resolution:
+        return None
+    candidates = [candidate for candidate in resolution.get("oem_candidates", []) if isinstance(candidate, dict)]
+    selected = candidates[0] if candidates else None
+    return {
+        "write_to_materials_automatically": False,
+        "requires_manual_confirmation": True,
+        "selected_candidate": selected,
+        "rejected_candidates": candidates[1:],
+        "confidence": selected.get("confidence_label") if selected else "blocked",
+        "source_evidence": {
+            "resolution_status": resolution.get("status"),
+            "category_resolution": resolution.get("category_resolution"),
+            "readiness": resolution.get("readiness"),
+            "enrichment": resolution.get("enrichment"),
+        },
+        "quantity_basis": selected.get("quantity_basis") if selected else (resolution.get("part_intent") or {}).get("quantity_basis"),
+        "crm_note": (
+            "VIN/OEM подбор готов к ручной проверке: подтвердить OEM-кандидат, применимость, quantity basis и цену перед записью материалов."
+            if selected
+            else "VIN/OEM подбор не готов к записи материалов: выполнить manual_actions из VinOemResolution."
+        ),
+    }
+
+
 def build_crm_vin_parts_lookup_pipeline(
     *,
     card_id: str | None = None,
@@ -151,6 +177,7 @@ def build_crm_vin_parts_lookup_pipeline(
     urgency: str | None = None,
     city: str = "Красноярск",
     limit: int = 10,
+    vin_oem_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the deterministic CRM VIN/OEM parts lookup pipeline.
 
@@ -210,6 +237,8 @@ def build_crm_vin_parts_lookup_pipeline(
         "identifier_lookup": lookup_plan,
         "vehicle_identity": vehicle_identity,
         "provider_plan": provider_plan,
+        "vin_oem_resolution": vin_oem_resolution,
+        "manual_writeback_package": _manual_writeback_package(vin_oem_resolution),
         "pipeline": [
             {
                 "step": "read_crm_card_vehicle_data",

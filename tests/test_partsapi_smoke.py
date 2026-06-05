@@ -73,8 +73,12 @@ def test_partsapi_vin_smoke_pipeline_with_numeric_category(monkeypatch):
             }
         if operation == "search_articles":
             return {**base, "article_candidates": [{"article_id": 1, "brand": "CITROEN", "part_number": "5610106660"}]}
+        if operation == "article_crosses":
+            return {**base, "article_candidates": [{"article_id": 2, "brand": "AGC", "part_number": "AGC-2"}]}
         if operation == "oe_applicability":
             return {**base, "empty_payload": True}
+        if operation == "crosses_title":
+            return {**base, "cross_candidates": [{"brand": "AGC", "part_number": "AGC-0", "name": "Windshield"}]}
         if operation == "crosses_with_brand":
             return {**base, "cross_candidates": [{"brand": "AGC", "part_number": "AGC-1"}]}
         raise AssertionError(operation)
@@ -91,7 +95,16 @@ def test_partsapi_vin_smoke_pipeline_with_numeric_category(monkeypatch):
     assert report["partsapi_category_resolution"]["category_kind"] == "numeric_id"
     assert report["candidate_count"] == 1
     assert report["enrichment"][0]["article_candidates"][0]["part_number"] == "5610106660"
-    assert calls == ["vin_decode", "vin_decode_oe", "parts_by_vin", "search_articles", "oe_applicability", "crosses_with_brand"]
+    assert calls == [
+        "vin_decode",
+        "vin_decode_oe",
+        "parts_by_vin",
+        "search_articles",
+        "article_crosses",
+        "oe_applicability",
+        "crosses_title",
+        "crosses_with_brand",
+    ]
     assert raw_identifier not in serialized
     assert "XW7***161" in serialized
 
@@ -171,7 +184,7 @@ def test_partsapi_vin_smoke_reports_text_category_without_live_parts_call(monkey
     monkeypatch.setattr("autostop_manager.partsapi_smoke.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
 
     report = build_partsapi_vin_smoke_report(
-        {"vin": "XW8AC2NH9JK106477", "vehicle": "Skoda Rapid", "requested_part": "замена стойки стабилизатора"},
+        {"vin": "XW8AC2NH9JK106477", "vehicle": "Skoda Rapid", "requested_part": "масляный фильтр"},
         dry_run=False,
     )
 

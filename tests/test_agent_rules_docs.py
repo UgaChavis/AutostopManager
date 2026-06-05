@@ -34,6 +34,8 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
         "</u>",
         "rare underline",
         "if the crm renderer supports it",
+        "прибейсь",
+        "переберись",
     ]
 
     combined = "\n".join(path.read_text(encoding="utf-8").casefold() for path in checked_paths)

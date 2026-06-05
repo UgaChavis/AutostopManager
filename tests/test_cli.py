@@ -84,12 +84,87 @@ def test_cli_parser_has_core_commands():
             "04465-60280",
             "--brand",
             "Toyota",
+            "--timeout",
+            "7",
+            "--max-attempts",
+            "2",
             "--dry-run",
         ]
     )
     assert args.command == "partsapi-lookup"
     assert args.operation == "crosses_with_brand"
     assert args.part_number == "04465-60280"
+    assert args.timeout == 7
+    assert args.max_attempts == 2
+
+    args = parser.parse_args(
+        [
+            "partsapi-lookup",
+            "--operation",
+            "crosses_title",
+            "--part-number",
+            "06D109244E",
+            "--lang",
+            "en",
+            "--dry-run",
+        ]
+    )
+    assert args.command == "partsapi-lookup"
+    assert args.operation == "crosses_title"
+    assert args.part_number == "06D109244E"
+    assert args.lang == "en"
+
+    args = parser.parse_args(
+        [
+            "partsapi-lookup",
+            "--operation",
+            "article_crosses",
+            "--article-id",
+            "1878343",
+            "--lang-id",
+            "16",
+            "--dry-run",
+        ]
+    )
+    assert args.command == "partsapi-lookup"
+    assert args.operation == "article_crosses"
+    assert args.article_id == "1878343"
+    assert args.lang_id == 16
+
+    args = parser.parse_args(
+        [
+            "partsapi-lookup",
+            "--operation",
+            "engine_info",
+            "--type-id",
+            "1404",
+            "--vehicle-type",
+            "PC",
+            "--dry-run",
+        ]
+    )
+    assert args.command == "partsapi-lookup"
+    assert args.operation == "engine_info"
+    assert args.type_id == "1404"
+    assert args.vehicle_type == "PC"
+
+    args = parser.parse_args(
+        [
+            "partsapi-lookup",
+            "--operation",
+            "search_tree",
+            "--type-id",
+            "1404",
+            "--dry-run",
+        ]
+    )
+    assert args.command == "partsapi-lookup"
+    assert args.operation == "search_tree"
+
+    args = parser.parse_args(["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"])
+    assert args.command == "partsapi-category-index"
+    assert args.category_index_command == "explain"
+    assert args.intent_id == "front_brake_pads"
 
     args = parser.parse_args(
         [
@@ -173,6 +248,23 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
+            "resolve-vin-oem-parts",
+            "1HGCM82633A004352",
+            "--part",
+            "передние колодки",
+            "--live-partsapi-identity",
+            "--max-live-calls",
+            "2",
+            "--partsapi-category-index",
+            "docs/agent/partsapi_category_index.json",
+        ]
+    )
+    assert args.command == "resolve-vin-oem-parts"
+    assert args.requested_part == "передние колодки"
+    assert args.max_live_calls == 2
+
+    args = parser.parse_args(
+        [
             "vin-parts-benchmark",
             "--items-json",
             "[]",
@@ -181,6 +273,13 @@ def test_cli_parser_has_core_commands():
             "--no-live-vpic",
             "--no-vpic-batch",
             "--skip-partsapi-dry-run",
+            "--live-partsapi-identity",
+            "--live-partsapi-oem",
+            "--resolve-oem",
+            "--max-live-calls",
+            "2",
+            "--max-candidates",
+            "1",
         ]
     )
     assert args.command == "vin-parts-benchmark"
@@ -188,6 +287,10 @@ def test_cli_parser_has_core_commands():
     assert args.requested_part == "передние колодки"
     assert args.no_live_vpic is True
     assert args.skip_partsapi_dry_run is True
+    assert args.live_partsapi_identity is True
+    assert args.live_partsapi_oem is True
+    assert args.resolve_oem is True
+    assert args.max_candidates == 1
 
     args = parser.parse_args(
         [
@@ -198,12 +301,16 @@ def test_cli_parser_has_core_commands():
             "передние колодки",
             "--no-live-vpic",
             "--no-vpic-batch",
+            "--live-partsapi-identity",
+            "--resolve-oem",
         ]
     )
     assert args.command == "vin-parts-work-order"
     assert args.items_json == "[]"
     assert args.requested_part == "передние колодки"
     assert args.no_live_vpic is True
+    assert args.live_partsapi_identity is True
+    assert args.resolve_oem is True
 
     args = parser.parse_args(
         [

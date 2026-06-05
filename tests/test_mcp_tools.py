@@ -17,7 +17,14 @@ PARTSAPI_ENV_NAMES = [
     "PARTSAPI_OE_APPLICABILITY_KEY",
     "PARTSAPI_CROSSES_KEY",
     "PARTSAPI_CROSSES_WITH_BRAND_KEY",
+    "PARTSAPI_CROSSES_TITLE_KEY",
+    "PARTSAPI_ARTICLE_CROSSES_KEY",
     "PARTSAPI_SEARCH_ARTICLES_KEY",
+    "PARTSAPI_GET_ENGINE_KEY",
+    "PARTSAPI_SEARCH_TREE_KEY",
+    "PARTSAPI_ARTICLES_KEY",
+    "PARTSAPI_ARTICLE_KEY",
+    "PARTSAPI_ARTICLE_CRITERIA_KEY",
     "PARTSAPI_BASE_URL",
 ]
 
@@ -178,6 +185,12 @@ def test_partsapi_adapter_tool_is_registered(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["missing_env_names"] == ["PARTSAPI_KEY", "PARTSAPI_BASE_URL"]
 
+    assert "search_partsapi_category_index" in server.tools
+    category = server.tools["search_partsapi_category_index"]("передние колодки", intent_id="front_brake_pads")
+    assert category["matches"][0]["cat_id"].isdigit()
+    assert "validate_partsapi_category_index" in server.tools
+    assert server.tools["validate_partsapi_category_index"]()["ok"] is True
+
 
 def test_public_aftermarket_catalog_tool_is_registered(tmp_path):
     server = _FakeServer()
@@ -234,6 +247,16 @@ def test_oem_catalog_lookup_tool_is_registered(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     assert result["provider_count"] == 3
+
+    assert "resolve_vin_oem_parts" in server.tools
+    resolved = server.tools["resolve_vin_oem_parts"](
+        identifier="JTEBU3FJX05027767",
+        requested_part="передние колодки",
+        live_vpic=False,
+        dry_run=True,
+    )
+    assert resolved["schema"] == "VinOemResolution"
+    assert resolved["privacy"]["secret_exposed"] is False
 
 
 def test_plan_crm_vin_oem_parts_lookup_tool_is_registered(tmp_path):

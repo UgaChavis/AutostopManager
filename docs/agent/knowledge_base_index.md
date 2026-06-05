@@ -33,6 +33,7 @@ python -m autostop_manager.cli knowledge-probe "BMW X5 кузов E15 мотор
 python -m autostop_manager.cli knowledge-probe "подобрать сцепление Toyota Yaris GR"
 python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
 python -m autostop_manager.cli knowledge-probe "в карточке CRM VIN найти OEM свечей аналоги закупка записать"
+python -m autostop_manager.cli knowledge-probe "MAN VIN webMANTIS partslink24 фильтра MAHLE Bosch MANN"
 python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
 python -m autostop_manager.cli knowledge-probe "сделать счет или КП в PDF Word Excel и проверить оформление"
 python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения черновики"
@@ -99,17 +100,26 @@ Use these MCP tools when working through the manager:
   adapter/dry-run after a 17VIN decode has returned an EPC code.
 - `partsapi_catalog_lookup` - read-only PartsAPI adapter/dry-run for
   `VINdecode`, `VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability`, `getCrosses`,
-  `getCrossesWithBrand`, and `searchArticles`; live calls require
+  `getCrossesWithBrand`, `getCrossesTitle`, `getArticleCrosses`,
+  `searchArticles`, `getEngine`, `getSearchTree`, `getArticles`, `getArticle`,
+  and `getArticleCriteria`; live calls require
   `PARTSAPI_BASE_URL` plus either `PARTSAPI_KEY` or a method-specific
   `PARTSAPI_*_KEY`.
+- `resolve_vin_oem_parts` - read-only PartsAPI-first resolver for one
+  VIN/frame/body-number and requested part: identity, category index routing,
+  OEM candidates, enrichment, readiness gates, and manual CRM confirmation gate.
+- `search_partsapi_category_index` / `explain_partsapi_category_for_intent` /
+  `validate_partsapi_category_index` - inspect the local numeric PartsAPI
+  category index used before live `getPartsbyVIN`.
 - `benchmark_vin_parts_lookup` - read-only batch benchmark for 10-card or CRM
   VIN/frame/body-number quality checks: identity confidence, part-intent
   recognition, safe public query coverage, PartsAPI/17VIN dry-run readiness,
-  and missing live catalog/supplier env names with raw identifiers redacted.
+  opt-in PartsAPI OE identity cross-check, and missing live catalog/supplier
+  env names with raw identifiers redacted.
 - `build_vin_parts_work_order` - read-only per-card work order after benchmark:
   OEM/EPC routes, prepared API checks, cross/applicability steps, supplier
-  sequence, CRM writeback gates, and acceptance checklists with raw identifiers
-  redacted.
+  sequence, read-only candidate lookup vs CRM writeback gates, and acceptance
+  checklists with raw identifiers redacted.
 - `plan_crm_vin_oem_parts_lookup` - deterministic workflow planner for CRM
   card VIN/frame/body-number parts lookup: card intake, vehicle identity, OEM,
   supersession/cross, закупка/RF market quote matrix, selected-part CRM material
@@ -277,6 +287,8 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 - `procurement_price_sources.json` - supplier/API catalog for ROSSKO/Роска, Armtek, Autopiter, AutoEuro, ZZap, AutoSputnik, APEC, PartsAPI, UMAPI, AUTOPOISK, Mikado, local Krasnoyarsk sources, access modes, and quote fields.
 - `ai_parts_krasnoyarsk_playbook.md` - AI parts search, local Красноярск vendor discovery, offer scoring, seller-call confirmation, and high-risk parts such as рулевая рейка.
 - `automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/` - compact owner-provided AI Parts Search Krasnoyarsk/Russia project pack with retained workflow docs only.
+- `automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/` - official public offline PDF/XLSX catalog source pack and usage rules.
+- `data/offline_parts_catalogs/catalog_index.json` - optional local runtime index for downloaded PDF/XLSX catalogs and extracted text.
 
 AI parts Красноярск project pack:
 
@@ -284,6 +296,25 @@ AI parts Красноярск project pack:
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md`
+
+MAN/OE and official aftermarket catalog route:
+
+- `docs/agent/vin_oem_lookup_playbook.md`
+- `docs/agent/crm_vin_oem_parts_lookup_playbook.md`
+- `docs/agent/vin_oem_sources.json`
+- `docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md`
+
+For MAN trucks, buses, vans, or engines, route OEM number lookup through MAN
+Service Portal/webMANTIS, MAN partslink24, Parts-Catalogs, PartsAPI, 17VIN, or
+dealer/supplier confirmation. Do not use third-party MANTIS/EPC downloads as
+official evidence. For filters, plugs, sensors, and other расходники, use
+official manufacturer catalogs such as MAHLE, Bosch, MANN-FILTER, Hengst,
+Donaldson, Fleetguard, NGK/NTK, and TecDoc as cross/applicability evidence
+after the genuine reference or exact vehicle profile is known. When the local
+offline cache is present, check it first with:
+`rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text`.
+The cache is not a MAN offline EPC; it is an official aftermarket/supporting
+source layer for fitment, dimensions, notes, and cross checks.
 
 For spare-parts search, steering rack / рулевая рейка, used/contract parts,
 seller discovery, call confirmation, offer scoring, supplier routing, or local
