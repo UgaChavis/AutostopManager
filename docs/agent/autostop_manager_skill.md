@@ -32,67 +32,73 @@ and as the working layer for Gmail inbox triage.
    tools first.
 8. If CRM tool availability looks stale, check `get_connector_identity` or
    `get_runtime_status` before assuming the connector is broken.
-9. Start CRM reads with `bootstrap_context`, `get_board_context`, or `review_board`.
-10. Use focused CRM reads before heavy exports.
-11. If the owner says the canonical command `Приберись`, follow
+9. Start CRM reads with `bootstrap_context` and `manager_board_scan`; use
+   `get_board_context` or `review_board` when a fuller legacy view is needed.
+10. Prefer high-level CRM manager operations for board-wide intents:
+    `list_ready_unpaid_cards` / `apply_ready_unpaid_followups` for "готовые
+    без оплаты", `triage_inbox_cards` for "разбери входящие",
+    `bulk_set_deadline_if_below` for timer floors, and `cleanup_card` for
+    one-card safe cleanup patches.
+11. Use focused CRM reads before heavy exports.
+12. If the owner says the canonical command `Приберись`, follow
    `docs/agent/board_cleanup_autopilot_playbook.md`. Treat this as owner
    permission for non-destructive board hygiene; do not move or archive cards
    without a separate explicit owner command. Do not document older
    voice-dictation variants as separate commands or aliases.
-12. If the task combines a live CRM card, VIN/frame/body number, requested
+13. If the task combines a live CRM card, VIN/frame/body number, requested
    part, OEM lookup, analogs/crosses, закупка/RF market price, and CRM
    writeback, follow `docs/agent/crm_vin_oem_parts_lookup_playbook.md` and use
    `plan_crm_vin_oem_parts_lookup` / `crm-vin-parts-plan` before writing.
-13. If the task involves vehicle identification or VIN/chassis decoding, follow
+14. If the task involves vehicle identification or VIN/chassis decoding, follow
    `docs/agent/vehicle_identity_playbook.md` first, then build a VIN/OEM
    dossier through `docs/agent/vin_oem_lookup_playbook.md` before marketplace
    search.
-14. If the task involves oils, operating fluids, fill capacities, maintenance
+15. If the task involves oils, operating fluids, fill capacities, maintenance
    service quantities, or ТО fluid planning, follow
    `docs/agent/fluid_maintenance_playbook.md` and use
    `recommend_fluid_maintenance_sources` before giving any capacity/spec.
-15. If the task involves gearbox or transmission diagnosis, clutch
+16. If the task involves gearbox or transmission diagnosis, clutch
    adaptation, or transmission-fluid service, follow
    `docs/agent/transmission_playbook.md` first.
-16. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
+17. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
    GR-FOUR, GRMN Yaris, 6MT EA67F, or 8AT UC80F, follow
    `docs/agent/toyota_gr_yaris_playbook.md` before answering.
-17. If the task involves general BMW repair, diagnostics, BMW fault memory,
+18. If the task involves general BMW repair, diagnostics, BMW fault memory,
     xDrive, ZF transmission, BMW body electronics, BMW HV, or BMW fluids and no
     more specific model skill already matches, search domain `bmw_repair` and
     use `docs/agent/bmw_repair_playbook.md`.
-18. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
+19. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
    wiring, fluids, torque specs, labor time, ADAS, SRS, HV, or programming,
    follow `docs/agent/automotive_repair_source_playbook.md` and use
    `docs/agent/automotive_sources/` for source routing before giving a
    technical fact.
-19. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
+20. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
     F15 electrical/electronics, injectors, drivetrain malfunction, misfires,
     oil consumption, or cooling, use `docs/agent/bmw_repair_playbook.md` and
     the indexed BMW repair source cache before answering.
-20. If the owner provides new files or asks to expand the knowledge base,
+21. If the owner provides new files or asks to expand the knowledge base,
     follow `docs/agent/knowledge_intake_playbook.md`, classify the source, and
     store only durable conclusions in memory.
-21. If the task involves workshop management in Krasnoyarsk, parts procurement
+22. If the task involves workshop management in Krasnoyarsk, parts procurement
     blockers, staff load, customer flow, finance control, or daily CRM control,
     follow `docs/agent/krasnoyarsk_service_management_playbook.md` and use
     `recommend_service_management_actions`.
-22. If the task asks for repair work cost, labor price, or a work estimate,
+23. If the task asks for repair work cost, labor price, or a work estimate,
     use `docs/agent/work_labor_pricing_playbook.md` and
     `estimate_repair_work_cost`. Price labor only from public Russia STO
     samples, apply AutoStop `+50%`, add the public norm-hours/labor-time
     plausibility layer automatically, and do not write repair-order works
     without a separate explicit owner command.
-23. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
+24. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
     improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
     price comparison and replacement checks.
-23. Write only durable non-CRM context into AutostopManager memory.
-24. Use memory as context for judgment, not as a rigid template; preserve the
+25. Write only durable non-CRM context into AutostopManager memory.
+26. Use memory as context for judgment, not as a rigid template; preserve the
     owner's preference for intelligent, human-sounding card notes.
-25. After strong praise, criticism, a clear success, a clear failure, or an
+27. After strong praise, criticism, a clear success, a clear failure, or an
     owner request to do something differently, use `learn_from_feedback` to
     store a short reusable lesson instead of copying the full event.
-26. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
+28. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
     work, create a manager run ledger entry, record planned actions/skips/risks
     and writes, then finish it with verification evidence.
 

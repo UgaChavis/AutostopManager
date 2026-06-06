@@ -592,10 +592,13 @@ def test_crm_mcp_catalog_counts_are_current():
     catalog = json.loads((ROOT / "docs/agent/crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
     assert catalog["source_branch"] == "autostopcrm-v1"
-    assert catalog["tool_counts"]["crm_base_tools"] == 71
+    assert catalog["tool_counts"]["crm_base_tools"] == 83
     assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 51
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 122
-    assert len(catalog["live_tools_verified"]) == 122
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 134
+    assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
+    assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
+    assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
+    assert len(catalog["live_tools_verified"]) == 134
     assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identities" in catalog["tool_families"]["optional_manager_memory_and_routing"]

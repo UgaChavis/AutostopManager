@@ -16,9 +16,10 @@
         "board-cleanup-no-card-movement"
       ],
       "next_actions": [
-        "read live CRM board state",
+        "read live CRM board state with bootstrap_context and manager_board_scan",
         "classify blockers",
-        "fill missing vehicle passport fields from available source-backed data; update short readable public descriptions with paragraphs, emoji markers, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly; keep only important facts, no raw technical markup, no separate status or next-step blocks; update separate plain board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise factual AI notes; update repair orders only when explicitly requested",
+        "use list_cards_missing_manager_data, triage_inbox_cards, audit_repair_order_consistency, and audit_client_links before one-card writes",
+        "use cleanup_card dry_run/apply for compact safe card patches; fill missing vehicle passport fields from available source-backed data; update short readable public descriptions with paragraphs, emoji markers, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly; keep only important facts, no raw technical markup, no separate status or next-step blocks; update separate plain board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise factual AI notes; update repair orders only when explicitly requested",
         "leave cards in their current columns",
         "do not archive cards without a separate explicit owner command; leave archive recommendations instead"
       ]
@@ -51,10 +52,72 @@
         "service-management"
       ],
       "next_actions": [
-        "read live CRM board state",
-        "check ready cars and due totals",
+        "read live CRM board state with bootstrap_context and manager_board_scan",
+        "check ready cars and due totals with list_ready_unpaid_cards",
         "classify payment blockers",
-        "create short follow-up notes or manager tasks"
+        "run apply_ready_unpaid_followups in dry_run, then apply with actor_name when safe",
+        "create short follow-up notes or manager tasks only for blockers the CRM operation cannot resolve"
+      ]
+    },
+    {
+      "command_id": "inbox_triage",
+      "intent": "inbox_triage",
+      "domain": "board_cleanup_autopilot",
+      "open_first": "docs/agent/board_cleanup_autopilot_playbook.md",
+      "aliases": [
+        "разбери входящие",
+        "разбери входящие карточки",
+        "проверь входящие",
+        "triage inbox"
+      ],
+      "keywords": [
+        "входящие",
+        "inbox",
+        "новые карточки",
+        "разобрать",
+        "triage"
+      ],
+      "memory_queries": [
+        "inbox triage",
+        "board-cleanup",
+        "manager operations"
+      ],
+      "next_actions": [
+        "read bootstrap_context and triage_inbox_cards",
+        "use audit_client_links and list_cards_missing_manager_data for incomplete cards",
+        "use cleanup_card dry_run/apply for safe one-card cleanup patches",
+        "do not move or archive cards without a separate explicit owner command"
+      ]
+    },
+    {
+      "command_id": "timer_floor_control",
+      "intent": "timer_floor",
+      "domain": "service_management",
+      "open_first": "docs/agent/crm_manager_data_playbook.md",
+      "aliases": [
+        "поставь таймеры",
+        "поставь таймеры на 2 суток",
+        "сделай таймеры не менее двух суток",
+        "таймер на активных карточках не менее двух суток"
+      ],
+      "keywords": [
+        "таймер",
+        "дедлайн",
+        "deadline",
+        "двое суток",
+        "не менее двух суток",
+        "172800"
+      ],
+      "memory_queries": [
+        "timer floor",
+        "deadline",
+        "bulk_set_deadline_if_below"
+      ],
+      "next_actions": [
+        "read bootstrap_context and manager_board_scan",
+        "run bulk_set_deadline_if_below dry_run with min_total_seconds=172800 and target_total_seconds=172800",
+        "apply with actor_name only after dry_run shows eligible cards and no unexpected errors",
+        "verify changed cards with response verification and a compact reread"
       ]
     },
     {

@@ -26,7 +26,11 @@ def test_prepare_manager_context_combines_rules_memory_and_knowledge_route(tmp_p
     assert result["knowledge"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
     assert any(item["kind"] == "rule" and item["title"] == "board-cleanup-no-card-movement" for item in result["relevant_memory"])
     assert any(item["kind"] == "fact" and item["category"] == "owner_preference" for item in result["relevant_memory"])
-    assert "read live CRM board state" in result["next_actions"]
+    assert (
+        "read live CRM board state with bootstrap_context and manager_board_scan"
+        in result["next_actions"]
+    )
+    assert any("cleanup_card dry_run/apply" in action for action in result["next_actions"])
 
 
 def test_prepare_manager_context_flags_missing_required_context(tmp_path):
