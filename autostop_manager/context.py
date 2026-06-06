@@ -45,7 +45,8 @@ DEFAULT_READ_ORDER = [
 BOARD_CLEANUP_READ_ORDER = [
     "today_context",
     "bootstrap_context",
-    "get_board_context or review_board",
+    "manager_board_scan",
+    "triage_inbox_cards/list_ready_unpaid_cards/list_cards_missing_manager_data when relevant",
     "search_cards/get_card_context for focused targets",
     "list_repair_orders/get_repair_order when money, works, materials, ready state, or closure matters",
     "get_cashbox/get_cash_journal only when payment evidence must be checked",
@@ -53,6 +54,10 @@ BOARD_CLEANUP_READ_ORDER = [
 
 BOARD_CLEANUP_ALLOWED_ACTIONS = [
     "read live CRM board/card/order/cashbox context",
+    "use high-level CRM manager operations in dry_run before apply",
+    "bulk_set_deadline_if_below for timer floor requests",
+    "cleanup_card for compact safe one-card patches",
+    "apply_ready_unpaid_followups for ready unpaid payment follow-ups",
     "update confirmed title, vehicle, description, tags, deadline, indicator, and source-backed vehicle profile fields",
     "set_card_board_summary",
     "add one concise AI note or question only when it adds a factual blocker, missing data, or verified conclusion",

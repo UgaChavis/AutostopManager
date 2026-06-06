@@ -18,6 +18,9 @@ under human control during routine cleanup.
 The agent may independently:
 
 - read all active board/card/repair-order/cashbox context needed for cleanup
+- use high-level CRM manager operations (`manager_board_scan`,
+  `triage_inbox_cards`, `list_cards_missing_manager_data`,
+  `audit_repair_order_consistency`, `audit_client_links`) before focused reads
 - update card title, vehicle, description, tags, deadline, indicator, and
   vehicle profile
 - rewrite the public card description into a short, human-readable working note
@@ -29,6 +32,9 @@ The agent may independently:
   `заполнить ЗН`, `заполнить заказ-наряд`, `расписать заказ-наряд`, or gives an
   equivalent explicit repair-order command for the target card
 - set or refresh the hidden `board_summary` as the clean 4-5 line board preview
+- use `cleanup_card`, `bulk_refresh_board_summaries`,
+  `bulk_set_deadline_if_below`, and `apply_ready_unpaid_followups` in
+  `dry_run` first, then `apply` with `actor_name` when the operation is safe
 - recommend archive candidates in the report, but do not archive cards unless
   the owner gives a separate explicit owner command for archive
 - add short factual questions or conclusions inside the card instead of asking
@@ -47,6 +53,7 @@ not a reason to rewrite the whole board every hour.
 Hourly automation should:
 
 - read current memory and live CRM state first
+- run `manager_board_scan` before lower-level card loops
 - prioritize red/overdue/stale cards, ready cars, payment blockers, parts
   blockers, and cards with missing critical identity data
 - write only meaningful deltas
@@ -95,15 +102,21 @@ uncertainty note instead of overwriting blindly.
 
 1. Read `today_context`.
 2. Read AutoStop CRM `bootstrap_context`.
-3. Read `get_board_context`.
-4. Read recent events with `get_board_events` or the wall preview when needed.
-5. Read active cards by focused search or board content.
-6. Read repair orders only for cards where money, works, materials, ready
+3. Run `manager_board_scan`.
+4. Run focused manager diagnostics as needed: `triage_inbox_cards`,
+   `list_ready_unpaid_cards`, `list_cards_missing_manager_data`,
+   `audit_repair_order_consistency`, and `audit_client_links`.
+5. Read recent events with `get_board_events` or the wall preview when needed.
+6. Read active cards by focused search or board content.
+7. Read repair orders only for cards where money, works, materials, ready
    status, or archive readiness matters.
-7. Read card logs only when a card looks stale, contradictory, or manually
+8. Read card logs only when a card looks stale, contradictory, or manually
    sensitive.
 
 Use focused reads before heavy full-board exports unless a full pass is needed.
+Prefer high-level manager operations over long chains of one-card CRUD when the
+intent is board diagnosis, timer floor, ready-unpaid follow-up, inbox triage, or
+summary refresh.
 
 ## Cleanup Passes
 
