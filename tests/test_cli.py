@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from autostop_manager import cli
 
 
@@ -528,6 +530,29 @@ def test_cli_parser_has_core_commands():
     assert args.intent == "board_cleanup"
     assert args.limit == 5
 
+    args = parser.parse_args(
+        [
+            "prepare-card-action",
+            "--card-id",
+            "card_123",
+            "--expected-updated-at",
+            "2026-06-08T10:00:00+07:00",
+            "--description",
+            "**Важно:** проверить течь",
+            "--vehicle-profile-json",
+            '{"engine_model":"N63TU","source_summary":"Из описания карточки"}',
+            "--board-summary",
+            "Проверить течь",
+            "--target-fields",
+            "description,vehicle_profile,board_summary",
+            "--intent",
+            "board_cleanup",
+        ]
+    )
+    assert args.command == "prepare-card-action"
+    assert args.card_id == "card_123"
+    assert args.target_fields == "description,vehicle_profile,board_summary"
+
     args = parser.parse_args(["skills-audit"])
     assert args.command == "skills-audit"
 
@@ -553,3 +578,35 @@ def test_cli_parser_has_core_commands():
     assert args.command == "run-list"
     assert args.limit == 3
     assert args.events is True
+
+
+def test_prepare_card_action_cli_outputs_dry_run_contract(capsys):
+    exit_code = cli.main(
+        [
+            "prepare-card-action",
+            "--card-id",
+            "card_123",
+            "--expected-updated-at",
+            "2026-06-08T10:00:00+07:00",
+            "--description",
+            "**Важно:** проверить течь",
+            "--vehicle-profile-json",
+            '{"engine_model":"N63TU","autofilled_fields":["engine_model"],"source_summary":"Из описания карточки"}',
+            "--current-card-json",
+            '{"updated_at":"2026-06-08T10:00:00+07:00","vehicle_profile":{"manual_fields":["vin"]}}',
+            "--board-summary",
+            "Проверить течь",
+            "--target-fields",
+            "description,vehicle_profile,board_summary",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["format"] == "crm_card_action_v1"
+    assert payload["dry_run"] is True
+    assert payload["write_contract"]["tool"] == "update_card"
+    assert payload["write_contract"]["expected_updated_at"] == "2026-06-08T10:00:00+07:00"
+    assert payload["summary_contract"]["required"] is True
+    assert payload["target_fields"] == ["description", "vehicle_profile", "board_summary"]

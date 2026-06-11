@@ -2,10 +2,11 @@
   "purpose": "Machine-readable summary of the current AutoStop CRM MCP surface used by the manager agent.",
   "source_of_truth_repo": "UgaChavis/AutostopCRM-V1",
   "source_branch": "autostopcrm-v1",
+  "source_documents_scope": "Paths in source_documents are from the AutoStopCRM-V1 repo, not this AutostopManager checkout.",
   "local_repo": "C:/Users/User/Desktop/AutostopCRM-V1",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-06-06",
+  "last_verified": "2026-06-12",
   "tool_counts": {
     "crm_base_tools": 83,
     "optional_autostop_manager_tools": 51,
@@ -346,6 +347,15 @@
     "vin17_decode_vehicle",
     "vin17_search_part_number_by_vin"
   ],
+  "pending_local_manager_tools": [
+    {
+      "tool": "prepare_crm_card_action",
+      "local_source": "autostop_manager.mcp_tools.register_manager_memory_tools",
+      "local_catalog": "docs/agent/manager_mcp_catalog.json",
+      "status": "local_only_until_production_mount_refresh",
+      "verified_gap": "Not exposed by current https://crm.autostopcrm.ru/mcp discovery on 2026-06-12; use local CLI or local manager MCP until the CRM mount is redeployed."
+    }
+  ],
   "not_mcp_runtime_tools": [
     "cleanup_card_content",
     "autofill_vehicle_data",
@@ -362,6 +372,7 @@
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use bulk_refresh_board_summaries for missing/stale board previews; use set_card_board_summary only for one-card confirmed edits and keep it under 5 non-empty lines.",
     "For the owner command Приберись, follow docs/agent/board_cleanup_autopilot_playbook.md: leave empty descriptions empty, rewrite only existing public descriptions into short rich-text summaries, move phone/VIN/plate/mileage/aggregates into structured client/vehicle fields, keep tags rare and capped at three, and keep board_summary as a separate short plain operator preview.",
+    "Use local prepare_crm_card_action before card description or vehicle_profile writes when AutoStopManager is orchestrating the operation; it returns expected_updated_at, compact write mode, ledger schema, risk flags, and strict reread verification checks without writing CRM. Until production exposes this tool, run python -m autostop_manager.cli prepare-card-action locally before update_card.",
     "Do not move or archive cards during routine cleanup unless the owner gives a separate explicit target/action.",
     "If a VIN/chassis/frame number exists and vehicle_profile engine_model, gearbox_model, or drivetrain is empty, enrich only from source-backed data and preserve manual_fields.",
     "Use decode_vehicle_identity locally before VIN-critical parts lookup when the vehicle is ROW/JDM, vPIC is partial, or CRM/manual data conflicts; verify production CRM server has the updated AutostopManager mount before relying on it through the CRM MCP endpoint.",

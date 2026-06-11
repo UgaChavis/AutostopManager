@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-06-10",
-  "tool_count": 55,
+  "last_verified": "2026-06-12",
+  "tool_count": 56,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [
@@ -27,6 +27,7 @@
     "today_context",
     "prepare_manager_context",
     "agent_brief",
+    "prepare_crm_card_action",
     "recall",
     "memory_context_for",
     "recall_lessons",
@@ -101,6 +102,7 @@
     "today_context",
     "prepare_manager_context",
     "agent_brief",
+    "prepare_crm_card_action",
     "manager_journal",
     "sync_knowledge_base",
     "probe_knowledge_base",
@@ -158,6 +160,7 @@
     "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
     "prepare_manager_context": "Combine owner command routes, relevant memory/rules, knowledge routing, missing required context, and next actions for a specific request.",
     "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, context_safety, next actions, and verification.",
+    "prepare_crm_card_action": "Build a dry-run CRM card edit contract with exact description patch, vehicle_profile metadata preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, risk flags, and strict reread verification; never writes CRM.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
     "sync_knowledge_base": "Refresh the SQLite index of docs/agent/knowledge_map.json routes, playbooks, source catalogs, and model-specific skills.",
     "probe_knowledge_base": "Cheaply test whether local knowledge exists for a vehicle, model, system, brand, fluid, diagnostic, parts, CRM, or source-intake task; if has_knowledge=true, open open_first/source_of_truth first; for routes with optional_runtime_files, report available/missing runtime files before claiming exact private facts.",
@@ -331,5 +334,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 55
+  "all_tools_count": 56
 }

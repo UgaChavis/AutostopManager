@@ -62,6 +62,7 @@ python -m autostop_manager.cli memory-audit
 python -m autostop_manager.cli memory-review
 python -m autostop_manager.cli memory-curate --apply
 python -m autostop_manager.cli knowledge-intake --path docs/agent/knowledge_map.json --dry-run
+python -m autostop_manager.cli prepare-card-action --card-id card_123 --expected-updated-at 2026-06-08T10:00:00+07:00 --description "Проверить течь" --target-fields description
 python -m autostop_manager.cli provider-smoke --provider all --mode dry-run
 ```
 
@@ -91,7 +92,8 @@ The manager MCP tools are intentionally separate from CRM operations. Keep
 
 Current families:
 
-- startup/context: `today_context`, `prepare_manager_context`, `agent_brief`;
+- startup/context: `today_context`, `prepare_manager_context`,
+  `agent_brief`, `prepare_crm_card_action`;
 - memory: `remember`, `recall`, `learn_from_feedback`, `memory_context_for`,
   `memory_map`, `memory_topics`, `memory_gaps`;
 - knowledge: `sync_knowledge_base`, `probe_knowledge_base`,

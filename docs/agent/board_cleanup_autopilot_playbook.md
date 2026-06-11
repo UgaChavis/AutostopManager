@@ -188,6 +188,30 @@ Prefer high-level manager operations over long chains of one-card CRUD when the
 intent is board diagnosis, timer floor, ready-unpaid follow-up, inbox triage, or
 summary refresh.
 
+## Card Action Session
+
+For every card text or vehicle passport write orchestrated by AutoStopManager,
+use a standard session:
+
+1. Start `start_manager_run`.
+2. Read `agent_brief` and focused CRM context with `get_card_context`.
+3. Build a dry-run write contract with local `prepare_crm_card_action`
+   (`python -m autostop_manager.cli prepare-card-action` when the production
+   CRM endpoint has not mounted the tool yet).
+4. Write with `update_card` using `expected_updated_at` and `response_mode=compact`.
+5. Refresh `board_summary` with `set_card_board_summary` when the public text,
+   tags, or passport changed.
+6. Reread the card with `get_card_context`.
+7. Verify exact `description`, visible text, vehicle_profile field metadata,
+   `board_summary_stale=false`, and no unplanned field changes.
+8. Record planned patch, write result, diff, verification checks, warnings, and
+   final status through the manager run ledger.
+
+Do not treat `prepare_crm_card_action` as a CRM write. It is the preflight
+contract that makes the later write faster, auditable, and easier to verify.
+If discovery does not show it on `https://crm.autostopcrm.ru/mcp`, run the local
+CLI preflight and keep its output with the manager-run evidence.
+
 ## Cleanup Passes
 
 Run these passes in order.

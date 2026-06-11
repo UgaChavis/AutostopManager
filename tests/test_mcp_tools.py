@@ -513,6 +513,70 @@ def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
     assert runs["items"][0]["events"]
 
 
+def test_prepare_crm_card_action_returns_strict_write_and_verification_contract(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+
+    assert "prepare_crm_card_action" in server.tools
+    result = server.tools["prepare_crm_card_action"](
+        card_id="card-123",
+        expected_updated_at="2026-06-08T10:00:00+07:00",
+        description="  **Важно:** проверить течь\n\n✅ Машина ждет диагностику  ",
+        vehicle_profile={
+            "engine_model": "N63TU",
+            "autofilled_fields": ["engine_model"],
+            "tentative_fields": ["engine_model"],
+            "field_sources": {"engine_model": "card_description"},
+            "source_summary": "Из описания карточки",
+            "source_confidence": "medium",
+        },
+        board_summary="Проверить течь\nЖдет диагностику",
+        current_card={
+            "id": "card-123",
+            "updated_at": "2026-06-08T10:00:00+07:00",
+            "description": "старое описание",
+            "vehicle_profile": {"vin": "WBAN63TEST0000001", "manual_fields": ["vin"]},
+        },
+        intent="board_cleanup",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["format"] == "crm_card_action_v1"
+    assert result["card_id"] == "card-123"
+    assert result["write_contract"]["tool"] == "update_card"
+    assert result["write_contract"]["expected_updated_at"] == "2026-06-08T10:00:00+07:00"
+    assert result["write_contract"]["response_mode"] == "compact"
+    assert result["planned_patch"]["description"] == "  **Важно:** проверить течь\n\n✅ Машина ждет диагностику  "
+    assert result["planned_patch"]["vehicle_profile"]["manual_fields"] == ["vin"]
+    assert "description_exact" in result["verification_spec"]["checks"]
+    assert "description_visible_text" in result["verification_spec"]["checks"]
+    assert "vehicle_profile_field_level" in result["verification_spec"]["checks"]
+    assert "board_summary_stale_false" in result["verification_spec"]["checks"]
+    assert result["ledger_event_schema"] == [
+        "pre_state_ref",
+        "planned_patch",
+        "write_result",
+        "post_state",
+        "diff",
+        "verification_checks",
+        "warnings",
+    ]
+    assert result["tool_sequence"] == [
+        "start_manager_run",
+        "agent_brief",
+        "get_card_context",
+        "prepare_crm_card_action",
+        "update_card",
+        "set_card_board_summary",
+        "get_card_context",
+        "record_manager_run_event",
+        "finish_manager_run",
+    ]
+
+
 def test_memory_curator_tools_are_registered(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -592,6 +656,7 @@ def test_crm_mcp_catalog_counts_are_current():
     catalog = json.loads((ROOT / "docs/agent/crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
     assert catalog["source_branch"] == "autostopcrm-v1"
+    assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
     assert catalog["tool_counts"]["crm_base_tools"] == 83
     assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 51
     assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 134
@@ -599,6 +664,8 @@ def test_crm_mcp_catalog_counts_are_current():
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
     assert len(catalog["live_tools_verified"]) == 134
+    assert "prepare_crm_card_action" not in catalog["live_tools_verified"]
+    assert catalog["pending_local_manager_tools"][0]["tool"] == "prepare_crm_card_action"
     assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identities" in catalog["tool_families"]["optional_manager_memory_and_routing"]

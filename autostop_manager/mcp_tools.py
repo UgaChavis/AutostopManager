@@ -14,6 +14,7 @@ from .catalog_clients import (
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
+from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
@@ -225,6 +226,37 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         limit: int = 8,
     ) -> dict[str, Any]:
         return build_agent_brief(memory, query, intent=intent, limit=limit)
+
+    @server.tool(
+        name="prepare_crm_card_action",
+        description=(
+            "Build a dry-run CRM card edit contract for AutoStopManager: exact description patch, vehicle_profile patch "
+            "with manual_fields preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, "
+            "risk flags, and strict reread verification spec. This tool never writes CRM."
+        ),
+    )
+    def prepare_crm_card_action_tool(
+        card_id: str,
+        expected_updated_at: str | None = None,
+        description: str | None = None,
+        vehicle_profile: dict[str, Any] | None = None,
+        board_summary: str | None = None,
+        target_fields: list[str] | None = None,
+        current_card: dict[str, Any] | None = None,
+        intent: str = "board_cleanup",
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return prepare_crm_card_action(
+            card_id=card_id,
+            expected_updated_at=expected_updated_at,
+            description=description,
+            vehicle_profile=vehicle_profile,
+            board_summary=board_summary,
+            target_fields=target_fields,
+            current_card=current_card,
+            intent=intent,
+            dry_run=dry_run,
+        )
 
     @server.tool(
         name="manager_journal",

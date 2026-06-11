@@ -146,6 +146,11 @@
       "rule": "For broad CRM scans, multi-card cleanup, ready-unpaid lists, procurement sweeps, or any task likely to exceed the chat context, checkpoint progress outside the model window: start a manager run, record compact checkpoint events after scope/candidates/batches/verification, keep raw board/card/order snapshots in private local temp files when needed, and resume through list_manager_runs(include_events=true) instead of re-reading everything after context compaction."
     },
     {
+      "id": "crm-card-action-session",
+      "priority": 24,
+      "rule": "For card description or vehicle_profile edits orchestrated by AutoStopManager, use local prepare_crm_card_action before writing; when the production CRM endpoint has not mounted it yet, run python -m autostop_manager.cli prepare-card-action locally. The operation must carry expected_updated_at, exact description text, vehicle_profile manual/autofilled/tentative/source metadata, optional board_summary, risk flags, and a reread verification spec before update_card/set_card_board_summary."
+    },
+    {
       "id": "memory-curator",
       "priority": 24,
       "rule": "Use audit_memory before memory cleanup or when recall quality looks weak. Use curate_memory only for non-destructive duplicate archiving; do not delete source memory records during routine curation."

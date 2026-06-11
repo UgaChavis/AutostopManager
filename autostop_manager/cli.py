@@ -19,6 +19,7 @@ from .catalog_clients import (
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
+from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
@@ -96,6 +97,18 @@ def _json_file(raw_path: str | None) -> Any:
         return None
     path = Path(raw_path)
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def _json_dict_arg(raw: str | None, *, option_name: str) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{option_name} must be valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise SystemExit(f"{option_name} must be a JSON object")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -188,6 +201,19 @@ def build_parser() -> argparse.ArgumentParser:
     agent_brief.add_argument("query")
     agent_brief.add_argument("--intent", default=None)
     agent_brief.add_argument("--limit", type=int, default=8)
+
+    prepare_card_action = sub.add_parser(
+        "prepare-card-action",
+        help="Build a dry-run CRM card update contract without writing CRM",
+    )
+    prepare_card_action.add_argument("--card-id", required=True)
+    prepare_card_action.add_argument("--expected-updated-at", default=None)
+    prepare_card_action.add_argument("--description", default=None)
+    prepare_card_action.add_argument("--vehicle-profile-json", default=None)
+    prepare_card_action.add_argument("--board-summary", default=None)
+    prepare_card_action.add_argument("--target-fields", default="")
+    prepare_card_action.add_argument("--current-card-json", default=None)
+    prepare_card_action.add_argument("--intent", default="board_cleanup")
 
     lookup = sub.add_parser("lookup-oem", help="Build a VIN/frame OEM lookup dossier for original catalog numbers")
     lookup.add_argument("identifier")
@@ -834,6 +860,20 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(prepare_manager_context(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
+    elif args.command == "prepare-card-action":
+        _print_json(
+            prepare_crm_card_action(
+                card_id=args.card_id,
+                expected_updated_at=args.expected_updated_at,
+                description=args.description,
+                vehicle_profile=_json_dict_arg(args.vehicle_profile_json, option_name="--vehicle-profile-json"),
+                board_summary=args.board_summary,
+                target_fields=_tags(args.target_fields),
+                current_card=_json_dict_arg(args.current_card_json, option_name="--current-card-json"),
+                intent=args.intent,
+                dry_run=True,
+            )
+        )
     elif args.command == "lookup-oem":
         _print_json(
             lookup_original_parts(
