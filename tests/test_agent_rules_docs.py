@@ -34,8 +34,8 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
         "</u>",
         "rare underline",
         "if the crm renderer supports it",
-        "прибейсь",
-        "переберись",
+        "при" + "бейсь",
+        "пере" + "берись",
     ]
 
     combined = "\n".join(path.read_text(encoding="utf-8").casefold() for path in checked_paths)
@@ -44,6 +44,47 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
         assert fragment not in combined
     assert "board_summary" in combined
     assert "separate explicit owner command" in combined
+
+
+def test_board_cleanup_description_and_structured_field_contract_is_documented():
+    playbook = (ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md").read_text(
+        encoding="utf-8"
+    )
+    route = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
+    manager_catalog = json.loads(
+        (ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8")
+    )
+    crm_catalog = json.loads(
+        (ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8")
+    )
+
+    assert "This playbook is the only detailed source of truth" in playbook
+    assert "leave it empty" in playbook
+    assert "phone goes to the client" in playbook
+    assert "VIN/plate/mileage" in playbook
+    assert "vehicle` as a compact make/model" in playbook
+    assert "no more than three tags" in playbook
+    assert "Bad public `description` patterns" in playbook
+    assert "repair_orders_changed=0 and payments_changed=0" in playbook
+
+    cleanup_route = next(
+        item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot"
+    )
+    route_text = "\n".join(cleanup_route["next_actions"])
+    assert "if description is empty leave it empty" in route_text
+    assert "tags rare with no more than three" in route_text
+    assert "move phone/VIN/plate/mileage/aggregates" in route_text
+
+    command = manager_catalog["natural_language_commands"]["Приберись"]
+    assert command["aliases"] == ["Приберись"]
+    assert any("no more than three operational tags" in item for item in command["allowed_actions"])
+    assert any("invent text for an empty public description" in item for item in command["forbidden_actions"])
+
+    assert "cleanup_card_content" in crm_catalog["not_mcp_runtime_tools"]
+    assert any(
+        "leave empty descriptions empty" in item and "tags rare and capped at three" in item
+        for item in crm_catalog["operation_notes"]
+    )
 
 
 def test_removed_second_brain_terms_are_not_tracked_anymore():

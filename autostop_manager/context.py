@@ -24,12 +24,14 @@ GENERAL_HOT_RULES = [
 
 DOMAIN_BRIEF_RULES = {
     "board_cleanup_autopilot": [
-        "Routine board cleanup may update confirmed fields, tags, deadlines, indicators, source-backed vehicle profile fields, concise AI notes, and board_summary.",
+        "Routine board cleanup focuses on the card itself: confirmed title/vehicle/description, rare operational tags capped at three, source-backed vehicle profile fields, client link/client record enrichment, concise AI notes, and board_summary.",
         "Routine board cleanup must not move cards between columns and must not archive cards unless the owner gives a separate explicit command.",
-        "Preserve operator evidence: works, materials, prices, payments, files, contacts, VIN/chassis/license data, diagnostics, and historical notes.",
-        "For 'Приберись', fill the vehicle passport from available card/order/VIN/source data whenever possible, then rewrite the public description as a short formatted working note with emojis and supported CRM Markdown: **bold**, *italic*, and ++underline++; never leave raw HTML or visible pseudo-markup.",
-        "Use description for important facts only, with readable paragraphs and no separate 'Статус:' or 'Следующий шаг:' blocks; keep board_summary a plain 4-5 line factual preview without private data or decorative formatting.",
-        "Update a live repair order only when the owner explicitly asks to fill or расписывать the ЗН/заказ-наряд for the target card.",
+        "Preserve operator evidence while moving structured data to structured fields: phone to client, VIN/plate/mileage/engine/gearbox/drivetrain to vehicle_profile; after verified transfer, do not keep those raw identifiers in the public description by default.",
+        "For 'Приберись', first inspect vehicle passport and client data; phone is the primary client match key, source-backed vehicle fields include engine/gearbox/drivetrain when evidence is adequate, and description is a very short formatted summary: if empty leave it empty, otherwise preserve prices/OEM/facts with **bold**, *italic*, ++underline++, and sparse emoji.",
+        "Do not put 'Статус:', 'Следующий шаг:', source lists, safety disclaimers, or 'нужно перепроверить данные' caveats into the public description.",
+        "Keep vehicle as compact make/model and title as the short issue/work essence; keep board_summary a plain 4-5 line factual preview without private data or decorative formatting.",
+        "If the card description contains a direct safe task such as find parts, find OEM, price maintenance, or decode VIN, do it during cleanup and write back only a compact result.",
+        "Update a live repair order, works, materials, prices, payments, cashboxes, or cash records only when the owner explicitly asks for that exact target.",
         "After saving CRM description, inspect the visible text/preview and remove formatting artifacts immediately.",
         "Keep source lists, long explanations, phone, VIN, full client name, raw diagnostic dumps, rich formatting, emoji decoration, and long issue lists out of board_summary.",
     ],
@@ -47,20 +49,21 @@ BOARD_CLEANUP_READ_ORDER = [
     "bootstrap_context",
     "manager_board_scan",
     "triage_inbox_cards/list_ready_unpaid_cards/list_cards_missing_manager_data when relevant",
+    "audit_client_links/suggest_clients_for_card/search_clients/get_client when client data is incomplete or ambiguous",
     "search_cards/get_card_context for focused targets",
     "list_repair_orders/get_repair_order when money, works, materials, ready state, or closure matters",
     "get_cashbox/get_cash_journal only when payment evidence must be checked",
 ]
 
 BOARD_CLEANUP_ALLOWED_ACTIONS = [
-    "read live CRM board/card/order/cashbox context",
+    "read live CRM board/card/client/order/cashbox context",
     "use high-level CRM manager operations in dry_run before apply",
-    "bulk_set_deadline_if_below for timer floor requests",
     "cleanup_card for compact safe one-card patches",
-    "apply_ready_unpaid_followups for ready unpaid payment follow-ups",
-    "update confirmed title, vehicle, description, tags, deadline, indicator, and source-backed vehicle profile fields",
+    "update confirmed title, vehicle, short description, at most three rare operational tags, and source-backed vehicle profile fields including engine/gearbox/drivetrain when evidence is adequate",
+    "move phone/VIN/plate/mileage/aggregate facts into structured fields, link/update the clear matching client by phone first, and upsert confirmed client vehicle facts",
     "set_card_board_summary",
     "add one concise AI note or question only when it adds a factual blocker, missing data, or verified conclusion",
+    "execute direct safe card tasks such as VIN decode, OEM/parts lookup, or maintenance price estimate and write back only the compact result",
     "update repair_order only when the owner explicitly asks to fill or расписывать the target ЗН/заказ-наряд",
     "record manager run events and a short manager_journal after meaningful work",
 ]
@@ -69,16 +72,45 @@ BOARD_CLEANUP_FORBIDDEN_ACTIONS = [
     "move_card or bulk_move_cards without a separate explicit owner command naming the target and destination",
     "archive_card without a separate explicit owner command for archive",
     "delete or overwrite operator-entered works, materials, prices, payments, files, contacts, diagnostics, or historical notes",
-    "change payments, cashboxes, repair-order works/materials, files, clients, or repair orders without explicit owner intent for that exact target",
+    "change payments, cashboxes, repair-order works/materials/prices/totals/status, files, or repair orders without explicit owner intent for that exact target",
+    "delete or merge client records during routine cleanup",
+    "change card deadlines or indicators during routine cleanup unless the owner explicitly asks for timer/signal work for the exact target",
+    "invent text for an empty public description during routine cleanup",
+    "leave phone, VIN, license plate, mileage, engine, gearbox, or drivetrain in public description after verified structured transfer unless operationally needed",
     "put phone, VIN, full client name, long complaint text, or raw diagnostic dumps into board_summary",
 ]
 
 BOARD_CLEANUP_VERIFICATION = [
     "reread every written card with get_card_context or get_card",
     "verify board_summary_stale=false after summary/content/profile/tag changes",
+    "verify client link/client vehicle changes after writes when cleanup touched client data",
     "report cards_moved=0 and cards_archived=0 unless the owner explicitly commanded those actions",
+    "report repair_orders_changed=0 and payments_changed=0 unless the owner explicitly commanded those actions",
     "record unresolved blockers and skipped writes instead of guessing",
 ]
+
+LONG_RUN_CONTEXT_SAFETY = {
+    "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
+    "rules": [
+        "Start start_manager_run before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, or knowledge-intake batches.",
+        "Record checkpoint events after scope selection, candidate filtering, each write batch, each skip batch, and each verification batch.",
+        "Keep raw board snapshots, full card dumps, phone lists, VIN/license tables, and repair-order dumps out of chat; save full machine data to local private files only when needed and report compact counts.",
+        "Prefer compact manager tools and focused get_card_context/get_repair_order reads over full-board Markdown or full JSON output.",
+        "Process large CRM work in small verified batches and leave a resume point in the run ledger before continuing.",
+    ],
+    "checkpoint_event_types": [
+        "planned_action",
+        "checkpoint",
+        "skip",
+        "write",
+        "risk",
+        "verification",
+    ],
+    "recovery": [
+        "After a stalled or compacted thread, call list_manager_runs(include_events=true) and resume from the latest running run.",
+        "If the Codex UI fails immediately after automatic context compaction with an invalid enum for context_compaction, restart the Codex app-server/Desktop so the active process matches the installed CLI.",
+    ],
+}
 
 DEFAULT_ALLOWED_ACTIONS = [
     "read manager memory and local knowledge routes",
@@ -306,6 +338,7 @@ def build_agent_brief(
         "forbidden_actions": forbidden_actions,
         "required_context": context.get("required_context", []),
         "missing_context": context.get("missing_context", []),
+        "context_safety": LONG_RUN_CONTEXT_SAFETY,
         "next_actions": next_actions,
         "verification": verification,
     }

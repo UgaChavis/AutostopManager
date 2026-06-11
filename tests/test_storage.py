@@ -90,9 +90,9 @@ def test_memory_context_uses_focused_vin_oem_query_before_generic_crm_noise(tmp_
         importance=5.0,
     )
     store.remember(
-        "Когда владелец просит «переберись» в карточке, нужно богато оформить описание CRM.",
+        "Когда владелец просит оформить описание карточки, нужно не мешать это с VIN/OEM подбором.",
         kind="note",
-        title="Команда «переберись»: оформление описаний карточек",
+        title="Оформление описаний карточек",
         category="crm_style",
         tags=["crm", "карточки"],
         importance=5.0,
@@ -117,7 +117,7 @@ def test_memory_context_uses_focused_vin_oem_query_before_generic_crm_noise(tmp_
     ).casefold()
     assert "board-cleanup" not in context_text
     assert "приберись" not in context_text
-    assert "переберись" not in context_text
+    assert "оформление описаний" not in context_text
     assert "knowledge-catalog-sync" not in context_text
     assert "github-publication-privacy" not in context_text
     assert "toyota gr yaris" not in context_text
@@ -127,21 +127,44 @@ def test_memory_context_keeps_board_cleanup_rules_for_explicit_cleanup_query(tmp
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()
     store.remember(
-        "Когда владелец просит «переберись» в карточке, нужно богато оформить описание CRM.",
+        "При команде «Приберись» карточку нужно оформить кратко и сохранить важные факты.",
         kind="note",
-        title="Команда «переберись»: оформление описаний карточек",
+        title="Команда «Приберись»: оформление описаний карточек",
         category="crm_style",
         tags=["crm", "карточки"],
         importance=5.0,
     )
 
-    result = store.memory_context_for("Переберись: оформи описание CRM карточки с VIN", limit=20)
+    result = store.memory_context_for("Приберись: оформи описание CRM карточки с VIN", limit=20)
 
     context_text = "\n".join(
         str(item.get("title") or item.get("content") or item.get("rule") or "")
         for item in result["preferences_or_facts"]
     ).casefold()
-    assert "board-cleanup" in context_text or "переберись" in context_text
+    assert "board-cleanup" in context_text or "приберись" in context_text
+
+
+def test_archived_lessons_are_not_recalled_or_used_for_context(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    lesson = store.learn_from_feedback(
+        "Старая инструкция по оформлению карточек.",
+        applies_to="crm_cleanup",
+        signal="owner_correction",
+        recommendation="Не использовать после архивирования.",
+        tags=["карточки"],
+    )
+    with store.connect() as conn:
+        conn.execute("UPDATE lessons SET archived_at = updated_at WHERE id = ?", (lesson["id"],))
+
+    recalled = store.recall_lessons("Старая инструкция", limit=5)
+    context = store.memory_context_for("оформи описание CRM карточки", limit=5)
+    context_text = "\n".join(
+        str(item.get("title") or item.get("content") or item.get("recommendation") or "")
+        for item in context["lessons"]
+    )
+
+    assert recalled["items"] == []
+    assert "Старая инструкция" not in context_text
 
 
 def test_memory_context_keeps_admin_rules_for_explicit_knowledge_query(tmp_path):

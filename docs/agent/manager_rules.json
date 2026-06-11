@@ -18,12 +18,12 @@
     {
       "id": "board-cleanup-autopilot-trigger",
       "priority": 16,
-      "rule": "When the owner says the canonical command 'Приберись', treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md. Older voice-dictation variants are deprecated and must not be documented as aliases."
+      "rule": "When the owner says the canonical command 'Приберись', treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md. Do not document extra natural-language aliases for this command."
     },
     {
       "id": "board-cleanup-autopilot-authority",
       "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update cards, tags, deadlines, indicators, vehicle profiles, concise AI notes, short readable public descriptions, and hidden board_summary previews. It also requires filling missing vehicle passport fields from available source-backed card/order/VIN data whenever possible. It does not allow moving, archiving, deleting, or changing financial/repair-order data without a separate explicit owner command."
+      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update confirmed card title, vehicle, description, up to three operational tags, source-backed vehicle profiles, clear client links/client vehicles, concise AI notes, and hidden board_summary previews. It also requires filling missing vehicle passport fields from available source-backed card/order/VIN data whenever possible. It does not allow moving, archiving, deleting, changing deadlines/indicators, or changing financial/repair-order data without a separate explicit owner command for that exact action."
     },
     {
       "id": "board-cleanup-no-card-movement",
@@ -33,12 +33,22 @@
     {
       "id": "board-cleanup-data-preservation",
       "priority": 18,
-      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer short structured description edits: keep the important facts, and avoid keeping noisy old text verbatim unless it is operationally needed."
+      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer short structured description edits: keep important facts, move confirmed phone/VIN/plate/mileage/aggregate data into client or vehicle-profile fields, and avoid keeping noisy old text verbatim unless it is operationally needed."
     },
     {
       "id": "board-cleanup-description-rich-text",
       "priority": 19,
-      "rule": "During board cleanup after the owner command 'Приберись', rewrite the public card description as a short human-readable working note: only task/complaint, important facts, blocker, money/parts note, and confirmed diagnostics when relevant. Do not add separate 'Статус:' or 'Следующий шаг:' blocks; the manager decides workflow actions from the facts. Split text into paragraphs where it improves reading. The default is formatted text, not a plain dump: use restrained emoji section markers and supported CRM Markdown for scanning: **bold** labels/key facts, *italic* uncertainty/caution, and ++underline++ for the key amount, OEM/catalog number, approval, or waiting state. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator. Do not add source lists, long provenance notes, diagnostic theory, or verbose AI explanations. Preserve relevant technical data, part numbers, prices, payments, contacts, files, diagnostics, and history without expanding them."
+      "rule": "During board cleanup after the owner command 'Приберись', leave an empty public card description empty unless the owner explicitly asks for new text. If description exists, rewrite it as a short human-readable working note: only task/complaint, important facts, blocker, money/parts note, confirmed diagnostics, prices, OEM/catalog numbers, and agreements when relevant. Do not add separate 'Статус:' or 'Следующий шаг:' blocks; the manager decides workflow actions from the facts. Split text into paragraphs where it improves reading. The default is formatted text, not a plain dump: use restrained emoji section markers and supported CRM Markdown for scanning: **bold** labels/key facts, *italic* uncertainty/caution, and ++underline++ for the key amount, OEM/catalog number, approval, or waiting state. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator. Do not add source lists, long provenance notes, diagnostic theory, generic safety disclaimers, 'нужно перепроверить данные' caveats, or verbose AI explanations."
+    },
+    {
+      "id": "board-cleanup-title-vehicle-tags",
+      "priority": 19,
+      "rule": "During board cleanup, analyze title, vehicle, and description together. Keep vehicle as compact make/model and title as the short essence of the issue, work, or result. Change them only when the card evidence clearly supports a better value. Tags are rare operational cues, not decoration: keep no more than three tags, and add/remove them only when they change what the operator should notice or do."
+    },
+    {
+      "id": "board-cleanup-client-phone-first",
+      "priority": 19,
+      "rule": "During board cleanup, treat the phone number as the primary client matching key. If a phone is present but the client name is missing, search/suggest CRM clients before writing a new name. Link the clear matching client and upsert the confirmed client vehicle; do not create duplicates or force ambiguous links."
     },
     {
       "id": "board-cleanup-repair-order-boundary",
@@ -129,6 +139,11 @@
       "id": "manager-run-ledger",
       "priority": 24,
       "rule": "For autopilot, procurement, finance, knowledge-intake, or multi-step CRM work, create a manager run ledger entry, record planned actions/skips/risks/writes, finish it with verification evidence, and store only the operational summary in memory."
+    },
+    {
+      "id": "context-window-safety",
+      "priority": 24,
+      "rule": "For broad CRM scans, multi-card cleanup, ready-unpaid lists, procurement sweeps, or any task likely to exceed the chat context, checkpoint progress outside the model window: start a manager run, record compact checkpoint events after scope/candidates/batches/verification, keep raw board/card/order snapshots in private local temp files when needed, and resume through list_manager_runs(include_events=true) instead of re-reading everything after context compaction."
     },
     {
       "id": "memory-curator",

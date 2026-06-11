@@ -206,7 +206,7 @@ def test_probe_routes_priberis_to_board_cleanup_autopilot(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = probe_knowledge_base(store, "Приберись уборка доски CRM board cleanup autopilot")
+    result = probe_knowledge_base(store, "Приберись CRM board_cleanup_autopilot")
 
     assert result["ok"] is True
     assert result["has_knowledge"] is True

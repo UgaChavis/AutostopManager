@@ -24,6 +24,7 @@ CRM_MCP_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent" / "crm_mcp_catalog.json"
 CRM_ROOT = Path("/opt/autostopcrm")
 CODEX_SYSTEM_SKILLS_ROOT = Path("/root/.codex/skills/.system")
 CODEX_PLUGIN_CACHE_ROOT = Path("/root/.codex/plugins/cache/openai-curated")
+CODEX_STANDALONE_CURRENT = Path("/root/.codex/packages/standalone/current")
 CORE_TOOL_COMMANDS = {
     "python3": [["python3", "--version"]],
     "git": [["git", "--version"]],
@@ -205,6 +206,8 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         f"- CRM env file: `{(((report.get('runtime_readiness') or {}).get('env_files') or {}).get('crm') or {}).get('present', False)}`",
         "",
         "## Codex Readiness",
+        f"- CLI version: `{(((report.get('codex_readiness') or {}).get('runtime') or {}).get('active_version', 'unknown'))}`",
+        f"- Stale app-server processes: `{len((((report.get('codex_readiness') or {}).get('runtime') or {}).get('stale_app_server_processes') or []))}`",
         f"- System skills: `{((report.get('codex_readiness') or {}).get('skills') or {}).get('system_skill_count', 0)}`",
         f"- Plugin skills: `{((report.get('codex_readiness') or {}).get('skills') or {}).get('plugin_skill_count', 0)}`",
         f"- Manager MCP import: `{(((report.get('codex_readiness') or {}).get('mcp_imports') or {}).get('manager') or {}).get('ok', False)}`",
@@ -364,6 +367,7 @@ def _codex_readiness(root: Path) -> dict[str, Any]:
         "crm": _mcp_import_status(CRM_ROOT / ".venv" / "bin" / "python", cwd=CRM_ROOT),
     }
     skills = _codex_skill_inventory()
+    runtime = _codex_runtime_status(root)
     warnings: list[str] = []
     for repo_name, hook in hooks.items():
         if not hook["hook_installed"]:
@@ -373,14 +377,106 @@ def _codex_readiness(root: Path) -> dict[str, Any]:
             warnings.append(f"{env_name}_mcp_import_failed")
     if skills["system_skill_count"] == 0:
         warnings.append("codex_system_skills_missing")
+    warnings.extend(runtime.get("warnings") or [])
     return {
         "ok": not warnings,
         "skills": skills,
+        "runtime": runtime,
         "hooks": hooks,
         "mcp_imports": imports,
         "mcp_catalogs": _mcp_catalog_summary(),
         "warnings": warnings,
     }
+
+
+def _codex_runtime_status(root: Path) -> dict[str, Any]:
+    codex_path = shutil.which("codex")
+    if not codex_path:
+        return {
+            "ok": False,
+            "binary": None,
+            "active_version": "",
+            "current_release": _safe_resolve(CODEX_STANDALONE_CURRENT),
+            "app_server_processes": [],
+            "stale_app_server_processes": [],
+            "warnings": ["codex_binary_missing"],
+        }
+
+    binary = _safe_resolve(Path(codex_path))
+    version_result = _run([codex_path, "--version"], cwd=root, timeout=4.0)
+    active_version = _parse_codex_version(version_result["stdout"])
+    processes = _codex_app_server_processes()
+    stale = [
+        process
+        for process in processes
+        if active_version and process.get("version") and process.get("version") != active_version
+    ]
+    warnings: list[str] = []
+    if version_result["returncode"] != 0:
+        warnings.append("codex_version_probe_failed")
+    if stale:
+        warnings.append("codex_app_server_stale")
+    return {
+        "ok": not warnings,
+        "binary": binary,
+        "active_version": active_version,
+        "version_output": version_result["stdout"].strip()[:120],
+        "current_release": _safe_resolve(CODEX_STANDALONE_CURRENT),
+        "app_server_processes": processes,
+        "stale_app_server_processes": stale,
+        "restart_hint": "Restart Codex Desktop or the codex app-server when stale_app_server_processes is not empty.",
+        "warnings": warnings,
+    }
+
+
+def _codex_app_server_processes() -> list[dict[str, Any]]:
+    result = _run(["ps", "-eo", "pid=,ppid=,args="], cwd=PROJECT_ROOT, timeout=4.0)
+    if result["returncode"] != 0:
+        return []
+    processes: list[dict[str, Any]] = []
+    for line in result["stdout"].splitlines():
+        stripped = line.strip()
+        if "codex app-server" not in stripped or " app-server proxy " in stripped:
+            continue
+        parts = stripped.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        exe_path = _proc_exe_path(pid)
+        processes.append(
+            {
+                "pid": pid,
+                "ppid": int(parts[1]) if parts[1].isdigit() else None,
+                "exe": exe_path,
+                "version": _version_from_release_path(exe_path),
+                "cmd": parts[2][:240],
+            }
+        )
+    return processes
+
+
+def _proc_exe_path(pid: int) -> str:
+    try:
+        return os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return ""
+
+
+def _parse_codex_version(output: str) -> str:
+    match = re.search(r"codex-cli\s+([0-9]+(?:\.[0-9]+){1,3})", output)
+    return match.group(1) if match else ""
+
+
+def _version_from_release_path(path: str) -> str:
+    match = re.search(r"/releases/([0-9]+(?:\.[0-9]+){1,3})-", path)
+    return match.group(1) if match else ""
+
+
+def _safe_resolve(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
 
 
 def _runtime_readiness(root: Path, *, memory: ManagerMemoryStore) -> dict[str, Any]:

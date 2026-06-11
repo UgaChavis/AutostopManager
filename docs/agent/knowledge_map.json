@@ -1283,23 +1283,14 @@
       "title": "Board cleanup autopilot: Приберись",
       "use_when": [
         "owner says Приберись",
-        "owner says прибери доску",
-        "owner says обслужи доску",
-        "owner says актуализируй доску",
-        "routine CRM board cleanup",
-        "hourly board cleanup automation"
+        "manual CRM card cleanup",
+        "bounded multi-card CRM cleanup by owner command"
       ],
       "aliases": [
         "Приберись",
-        "прибери доску",
-        "обслужи доску",
-        "актуализируй доску",
-        "проведи уборку доски",
-        "проверь доску",
-        "board cleanup",
-        "cleanup autopilot",
-        "CRM cleanup",
-        "ежечасная уборка"
+        "board_cleanup_autopilot",
+        "board_cleanup",
+        "cleanup_card"
       ],
       "keywords": [
         "board_cleanup_autopilot",
@@ -1308,19 +1299,20 @@
         "archive",
         "preserve data",
         "AI note",
-        "deadline",
-        "indicator",
         "tag",
+        "three tags",
+        "empty description",
+        "phone first client match",
+        "structured field transfer",
         "payment blocker",
         "parts blocker",
         "stale cards",
-        "automation"
+        "manual owner command"
       ],
       "questions": [
         "что делать когда владелец сказал Приберись",
-        "как агент должен убирать CRM доску",
+        "как агент должен убирать CRM карточки",
         "какие CRM правки разрешены автопилоту",
-        "как запускать уборку доски каждый час",
         "что нельзя удалять при уборке доски"
       ],
       "source_of_truth_files": [

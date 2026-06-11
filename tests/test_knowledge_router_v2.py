@@ -17,9 +17,16 @@ def test_probe_routes_owner_board_cleanup_command_to_cleanup_playbook(tmp_path):
     assert result["command_route"]["command_id"] == "board_cleanup_autopilot"
 
 
-def test_deprecated_voice_variants_are_not_command_aliases():
-    assert find_command_route("прибейсь") is None
-    assert find_command_route("переберись") is None
+def test_board_cleanup_route_has_single_canonical_alias():
+    route = find_command_route("Приберись")
+
+    assert route is not None
+    assert route["aliases"] == ["Приберись"]
+
+
+def test_noncanonical_cleanup_words_are_not_command_aliases():
+    assert find_command_route("оформи карточку") is None
+    assert find_command_route("обнови описание CRM") is None
 
 
 def test_probe_routes_ready_unpaid_daily_control_to_service_management(tmp_path):

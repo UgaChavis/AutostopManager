@@ -23,7 +23,7 @@
     "route repair diagnostics and technical recommendations through the automotive repair source catalog before giving source-sensitive facts",
     "route oils, operating fluids, capacities, and ТО fluid planning through the fluid maintenance playbook before giving source-sensitive facts",
     "route Krasnoyarsk workshop-management tasks through the service-management playbook before ad hoc operational decisions",
-    "run full board-cleanup autopilot when the owner says the canonical command Приберись",
+    "run card-focused board-cleanup autopilot when the owner says the canonical command Приберись",
     "accept new files as source material, extract durable conclusions, and update the relevant playbooks or catalogs before storing anything in memory",
     "maintain compact knowledge annotations so the right file or skill is found before broad source-pack reads",
     "route private ИП and AutoStop business-identity questions through the local private business identity knowledge files",
@@ -37,7 +37,7 @@
   "authority_rules": [
     "Safe read-only CRM checks can be done when needed.",
     "CRM writes require clear target and owner intent; the command Приберись is standing owner intent for safe board-cleanup writes.",
-    "During board cleanup, tags, indicators, deadlines, concise AI notes, short readable public descriptions, hidden board_summary previews, and source-backed vehicle-profile enrichment are allowed. For Приберись, fill the vehicle passport from available source-backed data whenever possible, and rewrite public descriptions with useful paragraphs, restrained emoji, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly; never leave raw technical markup visible. Moving or archiving cards requires a separate explicit owner command. Repair-order writes require a direct owner request to fill or расписывать the target ЗН/заказ-наряд.",
+    "During board cleanup, confirmed card title/vehicle, existing public description, up to three operational tags, concise AI notes, hidden board_summary previews, clear phone-first client links/client vehicles, and source-backed vehicle-profile enrichment are allowed. For Приберись, leave empty descriptions empty, rewrite only existing public descriptions as very short rich-text summaries, move phone/VIN/plate/mileage/aggregates into structured fields after verification, and never leave raw technical markup visible. Moving, archiving, deadline/indicator changes, repair-order writes, payment writes, and cashbox writes require a separate explicit owner command for the exact target.",
     "Do not delete user-entered CRM evidence: works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
     "Labor work estimates are read-only; writing works into a repair order requires a separate explicit owner command and a live CRM target.",
     "Potentially destructive actions, including archive/delete/move operations outside the explicit owner request, require confirmation.",

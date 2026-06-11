@@ -25,6 +25,8 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "provider_readiness" in report
     assert "server_environment" in report
     assert "codex_readiness" in report
+    assert "runtime" in report["codex_readiness"]
+    assert "stale_app_server_processes" in report["codex_readiness"]["runtime"]
     assert "runtime_readiness" in report
     assert "production_ops" in report
     assert "open_risk" in report
@@ -42,6 +44,7 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "AutoStopManager Control Report" in markdown
     assert "Server Environment" in markdown
     assert "Runtime Readiness" in markdown
+    assert "Stale app-server processes" in markdown
     assert "Production Ops" in markdown
     assert "Provider Matrix" in markdown
 

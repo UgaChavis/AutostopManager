@@ -377,7 +377,7 @@ approval for the exact action.
 - `service_management_sources.json` - source routing for Krasnoyarsk procurement, personnel, management, and local market context.
 - `service_patterns.json` - reusable service-management patterns.
 - `phone_flow.json` - phone/mobile workflow expectations.
-- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and routine board cleanup autonomy.
+- `board_cleanup_autopilot_playbook.md` - canonical meaning of `Приберись` and manual board cleanup autonomy.
 
 ## Work Labor Pricing
 
@@ -413,7 +413,7 @@ rg -n "ИП|Гришкявичус|Гришкевичус|реквизит|ка�
 # If data/private_knowledge exists locally, search it too; it is optional and ignored by Git.
 rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment" docs/agent
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
-rg -n "Приберись|прибейсь|переберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent
+rg -n "Приберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent
 rg -n "3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|clip|clamp|thread|болт|гайк|клипс|хомут" docs/agent/3d_printing_cad_playbook.md C:/Users/User/Desktop/3д/docs C:/Users/User/Desktop/3д/AGENTS.md
 ```

@@ -141,8 +141,6 @@ def _suppress_board_cleanup_context(task: str) -> bool:
         term in lowered
         for term in [
             "приберись",
-            "переберись",
-            "перебери",
             "уборк",
             "очист",
             "доску",
@@ -212,8 +210,6 @@ def _suppress_style_context(task: str) -> bool:
     explicit_text_work = any(
         term in lowered
         for term in [
-            "переберись",
-            "перебери",
             "приберись",
             "описание",
             "оформи",
@@ -253,7 +249,7 @@ def _is_context_noise(
             return True
         if title.startswith("board-cleanup"):
             return True
-        if any(marker in text for marker in ["board cleanup", "board_cleanup", "приберись", "переберись"]):
+        if any(marker in text for marker in ["board cleanup", "board_cleanup", "приберись"]):
             return True
     if suppress_style_context and category in {"crm_style", "style"}:
         return True
@@ -400,7 +396,8 @@ class ManagerMemoryStore:
                     tags_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    last_used_at TEXT
+                    last_used_at TEXT,
+                    archived_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -432,7 +429,8 @@ class ManagerMemoryStore:
                     event TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'codex',
                     tags_json TEXT NOT NULL DEFAULT '[]',
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    archived_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS manager_rules (
@@ -601,6 +599,13 @@ class ManagerMemoryStore:
                 "supersedes_id": "INTEGER",
                 "sensitivity": "TEXT NOT NULL DEFAULT 'normal'",
                 "last_used_at": "TEXT",
+                "archived_at": "TEXT",
+            },
+            "lessons": {
+                "last_used_at": "TEXT",
+                "archived_at": "TEXT",
+            },
+            "journal": {
                 "archived_at": "TEXT",
             },
             "knowledge_route_cards": {
@@ -941,9 +946,11 @@ class ManagerMemoryStore:
                 if kind and row_kind != kind:
                     continue
                 row_limit = 1000 if row_kind == "rule" else max(limit * 10, 100)
+                where = "WHERE archived_at IS NULL" if row_kind in {"lesson", "journal"} else ""
                 rows = conn.execute(
                     f"""
                     SELECT *, ? AS kind FROM {table}
+                    {where}
                     ORDER BY {order_column} DESC
                     LIMIT ?
                     """,
@@ -1009,6 +1016,7 @@ class ManagerMemoryStore:
             rows = conn.execute(
                 """
                 SELECT *, 'lesson' AS kind FROM lessons
+                WHERE archived_at IS NULL
                 ORDER BY importance DESC, confidence DESC, updated_at DESC
                 LIMIT ?
                 """,
@@ -1051,10 +1059,10 @@ class ManagerMemoryStore:
         sections = {
             "notes": self._section_summary("notes", "updated_at"),
             "facts": self._section_summary("facts", "updated_at"),
-            "lessons": self._section_summary("lessons", "updated_at"),
+            "lessons": self._section_summary("lessons", "updated_at", where="archived_at IS NULL"),
             "tasks": self._section_summary("tasks", "updated_at", where="status = 'open'"),
             "reminders": self._section_summary("reminders", "updated_at", where="status = 'open'"),
-            "journal": self._section_summary("journal", "created_at"),
+            "journal": self._section_summary("journal", "created_at", where="archived_at IS NULL"),
             "rules": self._section_summary("manager_rules", "updated_at"),
         }
         return {
@@ -1086,10 +1094,11 @@ class ManagerMemoryStore:
                 ("manager_rules", "rule"),
             ]:
                 order_column = "created_at" if table == "journal" else "updated_at"
+                where = "WHERE archived_at IS NULL" if table in {"lessons", "journal"} else ""
                 rows.extend(
                     self._row_to_dict(row)
                     for row in conn.execute(
-                        f"SELECT *, ? AS kind FROM {table} ORDER BY {order_column} DESC LIMIT 200",
+                        f"SELECT *, ? AS kind FROM {table} {where} ORDER BY {order_column} DESC LIMIT 200",
                         (kind,),
                     ).fetchall()
                 )
@@ -1195,10 +1204,10 @@ class ManagerMemoryStore:
         sections = {
             "notes": self._count_rows("notes"),
             "facts": self._count_rows("facts"),
-            "lessons": self._count_rows("lessons"),
+            "lessons": self._count_rows("lessons", where="archived_at IS NULL"),
             "tasks": self._count_rows("tasks", where="status = 'open'"),
             "reminders": self._count_rows("reminders", where="status = 'open'"),
-            "journal": self._count_rows("journal"),
+            "journal": self._count_rows("journal", where="archived_at IS NULL"),
             "rules": self._count_rows("manager_rules"),
         }
         empty_sections = {name: count for name, count in sections.items() if count == 0}
@@ -1311,7 +1320,12 @@ class ManagerMemoryStore:
             journal_rows = [
                 self._row_to_dict(row)
                 for row in conn.execute(
-                    "SELECT *, 'journal' AS kind FROM journal ORDER BY created_at DESC LIMIT ?",
+                    """
+                    SELECT *, 'journal' AS kind FROM journal
+                    WHERE archived_at IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
                     (limit,),
                 ).fetchall()
             ]

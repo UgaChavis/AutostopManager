@@ -18,8 +18,11 @@
       "next_actions": [
         "read live CRM board state with bootstrap_context and manager_board_scan",
         "classify blockers",
-        "use list_cards_missing_manager_data, triage_inbox_cards, audit_repair_order_consistency, and audit_client_links before one-card writes",
-        "use cleanup_card dry_run/apply for compact safe card patches; fill missing vehicle passport fields from available source-backed data; update short readable public descriptions with paragraphs, emoji markers, and supported CRM Markdown (**bold**, *italic*, ++underline++) that renders cleanly; keep only important facts, no raw technical markup, no separate status or next-step blocks; update separate plain board_summary previews, tags, indicators, deadlines, safe vehicle-profile fields, and concise factual AI notes; update repair orders only when explicitly requested",
+        "when the owner asks to run Приберись for many or all active cards, apply the same one-card cleanup locally to each card that actually needs it; select the explicit group or top-priority board candidates, process in small verified batches, and leave already-clear cards unchanged",
+        "use list_cards_missing_manager_data, triage_inbox_cards, audit_repair_order_consistency, audit_client_links, suggest_clients_for_card, search_clients, and get_client before one-card writes when relevant",
+        "use cleanup_card dry_run/apply for compact safe card patches; follow the canonical field contract in board_cleanup_autopilot_playbook.md: if description is empty leave it empty, otherwise compress it into a very short rich-text summary with sparse emoji while preserving prices/OEM/facts; move phone/VIN/plate/mileage/aggregates into client or vehicle-profile fields after verification; keep vehicle as make/model, title as short issue/work essence, and tags rare with no more than three",
+        "if the card description contains a direct safe task such as find parts, find OEM, price ТО, or decode VIN, perform it during cleanup and write back only the compact result",
+        "do not edit repair orders, works, materials, prices, payments, cashboxes, or cash records unless the owner explicitly asks for that exact target",
         "leave cards in their current columns",
         "do not archive cards without a separate explicit owner command; leave archive recommendations instead"
       ]

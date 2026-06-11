@@ -40,65 +40,71 @@ and as the working layer for Gmail inbox triage.
     `bulk_set_deadline_if_below` for timer floors, and `cleanup_card` for
     one-card safe cleanup patches.
 11. Use focused CRM reads before heavy exports.
-12. If the owner says the canonical command `Приберись`, follow
+12. For broad CRM scans or multi-card work, make the run resumable before the
+    context window gets large: create `start_manager_run`, record compact
+    `record_manager_run_event` checkpoints, keep raw snapshots in private local
+    temp files when machine filtering is needed, and resume with
+    `list_manager_runs(include_events=true)` after a stalled or compacted
+    thread.
+13. If the owner says the canonical command `Приберись`, follow
    `docs/agent/board_cleanup_autopilot_playbook.md`. Treat this as owner
    permission for non-destructive board hygiene; do not move or archive cards
-   without a separate explicit owner command. Do not document older
-   voice-dictation variants as separate commands or aliases.
-13. If the task combines a live CRM card, VIN/frame/body number, requested
+   without a separate explicit owner command. Do not document extra
+   natural-language aliases for this command.
+14. If the task combines a live CRM card, VIN/frame/body number, requested
    part, OEM lookup, analogs/crosses, закупка/RF market price, and CRM
    writeback, follow `docs/agent/crm_vin_oem_parts_lookup_playbook.md` and use
    `plan_crm_vin_oem_parts_lookup` / `crm-vin-parts-plan` before writing.
-14. If the task involves vehicle identification or VIN/chassis decoding, follow
+15. If the task involves vehicle identification or VIN/chassis decoding, follow
    `docs/agent/vehicle_identity_playbook.md` first, then build a VIN/OEM
    dossier through `docs/agent/vin_oem_lookup_playbook.md` before marketplace
    search.
-15. If the task involves oils, operating fluids, fill capacities, maintenance
+16. If the task involves oils, operating fluids, fill capacities, maintenance
    service quantities, or ТО fluid planning, follow
    `docs/agent/fluid_maintenance_playbook.md` and use
    `recommend_fluid_maintenance_sources` before giving any capacity/spec.
-16. If the task involves gearbox or transmission diagnosis, clutch
+17. If the task involves gearbox or transmission diagnosis, clutch
    adaptation, or transmission-fluid service, follow
    `docs/agent/transmission_playbook.md` first.
-17. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
+18. If the task involves Toyota GR Yaris / Yaris GR, GXPA16, G16E-GTS,
    GR-FOUR, GRMN Yaris, 6MT EA67F, or 8AT UC80F, follow
    `docs/agent/toyota_gr_yaris_playbook.md` before answering.
-18. If the task involves general BMW repair, diagnostics, BMW fault memory,
+19. If the task involves general BMW repair, diagnostics, BMW fault memory,
     xDrive, ZF transmission, BMW body electronics, BMW HV, or BMW fluids and no
     more specific model skill already matches, search domain `bmw_repair` and
     use `docs/agent/bmw_repair_playbook.md`.
-19. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
+20. If the task involves repair diagnostics, TSBs, recalls, repair procedures,
    wiring, fluids, torque specs, labor time, ADAS, SRS, HV, or programming,
    follow `docs/agent/automotive_repair_source_playbook.md` and use
    `docs/agent/automotive_sources/` for source routing before giving a
    technical fact.
-20. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
+21. If the task involves BMW X5 F15 xDrive50i, N63TU/N63T, BDC, MEVD17.2.8,
     F15 electrical/electronics, injectors, drivetrain malfunction, misfires,
     oil consumption, or cooling, use `docs/agent/bmw_repair_playbook.md` and
     the indexed BMW repair source cache before answering.
-21. If the owner provides new files or asks to expand the knowledge base,
+22. If the owner provides new files or asks to expand the knowledge base,
     follow `docs/agent/knowledge_intake_playbook.md`, classify the source, and
     store only durable conclusions in memory.
-22. If the task involves workshop management in Krasnoyarsk, parts procurement
+23. If the task involves workshop management in Krasnoyarsk, parts procurement
     blockers, staff load, customer flow, finance control, or daily CRM control,
     follow `docs/agent/krasnoyarsk_service_management_playbook.md` and use
     `recommend_service_management_actions`.
-23. If the task asks for repair work cost, labor price, or a work estimate,
+24. If the task asks for repair work cost, labor price, or a work estimate,
     use `docs/agent/work_labor_pricing_playbook.md` and
     `estimate_repair_work_cost`. Price labor only from public Russia STO
     samples, apply AutoStop `+50%`, add the public norm-hours/labor-time
     plausibility layer automatically, and do not write repair-order works
     without a separate explicit owner command.
-24. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
+25. For parts sourcing, follow `docs/agent/parts_search_playbook.md` instead of
     improvising search terms, and use `docs/agent/zzap_search_playbook.md` for
     price comparison and replacement checks.
-25. Write only durable non-CRM context into AutostopManager memory.
-26. Use memory as context for judgment, not as a rigid template; preserve the
+26. Write only durable non-CRM context into AutostopManager memory.
+27. Use memory as context for judgment, not as a rigid template; preserve the
     owner's preference for intelligent, human-sounding card notes.
-27. After strong praise, criticism, a clear success, a clear failure, or an
+28. After strong praise, criticism, a clear success, a clear failure, or an
     owner request to do something differently, use `learn_from_feedback` to
     store a short reusable lesson instead of copying the full event.
-28. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
+29. For autopilot, procurement, finance, knowledge-intake, or multi-step CRM
     work, create a manager run ledger entry, record planned actions/skips/risks
     and writes, then finish it with verification evidence.
 
@@ -264,17 +270,28 @@ When the owner says `Приберись`:
 
 - use `docs/agent/board_cleanup_autopilot_playbook.md` as the canonical
   procedure
-- act as full board-management autopilot: update, tag, set indicators, set
-  deadlines, enrich VIN/OEM/parts/service data, rewrite descriptions as very
-  short human-readable working notes when useful, and refresh the separate
-  `board_summary`
+- act as card-focused board cleanup: update confirmed card fields, short tags,
+  vehicle passport data, client links/client vehicles, concise AI notes, and
+  the separate `board_summary`; change indicators or deadlines only when the
+  owner explicitly asks for timer/signal work for the exact target
+- keep tags rare and operational, with no more than three tags on a card
 - fill missing vehicle passport fields from available card, repair-order, VIN,
-  attachment, and source-backed lookup data whenever confidence is adequate
+  attachment, and source-backed lookup data whenever confidence is adequate,
+  including engine and gearbox models when source-backed
+- transfer confirmed phone, VIN, license plate, mileage, engine, gearbox, and
+  drivetrain out of noisy description text into client or vehicle-profile
+  fields; after verifying transfer, do not keep those raw identifiers in the
+  public summary by default
+- compare card client data with the CRM client directory, link or update the
+  clear matching client by phone first, and upsert the client's confirmed
+  vehicle; do not delete or merge clients during routine cleanup
 - do not move or archive cards during this command unless the owner gives a
   separate explicit owner command with the target card and target action
-- rewrite the public card description as a short, readable working note: only
-  task/complaint, important facts, blocker, money/parts note, and confirmed
-  diagnostics when relevant. Do not add separate `Статус:` or `Следующий шаг:`
+- leave an empty public description empty unless the owner explicitly asks for
+  new text; otherwise rewrite the existing public card description as a short,
+  readable working note: only task/complaint, important facts, blocker,
+  money/parts note, confirmed diagnostics, prices, OEM/catalog numbers, and
+  agreements when relevant. Do not add separate `Статус:` or `Следующий шаг:`
   blocks during `Приберись`; the manager decides workflow actions from the
   facts. Split text into paragraphs when it improves reading. Use restrained
   emoji markers and supported CRM Markdown for scanning: **bold** labels/key
@@ -282,12 +299,17 @@ When the owner says `Приберись`:
   OEM/catalog number, approval, or waiting state. Do not use raw HTML-style
   tags or other pseudo-formatting. After saving, inspect the visible
   text/preview and remove any visible technical markup. Do not add source
-  lists, long provenance notes, diagnostic theory, or verbose AI explanation.
-  Preserve relevant technical data, prices, payments, contacts, files,
-  diagnostics, and history without expanding them.
+  lists, long provenance notes, diagnostic theory, generic safety disclaimers,
+  `нужно перепроверить данные` caveats, or verbose AI explanation.
+- if the card description contains a direct safe task such as find parts, find
+  OEM, price ТО, or decode VIN, perform it during cleanup and write back only
+  the compact result
 - read repair orders when they explain card state, but fill or rewrite a live
   ЗН only when the owner explicitly asks to `заполнить`, `расписать`, or
   `обновить` the target заказ-наряд
+- treat payments, cashboxes, repair-order works/materials/prices/totals, and
+  cash records as read-only evidence unless the owner explicitly asks to change
+  that exact target
 - use `board_summary` as the clean 4-5 line board preview; keep phone, VIN,
   full client identity, raw scan dumps, long issue lists, workflow status, and
   next-action instructions out of it

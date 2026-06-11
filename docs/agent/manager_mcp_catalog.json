@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-06-03",
+  "last_verified": "2026-06-10",
   "tool_count": 55,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
@@ -157,7 +157,7 @@
     "add_manager_task": "Create a durable task that is not a CRM card or repair order.",
     "today_context": "Return open tasks, due reminders, recent journal entries, and the current rule set.",
     "prepare_manager_context": "Combine owner command routes, relevant memory/rules, knowledge routing, missing required context, and next actions for a specific request.",
-    "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, next actions, and verification.",
+    "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, context_safety, next actions, and verification.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
     "sync_knowledge_base": "Refresh the SQLite index of docs/agent/knowledge_map.json routes, playbooks, source catalogs, and model-specific skills.",
     "probe_knowledge_base": "Cheaply test whether local knowledge exists for a vehicle, model, system, brand, fluid, diagnostic, parts, CRM, or source-intake task; if has_knowledge=true, open open_first/source_of_truth first; for routes with optional_runtime_files, report available/missing runtime files before claiming exact private facts.",
@@ -205,29 +205,30 @@
   "natural_language_commands": {
     "Приберись": {
       "aliases": [
-        "прибери доску",
-        "обслужи доску",
-        "актуализируй доску",
-        "проведи уборку доски",
-        "проверь доску"
+        "Приберись"
       ],
       "playbook": "docs/agent/board_cleanup_autopilot_playbook.md",
-      "authority": "full board-management autopilot with strict preservation of user-entered CRM data",
-      "automation_behavior": "When scheduled hourly, run as an incremental control pass: inspect live CRM state, prioritize blockers and stale cards, write only meaningful deltas, avoid duplicate AI notes, and skip writes if CRM/MCP health or target identity is uncertain.",
+      "authority": "card-focused cleanup governed by docs/agent/board_cleanup_autopilot_playbook.md, with strict preservation of repair-order, payment, cashbox, and user-entered CRM evidence",
+      "multi_card_behavior": "When the owner asks to run Приберись for many or all active cards, apply the same one-card cleanup locally to each card that actually needs it; process small verified batches and leave already-clear cards unchanged.",
       "allowed_actions": [
         "read live CRM board state",
-        "update cards",
+        "update confirmed card title, compact vehicle, existing public description, and no more than three operational tags",
         "add concise AI notes",
-        "enrich vehicle profiles",
-        "source VIN/OEM/parts data",
-        "set tags, indicators, and deadlines",
-        "rewrite public descriptions with supported rich text formatting and restrained emoji markers",
+        "enrich source-backed vehicle profiles including VIN, plate, mileage, engine, gearbox, and drivetrain when evidence is adequate",
+        "move phone/VIN/plate/mileage/aggregate facts into structured fields, link or update the clear matching client by phone first, and upsert confirmed client vehicle facts",
+        "source VIN/OEM/parts/maintenance data for direct safe tasks written in the card",
+        "rewrite non-empty public descriptions as very short rich-text summaries with sparse emoji while preserving prices, OEM numbers, and important facts",
         "update the separate hidden board_summary preview",
         "leave archive recommendations when a card looks completed"
       ],
       "forbidden_actions": [
         "move cards between columns unless the owner gives a separate explicit owner command",
         "archive cards unless the owner gives a separate explicit owner command",
+        "edit repair orders, works, materials, prices, payments, cashboxes, or cash records unless the owner explicitly asks for that exact target",
+        "delete or merge client records during routine cleanup",
+        "change card deadlines or indicators unless the owner asks for timer/signal work for the exact target",
+        "invent text for an empty public description during routine cleanup",
+        "keep transferred phone, VIN, license plate, mileage, engine, gearbox, or drivetrain in the public description by default",
         "put phone, VIN, full client identity, raw scan dumps, or long issue lists into board_summary"
       ],
       "protected_data": [

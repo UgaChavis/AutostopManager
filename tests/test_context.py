@@ -63,12 +63,37 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert result["route"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
     assert len(result["hot_rules"]) <= 8
     assert any("CRM" in rule and "source of truth" in rule for rule in result["hot_rules"])
+    assert any("vehicle passport and client data" in rule for rule in result["hot_rules"])
+    assert any("very short formatted summary" in rule for rule in result["hot_rules"])
+    assert any("empty leave it empty" in rule for rule in result["hot_rules"])
+    assert any("phone is the primary client match key" in rule for rule in result["hot_rules"])
+    assert any("rare operational tags capped at three" in rule for rule in result["hot_rules"])
     assert "today_context" in result["read_order"][0]
+    assert any("audit_client_links" in action for action in result["read_order"])
     assert "set_card_board_summary" in result["allowed_actions"]
+    assert any("client" in action and "vehicle" in action for action in result["allowed_actions"])
+    assert any("direct safe card tasks" in action for action in result["allowed_actions"])
+    assert any("at most three" in action and "tags" in action for action in result["allowed_actions"])
+    assert any("phone/VIN/plate/mileage" in action for action in result["allowed_actions"])
     assert any("move" in action for action in result["forbidden_actions"])
     assert any("archive" in action for action in result["forbidden_actions"])
     assert any("delete" in action for action in result["forbidden_actions"])
+    assert any("payments" in action and "repair-order" in action for action in result["forbidden_actions"])
+    assert any("client" in action and "merge" in action for action in result["forbidden_actions"])
+    assert any("empty public description" in action for action in result["forbidden_actions"])
+    assert any("verified structured transfer" in action for action in result["forbidden_actions"])
     assert any("board_summary_stale=false" in check for check in result["verification"])
+    assert any("payments_changed=0" in check for check in result["verification"])
+    assert result["context_safety"]["checkpoint_event_types"] == [
+        "planned_action",
+        "checkpoint",
+        "skip",
+        "write",
+        "risk",
+        "verification",
+    ]
+    assert any("list_manager_runs" in step for step in result["context_safety"]["recovery"])
+    assert any("raw board snapshots" in rule for rule in result["context_safety"]["rules"])
 
 
 def test_agent_brief_exposes_optional_runtime_catalog_cache_and_part_context(tmp_path):
@@ -93,9 +118,9 @@ def test_prepare_context_uses_focused_memory_for_vin_oem_parts_lookup(tmp_path):
     store.seed_default_rules()
     sync_knowledge_base(store)
     store.remember(
-        "Когда владелец просит «переберись» в карточке, нужно богато оформить описание CRM.",
+        "Когда владелец просит оформить описание карточки, нужно не мешать это с VIN/OEM подбором.",
         kind="note",
-        title="Команда «переберись»: оформление описаний карточек",
+        title="Оформление описаний карточек",
         category="crm_style",
         tags=["crm", "vin"],
         importance=5.0,
@@ -123,4 +148,4 @@ def test_prepare_context_uses_focused_memory_for_vin_oem_parts_lookup(tmp_path):
     assert "vin-oem-lookup-workflow" in context_text
     assert "board-cleanup" not in context_text
     assert "приберись" not in context_text
-    assert "переберись" not in context_text
+    assert "оформление описаний" not in context_text

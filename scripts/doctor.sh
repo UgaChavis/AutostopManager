@@ -53,6 +53,23 @@ skip() {
   printf '[SKIP] %s\n' "$1"
 }
 
+env_file_value() {
+  local file="$1"
+  local key="$2"
+  local line value
+  [[ -f "$file" ]] || return 1
+  line="$(grep -m1 -E "^${key}=" "$file" 2>/dev/null || true)"
+  [[ -n "$line" ]] || return 1
+  value="${line#*=}"
+  value="${value%$'\r'}"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf '%s' "$value"
+}
+
 require_tool() {
   local tool="$1"
   run "tool: ${tool}" command -v "$tool"
@@ -105,13 +122,21 @@ run "crm docs audit" "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/docs_audit.
 run "crm code audit" "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/code_health_audit.py"
 run "crm generated JS syntax" "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/check_web_assets_js.py"
 run "crm browser smoke" "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/browser_smoke.py"
-if [[ -n "${AUTOSTOP_CRM_OPERATOR_USERNAME:-}" && -n "${AUTOSTOP_CRM_OPERATOR_PASSWORD:-}" ]]; then
+CRM_RUNTIME_OPERATOR_USERNAME="${AUTOSTOP_CRM_OPERATOR_USERNAME:-}"
+CRM_RUNTIME_OPERATOR_PASSWORD="${AUTOSTOP_CRM_OPERATOR_PASSWORD:-}"
+if [[ -z "$CRM_RUNTIME_OPERATOR_USERNAME" ]]; then
+  CRM_RUNTIME_OPERATOR_USERNAME="$(env_file_value "$CRM_ROOT/.env" "AUTOSTOP_SMOKE_OPERATOR_USERNAME" || true)"
+fi
+if [[ -z "$CRM_RUNTIME_OPERATOR_PASSWORD" ]]; then
+  CRM_RUNTIME_OPERATOR_PASSWORD="$(env_file_value "$CRM_ROOT/.env" "AUTOSTOP_SMOKE_OPERATOR_PASSWORD" || true)"
+fi
+if [[ -n "$CRM_RUNTIME_OPERATOR_USERNAME" && -n "$CRM_RUNTIME_OPERATOR_PASSWORD" ]]; then
   run "crm runtime check" "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/check_agent_runtime.py" \
     --local-api-url "$CRM_API_URL" \
-    --operator-username "$AUTOSTOP_CRM_OPERATOR_USERNAME" \
-    --operator-password "$AUTOSTOP_CRM_OPERATOR_PASSWORD"
+    --operator-username "$CRM_RUNTIME_OPERATOR_USERNAME" \
+    --operator-password "$CRM_RUNTIME_OPERATOR_PASSWORD"
 else
-  skip "crm runtime check needs AUTOSTOP_CRM_OPERATOR_USERNAME/PASSWORD"
+  skip "crm runtime check needs AUTOSTOP_CRM_OPERATOR_USERNAME/PASSWORD or AUTOSTOP_SMOKE_OPERATOR_USERNAME/PASSWORD in CRM .env"
 fi
 if [[ "$FULL" -eq 1 ]]; then
   mkdir -p "$(dirname "$CRM_PYTEST_BASETEMP")"

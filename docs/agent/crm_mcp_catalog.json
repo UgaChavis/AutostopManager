@@ -361,7 +361,7 @@
     "Use shared_files tools for shared documents and card attachment tools for card-local attachments; do not paste file bytes into notes unless required.",
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use bulk_refresh_board_summaries for missing/stale board previews; use set_card_board_summary only for one-card confirmed edits and keep it under 5 non-empty lines.",
-    "For the owner commands Приберись, прибейсь, and переберись, treat description and board_summary as separate outputs: rich-text detailed recoverable card text plus short plain operator preview.",
+    "For the owner command Приберись, follow docs/agent/board_cleanup_autopilot_playbook.md: leave empty descriptions empty, rewrite only existing public descriptions into short rich-text summaries, move phone/VIN/plate/mileage/aggregates into structured client/vehicle fields, keep tags rare and capped at three, and keep board_summary as a separate short plain operator preview.",
     "Do not move or archive cards during routine cleanup unless the owner gives a separate explicit target/action.",
     "If a VIN/chassis/frame number exists and vehicle_profile engine_model, gearbox_model, or drivetrain is empty, enrich only from source-backed data and preserve manual_fields.",
     "Use decode_vehicle_identity locally before VIN-critical parts lookup when the vehicle is ROW/JDM, vPIC is partial, or CRM/manual data conflicts; verify production CRM server has the updated AutostopManager mount before relying on it through the CRM MCP endpoint.",
