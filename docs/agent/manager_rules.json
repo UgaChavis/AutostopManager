@@ -148,7 +148,7 @@
     {
       "id": "crm-card-action-session",
       "priority": 24,
-      "rule": "For card description or vehicle_profile edits orchestrated by AutoStopManager, use local prepare_crm_card_action before writing; when the production CRM endpoint has not mounted it yet, run python -m autostop_manager.cli prepare-card-action locally. The operation must carry expected_updated_at, exact description text, vehicle_profile manual/autofilled/tentative/source metadata, optional board_summary, risk flags, and a reread verification spec before update_card/set_card_board_summary."
+      "rule": "For card description or vehicle_profile edits orchestrated by AutoStopManager, use MCP prepare_crm_card_action before writing; for local runs or stale discovery sessions, run python -m autostop_manager.cli prepare-card-action locally. The operation must carry expected_updated_at, exact description text, vehicle_profile manual/autofilled/tentative/source metadata, optional board_summary, risk flags, and a reread verification spec before update_card/set_card_board_summary."
     },
     {
       "id": "memory-curator",

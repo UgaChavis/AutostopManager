@@ -57,7 +57,7 @@ Use these MCP tools when working through the manager:
 - `agent_brief` - mandatory compact startup package before broad document
   reads or CRM work: route, memory_sources, hot rules, allowed/forbidden
   actions, read order, and verification.
-- `prepare_crm_card_action` - local dry-run preflight for card description,
+- `prepare_crm_card_action` - MCP/local dry-run preflight for card description,
   vehicle_profile, and board_summary writes: exact patch, expected_updated_at,
   ledger schema, risk flags, and reread checks before `update_card`.
 - `prepare_manager_context` - combine command routes, relevant memory/rules,

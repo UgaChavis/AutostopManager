@@ -195,9 +195,9 @@ use a standard session:
 
 1. Start `start_manager_run`.
 2. Read `agent_brief` and focused CRM context with `get_card_context`.
-3. Build a dry-run write contract with local `prepare_crm_card_action`
-   (`python -m autostop_manager.cli prepare-card-action` when the production
-   CRM endpoint has not mounted the tool yet).
+3. Build a dry-run write contract with MCP `prepare_crm_card_action`
+   (`python -m autostop_manager.cli prepare-card-action` only as a local or
+   stale-discovery fallback).
 4. Write with `update_card` using `expected_updated_at` and `response_mode=compact`.
 5. Refresh `board_summary` with `set_card_board_summary` when the public text,
    tags, or passport changed.
@@ -209,8 +209,9 @@ use a standard session:
 
 Do not treat `prepare_crm_card_action` as a CRM write. It is the preflight
 contract that makes the later write faster, auditable, and easier to verify.
-If discovery does not show it on `https://crm.autostopcrm.ru/mcp`, run the local
-CLI preflight and keep its output with the manager-run evidence.
+If a stale client discovery session does not show it on
+`https://crm.autostopcrm.ru/mcp`, run the local CLI preflight and keep its
+output with the manager-run evidence.
 
 ## Cleanup Passes
 

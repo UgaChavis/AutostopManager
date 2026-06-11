@@ -657,15 +657,15 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
-    assert catalog["tool_counts"]["crm_base_tools"] == 83
-    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 51
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 134
+    assert catalog["tool_counts"]["crm_base_tools"] == 91
+    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 56
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 147
     assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
-    assert len(catalog["live_tools_verified"]) == 134
-    assert "prepare_crm_card_action" not in catalog["live_tools_verified"]
-    assert catalog["pending_local_manager_tools"][0]["tool"] == "prepare_crm_card_action"
+    assert len(catalog["live_tools_verified"]) == 147
+    assert "prepare_crm_card_action" in catalog["live_tools_verified"]
+    assert catalog["pending_local_manager_tools"] == []
     assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identities" in catalog["tool_families"]["optional_manager_memory_and_routing"]
@@ -674,6 +674,9 @@ def test_crm_mcp_catalog_counts_are_current():
     assert "vin17_decode_vehicle" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "vin17_search_part_number_by_vin" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "partsapi_catalog_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "resolve_vin_oem_parts" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "search_partsapi_category_index" in catalog["tool_families"]["optional_manager_memory_and_routing"]
+    assert "validate_partsapi_category_index" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "public_aftermarket_catalog_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "exist_price_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "plan_crm_vin_oem_parts_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]

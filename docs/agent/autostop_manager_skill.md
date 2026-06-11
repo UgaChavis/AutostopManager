@@ -384,12 +384,12 @@ Keep the manager run ledger useful:
 
 - use `start_manager_run` before autopilot, procurement, finance, knowledge
   intake, or multi-step CRM work
-- for card description or vehicle passport edits, call local
-  `prepare_crm_card_action` before `update_card`; if the production CRM
-  endpoint has not mounted it yet, run
-  `python -m autostop_manager.cli prepare-card-action`; keep exact description
-  text, `expected_updated_at`, vehicle_profile metadata, board summary target,
-  risk flags, and reread verification checks in the planned patch evidence
+- for card description or vehicle passport edits, call
+  `prepare_crm_card_action` before `update_card`; if a stale discovery session
+  does not list it, run `python -m autostop_manager.cli prepare-card-action`;
+  keep exact description text, `expected_updated_at`, vehicle_profile metadata,
+  board summary target, risk flags, and reread verification checks in the
+  planned patch evidence
 - record planned actions, skipped writes, risks, actual writes, and verification
   through `record_manager_run_event`
 - close the run with `finish_manager_run`, including counts or verification
