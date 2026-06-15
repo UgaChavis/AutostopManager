@@ -193,6 +193,12 @@ owner intent for that step.
 - `business_document_quality_playbook.md` - route for high-quality PDF/DOCX/XLSX
   business documents, invoices, acts, КП, totals, НДС wording, render QA, and
   audit before delivery or CRM upload.
+  AutoStop service documents are routed through the CRM print module and
+  standard AutoStop templates: use `download_repair_order_print_pdf` for
+  documents with CRM cards and `create_document_without_card_pdf` for "Документ
+  без карточки". Do not build independent PDF/HTML templates for AutoStop
+  invoices, acts, repair orders, invoice-facturas, defect reports, completion
+  acts, or parts-sale documents.
 
 Use intake when the owner says: "обнови базу знаний", "сохрани себе", "дополни инструкции", "запомни источник", "структурируй материалы", or provides files/links.
 

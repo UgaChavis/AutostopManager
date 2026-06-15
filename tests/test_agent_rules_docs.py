@@ -87,6 +87,47 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     )
 
 
+def test_business_documents_route_requires_crm_print_module_for_autostop_documents():
+    playbook = (ROOT / "docs" / "agent" / "business_document_quality_playbook.md").read_text(
+        encoding="utf-8"
+    )
+    index = (ROOT / "docs" / "agent" / "knowledge_base_index.md").read_text(encoding="utf-8")
+    annotations = (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").read_text(
+        encoding="utf-8"
+    )
+    manager_rules = json.loads(
+        (ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8")
+    )
+    crm_catalog = json.loads(
+        (ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8")
+    )
+    business_document_rule = next(
+        rule for rule in manager_rules["rules"] if rule["id"] == "business-document-quality-gate"
+    )["rule"]
+
+    combined = "\n".join([playbook, index, annotations])
+    assert "CRM print module" in combined
+    assert "create_document_without_card_pdf" in combined
+    assert "download_repair_order_print_pdf" in combined
+    assert "standard AutoStop templates" in combined
+    assert "tax_label" in combined
+    assert "Без НДС" in combined
+    assert "do not build independent PDF/HTML templates" in combined
+    assert "Документ без карточки" in combined
+    assert "infer the standard document type" in combined
+    assert "CRM print module" in business_document_rule
+    assert "standard AutoStop templates" in business_document_rule
+    assert "create_document_without_card_pdf" in business_document_rule
+    assert "download_repair_order_print_pdf" in business_document_rule
+    assert "tax_label" in business_document_rule
+    assert "Без НДС" in business_document_rule
+    assert "Do not build independent PDF/HTML templates" in business_document_rule
+    assert "create_document_without_card_pdf" in crm_catalog["tool_families"]["repair_order"]
+    assert any("documents without CRM cards" in note for note in crm_catalog["operation_notes"])
+    assert "optional document_type" in crm_catalog["schema_notes"]["autostop_document_printing"]
+    assert "tax_label" in crm_catalog["schema_notes"]["autostop_document_printing"]
+
+
 def test_removed_second_brain_terms_are_not_tracked_anymore():
     blocked_terms = [
         "Ob" + "sidian",

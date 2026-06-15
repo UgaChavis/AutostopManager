@@ -128,7 +128,7 @@
     {
       "id": "business-document-quality-gate",
       "priority": 24,
-      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. If a focused local Codex skill is installed, it may help with render/audit steps, but the playbook is canonical. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run."
+      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. AutoStop service documents, including счет, счет-фактура, акт приема, акт выполненных работ, заказ-наряд, дефектовка, and продажа запчастей, must use the CRM print module with standard AutoStop templates: use download_repair_order_print_pdf for CRM-card documents and create_document_without_card_pdf for Документ без карточки. For manual documents, pass the requested tax_label such as НДС (5%) or Без НДС through CRM instead of editing the rendered PDF. Do not build independent PDF/HTML templates for AutoStop documents. If a focused local Codex skill is installed, it may help with render/audit steps, but the playbook is canonical. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run."
     },
     {
       "id": "business-identity-private-route",

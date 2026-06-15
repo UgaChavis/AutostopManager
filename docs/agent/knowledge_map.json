@@ -263,7 +263,15 @@
         "счет-фактура",
         "УПД",
         "таблица",
-        "форма PDF"
+        "форма PDF",
+        "CRM print module",
+        "standard AutoStop templates",
+        "Документ без карточки",
+        "документ без карточки CRM",
+        "заказ-наряд",
+        "дефектовка",
+        "акт выполненных работ",
+        "продажа запчастей"
       ],
       "keywords": [
         "autostop-business-documents",
@@ -281,7 +289,19 @@
         "stamp",
         "page break",
         "print-ready",
-        "CRM Files"
+        "CRM Files",
+        "CRM print module",
+        "create_document_without_card_pdf",
+        "download_repair_order_print_pdf",
+        "standard AutoStop templates",
+        "Документ без карточки",
+        "do not build independent PDF/HTML templates",
+        "repair_order",
+        "vehicle_acceptance_act",
+        "invoice_factura",
+        "inspection_sheet",
+        "completion_act",
+        "parts_sale"
       ],
       "questions": [
         "как сделать качественный счет",
@@ -289,7 +309,10 @@
         "как оформить PDF Word Excel документ без кривой верстки",
         "какой скилл использовать для бухгалтерского документа",
         "как проверить суммы и НДС в документе",
-        "как подготовить документ для загрузки в CRM Files"
+        "как подготовить документ для загрузки в CRM Files",
+        "как создать счет без карточки CRM через стандартный шаблон AutoStop",
+        "какой tool использовать для Документ без карточки",
+        "можно ли делать AutoStop счет самодельным PDF HTML шаблоном"
       ],
       "source_of_truth_files": [
         "docs/agent/business_document_quality_playbook.md",
@@ -304,7 +327,9 @@
         "output format: PDF, DOCX, XLSX, or CRM upload",
         "source of реквизиты and counterparty facts",
         "line items, prices, quantities, discounts, НДС status",
-        "whether regulated/tax-form current rules must be verified"
+        "whether regulated/tax-form current rules must be verified",
+        "AutoStop service document type and whether a CRM card exists",
+        "manual client, реквизиты, vehicle, works, materials, payments, dates, numbers, tax_label, and comments for create_document_without_card_pdf"
       ]
     },
     "gmail_operations": {

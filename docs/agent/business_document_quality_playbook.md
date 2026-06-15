@@ -22,20 +22,42 @@ state which render or audit gate was available:
 
 1. Determine whether the task is a final external document, draft, template, or
    internal CRM file.
-2. Use `business_identity` for current AutoStop/IP реквизиты when company facts
+2. AutoStop service documents must go through the CRM print module and standard
+   AutoStop templates. This includes счета, акты, заказ-наряды, акты приема,
+   счет-фактуры, дефектовки, акты выполненных работ, and продажа запчастей.
+   For a CRM card use `download_repair_order_print_pdf`; for "Документ без
+   карточки" use `create_document_without_card_pdf`. Do not build independent
+   PDF/HTML templates for these AutoStop documents.
+3. Use `business_identity` for current AutoStop/IP реквизиты when company facts
    are needed. Do not copy private bank/contact facts into Git-tracked docs.
-3. For invoices, acts, КП, and accounting-like documents, verify:
+4. For invoices, acts, КП, and accounting-like documents, verify:
    - реквизиты and counterparty facts;
    - document number and date;
    - services/items, quantities, prices, discounts, totals;
    - НДС wording/status, including "в том числе НДС" when required;
    - signature/stamp blocks and logo/header/footer placement;
    - page breaks, print area, and visual alignment.
-4. Render and inspect the final artifact before delivery:
+5. Render and inspect the final artifact before delivery:
    - every PDF/DOCX page;
    - every meaningful XLSX sheet or print area.
-5. If the document is a regulated/tax form such as счет-фактура or УПД, verify
+6. If the document is a regulated/tax form such as счет-фактура or УПД, verify
    current requirements from official/current sources before finalizing.
+
+## AutoStop CRM Print Route
+
+- Documents with an existing CRM card: call `download_repair_order_print_pdf`
+  and select the needed standard AutoStop template.
+- Documents without CRM cards: call `create_document_without_card_pdf` or open
+  the CRM print module in "Документ без карточки" mode, then provide the client,
+  реквизиты, vehicle, works, materials, payments, dates, numbers, `tax_label`
+  (`НДС (5%)` or `Без НДС`), and comments.
+  If the request text already says `акт выполненных работ`, `дефектовка`,
+  `заказ-наряд`, `счет-фактура`, or `продажа запчастей`, the CRM MCP client can
+  infer the standard document type; pass `document_type` only when the text is
+  ambiguous or the owner explicitly names a different type.
+- The CRM print module owns PrintServiceProfile, template rendering, PDF render,
+  preview, export, and print behavior. The manager agent must not replace it
+  with a separate PDF/HTML generator for AutoStop documents.
 
 ## PDF Invoice Gate
 

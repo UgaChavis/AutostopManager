@@ -6,11 +6,11 @@
   "local_repo": "C:/Users/User/Desktop/AutostopCRM-V1",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-06-12",
+  "last_verified": "2026-06-15",
   "tool_counts": {
-    "crm_base_tools": 91,
+    "crm_base_tools": 92,
     "optional_autostop_manager_tools": 56,
-    "production_tools_with_manager_mounted": 147
+    "production_tools_with_manager_mounted": 148
   },
   "source_documents": [
     "README.md",
@@ -144,6 +144,7 @@
       "get_repair_order",
       "get_repair_order_text",
       "download_repair_order_print_pdf",
+      "create_document_without_card_pdf",
       "update_repair_order",
       "set_repair_order_status",
       "replace_repair_order_works",
@@ -242,6 +243,7 @@
     "create_cashbox",
     "create_client",
     "create_column",
+    "create_document_without_card_pdf",
     "create_sticky",
     "crm_health_plan",
     "curate_memory",
@@ -379,6 +381,7 @@
     "Route 'поставь таймеры' or timer-floor requests through bulk_set_deadline_if_below; default is dry_run and apply requires actor_name.",
     "Use search_cards, search_clients, get_card_context, get_client, and compact/redacted list_repair_orders before heavy board exports.",
     "Use shared_files tools for shared documents and card attachment tools for card-local attachments; do not paste file bytes into notes unless required.",
+    "For AutoStop documents without CRM cards, use create_document_without_card_pdf through the CRM print module with standard AutoStop templates; include tax_label in manual_document or request_text when the owner specifies НДС/Без НДС; omit document_type when request_text clearly says акт выполненных работ, дефектовка, заказ-наряд, счет-фактура, or продажа запчастей, because the CRM MCP client infers the standard document id from those phrases. For documents attached to CRM cards, use download_repair_order_print_pdf. Do not build independent PDF/HTML templates for AutoStop documents.",
     "Use client_directory and client_vehicle_linking tools before creating duplicate clients or vehicles.",
     "Use bulk_refresh_board_summaries for missing/stale board previews; use set_card_board_summary only for one-card confirmed edits and keep it under 5 non-empty lines.",
     "For the owner command Приберись, follow docs/agent/board_cleanup_autopilot_playbook.md: leave empty descriptions empty, rewrite only existing public descriptions into short rich-text summaries, move phone/VIN/plate/mileage/aggregates into structured client/vehicle fields, keep tags rare and capped at three, and keep board_summary as a separate short plain operator preview.",
@@ -401,6 +404,7 @@
     "write_response_mode": "High-traffic CRM write tools accept response_mode=full|compact; manager operations always return compact run metadata with scanned/eligible/changed/skipped/errors/verification.",
     "repair_order_privacy": "list_repair_orders accepts compact=true and redact_private=true for low-payload diagnostics without client phone/VIN fields.",
     "manager_operation_modes": "bulk_set_deadline_if_below, bulk_refresh_board_summaries, cleanup_card, apply_ready_unpaid_followups, run_manager_operation, and rollback_manager_run default to dry_run; apply requires actor_name.",
-    "write_scope": "All CRM tools operate only on the current AutoStop CRM board served by this MCP/API endpoint."
+    "write_scope": "All CRM tools operate only on the current AutoStop CRM board served by this MCP/API endpoint.",
+    "autostop_document_printing": "create_document_without_card_pdf accepts request_text, optional document_type, manual_document, selected_template_ids, and print_settings; manual_document may include tax_label such as НДС (5%) or Без НДС, and request_text may include a line like НДС: Без НДС. When document_type is omitted or auto, the CRM MCP client infers invoice, invoice_factura, completion_act, vehicle_acceptance_act, repair_order, inspection_sheet, or parts_sale from Russian request_text phrases. It renders application/pdf via the same CRM print module, PrintServiceProfile, standard AutoStop templates, template engine, and PDF render as card-based printing."
   }
 }

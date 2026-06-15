@@ -657,13 +657,17 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
-    assert catalog["tool_counts"]["crm_base_tools"] == 91
+    assert catalog["tool_counts"]["crm_base_tools"] == 92
     assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 56
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 147
+    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 148
     assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
-    assert len(catalog["live_tools_verified"]) == 147
+    assert len(catalog["live_tools_verified"]) == 148
+    assert "create_document_without_card_pdf" in catalog["tool_families"]["repair_order"]
+    assert "create_document_without_card_pdf" in catalog["live_tools_verified"]
+    assert "tax_label" in catalog["schema_notes"]["autostop_document_printing"]
+    assert "Без НДС" in catalog["schema_notes"]["autostop_document_printing"]
     assert "prepare_crm_card_action" in catalog["live_tools_verified"]
     assert catalog["pending_local_manager_tools"] == []
     assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]

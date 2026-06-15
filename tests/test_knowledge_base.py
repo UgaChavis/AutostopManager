@@ -311,6 +311,29 @@ def test_probe_routes_pdf_catalog_knowledge_update_to_intake(tmp_path):
     assert result["command_route"]["command_id"] == "manager_documentation_hygiene"
 
 
+def test_probe_routes_autostop_document_without_card_to_crm_print_module(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "создай счет без карточки CRM в стандартном шаблоне AutoStop PDF",
+    )
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "business_documents"
+    assert result["open_first"] == "docs/agent/business_document_quality_playbook.md"
+    assert any("tax_label" in item for item in result["routes"][0]["required_context"])
+    search = search_knowledge_base(
+        store,
+        "CRM print module create_document_without_card_pdf standard AutoStop templates",
+        domain="business_documents",
+        limit=5,
+    )
+    assert any("CRM print module" in item.get("preview", "") for item in search["items"])
+
+
 def test_search_finds_ai_parts_playbook_for_local_vendor_scoring(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
