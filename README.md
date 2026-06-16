@@ -55,8 +55,6 @@ python -m autostop_manager.cli system-audit
 python -m autostop_manager.cli doctor
 python -m autostop_manager.cli control-report --format json --output frontend/control-center/control-report.json
 python -m autostop_manager.cli environment-report --format markdown --output reports/environment-report.md
-./scripts/doctor.sh
-./scripts/doctor.sh --full
 python -m autostop_manager.cli skills-audit
 python -m autostop_manager.cli memory-audit
 python -m autostop_manager.cli memory-review
@@ -70,12 +68,11 @@ python -m autostop_manager.cli provider-smoke --provider all --mode dry-run
 cleanup, SQLite, and manager MCP catalog checks. It reports test status as
 external; run pytest separately when changing docs/contracts.
 
-`scripts/doctor.sh` is the unified environment route for this host. The default
-run checks system tools, `/tmp`, both virtualenvs, MCP imports, pre-commit
-hooks, Chromium/Playwright, lint/audits, CRM browser smoke, and read-only
-production health, plus Control Center, environment report, memory review,
-provider smoke, and knowledge-intake smoke checks. Use `--full` before handoff
-or releases to add both pytest suites.
+On Windows/local Codex hosts, use `python -m autostop_manager.cli doctor` and
+the audit commands above. `scripts/doctor.sh` is the server/Unix deep-check
+route for `/opt/AutostopManager` plus the adjacent CRM checkout; it needs bash,
+Linux paths, Docker, nginx, and the production service context. Use
+`bash scripts/doctor.sh --full` only on a host that has those prerequisites.
 
 `control-report` writes the local Control Center payload. `environment-report`
 is a CLI alias over the same safe data with emphasis on server/Codex/runtime

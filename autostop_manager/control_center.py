@@ -224,8 +224,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
     ]
     for row in (report.get("providers") or {}).get("stage_matrix") or []:
         lines.append(
-            f"- `{row['stage']}`: `{row['configured_count']}` configured, "
-            f"`{row['live_callable_count']}` live-readable"
+            f"- `{row['stage']}`: `{row['configured_count']}` configured, `{row['live_callable_count']}` live-readable"
         )
     production_ops = report.get("production_ops") or {}
     lines.extend(
@@ -249,10 +248,11 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         [
             "",
             "## Commands",
-            "- `autostop-manager control-report --format json --output frontend/control-center/control-report.json`",
-            "- `autostop-manager environment-report --format markdown --output reports/environment-report.md`",
-            "- `autostop-manager control-report --format markdown --output reports/control-report.md`",
-            "- `./scripts/doctor.sh && ./scripts/doctor.sh --full`",
+            "- `python -m autostop_manager.cli control-report --format json --output frontend/control-center/control-report.json`",
+            "- `python -m autostop_manager.cli environment-report --format markdown --output reports/environment-report.md`",
+            "- `python -m autostop_manager.cli control-report --format markdown --output reports/control-report.md`",
+            "- `python -m autostop_manager.cli doctor`",
+            "- server/Unix only: `bash scripts/doctor.sh --full`",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -268,7 +268,9 @@ def _knowledge_summary(memory: ManagerMemoryStore) -> dict[str, Any]:
         "domain_count": int(audit.get("domain_count") or summary.get("route_card_count") or 0),
         "documents_indexed": int(audit.get("documents_indexed") or summary.get("document_count") or 0),
         "section_count": int(audit.get("sections_indexed") or summary.get("section_count") or 0),
-        "annotation_count": int(annotations.get("annotations_indexed") or annotation_summary.get("annotation_count") or 0),
+        "annotation_count": int(
+            annotations.get("annotations_indexed") or annotation_summary.get("annotation_count") or 0
+        ),
         "warnings": list(audit.get("warnings") or []) + list(annotations.get("warnings") or []),
     }
 
@@ -594,10 +596,10 @@ def _git_state(root: Path) -> dict[str, Any]:
 
 def _tests_doctor_status(root: Path) -> dict[str, Any]:
     commands = [
-        ".venv/bin/ruff check .",
-        ".venv/bin/python -m pytest",
-        "./scripts/doctor.sh",
-        "./scripts/doctor.sh --full",
+        "python -m ruff check .",
+        "python -m pytest -q -p no:cacheprovider",
+        "python -m autostop_manager.cli doctor",
+        "server/Unix only: bash scripts/doctor.sh --full",
     ]
     return {
         "status": "external",
@@ -636,7 +638,9 @@ def _production_ops(root: Path) -> dict[str, Any]:
     compose_config: dict[str, Any]
     compose_ps: dict[str, Any]
     if compose_path:
-        compose_config_result = _run(["docker", "compose", "-f", str(compose_path), "config", "--quiet"], cwd=CRM_ROOT, timeout=8.0)
+        compose_config_result = _run(
+            ["docker", "compose", "-f", str(compose_path), "config", "--quiet"], cwd=CRM_ROOT, timeout=8.0
+        )
         compose_ps_result = _run(["docker", "compose", "-f", str(compose_path), "ps"], cwd=CRM_ROOT, timeout=8.0)
         compose_config = {
             "ok": compose_config_result["returncode"] == 0,
@@ -667,7 +671,13 @@ def _production_ops(root: Path) -> dict[str, Any]:
         {
             "operation": "docker_compose_up_or_restart",
             "allowed_command": "docker compose config && docker compose up -d",
-            "required_gates": ["dirty state recorded", "env file presence checked", "compose config ok", "backup/read-back noted", "smoke baseline captured"],
+            "required_gates": [
+                "dirty state recorded",
+                "env file presence checked",
+                "compose config ok",
+                "backup/read-back noted",
+                "smoke baseline captured",
+            ],
         },
         {
             "operation": "watchdog_restart_or_reinstall",
@@ -900,8 +910,14 @@ def _mcp_import_status(python_path: Path, *, cwd: Path) -> dict[str, Any]:
 
 def _codex_skill_inventory() -> dict[str, Any]:
     system_skills = sorted(CODEX_SYSTEM_SKILLS_ROOT.glob("*/SKILL.md")) if CODEX_SYSTEM_SKILLS_ROOT.exists() else []
-    plugin_skills = sorted(CODEX_PLUGIN_CACHE_ROOT.glob("*/**/skills/*/SKILL.md")) if CODEX_PLUGIN_CACHE_ROOT.exists() else []
-    plugins = sorted(path.name for path in CODEX_PLUGIN_CACHE_ROOT.iterdir() if path.is_dir()) if CODEX_PLUGIN_CACHE_ROOT.exists() else []
+    plugin_skills = (
+        sorted(CODEX_PLUGIN_CACHE_ROOT.glob("*/**/skills/*/SKILL.md")) if CODEX_PLUGIN_CACHE_ROOT.exists() else []
+    )
+    plugins = (
+        sorted(path.name for path in CODEX_PLUGIN_CACHE_ROOT.iterdir() if path.is_dir())
+        if CODEX_PLUGIN_CACHE_ROOT.exists()
+        else []
+    )
     return {
         "system_skills_root": str(CODEX_SYSTEM_SKILLS_ROOT),
         "plugin_cache_root": str(CODEX_PLUGIN_CACHE_ROOT),
@@ -1022,7 +1038,13 @@ def _container_status(name: str, *, cwd: Path) -> dict[str, Any]:
     if not shutil.which("docker"):
         return {"ok": False, "name": name, "state": "unknown", "health": "unknown", "error": "docker_missing"}
     result = _run(
-        ["docker", "inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", name],
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+            name,
+        ],
         cwd=cwd,
         timeout=5.0,
     )
@@ -1050,7 +1072,7 @@ def _open_risk_score(**sections: dict[str, Any]) -> dict[str, Any]:
         add(min(25, 5 + len(missing_providers)), "providers", "provider env/routes are incomplete")
     if not sections["server_environment"].get("ok"):
         add(20, "server_environment", "required server tools or /tmp readiness missing")
-    port_review_count = (((sections["server_environment"].get("ports") or {}).get("review_public_count")) or 0)
+    port_review_count = ((sections["server_environment"].get("ports") or {}).get("review_public_count")) or 0
     if port_review_count:
         add(min(20, port_review_count * 8), "ports", "public listeners need review")
     if not sections["codex_readiness"].get("ok"):
@@ -1096,45 +1118,97 @@ def _collect_risks(**sections: dict[str, Any]) -> list[dict[str, str]]:
     risks: list[dict[str, str]] = []
     system_audit = sections["system_audit"]
     if not system_audit.get("ok"):
-        risks.append({"severity": "yellow", "category": "system", "message": "system audit has warnings or failing checks"})
+        risks.append(
+            {"severity": "yellow", "category": "system", "message": "system audit has warnings or failing checks"}
+        )
     server_environment = sections["server_environment"]
     if not server_environment.get("ok"):
-        risks.append({"severity": "yellow", "category": "server_environment", "message": "required server tools or /tmp readiness are incomplete"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "server_environment",
+                "message": "required server tools or /tmp readiness are incomplete",
+            }
+        )
     codex_readiness = sections["codex_readiness"]
     if not codex_readiness.get("ok"):
-        risks.append({"severity": "yellow", "category": "codex", "message": "Codex skills, hooks, or MCP imports need attention"})
+        risks.append(
+            {"severity": "yellow", "category": "codex", "message": "Codex skills, hooks, or MCP imports need attention"}
+        )
     runtime_readiness = sections["runtime_readiness"]
     if not runtime_readiness.get("ok"):
-        risks.append({"severity": "yellow", "category": "runtime", "message": "Manager/CRM venv, package, document, browser, or SQLite readiness is incomplete"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "runtime",
+                "message": "Manager/CRM venv, package, document, browser, or SQLite readiness is incomplete",
+            }
+        )
     git = sections["git"]
     if git.get("dirty"):
-        risks.append({"severity": "yellow", "category": "git", "message": "working tree is dirty; preserve user changes before production actions"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "git",
+                "message": "working tree is dirty; preserve user changes before production actions",
+            }
+        )
     knowledge = sections["knowledge"]
     if not knowledge.get("ok"):
-        risks.append({"severity": "yellow", "category": "knowledge", "message": "knowledge or annotations audit has warnings"})
+        risks.append(
+            {"severity": "yellow", "category": "knowledge", "message": "knowledge or annotations audit has warnings"}
+        )
     memory = sections["memory"]
     if memory.get("duplicate_groups") or memory.get("expired_count") or memory.get("superseded_count"):
-        risks.append({"severity": "yellow", "category": "memory", "message": "memory review has duplicate, expired, or superseded candidates"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "memory",
+                "message": "memory review has duplicate, expired, or superseded candidates",
+            }
+        )
     mcp = sections["mcp"]
     if not mcp.get("manager", {}).get("ok") or not mcp.get("crm", {}).get("ok"):
-        risks.append({"severity": "yellow", "category": "mcp", "message": "one or more MCP catalog files are missing or invalid"})
+        risks.append(
+            {"severity": "yellow", "category": "mcp", "message": "one or more MCP catalog files are missing or invalid"}
+        )
     providers = sections["providers"]
     if providers.get("missing_provider_ids"):
-        risks.append({"severity": "yellow", "category": "providers", "message": "some provider credentials/routes are not configured"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "providers",
+                "message": "some provider credentials/routes are not configured",
+            }
+        )
     production = sections["production"]
     if not production.get("compose_config_present"):
-        risks.append({"severity": "yellow", "category": "production", "message": "docker compose config was not found in expected locations"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "production",
+                "message": "docker compose config was not found in expected locations",
+            }
+        )
     production_ops = sections["production_ops"]
     if not production_ops.get("ok"):
-        risks.append({"severity": "yellow", "category": "production_ops", "message": "production compose/nginx/watchdog/container gates are not all green"})
+        risks.append(
+            {
+                "severity": "yellow",
+                "category": "production_ops",
+                "message": "production compose/nginx/watchdog/container gates are not all green",
+            }
+        )
     ports = sections["ports"]
     if not ports.get("ok"):
         risks.append({"severity": "yellow", "category": "ports", "message": "public port inspection failed"})
     open_risk = sections["open_risk"]
     if open_risk.get("level") == "red":
         risks.append({"severity": "red", "category": "open_risk", "message": "open risk score is red"})
-    elif (((server_environment.get("ports") or {}).get("review_public_count")) or 0):
-        risks.append({"severity": "yellow", "category": "ports", "message": "one or more public listeners should be reviewed"})
+    elif ((server_environment.get("ports") or {}).get("review_public_count")) or 0:
+        risks.append(
+            {"severity": "yellow", "category": "ports", "message": "one or more public listeners should be reviewed"}
+        )
     return risks
 
 

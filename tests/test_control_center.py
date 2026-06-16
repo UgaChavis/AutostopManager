@@ -47,6 +47,9 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "Stale app-server processes" in markdown
     assert "Production Ops" in markdown
     assert "Provider Matrix" in markdown
+    assert "python -m autostop_manager.cli control-report" in markdown
+    assert "autostop-" + "manager control-report" not in markdown
+    assert ".venv/" + "bin/python" not in str(report["tests_doctor"]["commands"])
 
 
 def test_control_report_redacts_secret_like_text():
