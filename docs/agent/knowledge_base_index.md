@@ -174,9 +174,9 @@ should not produce full section matches in normal search.
 - `3d_printing_cad_playbook.md` - route for photo/description to CAD model,
   STL validation, Anycubic Kobra S1 print preparation, slicer handoff, and the
   boundary between source geometry, generated STL, and generated G-code.
-- `C:/Users/User/Desktop/3д/` - local CAD/STL workspace with OpenSCAD/BOSL2
-  models, printer profile, calibration measurements, export reports, and
-  helper scripts.
+- `AUTOSTOP_3D_WORKSPACE` - optional external CAD/STL workspace with
+  OpenSCAD/BOSL2 models, printer profile, calibration measurements, export
+  reports, and helper scripts.
 
 For 3D printing / Anycubic / STL / OpenSCAD / bolts / clips / clamps requests,
 search `3d_printing_cad` first. Use the local CAD project rules, then build and
@@ -424,7 +424,9 @@ rg -n "Gmail|gmail|email|почт|письм|входящие|ярлык|чер�
 rg -n "fluid|oil|capacity|масло|жидк|заправ" docs/agent
 rg -n "Приберись|cleanup|archive|preserve|board|описание|emoji|эмодзи" docs/agent
 rg -n "source_id|license|ingest|catalog" docs/agent
-rg -n "3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|clip|clamp|thread|болт|гайк|клипс|хомут" docs/agent/3d_printing_cad_playbook.md C:/Users/User/Desktop/3д/docs C:/Users/User/Desktop/3д/AGENTS.md
+rg -n "3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|clip|clamp|thread|болт|гайк|клипс|хомут" docs/agent/3d_printing_cad_playbook.md
+# If AUTOSTOP_3D_WORKSPACE points to an existing CAD workspace, search it too:
+rg -n "3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|clip|clamp|thread|болт|гайк|клипс|хомут" "$env:AUTOSTOP_3D_WORKSPACE/docs" "$env:AUTOSTOP_3D_WORKSPACE/AGENTS.md"
 ```
 
 ## Update Checklist

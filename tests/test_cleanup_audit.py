@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from autostop_manager.cleanup_audit import build_cleanup_audit
 from autostop_manager.storage import ManagerMemoryStore
@@ -30,13 +31,18 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (docs_agent / "partsapi_category_index.json").write_text('{"categories":[]}\n', encoding="utf-8")
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
     (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
+    (root / "autostopcrm-invoice-test.pdf").write_bytes(b"%PDF-1.4")
     store = ManagerMemoryStore(root / "data" / "autostop_manager.sqlite3")
     store.initialize()
 
-    result = build_cleanup_audit(
-        project_root=root,
-        store=store,
-    )
+    with patch(
+        "autostop_manager.cleanup_audit._git_untracked_paths",
+        return_value=["autostopcrm-invoice-test.pdf"],
+    ):
+        result = build_cleanup_audit(
+            project_root=root,
+            store=store,
+        )
 
     assert result["ok"] is True
     categories = {item["category"] for item in result["candidates"]}
@@ -44,19 +50,25 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
         "ignored_cache",
         "tracked_pdf_duplicate",
         "unreferenced_agent_doc",
-        "local_db",
+        "untracked_generated_artifact",
     }.issubset(categories)
+    retained_categories = {item["category"] for item in result["retained_items"]}
+    assert "local_db" in retained_categories
     allowed_actions = {
         "keep",
         "link_to_knowledge_map",
         "keep_text_equivalent",
         "delete_after_approval",
+        "delete",
     }
     assert ("ob" + "sidian_duplicate") not in categories
     assert all(item["requires_approval"] is True for item in result["candidates"])
     assert all(item["recommended_action"] in allowed_actions for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/reference_only.md" for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/partsapi_category_index.json" for item in result["candidates"])
+    artifact = next(item for item in result["candidates"] if item["category"] == "untracked_generated_artifact")
+    assert artifact["path"] == "autostopcrm-invoice-test.pdf"
+    assert artifact["recommended_action"] == "delete"
 
 
 def test_cleanup_audit_flags_source_pack_overindexed_routes(tmp_path):

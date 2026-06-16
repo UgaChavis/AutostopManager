@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,16 +51,20 @@ def build_cleanup_audit(
     root = Path(project_root)
     memory = store or ManagerMemoryStore()
     candidates: list[CleanupCandidate] = []
+    retained_items: list[CleanupCandidate] = []
     candidates.extend(_ignored_cache_candidates(root))
+    candidates.extend(_untracked_generated_artifact_candidates(root))
     candidates.extend(_tracked_pdf_duplicate_candidates(root))
     candidates.extend(_unreferenced_agent_doc_candidates(root))
     local_db = _local_db_candidate(memory)
     if local_db is not None:
-        candidates.append(local_db)
+        retained_items.append(local_db)
     candidates.extend(_source_pack_overindexed_candidates(root))
 
     category_counts = Counter(candidate.category for candidate in candidates)
+    retained_category_counts = Counter(item.category for item in retained_items)
     total_size = sum(candidate.size_bytes for candidate in candidates)
+    retained_size = sum(item.size_bytes for item in retained_items)
     return {
         "ok": True,
         "mode": "dry_run",
@@ -68,8 +73,12 @@ def build_cleanup_audit(
             "category_counts": dict(sorted(category_counts.items())),
             "total_size_bytes": total_size,
             "requires_approval_count": sum(1 for candidate in candidates if candidate.requires_approval),
+            "retained_count": len(retained_items),
+            "retained_category_counts": dict(sorted(retained_category_counts.items())),
+            "retained_size_bytes": retained_size,
         },
         "candidates": [candidate.to_dict() for candidate in candidates],
+        "retained_items": [item.to_dict() for item in retained_items],
         "checked_at": _now(),
     }
 
@@ -88,6 +97,32 @@ def _ignored_cache_candidates(root: Path) -> list[CleanupCandidate]:
                 recommended_action="delete_after_approval",
                 requires_approval=True,
                 matched_by="ignored cache directory",
+            )
+        )
+    return candidates
+
+
+def _untracked_generated_artifact_candidates(root: Path) -> list[CleanupCandidate]:
+    candidates: list[CleanupCandidate] = []
+    for relative_path in _git_untracked_paths(root):
+        path = root / relative_path
+        normalized = relative_path.replace("\\", "/")
+        if "/" in normalized:
+            continue
+        if path.suffix.lower() not in {".html", ".pdf"}:
+            continue
+        name = path.name.lower()
+        if not (name.startswith("autostopcrm-") or name.startswith("egrul-")):
+            continue
+        candidates.append(
+            CleanupCandidate(
+                category="untracked_generated_artifact",
+                path=normalized,
+                size_bytes=_path_size(path),
+                risk="low",
+                recommended_action="delete",
+                requires_approval=True,
+                matched_by="untracked generated business document at project root",
             )
         )
     return candidates
@@ -218,6 +253,19 @@ def _referenced_agent_paths(root: Path) -> set[str]:
             if raw_path.startswith("docs/agent/"):
                 referenced.add(raw_path)
     return referenced
+
+
+def _git_untracked_paths(root: Path) -> list[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
 
 def _source_pack_root(source_cache: Path, path: Path) -> Path:

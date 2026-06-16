@@ -1673,18 +1673,7 @@
       "primary_files": [
         "docs/agent/3d_printing_cad_playbook.md"
       ],
-      "optional_runtime_files": [
-        "C:/Users/User/Desktop/3д/AGENTS.md",
-        "C:/Users/User/Desktop/3д/README.md",
-        "C:/Users/User/Desktop/3д/docs/workflow.md",
-        "C:/Users/User/Desktop/3д/docs/mechanical-cad-playbook.md",
-        "C:/Users/User/Desktop/3д/docs/slicer-checklist.md",
-        "C:/Users/User/Desktop/3д/docs/remote-printing.md",
-        "C:/Users/User/Desktop/3д/docs/cad-stack-upgrade.md",
-        "C:/Users/User/Desktop/3д/docs/fdm-mechanical-printing-knowledge.md",
-        "C:/Users/User/Desktop/3д/config/printer-kobra-s1-pla.json",
-        "C:/Users/User/Desktop/3д/models/catalog.json"
-      ],
+      "optional_runtime_files": [],
       "required_context": [
         "purpose and service environment",
         "critical dimensions and mating features",
@@ -1783,7 +1772,7 @@
     "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent C:/Users/User/.codex/skills/autostop-business-documents",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
-    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md C:/Users/User/Desktop/3д/docs C:/Users/User/Desktop/3д/AGENTS.md"
+    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md"
   },
-  "updated_at": "2026-06-01"
+  "updated_at": "2026-06-16"
 }

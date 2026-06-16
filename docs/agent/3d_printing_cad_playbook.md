@@ -7,22 +7,28 @@ material/orientation, or open the result for Anycubic Kobra S1 printing.
 ## Source Boundaries
 
 - AutoStopManager stores the durable route and operating rules only.
-- The CAD/STL source workspace is `C:/Users/User/Desktop/3д`.
-- In that workspace, OpenSCAD source files and `models/catalog.json` are the
-  source of truth. Exported STL files under `exports/` are generated artifacts.
+- The CAD/STL source workspace is external to this repository and must be
+  resolved from `AUTOSTOP_3D_WORKSPACE`. If that variable is unset or points to
+  a missing directory, ask the owner for the current workspace before modeling.
+- In the external workspace, OpenSCAD source files and `models/catalog.json`
+  are the source of truth. Exported STL files under `exports/` are generated
+  artifacts.
 - Do not hand-edit STL files.
 - Do not generate or store G-code in the repository unless the owner explicitly
   changes the v1 rule.
 
 ## First Read
 
-1. `C:/Users/User/Desktop/3д/AGENTS.md`
-2. `C:/Users/User/Desktop/3д/README.md`
-3. `C:/Users/User/Desktop/3д/docs/workflow.md`
-4. `C:/Users/User/Desktop/3д/docs/mechanical-cad-playbook.md`
-5. `C:/Users/User/Desktop/3д/docs/slicer-checklist.md`
-6. `C:/Users/User/Desktop/3д/docs/remote-printing.md`
-7. `C:/Users/User/Desktop/3д/docs/cad-stack-upgrade.md`
+After resolving `AUTOSTOP_3D_WORKSPACE`, read these files relative to that
+workspace:
+
+1. `AGENTS.md`
+2. `README.md`
+3. `docs/workflow.md`
+4. `docs/mechanical-cad-playbook.md`
+5. `docs/slicer-checklist.md`
+6. `docs/remote-printing.md`
+7. `docs/cad-stack-upgrade.md`
 8. For print-process choices, query the local print knowledge base.
 
 ## Required Inputs
@@ -108,7 +114,7 @@ Local v1 path:
 
 Automation option after explicit owner approval:
 
-- Use `C:/Users/User/Desktop/3д/scripts/printer_connect.py` for safe local
+- Use `scripts/printer_connect.py` from `AUTOSTOP_3D_WORKSPACE` for safe local
   discovery, Moonraker status checks, and upload dry-runs.
 - If Rinkhals is installed and Moonraker is reachable on the printer, use the
   Moonraker file upload API for generated `.gcode` files only after slicer
@@ -127,7 +133,8 @@ Automation option after explicit owner approval:
 ## Local Commands
 
 ```powershell
-cd C:\Users\User\Desktop\3д
+if (-not $env:AUTOSTOP_3D_WORKSPACE) { throw "Set AUTOSTOP_3D_WORKSPACE first." }
+Set-Location -LiteralPath $env:AUTOSTOP_3D_WORKSPACE
 .\.venv\Scripts\python.exe scripts\cad.py check
 .\.venv\Scripts\python.exe scripts\cad.py list
 .\.venv\Scripts\python.exe scripts\cad.py build calibration
