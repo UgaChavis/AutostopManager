@@ -3,7 +3,7 @@
   "source_of_truth_repo": "UgaChavis/AutostopCRM-V1",
   "source_branch": "autostopcrm-v1",
   "source_documents_scope": "Paths in source_documents are from the AutoStopCRM-V1 repo, not this AutostopManager checkout.",
-  "local_repo": "C:/Users/User/Desktop/AutostopCRM-V1",
+  "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
   "last_verified": "2026-06-15",

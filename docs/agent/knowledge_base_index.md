@@ -274,13 +274,13 @@ For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS requests, load the
 playbook first, then verify VIN/frame-specific repair, TSB, wiring, torque,
 fluid, recall, and OEM part facts through Toyota official or licensed sources.
 
-Fluid maintenance has a dedicated Codex skill:
+Fluid maintenance may have a focused local Codex skill when installed. In this
+checkout, the durable source of truth is the playbook and source catalog:
 
-- `C:/Users/User/.codex/skills/autostop-fluid-maintenance/SKILL.md`
 - `docs/agent/fluid_maintenance_playbook.md`
 - `docs/agent/automotive_sources/fluid_maintenance_sources.json`
 
-For oil, fluid, approval, and fill-capacity requests, load the skill first,
+For oil, fluid, approval, and fill-capacity requests, load the playbook first,
 then verify exact vehicle/unit data through OEM or licensed service sources.
 
 ## Vehicle Identity and OEM Parts
@@ -301,7 +301,6 @@ then verify exact vehicle/unit data through OEM or licensed service sources.
 
 AI parts Красноярск project pack:
 
-- `C:/Users/User/.codex/skills/autostop-parts-pricing/SKILL.md`
 - `docs/agent/ai_parts_krasnoyarsk_playbook.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md`
 - `docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md`
@@ -340,8 +339,9 @@ without API/cabinet/phone/message confirmation.
   facts selected from the newest reliable documents. This file is local runtime
   knowledge and must not be committed.
 - `data/private_knowledge/business_documents_inventory.json` - optional private
-  filesystem inventory of `C:/Users/User/Мой диск/ДОКУМЕНТЫ`, with dates,
-  hashes, and topic flags.
+  filesystem inventory of the owner-synced document folder, with dates, hashes,
+  and topic flags. Resolve that folder from the local runtime inventory; do not
+  hard-code a Windows profile path in tracked docs.
 
 For ИП / реквизиты / карточка предприятия / ИП Гришкявичус or Гришкевичус
 requests, search `business_identity` first. If the optional private JSON files
@@ -355,8 +355,8 @@ document if formatting matters.
 - `business_document_quality_playbook.md` - AutoStop route for PDF/DOCX/XLSX
   invoices, acts, КП, receipts, requisites sheets, accounting-style documents,
   and printable forms.
-- `C:/Users/User/.codex/skills/autostop-business-documents/SKILL.md` - local
-  Codex skill with the mandatory document-quality gate.
+- optional local document skills, when installed under `$HOME/.codex/skills`,
+  are helpers only; the mandatory document-quality gate lives in the playbook.
 
 For счет / акт / КП / бухгалтерский документ / PDF / Word / Excel requests,
 search `business_documents` first. Use `business_identity` only for current

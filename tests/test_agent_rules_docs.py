@@ -47,16 +47,10 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
 
 
 def test_board_cleanup_description_and_structured_field_contract_is_documented():
-    playbook = (ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md").read_text(
-        encoding="utf-8"
-    )
+    playbook = (ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md").read_text(encoding="utf-8")
     route = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
-    manager_catalog = json.loads(
-        (ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8")
-    )
-    crm_catalog = json.loads(
-        (ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8")
-    )
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
+    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
     assert "This playbook is the only detailed source of truth" in playbook
     assert "leave it empty" in playbook
@@ -67,9 +61,7 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     assert "Bad public `description` patterns" in playbook
     assert "repair_orders_changed=0 and payments_changed=0" in playbook
 
-    cleanup_route = next(
-        item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot"
-    )
+    cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
     route_text = "\n".join(cleanup_route["next_actions"])
     assert "if description is empty leave it empty" in route_text
     assert "tags rare with no more than three" in route_text
@@ -88,19 +80,11 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
 
 def test_business_documents_route_requires_crm_print_module_for_autostop_documents():
-    playbook = (ROOT / "docs" / "agent" / "business_document_quality_playbook.md").read_text(
-        encoding="utf-8"
-    )
+    playbook = (ROOT / "docs" / "agent" / "business_document_quality_playbook.md").read_text(encoding="utf-8")
     index = (ROOT / "docs" / "agent" / "knowledge_base_index.md").read_text(encoding="utf-8")
-    annotations = (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").read_text(
-        encoding="utf-8"
-    )
-    manager_rules = json.loads(
-        (ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8")
-    )
-    crm_catalog = json.loads(
-        (ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8")
-    )
+    annotations = (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").read_text(encoding="utf-8")
+    manager_rules = json.loads((ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8"))
+    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
     business_document_rule = next(
         rule for rule in manager_rules["rules"] if rule["id"] == "business-document-quality-gate"
     )["rule"]
@@ -165,7 +149,10 @@ def test_removed_second_brain_terms_are_not_tracked_anymore():
 
 def test_tracked_docs_do_not_reference_old_windows_profile_paths():
     old_profile = "986" + "0606"
+    generic_profile = "Us" + "er"
     blocked_fragments = [
+        "C:/Users/" + generic_profile,
+        "C:\\Users\\" + generic_profile,
         "C:/Users/" + old_profile,
         "C:\\Users\\" + old_profile,
     ]

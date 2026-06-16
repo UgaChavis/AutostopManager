@@ -74,8 +74,9 @@ Use these locations consistently:
   compact cold source packs. Keep only README/MANIFEST, source/license notes,
   and important CSV/JSON/JSONL tables unless a current task and tests justify
   searchable Markdown modules.
-- `C:/Users/User/.codex/skills/<topic>/` - optional focused trigger skills
-  for large model-specific corpora when a local skill is actually installed.
+- `$HOME/.codex/skills/<topic>/` or `%USERPROFILE%\.codex\skills\<topic>\` -
+  optional focused trigger skills for large model-specific corpora when a local
+  skill is actually installed.
 - `data/` - local runtime storage, audit output, temporary evidence, and other
   material that should usually stay out of Git.
 - `data/private_knowledge/` - optional local private knowledge such as current
