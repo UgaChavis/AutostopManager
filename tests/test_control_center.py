@@ -97,6 +97,7 @@ def test_classify_ports_treats_known_autostop_listeners_as_expected():
                     "line": 'udp UNCONN 0 0 0.0.0.0:38166 0.0.0.0:* users:(("codex",pid=2812,fd=33))',
                     "local_address": "0.0.0.0:38166",
                 },
+                {"line": "udp UNCONN 0 0 0.0.0.0:35686 0.0.0.0:*", "local_address": "0.0.0.0:35686"},
             ],
             "local_listeners": [],
         }
@@ -109,6 +110,7 @@ def test_classify_ports_treats_known_autostop_listeners_as_expected():
         "expected_vpn_telegram_relay",
         "expected_docker_bridge_relay",
         "expected_codex_runtime_socket",
+        "expected_transient_udp_socket",
     }
 
 

@@ -883,6 +883,9 @@ def _classify_ports(ports: dict[str, Any]) -> dict[str, Any]:
         elif line.startswith("udp ") and '("codex"' in line:
             service = "codex_runtime_udp"
             risk = "expected_codex_runtime_socket"
+        elif line.startswith("udp ") and "users:" not in line:
+            service = "transient_udp_socket"
+            risk = "expected_transient_udp_socket"
         elif port in {"8000", "8001"}:
             risk = "review_crm_internal_port_public"
         elif port == "8080":
