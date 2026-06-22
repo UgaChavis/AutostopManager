@@ -219,6 +219,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         f"- Memory total: `{summary.get('memory_total', 0)}`",
         f"- MCP manager tools: `{summary.get('mcp_manager_tools', 0)}`",
         f"- Providers configured: `{summary.get('providers_configured', 0)}/{summary.get('providers_total', 0)}`",
+        f"- Provider external access backlog: `{((report.get('provider_readiness') or {}).get('external_access_backlog_count', 0))}`",
         "",
         "## Provider Matrix",
     ]
@@ -300,6 +301,7 @@ def _provider_summary() -> dict[str, Any]:
         "configured_count": int(status.get("configured_count") or 0),
         "live_callable_count": int(status.get("live_callable_count") or 0),
         "missing_provider_ids": status.get("missing_provider_ids") or [],
+        "external_access_backlog_count": len(status.get("missing_provider_ids") or []),
         "stage_matrix": status.get("stage_matrix") or [],
         "providers": [
             {
@@ -533,11 +535,26 @@ def _runtime_readiness(root: Path, *, memory: ManagerMemoryStore) -> dict[str, A
 
 def _provider_readiness(providers: dict[str, Any]) -> dict[str, Any]:
     smoke = build_provider_smoke_report(provider="all", mode="dry-run")
+    missing = [
+        provider
+        for provider in providers.get("providers") or []
+        if not bool(provider.get("configured"))
+    ]
     return {
         "ok": providers.get("ok") and smoke.get("ok") and bool((smoke.get("summary") or {}).get("no_order_guarantee")),
         "matrix": providers.get("stage_matrix") or [],
         "provider_count": providers.get("provider_count", 0),
         "configured_count": providers.get("configured_count", 0),
+        "external_access_backlog_count": len(missing),
+        "external_access_backlog": [
+            {
+                "source_id": provider.get("source_id"),
+                "stage": provider.get("stage"),
+                "missing_env_names": provider.get("missing_env_names") or [],
+                "manual_allowed": bool(provider.get("manual_allowed")),
+            }
+            for provider in missing
+        ],
         "missing_env_by_provider": [
             {
                 "source_id": provider.get("source_id"),
@@ -1084,9 +1101,8 @@ def _open_risk_score(**sections: dict[str, Any]) -> dict[str, Any]:
 
     if sections["git"].get("dirty"):
         add(15, "git", "working tree is dirty")
-    missing_providers = sections["providers"].get("missing_provider_ids") or []
-    if missing_providers:
-        add(min(25, 5 + len(missing_providers)), "providers", "provider env/routes are incomplete")
+    if not sections["providers"].get("ok"):
+        add(15, "providers", "provider catalog status could not be built")
     if not sections["server_environment"].get("ok"):
         add(20, "server_environment", "required server tools or /tmp readiness missing")
     port_review_count = ((sections["server_environment"].get("ports") or {}).get("review_public_count")) or 0
@@ -1190,12 +1206,12 @@ def _collect_risks(**sections: dict[str, Any]) -> list[dict[str, str]]:
             {"severity": "yellow", "category": "mcp", "message": "one or more MCP catalog files are missing or invalid"}
         )
     providers = sections["providers"]
-    if providers.get("missing_provider_ids"):
+    if not providers.get("ok"):
         risks.append(
             {
                 "severity": "yellow",
                 "category": "providers",
-                "message": "some provider credentials/routes are not configured",
+                "message": "provider catalog status could not be built",
             }
         )
     production = sections["production"]
