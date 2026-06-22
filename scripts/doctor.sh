@@ -149,7 +149,7 @@ if [[ -f "$CRM_ROOT/docker-compose.yml" ]]; then
   run "docker compose ps" docker compose -f "$CRM_ROOT/docker-compose.yml" ps
 fi
 run "nginx config" nginx -t
-if systemctl list-unit-files 'autostopcrm-watchdog.timer' --no-pager --plain | grep -q '^autostopcrm-watchdog.timer'; then
+if systemctl show autostopcrm-watchdog.timer --property=LoadState --value --no-pager | grep -qx loaded; then
   run "production watchdog timer active" systemctl is-active --quiet autostopcrm-watchdog.timer
   run "production watchdog service unit present" bash -c 'systemctl show autostopcrm-watchdog.service --property=LoadState --value | grep -qx loaded'
 else
