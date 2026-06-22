@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .storage import ManagerMemoryStore, _json_list, _now
+from .storage import ManagerMemoryStore, _json_list, _now, _string_list
 
 
 KNOWLEDGE_MAP_PATH = PROJECT_ROOT / "docs" / "agent" / "knowledge_map.json"
@@ -75,6 +75,32 @@ class _RouteCard:
     search_text: str
 
 
+_KNOWLEDGE_ROUTE_LIST_FIELDS = (
+    "use_when",
+    "aliases",
+    "keywords",
+    "questions",
+    "questions_it_answers",
+    "source_of_truth_files",
+    "primary_files",
+    "reference_files",
+    "required_context",
+    "optional_runtime_files",
+    "optional_files",
+)
+
+_COMMAND_ROUTE_LIST_FIELDS = ("aliases", "keywords", "memory_queries", "next_actions")
+
+_ANNOTATION_LIST_FIELDS = ("use_when", "keywords", "questions", "safety_flags", "related_skills")
+
+
+def _normalize_list_fields(item: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    normalized = dict(item)
+    for field in fields:
+        normalized[field] = _string_list(normalized.get(field))
+    return normalized
+
+
 def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     memory.initialize()
@@ -107,8 +133,8 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
         conn.execute("DELETE FROM knowledge_route_cards")
 
         for domain, route in domains.items():
-            use_when = [str(item) for item in route.get("use_when", [])]
-            primary_files = [str(item) for item in route.get("primary_files", [])]
+            use_when = _string_list(route.get("use_when"))
+            primary_files = _string_list(route.get("primary_files"))
             optional_runtime_files = _optional_runtime_files(route)
             optional_status = {
                 raw_path: (_resolve_path(raw_path).exists() and _resolve_path(raw_path).is_file())
@@ -375,9 +401,9 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
             domains_without_aliases.append(domain)
         for raw_path in _unique_strings(
             [
-                *[str(item) for item in route.get("source_of_truth_files", [])],
-                *[str(item) for item in route.get("primary_files", [])],
-                *[str(item) for item in route.get("reference_files", [])],
+                *_string_list(route.get("source_of_truth_files")),
+                *_string_list(route.get("primary_files")),
+                *_string_list(route.get("reference_files")),
             ]
         ):
             if raw_path in checked_paths:
@@ -750,14 +776,44 @@ def _select_knowledge_annotation_candidates(
 
 
 def _load_knowledge_map() -> dict[str, Any]:
-    return json.loads(KNOWLEDGE_MAP_PATH.read_text(encoding="utf-8-sig"))
+    try:
+        payload = json.loads(KNOWLEDGE_MAP_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    domains = payload.get("domains")
+    if domains is not None and not isinstance(domains, dict):
+        return {}
+    if isinstance(domains, dict):
+        payload = {
+            **payload,
+            "domains": {
+                str(key): _normalize_list_fields(value, _KNOWLEDGE_ROUTE_LIST_FIELDS)
+                for key, value in domains.items()
+                if isinstance(value, dict)
+            },
+        }
+    return payload
 
 
 @lru_cache(maxsize=1)
 def _load_command_routes() -> dict[str, Any]:
     if not COMMAND_ROUTES_PATH.exists():
         return {"routes": []}
-    return json.loads(COMMAND_ROUTES_PATH.read_text(encoding="utf-8-sig"))
+    try:
+        payload = json.loads(COMMAND_ROUTES_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"routes": []}
+    if not isinstance(payload, dict):
+        return {"routes": []}
+    routes = payload.get("routes")
+    if not isinstance(routes, list):
+        return {"routes": []}
+    return {
+        **payload,
+        "routes": [_normalize_list_fields(route, _COMMAND_ROUTE_LIST_FIELDS) for route in routes if isinstance(route, dict)],
+    }
 
 
 def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
@@ -772,7 +828,7 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
         if normalized_intent and normalized_intent == str(route.get("intent") or "").casefold():
             score += 40
             matching_terms.append(str(route.get("intent")))
-        for alias in route.get("aliases", []):
+        for alias in _string_list(route.get("aliases")):
             text = str(alias).casefold()
             if not text:
                 continue
@@ -782,7 +838,7 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
             elif text in lowered:
                 score += 70
                 matching_terms.append(str(alias))
-        for keyword in route.get("keywords", []):
+        for keyword in _string_list(route.get("keywords")):
             text = str(keyword).casefold()
             if text and text in lowered:
                 score += 15
@@ -796,27 +852,27 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
 
 
 def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
-    use_when = _unique_strings([str(item) for item in route.get("use_when", [])])
-    primary_files = _unique_strings([str(item) for item in route.get("primary_files", [])])
-    reference_files = _unique_strings([str(item) for item in route.get("reference_files", [])])
+    use_when = _unique_strings(_string_list(route.get("use_when")))
+    primary_files = _unique_strings(_string_list(route.get("primary_files")))
+    reference_files = _unique_strings(_string_list(route.get("reference_files")))
     optional_runtime_files = _optional_runtime_files(route)
-    source_of_truth = _unique_strings([str(item) for item in route.get("source_of_truth_files", [])]) or primary_files[:3]
+    source_of_truth = _unique_strings(_string_list(route.get("source_of_truth_files"))) or primary_files[:3]
     source_of_truth = _unique_strings([*source_of_truth, *optional_runtime_files])
     aliases = _unique_strings(
         [
             domain,
             domain.replace("_", " "),
-            *[str(item) for item in route.get("aliases", [])],
+            *_string_list(route.get("aliases")),
         ]
     )
-    keywords = _unique_strings([str(item) for item in route.get("keywords", [])])
+    keywords = _unique_strings(_string_list(route.get("keywords")))
     questions = _unique_strings(
         [
-            *[str(item) for item in route.get("questions", [])],
-            *[str(item) for item in route.get("questions_it_answers", [])],
+            *_string_list(route.get("questions")),
+            *_string_list(route.get("questions_it_answers")),
         ]
     )
-    required_context = _unique_strings([str(item) for item in route.get("required_context", [])])
+    required_context = _unique_strings(_string_list(route.get("required_context")))
     title = str(route.get("title") or f"{domain} route")
     skill_path = str(route.get("skill_path") or "")
     search_text = "\n".join(
@@ -895,8 +951,8 @@ def _optional_runtime_status(route: dict[str, Any]) -> dict[str, Any]:
 def _optional_runtime_files(route: dict[str, Any]) -> list[str]:
     return _unique_strings(
         [
-            *[str(item) for item in route.get("optional_runtime_files", [])],
-            *[str(item) for item in route.get("optional_files", [])],
+            *_string_list(route.get("optional_runtime_files")),
+            *_string_list(route.get("optional_files")),
         ]
     )
 
@@ -1180,11 +1236,11 @@ def _insert_annotations(conn: Any, *, indexed_at: str) -> int:
             continue
         title = str(annotation.get("title") or "").strip()
         summary = str(annotation.get("summary") or "").strip()
-        use_when = _unique_strings([str(item) for item in annotation.get("use_when", [])])
-        keywords = _unique_strings([str(item) for item in annotation.get("keywords", [])])
-        questions = _unique_strings([str(item) for item in annotation.get("questions", [])])
-        safety_flags = _unique_strings([str(item) for item in annotation.get("safety_flags", [])])
-        related_skills = _unique_strings([str(item) for item in annotation.get("related_skills", [])])
+        use_when = _unique_strings(_string_list(annotation.get("use_when")))
+        keywords = _unique_strings(_string_list(annotation.get("keywords")))
+        questions = _unique_strings(_string_list(annotation.get("questions")))
+        safety_flags = _unique_strings(_string_list(annotation.get("safety_flags")))
+        related_skills = _unique_strings(_string_list(annotation.get("related_skills")))
         source_type = str(annotation.get("source_type") or "").strip()
         trust_level = str(annotation.get("trust_level") or "").strip()
         refresh_cadence = str(annotation.get("refresh_cadence") or "").strip()
@@ -1262,7 +1318,11 @@ def _load_annotations() -> list[dict[str, Any]]:
     if not KNOWLEDGE_ANNOTATIONS_PATH.exists():
         return []
     annotations: list[dict[str, Any]] = []
-    for line in KNOWLEDGE_ANNOTATIONS_PATH.read_text(encoding="utf-8-sig").splitlines():
+    try:
+        annotations_content = KNOWLEDGE_ANNOTATIONS_PATH.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return []
+    for line in annotations_content.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -1271,7 +1331,7 @@ def _load_annotations() -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
-            annotations.append(payload)
+            annotations.append(_normalize_list_fields(payload, _ANNOTATION_LIST_FIELDS))
     return annotations
 
 

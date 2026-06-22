@@ -403,7 +403,7 @@ def _check_digit(vin: str) -> dict[str, Any]:
     if any(char not in TRANSLITERATION for char in vin):
         invalid = sorted({char for char in vin if char not in TRANSLITERATION})
         return {"status": "invalid_characters", "invalid": invalid}
-    total = sum(TRANSLITERATION[char] * weight for char, weight in zip(vin, VIN_WEIGHTS))
+    total = sum(TRANSLITERATION[char] * weight for char, weight in zip(vin, VIN_WEIGHTS, strict=True))
     expected_value = total % 11
     expected = "X" if expected_value == 10 else str(expected_value)
     return {

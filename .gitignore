@@ -4,9 +4,14 @@
 .codex-remote-attachments/
 __pycache__/
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.pyc
 tmp/
 output/
+out/
+reports/
 frontend/control-center/control-report.json
 generated_invoices/
 data/

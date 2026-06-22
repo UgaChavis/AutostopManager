@@ -59,7 +59,7 @@ class _FakeResponse:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, _exc_type, _exc, _tb):
         return False
 
     def read(self):
@@ -75,7 +75,7 @@ class _FakeRawResponse:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, _exc_type, _exc, _tb):
         return False
 
     def read(self):
@@ -501,7 +501,8 @@ def test_exist_lookup_returns_disambiguation_when_brand_missing(monkeypatch):
             return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
         if "pcode=9091901164" in url:
             return _FakeRawResponse(EXIST_CATALOG_HTML)
-        raise AssertionError(f"unexpected Exist URL: {url}")
+        message = f"unexpected Exist URL: {url}"
+        raise AssertionError(message)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
@@ -523,7 +524,8 @@ def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
             return _FakeRawResponse(EXIST_CATALOG_HTML)
         if "pid=02201730" in url:
             return _FakeRawResponse(_exist_price_html())
-        raise AssertionError(f"unexpected Exist URL: {url}")
+        message = f"unexpected Exist URL: {url}"
+        raise AssertionError(message)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
@@ -540,7 +542,8 @@ def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
 
 def test_exist_lookup_dry_run_does_not_call_network(monkeypatch):
     def fail_urlopen(request, timeout=20.0):
-        raise AssertionError("dry-run must not call Exist")
+        message = "dry-run must not call Exist"
+        raise AssertionError(message)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
 
@@ -554,7 +557,8 @@ def test_exist_lookup_dry_run_does_not_call_network(monkeypatch):
 
 def test_exist_lookup_network_error_returns_json_error(monkeypatch):
     def fake_urlopen(request, timeout=20.0):
-        raise TimeoutError("network timeout")
+        message = "network timeout"
+        raise TimeoutError(message)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
@@ -697,7 +701,8 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
 
     def fake_urlopen(request, timeout=20.0):
         calls.append(request.full_url)
-        raise TimeoutError("network timeout")
+        message = "network timeout"
+        raise TimeoutError(message)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 

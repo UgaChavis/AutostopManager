@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .storage import _string_list
 
 
 def _default_skill_root() -> Path:
@@ -18,11 +19,45 @@ def _default_skill_root() -> Path:
 SKILL_ROOT = _default_skill_root()
 KNOWLEDGE_MAP_PATH = PROJECT_ROOT / "docs" / "agent" / "knowledge_map.json"
 
+_ROUTE_LIST_FIELDS = ("source_of_truth_files", "primary_files")
+
+
+def _normalize_route_list_fields(route: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(route)
+    for field in _ROUTE_LIST_FIELDS:
+        normalized[field] = _string_list(normalized.get(field))
+    return normalized
+
 
 def _load_knowledge_map() -> dict[str, Any]:
     if not KNOWLEDGE_MAP_PATH.exists():
-        return {"domains": {}}
-    return json.loads(KNOWLEDGE_MAP_PATH.read_text(encoding="utf-8-sig"))
+        return {"domains": {}, "load_error": "knowledge_map_missing"}
+    try:
+        payload = json.loads(KNOWLEDGE_MAP_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {
+            "domains": {},
+            "load_error": "knowledge_map_unreadable" if isinstance(exc, OSError) else "knowledge_map_invalid_json",
+            "load_error_detail": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "domains": {},
+            "load_error": "knowledge_map_invalid_structure",
+            "load_error_detail": type(payload).__name__,
+        }
+    domains = payload.get("domains")
+    if not isinstance(domains, dict):
+        return {
+            **payload,
+            "domains": {},
+            "load_error": "knowledge_map_invalid_domains",
+            "load_error_detail": type(domains).__name__,
+        }
+    return {
+        **payload,
+        "domains": {str(key): _normalize_route_list_fields(value) for key, value in domains.items() if isinstance(value, dict)},
+    }
 
 
 def _skill_id_from_path(path: str) -> str:
@@ -40,11 +75,11 @@ def load_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
         skill_paths = []
         if raw_skill_path:
             skill_paths.append(raw_skill_path)
-        for raw_path in route.get("source_of_truth_files", []):
+        for raw_path in _string_list(route.get("source_of_truth_files")):
             text = str(raw_path)
             if text.endswith("SKILL.md"):
                 skill_paths.append(text)
-        for raw_path in route.get("primary_files", []):
+        for raw_path in _string_list(route.get("primary_files")):
             text = str(raw_path)
             if text.endswith("SKILL.md"):
                 skill_paths.append(text)
@@ -79,13 +114,23 @@ def load_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
             )
             item["filesystem_path"] = str(skill_file)
 
-    return {"ok": True, "skill_root": str(root), "skills": sorted(by_skill.values(), key=lambda item: item["skill_id"])}
+    result = {
+        "ok": not bool(payload.get("load_error")),
+        "skill_root": str(root),
+        "skills": sorted(by_skill.values(), key=lambda item: item["skill_id"]),
+    }
+    if payload.get("load_error"):
+        result["load_error"] = payload["load_error"]
+        result["load_error_detail"] = payload.get("load_error_detail")
+    return result
 
 
 def audit_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
     registry = load_skill_registry(skill_root=skill_root)
     items: list[dict[str, Any]] = []
     warnings: list[str] = []
+    if registry.get("load_error"):
+        warnings.append(f"knowledge_map_load_error: {registry['load_error']}")
     for skill in registry["skills"]:
         path = Path(str(skill.get("path") or ""))
         exists = path.exists()
@@ -99,7 +144,10 @@ def audit_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
         item["linked_domains"] = linked_domains
         items.append(item)
     return {
-        "ok": not any(warning.startswith("missing skill file") for warning in warnings),
+        "ok": not any(
+            warning.startswith("missing skill file") or warning.startswith("knowledge_map_load_error")
+            for warning in warnings
+        ),
         "skill_root": registry["skill_root"],
         "items": items,
         "warnings": warnings,

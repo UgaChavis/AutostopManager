@@ -21,7 +21,6 @@ from .vin_lookup import normalize_vin
 
 VIN17_BASE_URL = "http://api.17vin.com:8080"
 PARTS_CATALOGS_DOCS_URL = "https://www.parts-catalogs.com/us/api"
-PARTSAPI_DOCS_URL = "https://partsapi.ru/docs"
 MANN_FILTER_GRAPHQL_ENDPOINT = "https://www.mann-filter.com/api/graphql/catalog-prod"
 MANN_FILTER_STORE = "pcat_mf_us_store_en"
 DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"

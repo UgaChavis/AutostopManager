@@ -92,11 +92,25 @@ def _json_object(raw: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {"value": value}
 
 
-def _json_file(raw_path: str | None) -> Any:
+def _json_value(raw: str | None, *, option_name: str) -> Any:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        message = f"{option_name} must be valid JSON: {exc}"
+        raise SystemExit(message) from exc
+
+
+def _json_file(raw_path: str | None, *, option_name: str) -> Any:
     if not raw_path:
         return None
     path = Path(raw_path)
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        message = f"{option_name} must point to a valid JSON file: {exc}"
+        raise SystemExit(message) from exc
 
 
 def _json_dict_arg(raw: str | None, *, option_name: str) -> dict[str, Any] | None:
@@ -105,9 +119,11 @@ def _json_dict_arg(raw: str | None, *, option_name: str) -> dict[str, Any] | Non
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{option_name} must be valid JSON: {exc}") from exc
+        message = f"{option_name} must be valid JSON: {exc}"
+        raise SystemExit(message) from exc
     if not isinstance(value, dict):
-        raise SystemExit(f"{option_name} must be a JSON object")
+        message = f"{option_name} must be a JSON object"
+        raise SystemExit(message)
     return value
 
 
@@ -724,9 +740,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "crm-health-plan":
         _print_json(
             build_crm_health_plan(
-                board_context=_json_file(args.board_context_json),
-                board_review=_json_file(args.board_review_json),
-                today_context=_json_file(args.today_json),
+                board_context=_json_file(args.board_context_json, option_name="--board-context-json"),
+                board_review=_json_file(args.board_review_json, option_name="--board-review-json"),
+                today_context=_json_file(args.today_json, option_name="--today-json"),
             )
         )
     elif args.command == "annotations-audit":
@@ -912,16 +928,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.command == "decode-vehicles":
-        items = json.loads(args.items_json)
+        items = _json_value(args.items_json, option_name="--items-json")
         if not isinstance(items, list):
-            raise SystemExit("--items-json must be a JSON array")
+            message = "--items-json must be a JSON array"
+            raise SystemExit(message)
         _print_json(decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch))
     elif args.command == "catalog-status":
         _print_json(catalog_provider_status(stage=args.stage))
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
     elif args.command == "oem-parts-provider-plan":
-        identity = json.loads(args.vehicle_identity_json) if args.vehicle_identity_json else None
+        identity = _json_dict_arg(args.vehicle_identity_json, option_name="--vehicle-identity-json")
         _print_json(
             build_oem_parts_provider_plan(
                 identifier=args.identifier,
@@ -1040,20 +1057,22 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "partsapi-vin-smoke":
         if args.repair_orders_json:
-            raw_orders = json.loads(args.repair_orders_json)
+            raw_orders = _json_value(args.repair_orders_json, option_name="--repair-orders-json")
             if isinstance(raw_orders, dict):
                 raw_orders = ((raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or [])
             if not isinstance(raw_orders, list):
-                raise SystemExit("--repair-orders-json must be a JSON array or connector response object")
+                message = "--repair-orders-json must be a JSON array or connector response object"
+                raise SystemExit(message)
             selected = select_crm_partsapi_smoke_case(raw_orders, random_seed=args.random_seed)
             if not selected.get("ok"):
                 _print_json(selected)
                 return 0
             item = selected["selected"]
         elif args.item_json:
-            item = json.loads(args.item_json)
+            item = _json_dict_arg(args.item_json, option_name="--item-json")
             if not isinstance(item, dict):
-                raise SystemExit("--item-json must be a JSON object")
+                message = "--item-json must be a JSON object"
+                raise SystemExit(message)
         else:
             item = {
                 "identifier": args.identifier,
@@ -1073,7 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.command == "crm-vin-parts-plan":
-        vin_oem_resolution = json.loads(args.vin_oem_resolution_json) if args.vin_oem_resolution_json else None
+        vin_oem_resolution = _json_dict_arg(args.vin_oem_resolution_json, option_name="--vin-oem-resolution-json")
         _print_json(
             build_crm_vin_parts_lookup_pipeline(
                 card_id=args.card_id,
@@ -1125,9 +1144,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.command == "vin-parts-benchmark":
-        items = json.loads(args.items_json)
+        items = _json_value(args.items_json, option_name="--items-json")
         if not isinstance(items, list):
-            raise SystemExit("--items-json must be a JSON array")
+            message = "--items-json must be a JSON array"
+            raise SystemExit(message)
         _print_json(
             benchmark_vin_parts_lookup(
                 items,
@@ -1146,9 +1166,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.command == "vin-parts-work-order":
-        items = json.loads(args.items_json)
+        items = _json_value(args.items_json, option_name="--items-json")
         if not isinstance(items, list):
-            raise SystemExit("--items-json must be a JSON array")
+            message = "--items-json must be a JSON array"
+            raise SystemExit(message)
         _print_json(
             build_vin_parts_work_order(
                 items,
@@ -1238,7 +1259,7 @@ def main(argv: list[str] | None = None) -> int:
                 work_items=args.work_items,
                 complaint=args.complaint,
                 city=args.city,
-                quotes_json=_json_file(args.quotes_json),
+                quotes_json=_json_file(args.quotes_json, option_name="--quotes-json"),
                 auto_research=args.auto_research,
                 labor_time_policy=args.labor_time_policy,
             )

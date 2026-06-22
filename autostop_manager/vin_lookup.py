@@ -487,12 +487,12 @@ def _provider_adapters(catalog_routes: list[dict[str, Any]], *, captured_oem_num
     connected_routes = [
         route["source_name"]
         for route in catalog_routes
-        if "connected" in route.get("adapter_status", []) and route.get("requires_login") is False
+        if "connected" in _as_list(route.get("adapter_status")) and route.get("requires_login") is False
     ]
     manual_routes = [
         route["source_name"]
         for route in catalog_routes
-        if "manual_capture" in route.get("adapter_status", []) or route.get("requires_login")
+        if "manual_capture" in _as_list(route.get("adapter_status")) or route.get("requires_login")
     ]
     return [
         {

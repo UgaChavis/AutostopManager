@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .storage import _string_list
 
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 
@@ -53,8 +54,16 @@ _MAKE_SOURCE_MAP: dict[str, list[str]] = {
 def load_source_registry() -> dict[str, Any]:
     if not REGISTRY_PATH.exists():
         return {"version": 0, "purpose": "missing", "sources": []}
-    with REGISTRY_PATH.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        payload = json.loads(REGISTRY_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"version": 0, "purpose": "missing", "sources": []}
+    if not isinstance(payload, dict):
+        return {"version": 0, "purpose": "missing", "sources": []}
+    sources = payload.get("sources")
+    if not isinstance(sources, list):
+        return {"version": payload.get("version", 0), "purpose": payload.get("purpose", "missing"), "sources": []}
+    return {**payload, "sources": [source for source in sources if isinstance(source, dict)]}
 
 
 def normalize_make(make: str | None) -> str:
@@ -98,7 +107,7 @@ def sources_for_inputs(*inputs: str) -> list[dict[str, Any]]:
     registry = load_source_registry()
     result: list[dict[str, Any]] = []
     for source in registry.get("sources", []):
-        source_inputs = set(source.get("inputs", []))
+        source_inputs = set(_string_list(source.get("inputs")))
         if wanted & source_inputs:
             result.append(source)
     return result

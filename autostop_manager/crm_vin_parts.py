@@ -9,6 +9,7 @@ from .config import PROJECT_ROOT
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import decode_vehicle_identity
 from .vin_lookup import build_lookup_plan
+from .storage import _string_list
 
 VIN_OEM_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 PROCUREMENT_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "procurement_price_sources.json"
@@ -18,15 +19,94 @@ PLAYBOOK_PATH = "docs/agent/crm_vin_oem_parts_lookup_playbook.md"
 @lru_cache(maxsize=1)
 def _load_vin_oem_sources() -> dict[str, Any]:
     if not VIN_OEM_SOURCES_PATH.exists():
-        return {"sources": [], "integration_backlog": []}
-    return json.loads(VIN_OEM_SOURCES_PATH.read_text(encoding="utf-8-sig"))
+        return {"sources": [], "integration_backlog": [], "load_error": "vin_oem_sources_missing"}
+    try:
+        payload = json.loads(VIN_OEM_SOURCES_PATH.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        return {
+            "sources": [],
+            "integration_backlog": [],
+            "load_error": "vin_oem_sources_invalid_json",
+            "load_error_detail": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "sources": [],
+            "integration_backlog": [],
+            "load_error": "vin_oem_sources_invalid_structure",
+            "load_error_detail": type(payload).__name__,
+        }
+    sources = payload.get("sources")
+    if not isinstance(sources, list):
+        return {
+            **payload,
+            "sources": [],
+            "integration_backlog": _string_list(payload.get("integration_backlog")),
+            "load_error": "vin_oem_sources_invalid_sources",
+            "load_error_detail": type(sources).__name__,
+        }
+    return {
+        **payload,
+        "sources": [row for row in sources if isinstance(row, dict)],
+        "integration_backlog": _string_list(payload.get("integration_backlog")),
+    }
 
 
 @lru_cache(maxsize=1)
 def _load_procurement_sources() -> dict[str, Any]:
     if not PROCUREMENT_SOURCES_PATH.exists():
-        return {"sources": [], "integration_backlog": []}
-    return json.loads(PROCUREMENT_SOURCES_PATH.read_text(encoding="utf-8-sig"))
+        return {
+            "sources": [],
+            "integration_backlog": [],
+            "crm_vin_oem_parts_pricing_backlog": [],
+            "load_error": "procurement_sources_missing",
+        }
+    try:
+        payload = json.loads(PROCUREMENT_SOURCES_PATH.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        return {
+            "sources": [],
+            "integration_backlog": [],
+            "crm_vin_oem_parts_pricing_backlog": [],
+            "load_error": "procurement_sources_invalid_json",
+            "load_error_detail": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "sources": [],
+            "integration_backlog": [],
+            "crm_vin_oem_parts_pricing_backlog": [],
+            "load_error": "procurement_sources_invalid_structure",
+            "load_error_detail": type(payload).__name__,
+        }
+    sources = payload.get("sources")
+    pricing_backlog = payload.get("crm_vin_oem_parts_pricing_backlog")
+    if not isinstance(sources, list):
+        return {
+            **payload,
+            "sources": [],
+            "integration_backlog": _string_list(payload.get("integration_backlog")),
+            "crm_vin_oem_parts_pricing_backlog": [row for row in pricing_backlog if isinstance(row, dict)]
+            if isinstance(pricing_backlog, list)
+            else [],
+            "load_error": "procurement_sources_invalid_sources",
+            "load_error_detail": type(sources).__name__,
+        }
+    if not isinstance(pricing_backlog, list):
+        return {
+            **payload,
+            "sources": [row for row in sources if isinstance(row, dict)],
+            "integration_backlog": _string_list(payload.get("integration_backlog")),
+            "crm_vin_oem_parts_pricing_backlog": [],
+            "load_error": "procurement_sources_invalid_pricing_backlog",
+            "load_error_detail": type(pricing_backlog).__name__,
+        }
+    return {
+        **payload,
+        "sources": [row for row in sources if isinstance(row, dict)],
+        "integration_backlog": _string_list(payload.get("integration_backlog")),
+        "crm_vin_oem_parts_pricing_backlog": [row for row in pricing_backlog if isinstance(row, dict)],
+    }
 
 
 def _compact(value: str | None) -> str:
@@ -35,7 +115,7 @@ def _compact(value: str | None) -> str:
 
 def _first_present(*values: str | None) -> tuple[str | None, str | None]:
     labels = ["vin", "frame", "body_number"]
-    for label, value in zip(labels, values):
+    for label, value in zip(labels, values, strict=True):
         compact = _compact(value)
         if compact:
             return label, compact
@@ -55,8 +135,8 @@ def _missing_context(context: dict[str, Any]) -> list[str]:
     return missing
 
 
-def _catalog_backlog_candidates(limit: int = 8) -> list[dict[str, Any]]:
-    registry = _load_vin_oem_sources()
+def _catalog_backlog_candidates(limit: int = 8, registry: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    registry = registry or _load_vin_oem_sources()
     rows = []
     for source in registry.get("sources", []):
         if source.get("mvp_priority") or source.get("integration_priority"):
@@ -66,8 +146,8 @@ def _catalog_backlog_candidates(limit: int = 8) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
-def _procurement_backlog_candidates(limit: int = 10) -> list[dict[str, Any]]:
-    registry = _load_procurement_sources()
+def _procurement_backlog_candidates(limit: int = 10, registry: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    registry = registry or _load_procurement_sources()
     rows = list(registry.get("crm_vin_oem_parts_pricing_backlog") or registry.get("sources", []))
     priority = {"high": 0, "medium": 1, "low": 2}
     rows.sort(key=lambda row: priority.get(str(row.get("mvp_priority") or row.get("integration_priority") or "low"), 2))
@@ -87,6 +167,15 @@ def _source_digest(source: dict[str, Any]) -> dict[str, Any]:
         "adapter": source.get("adapter"),
         "acceptance": source.get("acceptance") or source.get("test_vin_checks"),
     }
+
+
+def _registry_warning(name: str, registry: dict[str, Any]) -> str | None:
+    load_error = registry.get("load_error")
+    if not load_error:
+        return None
+    detail = registry.get("load_error_detail")
+    suffix = f" ({detail})" if detail else ""
+    return f"{name}:{load_error}{suffix}"
 
 
 def _crm_note_template() -> str:
@@ -211,6 +300,8 @@ def build_crm_vin_parts_lookup_pipeline(
     lookup_plan = None
     vehicle_identity = None
     provider_plan = None
+    vin_oem_sources = _load_vin_oem_sources()
+    procurement_sources = _load_procurement_sources()
     if identifier:
         lookup_plan = build_lookup_plan(identifier, model_year=model_year, make_hint=make)
         vehicle_identity = decode_vehicle_identity(
@@ -239,6 +330,14 @@ def build_crm_vin_parts_lookup_pipeline(
         "provider_plan": provider_plan,
         "vin_oem_resolution": vin_oem_resolution,
         "manual_writeback_package": _manual_writeback_package(vin_oem_resolution),
+        "source_registry_warnings": [
+            warning
+            for warning in (
+                _registry_warning("vin_oem_sources", vin_oem_sources),
+                _registry_warning("procurement_sources", procurement_sources),
+            )
+            if warning
+        ],
         "pipeline": [
             {
                 "step": "read_crm_card_vehicle_data",
@@ -313,6 +412,8 @@ def build_crm_vin_parts_lookup_pipeline(
             "Do not store raw VIN/client data, supplier secrets, or raw CRM records in durable memory or Git.",
             "Do not place supplier orders or change financial CRM records without a separate explicit owner command.",
         ],
-        "catalog_backlog_candidates": [_source_digest(source) for source in _catalog_backlog_candidates(limit)],
-        "procurement_backlog_candidates": [_source_digest(source) for source in _procurement_backlog_candidates(limit)],
+        "catalog_backlog_candidates": [_source_digest(source) for source in _catalog_backlog_candidates(limit, registry=vin_oem_sources)],
+        "procurement_backlog_candidates": [
+            _source_digest(source) for source in _procurement_backlog_candidates(limit, registry=procurement_sources)
+        ],
     }

@@ -53,13 +53,20 @@ def _normalize_key(value: str | None) -> str:
 def _read_json(path: Path, fallback: Any) -> Any:
     if not path.exists():
         return fallback
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return fallback
+    return payload if isinstance(payload, dict) else fallback
 
 
 @lru_cache(maxsize=1)
 def load_source_catalog() -> dict[str, Any]:
-    return _read_json(SOURCE_CATALOG_PATH, {"sources": [], "source_count": 0})
+    payload = _read_json(SOURCE_CATALOG_PATH, {"sources": [], "source_count": 0})
+    sources = payload.get("sources")
+    if not isinstance(sources, list):
+        return {"sources": [], "source_count": 0}
+    return {**payload, "sources": [source for source in sources if isinstance(source, dict)]}
 
 
 @lru_cache(maxsize=1)
@@ -74,7 +81,11 @@ def load_data_type_source_map() -> dict[str, list[dict[str, Any]]]:
 
 @lru_cache(maxsize=1)
 def load_open_dataset_endpoints() -> dict[str, Any]:
-    return _read_json(OPEN_DATASET_ENDPOINTS_PATH, {"endpoints": []})
+    payload = _read_json(OPEN_DATASET_ENDPOINTS_PATH, {"endpoints": []})
+    endpoints = payload.get("endpoints")
+    if not isinstance(endpoints, list):
+        return {"endpoints": []}
+    return {**payload, "endpoints": [endpoint for endpoint in endpoints if isinstance(endpoint, dict)]}
 
 
 def _source_id(source: dict[str, Any]) -> str:
@@ -91,11 +102,11 @@ def _find_map_values(mapping: dict[str, list[dict[str, Any]]], query: str | None
     normalized = _normalize_key(query)
     for key, values in mapping.items():
         if _normalize_key(key) == normalized:
-            return key, values
+            return key, [value for value in values if isinstance(value, dict)] if isinstance(values, list) else []
     for key, values in mapping.items():
         key_normalized = _normalize_key(key)
         if normalized and (normalized in key_normalized or key_normalized in normalized):
-            return key, values
+            return key, [value for value in values if isinstance(value, dict)] if isinstance(values, list) else []
     return None, []
 
 

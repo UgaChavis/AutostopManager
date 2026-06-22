@@ -6,13 +6,24 @@ from typing import Any
 
 from .config import PROJECT_ROOT
 from .knowledge_base import KNOWLEDGE_MAP_PATH
-from .storage import _now
+from .storage import _now, _string_list
 
 
 TEXT_EXTENSIONS = {".md", ".txt", ".json", ".jsonl", ".csv", ".yaml", ".yml", ".py", ".html", ".css", ".js"}
 DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ods", ".ppt", ".pptx"}
 PRIVATE_PATH_MARKERS = {"private_knowledge", "credentials", "secrets", "cashbox", "generated_invoices", "attachments"}
 RAW_DATA_MARKERS = {"crm", "client", "customer", "email", "mail", "invoice", "payment", "cashbox", "repair_order"}
+
+_DOMAIN_LIST_FIELDS = (
+    "use_when",
+    "aliases",
+    "keywords",
+    "questions",
+    "source_of_truth_files",
+    "primary_files",
+    "reference_files",
+    "required_context",
+)
 
 
 def build_knowledge_intake_plan(
@@ -76,8 +87,8 @@ def _classify_domain(path_text: str, sample: str) -> str:
     best_score = 0
     for domain, route in _load_domains().items():
         values = [domain, route.get("title", "")]
-        values.extend(route.get("aliases") or [])
-        values.extend(route.get("keywords") or [])
+        values.extend(_string_list(route.get("aliases")))
+        values.extend(_string_list(route.get("keywords")))
         score = 0
         for value in values:
             token = str(value).casefold().strip()
@@ -194,10 +205,22 @@ def _load_domains() -> dict[str, Any]:
         return {}
     try:
         payload = json.loads(KNOWLEDGE_MAP_PATH.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
         return {}
     domains = payload.get("domains") or {}
-    return domains if isinstance(domains, dict) else {}
+    if not isinstance(domains, dict):
+        return {}
+    normalized: dict[str, Any] = {}
+    for domain, route in domains.items():
+        if not isinstance(route, dict):
+            continue
+        normalized_route = dict(route)
+        for field in _DOMAIN_LIST_FIELDS:
+            normalized_route[field] = _string_list(normalized_route.get(field))
+        normalized[str(domain)] = normalized_route
+    return normalized
 
 
 def _safe_relative(path: Path, root: Path) -> str | None:

@@ -5,11 +5,7 @@ from datetime import date
 from statistics import median
 from typing import Any
 
-from .config import PROJECT_ROOT
 from .work_pricing_research import collect_public_work_pricing_research
-
-
-LABOR_PRICING_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "labor_pricing_sources.json"
 
 ROUNDING_STEP_RUB = 100
 AUTOSTOP_MARKUP = 1.50

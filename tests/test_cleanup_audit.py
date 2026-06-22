@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import autostop_manager.cleanup_audit as cleanup_audit_module
 from autostop_manager.cleanup_audit import build_cleanup_audit
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -32,6 +33,18 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
     (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
     (root / "autostopcrm-invoice-test.pdf").write_bytes(b"%PDF-1.4")
+    workspace_pdf = root / "out" / "repair-orders" / "sample.pdf"
+    workspace_pdf.parent.mkdir(parents=True, exist_ok=True)
+    workspace_pdf.write_bytes(b"%PDF-1.4")
+    report_md = root / "reports" / "summary.md"
+    report_md.parent.mkdir(parents=True, exist_ok=True)
+    report_md.write_text("# Summary\n", encoding="utf-8")
+    tmp_artifact = root / "tmp" / "scratch" / "sample.txt"
+    tmp_artifact.parent.mkdir(parents=True, exist_ok=True)
+    tmp_artifact.write_text("scratch\n", encoding="utf-8")
+    backup_artifact = root / "data" / "backups" / "autostop_manager.sqlite3.20260519T123129Z.bak"
+    backup_artifact.parent.mkdir(parents=True, exist_ok=True)
+    backup_artifact.write_bytes(b"SQLite 3\x00")
     store = ManagerMemoryStore(root / "data" / "autostop_manager.sqlite3")
     store.initialize()
 
@@ -49,6 +62,7 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     assert {
         "ignored_cache",
         "tracked_pdf_duplicate",
+        "generated_workspace_artifact",
         "unreferenced_agent_doc",
         "untracked_generated_artifact",
     }.issubset(categories)
@@ -69,6 +83,9 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     artifact = next(item for item in result["candidates"] if item["category"] == "untracked_generated_artifact")
     assert artifact["path"] == "autostopcrm-invoice-test.pdf"
     assert artifact["recommended_action"] == "delete"
+    workspace_artifacts = [item for item in result["candidates"] if item["category"] == "generated_workspace_artifact"]
+    assert {item["path"] for item in workspace_artifacts} == {"out", "reports", "tmp", "data/backups"}
+    assert all(item["recommended_action"] == "delete" for item in workspace_artifacts)
 
 
 def test_cleanup_audit_flags_source_pack_overindexed_routes(tmp_path):
@@ -93,3 +110,43 @@ def test_cleanup_audit_flags_source_pack_overindexed_routes(tmp_path):
     assert overindexed
     assert overindexed[0]["path"] == "knowledge_map:parts_sourcing"
     assert overindexed[0]["recommended_action"] == "link_to_knowledge_map"
+
+
+def test_cleanup_audit_handles_invalid_knowledge_map_structure(tmp_path):
+    root = tmp_path / "repo"
+    docs_agent = root / "docs" / "agent"
+    docs_agent.mkdir(parents=True)
+    (docs_agent / "knowledge_map.json").write_text("[]", encoding="utf-8")
+
+    result = build_cleanup_audit(project_root=root, store=ManagerMemoryStore(root / "data.sqlite3"))
+
+    assert result["ok"] is True
+    assert result["summary"]["candidate_count"] == 0
+
+
+def test_cleanup_audit_handles_unreadable_knowledge_annotations(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    docs_agent = root / "docs" / "agent"
+    docs_agent.mkdir(parents=True)
+    (docs_agent / "knowledge_map.json").write_text(
+        '{"domains":{"startup":{"primary_files":["docs/agent/known.md"],"source_of_truth_files":["docs/agent/known.md"]}}}',
+        encoding="utf-8",
+    )
+    (docs_agent / "known.md").write_text("# Known\n", encoding="utf-8")
+    (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
+    annotations_path = docs_agent / "knowledge_annotations.jsonl"
+    annotations_path.write_text("{}", encoding="utf-8")
+
+    original_read_text = cleanup_audit_module.Path.read_text
+
+    def fake_read_text(self, encoding="utf-8-sig", *args, **kwargs):
+        if self == annotations_path:
+            raise OSError("permission denied")
+        return original_read_text(self, encoding=encoding, *args, **kwargs)
+
+    monkeypatch.setattr(cleanup_audit_module.Path, "read_text", fake_read_text)
+
+    result = build_cleanup_audit(project_root=root, store=ManagerMemoryStore(root / "data.sqlite3"))
+
+    assert result["ok"] is True
+    assert any(item["path"] == "docs/agent/unused.md" for item in result["candidates"])

@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .storage import _string_list
 
 SERVICE_MANAGEMENT_SOURCE_PATH = PROJECT_ROOT / "docs" / "agent" / "service_management_sources.json"
 
@@ -20,6 +21,8 @@ AREA_ALIASES: dict[str, set[str]] = {
     "work_pricing": {"work", "labor", "estimate", "pricing", "работы", "стоимость", "смета", "оценка"},
 }
 
+_AREA_LIST_FIELDS = ("source_ids", "required_context", "actions", "crm_tools", "kpis", "memory_rules")
+
 
 def _normalize_key(value: str | None) -> str:
     if not value:
@@ -31,8 +34,27 @@ def _normalize_key(value: str | None) -> str:
 def load_service_management_catalog() -> dict[str, Any]:
     if not SERVICE_MANAGEMENT_SOURCE_PATH.exists():
         return {"sources": [], "areas": {}}
-    with SERVICE_MANAGEMENT_SOURCE_PATH.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        payload = json.loads(SERVICE_MANAGEMENT_SOURCE_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"sources": [], "areas": {}}
+    if not isinstance(payload, dict):
+        return {"sources": [], "areas": {}}
+    sources = payload.get("sources")
+    areas = payload.get("areas")
+    if not isinstance(sources, list):
+        sources = []
+    if not isinstance(areas, dict):
+        areas = {}
+    normalized_areas: dict[str, Any] = {}
+    for name, area_config in areas.items():
+        if not isinstance(area_config, dict):
+            continue
+        normalized_area_config = dict(area_config)
+        for field in _AREA_LIST_FIELDS:
+            normalized_area_config[field] = _string_list(normalized_area_config.get(field))
+        normalized_areas[str(name)] = normalized_area_config
+    return {**payload, "sources": [source for source in sources if isinstance(source, dict)], "areas": normalized_areas}
 
 
 def normalize_area(area: str | None) -> str:
@@ -56,7 +78,8 @@ def _source_index() -> dict[str, dict[str, Any]]:
 def _sources_for_area(area_config: dict[str, Any], city: str, limit: int) -> list[dict[str, Any]]:
     index = _source_index()
     rows: list[dict[str, Any]] = []
-    for position, source_id in enumerate(area_config.get("source_ids", [])):
+    source_ids = _string_list(area_config.get("source_ids"))
+    for position, source_id in enumerate(source_ids):
         source = dict(index.get(source_id, {}))
         if not source:
             continue
@@ -78,7 +101,7 @@ def _sources_for_area(area_config: dict[str, Any], city: str, limit: int) -> lis
 
 def _missing_context(area_config: dict[str, Any], context: dict[str, Any]) -> list[str]:
     missing: list[str] = []
-    for key in area_config.get("required_context", []):
+    for key in _string_list(area_config.get("required_context")):
         if key == "vin_or_chassis" and (context.get("vin") or context.get("chassis")):
             continue
         if key == "crm_board_state":
@@ -171,13 +194,13 @@ def build_service_management_plan(
         "area_input": area,
         "city": city,
         "context": context,
-        "required_context": area_config.get("required_context", []),
+        "required_context": _string_list(area_config.get("required_context")),
         "missing_context": _missing_context(area_config, context),
         "sources": _sources_for_area(area_config, city, limit),
-        "actions": area_config.get("actions", []),
-        "crm_tools": area_config.get("crm_tools", []),
-        "kpis": area_config.get("kpis", []),
-        "memory_rules": area_config.get("memory_rules", []),
+        "actions": _string_list(area_config.get("actions")),
+        "crm_tools": _string_list(area_config.get("crm_tools")),
+        "kpis": _string_list(area_config.get("kpis")),
+        "memory_rules": _string_list(area_config.get("memory_rules")),
         "warnings": warnings,
         "playbook": "docs/agent/krasnoyarsk_service_management_playbook.md",
         "source_catalog": "docs/agent/service_management_sources.json",

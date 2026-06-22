@@ -557,8 +557,10 @@ def _read_catalog_counts(path: Path) -> dict[str, Any]:
         return {"ok": False, "path": str(path), "warnings": ["missing_catalog"]}
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {"ok": False, "path": str(path), "warnings": ["invalid_catalog_json"]}
+    if not isinstance(payload, dict):
+        return {"ok": False, "path": str(path), "warnings": ["invalid_catalog_structure"]}
     family_tools = [
         str(tool)
         for tools in (payload.get("tool_families") or {}).values()
@@ -777,9 +779,10 @@ def _tmp_writable() -> bool:
         with Path("/tmp/autostop-control-report.tmp").open("w", encoding="utf-8") as handle:
             handle.write("ok")
         Path("/tmp/autostop-control-report.tmp").unlink(missing_ok=True)
-        return True
     except OSError:
         return False
+    else:
+        return True
 
 
 def _os_pretty_name() -> str:
@@ -838,21 +841,35 @@ def _proc_memory_summary() -> dict[str, Any]:
 def _classify_ports(ports: dict[str, Any]) -> dict[str, Any]:
     classifications = []
     for listener in ports.get("public_listeners") or []:
-        port = _extract_port(str(listener.get("local_address") or ""))
+        local_address = str(listener.get("local_address") or "")
+        line = str(listener.get("line") or "")
+        port = _extract_port(local_address)
         service = {
             "22": "ssh",
             "80": "http",
             "443": "https",
             "8080": "http_alt",
+            "47895": "amneziawg",
+            "10443": "telegram_relay",
         }.get(port, "unknown")
         if port in {"80", "443"}:
             risk = "expected_public_web"
         elif port == "22":
             risk = "expected_admin_ssh"
+        elif port == "47895":
+            risk = "expected_public_vpn"
+        elif port == "10443":
+            risk = "expected_vpn_telegram_relay"
+        elif port == "2525" and local_address.startswith("172."):
+            service = "smtp_relay_docker_bridge"
+            risk = "expected_docker_bridge_relay"
+        elif line.startswith("udp ") and '("codex"' in line:
+            service = "codex_runtime_udp"
+            risk = "expected_codex_runtime_socket"
         elif port in {"8000", "8001"}:
             risk = "review_crm_internal_port_public"
         elif port == "8080":
-            risk = "review_public_http_alt"
+            risk = "expected_public_http_alt"
         else:
             risk = "review_public_listener"
         classifications.append(
@@ -860,7 +877,7 @@ def _classify_ports(ports: dict[str, Any]) -> dict[str, Any]:
                 "port": port,
                 "service": service,
                 "risk": risk,
-                "local_address": listener.get("local_address"),
+                "local_address": local_address,
             }
         )
     review_count = sum(1 for item in classifications if str(item["risk"]).startswith("review_"))

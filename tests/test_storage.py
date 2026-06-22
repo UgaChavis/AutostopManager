@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from autostop_manager import storage as storage_module
 from autostop_manager.storage import ManagerMemoryStore
 
 
@@ -273,3 +274,32 @@ def test_seed_default_rules_updates_existing_rule(tmp_path):
     rule = next(item for item in context["items"] if item["kind"] == "rule" and item["title"] == "crm-source-of-truth")
     assert rule["rule"] != "stale"
     assert rule["priority"] == 10
+
+
+def test_seed_default_rules_handles_invalid_manager_rules_payload(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    rules_path = root / "docs" / "agent" / "manager_rules.json"
+    rules_path.parent.mkdir(parents=True, exist_ok=True)
+    rules_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", root)
+
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    result = store.seed_default_rules()
+
+    assert result["ok"] is False
+    assert result["error"] == "manager_rules.json invalid_structure"
+    assert result["error_detail"] == "list"
+
+
+def test_today_context_reports_failed_default_rule_seed(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    rules_path = root / "docs" / "agent" / "manager_rules.json"
+    rules_path.parent.mkdir(parents=True, exist_ok=True)
+    rules_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(storage_module, "PROJECT_ROOT", root)
+
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    result = store.today_context()
+
+    assert result["ok"] is True
+    assert result["warnings"] == ["manager_rules_seed_failed: manager_rules.json invalid_structure"]

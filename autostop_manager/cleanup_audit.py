@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .storage import ManagerMemoryStore, _now
+from .storage import ManagerMemoryStore, _now, _string_list
 
 PROTECTED_AGENT_DOCS = {
     "crm_mcp_catalog.json",
@@ -54,6 +54,7 @@ def build_cleanup_audit(
     retained_items: list[CleanupCandidate] = []
     candidates.extend(_ignored_cache_candidates(root))
     candidates.extend(_untracked_generated_artifact_candidates(root))
+    candidates.extend(_workspace_output_tree_candidates(root))
     candidates.extend(_tracked_pdf_duplicate_candidates(root))
     candidates.extend(_unreferenced_agent_doc_candidates(root))
     local_db = _local_db_candidate(memory)
@@ -123,6 +124,29 @@ def _untracked_generated_artifact_candidates(root: Path) -> list[CleanupCandidat
                 recommended_action="delete",
                 requires_approval=True,
                 matched_by="untracked generated business document at project root",
+            )
+        )
+    return candidates
+
+
+def _workspace_output_tree_candidates(root: Path) -> list[CleanupCandidate]:
+    candidates: list[CleanupCandidate] = []
+    for relative_path in ("out", "reports", "tmp", "data/backups"):
+        path = root / relative_path
+        if not path.exists():
+            continue
+        size_bytes = _path_size(path)
+        if size_bytes <= 0:
+            continue
+        candidates.append(
+            CleanupCandidate(
+                category="generated_workspace_artifact",
+                path=relative_path,
+                size_bytes=size_bytes,
+                risk="low",
+                recommended_action="delete",
+                requires_approval=True,
+                matched_by="generated output tree",
             )
         )
     return candidates
@@ -204,11 +228,18 @@ def _source_pack_overindexed_candidates(root: Path) -> list[CleanupCandidate]:
         return []
     try:
         payload = json.loads(map_path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
         return []
     candidates: list[CleanupCandidate] = []
-    for domain, route in (payload.get("domains") or {}).items():
-        primary_files = [str(item) for item in route.get("primary_files", [])]
+    domains = payload.get("domains")
+    if not isinstance(domains, dict):
+        return []
+    for domain, route in domains.items():
+        if not isinstance(route, dict):
+            continue
+        primary_files = _string_list(route.get("primary_files"))
         source_pack_files = [item for item in primary_files if "source_cache" in item.replace("\\", "/")]
         if len(primary_files) >= 25 or len(source_pack_files) >= 20:
             candidates.append(
@@ -231,17 +262,28 @@ def _referenced_agent_paths(root: Path) -> set[str]:
     if map_path.exists():
         try:
             payload = json.loads(map_path.read_text(encoding="utf-8-sig"))
-        except json.JSONDecodeError:
+        except (OSError, UnicodeError, json.JSONDecodeError):
             payload = {}
-        for route in (payload.get("domains") or {}).values():
+        if not isinstance(payload, dict):
+            payload = {}
+        domains = payload.get("domains")
+        if not isinstance(domains, dict):
+            domains = {}
+        for route in domains.values():
+            if not isinstance(route, dict):
+                continue
             for key in ["source_of_truth_files", "primary_files", "reference_files", "optional_runtime_files"]:
-                for raw_path in route.get(key, []):
+                for raw_path in _string_list(route.get(key)):
                     text = str(raw_path).replace("\\", "/")
                     if text.startswith("docs/agent/"):
                         referenced.add(text)
     annotations_path = root / "docs" / "agent" / "knowledge_annotations.jsonl"
     if annotations_path.exists():
-        for line in annotations_path.read_text(encoding="utf-8-sig").splitlines():
+        try:
+            annotations_content = annotations_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            annotations_content = ""
+        for line in annotations_content.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -308,13 +350,14 @@ def _sqlite_table_counts(db_path: Path) -> dict[str, int]:
             )
             """
         ).fetchall()
+    except sqlite3.Error:
+        return {}
+    else:
         counts: dict[str, int] = {}
         for row in rows:
             name = str(row["name"])
             counts[name] = int(conn.execute(f"SELECT COUNT(*) AS count FROM {name}").fetchone()["count"] or 0)
         return counts
-    except sqlite3.Error:
-        return {}
     finally:
         conn.close()
 

@@ -58,6 +58,17 @@ state which render or audit gate was available:
 - The CRM print module owns PrintServiceProfile, template rendering, PDF render,
   preview, export, and print behavior. The manager agent must not replace it
   with a separate PDF/HTML generator for AutoStop documents.
+- Approved practical flow for ready CRM cars, including repeated "ВашАвто /
+  Ваш Авто" requests: identify the live ready cards/repair orders in CRM, export
+  the requested standard documents through the CRM print module, save runtime
+  artifacts under `out/<document-family>-<client-or-scope>-<date>-final/`, render
+  page previews with `pdftoppm`, extract text with `pdftotext`, and deliver the
+  final PDF links in chat only after page count, non-empty pages, line items,
+  totals, and signature/warranty or invoice wording have been checked.
+- For `заказ-наряд` exports, the accepted template behavior is: works/materials
+  tables may continue across pages row-by-row, totals must remain visible, and
+  the warranty/important-terms block may remain on its own forced page when the
+  standard CRM template inserts that break.
 
 ## PDF Invoice Gate
 

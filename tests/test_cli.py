@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager import cli
 
 
@@ -610,3 +612,16 @@ def test_prepare_card_action_cli_outputs_dry_run_contract(capsys):
     assert payload["write_contract"]["expected_updated_at"] == "2026-06-08T10:00:00+07:00"
     assert payload["summary_contract"]["required"] is True
     assert payload["target_fields"] == ["description", "vehicle_profile", "board_summary"]
+
+
+def test_cli_rejects_invalid_json_file_input(tmp_path):
+    board_context = tmp_path / "board_context.json"
+    board_context.write_text("not-json", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="--board-context-json"):
+        cli.main(["crm-health-plan", "--board-context-json", str(board_context)])
+
+
+def test_cli_rejects_invalid_vehicle_identity_json():
+    with pytest.raises(SystemExit, match="--vehicle-identity-json"):
+        cli.main(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки", "--vehicle-identity-json", "[]"])

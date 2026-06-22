@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import autostop_manager.crm_vin_parts as crm_vin_parts
 from autostop_manager.crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledge_base, sync_knowledge_base
 from autostop_manager.storage import ManagerMemoryStore
@@ -141,3 +142,33 @@ def test_command_route_and_annotation_point_to_crm_vin_domain():
     assert "writeback" in " ".join(route["keywords"]).casefold()
     assert "do_not_invent_oem" in annotation["safety_flags"]
     assert "separate_procurement_retail_client_price" in annotation["safety_flags"]
+
+
+def test_pipeline_reports_invalid_source_registry_payloads(tmp_path, monkeypatch):
+    vin_sources_path = tmp_path / "vin_oem_sources.json"
+    procurement_sources_path = tmp_path / "procurement_price_sources.json"
+    vin_sources_path.write_text("[]", encoding="utf-8")
+    procurement_sources_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(crm_vin_parts, "VIN_OEM_SOURCES_PATH", vin_sources_path)
+    monkeypatch.setattr(crm_vin_parts, "PROCUREMENT_SOURCES_PATH", procurement_sources_path)
+    crm_vin_parts._load_vin_oem_sources.cache_clear()
+    crm_vin_parts._load_procurement_sources.cache_clear()
+
+    result = build_crm_vin_parts_lookup_pipeline(
+        card_id="card_123",
+        requested_part="колодки передние",
+        vin="JTEBU3FJX05027767",
+        make="Toyota",
+    )
+
+    assert result["ok"] is True
+    assert any(
+        warning.startswith("vin_oem_sources:vin_oem_sources_invalid_structure")
+        for warning in result["source_registry_warnings"]
+    )
+    assert any(
+        warning.startswith("procurement_sources:procurement_sources_invalid_structure")
+        for warning in result["source_registry_warnings"]
+    )
+    assert result["catalog_backlog_candidates"] == []
+    assert result["procurement_backlog_candidates"] == []

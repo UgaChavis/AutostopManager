@@ -80,8 +80,18 @@ def _normalize_key(value: str | None) -> str:
 def load_fluid_source_catalog() -> dict[str, Any]:
     if not FLUID_SOURCE_PATH.exists():
         return {}
-    with FLUID_SOURCE_PATH.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        payload = json.loads(FLUID_SOURCE_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    selectors = payload.get("lubricant_product_selectors")
+    if selectors is not None and not isinstance(selectors, list):
+        return {k: v for k, v in payload.items() if k != "lubricant_product_selectors"}
+    if isinstance(selectors, list):
+        payload = {**payload, "lubricant_product_selectors": [selector for selector in selectors if isinstance(selector, dict)]}
+    return payload
 
 
 def normalize_unit(unit: str | None) -> str | None:

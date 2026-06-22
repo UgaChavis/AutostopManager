@@ -38,8 +38,29 @@ def load_partsapi_category_index(path: str | Path | None = None) -> dict[str, An
             "categories": [],
             "missing": True,
         }
-    payload = json.loads(index_path.read_text(encoding="utf-8-sig"))
-    categories = payload.get("categories") if isinstance(payload, dict) else None
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {
+            "schema": "PartsApiCategoryIndexV1",
+            "version": 0,
+            "path": str(index_path),
+            "categories": [],
+            "missing": True,
+            "error": "unreadable" if isinstance(exc, OSError) else "invalid_json",
+            "error_detail": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "schema": "PartsApiCategoryIndexV1",
+            "version": 0,
+            "path": str(index_path),
+            "categories": [],
+            "missing": True,
+            "error": "invalid_structure",
+            "error_detail": type(payload).__name__,
+        }
+    categories = payload.get("categories")
     return {
         **payload,
         "path": str(index_path),

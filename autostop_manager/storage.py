@@ -21,6 +21,26 @@ def _json_list(values: list[str] | None) -> str:
     return json.dumps(values or [], ensure_ascii=False)
 
 
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values: list[Any] = [value]
+    elif isinstance(value, dict):
+        return []
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        values = list(value)
+    else:
+        text = str(value).strip()
+        return [text] if text else []
+    result: list[str] = []
+    for item in values:
+        text = str(item).strip()
+        if text:
+            result.append(text)
+    return result
+
+
 def _decode_json(value: str | None, fallback: Any) -> Any:
     if not value:
         return fallback
@@ -93,16 +113,6 @@ def _add_topic(topics: dict[str, dict[str, Any]], name: str, item: dict[str, Any
 
 def _sort_topic_map(topics: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return dict(sorted(topics.items(), key=lambda entry: (-int(entry[1]["count"]), entry[0].casefold())))
-
-
-def _memory_tokens(query: str) -> list[str]:
-    stopwords = {"а", "в", "и", "или", "как", "на", "не", "о", "по", "про", "с", "у", "the", "and", "or"}
-    tokens = []
-    for token in re.findall(r"[\w\-]+", query.casefold(), flags=re.UNICODE):
-        if len(token) < 2 or token in stopwords:
-            continue
-        tokens.append(token)
-    return list(dict.fromkeys(tokens))
 
 
 def _memory_context_queries(task: str) -> list[str]:
@@ -276,15 +286,6 @@ def _unique_memory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         result.append(item)
     return result
-
-
-def _fts_query(tokens: list[str]) -> str:
-    escaped = []
-    for token in tokens:
-        text = token.replace('"', '""').strip()
-        if text:
-            escaped.append(f'"{text}"')
-    return " OR ".join(escaped)
 
 
 def _score_memory_item(item: dict[str, Any], query: str, tokens: list[str]) -> float:
@@ -656,12 +657,40 @@ class ManagerMemoryStore:
         rules_path = PROJECT_ROOT / "docs" / "agent" / "manager_rules.json"
         if not rules_path.exists():
             return {"ok": False, "error": "manager_rules.json not found", "inserted": 0}
-        payload = json.loads(rules_path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(rules_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return {
+                "ok": False,
+                "error": "manager_rules.json invalid_json",
+                "error_detail": str(exc),
+                "inserted": 0,
+                "updated": 0,
+            }
+        if not isinstance(payload, dict):
+            return {
+                "ok": False,
+                "error": "manager_rules.json invalid_structure",
+                "error_detail": type(payload).__name__,
+                "inserted": 0,
+                "updated": 0,
+            }
+        rules = payload.get("rules")
+        if not isinstance(rules, list):
+            return {
+                "ok": False,
+                "error": "manager_rules.json invalid_rules",
+                "error_detail": type(rules).__name__,
+                "inserted": 0,
+                "updated": 0,
+            }
         inserted = 0
         updated = 0
         now = _now()
         with self.connect() as conn:
-            for rule in payload.get("rules", []):
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
                 title = str(rule.get("id") or "").strip()
                 text = str(rule.get("rule") or "").strip()
                 if not title or not text:
@@ -1250,46 +1279,13 @@ class ManagerMemoryStore:
         except sqlite3.OperationalError:
             return
 
-    def _recall_memory_rows(
-        self,
-        conn: sqlite3.Connection,
-        kind: str,
-        table: str,
-        tokens: list[str],
-        *,
-        limit: int,
-    ) -> list[sqlite3.Row]:
-        if not tokens:
-            return []
-        fts_table = "notes_fts" if table == "notes" else "facts_fts"
-        fts_query = _fts_query(tokens)
-        if not fts_query:
-            return []
-        try:
-            rows = conn.execute(
-                f"""
-                SELECT {table}.*, ? AS kind, 25.0 AS fts_score
-                FROM {fts_table}
-                JOIN {table} ON {table}.id = {fts_table}.rowid
-                WHERE {fts_table} MATCH ?
-                    AND {table}.archived_at IS NULL
-                    AND ({table}.expires_at IS NULL OR {table}.expires_at > ?)
-                    AND {table}.id NOT IN (
-                        SELECT supersedes_id FROM {table}
-                        WHERE supersedes_id IS NOT NULL AND archived_at IS NULL
-                    )
-                LIMIT ?
-                """,
-                (kind, fts_query, _now(), limit),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return []
-        return list(rows)
-
     def today_context(self, *, limit: int = 20) -> dict[str, Any]:
         self.initialize()
+        warnings: list[str] = []
         if self._manager_rule_count() == 0:
-            self.seed_default_rules()
+            seed_result = self.seed_default_rules()
+            if not seed_result.get("ok", True):
+                warnings.append(f"manager_rules_seed_failed: {seed_result.get('error', 'unknown')}")
         now = _now()
         limit = max(1, min(limit, 100))
         with self.connect() as conn:
@@ -1360,6 +1356,7 @@ class ManagerMemoryStore:
                 "learn_from_feedback after strong praise, criticism, success, or failure",
                 "manager_journal after important decisions",
             ],
+            "warnings": warnings,
         }
 
     def start_manager_run(

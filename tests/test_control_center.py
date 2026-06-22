@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from autostop_manager import control_center as control_center_module
 from autostop_manager.control_center import (
     REQUIRED_CORE_TOOLS,
     build_control_report,
@@ -70,3 +71,42 @@ def test_env_file_status_reports_key_names_without_values(tmp_path):
     assert status["key_names"] == ["CRM_PASSWORD", "PARTSAPI_KEY"]
     assert "super-secret-value" not in str(status)
     assert "hunter2" not in str(status)
+
+
+def test_read_catalog_counts_handles_invalid_structure(tmp_path, monkeypatch):
+    catalog_path = tmp_path / "manager_mcp_catalog.json"
+    catalog_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(control_center_module, "MANAGER_MCP_CATALOG_PATH", catalog_path)
+
+    result = control_center_module._read_catalog_counts(catalog_path)
+
+    assert result["ok"] is False
+    assert result["warnings"] == ["invalid_catalog_structure"]
+
+
+def test_classify_ports_treats_known_autostop_listeners_as_expected():
+    result = control_center_module._classify_ports(
+        {
+            "ok": True,
+            "public_listeners": [
+                {"local_address": "0.0.0.0:8080"},
+                {"local_address": "0.0.0.0:47895"},
+                {"local_address": "0.0.0.0:10443"},
+                {"local_address": "172.19.0.1:2525"},
+                {
+                    "line": 'udp UNCONN 0 0 0.0.0.0:38166 0.0.0.0:* users:(("codex",pid=2812,fd=33))',
+                    "local_address": "0.0.0.0:38166",
+                },
+            ],
+            "local_listeners": [],
+        }
+    )
+
+    assert result["review_public_count"] == 0
+    assert {item["risk"] for item in result["classifications"]} == {
+        "expected_public_http_alt",
+        "expected_public_vpn",
+        "expected_vpn_telegram_relay",
+        "expected_docker_bridge_relay",
+        "expected_codex_runtime_socket",
+    }

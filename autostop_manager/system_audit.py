@@ -118,11 +118,17 @@ def audit_manager_mcp_catalog(
         }
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {
             "ok": False,
             "path": str(path),
             "warnings": ["manager_mcp_catalog_invalid_json"],
+        }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "path": str(path),
+            "warnings": ["manager_mcp_catalog_invalid_structure"],
         }
 
     all_tools = [str(item) for item in payload.get("all_tools") or []]

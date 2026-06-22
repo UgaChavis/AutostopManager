@@ -476,7 +476,7 @@ def benchmark_vin_parts_lookup(
     benchmark_items: list[dict[str, Any]] = []
     missing_env_names: set[str] = set()
 
-    for index, (item, identity) in enumerate(zip(items, identity_batch.get("results", [])), start=1):
+    for index, (item, identity) in enumerate(zip(items, identity_batch.get("results", []), strict=False), start=1):
         identifier = _item_identifier(item)
         classification = classify_identifier(identifier)
         item_requested_part = _compact(item.get("requested_part")) or requested_part
