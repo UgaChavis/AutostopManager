@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from autostop_manager.vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from autostop_manager.vin_lookup import classify_identifier
 
@@ -48,7 +50,7 @@ def test_decode_vehicle_identity_handles_jdm_frame_without_pretending_it_is_iso_
     )
 
     assert result["identifier"]["kind"] == "market_code"
-    assert result["diagnostics"]["frame_query_hint"] == "MR41S-123456"
+    assert result["diagnostics"]["frame_query_hint"] == "MR4***456"
     assert result["vehicle_profile"]["make"] == "Suzuki"
     assert result["vehicle_profile"]["model"] == "Hustler"
     assert result["vehicle_profile"]["platform"] == "MR41S"
@@ -151,6 +153,25 @@ def test_decode_vehicle_identity_recognizes_honda_es1_frame_pattern():
     )
 
     assert result["identifier"]["kind"] == "market_code"
-    assert result["diagnostics"]["frame_query_hint"] == "ES1-9999999"
+    assert result["diagnostics"]["frame_query_hint"] == "ES1***999"
     assert result["vehicle_profile"]["platform"] == "ES1"
     assert result["confidence_label"] == "high"
+
+
+def test_decode_vehicle_identity_redacts_raw_identifier_and_honors_no_live_vpic(monkeypatch):
+    raw_vin = "JTEBU3FJX05027767"
+
+    def fail_decode(*args, **kwargs):
+        raise AssertionError("vPIC should not be called when live_vpic is false")
+
+    monkeypatch.setattr("autostop_manager.vehicle_identity.decode_vin_vpic", fail_decode)
+    monkeypatch.setattr("autostop_manager.vin_lookup.decode_vin_vpic", fail_decode)
+
+    result = decode_vehicle_identity(raw_vin, live_vpic=False, live_wmi=False)
+    rendered = json.dumps(result, ensure_ascii=False)
+
+    assert raw_vin not in rendered
+    assert result["identifier"]["redacted"]["display"] == "JTE***767"
+    assert result["normalized_query"] == "JTE***767"
+    assert result["privacy"]["raw_identifier_redacted_from_output"] is True
+    assert result["lookup_plan"]["identifier"]["redacted"]["display"] == "JTE***767"

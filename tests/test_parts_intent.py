@@ -79,6 +79,21 @@ def test_normalize_part_intent_recognizes_current_crm_part_phrases():
         assert result["critical_vehicle_fields"]
 
 
+def test_headlight_rule_does_not_misclassify_tow_hitch():
+    result = normalize_part_intent("фаркоп")
+
+    assert result["recognized"] is False
+    assert result["intent_id"] == "unknown"
+
+
+def test_engine_assembly_rule_does_not_catch_engine_related_service_items():
+    for phrase in ["подушка двигателя", "масло двигателя"]:
+        result = normalize_part_intent(phrase)
+
+        assert result["recognized"] is False
+        assert result["intent_id"] == "unknown"
+
+
 def test_injector_washer_is_not_misclassified_as_full_fuel_injector():
     result = normalize_part_intent("шайба форсунки")
 

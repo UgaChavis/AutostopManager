@@ -325,3 +325,85 @@ def test_vin_parts_benchmark_can_attach_oem_resolution(monkeypatch):
     assert result["summary"]["oem_resolution_count"] == 1
     assert result["items"][0]["oem_resolution"]["schema"] == "VinOemResolution"
     assert result["items"][0]["identity"]["ready_for_oem_candidate_lookup"] is True
+
+
+def test_vin_parts_benchmark_counts_raw_identifier_queries_and_canonical_blockers(monkeypatch):
+    raw_identifier = "1HGCM82633A004352"
+
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.decode_vehicle_identities",
+        lambda items, **kwargs: {
+            "ok": True,
+            "count": 1,
+            "high_confidence_count": 1,
+            "medium_confidence_count": 0,
+            "low_confidence_count": 0,
+            "identity_coverage": {},
+            "vpic_batch": {},
+            "results": [
+                {
+                    "confidence": 0.95,
+                    "confidence_label": "high",
+                    "parts_lookup_readiness": {
+                        "ready_for_oem_lookup": True,
+                        "ready_for_oem_candidate_lookup": True,
+                        "ready_for_crm_writeback": True,
+                    },
+                    "vehicle_profile": {"make": "Honda", "model": "Accord", "model_year": 2003},
+                    "diagnostics": {},
+                    "warnings": [],
+                    "conflicts": [],
+                    "required_next_sources": [],
+                    "evidence_sources": [],
+                }
+            ],
+        },
+    )
+
+    def fake_provider_plan(**kwargs):
+        identifier = kwargs["identifier"]
+        return {
+            "live_capability": {},
+            "manual_public_search_queries": [
+                {
+                    "source_id": "raw_query_one",
+                    "role": "manual",
+                    "query": f"{identifier} front brake pads",
+                    "url": f"https://example.test/search?q={identifier}",
+                    "needs": "fitment",
+                },
+                {
+                    "source_id": "raw_query_two",
+                    "role": "manual",
+                    "query": f"Honda Accord {identifier} pads",
+                    "url": "",
+                    "needs": "cross-check",
+                },
+            ],
+            "blockers": [
+                {
+                    "stage": "oem_catalog",
+                    "reason": "missing live catalog credentials",
+                    "missing_env_names": ["PARTSAPI_KEY"],
+                }
+            ],
+        }
+
+    monkeypatch.setattr("autostop_manager.vin_parts_benchmark.build_oem_parts_provider_plan", fake_provider_plan)
+
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": raw_identifier, "requested_part": "передние колодки"}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        include_partsapi_dry_run=False,
+        include_vin17_dry_run=False,
+        include_oem_catalog_dry_run=False,
+    )
+
+    assert result["summary"]["manual_public_search_count"] == 2
+    assert result["summary"]["manual_public_queries_with_raw_identifier_count"] == 2
+    assert result["summary"]["missing_env_names"] == ["PARTSAPI_KEY"]
+    assert result["blockers_by_stage"]["oem_catalog"]["missing_env_names"] == ["PARTSAPI_KEY"]
+    assert all("[REDACTED_IDENTIFIER]" in row["query"] for row in result["items"][0]["manual_public_search"]["queries"])
+    assert raw_identifier not in json.dumps(result, ensure_ascii=False)

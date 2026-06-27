@@ -65,12 +65,9 @@ VENV_PACKAGES = ["mcp", "pytest", "ruff", "pre-commit", "reportlab", "PyMuPDF", 
 SECRET_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
-        r"(sk-[A-Za-z0-9_\-]{12,})",
-        r"(ghp_[A-Za-z0-9_]{12,})",
-        r"([A-Za-z0-9_]*TOKEN[A-Za-z0-9_]*=)[^\s]+",
-        r"([A-Za-z0-9_]*SECRET[A-Za-z0-9_]*=)[^\s]+",
-        r"([A-Za-z0-9_]*PASSWORD[A-Za-z0-9_]*=)[^\s]+",
-        r"([A-Za-z0-9_]*KEY[A-Za-z0-9_]*=)[^\s]+",
+        r"sk-[A-Za-z0-9_\-]{12,}",
+        r"ghp_[A-Za-z0-9_]{12,}",
+        r"(\b(?:[A-Z0-9]+_)*(?:TOKEN|SECRET|PASSWORD|KEY)(?:[0-9]+|_[A-Z0-9]+)*\s*[:=]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s]+)",
     ]
 ]
 
@@ -1289,7 +1286,7 @@ def _redact_text(value: str) -> str:
     redacted = value
     for pattern in SECRET_PATTERNS:
         redacted = pattern.sub(
-            lambda match: f"{match.group(1)}***" if "=" in match.group(0) and match.lastindex else "***",
+            lambda match: f"{match.group(1)}***" if match.lastindex else "***",
             redacted,
         )
     return redacted

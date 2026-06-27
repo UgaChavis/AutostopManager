@@ -22,12 +22,45 @@ AREA_ALIASES: dict[str, set[str]] = {
 }
 
 _AREA_LIST_FIELDS = ("source_ids", "required_context", "actions", "crm_tools", "kpis", "memory_rules")
+_IDENTIFIER_CONTEXT_FIELDS = {"vin", "chassis"}
+_SENSITIVE_CONTEXT_FIELDS = {"client_contact", "repair_orders", "cashbox", "payment_status", "file_path"}
 
 
 def _normalize_key(value: str | None) -> str:
     if not value:
         return ""
     return re.sub(r"[^a-z0-9а-яё]+", "_", value.casefold()).strip("_")
+
+
+def _compact(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _redact_identifier(identifier: str | None) -> dict[str, Any]:
+    normalized = re.sub(r"[^A-Z0-9]", "", str(identifier or "").upper())
+    if not normalized:
+        return {"display": "", "length": 0, "prefix": ""}
+    display = f"{normalized[:2]}***" if len(normalized) <= 6 else f"{normalized[:3]}***{normalized[-3:]}"
+    return {"display": display, "length": len(normalized), "prefix": normalized[:3]}
+
+
+def _public_context(context: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    public: dict[str, Any] = {}
+    redacted_fields: list[str] = []
+    for key, value in context.items():
+        if not _compact(value):
+            public[key] = value
+            continue
+        if key in _IDENTIFIER_CONTEXT_FIELDS:
+            public[key] = _redact_identifier(str(value))["display"]
+            redacted_fields.append(key)
+            continue
+        if key in _SENSITIVE_CONTEXT_FIELDS:
+            public[key] = "<provided:redacted>"
+            redacted_fields.append(key)
+            continue
+        public[key] = value
+    return public, redacted_fields
 
 
 @lru_cache(maxsize=1)
@@ -187,13 +220,14 @@ def build_service_management_plan(
         warnings.append("Part number is missing; search can start by description, but exact OEM or replacement number is safer.")
     if resolved_area == "staff_management":
         warnings.append("Market salary sources are context only; use internal output, quality, and attendance for decisions.")
+    public_context, redacted_context_fields = _public_context(context)
 
     return {
         "ok": True,
         "area": resolved_area,
         "area_input": area,
         "city": city,
-        "context": context,
+        "context": public_context,
         "required_context": _string_list(area_config.get("required_context")),
         "missing_context": _missing_context(area_config, context),
         "sources": _sources_for_area(area_config, city, limit),
@@ -202,6 +236,10 @@ def build_service_management_plan(
         "kpis": _string_list(area_config.get("kpis")),
         "memory_rules": _string_list(area_config.get("memory_rules")),
         "warnings": warnings,
+        "privacy": {
+            "raw_sensitive_context_redacted": bool(redacted_context_fields),
+            "redacted_context_fields": redacted_context_fields,
+        },
         "playbook": "docs/agent/krasnoyarsk_service_management_playbook.md",
         "source_catalog": "docs/agent/service_management_sources.json",
     }

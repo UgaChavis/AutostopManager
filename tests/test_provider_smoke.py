@@ -40,6 +40,16 @@ def test_provider_smoke_live_readonly_missing_env_is_skipped(monkeypatch):
     assert result["no_order_guarantee"] is True
 
 
+def test_provider_smoke_live_readonly_allows_local_rules():
+    report = build_provider_smoke_report(provider="local_platform_rules", mode="live-readonly")
+    result = report["results"][0]
+
+    assert result["provider"] == "local_platform_rules"
+    assert result["configured"] is True
+    assert result["live_readonly_status"] == "ready"
+    assert report["summary"]["blocked_count"] == 0
+
+
 def test_provider_smoke_rejects_unknown_provider():
     report = build_provider_smoke_report(provider="missing_provider", mode="dry-run")
 

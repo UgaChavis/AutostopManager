@@ -61,6 +61,16 @@ def load_partsapi_category_index(path: str | Path | None = None) -> dict[str, An
             "error_detail": type(payload).__name__,
         }
     categories = payload.get("categories")
+    if categories is not None and not isinstance(categories, list):
+        return {
+            "schema": payload.get("schema", "PartsApiCategoryIndexV1"),
+            "version": payload.get("version", 0),
+            "path": str(index_path),
+            "categories": [],
+            "missing": True,
+            "error": "invalid_categories",
+            "error_detail": type(categories).__name__,
+        }
     return {
         **payload,
         "path": str(index_path),

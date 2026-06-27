@@ -44,6 +44,40 @@ def test_memory_review_apply_archives_duplicate_without_deleting(tmp_path):
     assert archived == 1
 
 
+def test_memory_review_apply_reject_cannot_be_replayed_as_archive(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.remember("Duplicate candidate", kind="note")
+    store.remember("Duplicate candidate", kind="note")
+    duplicate = next(item for item in build_memory_review(store)["items"] if item["kind"] == "duplicate")
+
+    rejected = apply_memory_review_item(duplicate["id"], "reject", store=store)
+    replayed = apply_memory_review_item(duplicate["id"], "archive_duplicate", store=store)
+
+    assert rejected["ok"] is True
+    assert replayed["ok"] is False
+    assert replayed["error"] == "memory review item already decided"
+    with store.connect() as conn:
+        archived = conn.execute("SELECT COUNT(*) AS count FROM notes WHERE archived_at IS NOT NULL").fetchone()["count"]
+    assert archived == 0
+
+
+def test_memory_review_archive_duplicate_fails_closed_for_stale_item(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    first = store.remember("Duplicate candidate", kind="note")
+    store.remember("Duplicate candidate", kind="note")
+    duplicate = next(item for item in build_memory_review(store)["items"] if item["kind"] == "duplicate")
+    with store.connect() as conn:
+        conn.execute("UPDATE notes SET archived_at = updated_at WHERE id = ?", (first["id"],))
+
+    result = apply_memory_review_item(duplicate["id"], "archive_duplicate", store=store)
+
+    assert result["ok"] is False
+    assert result["error"] == "duplicate review item is stale"
+    with store.connect() as conn:
+        archived = conn.execute("SELECT COUNT(*) AS count FROM notes WHERE archived_at IS NOT NULL").fetchone()["count"]
+    assert archived == 1
+
+
 def test_memory_review_private_data_validator():
     assert memory_review_payload_has_raw_private_data({"proposal": "email test@example.com"})
     assert not memory_review_payload_has_raw_private_data({"source_ref": "fact:1", "proposal": {"content_included": False}})

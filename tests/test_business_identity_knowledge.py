@@ -22,7 +22,9 @@ def test_probe_routes_ip_requisites_to_private_business_identity(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "business_identity"
-    assert any("business_identity_current.json" in path for path in result["source_of_truth"])
+    assert result["open_first"] == "docs/agent/business_identity_playbook.md"
+    assert any("business_identity_playbook.md" in path for path in result["source_of_truth"])
+    assert any("business_identity_current.json" in path for path in result["optional_runtime_files"])
 
 
 def test_business_identity_search_returns_public_route_when_private_runtime_files_are_missing(tmp_path):

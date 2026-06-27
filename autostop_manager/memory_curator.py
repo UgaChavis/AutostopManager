@@ -47,7 +47,8 @@ def audit_memory(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
                     {
                         "kind": kind,
                         "ids": [int(item["id"]) for item in group],
-                        "text": _memory_text(group[0])[:240],
+                        "count": len(group),
+                        "content_included": False,
                     }
                 )
 
@@ -73,6 +74,10 @@ def audit_memory(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
         "duplicates": duplicates,
         "expired": expired,
         "superseded": superseded,
+        "privacy": {
+            "content_preview_included": False,
+            "raw_private_data_redacted": True,
+        },
         "warnings": warnings,
         "checked_at": now,
     }
@@ -127,9 +132,8 @@ def _compact_memory(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": row.get("kind"),
         "id": int(row["id"]),
-        "title": row.get("title", ""),
-        "content": str(row.get("content") or "")[:240],
         "expires_at": row.get("expires_at"),
         "supersedes_id": row.get("supersedes_id"),
-        "tags": row.get("tags", []),
+        "tag_count": len(row.get("tags", []) or []),
+        "content_included": False,
     }

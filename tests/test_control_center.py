@@ -54,11 +54,17 @@ def test_control_report_schema_and_markdown(tmp_path):
 
 
 def test_control_report_redacts_secret_like_text():
-    rendered = _redact_text("OPENAI_API_KEY=sk-testsecret123456789 ghp_secretsecretsecret")
+    rendered = _redact_text(
+        'OPENAI_API_KEY=sk-testsecret123456789 ghp_secretsecretsecret CRM_PASSWORD: hunter2 ROSSKO_KEY1: "quoted secret"'
+    )
 
     assert "sk-testsecret" not in rendered
     assert "ghp_secret" not in rendered
+    assert "hunter2" not in rendered
+    assert "quoted secret" not in rendered
     assert "OPENAI_API_KEY=***" in rendered
+    assert "CRM_PASSWORD: ***" in rendered
+    assert "ROSSKO_KEY1: ***" in rendered
 
 
 def test_env_file_status_reports_key_names_without_values(tmp_path):

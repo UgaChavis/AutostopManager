@@ -21,6 +21,9 @@ _LICENSED_STATUSES = {
     "book_purchase_required",
     "standards_purchase_required",
     "paid_training_license_required",
+    "license_dependent",
+    "licensed_or_link_only",
+    "link_or_license_dependent",
 }
 
 _SAFETY_CRITICAL_DATA_TYPES = {
@@ -48,6 +51,26 @@ def _normalize_key(value: str | None) -> str:
     if not value:
         return ""
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _key_tokens(value: str) -> list[str]:
+    return [token for token in _normalize_key(value).split("_") if token]
+
+
+def _token_matches(query_token: str, key_tokens: list[str]) -> bool:
+    if query_token in key_tokens:
+        return True
+    if len(query_token) < 4:
+        return False
+    return any(key_token.startswith(query_token) or query_token.startswith(key_token) for key_token in key_tokens)
+
+
+def _matches_map_key(query: str, key: str) -> bool:
+    query_tokens = _key_tokens(query)
+    key_tokens = _key_tokens(key)
+    if not query_tokens or not key_tokens:
+        return False
+    return all(_token_matches(token, key_tokens) for token in query_tokens)
 
 
 def _read_json(path: Path, fallback: Any) -> Any:
@@ -85,7 +108,17 @@ def load_open_dataset_endpoints() -> dict[str, Any]:
     endpoints = payload.get("endpoints")
     if not isinstance(endpoints, list):
         return {"endpoints": []}
-    return {**payload, "endpoints": [endpoint for endpoint in endpoints if isinstance(endpoint, dict)]}
+    normalized = []
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict):
+            continue
+        row = dict(endpoint)
+        if not row.get("source_id") and row.get("id"):
+            row["source_id"] = row["id"]
+        if not row.get("url") and row.get("url_template"):
+            row["url"] = row["url_template"]
+        normalized.append(row)
+    return {**payload, "endpoints": normalized}
 
 
 def _source_id(source: dict[str, Any]) -> str:
@@ -105,7 +138,7 @@ def _find_map_values(mapping: dict[str, list[dict[str, Any]]], query: str | None
             return key, [value for value in values if isinstance(value, dict)] if isinstance(values, list) else []
     for key, values in mapping.items():
         key_normalized = _normalize_key(key)
-        if normalized and (normalized in key_normalized or key_normalized in normalized):
+        if normalized and _matches_map_key(normalized, key_normalized):
             return key, [value for value in values if isinstance(value, dict)] if isinstance(values, list) else []
     return None, []
 
@@ -204,6 +237,8 @@ def recommend_automotive_sources(
         warnings.append(f"No exact brand route found for {brand}; use multi-brand and official sources.")
     if data_type and not data_type_key:
         warnings.append(f"No exact data-type route found for {data_type}; use repair source playbook.")
+    if not include_licensed and (brand_key or data_type_key) and not rows:
+        warnings.append("No open-only source route remained after licensed or license-dependent sources were filtered.")
     if _normalize_key(data_type) in _SAFETY_CRITICAL_DATA_TYPES:
         warnings.append("Safety-critical route: use OEM or licensed professional sources only.")
 

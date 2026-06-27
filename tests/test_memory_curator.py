@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from autostop_manager.memory_curator import audit_memory, curate_memory
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -44,8 +46,28 @@ def test_memory_audit_finds_duplicates_expired_and_superseded(tmp_path):
 
     assert result["ok"] is True
     assert any(item["ids"] == [first["id"], duplicate["id"]] for item in result["duplicates"])
+    assert all(item["content_included"] is False for item in result["duplicates"])
     assert any(item["id"] == expired["id"] for item in result["expired"])
     assert any(item["id"] == old["id"] and item["superseded_by"] == replacement["id"] for item in result["superseded"])
+    assert result["privacy"]["content_preview_included"] is False
+
+
+def test_memory_audit_does_not_return_raw_private_content(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sensitive = "Client email test@example.com phone +7 999 123-45-67 VIN WBA00000000000000"
+    store.remember(sensitive, kind="fact", title="private")
+    store.remember(sensitive, kind="fact", title="private")
+    store.remember("Temporary token sk-testsecret123456789 expires.", kind="fact", expires_at="2000-01-01T00:00:00+00:00")
+
+    result = audit_memory(store)
+    rendered = json.dumps(result, ensure_ascii=False)
+
+    assert result["duplicates"][0]["content_included"] is False
+    assert result["expired"][0]["content_included"] is False
+    assert "test@example.com" not in rendered
+    assert "+7 999 123-45-67" not in rendered
+    assert "WBA00000000000000" not in rendered
+    assert "sk-testsecret" not in rendered
 
 
 def test_curate_memory_can_mark_duplicates_archived_without_deleting(tmp_path):

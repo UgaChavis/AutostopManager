@@ -76,6 +76,108 @@ def _normalize_key(value: str | None) -> str:
     return re.sub(r"[^a-z0-9а-яё]+", "_", value.casefold()).strip("_")
 
 
+def _compact(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _redact_identifier(identifier: str | None) -> dict[str, Any]:
+    normalized = re.sub(r"[^A-Z0-9]", "", str(identifier or "").upper())
+    if not normalized:
+        return {"display": "", "length": 0, "prefix": ""}
+    if len(normalized) <= 6:
+        display = f"{normalized[:2]}***"
+    else:
+        display = f"{normalized[:3]}***{normalized[-3:]}"
+    return {"display": display, "length": len(normalized), "prefix": normalized[:3]}
+
+
+def _public_vehicle_context(
+    *,
+    vin: str | None,
+    chassis: str | None,
+    market: str | None,
+    year: int | None,
+    brand: str | None,
+    model: str | None,
+    engine_code: str | None,
+    transmission_code: str | None,
+    drivetrain: str | None,
+    service_operation: str | None,
+    unit_variant: str | None,
+    fluid_spec: str | None,
+    level_check_procedure: str | None,
+) -> dict[str, Any]:
+    identifier_source = "vin" if _compact(vin) else "chassis" if _compact(chassis) else None
+    identifier = _compact(vin) or _compact(chassis)
+    redacted_identifier = _redact_identifier(identifier)["display"]
+    return {
+        "vin": redacted_identifier if _compact(vin) else "",
+        "chassis": redacted_identifier if _compact(chassis) else "",
+        "identifier": {
+            "source": identifier_source,
+            "redacted": _redact_identifier(identifier),
+            "raw_identifier_is_sensitive": bool(identifier),
+        },
+        "market": market,
+        "year": year,
+        "brand": brand,
+        "model": model,
+        "engine_code": engine_code,
+        "transmission_code": transmission_code,
+        "drivetrain": drivetrain,
+        "service_operation": service_operation,
+        "unit_variant": unit_variant,
+        "fluid_spec": fluid_spec,
+        "level_check_procedure": level_check_procedure,
+    }
+
+
+def _requirement_is_satisfied(requirement: str, context_values: dict[str, bool]) -> bool:
+    text = requirement.casefold()
+    if "vin/chassis or exact model" in text:
+        return context_values["VIN/chassis"] or context_values["exact_model"]
+    if "vin/chassis" in text:
+        return context_values["VIN/chassis"]
+    if "market" in text:
+        return context_values["market"]
+    if "year" in text:
+        return context_values["year"]
+    if "make" in text:
+        return context_values["make"]
+    if "model" in text:
+        return context_values["model"]
+    if "engine_code" in text or "engine code" in text:
+        return context_values["engine_code"]
+    if "transmission_code" in text or "transmission code" in text:
+        return context_values["transmission_code"]
+    if "drivetrain" in text:
+        return context_values["drivetrain"]
+    if "service operation" in text or "service type" in text:
+        return context_values["service_operation"]
+    if "level-check" in text:
+        return context_values["level_check_procedure"]
+    if "fluid generation/spec" in text or "dot/oem spec" in text:
+        return context_values["fluid_spec"]
+    unit_variant_markers = (
+        "wet/dry clutch type",
+        "mechatronic/clutch oil distinction",
+        "transfer_case_code",
+        "axle code",
+        "lsd/open differential",
+        "center differential type",
+        "coupling generation",
+        "filter presence",
+        "steering system type",
+        "abs/esc system",
+        "hybrid/ev loop distinction",
+    )
+    if any(marker in text for marker in unit_variant_markers):
+        return context_values["unit_variant"]
+    if text.strip() == "unit":
+        return context_values["unit"]
+    return False
+
+
 @lru_cache(maxsize=1)
 def load_fluid_source_catalog() -> dict[str, Any]:
     if not FLUID_SOURCE_PATH.exists():
@@ -152,6 +254,10 @@ def build_fluid_maintenance_plan(
     transmission_code: str | None = None,
     drivetrain: str | None = None,
     market: str | None = None,
+    service_operation: str | None = None,
+    unit_variant: str | None = None,
+    fluid_spec: str | None = None,
+    level_check_procedure: str | None = None,
     include_licensed: bool = True,
     limit: int = 10,
 ) -> dict[str, Any]:
@@ -174,6 +280,7 @@ def build_fluid_maintenance_plan(
     missing_context: list[str] = []
     context_values = {
         "VIN/chassis": bool(vin or chassis),
+        "exact_model": bool(brand and model and year is not None),
         "market": bool(market),
         "year": year is not None,
         "make": bool(brand),
@@ -181,36 +288,39 @@ def build_fluid_maintenance_plan(
         "engine_code": bool(engine_code),
         "transmission_code": bool(transmission_code),
         "drivetrain": bool(drivetrain),
+        "service_operation": bool(service_operation),
+        "unit_variant": bool(unit_variant),
+        "fluid_spec": bool(fluid_spec),
+        "level_check_procedure": bool(level_check_procedure),
         "unit": bool(canonical_unit),
     }
     for requirement in required_inputs:
-        token = requirement.split()[0].split("/")[0].strip(",").casefold()
-        if token in {"vin", "vin/chassis"} and not context_values["VIN/chassis"]:
-            missing_context.append(requirement)
-        elif token == "market" and not market:
-            missing_context.append(requirement)
-        elif token == "year" and year is None:
-            missing_context.append(requirement)
-        elif token == "engine_code" and not engine_code:
-            missing_context.append(requirement)
-        elif token == "transmission_code" and not transmission_code:
-            missing_context.append(requirement)
-        elif token == "drivetrain" and not drivetrain:
+        if not _requirement_is_satisfied(requirement, context_values):
             missing_context.append(requirement)
 
+    identifier = _compact(vin) or _compact(chassis)
     return {
         "ok": True,
-        "vehicle_context": {
-            "vin": vin,
-            "chassis": chassis,
-            "market": market,
-            "year": year,
-            "brand": brand,
-            "model": model,
-            "engine_code": engine_code,
-            "transmission_code": transmission_code,
-            "drivetrain": drivetrain,
+        "privacy": {
+            "raw_identifier_is_sensitive": bool(identifier),
+            "raw_identifier_redacted_from_output": True,
+            "secret_exposed": False,
         },
+        "vehicle_context": _public_vehicle_context(
+            vin=vin,
+            chassis=chassis,
+            market=market,
+            year=year,
+            brand=brand,
+            model=model,
+            engine_code=engine_code,
+            transmission_code=transmission_code,
+            drivetrain=drivetrain,
+            service_operation=service_operation,
+            unit_variant=unit_variant,
+            fluid_spec=fluid_spec,
+            level_check_procedure=level_check_procedure,
+        ),
         "unit": canonical_unit,
         "unit_input": unit,
         "required_inputs": required_inputs,

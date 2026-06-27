@@ -33,6 +33,7 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
     (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
     (root / "autostopcrm-invoice-test.pdf").write_bytes(b"%PDF-1.4")
+    (root / "Заказ-наряд 246 ВашАвто Mercedes E200.pdf").write_bytes(b"%PDF-1.4")
     workspace_pdf = root / "out" / "repair-orders" / "sample.pdf"
     workspace_pdf.parent.mkdir(parents=True, exist_ok=True)
     workspace_pdf.write_bytes(b"%PDF-1.4")
@@ -50,7 +51,7 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
 
     with patch(
         "autostop_manager.cleanup_audit._git_untracked_paths",
-        return_value=["autostopcrm-invoice-test.pdf"],
+        return_value=["autostopcrm-invoice-test.pdf", "Заказ-наряд 246 ВашАвто Mercedes E200.pdf"],
     ):
         result = build_cleanup_audit(
             project_root=root,
@@ -80,9 +81,12 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     assert all(item["recommended_action"] in allowed_actions for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/reference_only.md" for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/partsapi_category_index.json" for item in result["candidates"])
-    artifact = next(item for item in result["candidates"] if item["category"] == "untracked_generated_artifact")
-    assert artifact["path"] == "autostopcrm-invoice-test.pdf"
-    assert artifact["recommended_action"] == "delete"
+    generated_artifacts = [item for item in result["candidates"] if item["category"] == "untracked_generated_artifact"]
+    assert {item["path"] for item in generated_artifacts} == {
+        "autostopcrm-invoice-test.pdf",
+        "Заказ-наряд 246 ВашАвто Mercedes E200.pdf",
+    }
+    assert all(item["recommended_action"] == "delete" for item in generated_artifacts)
     workspace_artifacts = [item for item in result["candidates"] if item["category"] == "generated_workspace_artifact"]
     assert {item["path"] for item in workspace_artifacts} == {"out", "reports", "tmp", "data/backups"}
     assert all(item["recommended_action"] == "delete" for item in workspace_artifacts)

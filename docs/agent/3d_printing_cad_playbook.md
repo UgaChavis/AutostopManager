@@ -132,6 +132,23 @@ Automation option after explicit owner approval:
 
 ## Local Commands
 
+Linux/Codex runtime:
+
+```bash
+test -n "$AUTOSTOP_3D_WORKSPACE" || { echo "Set AUTOSTOP_3D_WORKSPACE first." >&2; exit 1; }
+cd "$AUTOSTOP_3D_WORKSPACE"
+.venv/bin/python scripts/cad.py check
+.venv/bin/python scripts/cad.py list
+.venv/bin/python scripts/cad.py build calibration
+.venv/bin/python scripts/cad.py validate calibration
+.venv/bin/python scripts/print_knowledge.py search "printed threads PLA clearance"
+.venv/bin/python scripts/cad.py measurements summarize
+.venv/bin/python scripts/printer_connect.py inspect-local
+.venv/bin/python scripts/printer_connect.py scan --subnet 192.168.0.0/24
+```
+
+Windows/PowerShell workspace:
+
 ```powershell
 if (-not $env:AUTOSTOP_3D_WORKSPACE) { throw "Set AUTOSTOP_3D_WORKSPACE first." }
 Set-Location -LiteralPath $env:AUTOSTOP_3D_WORKSPACE

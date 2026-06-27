@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from autostop_manager.work_pricing import estimate_repair_work_cost
 
 
@@ -172,3 +174,86 @@ def test_related_operations_return_overlap_adjustments():
 
     assert result["overlap_adjustments"]
     assert any(item["type"] == "possible_included_remove_install" for item in result["overlap_adjustments"])
+
+
+def test_work_pricing_redacts_raw_vehicle_identifiers_from_output_and_research(monkeypatch):
+    raw_vin = "WBA00000000000000"
+    raw_chassis = "ES19999999"
+    captured = {}
+
+    def fake_research(**kwargs):
+        captured["vehicle_context"] = kwargs["vehicle_context"]
+        return {
+            "enabled": True,
+            "policy": kwargs["labor_time_policy"],
+            "access_mode": "public_web_only",
+            "search_queries": {"labor_prices": [], "labor_times": []},
+            "quotes": [],
+            "labor_time_sample": [],
+            "sources_checked": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("autostop_manager.work_pricing.collect_public_work_pricing_research", fake_research)
+
+    result = estimate_repair_work_cost(
+        vehicle=f"BMW X5 {raw_vin}",
+        vin=raw_vin,
+        chassis=raw_chassis,
+        work_items=["замена рулевой рейки"],
+    )
+
+    rendered = json.dumps(result, ensure_ascii=False)
+    research_context = json.dumps(captured["vehicle_context"], ensure_ascii=False)
+
+    assert raw_vin not in rendered
+    assert raw_chassis not in rendered
+    assert raw_vin not in research_context
+    assert raw_chassis not in research_context
+    assert result["vehicle_context"]["vin"] == "WBA***000"
+    assert result["vehicle_context"]["chassis"] == "ES1***999"
+    assert result["privacy"]["raw_vehicle_identifier_redacted_from_output"] is True
+
+
+def test_price_fallback_is_used_when_price_rub_is_empty():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена свечей"],
+        quotes_json=[
+            {**_quote("sto-a", 0, operation="замена свечей"), "price_rub": None, "price": 3000},
+            {**_quote("sto-b", 0, operation="замена свечей"), "price_rub": None, "price": 4000},
+            {**_quote("sto-c", 0, operation="замена свечей"), "price_rub": None, "price": 3500},
+        ],
+        auto_research=False,
+    )
+
+    assert result["market_sample"]["valid_count"] == 3
+    assert result["market_sample"]["invalid_count"] == 0
+    assert result["russia_average_rub"] == 3500
+    assert result["autostop_price_rub"] == 5300
+
+
+def test_labor_time_fallback_uses_range_or_norm_hours_when_hours_is_empty():
+    result = estimate_repair_work_cost(
+        vehicle="BMW X5",
+        vin="WBA00000000000000",
+        work_items=["поменять рулевую рейку"],
+        quotes_json={
+            "quotes": [
+                _quote("sto-a", 10000),
+                _quote("sto-b", 11000, city="Красноярск"),
+                _quote("sto-c", 12000, city="Новосибирск"),
+            ],
+            "labor_time_sample": [
+                {**_labor_time("public-time-a", 0), "hours": None, "range_hours": [3.5, 4.0]},
+                {**_labor_time("public-time-b", 0), "labor_hours": None, "norm_hours": "4-5 ч"},
+            ],
+        },
+        auto_research=False,
+    )
+
+    assert result["labor_time_sample"]["valid_count"] == 2
+    assert result["labor_time_sample"]["invalid_count"] == 0
+    assert result["labor_time_range_hours"] == [3.5, 5.0]
+    assert result["labor_time_average_hours"] == 4.12
+    assert result["operation_estimates"][0]["labor_time_analysis"]["average_hours"] == 4.12

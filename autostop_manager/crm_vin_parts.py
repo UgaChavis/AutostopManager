@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -14,6 +15,7 @@ from .storage import _string_list
 VIN_OEM_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 PROCUREMENT_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "procurement_price_sources.json"
 PLAYBOOK_PATH = "docs/agent/crm_vin_oem_parts_lookup_playbook.md"
+RAW_IDENTIFIER_KEYS = {"vin", "frame", "body_number", "chassis_number", "raw", "normalized", "normalized_query"}
 
 
 @lru_cache(maxsize=1)
@@ -111,6 +113,76 @@ def _load_procurement_sources() -> dict[str, Any]:
 
 def _compact(value: str | None) -> str:
     return str(value or "").strip()
+
+
+def _redact_identifier(identifier: str | None) -> dict[str, Any]:
+    normalized = re.sub(r"[^A-Z0-9]", "", str(identifier or "").upper())
+    if not normalized:
+        return {"display": "", "length": 0, "prefix": ""}
+    if len(normalized) <= 6:
+        display = f"{normalized[:2]}***"
+    else:
+        display = f"{normalized[:3]}***{normalized[-3:]}"
+    return {"display": display, "length": len(normalized), "prefix": normalized[:3]}
+
+
+def _identifier_variants(identifier: str | None) -> set[str]:
+    raw = str(identifier or "").strip()
+    if not raw:
+        return set()
+    compact = "".join(raw.split()).upper()
+    normalized = re.sub(r"[^A-Z0-9]", "", compact)
+    return {value for value in {raw, raw.upper(), compact, normalized} if value}
+
+
+def _redact_identifier_text(value: str, identifier: str | None) -> str:
+    text = str(value or "")
+    display = _redact_identifier(identifier)["display"]
+    if not display:
+        return text
+    for variant in sorted(_identifier_variants(identifier), key=len, reverse=True):
+        text = text.replace(variant, display)
+    return text
+
+
+def _safe_identifier_record(value: dict[str, Any], identifier: str | None) -> dict[str, Any]:
+    raw_identifier = identifier or value.get("raw") or value.get("normalized")
+    safe = {
+        key: _redact_identifier_payload(item, raw_identifier)
+        for key, item in value.items()
+        if key not in {"raw", "normalized"}
+    }
+    safe["redacted"] = _redact_identifier(raw_identifier)
+    safe["raw_identifier_is_sensitive"] = bool(raw_identifier)
+    return safe
+
+
+def _redact_identifier_payload(value: Any, identifier: str | None) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "identifier" and isinstance(item, dict):
+                redacted[key] = _safe_identifier_record(item, identifier)
+            elif key in RAW_IDENTIFIER_KEYS:
+                redacted[key] = _redact_identifier_text(str(item or ""), identifier)
+            else:
+                redacted[key] = _redact_identifier_payload(item, identifier)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_identifier_payload(item, identifier) for item in value]
+    if isinstance(value, str):
+        return _redact_identifier_text(value, identifier)
+    return value
+
+
+def _public_context(context: dict[str, Any], *, identifier_source: str | None, identifier: str | None) -> dict[str, Any]:
+    safe = _redact_identifier_payload(context, identifier)
+    safe["identifier"] = {
+        "source": identifier_source,
+        "redacted": _redact_identifier(identifier),
+        "raw_identifier_is_sensitive": bool(identifier),
+    }
+    return safe
 
 
 def _first_present(*values: str | None) -> tuple[str | None, str | None]:
@@ -223,12 +295,22 @@ def _manual_writeback_package(resolution: dict[str, Any] | None) -> dict[str, An
     if not resolution:
         return None
     candidates = [candidate for candidate in resolution.get("oem_candidates", []) if isinstance(candidate, dict)]
-    selected = candidates[0] if candidates else None
+    gate = resolution.get("crm_writeback_gate")
+    gate = gate if isinstance(gate, dict) else {}
+    can_prepare = bool(gate.get("can_prepare_manual_writeback", bool(candidates)))
+    selected_candidate_id = gate.get("selected_candidate_id")
+    selected = None
+    if can_prepare and selected_candidate_id:
+        selected = next((candidate for candidate in candidates if candidate.get("candidate_id") == selected_candidate_id), None)
+    elif can_prepare and candidates:
+        selected = candidates[0]
+    rejected = [candidate for candidate in candidates if candidate is not selected]
     return {
         "write_to_materials_automatically": False,
         "requires_manual_confirmation": True,
+        "can_prepare_manual_writeback": bool(selected),
         "selected_candidate": selected,
-        "rejected_candidates": candidates[1:],
+        "rejected_candidates": rejected,
         "confidence": selected.get("confidence_label") if selected else "blocked",
         "source_evidence": {
             "resolution_status": resolution.get("status"),
@@ -318,18 +400,28 @@ def build_crm_vin_parts_lookup_pipeline(
             city=city,
         )
 
+    public_context = _public_context(context, identifier_source=identifier_source, identifier=identifier)
+    public_lookup_plan = _redact_identifier_payload(lookup_plan, identifier)
+    public_vehicle_identity = _redact_identifier_payload(vehicle_identity, identifier)
+    public_resolution = _redact_identifier_payload(vin_oem_resolution, identifier)
+
     return {
         "ok": True,
         "playbook": PLAYBOOK_PATH,
-        "context": context,
+        "privacy": {
+            "raw_identifier_is_sensitive": bool(identifier),
+            "raw_identifier_redacted_from_output": True,
+            "secret_exposed": False,
+        },
+        "context": public_context,
         "requested_part_profile": part_profile,
         "missing_context": _missing_context(context),
         "identifier_source": identifier_source,
-        "identifier_lookup": lookup_plan,
-        "vehicle_identity": vehicle_identity,
+        "identifier_lookup": public_lookup_plan,
+        "vehicle_identity": public_vehicle_identity,
         "provider_plan": provider_plan,
-        "vin_oem_resolution": vin_oem_resolution,
-        "manual_writeback_package": _manual_writeback_package(vin_oem_resolution),
+        "vin_oem_resolution": public_resolution,
+        "manual_writeback_package": _manual_writeback_package(public_resolution),
         "source_registry_warnings": [
             warning
             for warning in (
@@ -382,9 +474,19 @@ def build_crm_vin_parts_lookup_pipeline(
                 "schema": _quote_matrix_schema(),
             },
             {
+                "step": "prepare_card_write_contract",
+                "manager_tools": ["prepare_crm_card_action"],
+                "checks": [
+                    "expected_updated_at is present before update_card",
+                    "description patch contains quote matrix and source confidence",
+                    "board_summary is <=5 non-empty lines and excludes VIN/client private data",
+                ],
+            },
+            {
                 "step": "write_structured_result_to_crm_card",
                 "crm_tools": ["update_card", "replace_repair_order_materials", "set_card_board_summary"],
                 "rules": [
+                    "apply card description and board_summary writes from prepare_crm_card_action contract",
                     "description gets OEM/replacements/quote matrix/source/confidence",
                     "repair-order materials get selected priced part only",
                     "board_summary stays short and excludes raw VIN/client private data",

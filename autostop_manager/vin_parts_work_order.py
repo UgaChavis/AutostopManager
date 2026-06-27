@@ -188,7 +188,12 @@ def _missing_env_for_stage(blockers: list[dict[str, Any]], stage: str) -> list[s
     names = set()
     for blocker in blockers:
         if blocker.get("stage") == stage:
-            names.update(blocker.get("missing_env") or [])
+            for field in ("missing_env_names", "missing_env"):
+                value = blocker.get(field)
+                if isinstance(value, (list, tuple, set)):
+                    names.update(str(name).strip() for name in value if str(name).strip())
+                elif value not in (None, ""):
+                    names.add(str(value).strip())
     return sorted(names)
 
 
@@ -329,6 +334,8 @@ def build_vin_parts_work_order(
         partsapi_category_index=partsapi_category_index,
     )
     work_items = [_work_order_item(item) for item in benchmark["items"]]
+    count = int(benchmark["summary"].get("count") or 0)
+    full_auto_count = int(benchmark["summary"].get("full_auto_lookup_count") or 0)
     return {
         "ok": True,
         "mode": "read_only_vin_parts_work_order",
@@ -368,8 +375,10 @@ def build_vin_parts_work_order(
             "confirmed_for_manual_crm_writeback_count": sum(1 for item in work_items if item["status"] == "confirmed_for_manual_crm_writeback"),
         },
         "next_decision": (
-            "Configure live OEM catalog and supplier credentials to move from manual-ready work orders to full automated lookup."
-            if benchmark["summary"]["full_auto_lookup_count"] < benchmark["summary"]["count"]
+            "No VIN/frame items supplied; add at least one item before planning OEM and supplier lookup."
+            if count == 0
+            else "Configure live OEM catalog and supplier credentials to move from manual-ready work orders to full automated lookup."
+            if full_auto_count < count
             else "Live automated lookup is ready for every item; execute read-only lookups before CRM writeback."
         ),
         "items": work_items,

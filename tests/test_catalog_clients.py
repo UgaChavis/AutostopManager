@@ -162,6 +162,10 @@ def test_17vin_signed_request_redacts_secret_and_token():
     assert request["ok"] is True
     assert request["secret_exposed"] is False
     assert "mypassword" not in request["redacted_url"]
+    assert "myusername" not in request["redacted_url"]
+    assert "LFMGJE720DS070251" not in request["redacted_url"]
+    assert "vin=LFM***251" in request["redacted_url"]
+    assert "user=my***me" in request["redacted_url"]
     assert "token=***" in request["redacted_url"]
     assert request["url_parameters"] == "/?vin=LFMGJE720DS070251"
 
@@ -187,7 +191,9 @@ def test_partsapi_request_redacts_key(monkeypatch):
 
     assert request["ok"] is True
     assert "secret-key" not in request["redacted_url"]
-    assert "key=%2A%2A%2A" in request["redacted_url"]
+    assert "MR41S123456" not in request["redacted_url"]
+    assert "vin=MR4***456" in request["redacted_url"]
+    assert "key=***" in request["redacted_url"]
     assert "method=VINdecodeOE" in request["redacted_url"]
     assert request["secret_exposed"] is False
 

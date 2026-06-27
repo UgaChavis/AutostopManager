@@ -33,6 +33,17 @@ def test_remember_and_recall(tmp_path):
     assert "content" in result["items"][0]["matched_fields"]
 
 
+def test_remember_clamps_importance_and_confidence(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    created = store.remember("Very important bounded fact", kind="fact", importance=50, confidence=2)
+    recalled = store.recall("Very important", kind="fact")["items"][0]
+
+    assert created["confidence"] == 1.0
+    assert recalled["importance"] == 1.0
+    assert recalled["confidence"] == 1.0
+
+
 def test_recall_filters_and_scores_russian_memory(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 

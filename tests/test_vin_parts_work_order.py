@@ -194,3 +194,11 @@ def test_vin_parts_work_order_uses_oem_resolution_status(monkeypatch):
     assert result["work_order_summary"]["ready_for_live_oem_candidate_lookup_count"] == 1
     assert result["items"][0]["status"] == "ready_for_live_oem_candidate_lookup"
     assert result["items"][0]["next_manual_actions"][0]["code"] == "run_live_get_parts_by_vin"
+
+
+def test_vin_parts_work_order_reports_no_items_next_decision():
+    result = build_vin_parts_work_order([], requested_part="передние колодки", live_vpic=False, use_vpic_batch=False)
+
+    assert result["work_order_summary"]["count"] == 0
+    assert result["benchmark_summary"]["benchmark_status"] == "no_items"
+    assert result["next_decision"] == "No VIN/frame items supplied; add at least one item before planning OEM and supplier lookup."

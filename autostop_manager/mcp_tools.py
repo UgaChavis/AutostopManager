@@ -578,6 +578,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         market: str | None = None,
         source_confidence: float | None = None,
         live_vpic: bool = True,
+        live_wmi: bool = True,
     ) -> dict[str, Any]:
         return decode_vehicle_identity(
             identifier,
@@ -595,6 +596,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             model_year=model_year,
             make_hint=make,
             live_vpic=live_vpic,
+            live_wmi=live_wmi,
         )
 
     @server.tool(
@@ -813,6 +815,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         epc: str | None = None,
         partsapi_part_type: str = "oem",
         partsapi_category: str | None = None,
+        partsapi_category_index_path: str | None = None,
         timeout: float = 20.0,
         max_attempts: int = 1,
         dry_run: bool = False,
@@ -826,6 +829,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             epc=epc,
             partsapi_part_type=partsapi_part_type,
             partsapi_category=partsapi_category,
+            partsapi_category_index_path=partsapi_category_index_path,
             timeout=timeout,
             max_attempts=max_attempts,
             dry_run=dry_run,
@@ -952,12 +956,14 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         use_vpic_batch: bool = True,
         include_partsapi_dry_run: bool = True,
         include_vin17_dry_run: bool = True,
+        include_oem_catalog_dry_run: bool = True,
         live_partsapi_identity: bool = False,
         live_partsapi_oem: bool = False,
         resolve_oem: bool = False,
         max_live_calls: int = 3,
         max_candidates: int = 3,
         partsapi_category_index: str | None = None,
+        partsapi_timeout: float = 20.0,
     ) -> dict[str, Any]:
         return benchmark_vin_parts_lookup(
             items,
@@ -967,12 +973,14 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             use_vpic_batch=use_vpic_batch,
             include_partsapi_dry_run=include_partsapi_dry_run,
             include_vin17_dry_run=include_vin17_dry_run,
+            include_oem_catalog_dry_run=include_oem_catalog_dry_run,
             live_partsapi_identity=live_partsapi_identity,
             live_partsapi_oem=live_partsapi_oem,
             resolve_oem=resolve_oem,
             max_live_calls=max_live_calls,
             max_candidates=max_candidates,
             partsapi_category_index=partsapi_category_index,
+            partsapi_timeout=partsapi_timeout,
         )
 
     @server.tool(
@@ -1048,6 +1056,10 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         transmission_code: str | None = None,
         drivetrain: str | None = None,
         market: str | None = None,
+        service_operation: str | None = None,
+        unit_variant: str | None = None,
+        fluid_spec: str | None = None,
+        level_check_procedure: str | None = None,
         include_licensed: bool = True,
         limit: int = 10,
     ) -> dict[str, Any]:
@@ -1062,6 +1074,10 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             transmission_code=transmission_code,
             drivetrain=drivetrain,
             market=market,
+            service_operation=service_operation,
+            unit_variant=unit_variant,
+            fluid_spec=fluid_spec,
+            level_check_procedure=level_check_procedure,
             include_licensed=include_licensed,
             limit=limit,
         )

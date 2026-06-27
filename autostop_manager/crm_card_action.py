@@ -41,6 +41,9 @@ VEHICLE_PROFILE_META_FIELDS = {
     "data_completion_state",
 }
 
+VIN_LIKE_PATTERN = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)
+PHONE_LIKE_PATTERN = re.compile(r"(?<!\d)(?:\+?\d[\s().-]*){10,15}(?!\d)")
+
 
 def prepare_crm_card_action(
     *,
@@ -128,6 +131,12 @@ def _vehicle_profile_patch_with_preserved_manual_fields(
     if manual_fields:
         result["manual_fields"] = sorted(manual_fields)
 
+    for field_name in sorted(manual_fields):
+        if field_name in result and field_name not in VEHICLE_PROFILE_META_FIELDS:
+            current_value = current_profile.get(field_name)
+            if current_value not in (None, "", [], {}):
+                result.pop(field_name, None)
+
     for field_name in ("autofilled_fields", "tentative_fields"):
         if field_name in result:
             result[field_name] = sorted(set(_string_list(result.get(field_name))) - manual_fields)
@@ -205,6 +214,10 @@ def _risk_flags(
             flags.append("description_contains_deprecated_blocks")
     if board_summary and _has_rich_formatting(board_summary):
         flags.append("board_summary_contains_rich_formatting")
+    if board_summary and _board_summary_line_count(board_summary) > 5:
+        flags.append("board_summary_too_many_lines")
+    if board_summary and _has_private_board_summary_data(board_summary):
+        flags.append("board_summary_contains_private_identifier")
     profile_patch = planned_patch.get("vehicle_profile")
     if isinstance(profile_patch, dict):
         primary_fields = _vehicle_profile_primary_fields(profile_patch)
@@ -220,6 +233,15 @@ def _risk_flags(
 def _has_rich_formatting(value: str) -> bool:
     text = str(value or "")
     return any(marker in text for marker in ("**", "++", "<", ">"))
+
+
+def _board_summary_line_count(value: str) -> int:
+    return sum(1 for line in str(value or "").splitlines() if line.strip())
+
+
+def _has_private_board_summary_data(value: str) -> bool:
+    text = str(value or "")
+    return bool(VIN_LIKE_PATTERN.search(text) or PHONE_LIKE_PATTERN.search(text))
 
 
 def _vehicle_profile_primary_fields(profile: dict[str, Any]) -> list[str]:

@@ -908,13 +908,13 @@
       "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip"
     },
     {
-      "source_id": "nhtsa_tsbs_flat",
-      "name": "NHTSA Technical Service Bulletins System Flat File",
+      "source_id": "nhtsa_tsbs_dataset_page",
+      "name": "NHTSA Manufacturer Communications / TSB Dataset Page",
       "category": "open_government_data",
       "access": "free",
       "priority_score_1_5": 5,
       "legal_ingestion_status": "open_download_allowed",
-      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+      "url": "https://www.nhtsa.gov/nhtsa-datasets-and-apis"
     },
     {
       "source_id": "genesis_techinfo",
@@ -1803,13 +1803,13 @@
       "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip"
     },
     {
-      "source_id": "nhtsa_tsbs_flat",
-      "name": "NHTSA Technical Service Bulletins System Flat File",
+      "source_id": "nhtsa_tsbs_dataset_page",
+      "name": "NHTSA Manufacturer Communications / TSB Dataset Page",
       "category": "open_government_data",
       "access": "free",
       "priority_score_1_5": 5,
       "legal_ingestion_status": "open_download_allowed",
-      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+      "url": "https://www.nhtsa.gov/nhtsa-datasets-and-apis"
     }
   ],
   "remedy": [
@@ -1836,24 +1836,24 @@
   ],
   "summary": [
     {
-      "source_id": "nhtsa_tsbs_flat",
-      "name": "NHTSA Technical Service Bulletins System Flat File",
+      "source_id": "nhtsa_tsbs_recent_zips",
+      "name": "NHTSA Manufacturer Communications / TSB Received ZIPs",
       "category": "open_government_data",
       "access": "free",
       "priority_score_1_5": 5,
       "legal_ingestion_status": "open_download_allowed",
-      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+      "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip"
     }
   ],
   "year_make_model": [
     {
-      "source_id": "nhtsa_tsbs_flat",
-      "name": "NHTSA Technical Service Bulletins System Flat File",
+      "source_id": "nhtsa_tsbs_recent_zips",
+      "name": "NHTSA Manufacturer Communications / TSB Received ZIPs",
       "category": "open_government_data",
       "access": "free",
       "priority_score_1_5": 5,
       "legal_ingestion_status": "open_download_allowed",
-      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+      "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip"
     }
   ],
   "vin_decode": [
@@ -2934,13 +2934,13 @@
       "url": "https://volkswagen.erwin-store.com/"
     },
     {
-      "source_id": "nhtsa_tsbs_flat",
-      "name": "NHTSA manufacturer communications / TSB flat data",
+      "source_id": "nhtsa_tsbs_recent_zips",
+      "name": "NHTSA manufacturer communications / TSB received ZIPs",
       "category": "open_government_data",
       "access": "free",
       "priority_score_1_5": 4,
       "legal_ingestion_status": "open_download_allowed",
-      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip"
+      "url": "https://static.nhtsa.gov/odi/ffdd/tsbs/TSBS_RECEIVED_2025-2026.zip"
     },
     {
       "source_id": "ZF_OIL_CHANGE_PC",

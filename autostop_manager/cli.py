@@ -553,6 +553,10 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_fluids.add_argument("--transmission", dest="transmission_code", default=None)
     maintenance_fluids.add_argument("--drivetrain", default=None)
     maintenance_fluids.add_argument("--market", default=None)
+    maintenance_fluids.add_argument("--service-operation", default=None)
+    maintenance_fluids.add_argument("--unit-variant", default=None)
+    maintenance_fluids.add_argument("--fluid-spec", default=None)
+    maintenance_fluids.add_argument("--level-check-procedure", default=None)
     maintenance_fluids.add_argument("--open-only", action="store_true")
     maintenance_fluids.add_argument("--limit", type=int, default=10)
 
@@ -1063,11 +1067,17 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(raw_orders, list):
                 message = "--repair-orders-json must be a JSON array or connector response object"
                 raise SystemExit(message)
-            selected = select_crm_partsapi_smoke_case(raw_orders, random_seed=args.random_seed)
+            selected = select_crm_partsapi_smoke_case(raw_orders, random_seed=args.random_seed, include_raw_identifier=True)
             if not selected.get("ok"):
                 _print_json(selected)
                 return 0
-            item = selected["selected"]
+            selected_item = selected["selected"]
+            item = {
+                key: value
+                for key, value in selected_item.items()
+                if key not in {"identifier", "raw_identifier", "raw_identifier_is_sensitive"}
+            }
+            item["identifier"] = selected_item.get("raw_identifier")
         elif args.item_json:
             item = _json_dict_arg(args.item_json, option_name="--item-json")
             if not isinstance(item, dict):
@@ -1207,6 +1217,10 @@ def main(argv: list[str] | None = None) -> int:
                 transmission_code=args.transmission_code,
                 drivetrain=args.drivetrain,
                 market=args.market,
+                service_operation=args.service_operation,
+                unit_variant=args.unit_variant,
+                fluid_spec=args.fluid_spec,
+                level_check_procedure=args.level_check_procedure,
                 include_licensed=not args.open_only,
                 limit=args.limit,
             )

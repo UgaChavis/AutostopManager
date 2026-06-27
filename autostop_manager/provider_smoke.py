@@ -15,6 +15,7 @@ READ_ONLY_ACCESS_MODES = {
     "account_or_etp",
     "account_webservice",
     "account_webservice_ip_whitelist",
+    "local_rules",
 }
 
 WRITE_CAPABILITY_MARKERS = {"order", "basket", "checkout", "writeback", "create_order"}

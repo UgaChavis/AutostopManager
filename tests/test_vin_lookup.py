@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from autostop_manager.vin_lookup import build_lookup_plan, classify_identifier
 from autostop_manager.vin_sources import sources_for_make
 
@@ -40,6 +42,43 @@ def test_build_lookup_plan_uses_make_specific_sources(monkeypatch):
     assert "supersessions" in plan
     assert "fitment_confidence" in plan
     assert "missing_context" in plan
+
+
+def test_build_lookup_plan_redacts_raw_identifier_from_public_output(monkeypatch):
+    raw_vin = "JTEBU3FJX05027767"
+
+    def fake_decode_vin_vpic(vin: str, *, model_year: int | None = None, timeout: float = 10.0):
+        return {
+            "ok": True,
+            "source": "NHTSA vPIC",
+            "request_url": f"https://example.test/{vin}",
+            "vin": vin,
+            "vehicle": {"vin": vin, "vehicledescriptor": "JTEBU3FJ*05", "make": "Toyota", "model": "Land Cruiser"},
+        }
+
+    monkeypatch.setattr("autostop_manager.vin_lookup.decode_vin_vpic", fake_decode_vin_vpic)
+
+    plan = build_lookup_plan(raw_vin)
+    rendered = json.dumps(plan, ensure_ascii=False)
+
+    assert raw_vin not in rendered
+    assert plan["identifier"]["redacted"]["display"] == "JTE***767"
+    assert plan["decoded_vehicle"]["vin"] == "JTE***767"
+    assert plan["decoded_vehicle"]["vehicledescriptor"] == "JTE***767"
+    assert all(raw_vin not in route["query"] for route in plan["steps"])
+
+
+def test_build_lookup_plan_honors_no_live_vpic(monkeypatch):
+    def fail_decode(*args, **kwargs):
+        raise AssertionError("vPIC should not be called when live_vpic is false")
+
+    monkeypatch.setattr("autostop_manager.vin_lookup.decode_vin_vpic", fail_decode)
+
+    plan = build_lookup_plan("JTEBU3FJX05027767", make_hint="Toyota", live_vpic=False)
+
+    assert plan["decoded_vehicle"] == {}
+    assert any("vPIC decode skipped" in warning for warning in plan["warnings"])
+    assert plan["steps"]
 
 
 def test_build_lookup_plan_for_frame_number_returns_japan_routes():

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 import re
 from typing import Any
 
 from .catalog_adapters import catalog_provider_status
-from .vin_lookup import build_lookup_plan, classify_identifier, decode_vin_vpic, decode_vins_vpic_batch, decode_wmi_vpic
+from .vin_lookup import (
+    _public_identifier,
+    _redact_identifier,
+    _redact_identifier_payload,
+    build_lookup_plan,
+    classify_identifier,
+    decode_vin_vpic,
+    decode_vins_vpic_batch,
+    decode_wmi_vpic,
+)
 from .vin_sources import load_source_registry
 
 
@@ -691,7 +700,13 @@ def decode_vehicle_identity(
         warnings.append("Identifier is market/JDM-frame-like; do not treat it as a 17-character ISO VIN.")
 
     conflicts = _conflicts(profile, crm, diagnostics)
-    lookup_plan = build_lookup_plan(normalized, model_year=model_year or crm.get("model_year"), make_hint=profile.get("make") or make_hint)
+    lookup_plan = build_lookup_plan(
+        normalized,
+        model_year=model_year or crm.get("model_year"),
+        make_hint=profile.get("make") or make_hint,
+        live_vpic=live_vpic,
+        vpic_result=vpic_result,
+    )
 
     score = max(classification.confidence * 0.25, 0.0)
     if wmi_hint:
@@ -731,12 +746,13 @@ def decode_vehicle_identity(
     if _confidence_label(score) != "high":
         blocking_reasons.append("identity_confidence_below_high")
 
-    return {
+    result = {
         "ok": True,
-        "identifier": asdict(classification),
-        "normalized_query": normalized,
+        "identifier": _public_identifier(classification),
+        "normalized_query": _redact_identifier(normalized)["display"],
         "privacy": {
             "raw_identifier_is_sensitive": True,
+            "raw_identifier_redacted_from_output": True,
             "persistence_rule": "Do not store raw customer VIN/frame in durable memory or Git fixtures.",
         },
         "vehicle_profile": profile,
@@ -767,6 +783,7 @@ def decode_vehicle_identity(
         "lookup_plan": lookup_plan,
         "registry_version": load_source_registry().get("version", 0),
     }
+    return _redact_identifier_payload(result, normalized)
 
 
 def decode_vehicle_identities(items: list[dict[str, Any]], *, live_vpic: bool = True, use_vpic_batch: bool = True) -> dict[str, Any]:

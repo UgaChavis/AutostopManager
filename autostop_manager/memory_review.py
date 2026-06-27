@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from .memory_curator import audit_memory
+from .memory_curator import _normalize_memory_text, audit_memory
 from .storage import ManagerMemoryStore, _decode_json, _now
 
 
@@ -60,12 +60,29 @@ def apply_memory_review_item(
     item = _get_review_item(memory, item_id)
     if item is None:
         return {"ok": False, "error": "memory review item not found", "id": item_id}
+    if item["status"] != "pending":
+        return {
+            "ok": False,
+            "error": "memory review item already decided",
+            "id": item_id,
+            "status": item["status"],
+            "decided_at": item["decided_at"],
+        }
 
     archived_ids: list[int] = []
     if action == "archive_duplicate":
         if item["kind"] != "duplicate":
             return {"ok": False, "error": "archive_duplicate is only allowed for duplicate review items", "id": item_id}
-        archived_ids = _archive_duplicate_refs(memory, item["source_ref"])
+        archive_result = _archive_duplicate_refs(memory, item["source_ref"])
+        if not archive_result["ok"]:
+            return {
+                "ok": False,
+                "error": archive_result["error"],
+                "id": item_id,
+                "source_ref": item["source_ref"],
+                "source_records_deleted": False,
+            }
+        archived_ids = archive_result["archived_ids"]
 
     status = "rejected" if action == "reject" else "accepted"
     decided_at = _now()
@@ -295,11 +312,23 @@ def _row_to_review_item(row: Any) -> dict[str, Any]:
     }
 
 
-def _archive_duplicate_refs(memory: ManagerMemoryStore, source_ref: str) -> list[int]:
+def _archive_duplicate_refs(memory: ManagerMemoryStore, source_ref: str) -> dict[str, Any]:
     kind, ids = _parse_source_ref(source_ref)
     if kind not in {"note", "fact"} or len(ids) < 2:
-        return []
+        return {"ok": False, "error": "invalid duplicate source reference", "archived_ids": []}
     table = "notes" if kind == "note" else "facts"
+    placeholders = ",".join("?" for _ in ids)
+    with memory.connect() as conn:
+        rows = conn.execute(
+            f"SELECT *, ? AS kind FROM {table} WHERE archived_at IS NULL AND id IN ({placeholders})",
+            (kind, *ids),
+        ).fetchall()
+    active_by_id = {int(row["id"]): memory._row_to_dict(row) for row in rows}
+    if any(item_id not in active_by_id for item_id in ids):
+        return {"ok": False, "error": "duplicate review item is stale", "archived_ids": []}
+    normalized = [_normalize_memory_text(active_by_id[item_id]) for item_id in ids]
+    if not normalized[0] or len(set(normalized)) != 1:
+        return {"ok": False, "error": "duplicate review item no longer points to duplicate memories", "archived_ids": []}
     archived_at = _now()
     archive_ids = ids[1:]
     with memory.connect() as conn:
@@ -308,7 +337,7 @@ def _archive_duplicate_refs(memory: ManagerMemoryStore, source_ref: str) -> list
                 f"UPDATE {table} SET archived_at = ?, updated_at = ? WHERE id = ?",
                 (archived_at, archived_at, item_id),
             )
-    return archive_ids
+    return {"ok": True, "error": "", "archived_ids": archive_ids}
 
 
 def _parse_source_ref(source_ref: str) -> tuple[str, list[int]]:

@@ -443,25 +443,29 @@ def build_oem_parts_provider_plan(
 
     blockers: list[dict[str, Any]] = []
     if not live_oem:
+        missing_env = sorted(
+            {
+                name
+                for provider in _providers_for_stage("oem_catalog") + _providers_for_stage("catalog_cross")
+                for name in provider["missing_env_names"]
+            }
+        )
         blockers.append(
             {
                 "stage": "oem_catalog",
                 "reason": "No live VIN/frame-specific OEM catalog API is configured.",
-                "missing_env": sorted(
-                    {
-                        name
-                        for provider in _providers_for_stage("oem_catalog") + _providers_for_stage("catalog_cross")
-                        for name in provider["missing_env_names"]
-                    }
-                ),
+                "missing_env": missing_env,
+                "missing_env_names": missing_env,
             }
         )
     if not live_procurement:
+        missing_env = sorted({name for provider in _providers_for_stage("procurement_price") for name in provider["missing_env_names"]})
         blockers.append(
             {
                 "stage": "procurement_price",
                 "reason": "No live supplier price/stock API is configured.",
-                "missing_env": sorted({name for provider in _providers_for_stage("procurement_price") for name in provider["missing_env_names"]}),
+                "missing_env": missing_env,
+                "missing_env_names": missing_env,
             }
         )
 

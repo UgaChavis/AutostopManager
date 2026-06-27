@@ -104,6 +104,7 @@ def select_crm_partsapi_smoke_case(
     repair_orders: list[dict[str, Any]],
     *,
     random_seed: int = 0,
+    include_raw_identifier: bool = False,
 ) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
     for order in repair_orders:
@@ -135,16 +136,21 @@ def select_crm_partsapi_smoke_case(
     top_score = max(candidate["score"] for candidate in candidates)
     top = [candidate["order"] for candidate in candidates if candidate["score"] == top_score]
     selected = random.Random(random_seed).choice(top)
+    identifier = _item_identifier(selected)
+    selected_item = {
+        "card_id": selected.get("card_id"),
+        "number": selected.get("number"),
+        "vehicle": selected.get("vehicle"),
+        "identifier": _redact_identifier(identifier),
+        "raw_identifier_is_sensitive": True,
+        "requested_part": _item_requested_part(selected),
+    }
+    if include_raw_identifier:
+        selected_item["raw_identifier"] = identifier
     return {
         "ok": True,
         "candidate_count": len(candidates),
-        "selected": {
-            "card_id": selected.get("card_id"),
-            "number": selected.get("number"),
-            "vehicle": selected.get("vehicle"),
-            "identifier": _item_identifier(selected),
-            "requested_part": _item_requested_part(selected),
-        },
+        "selected": selected_item,
     }
 
 

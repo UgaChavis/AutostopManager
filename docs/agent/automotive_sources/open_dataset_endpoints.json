@@ -37,16 +37,16 @@
       "refresh": "daily_or_weekly"
     },
     {
-      "id": "nhtsa_tsbs_flat",
-      "name": "NHTSA TSB Flat File",
-      "url": "http://www-odi.nhtsa.dot.gov/downloads/folders/TSBS/FLAT_TSBS.zip",
-      "format": "zip",
+      "id": "nhtsa_tsbs_dataset_page",
+      "name": "NHTSA Manufacturer Communications / TSB Dataset Page",
+      "url": "https://www.nhtsa.gov/nhtsa-datasets-and-apis",
+      "format": "html_dataset_index",
       "license_or_access": "public",
       "data_types": [
         "technical_service_bulletins",
         "manufacturer_communications"
       ],
-      "refresh": "daily_or_weekly"
+      "refresh": "check_before_ingestion"
     },
     {
       "id": "nhtsa_tsbs_2025_2026",

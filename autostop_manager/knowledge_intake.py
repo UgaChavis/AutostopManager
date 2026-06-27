@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,8 @@ TEXT_EXTENSIONS = {".md", ".txt", ".json", ".jsonl", ".csv", ".yaml", ".yml", ".
 DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ods", ".ppt", ".pptx"}
 PRIVATE_PATH_MARKERS = {"private_knowledge", "credentials", "secrets", "cashbox", "generated_invoices", "attachments"}
 RAW_DATA_MARKERS = {"crm", "client", "customer", "email", "mail", "invoice", "payment", "cashbox", "repair_order"}
+UNSAFE_METADATA_FLAGS = {"outside_project", "private_path", "raw_crm_email_or_finance_risk", "secret_risk"}
+TERM_PATTERN = re.compile(r"[0-9a-zа-яё]+", re.IGNORECASE)
 
 _DOMAIN_LIST_FIELDS = (
     "use_when",
@@ -37,13 +40,12 @@ def build_knowledge_intake_plan(
     resolved = path if path.is_absolute() else root / path
     resolved = resolved.resolve()
     exists = resolved.exists()
-    relative = _safe_relative(resolved, root)
-    path_text = str(relative or resolved)
     safety_flags = _safety_flags(resolved, root=root, exists=exists)
+    path_text = _safe_path_text(resolved, root=root, safety_flags=safety_flags)
     domain = _classify_domain(path_text, _sample_text(resolved, safety_flags=safety_flags))
     source_type = _source_type(resolved)
-    target_updates = _target_updates(domain, source_type, path_text)
-    apply_allowed = exists and not any(flag in safety_flags for flag in {"outside_project", "private_path", "raw_crm_email_or_finance_risk", "secret_risk"})
+    target_updates = _target_updates(domain, source_type, path_text, safety_flags=safety_flags)
+    apply_allowed = exists and not any(flag in safety_flags for flag in UNSAFE_METADATA_FLAGS)
     draft = {
         "ok": apply_allowed or not apply,
         "schema": "KnowledgeIntakeDraft",
@@ -83,6 +85,7 @@ def _classify_domain(path_text: str, sample: str) -> str:
     if "knowledge_map.json" in lower_path or "knowledge_annotations.jsonl" in lower_path:
         return "knowledge_intake"
     haystack = f"{path_text}\n{sample}".casefold()
+    haystack_terms = _terms(haystack)
     best_domain = "knowledge_intake"
     best_score = 0
     for domain, route in _load_domains().items():
@@ -92,7 +95,7 @@ def _classify_domain(path_text: str, sample: str) -> str:
         score = 0
         for value in values:
             token = str(value).casefold().strip()
-            if token and token in haystack:
+            if _matches_route_token(token, haystack, haystack_terms):
                 score += 3 if token == domain else 1
         if score > best_score:
             best_score = score
@@ -117,7 +120,37 @@ def _source_type(path: Path) -> str:
     return "unknown_file"
 
 
-def _target_updates(domain: str, source_type: str, path_text: str) -> list[dict[str, Any]]:
+def _target_updates(
+    domain: str,
+    source_type: str,
+    path_text: str,
+    *,
+    safety_flags: list[str],
+) -> list[dict[str, Any]]:
+    unsafe_flags = [flag for flag in safety_flags if flag in UNSAFE_METADATA_FLAGS]
+    if unsafe_flags:
+        reason = "source path requires review before durable knowledge metadata can reference it"
+        return [
+            {
+                "target": "docs/agent/knowledge_map.json",
+                "domain": domain,
+                "operation": "blocked_pending_safety_review",
+                "review_required": True,
+                "blocked": True,
+                "reason": reason,
+                "safety_flags": unsafe_flags,
+            },
+            {
+                "target": "docs/agent/knowledge_annotations.jsonl",
+                "domain": domain,
+                "operation": "blocked_pending_safety_review",
+                "review_required": True,
+                "blocked": True,
+                "reason": reason,
+                "source_type": source_type,
+                "safety_flags": unsafe_flags,
+            },
+        ]
     return [
         {
             "target": "docs/agent/knowledge_map.json",
@@ -174,7 +207,7 @@ def _safety_flags(path: Path, *, root: Path, exists: bool) -> list[str]:
 
 
 def _sample_text(path: Path, *, safety_flags: list[str]) -> str:
-    if "private_path" in safety_flags or "raw_crm_email_or_finance_risk" in safety_flags or "secret_risk" in safety_flags:
+    if any(flag in safety_flags for flag in UNSAFE_METADATA_FLAGS):
         return ""
     if not path.exists() or path.suffix.casefold() not in TEXT_EXTENSIONS:
         return ""
@@ -228,3 +261,34 @@ def _safe_relative(path: Path, root: Path) -> str | None:
         return str(path.relative_to(root))
     except ValueError:
         return None
+
+
+def _safe_path_text(path: Path, *, root: Path, safety_flags: list[str]) -> str:
+    relative = _safe_relative(path, root)
+    if relative is not None:
+        return relative
+    suffix = path.suffix.casefold()
+    return f"<outside_project>/{_safe_file_label(path.name, suffix=suffix, safety_flags=safety_flags)}"
+
+
+def _safe_file_label(name: str, *, suffix: str, safety_flags: list[str]) -> str:
+    lowered = name.casefold()
+    if "secret_risk" in safety_flags or any(marker in lowered for marker in ["secret", "token", "password", ".env"]):
+        return f"redacted{suffix}"
+    return name or f"unnamed{suffix}"
+
+
+def _terms(text: str) -> list[str]:
+    return TERM_PATTERN.findall(text.casefold())
+
+
+def _matches_route_token(token: str, haystack: str, haystack_terms: list[str]) -> bool:
+    if not token:
+        return False
+    token_terms = _terms(token)
+    if not token_terms:
+        return token in haystack
+    if len(token_terms) == 1:
+        return token_terms[0] in haystack_terms
+    last_start = len(haystack_terms) - len(token_terms)
+    return any(haystack_terms[index : index + len(token_terms)] == token_terms for index in range(last_start + 1))

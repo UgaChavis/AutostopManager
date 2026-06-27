@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+import autostop_manager.knowledge_base as kb
 from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -21,6 +24,92 @@ def test_sync_indexes_domains_documents_and_sections(tmp_path):
     assert "bmw_f15_n63" in result["domains"]
     assert result["missing_files"] == []
     assert set(PRIVATE_RUNTIME_FILES).issubset(set(result["optional_missing_files"]))
+
+
+def test_sync_does_not_index_knowledge_paths_outside_active_root(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    docs_agent = root / "docs" / "agent"
+    docs_agent.mkdir(parents=True)
+    playbook = docs_agent / "safe.md"
+    playbook.write_text("# Safe\n\nSafe route text.\n", encoding="utf-8")
+    outside = tmp_path / "outside-secret.md"
+    outside.write_text("# Outside\n\nLEAKED-PRIVATE-CONTENT-98765\n", encoding="utf-8")
+    knowledge_map = docs_agent / "knowledge_map.json"
+    knowledge_map.write_text(
+        json.dumps(
+            {
+                "domains": {
+                    "safe_domain": {
+                        "title": "Safe domain",
+                        "use_when": ["test"],
+                        "aliases": ["safe"],
+                        "keywords": ["safe"],
+                        "questions": ["safe?"],
+                        "source_of_truth_files": ["docs/agent/safe.md"],
+                        "primary_files": ["docs/agent/safe.md", str(outside), "../outside-secret.md"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "KNOWLEDGE_MAP_PATH", knowledge_map)
+    store = ManagerMemoryStore(root / "memory.sqlite3")
+
+    sync = kb.sync_knowledge_base(store)
+    search = kb.search_knowledge_base(store, "LEAKED-PRIVATE-CONTENT-98765", limit=5)
+    audit = kb.audit_knowledge_base(store)
+
+    assert sync["ok"] is True
+    assert str(outside) in sync["missing_files"]
+    assert "../outside-secret.md" in sync["missing_files"]
+    assert search["items"] == []
+    assert audit["ok"] is False
+    assert str(outside) in audit["missing_files"]
+
+
+def test_sync_fails_closed_on_empty_knowledge_map_without_wiping_existing_index(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    docs_agent = root / "docs" / "agent"
+    docs_agent.mkdir(parents=True)
+    playbook = docs_agent / "safe.md"
+    playbook.write_text("# Safe\n\nSafe route text.\n", encoding="utf-8")
+    knowledge_map = docs_agent / "knowledge_map.json"
+    knowledge_map.write_text(
+        json.dumps(
+            {
+                "domains": {
+                    "safe_domain": {
+                        "title": "Safe domain",
+                        "use_when": ["test"],
+                        "aliases": ["safe"],
+                        "keywords": ["safe"],
+                        "questions": ["safe?"],
+                        "source_of_truth_files": ["docs/agent/safe.md"],
+                        "primary_files": ["docs/agent/safe.md"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "KNOWLEDGE_MAP_PATH", knowledge_map)
+    store = ManagerMemoryStore(root / "memory.sqlite3")
+    first = kb.sync_knowledge_base(store)
+    knowledge_map.write_text(json.dumps({"domains": {}}), encoding="utf-8")
+
+    second = kb.sync_knowledge_base(store)
+    audit = kb.audit_knowledge_base(store)
+
+    with store.connect() as conn:
+        documents = conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()
+
+    assert first["ok"] is True
+    assert second["ok"] is False
+    assert second["error"] == "knowledge_map.json has no valid domains"
+    assert int(documents["count"]) > 0
+    assert audit["ok"] is False
+    assert "knowledge_map_has_no_valid_domains" in audit["warnings"]
 
 
 def test_sync_populates_fast_knowledge_fts_indexes(tmp_path):

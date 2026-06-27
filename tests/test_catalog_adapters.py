@@ -158,6 +158,9 @@ def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeyp
     assert plan["live_capability"]["can_complete_full_auto_lookup_now"] is False
     assert plan["requested_part_profile"]["intent_id"] == "front_brake_pads"
     assert any(blocker["stage"] == "oem_catalog" for blocker in plan["blockers"])
+    oem_blocker = next(blocker for blocker in plan["blockers"] if blocker["stage"] == "oem_catalog")
+    assert oem_blocker["missing_env_names"] == oem_blocker["missing_env"]
+    assert "PARTSAPI_KEY" in oem_blocker["missing_env_names"]
     assert any(step["step"] == "find_oem_candidates" for step in plan["pipeline"])
     assert any(step["step"] == "lookup_public_aftermarket_catalogs" for step in plan["pipeline"])
     assert plan["manual_public_search_queries"]

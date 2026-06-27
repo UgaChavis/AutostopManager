@@ -86,7 +86,7 @@ def build_cleanup_audit(
 
 def _ignored_cache_candidates(root: Path) -> list[CleanupCandidate]:
     candidates: list[CleanupCandidate] = []
-    for cache_path in [root / ".pytest_cache", *sorted(root.rglob("__pycache__"))]:
+    for cache_path in [root / ".pytest_cache", root / ".ruff_cache", *sorted(root.rglob("__pycache__"))]:
         if not cache_path.exists():
             continue
         candidates.append(
@@ -113,7 +113,18 @@ def _untracked_generated_artifact_candidates(root: Path) -> list[CleanupCandidat
         if path.suffix.lower() not in {".html", ".pdf"}:
             continue
         name = path.name.lower()
-        if not (name.startswith("autostopcrm-") or name.startswith("egrul-")):
+        generated_name_markers = (
+            "autostopcrm-",
+            "egrul-",
+            "invoice",
+            "repair-order",
+            "заказ-наряд",
+            "счет",
+            "счёт",
+            "акт",
+            "кп",
+        )
+        if not any(name.startswith(marker) for marker in generated_name_markers):
             continue
         candidates.append(
             CleanupCandidate(

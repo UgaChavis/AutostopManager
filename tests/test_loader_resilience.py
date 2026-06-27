@@ -143,7 +143,7 @@ def test_skill_registry_string_lists_are_normalized(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(module, "KNOWLEDGE_MAP_PATH", knowledge_map_path)
 
-    registry = module.load_skill_registry(skill_root=tmp_path / "missing-skills")
+    registry = module.load_skill_registry(skill_root=tmp_path / "skills")
 
     assert registry["ok"] is True
     assert registry["skills"]

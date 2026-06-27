@@ -8,6 +8,20 @@ from .storage import _now
 
 DEFAULT_OVERLOAD_THRESHOLD = 8
 DONE_STATUSES = {"done", "closed", "completed", "archived", "cancelled", "canceled", "готово", "закрыто"}
+MANAGER_SIGNAL_KEYS = (
+    "overdue",
+    "critical",
+    "missing_manager_data",
+    "ready_unpaid",
+    "inbox",
+    "repair_order_consistency",
+)
+FOCUSED_RESPONSE_SIGNAL_KEYS = {
+    "ready_unpaid_cards": "ready_unpaid",
+    "inbox_triage": "inbox",
+    "missing_manager_data": "missing_manager_data",
+    "repair_order_consistency_audit": "repair_order_consistency",
+}
 
 
 def build_crm_health_plan(
@@ -25,20 +39,30 @@ def build_crm_health_plan(
     review = _unwrap_payload(board_review)
     context = _unwrap_payload(board_context)
     today = _unwrap_payload(today_context)
+    payloads = (review, context, today)
 
     overloaded_columns = _overloaded_columns(
-        _extract_columns(review, context),
+        _extract_columns(*payloads),
         threshold=max(1, overload_threshold),
     )
-    event_noise = _event_noise(_extract_events(review, context, today))
+    event_noise = _event_noise(_extract_events(*payloads))
     stale_tasks = _stale_tasks(_extract_tasks(today), now_dt)
-    suggested_actions = _suggested_actions(overloaded_columns, stale_tasks, event_noise)
+    manager_summary = _extract_manager_summary(*payloads)
+    manager_signals = _extract_manager_signals(*payloads)
+    suggested_actions = _suggested_actions(
+        overloaded_columns,
+        stale_tasks,
+        event_noise,
+        manager_signals,
+    )
 
     return {
         "ok": True,
         "mode": "read_only",
         "generated_at": generated_at,
         "overload_threshold": max(1, overload_threshold),
+        "manager_summary": manager_summary,
+        "manager_signals": manager_signals,
         "overloaded_columns": overloaded_columns,
         "stale_tasks": stale_tasks,
         "event_noise": event_noise,
@@ -69,8 +93,20 @@ def _extract_columns(*payloads: dict[str, Any]) -> list[dict[str, Any]]:
         for raw_column in _column_sources(payload):
             if not isinstance(raw_column, dict):
                 continue
-            column_id = str(raw_column.get("column_id") or raw_column.get("id") or raw_column.get("columnId") or "")
-            label = str(raw_column.get("label") or raw_column.get("name") or raw_column.get("title") or column_id)
+            column_id = str(
+                raw_column.get("column_id")
+                or raw_column.get("id")
+                or raw_column.get("columnId")
+                or raw_column.get("column")
+                or ""
+            )
+            label = str(
+                raw_column.get("label")
+                or raw_column.get("name")
+                or raw_column.get("title")
+                or raw_column.get("column_label")
+                or column_id
+            )
             count = _column_count(raw_column)
             key = (column_id, label)
             if key in seen:
@@ -81,22 +117,28 @@ def _extract_columns(*payloads: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _column_sources(payload: dict[str, Any]) -> list[Any]:
+    sources: list[Any] = []
     if isinstance(payload.get("by_column"), list):
-        return list(payload["by_column"])
+        sources.extend(payload["by_column"])
     if isinstance(payload.get("columns"), list):
-        return list(payload["columns"])
+        sources.extend(payload["columns"])
     if isinstance(payload.get("column_counts"), list):
-        return list(payload["column_counts"])
+        sources.extend(payload["column_counts"])
     if isinstance(payload.get("column_counts"), dict):
-        return [
+        sources.extend(
             {"column_id": key, "label": key, "count": value}
             for key, value in payload["column_counts"].items()
-        ]
-    return []
+        )
+    if isinstance(payload.get("overloaded_columns"), list):
+        sources.extend(payload["overloaded_columns"])
+    sections = payload.get("sections")
+    if isinstance(sections, dict) and isinstance(sections.get("overloaded_columns"), list):
+        sources.extend(sections["overloaded_columns"])
+    return sources
 
 
 def _column_count(column: dict[str, Any]) -> int:
-    for key in ("count", "card_count", "cards_count", "total"):
+    for key in ("count", "card_count", "cards_count", "total", "active_cards"):
         value = column.get(key)
         if isinstance(value, int):
             return value
@@ -120,6 +162,81 @@ def _overloaded_columns(columns: list[dict[str, Any]], *, threshold: int) -> lis
             }
         )
     return overloaded
+
+
+def _extract_manager_summary(*payloads: dict[str, Any]) -> dict[str, Any]:
+    for payload in payloads:
+        summary = payload.get("summary")
+        if not isinstance(summary, dict):
+            continue
+        meta = payload.get("meta")
+        response_mode = meta.get("response_mode") if isinstance(meta, dict) else None
+        if response_mode == "manager_board_scan" or _has_manager_sections(payload):
+            return dict(summary)
+    return {}
+
+
+def _extract_manager_signals(*payloads: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    signals: dict[str, list[dict[str, Any]]] = {key: [] for key in MANAGER_SIGNAL_KEYS}
+    for payload in payloads:
+        sections = payload.get("sections")
+        if isinstance(sections, dict):
+            for key in MANAGER_SIGNAL_KEYS:
+                _extend_signal_items(signals[key], sections.get(key))
+
+        meta = payload.get("meta")
+        response_mode = meta.get("response_mode") if isinstance(meta, dict) else None
+        signal_key = FOCUSED_RESPONSE_SIGNAL_KEYS.get(str(response_mode or ""))
+        if signal_key:
+            _extend_signal_items(signals[signal_key], payload.get("cards"))
+            _extend_signal_items(signals[signal_key], payload.get("items"))
+
+        for key in MANAGER_SIGNAL_KEYS:
+            _extend_signal_items(signals[key], payload.get(key))
+    return signals
+
+
+def _has_manager_sections(payload: dict[str, Any]) -> bool:
+    sections = payload.get("sections")
+    if not isinstance(sections, dict):
+        return False
+    return any(isinstance(sections.get(key), list) for key in MANAGER_SIGNAL_KEYS)
+
+
+def _extend_signal_items(target: list[dict[str, Any]], value: Any) -> None:
+    if not isinstance(value, list):
+        return
+    seen = {_signal_identity(item) for item in target}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        identity = _signal_identity(item)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        target.append(dict(item))
+
+
+def _signal_identity(item: dict[str, Any]) -> tuple[str, str]:
+    primary = str(
+        item.get("id")
+        or item.get("card_id")
+        or item.get("short_id")
+        or item.get("column")
+        or item.get("column_id")
+        or ""
+    )
+    secondary = str(
+        item.get("code")
+        or item.get("issue")
+        or item.get("reason")
+        or item.get("heading")
+        or item.get("title")
+        or ""
+    )
+    if primary or secondary:
+        return primary, secondary
+    return repr(sorted(item.items())), ""
 
 
 def _extract_events(*payloads: dict[str, Any]) -> list[dict[str, Any]]:
@@ -206,6 +323,7 @@ def _suggested_actions(
     overloaded_columns: list[dict[str, Any]],
     stale_tasks: list[dict[str, Any]],
     event_noise: list[dict[str, Any]],
+    manager_signals: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for column in overloaded_columns:
@@ -224,6 +342,26 @@ def _suggested_actions(
                 "target": task["title"],
                 "action": "refresh_or_close_manager_task_after_owner_confirmation",
                 "requires_owner_approval": True,
+            }
+        )
+    signal_actions = {
+        "overdue": "review_deadline_and_blocker_state_before_timer_changes",
+        "critical": "review_critical_cards_before_any_cleanup_batch",
+        "missing_manager_data": "prepare_missing_manager_data_cleanup_or_board_summary_dry_run",
+        "ready_unpaid": "review_ready_unpaid_cards_and_prepare_followup_dry_run",
+        "inbox": "triage_inbox_cards_before_cleanup_or_client_link_actions",
+        "repair_order_consistency": "audit_repair_order_consistency_before_finance_or_closure_actions",
+    }
+    for category, action in signal_actions.items():
+        count = len(manager_signals.get(category, []))
+        if not count:
+            continue
+        actions.append(
+            {
+                "category": category,
+                "target": f"{count} item{'s' if count != 1 else ''}",
+                "action": action,
+                "requires_owner_approval": False,
             }
         )
     if event_noise:

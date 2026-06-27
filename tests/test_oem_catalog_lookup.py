@@ -37,6 +37,8 @@ def test_parts_catalogs_request_uses_authorization_header_and_redacts_key():
     assert request["url"] == "https://api.parts-catalogs.example/v1/car/info?vin=JTEBU3FJX05027767"
     assert request["headers"]["Authorization"] == "pc-secret"
     assert request["redacted_headers"]["Authorization"] == "***"
+    assert "JTEBU3FJX05027767" not in request["redacted_url"]
+    assert "vin=JTE***767" in request["redacted_url"]
     assert request["secret_exposed"] is False
 
 

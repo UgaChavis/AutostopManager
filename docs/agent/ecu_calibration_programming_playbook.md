@@ -66,6 +66,18 @@ Data indexes:
 
 ## Search Examples
 
+Linux/Codex shell:
+
+```bash
+.venv/bin/python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
+.venv/bin/python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming
+.venv/bin/python -m autostop_manager.cli knowledge-search "BMW I-level VO FA measures plan" --domain ecu_calibration_programming
+.venv/bin/python -m autostop_manager.cli knowledge-search "ECU не отвечает после flash recovery" --domain ecu_calibration_programming
+.venv/bin/python -m autostop_manager.cli knowledge-search "A2L DCM ODX calibration format" --domain ecu_calibration_programming
+```
+
+PowerShell:
+
 ```powershell
 python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
 python -m autostop_manager.cli knowledge-search "KOMBI coding комбинация приборов" --domain ecu_calibration_programming

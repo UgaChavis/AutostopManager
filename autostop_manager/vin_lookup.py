@@ -124,6 +124,57 @@ def normalize_part_number(raw: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", raw.strip().upper())
 
 
+def _redact_identifier(identifier: str | None) -> dict[str, Any]:
+    normalized = re.sub(r"[^A-Z0-9*]", "", str(identifier or "").upper())
+    if not normalized:
+        return {"display": "", "length": 0, "prefix": ""}
+    if len(normalized) <= 6:
+        return {"display": f"{normalized[:2]}***", "length": len(normalized), "prefix": normalized[:2]}
+    return {"display": f"{normalized[:3]}***{normalized[-3:]}", "length": len(normalized), "prefix": normalized[:3]}
+
+
+def _public_identifier(classification: IdentifierClassification) -> dict[str, Any]:
+    return {
+        "redacted": _redact_identifier(classification.normalized or classification.raw),
+        "kind": classification.kind,
+        "market_hint": classification.market_hint,
+        "confidence": classification.confidence,
+        "notes": list(classification.notes),
+        "raw_identifier_is_sensitive": True,
+    }
+
+
+def _redact_identifier_text(value: str, identifier: str | None) -> str:
+    normalized = re.sub(r"[^A-Z0-9*]", "", str(identifier or "").upper())
+    if not normalized:
+        return value
+    display = _redact_identifier(normalized)["display"]
+    redacted = value.replace(normalized, display)
+    if "-" in value:
+        parts = []
+        for split_at in range(3, min(len(normalized), 7)):
+            parts.append(f"{normalized[:split_at]}-{normalized[split_at:]}")
+        for variant in parts:
+            redacted = redacted.replace(variant, display)
+    return redacted
+
+
+def _redact_identifier_payload(value: Any, identifier: str | None) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key).casefold() in {"vin", "vehicledescriptor", "vehicle_descriptor"} and _redact_identifier(identifier)["display"]:
+                redacted[key] = _redact_identifier(identifier)["display"]
+            else:
+                redacted[key] = _redact_identifier_payload(item, identifier)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_identifier_payload(item, identifier) for item in value]
+    if isinstance(value, str):
+        return _redact_identifier_text(value, identifier)
+    return value
+
+
 def classify_identifier(raw: str) -> IdentifierClassification:
     original = raw.strip()
     compact = _compact_text(raw)
@@ -831,6 +882,8 @@ def build_lookup_plan(
     *,
     model_year: int | None = None,
     make_hint: str | None = None,
+    live_vpic: bool = True,
+    vpic_result: dict[str, Any] | None = None,
     part_name: str | None = None,
     part_group: str | None = None,
     side: str | None = None,
@@ -842,9 +895,10 @@ def build_lookup_plan(
     captured_note: str | None = None,
 ) -> dict[str, Any]:
     classification = classify_identifier(raw_identifier)
+    public_query = _redact_identifier(classification.normalized)["display"]
     plan: dict[str, Any] = {
         "ok": True,
-        "identifier": asdict(classification),
+        "identifier": _public_identifier(classification),
         "source_registry_version": load_source_registry().get("version", 0),
         "decoded_vehicle": None,
         "steps": [],
@@ -853,11 +907,16 @@ def build_lookup_plan(
     }
 
     if classification.kind in {"vin", "vin_partial"}:
-        decode = decode_vin_vpic(classification.normalized, model_year=model_year)
-        plan["decoded_vehicle"] = decode.get("vehicle")
+        if vpic_result is not None:
+            decode = vpic_result
+        elif live_vpic:
+            decode = decode_vin_vpic(classification.normalized, model_year=model_year)
+        else:
+            decode = {"ok": False, "vehicle": {}, "error": "vPIC decode skipped because live_vpic is false", "skipped": True}
+        plan["decoded_vehicle"] = _redact_identifier_payload(decode.get("vehicle"), classification.normalized)
         if not decode.get("ok"):
             plan["warnings"].append(decode.get("error", "VIN decode failed"))
-            plan["steps"] = _catalog_steps_for_vin(None, classification.normalized)
+            plan["steps"] = _catalog_steps_for_vin(make_hint, public_query)
             return _finalize_dossier(
                 plan,
                 make_hint=make_hint,
@@ -877,7 +936,7 @@ def build_lookup_plan(
             plan["warnings"].append("vPIC did not return a make; follow the generic catalog route")
         else:
             plan["hints"].append(f"Decoded make: {make}")
-        plan["steps"] = _catalog_steps_for_vin(make, classification.normalized)
+        plan["steps"] = _catalog_steps_for_vin(make, public_query)
         return _finalize_dossier(
             plan,
             make_hint=make_hint,
@@ -896,7 +955,7 @@ def build_lookup_plan(
         plan["warnings"].append(
             "Frame numbers need a market-appropriate catalog route; confirm the brand before trusting the output."
         )
-        plan["steps"] = _catalog_steps_for_frame_number(classification.normalized, make_hint=make_hint)
+        plan["steps"] = _catalog_steps_for_frame_number(public_query, make_hint=make_hint)
         return _finalize_dossier(
             plan,
             make_hint=make_hint,
@@ -913,7 +972,7 @@ def build_lookup_plan(
 
     if classification.kind == "market_code":
         plan["warnings"].append("Market-specific code detected; resolve the vehicle family before OEM lookup.")
-        plan["steps"] = _catalog_steps_for_market_code(classification.normalized, make_hint=make_hint)
+        plan["steps"] = _catalog_steps_for_market_code(public_query, make_hint=make_hint)
         return _finalize_dossier(
             plan,
             make_hint=make_hint,
@@ -930,7 +989,7 @@ def build_lookup_plan(
 
     plan["ok"] = False
     plan["warnings"].append("Could not classify the identifier safely.")
-    plan["steps"] = _catalog_steps_for_market_code(classification.normalized, make_hint=make_hint)
+    plan["steps"] = _catalog_steps_for_market_code(public_query, make_hint=make_hint)
     return _finalize_dossier(
         plan,
         make_hint=make_hint,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import re
 import sqlite3
@@ -116,6 +118,16 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
 
     payload = _load_knowledge_map()
     domains: dict[str, Any] = payload.get("domains", {})
+    if not domains:
+        return {
+            "ok": False,
+            "error": "knowledge_map.json has no valid domains",
+            "documents_indexed": 0,
+            "sections_indexed": 0,
+            "missing_files": [],
+            "optional_missing_files": [],
+            "missing_optional_files": [],
+        }
     now = _now()
     missing: list[str] = []
     optional_missing: list[str] = []
@@ -387,6 +399,25 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
 
     payload = _load_knowledge_map()
     domains: dict[str, Any] = payload.get("domains", {})
+    if not domains:
+        return {
+            "ok": False,
+            "map_path": str(KNOWLEDGE_MAP_PATH),
+            "domain_count": 0,
+            "route_cards_indexed": 0,
+            "documents_indexed": 0,
+            "sections_indexed": 0,
+            "sections_fts_indexed": 0,
+            "annotations_indexed": 0,
+            "annotations_fts_indexed": 0,
+            "missing_files": [],
+            "optional_missing_files": [],
+            "missing_optional_files": [],
+            "domains_without_source_of_truth": [],
+            "domains_without_aliases": [],
+            "warnings": ["knowledge_map_has_no_valid_domains"],
+            "checked_at": _now(),
+        }
     missing_files: list[str] = []
     optional_missing_files: list[str] = []
     domains_without_source_of_truth: list[str] = []
@@ -857,7 +888,6 @@ def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
     reference_files = _unique_strings(_string_list(route.get("reference_files")))
     optional_runtime_files = _optional_runtime_files(route)
     source_of_truth = _unique_strings(_string_list(route.get("source_of_truth_files"))) or primary_files[:3]
-    source_of_truth = _unique_strings([*source_of_truth, *optional_runtime_files])
     aliases = _unique_strings(
         [
             domain,
@@ -957,11 +987,33 @@ def _optional_runtime_files(route: dict[str, Any]) -> list[str]:
     )
 
 
+def _knowledge_root() -> Path:
+    project_root = PROJECT_ROOT.resolve(strict=False)
+    map_path = KNOWLEDGE_MAP_PATH.resolve(strict=False)
+    if map_path == project_root or project_root in map_path.parents:
+        return project_root
+    if len(map_path.parents) >= 3 and map_path.parent.name == "agent" and map_path.parent.parent.name == "docs":
+        return map_path.parents[2]
+    return map_path.parent
+
+
+def _unsafe_path_sentinel(raw_path: str) -> Path:
+    digest = hashlib.sha256(str(raw_path).encode("utf-8", errors="replace")).hexdigest()[:12]
+    return _knowledge_root() / ".invalid_knowledge_path" / digest
+
+
 def _resolve_path(raw_path: str) -> Path:
     path = Path(raw_path)
-    if path.is_absolute():
-        return path
-    return PROJECT_ROOT / path
+    root = _knowledge_root()
+    candidate = path if path.is_absolute() else root / path
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved_root = root.resolve(strict=False)
+    except OSError:
+        return _unsafe_path_sentinel(raw_path)
+    if resolved == resolved_root or resolved_root in resolved.parents:
+        return resolved
+    return _unsafe_path_sentinel(raw_path)
 
 
 def _document_type(path: Path) -> str:
@@ -1022,6 +1074,8 @@ def _parse_sections(content: str, *, document_type: str) -> list[_Section]:
         return _parse_json_sections(content)
     if document_type == "jsonl":
         return _parse_jsonl_sections(content)
+    if document_type == "csv":
+        return _parse_csv_sections(content)
     return [_Section("Document", 1, _clip(content), 0)]
 
 
@@ -1078,14 +1132,39 @@ def _parse_jsonl_sections(content: str) -> list[_Section]:
     return sections or [_Section("JSONL Document", 1, "", 0)]
 
 
+def _parse_csv_sections(content: str) -> list[_Section]:
+    try:
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+    except csv.Error:
+        return [_Section("CSV Document", 1, _clip(content), 0)]
+    if not reader.fieldnames or not rows:
+        return [_Section("CSV Document", 1, _clip(content), 0)]
+
+    sections: list[_Section] = []
+    for index, row in enumerate(rows):
+        normalized = {str(key or "").strip(): str(value or "").strip() for key, value in row.items() if key}
+        if not any(normalized.values()):
+            continue
+        heading = _csv_heading(normalized, index)
+        dumped = json.dumps(normalized, ensure_ascii=False, indent=2)
+        sections.append(_Section(heading, 1, _clip(dumped), index))
+    return sections or [_Section("CSV Document", 1, _clip(content), 0)]
+
+
 def _jsonl_heading(payload: dict[str, Any], index: int) -> str:
     preferred_keys = [
         "code",
+        "scenario_id",
+        "risk_id",
         "source_id",
         "engine",
+        "symptom",
         "symptom_ru",
+        "effect",
         "system",
         "abbreviation",
+        "abbr",
         "term",
         "transmission",
         "chassis",
@@ -1101,6 +1180,30 @@ def _jsonl_heading(payload: dict[str, Any], index: int) -> str:
         if len(parts) == 2:
             break
     return " - ".join(parts) if parts else f"JSONL row {index + 1}"
+
+
+def _csv_heading(row: dict[str, str], index: int) -> str:
+    preferred_keys = [
+        "module",
+        "extension",
+        "sid",
+        "code",
+        "item",
+        "title",
+        "source_id",
+        "name",
+        "service",
+        "domain",
+        "full_name",
+    ]
+    parts: list[str] = []
+    for key in preferred_keys:
+        value = str(row.get(key) or "").strip()
+        if value:
+            parts.append(value)
+        if len(parts) == 2:
+            break
+    return " - ".join(parts) if parts else f"CSV row {index + 1}"
 
 
 def _insert_route_card(conn: Any, card: _RouteCard, *, indexed_at: str) -> None:

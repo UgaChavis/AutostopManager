@@ -290,12 +290,28 @@ def _safe_request_plan(request_plan: dict[str, Any], *, omit: set[str] | None = 
     return safe
 
 
-def _without_secret_query(url: str, secret_param_names: set[str]) -> str:
+def _without_secret_query(
+    url: str,
+    secret_param_names: set[str],
+    *,
+    account_param_names: set[str] | None = None,
+) -> str:
     parsed = urlsplit(url)
+    secret_names = {name.lower() for name in secret_param_names}
+    account_names = {name.lower() for name in (account_param_names or set())}
     redacted_pairs = []
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-        redacted_pairs.append((key, "***" if key in secret_param_names else value))
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(redacted_pairs), parsed.fragment))
+        key_normalized = key.lower()
+        if key_normalized in secret_names:
+            redacted_value = "***"
+        elif key_normalized in account_names:
+            redacted_value = _redact_account(value)
+        elif _is_sensitive_request_param(key):
+            redacted_value = _redact_identifier(value)
+        else:
+            redacted_value = value
+        redacted_pairs.append((key, redacted_value))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(redacted_pairs), parsed.fragment)).replace("%2A%2A%2A", "***")
 
 
 def _clamp_page_size(page_size: int, *, default: int = 5, maximum: int = 25) -> int:
@@ -1933,7 +1949,7 @@ def build_parts_catalogs_request(
         "headers": headers,
         "redacted_headers": {"Authorization": "***"} if actual_key else {},
         "url": url if not missing_env else None,
-        "redacted_url": url if url else None,
+        "redacted_url": _redact_sensitive_query_text(url) if url else None,
         "secret_exposed": False,
     }
 
@@ -2288,7 +2304,7 @@ def build_17vin_signed_request(
         "method": "GET",
         "url_parameters": url_parameters,
         "signed_url": signed_url if not missing else None,
-        "redacted_url": f"{VIN17_BASE_URL}{clean_path}?{query}&user={quote(actual_user)}&token=***" if query else f"{VIN17_BASE_URL}{clean_path}?user={quote(actual_user)}&token=***",
+        "redacted_url": _without_secret_query(signed_url, {"token"}, account_param_names={"user"}),
         "token_algorithm": "MD5(MD5(user) + MD5(secret) + url_parameters)",
         "secret_exposed": False,
     }

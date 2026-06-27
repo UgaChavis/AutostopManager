@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from autostop_manager import config as manager_config
+import autostop_manager.mcp_tools as mcp_tools_module
 from autostop_manager.mcp_tools import register_manager_memory_tools
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -87,8 +88,29 @@ def test_decode_vehicle_identity_tool_is_registered(tmp_path):
         live_vpic=False,
     )
     assert result["vehicle_profile"]["make"] == "Suzuki"
-    assert result["diagnostics"]["frame_query_hint"] == "MR41S-123456"
+    assert result["diagnostics"]["frame_query_hint"] == "MR4***456"
     assert any(source["source_id"] == "parts_catalogs_api" for source in result["required_next_sources"])
+
+
+def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_decode_vehicle_identity(identifier, **kwargs):
+        captured["identifier"] = identifier
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity", fake_decode_vehicle_identity)
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+    result = server.tools["decode_vehicle_identity"]("WBA00000000000000", live_vpic=False, live_wmi=False)
+
+    assert result["ok"] is True
+    assert captured["identifier"] == "WBA00000000000000"
+    assert captured["live_vpic"] is False
+    assert captured["live_wmi"] is False
 
 
 def test_decode_vehicle_identities_tool_is_registered(tmp_path):
@@ -259,6 +281,30 @@ def test_oem_catalog_lookup_tool_is_registered(tmp_path, monkeypatch):
     assert resolved["privacy"]["secret_exposed"] is False
 
 
+def test_lookup_oem_catalog_candidates_tool_forwards_custom_category_index(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_lookup_oem_catalog_candidates(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "lookup_oem_catalog_candidates", fake_lookup_oem_catalog_candidates)
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+    result = server.tools["lookup_oem_catalog_candidates"](
+        identifier="JTEBU3FJX05027767",
+        requested_part="передние колодки",
+        partsapi_category_index_path="data/custom_partsapi_index.json",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert captured["partsapi_category_index_path"] == "data/custom_partsapi_index.json"
+    assert captured["dry_run"] is True
+
+
 def test_plan_crm_vin_oem_parts_lookup_tool_is_registered(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -300,6 +346,31 @@ def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     assert "PARTSAPI_KEY" in result["summary"]["missing_env_names"]
     assert "MR41S123456" not in rendered
     assert "MR41S-123456" not in rendered
+
+
+def test_benchmark_vin_parts_lookup_tool_forwards_dry_run_controls(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_benchmark_vin_parts_lookup(items, **kwargs):
+        captured["items"] = items
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "benchmark_vin_parts_lookup", fake_benchmark_vin_parts_lookup)
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+    result = server.tools["benchmark_vin_parts_lookup"](
+        [{"identifier": "MR41S123456"}],
+        requested_part="передние колодки",
+        include_oem_catalog_dry_run=False,
+        partsapi_timeout=7.5,
+    )
+
+    assert result["ok"] is True
+    assert captured["include_oem_catalog_dry_run"] is False
+    assert captured["partsapi_timeout"] == 7.5
 
 
 def test_build_vin_parts_work_order_tool_is_registered(tmp_path, monkeypatch):

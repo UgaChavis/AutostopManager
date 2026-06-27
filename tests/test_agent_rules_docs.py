@@ -218,6 +218,38 @@ def test_source_pack_playbook_navigation_uses_repo_relative_paths():
     assert offenders == []
 
 
+def test_3d_printing_playbook_has_linux_and_powershell_command_paths():
+    playbook = (ROOT / "docs" / "agent" / "3d_printing_cad_playbook.md").read_text(encoding="utf-8")
+
+    assert "```powershell" in playbook
+    assert "```bash" in playbook
+    assert "$AUTOSTOP_3D_WORKSPACE" in playbook
+    assert ".venv/bin/python scripts/cad.py check" in playbook
+
+
+def test_bmw_jsonl_indexes_keep_canonical_lookup_fields():
+    data_root = ROOT / "docs" / "agent" / "automotive_sources" / "source_cache" / "bmw_repair_knowledge_pack" / "data"
+    required = {
+        "bmw_chassis_codes.jsonl": ("chassis", "body_code"),
+        "bmw_control_units_glossary.jsonl": ("abbreviation", "system", "meaning"),
+        "bmw_transmission_families.jsonl": ("transmission", "system", "notes_ru"),
+    }
+
+    for filename, fields in required.items():
+        rows = [
+            json.loads(line)
+            for line in (data_root / filename).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        missing = [
+            (index, field)
+            for index, row in enumerate(rows, 1)
+            for field in fields
+            if row.get(field) in (None, "")
+        ]
+        assert missing == []
+
+
 def test_partsapi_contract_docs_match_adapter_operations():
     contract = (ROOT / "docs" / "agent" / "partsapi_method_contracts.md").read_text(encoding="utf-8")
     source_registry = json.loads((ROOT / "docs" / "agent" / "vin_oem_sources.json").read_text(encoding="utf-8"))

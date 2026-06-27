@@ -66,6 +66,57 @@ def _as_text_list(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
     return [str(item) for item in value if str(item).strip()]
 
 
+def _identifier_variants(*values: Any) -> list[str]:
+    variants: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        compact = re.sub(r"[^A-Za-z0-9А-Яа-я]+", "", text).upper()
+        for item in (text, text.upper(), text.casefold(), compact, compact.casefold()):
+            if item and len(item) >= 6:
+                variants.add(item)
+    return sorted(variants, key=len, reverse=True)
+
+
+def _redact_identifier(value: Any) -> str:
+    compact = re.sub(r"[^A-Za-z0-9А-Яа-я]+", "", str(value or "")).upper()
+    if not compact:
+        return ""
+    if len(compact) <= 6:
+        return f"{compact[:2]}***"
+    return f"{compact[:3]}***{compact[-3:]}"
+
+
+def _replace_identifiers(value: Any, identifiers: list[str], replacement: str) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value
+    for identifier in identifiers:
+        text = text.replace(identifier, replacement)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _public_vehicle_context(vehicle_context: dict[str, Any]) -> dict[str, Any]:
+    identifiers = _identifier_variants(vehicle_context.get("vin"), vehicle_context.get("chassis"))
+    public = dict(vehicle_context)
+    for key in ("vehicle", "make", "model", "engine", "transmission"):
+        public[key] = _replace_identifiers(public.get(key), identifiers, "[REDACTED_IDENTIFIER]")
+    if vehicle_context.get("vin"):
+        public["vin"] = _redact_identifier(vehicle_context.get("vin"))
+    if vehicle_context.get("chassis"):
+        public["chassis"] = _redact_identifier(vehicle_context.get("chassis"))
+    return public
+
+
+def _research_vehicle_context(vehicle_context: dict[str, Any]) -> dict[str, Any]:
+    identifiers = _identifier_variants(vehicle_context.get("vin"), vehicle_context.get("chassis"))
+    public = dict(vehicle_context)
+    public["vin"] = None
+    public["chassis"] = None
+    for key in ("vehicle", "make", "model", "engine", "transmission"):
+        public[key] = _replace_identifiers(public.get(key), identifiers, "")
+    return public
+
+
 def _operation_category(text: str) -> str:
     if any(token in text for token in ("рейк", "рулев", "руль", "steering", "rack")):
         return "steering"
@@ -164,6 +215,14 @@ def _coerce_price(value: Any) -> int | None:
     return price if price > 0 else None
 
 
+def _coerce_first_price(*values: Any) -> int | None:
+    for value in values:
+        price = _coerce_price(value)
+        if price is not None:
+            return price
+    return None
+
+
 def _quote_rows(quotes_json: Any) -> list[dict[str, Any]]:
     if quotes_json is None:
         return []
@@ -197,7 +256,7 @@ def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
     operation_name = str(row.get("operation_name") or row.get("operation") or row.get("work_item") or "").strip()
     includes_parts = _parse_bool(row.get("includes_parts"))
     labor_only = _parse_bool(row.get("labor_only"))
-    price = _coerce_price(row.get("price_rub", row.get("price")))
+    price = _coerce_first_price(row.get("price_rub"), row.get("price"))
     captured_at = str(row.get("captured_at") or date.today().isoformat())
     confidence = _normalize_key(str(row.get("confidence") or "medium"))
 
@@ -258,6 +317,14 @@ def _coerce_hours(value: Any) -> tuple[float | None, list[float] | None]:
     return (hours, [hours, hours]) if 0 < hours <= 80 else (None, None)
 
 
+def _coerce_first_hours(*values: Any) -> tuple[float | None, list[float] | None]:
+    for value in values:
+        hours, hours_range = _coerce_hours(value)
+        if hours is not None and hours_range is not None:
+            return hours, hours_range
+    return None, None
+
+
 def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
     source = str(row.get("source") or row.get("source_name") or "").strip()
     city_region = str(row.get("city") or row.get("region") or row.get("city_region") or "").strip()
@@ -266,12 +333,7 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
     confidence = _normalize_key(str(row.get("confidence") or "low"))
     public_source = _parse_bool(row.get("public_source"))
     official = _parse_bool(row.get("official"))
-    hours, hours_range = _coerce_hours(
-        row.get(
-            "hours",
-            row.get("labor_hours", row.get("norm_hours", row.get("time_hours", row.get("range_hours")))),
-        )
-    )
+    hours, hours_range = _coerce_first_hours(row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours"))
 
     reasons: list[str] = []
     if not source:
@@ -636,7 +698,7 @@ def estimate_repair_work_cost(
     manual_quote_rows = _quote_rows(quotes_json)
     embedded_labor_time_rows = _labor_time_rows(quotes_json)
     research = collect_public_work_pricing_research(
-        vehicle_context=vehicle_context,
+        vehicle_context=_research_vehicle_context(vehicle_context),
         operations=normalized_operations,
         city=city,
         auto_research=bool(auto_research and not manual_quote_rows),
@@ -791,7 +853,7 @@ def estimate_repair_work_cost(
         "mode": "diagnostic_first" if complaint_only else "work_estimate",
         "read_only": True,
         "crm_write_allowed": False,
-        "vehicle_context": vehicle_context,
+        "vehicle_context": _public_vehicle_context(vehicle_context),
         "normalized_operations": normalized_operations,
         "operation_estimates": operation_estimates,
         "labor_time_sample": {
@@ -854,6 +916,10 @@ def estimate_repair_work_cost(
             "Parts, fluids, materials, and procurement markup are separate from labor pricing.",
             "Public labor-time rows are plausibility checks, not the primary price basis or official OEM norm-hours.",
         ],
+        "privacy": {
+            "raw_vehicle_identifier_redacted_from_output": bool(vehicle_context.get("vin") or vehicle_context.get("chassis")),
+            "raw_vehicle_identifier_removed_from_public_research_queries": bool(vehicle_context.get("vin") or vehicle_context.get("chassis")),
+        },
         "research": {
             "enabled": research.get("enabled", False),
             "policy": research.get("policy"),

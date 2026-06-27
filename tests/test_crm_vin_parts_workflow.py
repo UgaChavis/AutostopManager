@@ -78,6 +78,11 @@ def test_pipeline_returns_crm_output_format_and_frame_workflow():
     assert result["provider_plan"]["live_capability"]["can_complete_full_auto_lookup_now"] is False
     assert any(step["step"] == "write_structured_result_to_crm_card" for step in result["pipeline"])
     assert any(step["step"] == "reopen_and_verify_crm_write" for step in result["pipeline"])
+    assert any(step["step"] == "prepare_card_write_contract" for step in result["pipeline"])
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert "GXE10-0088644" not in rendered
+    assert "GXE100088644" not in rendered
+    assert result["context"]["frame"] == "GXE***644"
     assert "OEM reference" in result["crm_note_template"]
     assert "Selected parts" in result["crm_note_template"]
     assert "price_procurement" in result["pipeline"][5]["schema"]
@@ -87,6 +92,92 @@ def test_pipeline_returns_crm_output_format_and_frame_workflow():
     assert result["procurement_backlog_candidates"][0]["source_id"] == "rossko"
     assert result["procurement_backlog_candidates"][0]["env"]
     assert result["procurement_backlog_candidates"][0]["acceptance"]
+
+
+def test_pipeline_redacts_raw_identifier_from_public_output():
+    raw_vin = "JTEBU3FJX05027767"
+
+    result = build_crm_vin_parts_lookup_pipeline(
+        card_id="card_123",
+        requested_part="колодки передние",
+        vin=raw_vin,
+        make="Toyota",
+    )
+
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert raw_vin not in rendered
+    assert result["privacy"]["raw_identifier_redacted_from_output"] is True
+    assert result["context"]["vin"] == "JTE***767"
+    assert result["context"]["identifier"]["redacted"]["display"] == "JTE***767"
+    assert "raw" not in result["identifier_lookup"]["identifier"]
+    assert "normalized" not in result["identifier_lookup"]["identifier"]
+    assert result["identifier_lookup"]["identifier"]["redacted"]["display"] == "JTE***767"
+    assert result["vehicle_identity"]["identifier"]["redacted"]["display"] == "JTE***767"
+
+
+def test_manual_writeback_package_respects_gate_and_selected_candidate_id():
+    resolution = {
+        "status": "oem_candidates_found_needs_manual_confirmation",
+        "oem_candidates": [
+            {"candidate_id": "oem-1", "part_number": "111", "confidence_label": "medium"},
+            {"candidate_id": "oem-2", "part_number": "222", "confidence_label": "high"},
+        ],
+        "crm_writeback_gate": {
+            "can_prepare_manual_writeback": True,
+            "selected_candidate_id": "oem-2",
+        },
+    }
+
+    result = build_crm_vin_parts_lookup_pipeline(
+        card_id="card_123",
+        requested_part="колодки передние",
+        vin_oem_resolution=resolution,
+    )
+
+    package = result["manual_writeback_package"]
+    assert package["can_prepare_manual_writeback"] is True
+    assert package["selected_candidate"]["candidate_id"] == "oem-2"
+    assert package["confidence"] == "high"
+    assert [candidate["candidate_id"] for candidate in package["rejected_candidates"]] == ["oem-1"]
+
+
+def test_manual_writeback_package_blocks_when_resolution_gate_disallows_prepare():
+    resolution = {
+        "status": "blocked",
+        "oem_candidates": [{"candidate_id": "oem-1", "part_number": "111", "confidence_label": "medium"}],
+        "crm_writeback_gate": {
+            "can_prepare_manual_writeback": False,
+            "selected_candidate_id": "oem-1",
+        },
+    }
+
+    result = build_crm_vin_parts_lookup_pipeline(
+        card_id="card_123",
+        requested_part="колодки передние",
+        vin_oem_resolution=resolution,
+    )
+
+    package = result["manual_writeback_package"]
+    assert package["can_prepare_manual_writeback"] is False
+    assert package["selected_candidate"] is None
+    assert package["confidence"] == "blocked"
+
+
+def test_pipeline_requires_prepare_card_action_before_card_writeback():
+    result = build_crm_vin_parts_lookup_pipeline(
+        card_id="card_123",
+        requested_part="колодки передние",
+        frame="GXE10-0088644",
+        make="Toyota",
+    )
+
+    prepare_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "prepare_card_write_contract")
+    write_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "write_structured_result_to_crm_card")
+
+    assert prepare_index < write_index
+    assert "prepare_crm_card_action" in result["pipeline"][prepare_index]["manager_tools"]
+    assert "expected_updated_at is present before update_card" in result["pipeline"][prepare_index]["checks"]
+    assert any("prepare_crm_card_action" in rule for rule in result["pipeline"][write_index]["rules"])
 
 
 def test_rules_forbid_hallucinated_oem_and_require_price_separation():

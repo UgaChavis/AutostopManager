@@ -22,10 +22,13 @@ def test_select_crm_partsapi_smoke_case_uses_recognized_part_intent():
     ]
 
     selected = select_crm_partsapi_smoke_case(orders)
+    serialized = json.dumps(selected, ensure_ascii=False)
 
     assert selected["ok"] is True
     assert selected["selected"]["number"] == "2"
+    assert selected["selected"]["identifier"] == "XW8***477"
     assert selected["selected"]["requested_part"] == "замена стойки стабилизатора"
+    assert "XW8AC2NH9JK106477" not in serialized
 
 
 def test_partsapi_vin_smoke_pipeline_with_numeric_category(monkeypatch):

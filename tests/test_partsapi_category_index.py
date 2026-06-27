@@ -43,6 +43,20 @@ def test_category_index_loader_handles_invalid_payload(tmp_path):
     assert validation["category_count"] == 0
 
 
+def test_category_index_loader_rejects_non_list_categories(tmp_path):
+    index_path = tmp_path / "partsapi_category_index.json"
+    index_path.write_text('{"schema":"PartsApiCategoryIndexV1","categories":"bad"}', encoding="utf-8")
+
+    loaded = load_partsapi_category_index(index_path)
+    validation = validate_partsapi_category_index(path=index_path)
+
+    assert loaded["missing"] is True
+    assert loaded["error"] == "invalid_categories"
+    assert loaded["error_detail"] == "str"
+    assert validation["ok"] is False
+    assert validation["category_count"] == 0
+
+
 def test_category_index_loader_handles_unreadable_payload(tmp_path, monkeypatch):
     index_path = tmp_path / "partsapi_category_index.json"
     index_path.write_text("{}", encoding="utf-8")

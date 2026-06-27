@@ -755,6 +755,8 @@ class ManagerMemoryStore:
         self.initialize()
         now = _now()
         table = "facts" if kind == "fact" else "notes"
+        importance = _clamp01(importance)
+        confidence = _clamp01(confidence)
         row_id = 0
         with self.connect() as conn:
             if table == "facts":
@@ -957,9 +959,9 @@ class ManagerMemoryStore:
                     score, matched_fields = self._score_memory_item(item, query, query_tokens)
                     if query_tokens and score <= 0:
                         continue
-                    score += int(float(item.get("importance") or 0.5) * 8)
+                    score += int(_clamp01(float(item.get("importance") or 0.5)) * 8)
                     if row_kind == "fact":
-                        score += int(float(item.get("confidence") or 0.0) * 3)
+                        score += int(_clamp01(float(item.get("confidence") or 0.0)) * 3)
                     item["score"] = score
                     item["matched_fields"] = matched_fields
                     results.append(item)
@@ -997,8 +999,8 @@ class ManagerMemoryStore:
                     if row_kind == "rule":
                         score += max(0, 30 - int(item.get("priority") or 100)) // 2
                     if row_kind == "lesson":
-                        score += int(float(item.get("importance") or 0) * 8)
-                        score += int(float(item.get("confidence") or 0) * 3)
+                        score += int(_clamp01(float(item.get("importance") or 0)) * 8)
+                        score += int(_clamp01(float(item.get("confidence") or 0)) * 3)
                     item["score"] = score
                     item["matched_fields"] = matched_fields
                     results.append(item)

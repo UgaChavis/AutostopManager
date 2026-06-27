@@ -413,7 +413,18 @@ def _oem_catalog_lookup_call(identifier: str, item: dict[str, Any], requested_pa
 def _missing_env_from_plan(plan: dict[str, Any]) -> list[str]:
     names = set()
     for blocker in plan.get("blockers", []):
-        names.update(blocker.get("missing_env") or [])
+        names.update(_missing_env_names_from_blocker(blocker))
+    return sorted(names)
+
+
+def _missing_env_names_from_blocker(blocker: dict[str, Any]) -> list[str]:
+    names: set[str] = set()
+    for field in ("missing_env_names", "missing_env"):
+        value = blocker.get(field)
+        if isinstance(value, (list, tuple, set)):
+            names.update(str(name).strip() for name in value if str(name).strip())
+        elif value not in (None, ""):
+            names.add(str(value).strip())
     return sorted(names)
 
 
@@ -424,7 +435,7 @@ def _blockers_by_stage(items: list[dict[str, Any]]) -> dict[str, Any]:
             stage = str(blocker.get("stage") or "unknown")
             row = grouped.setdefault(stage, {"count": 0, "missing_env_names": set(), "reasons": set()})
             row["count"] += 1
-            row["missing_env_names"].update(blocker.get("missing_env") or [])
+            row["missing_env_names"].update(_missing_env_names_from_blocker(blocker))
             if blocker.get("reason"):
                 row["reasons"].add(blocker["reason"])
     return {
@@ -618,7 +629,10 @@ def benchmark_vin_parts_lookup(
         "part_intent_clarification_required_count": sum(1 for item in benchmark_items if item["requested_part"]["clarification_required"]),
         "manual_public_search_count": sum(item["manual_public_search"]["count"] for item in benchmark_items),
         "manual_public_queries_with_raw_identifier_count": sum(
-            1 for item in benchmark_items if item["manual_public_search"]["raw_identifier_in_any_query"]
+            1
+            for item in benchmark_items
+            for row in item["manual_public_search"]["queries"]
+            if row["raw_identifier_in_query"]
         ),
         "live_oem_ready_count": sum(1 for item in benchmark_items if item["live_capability"].get("live_oem_catalog_available")),
         "live_price_ready_count": sum(1 for item in benchmark_items if item["live_capability"].get("live_procurement_available")),
