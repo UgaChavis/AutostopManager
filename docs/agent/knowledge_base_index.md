@@ -150,6 +150,8 @@ should not produce full section matches in normal search.
 
 ## Core Control Files
 
+- `AGENTS.md` - compact Codex startup layer for this repository. It must remain
+  a short router to the canonical playbooks, not a parallel rulebook.
 - `autostop_manager_skill.md` - agent startup routine, role, memory boundaries, and canonical behavior.
 - `manager_rules.json` - durable operating rules with priorities.
 - `knowledge_shelves.md` - shelf map, file placement rules, route-card contract, and maintenance checklist.

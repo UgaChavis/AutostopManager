@@ -1,0 +1,7 @@
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["README.md"]
+
+[mcp_servers.autostopcrm]
+url = "https://crm.autostopcrm.ru/mcp"
+enabled = true
+tool_timeout_sec = 90

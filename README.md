@@ -14,6 +14,8 @@ manager agent. It does not replace AutoStop CRM or Gmail.
 
 Start with these files instead of broad-reading the whole tree:
 
+- `AGENTS.md` - compact Codex startup layer for this repository. It routes to
+  the canonical playbooks below and should stay short.
 - `docs/agent/knowledge_base_index.md` - compact human navigation.
 - `docs/agent/knowledge_shelves.md` - placement, deletion, and source-pack
   policy.
