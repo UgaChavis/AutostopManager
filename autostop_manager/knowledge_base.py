@@ -990,10 +990,10 @@ def _optional_runtime_files(route: dict[str, Any]) -> list[str]:
 def _knowledge_root() -> Path:
     project_root = PROJECT_ROOT.resolve(strict=False)
     map_path = KNOWLEDGE_MAP_PATH.resolve(strict=False)
-    if map_path == project_root or project_root in map_path.parents:
-        return project_root
     if len(map_path.parents) >= 3 and map_path.parent.name == "agent" and map_path.parent.parent.name == "docs":
         return map_path.parents[2]
+    if map_path == project_root or project_root in map_path.parents:
+        return project_root
     return map_path.parent
 
 

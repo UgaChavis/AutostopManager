@@ -64,13 +64,28 @@ def _skill_id_from_path(path: str) -> str:
     return Path(path).parent.name if path.endswith("SKILL.md") else Path(path).name
 
 
+def _knowledge_root() -> Path:
+    project_root = PROJECT_ROOT.resolve(strict=False)
+    map_path = KNOWLEDGE_MAP_PATH.resolve(strict=False)
+    if len(map_path.parents) >= 3 and map_path.parent.name == "agent" and map_path.parent.parent.name == "docs":
+        return map_path.parents[2]
+    if map_path == project_root or project_root in map_path.parents:
+        return project_root
+    return map_path.parent
+
+
+def _is_project_like_knowledge_map() -> bool:
+    map_path = KNOWLEDGE_MAP_PATH.resolve(strict=False)
+    return len(map_path.parents) >= 3 and map_path.parent.name == "agent" and map_path.parent.parent.name == "docs"
+
+
 def _safe_resolve_skill_path(raw_path: str, *, skill_root: Path) -> dict[str, Any]:
     path = Path(raw_path).expanduser()
-    resolved = (path if path.is_absolute() else PROJECT_ROOT / path).resolve(strict=False)
-    allowed_roots = [
-        PROJECT_ROOT.resolve(strict=False),
-        skill_root.expanduser().resolve(strict=False),
-    ]
+    knowledge_root = _knowledge_root()
+    resolved = (path if path.is_absolute() else knowledge_root / path).resolve(strict=False)
+    allowed_roots = [skill_root.expanduser().resolve(strict=False)]
+    if _is_project_like_knowledge_map():
+        allowed_roots.append(knowledge_root.resolve(strict=False))
     if any(resolved == root or root in resolved.parents for root in allowed_roots):
         return {"path": str(resolved), "unsafe_path": None}
     public_name = path.name or "SKILL.md"
