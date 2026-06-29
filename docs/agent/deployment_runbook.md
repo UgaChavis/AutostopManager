@@ -10,7 +10,8 @@ Safe to commit and push:
 - Python package code in `autostop_manager/`
 - tests in `tests/`
 - playbooks and source-routing catalogs in `docs/`
-- project metadata such as `README.md`, `pyproject.toml`, `.gitignore`
+- project metadata such as `agent.md`, `AGENTS.md`, `README.md`,
+  `pyproject.toml`, `.gitignore`
 
 Do not commit or push:
 
@@ -46,7 +47,7 @@ python -m autostop_manager.cli knowledge-search "route card aliases source_of_tr
 Use this order when the owner asks to clean up, update docs, publish to GitHub,
 and deploy:
 
-1. Update `README.md`, `docs/agent/knowledge_base_index.md`,
+1. Update `agent.md`, `README.md`, `docs/agent/knowledge_base_index.md`,
    `docs/agent/knowledge_shelves.md`, playbooks, source catalogs, and tests for
    any new commands or route cards.
 2. Run `python -m autostop_manager.cli knowledge-sync`.

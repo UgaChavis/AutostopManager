@@ -387,6 +387,19 @@ def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
     assert any("knowledge_shelves.md" in path for path in result["source_of_truth"])
 
 
+def test_probe_routes_prepare_for_work_to_agent_entrypoint(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "подготовь менеджера к работе и почитай документацию")
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "startup_and_identity"
+    assert result["open_first"] == "agent.md"
+    assert result.get("command_route") is None
+
+
 def test_probe_routes_pdf_catalog_knowledge_update_to_intake(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)

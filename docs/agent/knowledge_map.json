@@ -12,6 +12,8 @@
       ],
       "aliases": [
         "startup",
+        "agent.md",
+        "agent instructions",
         "agent identity",
         "manager rules",
         "rules",
@@ -24,12 +26,16 @@
         "инструкции менеджера",
         "правила агента",
         "операционный режим",
+        "подготовь менеджера к работе",
+        "почитай документацию",
+        "приготовься к работе",
         "долговременная память",
         "качество памяти",
         "устаревшие воспоминания",
         "журнал запусков"
       ],
       "keywords": [
+        "agent.md",
         "today_context",
         "prepare_manager_context",
         "memory boundary",
@@ -45,6 +51,8 @@
         "как должен начинать работу менеджер",
         "какие правила ответа и памяти действуют",
         "какой файл открыть первым для инструкций агента",
+        "как подготовиться к работе",
+        "какую стартовую инструкцию читать",
         "как подготовить контекст перед задачей",
         "как проверить локальные навыки",
         "как проверить качество памяти",
@@ -52,12 +60,16 @@
         "как журналировать автопилот или закупку"
       ],
       "source_of_truth_files": [
+        "agent.md",
+        "AGENTS.md",
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json"
       ],
       "primary_files": [
+        "agent.md",
+        "AGENTS.md",
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
         "docs/agent/command_routes.json",

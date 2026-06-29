@@ -13,20 +13,44 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_codex_native_startup_files_are_present_and_safe():
+    agent_path = ROOT / "agent.md"
     agents_path = ROOT / "AGENTS.md"
     config_path = ROOT / ".codex" / "config.toml"
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     index = (ROOT / "docs" / "agent" / "knowledge_base_index.md").read_text(encoding="utf-8")
 
+    assert agent_path.is_file()
     assert agents_path.is_file()
     assert config_path.is_file()
+
+    agent = agent_path.read_text(encoding="utf-8")
+    assert len(agent.encode("utf-8")) < 32 * 1024
+    for expected in [
+        "AutoStop CRM: cards, clients, vehicles",
+        "Gmail: mail, threads, labels",
+        "AutostopManager: durable non-CRM memory",
+        "bootstrap_context",
+        "manager_board_scan",
+        "preflight/dry-run",
+        "manager run ledger",
+        "Приберись",
+        "Ready unpaid",
+        "Timer floor",
+        "crm_vin_oem_parts_lookup_playbook.md",
+        "business_document_quality_playbook.md",
+        "knowledge-audit",
+        "annotations-audit",
+        "skills-audit",
+        "docs/agent/autostop_manager_skill.md",
+    ]:
+        assert expected in agent
 
     agents = agents_path.read_text(encoding="utf-8")
     assert len(agents.encode("utf-8")) < 32 * 1024
     for expected in [
         "AutoStop CRM is the source of truth",
         "Gmail is the source of truth",
-        "AutostopManager stores durable manager memory",
+        "AutostopManager stores only durable non-CRM memory",
         "bootstrap_context",
         "manager_board_scan",
         "dry-run",
@@ -45,7 +69,7 @@ def test_codex_native_startup_files_are_present_and_safe():
 
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert config["project_doc_max_bytes"] == 65536
-    assert config["project_doc_fallback_filenames"] == ["README.md"]
+    assert config["project_doc_fallback_filenames"] == ["agent.md", "README.md"]
     assert config["mcp_servers"]["autostopcrm"]["url"] == "https://crm.autostopcrm.ru/mcp"
     assert config["mcp_servers"]["autostopcrm"]["enabled"] is True
     assert config["mcp_servers"]["autostopcrm"]["tool_timeout_sec"] == 90
@@ -67,8 +91,10 @@ def test_codex_native_startup_files_are_present_and_safe():
     config_text = config_path.read_text(encoding="utf-8").casefold()
     assert not re.search(r"(api[_-]?key|token|secret|password|credential)", config_text)
 
-    assert "`AGENTS.md` - compact Codex startup layer" in readme
-    assert "`AGENTS.md` - compact Codex startup layer" in index
+    assert "`agent.md` - canonical startup instruction" in readme
+    assert "`AGENTS.md` - short Codex compatibility shim" in readme
+    assert "`agent.md` - canonical startup instruction" in index
+    assert "`AGENTS.md` - compact Codex compatibility shim" in index
 
 
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():

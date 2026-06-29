@@ -61,7 +61,7 @@ memory records unless the owner explicitly asks for archiving.
 
 ## Placement Rules
 
-- Put broad behavior in `autostop_manager_skill.md` or
+- Put startup behavior in `agent.md`; put durable rules in
   `manager_rules.json`.
 - Put task workflows in a specific `*_playbook.md`.
 - Put source lists and routing data in JSON catalogs.
