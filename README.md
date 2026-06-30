@@ -80,6 +80,9 @@ separately after code, docs contracts, or route behavior changes.
 Keep procedures in playbooks, route metadata in `knowledge_map.json`, and short
 search summaries in `knowledge_annotations.jsonl`. Keep large source packs cold:
 README/MANIFEST, source/license notes, and important structured tables only.
+Prefer updating an existing canonical file over creating a new one. Delete only
+fully migrated/obsolete tracked docs after `cleanup-audit` and green knowledge
+audits.
 
 When reorganizing docs, update the smallest canonical file, then run:
 
@@ -88,4 +91,5 @@ python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-audit
 python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli skills-audit
+python -m autostop_manager.cli cleanup-audit
 ```

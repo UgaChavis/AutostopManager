@@ -76,7 +76,7 @@ memory, or chat summaries.
 | Business documents | `docs/agent/business_document_quality_playbook.md` | AutoStop service documents use the CRM print module and standard templates. |
 | Gmail | `docs/agent/gmail_workflow_playbook.md` | Read/search first; mutating actions require explicit approval. |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Server can use `ssh home-pc`, `sftp`/`scp`, `pwsh`, and Python; no public home SSH; no key rotation without Windows-side update. |
-| Documentation hygiene | `docs/agent/knowledge_shelves.md` | Delete only fully migrated/obsolete files; update map/index/annotations and run audits. |
+| Documentation hygiene | `docs/agent/knowledge_shelves.md` | Keep docs compact; delete only fully migrated/obsolete files after `cleanup-audit`; update map/index/annotations and run audits. |
 
 ## Canonical Detail Files
 
@@ -102,6 +102,8 @@ memory, or chat summaries.
   `python -m autostop_manager.cli knowledge-audit`,
   `python -m autostop_manager.cli annotations-audit`,
   `python -m autostop_manager.cli skills-audit`.
+- Documentation cleanup/deletion: run `cleanup-audit` first; delete tracked docs
+  only when `knowledge_shelves.md` deletion rules are satisfied.
 - Code/contract changes: focused pytest first; full `python -m pytest -q` when
   shared behavior changed.
 - Server/Codex readiness:

@@ -38,9 +38,11 @@ def test_codex_native_startup_files_are_present_and_safe():
         "Timer floor",
         "crm_vin_oem_parts_lookup_playbook.md",
         "business_document_quality_playbook.md",
+        "knowledge-sync",
         "knowledge-audit",
         "annotations-audit",
         "skills-audit",
+        "cleanup-audit",
         "docs/agent/autostop_manager_skill.md",
     ]:
         assert expected in agent
@@ -60,9 +62,11 @@ def test_codex_native_startup_files_are_present_and_safe():
         "Timer floor",
         "crm_vin_oem_parts_lookup_playbook.md",
         "business_document_quality_playbook.md",
+        "knowledge-sync",
         "knowledge-audit",
         "annotations-audit",
         "skills-audit",
+        "cleanup-audit",
         "docs/agent/autostop_manager_skill.md",
     ]:
         assert expected in agents
@@ -135,6 +139,32 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
     assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"][
         "source_of_truth_files"
     ]
+
+
+def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
+    checked_paths = [
+        ROOT / "AGENTS.md",
+        ROOT / "agent.md",
+        ROOT / "README.md",
+        ROOT / "docs" / "agent" / "knowledge_shelves.md",
+        ROOT / "docs" / "agent" / "autostop_manager_skill.md",
+        ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
+
+    for expected in [
+        "cleanup-audit",
+        "knowledge-sync",
+        "Keep docs compact",
+        "Prefer updating an existing canonical file",
+        "Delete a tracked doc only when all are true",
+    ]:
+        assert expected in combined
+
+    route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
+    knowledge_intake = route["domains"]["knowledge_intake"]
+    assert "cleanup-audit" in knowledge_intake["keywords"]
+    assert "удалить устаревшие инструкции" in knowledge_intake["keywords"]
 
 
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():

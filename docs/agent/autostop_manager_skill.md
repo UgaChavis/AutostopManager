@@ -57,7 +57,7 @@ does not mean live CRM or MCP context is empty.
 | Labor estimate | `docs/agent/work_labor_pricing_playbook.md`, `estimate_repair_work_cost` | Read-only estimate; no repair-order writes without exact approval. |
 | Business documents | `docs/agent/business_document_quality_playbook.md` | Use CRM print module for AutoStop service documents. |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current server-to-home Windows reverse SSH with `ssh`, `sftp`/`scp`, `pwsh`, Python, and helper scripts; do not rotate keys without Windows-side update. |
-| Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` | Delete only after migration and green audits. |
+| Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` | Keep docs compact; prefer existing canonical files; delete only after `cleanup-audit`, migration, and green audits. |
 
 ## CRM Write Boundary
 
@@ -109,6 +109,7 @@ python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-audit
 python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli skills-audit
+python -m autostop_manager.cli cleanup-audit
 ```
 
 ## Run Ledger

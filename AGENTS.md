@@ -40,8 +40,9 @@ Hard rules kept here so Codex sees them immediately:
   `home-pc` remote Codex access,
   `docs/agent/crm_vin_oem_parts_lookup_playbook.md`, and
   `docs/agent/business_document_quality_playbook.md`.
-- After docs/routing changes run `knowledge-audit`, `annotations-audit`, and
-  `skills-audit`.
+- After docs/routing changes run `knowledge-sync`, `knowledge-audit`,
+  `annotations-audit`, and `skills-audit`; run `cleanup-audit` before deleting
+  docs or generated artifacts.
 
 Detailed docs: `agent.md`, `docs/agent/autostop_manager_skill.md`,
 `docs/agent/manager_rules.json`, `docs/agent/command_routes.json`,

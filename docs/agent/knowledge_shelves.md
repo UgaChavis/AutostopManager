@@ -4,7 +4,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 
 ## Agent Loop
 
-1. Run `prepare-context` for non-trivial operational work.
+1. Run `agent-brief` or `prepare-context` for non-trivial operational work.
 2. Run `knowledge-probe "<query>"` before broad file reads.
 3. Open the returned `open_first` and source-of-truth files.
 4. Use `knowledge-search --domain <best_domain>` only when the first file is
@@ -13,6 +13,8 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
    relevant.
 6. After durable docs/catalog/skill changes, run `knowledge-sync`,
    `knowledge-audit`, `annotations-audit`, and `skills-audit`.
+7. Before deleting tracked docs or generated artifacts, run `cleanup-audit` and
+   remove only items that satisfy the deletion rule below.
 
 ## Shelves
 
@@ -57,6 +59,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 ## Placement Rules
 
 - Put startup summaries in `agent.md`; keep `AGENTS.md` as a short Codex shim.
+- Prefer updating an existing canonical file over creating a new route file.
 - Put detailed procedures in `docs/agent/*_playbook.md`.
 - Put route metadata in `knowledge_map.json`.
 - Put search summaries in `knowledge_annotations.jsonl`.
