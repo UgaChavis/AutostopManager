@@ -22,13 +22,29 @@ function Assert-Administrator {
 
 function New-StrongLocalPassword {
     $bytes = New-Object byte[] 32
-    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
     return ([Convert]::ToBase64String($bytes) + "aA1!")
 }
 
 function Set-PrivateAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
     & icacls $Path /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
+}
+
+function Set-SystemOwner {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        $acl = Get-Acl -LiteralPath $Path
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier("S-1-5-18")))
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    } catch {
+        Write-Host "owner_warning=$Path"
+    }
 }
 
 function Remove-ManagedBlock {
@@ -136,6 +152,21 @@ function Ensure-OpenSshServer {
     Set-Service -Name sshd -StartupType Automatic
 }
 
+function Ensure-OpenSshHostKeyAcl {
+    param([Parameter(Mandatory = $true)][string]$ProgramDataSsh)
+
+    if (-not (Test-Path -LiteralPath $ProgramDataSsh)) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $ProgramDataSsh -Filter "ssh_host_*_key" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*.pub" } |
+        ForEach-Object {
+            Set-PrivateAcl -Path $_.FullName
+            Set-SystemOwner -Path $_.FullName
+        }
+}
+
 function Ensure-CodexAdminUser {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -223,23 +254,75 @@ function Write-TunnelRunner {
 `$KnownHosts = "$KnownHostsPath"
 New-Item -ItemType Directory -Force -Path `$LogDir | Out-Null
 
+function Redact-Text {
+    param([AllowNull()][string]`$Text)
+    if ([string]::IsNullOrWhiteSpace(`$Text)) { return "" }
+    `$safe = `$Text
+    `$safe = `$safe -replace [regex]::Escape(`$Key), "[private-key-file]"
+    `$safe = `$safe -replace "home_reverse_to_server_ed25519", "[private-key-file]"
+    `$safe = `$safe -replace "codexadmin-password\.txt", "[secret-file]"
+    `$safe = `$safe -replace "(?i)(password|token|secret)\s*[:=]\s*\S+", '`$1=[redacted]'
+    return `$safe
+}
+
+function Add-LogLine {
+    param([string]`$Line)
+    Add-Content -LiteralPath `$Log -Value `$Line -Encoding UTF8
+}
+
+function Quote-Arg {
+    param([string]`$Arg)
+    if (`$Arg -match '[\s"]') {
+        return '"' + (`$Arg -replace '"','\"') + '"'
+    }
+    return `$Arg
+}
+
 while (`$true) {
     `$started = Get-Date -Format o
-    Add-Content -Path `$Log -Value "[`$started] starting reverse tunnel"
-    & `$SshExe -NT `
-        -p $ServerSshPort `
-        -o BatchMode=yes `
-        -o ExitOnForwardFailure=yes `
-        -o ServerAliveInterval=30 `
-        -o ServerAliveCountMax=3 `
-        -o StrictHostKeyChecking=accept-new `
-        -o UserKnownHostsFile="`$KnownHosts" `
-        -i "`$Key" `
-        -R "$RemoteListenHost`:$ServerListenPort`:$LocalSshHost`:$LocalSshPort" `
-        "$ServerUser@$ServerHost" >> `$Log 2>&1
-    `$code = `$LASTEXITCODE
+    Add-LogLine "[`$started] starting reverse tunnel"
+
+    `$sshArgs = @(
+        "-NT",
+        "-p", "$ServerSshPort",
+        "-o", "BatchMode=yes",
+        "-o", "ExitOnForwardFailure=yes",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "UserKnownHostsFile=`$KnownHosts",
+        "-i", `$Key,
+        "-R", "$RemoteListenHost`:$ServerListenPort`:$LocalSshHost`:$LocalSshPort",
+        "$ServerUser@$ServerHost"
+    )
+
+    `$psi = New-Object System.Diagnostics.ProcessStartInfo
+    `$psi.FileName = `$SshExe
+    `$psi.Arguments = (`$sshArgs | ForEach-Object { Quote-Arg `$_ }) -join " "
+    `$psi.UseShellExecute = `$false
+    `$psi.CreateNoWindow = `$true
+    `$psi.RedirectStandardOutput = `$true
+    `$psi.RedirectStandardError = `$true
+
+    `$process = New-Object System.Diagnostics.Process
+    `$process.StartInfo = `$psi
+    try {
+        [void]`$process.Start()
+        `$process.WaitForExit()
+        `$stdout = `$process.StandardOutput.ReadToEnd()
+        `$stderr = `$process.StandardError.ReadToEnd()
+        `$combined = ((`$stdout, `$stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) }) -join "`n"
+        if (-not [string]::IsNullOrWhiteSpace(`$combined)) {
+            Add-LogLine (Redact-Text `$combined)
+        }
+        `$code = `$process.ExitCode
+    } catch {
+        Add-LogLine (Redact-Text ("runner_exception: " + `$_.Exception.Message))
+        `$code = -1
+    }
+
     `$ended = Get-Date -Format o
-    Add-Content -Path `$Log -Value "[`$ended] ssh exited code=`$code; restarting in 10s"
+    Add-LogLine "[`$ended] ssh exited code=`$code; restarting in 10s"
     Start-Sleep -Seconds 10
 }
 "@
@@ -303,6 +386,7 @@ Ensure-CodexAdminUser -Name $CodexUser -SecretPath $passwordPath
 
 $programDataSsh = Join-Path $env:ProgramData "ssh"
 New-Item -ItemType Directory -Force -Path $programDataSsh | Out-Null
+Ensure-OpenSshHostKeyAcl -ProgramDataSsh $programDataSsh
 $authorizedKeysPath = Join-Path $programDataSsh "administrators_authorized_keys"
 Ensure-AdminAuthorizedKey -PublicKeySource $serverPublicKeySource -AuthorizedKeysPath $authorizedKeysPath
 

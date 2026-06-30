@@ -17,6 +17,8 @@ on the home router or public internet.
   `/root/codex-home-remote/bootstrap/current`.
 
 Do not paste private key contents into chat or commit them to git.
+Do not rotate or overwrite `home-pc` key material unless the Windows side and
+server side are updated together.
 
 ## Server State
 
@@ -98,6 +100,9 @@ Expected results:
 - `ssh home-pc` authenticates as `codexadmin`.
 - PowerShell commands run on the home PC.
 - Test file write/read under `C:\ProgramData\CodexRemote\probe` returns `ok`.
+- If the tunnel log contains old `code=255` lines, confirm they are followed by
+  a later `starting reverse tunnel` with no later exit before treating them as
+  current failures.
 
 ## Rollback
 
