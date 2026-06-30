@@ -212,25 +212,26 @@ Use `docs/agent/procurement_pricing_playbook.md` before writing prices.
      foreign-only offers from the main average;
    - record whether the number is закупка, retail upper bound, or client sale.
 
-## Quote Matrix
+## CRM Public Description
 
-Every nontrivial CRM writeback should include a compact quote matrix in the
-card description:
+Every nontrivial CRM writeback must follow
+`docs/agent/crm_card_description_standard.md`. The public card description gets
+only the selected working facts, not the lookup dossier.
 
-```text
-VIN/OEM подбор:
-Авто: <make model, year/build, engine/transmission/market if confirmed>
-VIN/frame source: <CRM field / card description / file/photo>; <identifier type>
-Деталь: <requested part, side/axis/position/quantity>
-OEM reference:
-- <OEM>: <source + applicability evidence + replacement status>
-Replacements/supersession:
-- <old/current/replaced-by>: <source>
-Selected parts:
-- <brand article name>: закупка <price>, рынок РФ <range/avg>, срок <lead time>, source <supplier>, confidence <high|medium|low>
-Нужна проверка:
-- <missing supplier login / photo / production date / side / stock reserve>
+```markdown
+🚘 **Авто:** <make model, year/build only if useful>.
+
+**Задача:** **<requested part/work>**.
+
+**Каталожный номер:** **++<OEM/catalog number>++**.
+
+**Выбор:** **++<selected brand/article>++**, <quantity/price if known>.
 ```
+
+Do not write source/provenance, lookup method, confidence, missing checks,
+supplier-check reminders, or `Нужна проверка` blocks into the public
+description. Keep source evidence and confidence in the internal owner report,
+manager run, or structured lookup result when needed.
 
 Do not put phone numbers, full client names, raw VIN dumps, or long private
 source excerpts into `board_summary`.
@@ -254,10 +255,11 @@ Bad material line:
 Toyota 90919-01275 / NGK 91568
 ```
 
-Keep OEM references, alternatives, rejected crosses, and source notes in the
-description/quote matrix, not in the priced material row. If the selected part
-is genuine OEM, the row may use the OEM brand/number because that is the priced
-selected part.
+Keep OEM references, alternatives, rejected crosses, and source notes out of
+the priced material row. Put only the compact selected facts allowed by
+`docs/agent/crm_card_description_standard.md` into the public description. If
+the selected part is genuine OEM, the row may use the OEM brand/number because
+that is the priced selected part.
 
 ## Writeback Pipeline
 
@@ -270,17 +272,18 @@ selected part.
    price/lead-time/analog summary, confidence, and `requires_confirmation`.
    Do not write basket links, add-to-cart URLs, private-cabinet data, or raw
    HTML into the CRM card.
-6. Build the quote matrix.
-7. Write card description with the matrix via `update_card`, preserving old
-   useful text.
+6. Build an internal quote matrix / lookup dossier.
+7. Write the public card description via `update_card` using
+   `docs/agent/crm_card_description_standard.md`, preserving old useful facts.
 8. Update repair-order materials via `replace_repair_order_materials` only for
    selected priced parts, not OEM references.
-9. Update `board_summary` with a short status without VIN/client private data:
-   `Подбор: OEM найден, выбран NGK 91568, закупка требует подтверждения ROSSKO`.
+9. Update `board_summary` with a short plain result without VIN/client private
+   data, source lists, or confidence/provenance text:
+   `OEM найден, выбран NGK 91568`.
 10. Re-open the card and repair order with `get_card_context` /
     `get_repair_order`.
-11. Verify description, board summary, material totals, quantity basis, and
-    confidence.
+11. Verify description, board summary, material totals, quantity basis, and the
+    internal confidence/evidence record.
 12. Finish the manager run with verification evidence.
 
 ## Confidence
@@ -329,9 +332,10 @@ MVP tool chain:
    ZZap replacements, supplier substitutions.
 8. `quote procurement and market retail prices`: normalized supplier quote
    adapters with stale-price checks.
-9. `build quote matrix`: one structure for card description and owner report.
+9. `build quote matrix`: internal lookup structure for owner report and write
+   decisions.
 10. `write structured result to CRM card`: description, selected material rows,
-   short board summary.
+    short board summary.
 11. `reopen/verify CRM write`: card/reorder reread and totals check.
 
 No adapter may place supplier orders or change financial CRM records without a

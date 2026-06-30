@@ -299,7 +299,7 @@
       "required_context": ["card_id", "client_contact", "next_action", "approval_status"],
       "crm_tools": ["get_card_context", "update_card", "set_card_deadline", "manager_journal"],
       "actions": [
-        "Make the next action visible in the card description or title.",
+        "Make the compact customer-flow fact visible in the card title, board_summary, or public description following docs/agent/crm_card_description_standard.md.",
         "Separate estimate requested, prepared, approved, declined, and needs-data states.",
         "Set follow-up deadlines for client approvals and pickups."
       ],

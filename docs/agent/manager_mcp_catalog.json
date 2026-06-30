@@ -197,7 +197,7 @@
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
     "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake.",
-    "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, procurement/RF market quote matrix, selected-part material line policy, CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders.",
+    "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, internal procurement/RF market quote matrix, selected-part material line policy, compact public CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders.",
     "estimate_repair_work_cost": "Build a read-only labor estimate from vehicle/work items, public Russia STO labor-only prices, and a public norm-hours/labor-time plausibility layer; returns normalized operations, market sample, labor-time checks, Russia average, AutoStop +50% price, confidence, missing context, and next actions without writing repair orders.",
     "control_report": "Generate ControlReportV1 with server/runtime/Codex readiness, system health, git state, tests/doctor route, memory/knowledge/MCP/provider readiness, production ops gates, ports, risks, and last run ledger; read-only and secrets-redacted.",
     "memory_review": "Generate rule-based MemoryReviewItem proposals for duplicates, expired/superseded items, weak confidence, and run-ledger lesson candidates without copying raw CRM, email, or secret content.",
@@ -220,7 +220,7 @@
         "enrich source-backed vehicle profiles including VIN, plate, mileage, engine, gearbox, and drivetrain when evidence is adequate",
         "move phone/VIN/plate/mileage/aggregate facts into structured fields, link or update the clear matching client by phone first, and upsert confirmed client vehicle facts",
         "source VIN/OEM/parts/maintenance data for direct safe tasks written in the card",
-        "rewrite non-empty public descriptions as very short rich-text summaries with sparse emoji while preserving prices, OEM numbers, and important facts",
+        "rewrite non-empty public descriptions per docs/agent/crm_card_description_standard.md as very short rich-text working facts with sparse emoji while preserving prices, OEM numbers, oil/fluid capacities, and important facts",
         "update the separate hidden board_summary preview",
         "leave archive recommendations when a card looks completed"
       ],
@@ -231,6 +231,7 @@
         "delete or merge client records during routine cleanup",
         "change card deadlines or indicators unless the owner asks for timer/signal work for the exact target",
         "invent text for an empty public description during routine cleanup",
+        "add risks, safety caveats, source/provenance, selection method, search history, supplier-check reminders, or quote-matrix reports to public descriptions",
         "keep transferred phone, VIN, license plate, mileage, engine, gearbox, or drivetrain in the public description by default",
         "put phone, VIN, full client identity, raw scan dumps, or long issue lists into board_summary"
       ],

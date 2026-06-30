@@ -138,21 +138,27 @@ operationally needed.
 Public `description` and hidden `board_summary` are different fields.
 
 If `description` is empty, leave it empty unless the owner explicitly asks for
-new public text. If it contains text, compress it into a short working summary:
-task/complaint, key facts, blocker, money/parts note, confirmed diagnostics,
-OEM/catalog numbers, prices, agreements, and useful vehicle facts only.
+new public text. If it contains text, compress it according to
+`docs/agent/crm_card_description_standard.md`: maximally laconic working facts
+only.
+
+The public `description` may contain only the operational facts needed to scan
+the card: task/complaint, confirmed diagnostics, OEM/catalog numbers, selected
+parts/materials, oil/fluid capacity, prices, agreements, and useful vehicle
+facts.
 
 Do not add separate `Статус:` or `Следующий шаг:` blocks. Do not write source
-lists, search history, diagnostic theory, generic safety disclaimers,
-`нужно перепроверить данные`, or verbose AI explanations.
+lists, search history, selection method, diagnostic theory, risk/caveat/safety
+blocks, supplier-check reminders, `нужно перепроверить данные`, or verbose AI
+explanations.
 
 Readable formatting rules:
 
 - split dense text into short paragraphs
 - use **bold** for labels and decisive facts
-- use *italic* only for real uncertainty or caution
-- use ++underline++ for one key amount, OEM/catalog number, approval, or waiting
-  state when emphasis helps
+- use *italic* only for a short secondary working note
+- use ++underline++ for one key amount, oil capacity, OEM/catalog number,
+  approval, or money value when emphasis helps
 - use restrained emoji markers only when they speed scanning
 - use only CRM-supported Markdown: `**bold**`, `*italic*`, `++underline++`
 - never use raw HTML-style tags or pseudo-formatting
@@ -167,9 +173,9 @@ Preferred public `description` shape:
 
 **Запчасти/OEM:** **++<номер или выбранный вариант>++**.
 
-**Деньги:** **++<сумма или согласование>++**.
+**Масло/жидкости:** **++<объем/спецификация>++**.
 
-*Важно:* <короткий риск или blocker, если есть>.
+**Деньги:** **++<сумма или согласование>++**.
 ```
 
 Use only blocks that matter. Two short paragraphs are enough for a tiny card.
@@ -180,6 +186,7 @@ Bad public `description` patterns:
 Статус: ...
 Следующий шаг: ...
 По данным источников нужно перепроверить...
+Основание подбора: ...
 В целях безопасности пользователя...
 AI: длинное объяснение поиска и всех источников...
 ```
@@ -194,7 +201,6 @@ Recommended `board_summary` shape:
 <vehicle or job>.
 Факт: <main issue, work, or result>.
 Деньги/запчасти: <only if relevant>.
-Важно: <one blocker, caveat, or missing fact if needed>.
 ```
 
 ## Title, Vehicle, Tags

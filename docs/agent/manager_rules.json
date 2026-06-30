@@ -38,7 +38,7 @@
     {
       "id": "board-cleanup-description-rich-text",
       "priority": 19,
-      "rule": "During board cleanup after the owner command 'Приберись', leave an empty public card description empty unless the owner explicitly asks for new text. If description exists, rewrite it as a short human-readable working note: only task/complaint, important facts, blocker, money/parts note, confirmed diagnostics, prices, OEM/catalog numbers, and agreements when relevant. Do not add separate 'Статус:' or 'Следующий шаг:' blocks; the manager decides workflow actions from the facts. Split text into paragraphs where it improves reading. The default is formatted text, not a plain dump: use restrained emoji section markers and supported CRM Markdown for scanning: **bold** labels/key facts, *italic* uncertainty/caution, and ++underline++ for the key amount, OEM/catalog number, approval, or waiting state. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator. Do not add source lists, long provenance notes, diagnostic theory, generic safety disclaimers, 'нужно перепроверить данные' caveats, or verbose AI explanations."
+      "rule": "During board cleanup after the owner command 'Приберись', leave an empty public card description empty unless the owner explicitly asks for new text. If description exists, rewrite it according to docs/agent/crm_card_description_standard.md as a maximally laconic formatted working note: only task/complaint, important confirmed facts, money/parts note, diagnostics result, prices, oil/fluid capacity, OEM/catalog numbers, and agreements when relevant. Do not add separate 'Статус:' or 'Следующий шаг:' blocks; the manager decides workflow actions from the facts. Split text into short paragraphs only where it improves reading. Use restrained emoji section markers and supported CRM Markdown for scanning: **bold** labels/key facts, *italic* short secondary notes, and ++underline++ for the key amount, oil capacity, OEM/catalog number, approval, or money value. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator. Do not add risk/caveat/safety blocks, source lists, provenance, selection method, search history, supplier-check reminders, 'нужно перепроверить данные' caveats, or verbose AI explanations."
     },
     {
       "id": "board-cleanup-title-vehicle-tags",
@@ -63,7 +63,7 @@
     {
       "id": "board-cleanup-public-summary",
       "priority": 19,
-      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description is a short readable working note with paragraphs, useful emoji markers, supported rich text, and important facts only; do not add 'Статус:' or 'Следующий шаг:' blocks. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, long issue lists, and next-action instructions out of it. A short factual waiting/approval state is allowed when it is the main blocker."
+      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description follows docs/agent/crm_card_description_standard.md: short readable formatted working facts only; do not add 'Статус:' or 'Следующий шаг:' blocks, risk/caveat/safety blocks, source/provenance, selection method, search history, or supplier-check reminders. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, long issue lists, and next-action instructions out of it."
     },
     {
       "id": "board-cleanup-vin-profile-enrichment",
@@ -313,7 +313,7 @@
     {
       "id": "crm-vin-oem-crm-writeback-format",
       "priority": 36,
-      "rule": "CRM VIN/OEM parts results must be written as a compact quote matrix in the card description: Auto, VIN/frame source, requested detail, OEM numbers, replacements, selected parts, закупка, RF market price, sources, confidence, and needs-confirmation. board_summary stays short and excludes raw VIN/client private data."
+      "rule": "CRM VIN/OEM parts public card descriptions must follow docs/agent/crm_card_description_standard.md: compact formatted selected working facts only, such as auto, requested part/work, OEM/catalog number, selected part, quantity, price, and oil/fluid capacity. Do not write VIN/frame source, source/provenance, lookup method, confidence, missing checks, needs-confirmation, supplier-check reminders, or long quote matrices into the public description. Keep internal evidence in the manager run or owner report. board_summary stays short and excludes raw VIN/client private data."
     },
     {
       "id": "crm-vin-oem-privacy-boundary",

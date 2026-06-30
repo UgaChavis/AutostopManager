@@ -1364,6 +1364,70 @@
         "docs/agent/krasnoyarsk_service_management_playbook.md"
       ]
     },
+    "crm_card_description_standard": {
+      "title": "CRM public card description standard",
+      "use_when": [
+        "owner asks to create a CRM card and fill the public description",
+        "public CRM card description needs update or cleanup",
+        "parts, oil, fluid, price, or service result should be written back to a card",
+        "owner asks to standardize card description text"
+      ],
+      "aliases": [
+        "CRM card description",
+        "card description standard",
+        "public card description",
+        "описание карточки",
+        "стандарт описания карточки",
+        "создай карточку",
+        "запиши в карточку",
+        "оформи клиента",
+        "заполни описание"
+      ],
+      "keywords": [
+        "description",
+        "card description",
+        "public description",
+        "rich text",
+        "bold",
+        "italic",
+        "underline",
+        "laconic",
+        "no sources",
+        "no provenance",
+        "no supplier-check reminder",
+        "описание",
+        "карточка",
+        "жирный",
+        "курсив",
+        "подчеркнутый",
+        "лаконично",
+        "без источников",
+        "без рисков",
+        "без проверки применимости",
+        "каталожный номер",
+        "масло",
+        "объем масла"
+      ],
+      "questions": [
+        "как заполнять описание карточки CRM",
+        "что писать в публичное описание карточки",
+        "как оформить подбор запчастей в карточке",
+        "как записать объем масла и фильтр в карточку",
+        "какой стандарт описания карточки использовать"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/crm_card_description_standard.md",
+        "docs/agent/board_cleanup_autopilot_playbook.md",
+        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
+        "docs/agent/manager_rules.json"
+      ],
+      "primary_files": [
+        "docs/agent/crm_card_description_standard.md",
+        "docs/agent/board_cleanup_autopilot_playbook.md",
+        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
+        "docs/agent/manager_rules.json"
+      ]
+    },
     "service_management": {
       "title": "Krasnoyarsk workshop service management route",
       "use_when": [
@@ -1478,7 +1542,7 @@
       ]
     },
     "crm_vin_oem_parts_lookup": {
-      "title": "CRM VIN/frame OEM parts lookup, quote matrix, and CRM writeback",
+      "title": "CRM VIN/frame OEM parts lookup and compact CRM writeback",
       "use_when": [
         "CRM card contains VIN/frame/body number and requested part",
         "find OEM catalog number for plugs, pads, filters, or other parts from VIN/frame",
@@ -1487,7 +1551,7 @@
       "aliases": [
         "CRM VIN OEM parts lookup",
         "VIN parts writeback",
-        "VIN OEM quote matrix",
+        "VIN OEM card result",
         "frame parts lookup",
         "body number parts lookup",
         "KDM VIN parts lookup",
@@ -1542,7 +1606,7 @@
         "procurement price",
         "public retail price",
         "client sale price",
-        "quote matrix",
+        "compact public result",
         "writeback",
         "replace_repair_order_materials",
         "update_card",
@@ -1580,6 +1644,7 @@
         "docs/agent/partsapi_category_index.json",
         "docs/agent/vin_oem_sources.json",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
+        "docs/agent/crm_card_description_standard.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
         "docs/agent/crm_mcp_catalog.json"
@@ -1592,6 +1657,7 @@
         "docs/agent/partsapi_category_index.json",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl",
+        "docs/agent/crm_card_description_standard.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json"
       ],

@@ -21,7 +21,7 @@
         "when the owner asks to run Приберись for many or all active cards, apply the same one-card cleanup locally to each card that actually needs it; select the explicit group or top-priority board candidates, process in small verified batches, and leave already-clear cards unchanged",
         "use list_cards_missing_manager_data, triage_inbox_cards, audit_repair_order_consistency, audit_client_links, suggest_clients_for_card, search_clients, and get_client before one-card writes when relevant",
         "prepare focused CRM card description or vehicle_profile writes through MCP prepare_crm_card_action, or python -m autostop_manager.cli prepare-card-action for local/stale-discovery fallback, so expected_updated_at, exact description text, vehicle_profile metadata, board_summary target, and reread verification are explicit before update_card",
-        "use cleanup_card dry_run/apply for compact safe card patches; follow the canonical field contract in board_cleanup_autopilot_playbook.md: if description is empty leave it empty, otherwise compress it into a very short rich-text summary with sparse emoji while preserving prices/OEM/facts; move phone/VIN/plate/mileage/aggregates into client or vehicle-profile fields after verification; keep vehicle as make/model, title as short issue/work essence, and tags rare with no more than three",
+        "use cleanup_card dry_run/apply for compact safe card patches; follow the canonical field contract in board_cleanup_autopilot_playbook.md and docs/agent/crm_card_description_standard.md: if description is empty leave it empty, otherwise compress it into a very short rich-text working summary with sparse emoji while preserving prices/OEM/facts; never add risks, sources/provenance, selection method, or supplier-check reminders; move phone/VIN/plate/mileage/aggregates into client or vehicle-profile fields after verification; keep vehicle as make/model, title as short issue/work essence, and tags rare with no more than three",
         "if the card description contains a direct safe task such as find parts, find OEM, price ТО, or decode VIN, perform it during cleanup and write back only the compact result",
         "do not edit repair orders, works, materials, prices, payments, cashboxes, or cash records unless the owner explicitly asks for that exact target",
         "leave cards in their current columns",
@@ -222,7 +222,7 @@
         "подбери колодки по VIN",
         "подбери фильтр по VIN",
         "найди каталожный номер и аналоги",
-        "VIN OEM quote matrix"
+        "VIN OEM card result"
       ],
       "keywords": [
         "VIN",
@@ -250,7 +250,7 @@
         "classify VIN/frame/body number and identify vehicle by market",
         "find source-backed OEM number for requested part and verify applicability",
         "find supersession, crosses, analogs, procurement price, and RF market range",
-        "write quote matrix to card description, selected priced part only to materials, then reread CRM and verify"
+        "write only the compact public result to card description using docs/agent/crm_card_description_standard.md, write selected priced part only to materials, then reread CRM and verify"
       ]
     }
   ]

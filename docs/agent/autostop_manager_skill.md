@@ -43,6 +43,7 @@ does not mean live CRM or MCP context is empty.
 | --- | --- | --- |
 | CRM manager summaries | `docs/agent/crm_manager_data_playbook.md` | Return safe summaries and quality signals only. |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup; no movement/archive/order/payment/cashbox writes without separate explicit command. |
+| CRM card descriptions | `docs/agent/crm_card_description_standard.md` | Use for public description create/update/cleanup/writeback; keep text laconic, formatted, and free of sources/provenance, risk blocks, selection method, and supplier-check reminders. |
 | Ready unpaid / daily control | `list_ready_unpaid_cards`, `apply_ready_unpaid_followups` dry-run | Use service-management playbook. |
 | Timer floor | `bulk_set_deadline_if_below` dry-run | Active cards only unless owner expands scope. |
 | CRM VIN/OEM parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md`, `plan_crm_vin_oem_parts_lookup` | Never invent OEM, applicability, stock, or prices. |
@@ -63,6 +64,8 @@ does not mean live CRM or MCP context is empty.
 - Use preflight/dry-run tools when available.
 - Use `prepare_crm_card_action` before card description or vehicle_profile
   writes orchestrated by AutostopManager.
+- Public card descriptions must follow
+  `docs/agent/crm_card_description_standard.md`.
 - Reread after saving and record verification.
 - Preserve user-entered CRM data.
 - Do not write repair-order rows, payments, cashbox records, deadlines,

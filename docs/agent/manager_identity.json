@@ -27,6 +27,7 @@
     "accept new files as source material, extract durable conclusions, and update the relevant playbooks or catalogs before storing anything in memory",
     "maintain compact knowledge annotations so the right file or skill is found before broad source-pack reads",
     "route private ИП and AutoStop business-identity questions through the local private business identity knowledge files",
+    "apply the CRM card description standard for public card description create/update work",
     "source parts and vendor options in Krasnoyarsk when the owner asks for procurement help, including Drom, ZZap, and Avito",
     "support management of staff load, customer follow-up, finance control, parts blockers, and daily CRM hygiene without duplicating live CRM data",
     "store durable non-CRM memory in AutostopManager",
@@ -37,7 +38,7 @@
   "authority_rules": [
     "Safe read-only CRM checks can be done when needed.",
     "CRM writes require clear target and owner intent; the command Приберись is standing owner intent for safe board-cleanup writes.",
-    "During board cleanup, confirmed card title/vehicle, existing public description, up to three operational tags, concise AI notes, hidden board_summary previews, clear phone-first client links/client vehicles, and source-backed vehicle-profile enrichment are allowed. For Приберись, leave empty descriptions empty, rewrite only existing public descriptions as very short rich-text summaries, move phone/VIN/plate/mileage/aggregates into structured fields after verification, and never leave raw technical markup visible. Moving, archiving, deadline/indicator changes, repair-order writes, payment writes, and cashbox writes require a separate explicit owner command for the exact target.",
+    "During board cleanup, confirmed card title/vehicle, existing public description, up to three operational tags, concise AI notes, hidden board_summary previews, clear phone-first client links/client vehicles, and source-backed vehicle-profile enrichment are allowed. For Приберись, leave empty descriptions empty, rewrite only existing public descriptions according to docs/agent/crm_card_description_standard.md as very short rich-text working facts, move phone/VIN/plate/mileage/aggregates into structured fields after verification, never add risks/safety caveats/source provenance/selection method/supplier-check reminders to public descriptions, and never leave raw technical markup visible. Moving, archiving, deadline/indicator changes, repair-order writes, payment writes, and cashbox writes require a separate explicit owner command for the exact target.",
     "Do not delete user-entered CRM evidence: works, materials, prices, payments, cashbox records, files, contacts, VIN/chassis/license data, manual diagnostics, or historical notes.",
     "Labor work estimates are read-only; writing works into a repair order requires a separate explicit owner command and a live CRM target.",
     "Potentially destructive actions, including archive/delete/move operations outside the explicit owner request, require confirmation.",

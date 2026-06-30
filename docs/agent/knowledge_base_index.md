@@ -21,6 +21,8 @@ playbooks instead of broad-reading the tree.
   explanations.
 - `docs/agent/manager_rules.json` - durable operating rules with priorities.
 - `docs/agent/command_routes.json` - standing owner-command aliases.
+- `docs/agent/crm_card_description_standard.md` - public CRM card
+  description create/update style.
 - `docs/agent/knowledge_shelves.md` - shelf map, placement, deletion policy.
 - `docs/agent/knowledge_map.json` - machine route cards.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
@@ -37,6 +39,7 @@ playbooks instead of broad-reading the tree.
 | `startup_and_identity` | `agent.md` | Startup, answer style, memory boundaries, command routing. |
 | `knowledge_intake` | `docs/agent/knowledge_shelves.md` | New files, docs cleanup, indexing, source-pack policy. |
 | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` | Owner says `Приберись`; no card movement/archive/order/payment writes without separate command. |
+| `crm_card_description_standard` | `docs/agent/crm_card_description_standard.md` | Creating, updating, or cleaning public CRM card descriptions; laconic rich text without sources/provenance, risk blocks, or supplier-check reminders. |
 | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` | Daily control, ready unpaid, staff/load, customer flow, finance, procurement blockers. |
 | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` | Gmail search, labels, drafts, attachments, thread reads, safe mailbox changes. |
 | `business_identity` | `docs/agent/business_identity_playbook.md` | Private ИП/AutoStop requisites route; exact facts live in ignored private files. |

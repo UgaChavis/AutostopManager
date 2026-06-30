@@ -48,6 +48,10 @@ memory, or chat summaries.
   a separate explicit command for that exact target.
 - Use `prepare_crm_card_action` before card description or vehicle_profile
   writes orchestrated by AutostopManager.
+- Public CRM card `description` create/update work must follow
+  `docs/agent/crm_card_description_standard.md`: maximally laconic formatted
+  working facts only, without risks, source/provenance, selection method, or
+  supplier-check reminders.
 - Gmail send/archive/delete/label/draft actions require explicit owner approval
   for the exact mailbox target.
 
@@ -56,6 +60,7 @@ memory, or chat summaries.
 | Owner intent | Open first | Boundary |
 | --- | --- | --- |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup only; no movement/archive/finance/order writes without separate explicit command. |
+| CRM card description create/update | `docs/agent/crm_card_description_standard.md` | Laconic rich-text working facts only; no source/provenance, selection method, risk/caveat blocks, or supplier-check reminders. |
 | Ready unpaid / daily control | `docs/agent/krasnoyarsk_service_management_playbook.md` | Use live ready-unpaid CRM tools and dry-run followups first. |
 | Timer floor | `docs/agent/crm_manager_data_playbook.md` | Use authenticated `bulk_set_deadline_if_below`, dry-run first, active cards only unless scope expands. |
 | VIN/OEM/parts CRM writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` | Never invent OEM numbers, applicability, stock, prices, or selected material rows. |
@@ -71,6 +76,8 @@ memory, or chat summaries.
 - `docs/agent/command_routes.json` - natural owner-command routes.
 - `docs/agent/knowledge_base_index.md` - human knowledge navigation.
 - `docs/agent/knowledge_shelves.md` - placement, deletion, source-pack policy.
+- `docs/agent/crm_card_description_standard.md` - public CRM card description
+  style for create/update/cleanup/writeback tasks.
 - `docs/agent/knowledge_map.json` - machine route cards.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
 - `docs/agent/manager_mcp_catalog.json` - AutostopManager MCP surface.

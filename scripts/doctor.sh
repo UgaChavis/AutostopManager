@@ -140,7 +140,7 @@ else
 fi
 if [[ "$FULL" -eq 1 ]]; then
   mkdir -p "$(dirname "$CRM_PYTEST_BASETEMP")"
-  run "crm pytest" "$CRM_ROOT/.venv/bin/python" -m pytest "$CRM_ROOT" --basetemp "$CRM_PYTEST_BASETEMP"
+  run "crm pytest" bash -c 'cd "$1" && PYTHONPATH="$1/src:$1${PYTHONPATH:+:$PYTHONPATH}" "$1/.venv/bin/python" -m pytest tests --basetemp "$2"' _ "$CRM_ROOT" "$CRM_PYTEST_BASETEMP"
 fi
 
 section "Production Read-Only"

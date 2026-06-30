@@ -56,8 +56,8 @@ that line must belong to that selected part.
 
 Do not write a combined line such as `BMW 34116794429 / Brembo 09.C410.13` when
 the price is for Brembo. Write `Brembo 09.C410.13 диски передние, 2 шт` in the
-material line, and keep `OEM reference: BMW 34116794429` in the card
-description or quote matrix.
+material line, and keep `OEM reference: BMW 34116794429` in the internal lookup
+record or compact public card result.
 
 If the selected part is genuine BMW, the material line may contain the BMW
 number because that is the priced selected part.
@@ -221,14 +221,16 @@ For materials in ЗН:
 - keep line names short
 - put the selected brand/article/package in the name if the catalog field does
   not persist
-- keep OEM references and alternative cross numbers in the card description,
-  not mixed into the priced material row
+- keep OEM references and alternative cross numbers out of the priced material
+  row; public card text must stay compact per
+  `docs/agent/crm_card_description_standard.md`
 - put total procurement cost for a package set as `price` with `quantity=1`
 - use numeric quantity only when price is truly per unit
 - keep client sell price separate from закупка unless owner explicitly asks for
   selling estimate
-- add a short quote matrix to the card description for nontrivial estimates:
-  `operation | OEM reference | selected part | price basis | source/status`
+- add only a short public description result for nontrivial estimates:
+  `operation | OEM/reference | selected part | quantity | price basis`
+  without source/status/provenance text
 
 Before finalizing, re-open the repair order and verify:
 
