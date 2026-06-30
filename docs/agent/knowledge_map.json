@@ -1541,6 +1541,51 @@
         "README.md"
       ]
     },
+    "remote_codex_access": {
+      "title": "Home Windows PC reverse SSH access for Codex",
+      "use_when": [
+        "server-side Codex needs command or filesystem access to the owner's Windows home PC",
+        "connect a home computer to the Autostop server without public SSH",
+        "prepare or verify the home-pc SSH alias and reverse tunnel bootstrap"
+      ],
+      "aliases": [
+        "remote Codex access",
+        "home PC",
+        "home-pc",
+        "reverse SSH",
+        "Windows OpenSSH",
+        "codexadmin",
+        "codex-home-tunnel",
+        "подключить домашний ПК",
+        "доступ Codex к Windows",
+        "удаленный компьютер Codex"
+      ],
+      "keywords": [
+        "Codex",
+        "Windows",
+        "reverse SSH",
+        "OpenSSH Server",
+        "Scheduled Task",
+        "127.0.0.1:22220",
+        "filesystem access",
+        "process access",
+        "no public SSH"
+      ],
+      "questions": [
+        "как подключить домашний ПК к Codex",
+        "какой промпт запустить на домашнем Windows Codex",
+        "как проверить ssh home-pc",
+        "как откатить codex-home-tunnel"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/codex_home_pc_reverse_ssh.md",
+        "scripts/codex_home_pc_bootstrap.ps1"
+      ],
+      "primary_files": [
+        "docs/agent/codex_home_pc_reverse_ssh.md",
+        "scripts/codex_home_pc_bootstrap.ps1"
+      ]
+    },
     "crm_vin_oem_parts_lookup": {
       "title": "CRM VIN/frame OEM parts lookup and compact CRM writeback",
       "use_when": [
