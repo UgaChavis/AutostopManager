@@ -6,6 +6,11 @@
       "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."
     },
     {
+      "id": "home-pc-remote-codex-access",
+      "priority": 6,
+      "rule": "This server has working reverse-SSH access to the owner's home Windows PC through alias home-pc. Use ssh home-pc for filesystem and process work, verify with docs/agent/codex_home_pc_reverse_ssh.md, and do not rotate or overwrite home-pc key material unless the Windows side is updated in the same operation."
+    },
+    {
       "id": "crm-source-of-truth",
       "priority": 10,
       "rule": "Do not copy CRM card, vehicle, client, repair-order, or cashbox data into manager memory as a parallel database. Read it from AutoStop CRM MCP when needed."

@@ -13,6 +13,9 @@ Hard rules kept here so Codex sees them immediately:
   attachments, and sent/archive history.
 - AutostopManager stores only durable non-CRM memory, command routes, playbooks,
   compact catalogs, local knowledge indexes, and verification reports.
+- This server has working reverse-SSH access to the owner's home Windows PC:
+  use `ssh home-pc`; open `docs/agent/codex_home_pc_reverse_ssh.md` before
+  changing that route, and do not rotate its keys without updating Windows too.
 - For non-trivial owner requests, start with
   `python -m autostop_manager.cli agent-brief "<query>"` or
   `python -m autostop_manager.cli prepare-context "<query>"`.
@@ -33,6 +36,7 @@ Hard rules kept here so Codex sees them immediately:
   separate explicit command for that exact target.
 - Canonical route highlights: `Приберись`, CRM card descriptions,
   `ready unpaid`, Timer floor,
+  `home-pc` remote Codex access,
   `docs/agent/crm_vin_oem_parts_lookup_playbook.md`, and
   `docs/agent/business_document_quality_playbook.md`.
 - After docs/routing changes run `knowledge-audit`, `annotations-audit`, and
@@ -41,5 +45,6 @@ Hard rules kept here so Codex sees them immediately:
 Detailed docs: `agent.md`, `docs/agent/autostop_manager_skill.md`,
 `docs/agent/manager_rules.json`, `docs/agent/command_routes.json`,
 `docs/agent/crm_card_description_standard.md`,
-`docs/agent/knowledge_base_index.md`, `docs/agent/manager_mcp_catalog.json`,
-and `docs/agent/crm_mcp_catalog.json`.
+`docs/agent/knowledge_base_index.md`,
+`docs/agent/codex_home_pc_reverse_ssh.md`,
+`docs/agent/manager_mcp_catalog.json`, and `docs/agent/crm_mcp_catalog.json`.

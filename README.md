@@ -9,6 +9,7 @@ verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
 - `AGENTS.md` - short Codex compatibility shim that points to `agent.md`.
 - `docs/agent/knowledge_base_index.md` - compact human navigation.
 - `docs/agent/knowledge_shelves.md` - file placement and deletion policy.
+- `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access.
 - `docs/agent/knowledge_map.json` - machine route cards for `knowledge-probe`.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
 - `docs/agent/command_routes.json` - standing owner-command routes.
@@ -70,6 +71,7 @@ separately after code, docs contracts, or route behavior changes.
 | Vehicle identity / OEM | `docs/agent/vehicle_identity_playbook.md` |
 | Parts sourcing | `docs/agent/ai_parts_krasnoyarsk_playbook.md` |
 | Service management | `docs/agent/krasnoyarsk_service_management_playbook.md` |
+| Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
 | Deployment | `docs/agent/deployment_runbook.md` |
 
 ## Documentation Hygiene

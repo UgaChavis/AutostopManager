@@ -1,108 +1,60 @@
 # Codex Home PC Reverse SSH Access
 
-Use this route when the owner wants this server-side Codex agent to operate a
-Windows 10/11 home PC with filesystem and process access, without exposing SSH
-on the home router or public internet.
+Server-side Codex has working command and filesystem access to the owner's home
+Windows PC.
 
-## Architecture
+## Current Route
 
-- Home PC runs Windows OpenSSH Server on `127.0.0.1:22` only.
-- Home PC holds a persistent outbound SSH session to this server as
-  `codex-home-tunnel`.
-- The outbound session creates a server-local reverse listener:
-  `127.0.0.1:22220 -> home-pc 127.0.0.1:22`.
-- Server-side Codex connects with `ssh home-pc`.
-- The Windows user is `codexadmin` and belongs to local Administrators.
-- Private bootstrap material lives outside git:
+- Connect from this server with `ssh home-pc`.
+- Home PC: `DESKTOP-BUSO4I8`, Windows OpenSSH, user `codexadmin`.
+- Reverse listener on server: `127.0.0.1:22220`.
+- Home SSH listens only on `127.0.0.1:22`; no router port-forward or public
+  home SSH.
+- Home PC keeps an outbound SSH tunnel as server user `codex-home-tunnel`.
+- Private bootstrap/key material is outside git:
   `/root/codex-home-remote/bootstrap/current`.
 
-Do not paste private key contents into chat or commit them to git.
-Do not rotate or overwrite `home-pc` key material unless the Windows side and
-server side are updated together.
+Do not print, commit, rotate, or overwrite private keys or
+`codexadmin-password.txt`. Do not rotate `home-pc` keys unless Windows and
+server sides are updated together.
 
-## Server State
+## Server Files
 
-Expected server-side pieces:
+- `/root/.ssh/config`: alias `home-pc`.
+- `/root/.ssh/codex_home_ed25519`: server-to-home key.
+- `/etc/ssh/sshd_config.d/90-codex-home-tunnel.conf`: restricts
+  `codex-home-tunnel` to remote forwarding on `127.0.0.1:22220`.
+- `scripts/codex_home_pc_bootstrap.ps1`: canonical Windows bootstrap script.
 
-- SSH alias: `/root/.ssh/config`, host `home-pc`.
-- Server-to-home key: `/root/.ssh/codex_home_ed25519`.
-- Reverse tunnel user: `codex-home-tunnel`.
-- Tunnel policy: `/etc/ssh/sshd_config.d/90-codex-home-tunnel.conf`.
-- Windows bootstrap bundle:
-  `/root/codex-home-remote/bootstrap/current`.
-
-The tunnel user is restricted to public-key auth and remote port forwarding for
-`127.0.0.1:22220`. It must not receive shell, TTY, agent forwarding, public
-listen addresses, or password auth.
-
-## Prompt For The Home Windows Codex Agent
-
-Paste this prompt into Codex running on the home Windows PC from an elevated
-administrator session:
-
-```text
-You are Codex running on this Windows 10/11 home PC with administrator rights.
-Set up the prepared Autostop Codex reverse SSH access. Work autonomously, but do
-not print private keys, passwords, or full secret file contents.
-
-Goal:
-- Download the prepared bootstrap bundle from the Autostop server.
-- Run the Windows bootstrap script from the bundle.
-- Configure OpenSSH Server to listen only on 127.0.0.1.
-- Create or reuse local admin user codexadmin.
-- Install the server public key for codexadmin.
-- Install the reverse tunnel private key locally under ProgramData.
-- Register and start a SYSTEM scheduled task named
-  \Autostop\CodexRemoteReverseTunnel.
-- Report only status lines and any non-secret errors.
-
-Use this default server route:
-- host: 46.8.254.243
-- user: root
-- bundle: /root/codex-home-remote/bootstrap/current
-
-Implementation:
-1. Confirm the session is elevated. If not elevated, stop and tell the owner to
-   restart Codex/PowerShell as Administrator.
-2. Create C:\ProgramData\CodexRemote\bootstrap.
-3. Use the existing SSH access from this home PC to the server to download the
-   bundle. Start with:
-   scp -r root@46.8.254.243:/root/codex-home-remote/bootstrap/current/* C:\ProgramData\CodexRemote\bootstrap\
-   If that host/user is not the configured SSH route on this PC, inspect the
-   local SSH config and use the existing server alias. Do not print key content.
-4. Run:
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\CodexRemote\bootstrap\codex_home_pc_bootstrap.ps1
-5. After it finishes, verify:
-   - Get-Service sshd
-   - Get-NetTCPConnection -LocalPort 22 -State Listen
-   - Get-ScheduledTask -TaskName CodexRemoteReverseTunnel -TaskPath \Autostop\
-   - Get-Content C:\ProgramData\CodexRemote\logs\reverse-tunnel.log -Tail 20
-6. Send back only compact status and errors. Do not paste:
-   - C:\ProgramData\CodexRemote\ssh\home_reverse_to_server_ed25519
-   - C:\ProgramData\CodexRemote\secrets\codexadmin-password.txt
-   - any private SSH key or password.
-```
-
-## Server Verification After Home Bootstrap
-
-Run from `/opt/AutostopManager` on this server:
+## Quick Check
 
 ```bash
 ss -ltnp | rg '127\.0\.0\.1:22220'
-ssh -o BatchMode=yes home-pc 'hostname && whoami'
-ssh home-pc 'powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"'
-ssh home-pc 'powershell -NoProfile -Command "New-Item -ItemType Directory -Force C:\ProgramData\CodexRemote\probe | Out-Null; Set-Content C:\ProgramData\CodexRemote\probe\server_probe.txt ok; Get-Content C:\ProgramData\CodexRemote\probe\server_probe.txt"'
+ssh -o BatchMode=yes home-pc 'cmd /c echo HOME_PC_OK && hostname && whoami'
 ```
 
-Expected results:
+Expected:
 
-- `127.0.0.1:22220` listens only on loopback.
-- `ssh home-pc` authenticates as `codexadmin`.
-- PowerShell commands run on the home PC.
-- Test file write/read under `C:\ProgramData\CodexRemote\probe` returns `ok`.
-- If the tunnel log contains old `code=255` lines, confirm they are followed by
-  a later `starting reverse tunnel` with no later exit before treating them as
-  current failures.
+```text
+HOME_PC_OK
+DESKTOP-BUSO4I8
+desktop-buso4i8\codexadmin
+```
+
+If the tunnel is down, check Windows task `\Autostop\CodexRemoteReverseTunnel`
+and `C:\ProgramData\CodexRemote\logs\reverse-tunnel.log`. Old `code=255` lines
+are not current failures if a later `starting reverse tunnel` has no later
+exit.
+
+## Windows Bootstrap
+
+Use `scripts/codex_home_pc_bootstrap.ps1` only for setup/repair. It installs
+OpenSSH Server, sets loopback-only SSH, creates/reuses `codexadmin`, installs
+the server public key, stores the tunnel key under ProgramData, and registers
+the SYSTEM scheduled task.
+
+The home-side Codex/PowerShell session must run elevated. Report only compact
+status; never paste private key, password, or token contents.
 
 ## Rollback
 
@@ -120,5 +72,4 @@ Windows side:
 ```powershell
 Unregister-ScheduledTask -TaskName CodexRemoteReverseTunnel -TaskPath \Autostop\ -Confirm:$false
 Stop-Service sshd
-# Restore C:\ProgramData\ssh\sshd_config from its .codex-remote.bak timestamp if needed.
 ```

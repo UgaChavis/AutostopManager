@@ -97,6 +97,39 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert "`AGENTS.md` - compact Codex compatibility shim" in index
 
 
+def test_home_pc_remote_access_is_documented_as_current_capability():
+    checked_paths = [
+        ROOT / "AGENTS.md",
+        ROOT / "agent.md",
+        ROOT / "README.md",
+        ROOT / "docs" / "agent" / "knowledge_base_index.md",
+        ROOT / "docs" / "agent" / "knowledge_shelves.md",
+        ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md",
+        ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
+        ROOT / "docs" / "agent" / "knowledge_map.json",
+        ROOT / "docs" / "agent" / "manager_rules.json",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
+
+    for expected in [
+        "home-pc",
+        "ssh home-pc",
+        "DESKTOP-BUSO4I8",
+        "127.0.0.1:22220",
+        "codex-home-tunnel",
+        "codexadmin",
+        "do not rotate",
+        "no public home SSH",
+    ]:
+        assert expected in combined
+
+    route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
+    assert "remote_codex_access" in route["domains"]
+    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"][
+        "source_of_truth_files"
+    ]
+
+
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():
     checked_paths = [
         ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md",

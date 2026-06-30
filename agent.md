@@ -23,6 +23,14 @@ Do not store raw CRM exports, full Gmail threads, phone/VIN/license tables,
 cashbox ledgers, supplier credentials, OAuth state, or secrets in Git, manager
 memory, or chat summaries.
 
+## Remote Hosts
+
+- `home-pc`: owner's home Windows PC, reachable from this server through the
+  reverse SSH listener `127.0.0.1:22220`. Use `ssh home-pc` for filesystem and
+  process work. Open `docs/agent/codex_home_pc_reverse_ssh.md` before changing
+  the route; do not rotate or overwrite its key material unless the Windows
+  side is updated in the same operation.
+
 ## Startup Loop
 
 1. For non-trivial owner requests, run one compact context command first:
@@ -66,6 +74,7 @@ memory, or chat summaries.
 | VIN/OEM/parts CRM writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` | Never invent OEM numbers, applicability, stock, prices, or selected material rows. |
 | Business documents | `docs/agent/business_document_quality_playbook.md` | AutoStop service documents use the CRM print module and standard templates. |
 | Gmail | `docs/agent/gmail_workflow_playbook.md` | Read/search first; mutating actions require explicit approval. |
+| Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Server can use `ssh home-pc`; no public home SSH; no key rotation without Windows-side update. |
 | Documentation hygiene | `docs/agent/knowledge_shelves.md` | Delete only fully migrated/obsolete files; update map/index/annotations and run audits. |
 
 ## Canonical Detail Files
@@ -80,6 +89,8 @@ memory, or chat summaries.
   style for create/update/cleanup/writeback tasks.
 - `docs/agent/knowledge_map.json` - machine route cards.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
+- `docs/agent/codex_home_pc_reverse_ssh.md` - server-to-home Windows reverse
+  SSH route for Codex filesystem/process access.
 - `docs/agent/manager_mcp_catalog.json` - AutostopManager MCP surface.
 - `docs/agent/crm_mcp_catalog.json` - AutoStop CRM MCP surface.
 

@@ -1546,12 +1546,13 @@
       "use_when": [
         "server-side Codex needs command or filesystem access to the owner's Windows home PC",
         "connect a home computer to the Autostop server without public SSH",
-        "prepare or verify the home-pc SSH alias and reverse tunnel bootstrap"
+        "prepare, verify, or repair the home-pc SSH alias and reverse tunnel"
       ],
       "aliases": [
         "remote Codex access",
         "home PC",
         "home-pc",
+        "DESKTOP-BUSO4I8",
         "reverse SSH",
         "Windows OpenSSH",
         "codexadmin",
@@ -1563,18 +1564,21 @@
       "keywords": [
         "Codex",
         "Windows",
+        "DESKTOP-BUSO4I8",
         "reverse SSH",
         "OpenSSH Server",
         "Scheduled Task",
         "127.0.0.1:22220",
         "filesystem access",
         "process access",
-        "no public SSH"
+        "no public SSH",
+        "do not rotate keys"
       ],
       "questions": [
         "как подключить домашний ПК к Codex",
         "какой промпт запустить на домашнем Windows Codex",
         "как проверить ssh home-pc",
+        "есть ли доступ к домашнему ПК с сервера",
         "как откатить codex-home-tunnel"
       ],
       "source_of_truth_files": [
