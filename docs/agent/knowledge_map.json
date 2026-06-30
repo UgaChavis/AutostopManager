@@ -1546,7 +1546,8 @@
       "use_when": [
         "server-side Codex needs command or filesystem access to the owner's Windows home PC",
         "connect a home computer to the Autostop server without public SSH",
-        "prepare, verify, or repair the home-pc SSH alias and reverse tunnel"
+        "prepare, verify, or repair the home-pc SSH alias and reverse tunnel",
+        "interact with the home PC through ssh, sftp/scp, pwsh, Python, or visible-desktop helper scripts"
       ],
       "aliases": [
         "remote Codex access",
@@ -1557,6 +1558,12 @@
         "Windows OpenSSH",
         "codexadmin",
         "codex-home-tunnel",
+        "PowerShell 7",
+        "pwsh",
+        "Python 3.14.6",
+        "scp",
+        "sftp",
+        "CodexRemote helper scripts",
         "подключить домашний ПК",
         "доступ Codex к Windows",
         "удаленный компьютер Codex"
@@ -1569,6 +1576,13 @@
         "OpenSSH Server",
         "Scheduled Task",
         "127.0.0.1:22220",
+        "PowerShell 7.6.3",
+        "Python 3.14.6",
+        "scp",
+        "sftp",
+        "write-public-desktop-note.ps1",
+        "open-in-user-session.ps1",
+        "health-check.ps1",
         "filesystem access",
         "process access",
         "no public SSH",
@@ -1578,6 +1592,8 @@
         "как подключить домашний ПК к Codex",
         "какой промпт запустить на домашнем Windows Codex",
         "как проверить ssh home-pc",
+        "как использовать scp или sftp с home-pc",
+        "как открыть файл на домашнем ПК через Codex",
         "есть ли доступ к домашнему ПК с сервера",
         "как откатить codex-home-tunnel"
       ],

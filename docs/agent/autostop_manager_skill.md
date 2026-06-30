@@ -56,7 +56,7 @@ does not mean live CRM or MCP context is empty.
 | Parts sourcing | `docs/agent/parts_search_playbook.md`, then `zzap_search_playbook.md` | Drom first, then ZZap/Avito; confirm availability beyond listing text. |
 | Labor estimate | `docs/agent/work_labor_pricing_playbook.md`, `estimate_repair_work_cost` | Read-only estimate; no repair-order writes without exact approval. |
 | Business documents | `docs/agent/business_document_quality_playbook.md` | Use CRM print module for AutoStop service documents. |
-| Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current server-to-home Windows reverse SSH; do not rotate keys without Windows-side update. |
+| Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current server-to-home Windows reverse SSH with `ssh`, `sftp`/`scp`, `pwsh`, Python, and helper scripts; do not rotate keys without Windows-side update. |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` | Delete only after migration and green audits. |
 
 ## CRM Write Boundary

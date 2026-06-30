@@ -25,7 +25,8 @@ playbooks instead of broad-reading the tree.
   description create/update style.
 - `docs/agent/knowledge_shelves.md` - shelf map, placement, deletion policy.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - current `home-pc` reverse SSH
-  route from this server to the owner's Windows PC.
+  route, toolset, and helper workflow from this server to the owner's Windows
+  PC.
 - `docs/agent/knowledge_map.json` - machine route cards.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
 - `docs/agent/manager_mcp_catalog.json` - AutostopManager MCP tool surface.
@@ -58,7 +59,7 @@ playbooks instead of broad-reading the tree.
 | `ecu_calibration_programming` | `docs/agent/ecu_calibration_programming_playbook.md` | ECU flash/coding/calibration, UDS/J2534, BMW KOMBI/legal limits. |
 | `3d_printing_cad` | `docs/agent/3d_printing_cad_playbook.md` | CAD/STL/Anycubic Kobra S1 workflow. |
 | `deployment` | `docs/agent/deployment_runbook.md` | Publishing, GitHub/private-data boundary, verification order. |
-| `remote_codex_access` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current `ssh home-pc` access to the owner's Windows PC through reverse SSH. |
+| `remote_codex_access` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current `ssh home-pc`, `sftp`/`scp`, `pwsh`, and Python access to the owner's Windows PC through reverse SSH. |
 
 ## Business Documents Rule
 

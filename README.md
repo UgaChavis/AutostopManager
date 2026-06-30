@@ -9,7 +9,8 @@ verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
 - `AGENTS.md` - short Codex compatibility shim that points to `agent.md`.
 - `docs/agent/knowledge_base_index.md` - compact human navigation.
 - `docs/agent/knowledge_shelves.md` - file placement and deletion policy.
-- `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access.
+- `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access,
+  toolset, and helper workflow.
 - `docs/agent/knowledge_map.json` - machine route cards for `knowledge-probe`.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
 - `docs/agent/command_routes.json` - standing owner-command routes.

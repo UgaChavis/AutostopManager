@@ -15,7 +15,8 @@ Hard rules kept here so Codex sees them immediately:
   compact catalogs, local knowledge indexes, and verification reports.
 - This server has working reverse-SSH access to the owner's home Windows PC:
   use `ssh home-pc`; open `docs/agent/codex_home_pc_reverse_ssh.md` before
-  changing that route, and do not rotate its keys without updating Windows too.
+  interacting with or changing that route. `sftp`/`scp`, `pwsh`, and `python`
+  are available there. Do not rotate its keys without updating Windows too.
 - For non-trivial owner requests, start with
   `python -m autostop_manager.cli agent-brief "<query>"` or
   `python -m autostop_manager.cli prepare-context "<query>"`.

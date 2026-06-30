@@ -120,6 +120,13 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "codexadmin",
         "do not rotate",
         "no public home SSH",
+        "sftp",
+        "scp",
+        "pwsh",
+        "PowerShell 7.6.3",
+        "Python 3.14.6",
+        "write-public-desktop-note.ps1",
+        "open-in-user-session.ps1",
     ]:
         assert expected in combined
 
