@@ -15,8 +15,7 @@ playbooks instead of broad-reading the tree.
 
 ## Core Control Files
 
-- `agent.md` - canonical startup instruction for the manager agent.
-- `AGENTS.md` - compact Codex compatibility shim; it points to `agent.md`.
+- `AGENTS.md` - canonical compact startup instruction for Codex.
 - `docs/agent/autostop_manager_skill.md` - detailed startup behavior and route
   explanations.
 - `docs/agent/manager_rules.json` - durable operating rules with priorities.
@@ -39,7 +38,7 @@ playbooks instead of broad-reading the tree.
 
 | Domain | Open first | Use when |
 | --- | --- | --- |
-| `startup_and_identity` | `agent.md` | Startup, answer style, memory boundaries, command routing. |
+| `startup_and_identity` | `AGENTS.md` | Startup, answer style, memory boundaries, command routing. |
 | `knowledge_intake` | `docs/agent/knowledge_shelves.md` | New files, docs cleanup, indexing, source-pack policy. |
 | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` | Owner says `Приберись`; no card movement/archive/order/payment writes without separate command. |
 | `crm_card_description_standard` | `docs/agent/crm_card_description_standard.md` | Creating, updating, or cleaning public CRM card descriptions; laconic rich text without sources/provenance, risk blocks, or supplier-check reminders. |

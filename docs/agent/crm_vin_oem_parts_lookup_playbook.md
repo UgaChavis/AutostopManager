@@ -173,6 +173,11 @@ Classify before decoding.
 If supplier/catalog APIs are not configured, use the generated
 `manual_public_search_queries` only as search starting points. They intentionally
 exclude raw VIN/frame values and must not be treated as OEM or закупка proof.
+For public catalog or marketplace discovery, use CRM agent `search_web_multi`
+first, then ordinary excerpt. For JS-heavy public pages, the CRM agent may use
+`fetch_page_browser` after that. Browser text can support a
+manual evidence trail, but CAPTCHA, login, paywall, IP block, or private
+cabinet pages require manual/approved account access and must not be bypassed.
 For 10-card or broad CRM quality checks, run `benchmark_vin_parts_lookup` /
 `vin-parts-benchmark` before claiming coverage. It reports identity confidence,
 part-intent recognition, safe public-query coverage, PartsAPI/17VIN dry-run

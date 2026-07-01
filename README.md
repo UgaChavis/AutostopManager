@@ -5,8 +5,7 @@ verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
 
 ## Start Here
 
-- `agent.md` - canonical startup instruction for the manager agent.
-- `AGENTS.md` - short Codex compatibility shim that points to `agent.md`.
+- `AGENTS.md` - canonical compact startup instruction for Codex.
 - `docs/agent/knowledge_base_index.md` - compact human navigation.
 - `docs/agent/knowledge_shelves.md` - file placement and deletion policy.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access,
@@ -62,7 +61,7 @@ separately after code, docs contracts, or route behavior changes.
 
 | Task | Open first |
 | --- | --- |
-| Startup / identity | `agent.md` |
+| Startup / identity | `AGENTS.md` |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` |
 | CRM manager data summaries | `docs/agent/crm_manager_data_playbook.md` |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` |
@@ -71,6 +70,7 @@ separately after code, docs contracts, or route behavior changes.
 | VIN/OEM/parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle identity / OEM | `docs/agent/vehicle_identity_playbook.md` |
 | Parts sourcing | `docs/agent/ai_parts_krasnoyarsk_playbook.md` |
+| Internet / repair web research | `docs/agent/automotive_repair_source_playbook.md` |
 | Service management | `docs/agent/krasnoyarsk_service_management_playbook.md` |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
 | Deployment | `docs/agent/deployment_runbook.md` |

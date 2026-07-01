@@ -20,7 +20,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 
 | Shelf | Domain | Open first |
 | --- | --- | --- |
-| Manager startup | `startup_and_identity` | `agent.md` |
+| Manager startup | `startup_and_identity` | `AGENTS.md` |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
@@ -43,7 +43,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 
 ## File Classes
 
-- `active_control`: `agent.md`, `AGENTS.md`, README, route maps, MCP catalogs,
+- `active_control`: `AGENTS.md`, README, route maps, MCP catalogs,
   command routes, and startup rules.
 - `active_playbook`: workflow instructions opened by route cards.
 - `structured_catalog`: JSON/JSONL/CSV/YAML/SQL registries used by playbooks.
@@ -58,7 +58,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 
 ## Placement Rules
 
-- Put startup summaries in `agent.md`; keep `AGENTS.md` as a short Codex shim.
+- Put compact startup behavior in `AGENTS.md`.
 - Prefer updating an existing canonical file over creating a new route file.
 - Put detailed procedures in `docs/agent/*_playbook.md`.
 - Put route metadata in `knowledge_map.json`.

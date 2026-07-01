@@ -201,6 +201,11 @@
       "rule": "For repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, consult docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts."
     },
     {
+      "id": "browser-web-research-boundary",
+      "priority": 31,
+      "rule": "For public internet research, use CRM agent search_web_multi first, then excerpt, and use fetch_page_browser only for JS-heavy public pages. Do not bypass CAPTCHA, login walls, paywalls, IP blocks, private cabinets, or access restrictions; report manual or approved account access required."
+    },
+    {
       "id": "bmw-f15-n63-route",
       "priority": 31,
       "rule": "For BMW X5 F15 xDrive50i, N63TU/N63T, BDC/gateway/network faults, F15 electrical/electronics, MEVD17.2.8, injector bulletins, misfires, oil consumption, or cooling faults, use docs/agent/bmw_repair_playbook.md and the indexed BMW repair source cache, then verify VIN-specific facts through BMW ISTA/AIR/ETK or official BMW sources."

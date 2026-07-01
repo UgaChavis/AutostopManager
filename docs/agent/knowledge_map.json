@@ -12,7 +12,7 @@
       ],
       "aliases": [
         "startup",
-        "agent.md",
+        "AGENTS.md",
         "agent instructions",
         "agent identity",
         "manager rules",
@@ -35,7 +35,7 @@
         "журнал запусков"
       ],
       "keywords": [
-        "agent.md",
+        "AGENTS.md",
         "today_context",
         "prepare_manager_context",
         "memory boundary",
@@ -60,7 +60,6 @@
         "как журналировать автопилот или закупку"
       ],
       "source_of_truth_files": [
-        "agent.md",
         "AGENTS.md",
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
@@ -68,7 +67,6 @@
         "docs/agent/manager_mcp_catalog.json"
       ],
       "primary_files": [
-        "agent.md",
         "AGENTS.md",
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
@@ -450,18 +448,26 @@
         "diagnostics",
         "repair manuals",
         "service information",
+        "web research",
+        "browser research",
         "диагностика",
         "ремонт",
         "ошибка",
         "ошибки",
         "электрика",
         "схемы",
+        "поиск по форумам",
+        "браузерный поиск",
         "TSB",
         "recall"
       ],
       "keywords": [
         "DTC",
         "fault code",
+        "fetch_page_browser",
+        "Playwright",
+        "Chromium",
+        "forum research",
         "wiring",
         "torque",
         "labor",
@@ -473,6 +479,8 @@
       "questions": [
         "где искать техническую информацию по ремонту",
         "какой источник использовать для ошибки или схемы",
+        "как искать профильные форумы по ремонту",
+        "когда использовать браузерный fetch для сайта",
         "как проверить TSB recall wiring torque fluids"
       ],
       "source_of_truth_files": [
@@ -1185,6 +1193,8 @@
         "оригинал или заменитель",
         "цена непонятна",
         "AI parts search",
+        "browser search",
+        "fetch_page_browser",
         "parts sourcing workflow",
         "offer scoring",
         "seller call",
@@ -1219,6 +1229,7 @@
         "new parts",
         "seller",
         "price comparison",
+        "browser rendered listing",
         "procurement price",
         "local availability",
         "package price",
@@ -1288,6 +1299,7 @@
         "как построить отчет по найденным запчастям",
         "как вести локальную базу продавцов Красноярска",
         "как проверить аналог по локальному офлайн каталогу перед поиском цены",
+        "когда использовать браузерный fetch для Drom ZZap Avito",
         "какие workflow docs использовать для поиска и оценки предложений по запчастям"
       ],
       "source_of_truth_files": [
@@ -1650,6 +1662,7 @@
         "NGK Part Finder",
         "offline PDF catalog",
         "local catalog cache",
+        "fetch_page_browser",
         "офлайн каталог запчастей"
       ],
       "keywords": [
@@ -1696,7 +1709,8 @@
         "offline_parts_catalogs",
         "catalog_index.json",
         "PDF catalog",
-        "XLSX interchange"
+        "XLSX interchange",
+        "browser public catalog"
       ],
       "questions": [
         "как найти оригинальный номер детали по VIN из карточки CRM",

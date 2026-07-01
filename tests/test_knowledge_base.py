@@ -396,7 +396,7 @@ def test_probe_routes_prepare_for_work_to_agent_entrypoint(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "startup_and_identity"
-    assert result["open_first"] == "agent.md"
+    assert result["open_first"] == "AGENTS.md"
     assert result.get("command_route") is None
 
 

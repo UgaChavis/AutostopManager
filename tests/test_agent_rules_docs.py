@@ -13,39 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_codex_native_startup_files_are_present_and_safe():
-    agent_path = ROOT / "agent.md"
     agents_path = ROOT / "AGENTS.md"
     config_path = ROOT / ".codex" / "config.toml"
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     index = (ROOT / "docs" / "agent" / "knowledge_base_index.md").read_text(encoding="utf-8")
 
-    assert agent_path.is_file()
+    assert not (ROOT / "agent.md").exists()
     assert agents_path.is_file()
     assert config_path.is_file()
-
-    agent = agent_path.read_text(encoding="utf-8")
-    assert len(agent.encode("utf-8")) < 32 * 1024
-    for expected in [
-        "AutoStop CRM: cards, clients, vehicles",
-        "Gmail: mail, threads, labels",
-        "AutostopManager: durable non-CRM memory",
-        "bootstrap_context",
-        "manager_board_scan",
-        "preflight/dry-run",
-        "manager run ledger",
-        "Приберись",
-        "Ready unpaid",
-        "Timer floor",
-        "crm_vin_oem_parts_lookup_playbook.md",
-        "business_document_quality_playbook.md",
-        "knowledge-sync",
-        "knowledge-audit",
-        "annotations-audit",
-        "skills-audit",
-        "cleanup-audit",
-        "docs/agent/autostop_manager_skill.md",
-    ]:
-        assert expected in agent
 
     agents = agents_path.read_text(encoding="utf-8")
     assert len(agents.encode("utf-8")) < 32 * 1024
@@ -73,7 +48,7 @@ def test_codex_native_startup_files_are_present_and_safe():
 
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert config["project_doc_max_bytes"] == 65536
-    assert config["project_doc_fallback_filenames"] == ["agent.md", "README.md"]
+    assert config["project_doc_fallback_filenames"] == ["AGENTS.md", "README.md"]
     assert config["mcp_servers"]["autostopcrm"]["url"] == "https://crm.autostopcrm.ru/mcp"
     assert config["mcp_servers"]["autostopcrm"]["enabled"] is True
     assert config["mcp_servers"]["autostopcrm"]["tool_timeout_sec"] == 90
@@ -95,16 +70,15 @@ def test_codex_native_startup_files_are_present_and_safe():
     config_text = config_path.read_text(encoding="utf-8").casefold()
     assert not re.search(r"(api[_-]?key|token|secret|password|credential)", config_text)
 
-    assert "`agent.md` - canonical startup instruction" in readme
-    assert "`AGENTS.md` - short Codex compatibility shim" in readme
-    assert "`agent.md` - canonical startup instruction" in index
-    assert "`AGENTS.md` - compact Codex compatibility shim" in index
+    assert "`AGENTS.md` - canonical compact startup instruction for Codex." in readme
+    assert "`AGENTS.md` - canonical compact startup instruction for Codex." in index
+    assert "agent.md" not in readme
+    assert "agent.md" not in index
 
 
 def test_home_pc_remote_access_is_documented_as_current_capability():
     checked_paths = [
         ROOT / "AGENTS.md",
-        ROOT / "agent.md",
         ROOT / "README.md",
         ROOT / "docs" / "agent" / "knowledge_base_index.md",
         ROOT / "docs" / "agent" / "knowledge_shelves.md",
@@ -144,7 +118,6 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
 def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
     checked_paths = [
         ROOT / "AGENTS.md",
-        ROOT / "agent.md",
         ROOT / "README.md",
         ROOT / "docs" / "agent" / "knowledge_shelves.md",
         ROOT / "docs" / "agent" / "autostop_manager_skill.md",

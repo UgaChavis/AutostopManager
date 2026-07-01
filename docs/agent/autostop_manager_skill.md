@@ -1,7 +1,7 @@
 # AutostopManager Agent Skill
 
-Detailed router for the AutoStop manager agent. Start with `agent.md`; use this
-file only when more route detail is needed.
+Detailed router for the AutoStop manager agent. Start with `AGENTS.md`; use
+this file only when more route detail is needed.
 
 ## Identity
 
@@ -50,10 +50,10 @@ does not mean live CRM or MCP context is empty.
 | Vehicle identity / VIN/frame | `docs/agent/vehicle_identity_playbook.md`, `decode_vehicle_identity` | Classify identifier and market before OEM or parts work. |
 | Oils/fluids/capacities | `docs/agent/fluid_maintenance_playbook.md`, `recommend_fluid_maintenance_sources` | Do not confirm specs/capacities without source route. |
 | Transmission/gearbox | `docs/agent/transmission_playbook.md`; DSG route opens `dsg_transmission_playbook.md` | Require exact gearbox/context before final repair facts. |
-| Repair diagnostics/source facts | `docs/agent/automotive_repair_source_playbook.md`, `recommend_automotive_sources` | Do not invent torque, pinout, labor time, ADAS/SRS/HV, programming facts. |
+| Repair diagnostics/source facts | `docs/agent/automotive_repair_source_playbook.md`, `recommend_automotive_sources` | Use CRM `search_web_multi`, then excerpt; use browser fetch only for public JS-heavy pages. Do not invent torque, pinout, labor time, ADAS/SRS/HV, programming facts. |
 | BMW | `docs/agent/bmw_repair_playbook.md` | Use BMW pack as route/index; verify final VIN-specific facts through official/licensed sources. |
 | Toyota GR Yaris | `docs/agent/toyota_gr_yaris_playbook.md` | Verify frame/VIN, market, grade, transmission, diff package before final facts. |
-| Parts sourcing | `docs/agent/parts_search_playbook.md`, then `zzap_search_playbook.md` | Drom first, then ZZap/Avito; confirm availability beyond listing text. |
+| Parts sourcing | `docs/agent/parts_search_playbook.md`, then `zzap_search_playbook.md` | Use CRM `search_web_multi` for public discovery; Drom first, then ZZap/Avito; browser fetch may help with public JS listings, but availability still needs confirmation beyond listing text. |
 | Labor estimate | `docs/agent/work_labor_pricing_playbook.md`, `estimate_repair_work_cost` | Read-only estimate; no repair-order writes without exact approval. |
 | Business documents | `docs/agent/business_document_quality_playbook.md` | Use CRM print module for AutoStop service documents. |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current server-to-home Windows reverse SSH with `ssh`, `sftp`/`scp`, `pwsh`, Python, and helper scripts; do not rotate keys without Windows-side update. |

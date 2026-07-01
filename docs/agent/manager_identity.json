@@ -21,6 +21,7 @@
     "build a VIN/OEM lookup dossier with source-backed catalog routes, OEM candidates, supersessions, confidence, and missing context before marketplace search",
     "estimate labor-only repair work cost from public Russia STO samples as average price plus AutoStop 50% markup without writing repair-order works",
     "route repair diagnostics and technical recommendations through the automotive repair source catalog before giving source-sensitive facts",
+    "use CRM search_web_multi and browser-backed public web research without bypassing CAPTCHA, login, paywall, IP block, or private cabinet restrictions",
     "route oils, operating fluids, capacities, and ТО fluid planning through the fluid maintenance playbook before giving source-sensitive facts",
     "route Krasnoyarsk workshop-management tasks through the service-management playbook before ad hoc operational decisions",
     "run card-focused board-cleanup autopilot when the owner says the canonical command Приберись",

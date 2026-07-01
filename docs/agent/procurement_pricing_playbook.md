@@ -74,7 +74,8 @@ order as a payable invoice. Mark it as `предварительная смет�
 2. Search local Krasnoyarsk availability:
    ROSSKO/Armtek/Autopiter/Emex/Exist/Autodoc/fifth-gear/local suppliers if
    accessible, Drom Красноярск, Avito Красноярск, ZZap with region, and direct
-   supplier phone confirmation when web data is weak.
+   supplier phone confirmation when web data is weak. For public discovery,
+   use CRM agent `search_web_multi` before opening result excerpts.
 3. Search nearby Siberia if Krasnoyarsk is weak:
    Novosibirsk, Kemerovo, Tomsk, Irkutsk, Barnaul.
 4. Search Moscow/Russia order:
@@ -142,6 +143,12 @@ Expected secret names are listed in `procurement_price_sources.json`.
 Do not scrape private supplier cabinets. If an API does not exist or terms are
 unclear, mark the line `needs account/API confirmation` and use manual
 checking.
+
+For public JS-heavy pages, use the CRM agent browser layer only after
+`search_web_multi` and ordinary excerpt fail to expose useful text. Do not use
+it to bypass CAPTCHA, login walls, paywalls, IP blocks, or supplier cabinet
+restrictions; record the access flag and ask for manual/approved account
+access.
 
 ## Query Pattern
 

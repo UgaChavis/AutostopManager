@@ -16,6 +16,27 @@ Use the local knowledge package in `docs/agent/automotive_sources/`:
 Do not update `last_verified` fields in source catalogs during documentation
 hygiene unless the external source was actually checked in that pass.
 
+## Web Research Tools
+
+For public internet research, use the lightest route that works:
+
+1. source catalog / local knowledge route;
+2. CRM agent `search_web_multi` results, then HTTP page excerpt;
+3. CRM agent `fetch_page_browser` for public JS-heavy pages, forums, and
+   marketplace pages that do not render useful text through HTTP.
+
+`search_web_multi` tries configured providers in order:
+Brave Search API -> Tavily -> Google Custom Search JSON API -> DuckDuckGo HTML.
+Configure only secret env vars in runtime, never in docs or Git:
+`BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`,
+`GOOGLE_CUSTOM_SEARCH_API_KEY`, `GOOGLE_CUSTOM_SEARCH_CX`.
+
+Browser output is evidence collection, not authority. Do not bypass CAPTCHA,
+login walls, paywalls, IP blocks, robots restrictions, or private cabinets. If
+the browser result reports `captcha_required`, `login_required`, `ip_blocked`,
+`access_denied`, or similar flags, stop and report that manual or approved
+account access is required.
+
 ## Required Vehicle Context
 
 Before a technical recommendation, extract from CRM or ask for:
@@ -47,6 +68,10 @@ Use sources in this order:
 
 Do not treat forums, pirated manuals, random PDFs, or unclear aggregators as
 technical sources.
+
+Forums can be useful for symptom patterns and next-check ideas only. They do
+not confirm torque, wiring, coding, SRS/ADAS/HV, immobilizer, programming,
+fluid capacity, OEM part applicability, labor time, or safety procedure facts.
 
 ## Transmission-Specific Route
 

@@ -15,6 +15,10 @@ Use this playbook when the owner asks to:
 
 The manager should treat the CRM card or repair order as the source for the
 vehicle context, then use public marketplaces for the market scan.
+Use CRM agent `search_web_multi` first, then page excerpt. If a public
+marketplace page is JS-heavy or the excerpt is empty, use `fetch_page_browser`
+for rendered text and visible links. Do not bypass CAPTCHA, login, paywall, IP
+block, or private cabinet pages; report that manual/approved access is needed.
 If the input is a VIN, Japanese chassis number, or other market-specific
 vehicle code, decode it first with `docs/agent/vehicle_identity_playbook.md`
 before starting marketplace search. If the owner wants original catalog
