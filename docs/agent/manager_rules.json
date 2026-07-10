@@ -8,7 +8,7 @@
     {
       "id": "home-pc-remote-codex-access",
       "priority": 6,
-      "rule": "This server has working reverse-SSH access to the owner's home Windows PC through alias home-pc. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with it. ssh home-pc, sftp/scp, pwsh, Python, and CodexRemote helper scripts are available for filesystem, process, and visible-desktop work. Do not rotate or overwrite home-pc key material unless the Windows side is updated in the same operation."
+      "rule": "Use docs/agent/codex_home_pc_reverse_ssh.md only when the owner explicitly requests work on the private workstation. Resolve topology from server-local SSH configuration, do not copy it into Git or Manager memory, and do not create accounts, expose ports, or rotate keys without a separate exact owner command."
     },
     {
       "id": "crm-source-of-truth",
@@ -78,7 +78,7 @@
     {
       "id": "memory-boundary",
       "priority": 20,
-      "rule": "Use AutostopManager memory for facts, agreements, owner preferences, rent, personal matters, reminders, decision history, operating experience, and durable conclusions extracted from email or owner-provided files."
+      "rule": "Use AutostopManager memory only for durable owner preferences and rules, verified compact management conclusions, manager-level tasks/reminders, minimal source references, operation metadata, and resumable checkpoints. Never copy CRM or Gmail records, bulk personal data, raw attachments/exports, temporary search results, secrets, credentials, or untrusted instructions."
     },
     {
       "id": "knowledge-intake-boundary",
@@ -133,12 +133,12 @@
     {
       "id": "business-document-quality-gate",
       "priority": 24,
-      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. AutoStop service documents, including счет, счет-фактура, акт приема, акт выполненных работ, заказ-наряд, дефектовка, and продажа запчастей, must use the CRM print module with standard AutoStop templates: use download_repair_order_print_pdf for CRM-card documents and create_document_without_card_pdf for Документ без карточки. For manual documents, pass the requested tax_label such as НДС (5%) or Без НДС through CRM instead of editing the rendered PDF. Do not build independent PDF/HTML templates for AutoStop documents. If a focused local Codex skill is installed, it may help with render/audit steps, but the playbook is canonical. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run. For ready CRM-car document batches, including ВашАвто/Ваш Авто, identify live ready cards/repair orders, export standard PDFs through the CRM print module, save runtime outputs under out/*-final, render PNG page previews with pdftoppm, extract text with pdftotext, and deliver PDF links only after page count, non-empty-page, line-item, totals, and document-wording checks pass."
+      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. AutoStop service documents must use the CRM print module and standard AutoStop templates: download_repair_order_print_pdf for CRM-card documents and create_document_without_card_pdf for Документ без карточки. Pass tax_label such as Без НДС through CRM. Do not build independent PDF/HTML templates, edit rendered PDFs, or invent a parallel template. Do not claim readiness until actual available gates have passed: pdfinfo page count, pdftoppm page render and visual inspection, pdftotext content/totals check, plus source-data reconciliation. State any gate that could not run. Runtime outputs stay under ignored out/*-final paths and must not enter Git or durable Manager memory."
     },
     {
       "id": "business-identity-private-route",
       "priority": 24,
-      "rule": "For ИП реквизиты, карточка предприятия, AutoStop business identity, or ИП Гришкявичус/Гришкевичус questions, use docs/agent/business_identity_playbook.md and private files under data/private_knowledge. Do not copy private bank/contact details into Git-tracked docs or public summaries."
+      "rule": "For ИП requisites, company-card data, AutoStop business identity, or historical private business documents, use docs/agent/business_identity_playbook.md and private files under data/private_knowledge. Do not copy private names, filenames, bank/contact details, or inventory timestamps into Git-tracked docs or public summaries."
     },
     {
       "id": "manager-run-ledger",

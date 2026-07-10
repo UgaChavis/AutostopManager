@@ -2,8 +2,8 @@
 
 Purpose: route owner-authorized questions about current ИП / AutoStop business
 requisites, company card data, commercial-offer identity, and historical
-Гришкявичус tender templates without copying private business details into
-Git-tracked docs.
+document templates without copying private business details into Git-tracked
+docs.
 
 ## Source Of Truth
 
@@ -26,19 +26,11 @@ banking/contact contents into public playbooks.
 
 ## Current Selection Rule
 
-Use only the newest reliable source for current facts:
-
-1. Current legal and bank requisites: `Карточка предприятия (1).doc`,
-   last modified `2025-10-28T15:52:24+07:00`.
-2. Current customer-facing commercial/service wording: `КП НОВОЕ!.doc`,
-   last modified `2025-10-22T13:28:01+07:00`.
-3. Latest historical tender response wording for ИП Гришкявичус:
-   `Тендер Администрация/Ответ на запрос ИП Гришкявичус.docx`, last modified
-   `2020-11-09T15:43:47+07:00`.
-4. Historical fallback registration source: `выписка.pdf`, generated in 2019.
-
-Older response drafts, old commercial offers, and scanned lease files are not
-current sources unless the owner explicitly asks to inspect history.
+Use only the newest reliable item recorded in the private runtime inventory.
+Prefer the current legal/bank source for requisites, the current approved
+customer-facing source for commercial wording, and explicitly labelled archive
+sources only for historical questions. Never copy private filenames, names,
+addresses, bank details, or inventory timestamps into this tracked route.
 
 ## Use When
 

@@ -18,6 +18,10 @@ playbooks instead of broad-reading the tree.
 - `AGENTS.md` - canonical compact startup instruction for Codex.
 - `docs/agent/autostop_manager_skill.md` - detailed startup behavior and route
   explanations.
+- `docs/agent/architecture.md` - canonical runtime and code architecture.
+- `docs/agent/security.md` - canonical trust, write, network, and memory policy.
+- `docs/agent/development.md` - canonical install, test, static-analysis, and
+  documentation gates.
 - `docs/agent/manager_rules.json` - durable operating rules with priorities.
 - `docs/agent/command_routes.json` - standing owner-command aliases.
 - `docs/agent/crm_card_description_standard.md` - public CRM card
@@ -39,6 +43,7 @@ playbooks instead of broad-reading the tree.
 | Domain | Open first | Use when |
 | --- | --- | --- |
 | `startup_and_identity` | `AGENTS.md` | Startup, answer style, memory boundaries, command routing. |
+| `project_maintenance` | `docs/agent/architecture.md` | Broad or mixed repository audit, refactor, security, quality, GitHub, deploy, smoke, and rollback work. |
 | `knowledge_intake` | `docs/agent/knowledge_shelves.md` | New files, docs cleanup, indexing, source-pack policy. |
 | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` | Owner says `Приберись`; no card movement/archive/order/payment writes without separate command. |
 | `crm_card_description_standard` | `docs/agent/crm_card_description_standard.md` | Creating, updating, or cleaning public CRM card descriptions; laconic rich text without sources/provenance, risk blocks, or supplier-check reminders. |
@@ -48,7 +53,7 @@ playbooks instead of broad-reading the tree.
 | `business_documents` | `docs/agent/business_document_quality_playbook.md` | PDF/DOCX/XLSX, счет, акт, КП, requisites, render QA. |
 | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` | CRM card VIN/frame -> OEM -> crosses -> prices -> CRM writeback. |
 | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` | VIN/frame classification, market identity, OEM lookup route. |
-| `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` | Drom/ZZap/Avito/supplier search, Krasnoyarsk availability, offer scoring. |
+| `parts_sourcing` | `docs/agent/parts_search_playbook.md` | Drom/ZZap/Avito/supplier search, Krasnoyarsk availability, offer scoring. |
 | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` | Read-only labor estimates from public Russia STO samples plus AutoStop +50%. |
 | `automotive_repair` | `docs/agent/automotive_repair_source_playbook.md` | Diagnostics, TSB/recall/wiring/torque/labor/source routing. |
 | `bmw_repair` / `bmw_f15_n63` | `docs/agent/bmw_repair_playbook.md` | BMW diagnostics, xDrive, ZF, body electronics, F15/N63 route. |

@@ -21,15 +21,65 @@ hygiene unless the external source was actually checked in that pass.
 For public internet research, use the lightest route that works:
 
 1. source catalog / local knowledge route;
-2. CRM agent `search_web_multi` results, then HTTP page excerpt;
-3. CRM agent `fetch_page_browser` for public JS-heavy pages, forums, and
+2. CRM agent `search_web_multi` results for discovery;
+3. CRM agent `fetch_page_excerpt` for Crawl4AI Markdown extraction with HTTP fallback;
+4. CRM agent `fetch_page_browser` for public JS-heavy pages, forums, and
    marketplace pages that do not render useful text through HTTP.
 
-`search_web_multi` tries configured providers in order:
-Brave Search API -> Tavily -> Google Custom Search JSON API -> DuckDuckGo HTML.
+`search_web_multi` can run the free local route without owner account setup:
+SearXNG local metasearch -> Marginalia public API -> DuckDuckGo HTML.
+The legacy paid/account providers remain available when explicitly configured:
+Brave Search API, Tavily, and Google Custom Search JSON API.
+
+`fetch_page_excerpt` uses local self-hosted Crawl4AI first. It calls Crawl4AI's
+authenticated `/md` endpoint for clean Markdown, then falls back to direct HTTP
+HTML cleanup if Crawl4AI is unavailable. Use `fetch_page_browser` only after
+that, when the page is public but requires browser rendering.
+
+Runtime knobs:
+
+```bash
+AUTOSTOP_SEARXNG_BASE_URL=http://127.0.0.1:8890
+AUTOSTOP_MARGINALIA_ENABLED=1
+AUTOSTOP_SEARCH_PROVIDER_ORDER=searxng,marginalia,duckduckgo
+AUTOSTOP_SEARCH_DISABLED_PROVIDERS=brave,tavily,google_cse
+AUTOSTOP_CRAWL4AI_BASE_URL=http://127.0.0.1:11235
+AUTOSTOP_CRAWL4AI_ENABLED=1
+```
+
+The local SearXNG runtime uses a narrow working engine set in
+`/opt/autostopcrm/data/searxng/config/settings.yml`: `bing`, `qwant`,
+`privacywall`, `gmx`, `dogpile`, and `vuhuv`. Keep `duckduckgo`, `brave`,
+`startpage`, `google`, `yahoo`, `mojeek`, `presearch`, and `yep` disabled there
+unless live-readonly checks prove they are no longer rate-limited or blocked
+from this server.
+
 Configure only secret env vars in runtime, never in docs or Git:
 `BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`,
-`GOOGLE_CUSTOM_SEARCH_API_KEY`, `GOOGLE_CUSTOM_SEARCH_CX`.
+`GOOGLE_CUSTOM_SEARCH_API_KEY`, `GOOGLE_CUSTOM_SEARCH_CX`, and optional
+`MARGINALIA_API_KEY` if a dedicated Marginalia key is issued. Crawl4AI runtime
+secrets are `AUTOSTOP_CRAWL4AI_API_TOKEN` and
+`AUTOSTOP_CRAWL4AI_SECRET_KEY`.
+
+Before relying on search and page extraction quality, check readiness:
+
+```bash
+python -m autostop_manager.cli web-search-readiness --mode dry-run
+python -m autostop_manager.cli web-search-readiness --mode live-readonly
+python -m autostop_manager.cli web-page-readiness --mode dry-run
+python -m autostop_manager.cli web-page-readiness --mode live-readonly
+```
+
+`dry-run` must never print secret values. Treat `fallback_only=true` as an
+external access backlog, not a server failure: DuckDuckGo HTML still works as a
+last-resort discovery path. A healthy free layer is SearXNG live-readonly ready
+with Marginalia or DuckDuckGo available behind it.
+
+Crawl4AI must stay local, authenticated, and public-URL-only. Do not pass
+browser hooks, local files, private network URLs, credentials, or account-only
+targets into page extraction. If extraction reports a challenge, login, IP
+block, or paywall, stop and report that manual or approved account access is
+required.
 
 Browser output is evidence collection, not authority. Do not bypass CAPTCHA,
 login walls, paywalls, IP blocks, robots restrictions, or private cabinets. If

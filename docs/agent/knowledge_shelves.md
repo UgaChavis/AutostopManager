@@ -21,6 +21,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 | Shelf | Domain | Open first |
 | --- | --- | --- |
 | Manager startup | `startup_and_identity` | `AGENTS.md` |
+| Project architecture/quality | `project_maintenance` | `docs/agent/architecture.md` |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
@@ -29,7 +30,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` |
 | CRM VIN/OEM parts | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` |
-| Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` |
+| Parts sourcing | `parts_sourcing` | `docs/agent/parts_search_playbook.md` |
 | Labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` |
 | Repair sources | `automotive_repair` | `docs/agent/automotive_repair_source_playbook.md` |
 | BMW | `bmw_repair`, `bmw_f15_n63` | `docs/agent/bmw_repair_playbook.md` |

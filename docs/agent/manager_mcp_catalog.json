@@ -1,8 +1,29 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-06-23",
+  "last_verified": "2026-07-10",
   "tool_count": 56,
+  "contract_registry": {
+    "source": "autostop_manager.tool_contracts",
+    "coverage": "all_tools",
+    "required_fields": [
+      "name",
+      "operation_kind",
+      "risk",
+      "authorization",
+      "input_schema",
+      "validation",
+      "result_contract",
+      "typical_errors",
+      "dry_run",
+      "preflight",
+      "post_write_verification",
+      "idempotency",
+      "audit_logging",
+      "data_constraints",
+      "rollback"
+    ]
+  },
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
   "memory_is_source_of_truth_for": [

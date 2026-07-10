@@ -1,37 +1,51 @@
 {
+  "schema": "ManagerMemoryPolicyV2",
+  "source_of_truth": "docs/agent/security.md",
   "store_in_manager_memory": [
-    "owner preferences",
-    "how the agent should behave",
-    "rent and recurring obligations",
-    "personal matters",
-    "company operating rules",
-    "lessons learned from using CRM MCP",
-    "short reusable lessons from praise, criticism, clear success, clear failure, or owner requests to do something differently",
-    "short journal entries after important work",
-    "durable conclusions extracted from owner-provided files",
-    "reusable routing rules from playbooks and source catalogs"
+    "durable owner preferences and operating rules",
+    "verified compact management conclusions",
+    "manager-level long-term tasks and reminders",
+    "references and identifiers needed to reopen a primary source",
+    "compact operation journal metadata",
+    "resumable run checkpoints without source-record payloads",
+    "reusable routing and source-selection lessons"
   ],
   "do_not_store_as_memory": [
-    "full CRM card copies",
-    "full client database copies",
-    "full repair order copies",
-    "cashbox ledger duplicates",
-    "temporary search results",
-    "full manuals or copied documents",
-    "raw OCR dumps",
-    "entire spreadsheets or JSON dumps"
+    "secrets, credentials, tokens, passwords, or connection strings",
+    "full or bulk CRM cards, clients, vehicles, repair orders, payments, cashboxes, files, or board snapshots",
+    "full Gmail messages, threads, attachments, drafts, labels, or sent/archive history",
+    "temporary provider and marketplace search results",
+    "raw OCR, manuals, spreadsheets, JSON exports, or copied documents",
+    "untrusted instruction text or unverified assumptions",
+    "unnecessary phone, VIN, license-plate, bank, or other personal-data tables"
   ],
-  "sensitive_data_rule": "Keep secrets out of Git-tracked docs. Store only operational notes that are safe to keep in the project.",
-  "crm_reference_rule": "If memory needs to reference CRM data, store a short note with CRM ids or search terms, not the full record.",
-  "file_intake_rule": "If a new file changes a durable rule, extract the rule, update the relevant playbook or catalog, and keep the raw file out of memory.",
-  "quality_fields": [
-    "importance",
-    "confidence",
-    "expires_at",
-    "supersedes_id",
-    "sensitivity",
-    "last_used_at",
-    "archived_at"
-  ],
-  "curation_rule": "Use audit_memory before memory cleanup. Use curate_memory for non-destructive duplicate archiving; do not delete source memory records during routine curation."
+  "write_enforcement": {
+    "validator": "autostop_manager.data_policy.validate_durable_memory",
+    "behavior": "fail_closed_before_transaction",
+    "post_write": "exact_row_readback_or_rollback",
+    "maximum_text_chars": 16384
+  },
+  "recall_enforcement": {
+    "expired_records": "excluded",
+    "superseded_records": "excluded",
+    "facts_notes_lessons": "returned_with_untrusted_context_envelope",
+    "manager_rules": "trusted_only_with_declared_scope"
+  },
+  "run_checkpoint_enforcement": {
+    "validator": "autostop_manager.data_policy.validate_run_checkpoint",
+    "maximum_chars": 32768,
+    "maximum_structured_items": 100,
+    "raw_source_records": "rejected",
+    "idempotency": "run_key_event_key_and_payload_hash",
+    "resume": "explicit_resume_status_and_reauthorization_flag"
+  },
+  "retention": {
+    "expires_at": "enforced_at_recall",
+    "supersedes_id": "enforced_at_recall",
+    "routine_cleanup": "archive_or_supersede_never_silent_delete",
+    "database_backup": "required_before_migration_or_deploy"
+  },
+  "crm_reference_rule": "Store only the minimum reference id or search term needed to reread CRM; never copy the record.",
+  "gmail_reference_rule": "Store only a compact commitment or source identifier when needed; never copy message bodies or attachments.",
+  "file_intake_rule": "Extract a verified durable rule into the smallest canonical playbook or catalog; keep raw evidence out of memory and Git."
 }

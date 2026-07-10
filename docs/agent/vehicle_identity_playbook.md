@@ -188,7 +188,6 @@ Once the vehicle identity is stable, pass the result to:
 
 - `docs/agent/vin_oem_lookup_playbook.md`
 - `docs/agent/parts_search_playbook.md`
-- `docs/agent/zzap_search_playbook.md`
 
 Before writing to CRM materials, identity should be at least `high` for the
 vehicle and the selected part still needs VIN/frame-specific EPC or supplier

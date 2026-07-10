@@ -1,226 +1,123 @@
-# Parts Search Playbook
+# Parts Sourcing Playbook
 
-Purpose: help the AutoStop manager source spare parts for the Красноярск
-workshop quickly and consistently.
+Canonical route for spare-part search, local availability, supplier/API checks,
+used or contract parts, marketplace comparison, offer scoring, and Красноярск
+procurement.
 
-## Scope
+## Apply when
 
-Use this playbook when the owner asks to:
+- a CRM card or owner request names a part, OEM/article, replacement, used or
+  contract unit, local stock, delivery, supplier, or price comparison;
+- the part is VIN-dependent, expensive, electronic, body/aggregate, a steering
+  rack, or otherwise high return-risk;
+- Drom, ZZap, Avito, supplier APIs/cabinets, 2GIS/Yandex Maps, or a seller call
+  is needed to establish an offer.
 
-- find a spare part
-- compare offers
-- choose a seller
-- estimate delivery
-- verify whether a part fits a specific car
+If the task starts with VIN/frame/body number, open
+`vehicle_identity_playbook.md` and `vin_oem_lookup_playbook.md` first. A
+marketplace title is never proof of an OEM number or fitment. If закупочная
+price or repair-order materials are involved, also open
+`procurement_pricing_playbook.md`; this playbook never authorizes a CRM write or
+supplier order.
 
-The manager should treat the CRM card or repair order as the source for the
-vehicle context, then use public marketplaces for the market scan.
-Use CRM agent `search_web_multi` first, then page excerpt. If a public
-marketplace page is JS-heavy or the excerpt is empty, use `fetch_page_browser`
-for rendered text and visible links. Do not bypass CAPTCHA, login, paywall, IP
-block, or private cabinet pages; report that manual/approved access is needed.
-If the input is a VIN, Japanese chassis number, or other market-specific
-vehicle code, decode it first with `docs/agent/vehicle_identity_playbook.md`
-before starting marketplace search. If the owner wants original catalog
-numbers rather than marketplace candidates, route through
-`docs/agent/vin_oem_lookup_playbook.md` first.
+## Required input
 
-Do not treat marketplace text as the source for an original catalog number.
-The OEM-number workflow is: VIN decode -> catalog vehicle selection -> part
-group lookup -> OEM candidate validation -> only then market price search.
-For BMW/VAG, prefer legal paid/official EPC routes such as partslink24,
-BMW AOS/AIR/ETK, or VAG ETKA; public EPC mirrors are fallback evidence only.
-For MAN, prefer MAN Service Portal/webMANTIS or MAN partslink24 for
-VIN-specific OEM references. MAHLE, Bosch, MANN-FILTER, Hengst, Donaldson,
-Fleetguard, NGK/NTK, and TecDoc-backed catalogs are official aftermarket/cross
-layers: useful for selecting расходники and analogs after the genuine reference
-or exact vehicle profile is known, but not enough on their own to claim an OEM
-number by VIN.
-When `data/offline_parts_catalogs/catalog_index.json` exists, search the local
-offline catalog text before marketplace browsing for filter/plug/commercial
-service-part crosses:
+Collect only what the task needs:
+
+- vehicle make/model/year, market, engine/gearbox, VIN/frame when available;
+- exact part/function, side/axle/position, old marking and OEM/article;
+- new/remanufactured/used/contract condition, quantity/package basis;
+- city, urgency, budget, delivery and return requirements.
+
+Normalize the name before search (`датчик кислорода` -> lambda/oxygen sensor,
+`локер` -> wheel-arch liner). Decode the vehicle before widening a VIN-critical
+query.
+
+## Evidence order
+
+1. Confirm vehicle identity and source-backed OEM/supersession in an official,
+   licensed, or reviewed catalog route.
+2. Check approved supplier/API or current price-list sources for stock,
+   procurement price, lead time, package basis, and return terms.
+3. Search Drom first for OEM-based local/used offers.
+4. Search ZZap second for structured price spread, sellers, replacements, and
+   regional filters.
+5. Search Avito third as a direct-site/manual fallback.
+6. Widen by platform, model, engine, part description, photo, or marking only
+   when exact-number coverage is sparse.
+7. For an urgent, expensive, or high-risk choice, confirm by seller call or
+   message before recommendation.
+
+Use CRM agent `search_web_multi`, then a bounded page excerpt. Use browser
+rendering only for a public JS-heavy page. Never bypass CAPTCHA, login, paywall,
+IP blocks, closed cabinets, or access controls; do not reuse cookies/tokens or
+mass-dump listings.
+
+## Number and catalog checks
+
+Search separated and compressed article forms, with brand/vehicle context when
+ambiguous. Official aftermarket/TecDoc-backed catalogs can support a cross or
+service-part selection after the genuine reference/vehicle profile is stable;
+they are not VIN-specific OEM proof.
+
+When the ignored local cache exists, search it before marketplace browsing:
 
 ```bash
 rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text
 ```
 
-Treat local PDF/XLSX hits as source-backed fitment/cross evidence, then move to
-supplier/marketplace price checks only after the OEM reference or selected
-replacement remains stable.
+Keep the local catalog as fitment/cross evidence, not as live stock or price.
 
-If the owner asks for закупочная цена, local availability, repair-order
-materials pricing, or cost correction, load
-`docs/agent/procurement_pricing_playbook.md` before writing prices.
+## Marketplace checks
 
-## Information To Collect First
+For every candidate capture compactly:
 
-Before searching, extract:
+- selected brand/article and relation to the OEM reference;
+- fitment basis, condition, photos/marking, seller and city;
+- stock confirmation status/time, lead time, price basis and package quantity;
+- warranty/return terms, confidence, and who confirmed it.
 
-- make, model, year
-- VIN or chassis number if available
-- OEM number or article number
-- left / right / front / rear
-- new / used / contract / analog
-- city or region
-- target price or budget ceiling
-- urgency and delivery method
+ZZap sequence: exact article -> alternate number form -> region -> all/new/used
+mode -> replacements -> seller/rating/delivery filters. Treat replacement data
+as informational until vehicle applicability and seller stock are confirmed.
 
-If the only input is a free-text card, normalize the part name first. Example:
+Listing text is not confirmed stock. Distinguish `listed`, `supplier-confirmed`,
+and `seller-confirmed`; record the confirmation time. Public retail and
+marketplace prices are sanity bounds unless a procurement source confirms the
+actual selected offer.
 
-- `датчик кислорода` -> oxygen sensor / lambda probe
-- `патрубок` -> hose / pipe / tube
-- `локер` -> wheel-arch liner / fender trim
-- `эмблема` -> emblem / logo badge
+## High-risk steering rack rule
 
-## Search Order
+Require steering type, drive-side market, VIN/frame, OEM/old label, connectors,
+EPS/Servotronic/active-steering options, condition, photos, and return/warranty
+terms. Separate new, remanufactured, used, contract, repair/exchange, and
+unknown-condition offers. Never recommend from a title match alone. Compare
+local pickup against Russia delivery plus workshop downtime.
 
-1. Search Drom first.
-2. Search ZZap second for price comparison, seller coverage, and replacements.
-3. Search Avito third as a manual fallback.
-4. If exact part hits are sparse, widen the query with the vehicle model,
-   platform, and description.
-5. If the exact OEM still does not surface, search by fitment clues from the
-   card and compare cross references.
+## Ranking
 
-## Drom Workflow
+Rank by fitment and operational risk, not lowest price:
 
-Use Drom as the primary marketplace because it is already present in CRM work
-and usually gives the most useful OEM-based results for Красноярск.
+1. exact OEM/verified supersession and confirmed fitment;
+2. source-backed cross with vehicle-generation applicability;
+3. photo/marking-supported candidate requiring final confirmation;
+4. generic/title-only listing (do not recommend).
 
-Recommended query pattern:
+Then weigh confirmed stock, local pickup/lead time, seller reliability,
+return/warranty, package basis, total delivered cost, and bay downtime.
 
-- exact OEM number
-- exact OEM number + make/model
-- OEM number + `Красноярск`
-- OEM number + part description
+## Result and write boundary
 
-Search both the raw format and the compressed format of the number:
+Return the requested part, identifiers searched, sources checked, top three
+offers, price/city/delivery/condition, fitment basis, confirmation status, and a
+recommended plus backup option. State blockers precisely.
 
-- `86310-1G100`
-- `863101G100`
-- `G052182A2`
-- `02E305051C`
+Do not write full listing dumps to Manager memory. Keep only a durable compact
+lesson such as the selected article, successful search pattern, or reusable
+fitment warning. A repair-order material write requires a separate exact owner
+command, selected part/quantity/price confirmation, dry-run, pre-state capture,
+and post-write reread.
 
-What to check in each listing:
-
-- exact OEM match or known cross
-- seller city
-- delivery to transport company
-- photo quality
-- condition
-- warranty / return policy
-- fitment notes
-
-Prefer listings where the title or description explicitly names the OEM
-number. If Drom has no exact hit, try a broader model or platform search on the
-same site.
-
-## Avito Workflow
-
-Use Avito as the second marketplace and manual fallback.
-
-Recommended query pattern:
-
-- exact OEM number
-- OEM number + part description
-- model + part description
-- city + part name
-
-Important note from testing: exact OEM searches for Avito are less reliable in
-external web search than Drom. Treat Avito as a direct-site search task, not as
-something that must be solved through search-engine snippets.
-
-What to check in each listing:
-
-- exact OEM or visible photo match
-- city and delivery options
-- seller activity and response quality
-- compatibility notes
-- whether the listing is a single part or a bundle
-
-## ZZap Workflow
-
-Use ZZap as the price and replacement layer between Drom and Avito.
-
-Recommended query pattern:
-
-- exact OEM number
-- exact OEM number + brand family
-- exact OEM number + Красноярск
-- exact OEM number + part description
-
-Search the same part in all three ZZap modes:
-
-- all offers
-- new only
-- used / discounted / description-based
-
-What to check in each listing:
-
-- exact OEM or replacement number
-- seller city and region
-- delivery time
-- secure deal or special conditions
-- seller rating
-- whether the listing is an analog or an exact part
-
-For replacement checks, open `все замены` and compare the analog against the
-vehicle generation and fitment clues from the CRM card.
-
-## Ranking Rules
-
-Rank candidates in this order:
-
-1. exact OEM match
-2. known cross-reference with the same platform or generation
-3. visually confirmed match from photo and description
-4. generic or universal part
-
-When prices are close, prefer:
-
-- Krasnoyarsk seller or fast local pickup
-- clear photos
-- explicit warranty or return terms
-- a seller who names the exact part number
-
-## Output Format
-
-When reporting back to the owner, keep it short:
-
-- part requested
-- where you searched
-- top 3 options
-- price
-- city
-- seller
-- delivery
-- confidence / risk note
-
-If the owner wants a purchase decision, give a recommendation and a backup
-option.
-
-## What To Remember
-
-Store only the durable conclusion in manager memory:
-
-- which part was chosen
-- which seller was preferred
-- what search pattern worked
-- any compatibility warning that should be reused later
-
-Do not store full listing dumps in memory.
-
-## Test Observations
-
-The following patterns worked in live checks:
-
-- `863101G100` on Drom produced usable Красноярск offers and clear OEM-based
-  matches.
-- `G052182A2` and `02E305051C` are better searched together with the gearbox
-  context, not as a raw part number only.
-- Rare or awkward OEM numbers may not produce good exact hits on the first
-  search, so the fallback should move to model, platform, and part description.
-- Avito direct results were not reliable through external search snippets in
-  the test pass, so the playbook treats Avito as a direct manual search step.
-- ZZap gives the best value when used as a structured price-comparison layer
-  with region and filter control, not as a raw free-text search box.
+The retained source pack under
+`docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/`
+is provenance/manifest only; this file is the active workflow.

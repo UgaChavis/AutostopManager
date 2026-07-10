@@ -26,8 +26,8 @@ state which render or audit gate was available:
    AutoStop templates. This includes счета, акты, заказ-наряды, акты приема,
    счет-фактуры, дефектовки, акты выполненных работ, and продажа запчастей.
    For a CRM card use `download_repair_order_print_pdf`; for "Документ без
-   карточки" use `create_document_without_card_pdf`. Do not build independent
-   PDF/HTML templates for these AutoStop documents.
+   карточки" use `create_document_without_card_pdf`; do not build independent PDF/HTML templates
+   for these AutoStop documents.
 3. Use `business_identity` for current AutoStop/IP реквизиты when company facts
    are needed. Do not copy private bank/contact facts into Git-tracked docs.
 4. For invoices, acts, КП, and accounting-like documents, verify:

@@ -56,7 +56,8 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
   `bulk_set_deadline_if_below` dry-run first.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
 - Internet/repair web research -> CRM agent `search_web_multi` first
-  (Brave -> Tavily -> Google CSE -> DuckDuckGo), then excerpt; use
+  (SearXNG -> Marginalia -> DuckDuckGo; optional Tavily/Brave/Google CSE),
+  then `fetch_page_excerpt` via local Crawl4AI Markdown with HTTP fallback; use
   `fetch_page_browser` only for public JS-heavy pages. Do not bypass CAPTCHA,
   login, paywall, or IP blocks; report manual access needed.
 - Business documents -> `docs/agent/business_document_quality_playbook.md`.

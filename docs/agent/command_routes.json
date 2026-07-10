@@ -2,6 +2,38 @@
   "purpose": "Canonical natural-language owner command routes for AutostopManager.",
   "routes": [
     {
+      "command_id": "project_maintenance",
+      "intent": "project_maintenance",
+      "domain": "project_maintenance",
+      "open_first": "docs/agent/architecture.md",
+      "aliases": [
+        "проведи полный аудит AutoStop Manager",
+        "полностью обследуй проект AutoStop Manager",
+        "отрефактори AutoStop Manager"
+      ],
+      "keywords": [
+        "архитектура проекта",
+        "полный аудит проекта",
+        "рефакторинг проекта",
+        "технический долг",
+        "MCP инструменты",
+        "маршрутизатор",
+        "SQLite миграции"
+      ],
+      "memory_queries": [
+        "project architecture",
+        "server maintenance",
+        "deployment verification"
+      ],
+      "next_actions": [
+        "open the canonical architecture, development, security, and deployment documents",
+        "inventory the repository and runtime before changing behavior",
+        "separate diagnosis, bounded implementation, verification, publishing, and deployment checkpoints",
+        "use focused semantic routes for explicitly scoped CRM, Gmail, VIN/OEM, parts, or server sub-operations",
+        "finish with tests, documentation audits, Git verification, deployment smoke tests, and a rollback point"
+      ]
+    },
+    {
       "command_id": "board_cleanup_autopilot",
       "intent": "board_cleanup",
       "domain": "board_cleanup_autopilot",
@@ -119,9 +151,9 @@
       ],
       "next_actions": [
         "read bootstrap_context and manager_board_scan",
-        "run bulk_set_deadline_if_below dry_run with min_total_seconds=172800 and target_total_seconds=172800",
-        "apply with actor_name only after dry_run shows eligible cards and no unexpected errors",
-        "verify changed cards with response verification and a compact reread"
+        "run bulk_set_deadline_if_below dry_run for active cards only with include_archived=false, min_total_seconds=172800, and target_total_seconds=173700",
+        "apply with include_archived=false and actor_name only after dry_run shows eligible active cards and no unexpected errors",
+        "reread changed cards, then repeat the same dry_run and verify eligible_count=0"
       ]
     },
     {
@@ -250,7 +282,7 @@
         "classify VIN/frame/body number and identify vehicle by market",
         "find source-backed OEM number for requested part and verify applicability",
         "find supersession, crosses, analogs, procurement price, and RF market range",
-        "write only the compact public result to card description using docs/agent/crm_card_description_standard.md, write selected priced part only to materials, then reread CRM and verify"
+        "prepare a compact public result under docs/agent/crm_card_description_standard.md without writing CRM; only after a separate exact owner command, preflight the named card/order, apply the bounded patch, reread, and verify"
       ]
     }
   ]

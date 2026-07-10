@@ -6,6 +6,10 @@ verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
 ## Start Here
 
 - `AGENTS.md` - canonical compact startup instruction for Codex.
+- `docs/agent/architecture.md` - runtime boundaries, code layers, and contracts.
+- `docs/agent/security.md` - trust boundaries, write protocol, and data policy.
+- `docs/agent/development.md` - supported Python, locked install, and quality gates.
+- `docs/agent/deployment_runbook.md` - backup, deploy, smoke, and rollback procedure.
 - `docs/agent/knowledge_base_index.md` - compact human navigation.
 - `docs/agent/knowledge_shelves.md` - file placement and deletion policy.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access,
@@ -32,18 +36,30 @@ live MCP context first. For local docs: `knowledge-probe` first.
 
 ## Core Audits
 
-```powershell
+```bash
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check autostop_manager tests
+.venv/bin/mypy autostop_manager
+.venv/bin/python -m pytest -q
+.venv/bin/coverage run -m pytest -q
+.venv/bin/coverage report
+.venv/bin/pip-audit --progress-spinner off
+.venv/bin/vulture autostop_manager --min-confidence 80
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-audit
 python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli skills-audit
 python -m autostop_manager.cli cleanup-audit
 python -m autostop_manager.cli system-audit
-python -m pytest -q
 ```
 
 `system-audit` is read-only and reports test status as external; run pytest
 separately after code, docs contracts, or route behavior changes.
+
+Install the reproducible environment from `requirements.lock` with
+`pip install --require-hashes -r requirements.lock`, then install this package
+editable with `pip install --no-deps -e .`. CI runs the same gates on Python
+3.11 and 3.12.
 
 ## Source Boundaries
 
@@ -62,6 +78,9 @@ separately after code, docs contracts, or route behavior changes.
 | Task | Open first |
 | --- | --- |
 | Startup / identity | `AGENTS.md` |
+| Broad project audit/refactor | `docs/agent/architecture.md` |
+| Development and tests | `docs/agent/development.md` |
+| Security/data policy | `docs/agent/security.md` |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` |
 | CRM manager data summaries | `docs/agent/crm_manager_data_playbook.md` |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` |
@@ -69,11 +88,17 @@ separately after code, docs contracts, or route behavior changes.
 | Business documents | `docs/agent/business_document_quality_playbook.md` |
 | VIN/OEM/parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle identity / OEM | `docs/agent/vehicle_identity_playbook.md` |
-| Parts sourcing | `docs/agent/ai_parts_krasnoyarsk_playbook.md` |
+| Parts sourcing | `docs/agent/parts_search_playbook.md` |
 | Internet / repair web research | `docs/agent/automotive_repair_source_playbook.md` |
 | Service management | `docs/agent/krasnoyarsk_service_management_playbook.md` |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
 | Deployment | `docs/agent/deployment_runbook.md` |
+
+The semantic router scores intent, object, action, source, expected output,
+read/write boundary, risk, applicability, negative evidence, and confidence.
+Low-confidence or mixed broad requests use the safe `project_maintenance`
+route or return ambiguity instead of selecting a narrow playbook by one shared
+keyword.
 
 ## Documentation Hygiene
 

@@ -168,7 +168,7 @@
     },
     {
       "when": "used DSG gearbox, mechatronic, clutch, flywheel, or contract aggregate search in Krasnoyarsk",
-      "open_first": "docs/agent/ai_parts_krasnoyarsk_playbook.md",
+      "open_first": "docs/agent/parts_search_playbook.md",
       "then": "docs/agent/dsg_transmission_playbook.md"
     }
   ]

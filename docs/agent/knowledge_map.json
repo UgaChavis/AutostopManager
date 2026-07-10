@@ -76,6 +76,70 @@
         "docs/agent/memory_policy.json"
       ]
     },
+    "project_maintenance": {
+      "title": "AutoStop Manager architecture, quality, security, and deployment maintenance",
+      "use_when": [
+        "broad project overview, architecture review, or repository inventory",
+        "multi-area audit or refactor spanning routing, MCP, memory, tests, documentation, Git, and server deployment",
+        "project quality, security, recovery, release, or long-running operation work",
+        "a narrow route is not semantically applicable or route confidence is low"
+      ],
+      "aliases": [
+        "AutoStop Manager project maintenance",
+        "project architecture",
+        "repository audit",
+        "full project audit",
+        "архитектура AutoStop Manager",
+        "полный аудит проекта",
+        "обследование проекта",
+        "рефакторинг проекта",
+        "технический долг",
+        "качество проекта"
+      ],
+      "keywords": [
+        "architecture",
+        "quality",
+        "security",
+        "routing",
+        "MCP contracts",
+        "SQLite migrations",
+        "tests",
+        "CI",
+        "deployment",
+        "rollback",
+        "GitHub",
+        "server smoke tests"
+      ],
+      "questions": [
+        "как устроен AutoStop Manager",
+        "как провести полный аудит проекта",
+        "как безопасно отрефакторить проверить и развернуть проект",
+        "какие документы описывают архитектуру безопасность разработку и deployment",
+        "куда направить широкий или неоднозначный запрос по проекту"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/architecture.md",
+        "docs/agent/development.md",
+        "docs/agent/security.md",
+        "docs/agent/deployment_runbook.md",
+        "README.md",
+        "AGENTS.md"
+      ],
+      "primary_files": [
+        "docs/agent/architecture.md",
+        "docs/agent/development.md",
+        "docs/agent/security.md",
+        "docs/agent/deployment_runbook.md",
+        "README.md",
+        "AGENTS.md"
+      ],
+      "reference_files": [
+        "pyproject.toml",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/command_routes.json",
+        "docs/agent/knowledge_map.json"
+      ]
+    },
     "knowledge_intake": {
       "title": "Knowledge intake, indexing, and source organization",
       "use_when": [
@@ -184,7 +248,6 @@
       "title": "Private business identity, ИП requisites, and current company-card route",
       "use_when": [
         "owner asks for current ИП requisites or company card data",
-        "owner asks about ИП Гришкявичус or Гришкевичус",
         "owner asks which business documents are current versus old",
         "quotes, invoices, tender responses, or document drafts need current AutoStop business identity facts"
       ],
@@ -198,10 +261,6 @@
         "реквизиты ИП",
         "карточка предприятия",
         "карточка ИП",
-        "ИП Гришкявичус",
-        "ИП Гришкевичус",
-        "Гришкявичус",
-        "Гришкевичус",
         "АвтоСтоп реквизиты",
         "документы ИП",
         "актуальные реквизиты",
@@ -224,14 +283,12 @@
         "commercial offer",
         "tender response",
         "Карточка предприятия",
-        "КП НОВОЕ",
         "выписка ЕГРИП",
         "доверенность",
         "договор аренды"
       ],
       "questions": [
         "какие актуальные реквизиты моего ИП",
-        "что известно про ИП Гришкявичус",
         "какая карточка предприятия самая свежая",
         "какие документы ИП старые а какие актуальные",
         "какой файл открыть для реквизитов АвтоСтоп",
@@ -291,10 +348,10 @@
       ],
       "keywords": [
         "business document quality gate",
-        "audit_business_document",
-        "render_docx",
-        "render_pdf",
-        "artifact-tool",
+        "pdfinfo",
+        "pdftoppm",
+        "pdftotext",
+        "libreoffice headless",
         "invoice",
         "act",
         "proposal",
@@ -1303,21 +1360,17 @@
         "какие workflow docs использовать для поиска и оценки предложений по запчастям"
       ],
       "source_of_truth_files": [
-        "docs/agent/ai_parts_krasnoyarsk_playbook.md",
+        "docs/agent/parts_search_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
-        "docs/agent/parts_search_playbook.md",
-        "docs/agent/zzap_search_playbook.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md"
       ],
       "primary_files": [
-        "docs/agent/ai_parts_krasnoyarsk_playbook.md",
+        "docs/agent/parts_search_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
-        "docs/agent/parts_search_playbook.md",
-        "docs/agent/zzap_search_playbook.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl"
@@ -1514,7 +1567,6 @@
         "docs/agent/procurement_price_sources.json",
         "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/service_management_sources.json",
-        "docs/agent/service_patterns.json",
         "docs/agent/board_cleanup_autopilot_playbook.md",
         "docs/agent/phone_flow.json"
       ]
@@ -1560,28 +1612,20 @@
       ]
     },
     "remote_codex_access": {
-      "title": "Home Windows PC reverse SSH access for Codex",
+      "title": "Private remote-workstation access route",
       "use_when": [
-        "server-side Codex needs command or filesystem access to the owner's Windows home PC",
-        "connect a home computer to the Autostop server without public SSH",
-        "prepare, verify, or repair the home-pc SSH alias and reverse tunnel",
-        "interact with the home PC through ssh, sftp/scp, pwsh, Python, or visible-desktop helper scripts"
+        "owner explicitly requests work on the private workstation",
+        "verify the server-local home-pc SSH alias without exposing topology",
+        "use ssh, sftp, or scp for a bounded owner-authorized operation"
       ],
       "aliases": [
         "remote Codex access",
         "home PC",
         "home-pc",
-        "DESKTOP-BUSO4I8",
         "reverse SSH",
-        "Windows OpenSSH",
-        "codexadmin",
-        "codex-home-tunnel",
-        "PowerShell 7",
-        "pwsh",
-        "Python 3.14.6",
+        "remote workstation",
         "scp",
         "sftp",
-        "CodexRemote helper scripts",
         "подключить домашний ПК",
         "доступ Codex к Windows",
         "удаленный компьютер Codex"
@@ -1589,31 +1633,19 @@
       "keywords": [
         "Codex",
         "Windows",
-        "DESKTOP-BUSO4I8",
         "reverse SSH",
-        "OpenSSH Server",
-        "Scheduled Task",
-        "127.0.0.1:22220",
-        "PowerShell 7.6.3",
-        "Python 3.14.6",
         "scp",
         "sftp",
-        "write-public-desktop-note.ps1",
-        "open-in-user-session.ps1",
-        "health-check.ps1",
         "filesystem access",
         "process access",
-        "no public SSH",
-        "do not rotate keys"
+        "private runtime topology",
+        "no public SSH"
       ],
       "questions": [
         "как подключить домашний ПК к Codex",
-        "какой промпт запустить на домашнем Windows Codex",
         "как проверить ssh home-pc",
         "как использовать scp или sftp с home-pc",
-        "как открыть файл на домашнем ПК через Codex",
-        "есть ли доступ к домашнему ПК с сервера",
-        "как откатить codex-home-tunnel"
+        "есть ли доступ к домашнему ПК с сервера"
       ],
       "source_of_truth_files": [
         "docs/agent/codex_home_pc_reverse_ssh.md",
@@ -1932,7 +1964,7 @@
     "vin_oem": "rg -n \"VIN|OEM|frame|chassis|кузов|каталог\" docs/agent",
     "fluids": "rg -n \"fluid|oil|capacity|масло|жидк|заправ\" docs/agent",
     "board_cleanup": "rg -n \"Приберись|cleanup|archive|preserve|board\" docs/agent",
-    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent",
+    "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|pdftoppm|pdftotext\" docs/agent",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
     "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md"

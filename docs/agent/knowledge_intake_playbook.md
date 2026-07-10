@@ -121,7 +121,6 @@ Use this sequence when the file is automotive-related:
 3. `docs/agent/automotive_repair_source_playbook.md`
 4. `docs/agent/fluid_maintenance_playbook.md`
 5. `docs/agent/parts_search_playbook.md`
-6. `docs/agent/zzap_search_playbook.md`
 
 If the file changes the supported MCP tools or memory flow, update the local
 catalogs first, then remember the new durable rule.
