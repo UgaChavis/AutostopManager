@@ -120,7 +120,8 @@ All of these must be observed, not inferred:
 1. Package and MCP registry inside the running container:
 
    ```bash
-   docker compose -f /opt/autostopcrm/docker-compose.yml exec -T autostopcrm \
+   docker compose -f /opt/autostopcrm/docker-compose.yml exec -T \
+     --workdir /opt/AutostopManager autostopcrm \
      python -c 'import asyncio, autostop_manager; from autostop_manager.mcp_server import build_server; print(len(asyncio.run(build_server().list_tools())))'
    ```
 
