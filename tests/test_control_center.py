@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from autostop_manager import control_center as control_center_module
 from autostop_manager.control_center import (
     REQUIRED_CORE_TOOLS,
@@ -80,6 +82,28 @@ def test_control_report_redacts_secret_like_text():
     assert "Authorization: Bearer ***" in rendered
     assert "Cookie: ***" in rendered
     assert "postgresql://manager:***@db/manager" in rendered
+
+
+def test_codex_skill_inventory_treats_inaccessible_optional_root_as_empty(tmp_path, monkeypatch):
+    inaccessible = tmp_path / "inaccessible-system-skills"
+    plugin_root = tmp_path / "plugin-cache"
+    plugin_root.mkdir()
+    original_is_dir = Path.is_dir
+
+    def guarded_is_dir(path):
+        if path == inaccessible:
+            raise PermissionError("synthetic inaccessible Codex home")
+        return original_is_dir(path)
+
+    monkeypatch.setattr(control_center_module, "CODEX_SYSTEM_SKILLS_ROOT", inaccessible)
+    monkeypatch.setattr(control_center_module, "CODEX_PLUGIN_CACHE_ROOT", plugin_root)
+    monkeypatch.setattr(Path, "is_dir", guarded_is_dir)
+
+    result = control_center_module._codex_skill_inventory()
+
+    assert result["system_skill_count"] == 0
+    assert result["plugin_skill_count"] == 0
+    assert result["plugin_count"] == 0
 
 
 def test_env_file_status_reports_key_names_without_values(tmp_path):

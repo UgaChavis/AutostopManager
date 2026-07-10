@@ -957,15 +957,9 @@ def _mcp_import_status(python_path: Path, *, cwd: Path) -> dict[str, Any]:
 
 
 def _codex_skill_inventory() -> dict[str, Any]:
-    system_skills = sorted(CODEX_SYSTEM_SKILLS_ROOT.glob("*/SKILL.md")) if CODEX_SYSTEM_SKILLS_ROOT.exists() else []
-    plugin_skills = (
-        sorted(CODEX_PLUGIN_CACHE_ROOT.glob("*/**/skills/*/SKILL.md")) if CODEX_PLUGIN_CACHE_ROOT.exists() else []
-    )
-    plugins = (
-        sorted(path.name for path in CODEX_PLUGIN_CACHE_ROOT.iterdir() if path.is_dir())
-        if CODEX_PLUGIN_CACHE_ROOT.exists()
-        else []
-    )
+    system_skills = _safe_external_glob(CODEX_SYSTEM_SKILLS_ROOT, "*/SKILL.md")
+    plugin_skills = _safe_external_glob(CODEX_PLUGIN_CACHE_ROOT, "*/**/skills/*/SKILL.md")
+    plugins = _safe_external_directories(CODEX_PLUGIN_CACHE_ROOT)
     return {
         "system_skills_root": str(CODEX_SYSTEM_SKILLS_ROOT),
         "plugin_cache_root": str(CODEX_PLUGIN_CACHE_ROOT),
@@ -975,6 +969,22 @@ def _codex_skill_inventory() -> dict[str, Any]:
         "plugins": plugins,
         "system_skills": [path.parent.name for path in system_skills],
     }
+
+
+def _safe_external_glob(root: Path, pattern: str) -> list[Path]:
+    """Treat an absent or inaccessible optional Codex installation as empty."""
+
+    try:
+        return sorted(root.glob(pattern)) if root.is_dir() else []
+    except OSError:
+        return []
+
+
+def _safe_external_directories(root: Path) -> list[str]:
+    try:
+        return sorted(path.name for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
+    except OSError:
+        return []
 
 
 def _venv_status(python_path: Path, *, cwd: Path) -> dict[str, Any]:
