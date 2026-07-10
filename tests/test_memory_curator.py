@@ -57,7 +57,7 @@ def test_memory_audit_does_not_return_raw_private_content(tmp_path):
     sensitive = "Client email test@example.com phone +7 999 123-45-67 VIN WBA00000000000000"
     store.remember(sensitive, kind="fact", title="private")
     store.remember(sensitive, kind="fact", title="private")
-    store.remember("Temporary token sk-testsecret123456789 expires.", kind="fact", expires_at="2000-01-01T00:00:00+00:00")
+    store.remember("Temporary maintenance note expires.", kind="fact", expires_at="2000-01-01T00:00:00+00:00")
 
     result = audit_memory(store)
     rendered = json.dumps(result, ensure_ascii=False)

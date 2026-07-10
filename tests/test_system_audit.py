@@ -38,8 +38,10 @@ def test_system_audit_returns_health_summary_and_sqlite_stats(tmp_path):
     assert result["summary"]["local_sqlite_size_bytes"] > 0
     assert "rules" in result["summary"]["local_memory_sections"]
     assert result["summary"]["manager_mcp_catalog_ok"] is True
+    assert result["summary"]["documentation_ok"] is True
     assert result["summary"]["tests_status"] == "external"
     assert result["checks"]["cleanup_audit"]["mode"] == "dry_run"
+    assert result["checks"]["documentation_audit"]["ok"] is True
 
 
 def test_system_audit_flags_broken_manager_mcp_catalog_count(tmp_path):

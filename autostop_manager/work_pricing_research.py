@@ -45,10 +45,14 @@ def _ddg_search(query: str, *, timeout_seconds: int = PUBLIC_RESEARCH_TIMEOUT_SE
     results: list[dict[str, str]] = []
     blocks = re.findall(r"<div class=\"result(?: results_links)?\".*?</div>\s*</div>", raw, flags=re.I | re.S)
     if not blocks:
-        blocks = re.findall(r"<a rel=\"nofollow\" class=\"result__a\".*?</a>.*?(?:<a class=\"result__snippet\".*?</a>|</div>)", raw, flags=re.I | re.S)
+        blocks = re.findall(
+            r"<a rel=\"nofollow\" class=\"result__a\".*?</a>.*?(?:<a class=\"result__snippet\".*?</a>|</div>)",
+            raw,
+            flags=re.I | re.S,
+        )
     for block in blocks[:5]:
-        link_match = re.search(r'class=\"result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>', block, flags=re.I | re.S)
-        snippet_match = re.search(r'class=\"result__snippet\"[^>]*>(.*?)</a>', block, flags=re.I | re.S)
+        link_match = re.search(r"class=\"result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>", block, flags=re.I | re.S)
+        snippet_match = re.search(r"class=\"result__snippet\"[^>]*>(.*?)</a>", block, flags=re.I | re.S)
         if not link_match:
             continue
         url_value = html.unescape(link_match.group(1))
@@ -190,7 +194,12 @@ def collect_public_work_pricing_research(
             if searches >= MAX_PUBLIC_SEARCHES:
                 break
             searches += 1
-            checked = {"source_id": "duckduckgo_html", "query_type": query_type, "query": query, "status": "ok"}
+            checked: dict[str, Any] = {
+                "source_id": "duckduckgo_html",
+                "query_type": query_type,
+                "query": query,
+                "status": "ok",
+            }
             try:
                 search = _ddg_search(query, timeout_seconds=timeout_seconds)
             except Exception as exc:  # pragma: no cover - network-dependent safety rail

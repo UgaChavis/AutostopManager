@@ -59,12 +59,10 @@ def prepare_crm_card_action(
 ) -> dict[str, Any]:
     card_id = str(card_id or "").strip()
     current = current_card if isinstance(current_card, dict) else {}
-    current_profile = (
-        current.get("vehicle_profile") if isinstance(current.get("vehicle_profile"), dict) else {}
+    current_profile: dict[str, Any] = (
+        dict(current.get("vehicle_profile") or {}) if isinstance(current.get("vehicle_profile"), dict) else {}
     )
-    effective_expected_updated_at = str(
-        expected_updated_at or current.get("updated_at") or ""
-    ).strip()
+    effective_expected_updated_at = str(expected_updated_at or current.get("updated_at") or "").strip()
 
     planned_patch: dict[str, Any] = {}
     if description is not None:
@@ -86,9 +84,12 @@ def prepare_crm_card_action(
         board_summary=summary_patch,
         current_profile=current_profile,
     )
+    if not dry_run:
+        risk_flags.append("planner_apply_mode_not_supported")
+    blocking_risk_flags = list(dict.fromkeys(risk_flags))
 
     return {
-        "ok": bool(card_id),
+        "ok": not blocking_risk_flags,
         "format": "crm_card_action_v1",
         "intent": str(intent or "board_cleanup"),
         "dry_run": bool(dry_run),
@@ -115,7 +116,9 @@ def prepare_crm_card_action(
             board_summary=summary_patch,
             current_profile=current_profile,
         ),
-        "risk_flags": risk_flags,
+        "ready_to_apply": not blocking_risk_flags,
+        "risk_flags": blocking_risk_flags,
+        "blocking_risk_flags": blocking_risk_flags,
         "ledger_event_schema": CARD_ACTION_LEDGER_SCHEMA,
         "tool_sequence": CARD_ACTION_TOOL_SEQUENCE,
     }

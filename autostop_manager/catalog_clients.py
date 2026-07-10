@@ -4,12 +4,13 @@ import hashlib
 from html import unescape
 from html.parser import HTMLParser
 import json
+import math
 import os
 import re
-from typing import Any
+from typing import Any, IO
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape as xml_escape
 
@@ -19,18 +20,47 @@ from .partsapi_category_index import search_partsapi_category_index
 from .vin_lookup import normalize_vin
 
 
-VIN17_BASE_URL = "http://api.17vin.com:8080"
 PARTS_CATALOGS_DOCS_URL = "https://www.parts-catalogs.com/us/api"
 MANN_FILTER_GRAPHQL_ENDPOINT = "https://www.mann-filter.com/api/graphql/catalog-prod"
 MANN_FILTER_STORE = "pcat_mf_us_store_en"
 DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"
-EMEX_SEARCH_SERVICE_URL = "http://ws.emex.ru/EmExService.asmx"
 EMEX_SEARCH_DOCS_URL = "http://wsdoc.emex.ru/FindDetailAdv5.html"
 EMEX_SOAP_NAMESPACE = "http://tempuri.org/"
 EXIST_BASE_URL = "https://www.exist.ru"
 EXIST_OPEN_SEARCH_DOCS_URL = "https://s.exist.ru/xml/osd.xml"
 EXIST_DEFAULT_OFFICE_ID = 905
 EXIST_DEFAULT_OFFICE_NAME = "Красноярск, ул. Гайдашовка, д.3"
+
+MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
+MIN_PROVIDER_TIMEOUT_SECONDS = 1.0
+MAX_PROVIDER_TIMEOUT_SECONDS = 30.0
+MAX_PARTSAPI_ATTEMPTS = 3
+MAX_PARTSAPI_TOTAL_TIMEOUT_SECONDS = 60.0
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Refuse redirects so credentials cannot cross an authority boundary."""
+
+    def redirect_request(
+        self,
+        _req: Request,
+        _fp: IO[bytes],
+        code: int,
+        _msg: str,
+        headers: Any,
+        _newurl: str,
+    ) -> Request | None:
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
+
+
+def urlopen(request: Request, timeout: float = 20.0) -> Any:
+    """Repository-local opener kept patchable by tests; redirects are denied."""
+
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+
 
 MANN_FILTER_PART_SEARCH_QUERY = """
 query ($search: String!, $currentPage: Int!, $pageSize: Int!) {
@@ -311,7 +341,9 @@ def _without_secret_query(
         else:
             redacted_value = value
         redacted_pairs.append((key, redacted_value))
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(redacted_pairs), parsed.fragment)).replace("%2A%2A%2A", "***")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(redacted_pairs), parsed.fragment)).replace(
+        "%2A%2A%2A", "***"
+    )
 
 
 def _clamp_page_size(page_size: int, *, default: int = 5, maximum: int = 25) -> int:
@@ -322,10 +354,79 @@ def _clamp_page_size(page_size: int, *, default: int = 5, maximum: int = 25) -> 
     return max(1, min(value, maximum))
 
 
+def _clamp_timeout(timeout: Any, *, default: float = 20.0) -> float:
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value):
+        value = default
+    return max(MIN_PROVIDER_TIMEOUT_SECONDS, min(value, MAX_PROVIDER_TIMEOUT_SECONDS))
+
+
+def _partsapi_request_budget(timeout: Any, max_attempts: Any) -> tuple[float, int]:
+    try:
+        attempts = int(max_attempts)
+    except (TypeError, ValueError):
+        attempts = 1
+    attempts = max(1, min(attempts, MAX_PARTSAPI_ATTEMPTS))
+    per_attempt = _clamp_timeout(timeout)
+    per_attempt = min(per_attempt, MAX_PARTSAPI_TOTAL_TIMEOUT_SECONDS / attempts)
+    return per_attempt, attempts
+
+
+def _read_response_bytes(response: Any, *, maximum: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
+    try:
+        raw = response.read(maximum + 1)
+    except TypeError:
+        # Small test doubles and legacy file-like adapters may not accept a size.
+        raw = response.read()
+    if not isinstance(raw, bytes):
+        raise ValueError("Provider response was not bytes.")
+    if len(raw) > maximum:
+        raise ValueError(f"Provider response exceeds the {maximum}-byte safety limit.")
+    return raw
+
+
+def _read_response_text(response: Any, *, errors: str = "strict") -> str:
+    return _read_response_bytes(response).decode("utf-8", errors=errors)
+
+
+def _https_endpoint(value: Any) -> str | None:
+    endpoint = str(value or "").strip().rstrip("/")
+    parsed = urlsplit(endpoint)
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        return None
+    return endpoint
+
+
+def _provider_path_segment(value: Any) -> str | None:
+    segment = str(value or "").strip()
+    if (
+        not segment
+        or len(segment) > 128
+        or segment in {".", ".."}
+        or "/" in segment
+        or "\\" in segment
+        or any(ord(character) < 32 for character in segment)
+    ):
+        return None
+    return quote(segment, safe="-._~")
+
+
 def _read_json_url(url: str, *, headers: dict[str, str] | None = None, timeout: float = 20.0) -> dict[str, Any]:
     request = Request(url, headers={"User-Agent": "AutostopManager/0.1", **(headers or {})})
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+        payload = json.loads(_read_response_text(response))
+    if not isinstance(payload, dict):
+        raise ValueError("Provider JSON response must be an object.")
+    return payload
 
 
 def _reference_groups(raw_references: Any) -> list[dict[str, Any]]:
@@ -335,7 +436,8 @@ def _reference_groups(raw_references: Any) -> list[dict[str, Any]]:
     for reference in raw_references:
         if not isinstance(reference, dict):
             continue
-        values = reference.get("value") if isinstance(reference.get("value"), list) else []
+        raw_values = reference.get("value")
+        values: list[Any] = raw_values if isinstance(raw_values, list) else []
         groups.append(
             {
                 "label": reference.get("label") or "",
@@ -346,7 +448,8 @@ def _reference_groups(raw_references: Any) -> list[dict[str, Any]]:
 
 
 def _mann_filter_product(item: dict[str, Any]) -> dict[str, Any]:
-    product = item.get("product") if isinstance(item.get("product"), dict) else item
+    raw_product = item.get("product")
+    product: dict[str, Any] = raw_product if isinstance(raw_product, dict) else item
     return {
         "sku": product.get("sku"),
         "name": product.get("name"),
@@ -369,7 +472,9 @@ def build_mann_filter_catalog_request(
     store: str | None = None,
 ) -> dict[str, Any]:
     clean_part = str(part_number or "").strip()
-    actual_endpoint = (endpoint or os.getenv("MANN_FILTER_GRAPHQL_ENDPOINT") or MANN_FILTER_GRAPHQL_ENDPOINT).rstrip("?&")
+    actual_endpoint = (endpoint or os.getenv("MANN_FILTER_GRAPHQL_ENDPOINT") or MANN_FILTER_GRAPHQL_ENDPOINT).rstrip(
+        "?&"
+    )
     actual_store = store or os.getenv("MANN_FILTER_STORE") or MANN_FILTER_STORE
     clean_page_size = _clamp_page_size(page_size)
     clean_current_page = max(1, int(current_page or 1))
@@ -402,7 +507,9 @@ def mann_filter_catalog_lookup(
     timeout: float = 20.0,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    request_plan = build_mann_filter_catalog_request(part_number=part_number, current_page=current_page, page_size=page_size)
+    request_plan = build_mann_filter_catalog_request(
+        part_number=part_number, current_page=current_page, page_size=page_size
+    )
     base = {
         "provider": "mann_filter_catalog",
         "operation": "part_number_search",
@@ -429,7 +536,8 @@ def mann_filter_catalog_lookup(
         return {**base, "ok": False, "errors": payload.get("errors")}
 
     product_search = ((payload.get("data") or {}).get("productSearch") or {}) if isinstance(payload, dict) else {}
-    raw_items = product_search.get("items") if isinstance(product_search.get("items"), list) else []
+    raw_items_value = product_search.get("items")
+    raw_items: list[Any] = raw_items_value if isinstance(raw_items_value, list) else []
     items = [_mann_filter_product(item) for item in raw_items if isinstance(item, dict)]
     return {
         **base,
@@ -481,7 +589,8 @@ def _denso_catalog_item(raw_item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _denso_detail_summary(raw_detail: dict[str, Any]) -> dict[str, Any]:
-    criteria = raw_detail.get("criteria") if isinstance(raw_detail.get("criteria"), list) else []
+    raw_criteria = raw_detail.get("criteria")
+    criteria: list[Any] = raw_criteria if isinstance(raw_criteria, list) else []
     return {
         "tid": raw_detail.get("tid"),
         "name": raw_detail.get("name"),
@@ -530,8 +639,10 @@ def denso_aftermarket_catalog_lookup(
     if payload.get("status") != "success":
         return {**base, "ok": False, "payload_status": payload.get("status"), "errors": payload.get("errors", [])}
 
-    data = payload.get("data") or {}
-    parts = data.get("parts") if isinstance(data.get("parts"), list) else []
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    raw_parts = data.get("parts")
+    parts: list[Any] = raw_parts if isinstance(raw_parts, list) else []
     items = [_denso_catalog_item(item) for item in parts if isinstance(item, dict)]
     details = []
     if include_detail:
@@ -545,7 +656,8 @@ def denso_aftermarket_catalog_lookup(
             except (HTTPError, URLError, TimeoutError, ValueError) as exc:
                 details.append({"part_key": part_key, "ok": False, "error": str(exc)})
                 continue
-            detail_data = detail_payload.get("data") if isinstance(detail_payload.get("data"), list) else []
+            raw_detail_data = detail_payload.get("data")
+            detail_data: list[Any] = raw_detail_data if isinstance(raw_detail_data, list) else []
             details.append(
                 {
                     "part_key": part_key,
@@ -576,7 +688,9 @@ def public_aftermarket_catalog_lookup(
 ) -> dict[str, Any]:
     normalized_provider = str(provider or "").strip().lower()
     if normalized_provider in {"mann", "mann_filter", "mann_filter_catalog"}:
-        return mann_filter_catalog_lookup(part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run)
+        return mann_filter_catalog_lookup(
+            part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run
+        )
     if normalized_provider in {"denso", "denso_aftermarket", "denso_aftermarket_catalog"}:
         return denso_aftermarket_catalog_lookup(
             part_number=part_number,
@@ -592,7 +706,9 @@ def public_aftermarket_catalog_lookup(
             "provider": "public_aftermarket_catalogs",
             "operation": "part_number_search",
             "results": [
-                mann_filter_catalog_lookup(part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run),
+                mann_filter_catalog_lookup(
+                    part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run
+                ),
                 denso_aftermarket_catalog_lookup(
                     part_number=part_number,
                     country=country,
@@ -614,11 +730,108 @@ def public_aftermarket_catalog_lookup(
 
 def _emex_xml_value(name: str, value: Any) -> str:
     if value in (None, ""):
-        return f"<{name} xsi:nil=\"true\" />"
+        return f'<{name} xsi:nil="true" />'
     if isinstance(value, (list, tuple)):
         items = "".join(f"<string>{xml_escape(str(item))}</string>" for item in value if item not in (None, ""))
-        return f"<{name}>{items}</{name}>" if items else f"<{name} xsi:nil=\"true\" />"
+        return f"<{name}>{items}</{name}>" if items else f'<{name} xsi:nil="true" />'
     return f"<{name}>{xml_escape(str(value))}</{name}>"
+
+
+def _build_emex_find_detail_material(
+    *,
+    part_number: str,
+    brand: str | None = None,
+    subst_level: str = "All",
+    subst_filter: str = "None",
+    delivery_region_type: str = "PRI",
+    min_delivery_percent: int | None = None,
+    max_delivery_days: int | None = None,
+    min_quantity: int | None = None,
+    max_result_price: float | None = None,
+    max_one_detail_offers_count: int | None = 10,
+    detail_nums_to_load: list[str] | None = None,
+    login: str | None = None,
+    password: str | None = None,
+    service_url: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    credentials = _emex_credentials()
+    actual_login = login if login is not None else credentials["login"]
+    actual_password = password if password is not None else credentials["password"]
+    actual_service_url = _https_endpoint(service_url) if service_url is not None else credentials["service_url"]
+    endpoint_error = (
+        "secure_endpoint_required"
+        if (service_url is not None and actual_service_url is None) or credentials.get("endpoint_error")
+        else None
+    )
+    clean_part = str(part_number or "").strip()
+    clean_brand = str(brand or "").strip() or None
+    missing_env_names = []
+    if not actual_login:
+        missing_env_names.append("EMEX_LOGIN")
+    if not actual_password:
+        missing_env_names.append("EMEX_PASSWORD")
+    if actual_service_url is None and endpoint_error is None:
+        missing_env_names.append("EMEX_SERVICE_URL")
+    missing_params = []
+    if not clean_part:
+        missing_params.append("part_number")
+
+    params = {
+        "login": actual_login,
+        "password": actual_password,
+        "makeLogo": clean_brand,
+        "detailNum": clean_part,
+        "substLevel": subst_level or "All",
+        "substFilter": subst_filter or "None",
+        "deliveryRegionType": delivery_region_type or "PRI",
+        "minDeliveryPercent": min_delivery_percent,
+        "maxADDays": max_delivery_days,
+        "minQuantity": min_quantity,
+        "maxResultPrice": max_result_price,
+        "maxOneDetailOffersCount": max_one_detail_offers_count,
+        "detailNumsToLoad": detail_nums_to_load,
+    }
+    request_ready = not missing_env_names and not missing_params and endpoint_error is None
+    soap_body = None
+    if request_ready:
+        body_params = "".join(_emex_xml_value(name, value) for name, value in params.items())
+        soap_body = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+            'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+            "<soap:Body>"
+            f'<FindDetailAdv5 xmlns="{EMEX_SOAP_NAMESPACE}">'
+            f"{body_params}"
+            "</FindDetailAdv5>"
+            "</soap:Body>"
+            "</soap:Envelope>"
+        )
+    safe_params = {
+        key: (
+            "***" if key == "password" and value else _redact_account(str(value)) if key == "login" and value else value
+        )
+        for key, value in params.items()
+        if value not in (None, "")
+    }
+    safe_shape = json.dumps(safe_params, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    safe_plan = {
+        "ok": request_ready,
+        "provider": "emex",
+        "configured": not missing_env_names and endpoint_error is None,
+        "method": "POST",
+        "emex_method": "FindDetailAdv5",
+        "endpoint": actual_service_url,
+        "endpoint_configured": actual_service_url is not None,
+        "error_code": endpoint_error,
+        "soap_action": f"{EMEX_SOAP_NAMESPACE}FindDetailAdv5",
+        "params": safe_params,
+        "missing_env_names": missing_env_names,
+        "missing_params": missing_params,
+        "body_sha256": hashlib.sha256(safe_shape.encode("utf-8")).hexdigest() if soap_body else None,
+        "secret_exposed": False,
+    }
+    return safe_plan, soap_body
 
 
 def build_emex_find_detail_request(
@@ -638,68 +851,25 @@ def build_emex_find_detail_request(
     password: str | None = None,
     service_url: str | None = None,
 ) -> dict[str, Any]:
-    credentials = _emex_credentials()
-    actual_login = login if login is not None else credentials["login"]
-    actual_password = password if password is not None else credentials["password"]
-    actual_service_url = service_url or credentials["service_url"]
-    clean_part = str(part_number or "").strip()
-    clean_brand = str(brand or "").strip() or None
-    missing = []
-    if not actual_login:
-        missing.append("EMEX_LOGIN")
-    if not actual_password:
-        missing.append("EMEX_PASSWORD")
-    if not clean_part:
-        missing.append("part_number")
+    """Build a safe Emex request plan without returning credential material."""
 
-    params = {
-        "login": actual_login,
-        "password": actual_password,
-        "makeLogo": clean_brand,
-        "detailNum": clean_part,
-        "substLevel": subst_level or "All",
-        "substFilter": subst_filter or "None",
-        "deliveryRegionType": delivery_region_type or "PRI",
-        "minDeliveryPercent": min_delivery_percent,
-        "maxADDays": max_delivery_days,
-        "minQuantity": min_quantity,
-        "maxResultPrice": max_result_price,
-        "maxOneDetailOffersCount": max_one_detail_offers_count,
-        "detailNumsToLoad": detail_nums_to_load,
-    }
-    body_params = "".join(_emex_xml_value(name, value) for name, value in params.items())
-    soap_body = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-        'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
-        'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
-        "<soap:Body>"
-        f'<FindDetailAdv5 xmlns="{EMEX_SOAP_NAMESPACE}">'
-        f"{body_params}"
-        "</FindDetailAdv5>"
-        "</soap:Body>"
-        "</soap:Envelope>"
+    plan, _body = _build_emex_find_detail_material(
+        part_number=part_number,
+        brand=brand,
+        subst_level=subst_level,
+        subst_filter=subst_filter,
+        delivery_region_type=delivery_region_type,
+        min_delivery_percent=min_delivery_percent,
+        max_delivery_days=max_delivery_days,
+        min_quantity=min_quantity,
+        max_result_price=max_result_price,
+        max_one_detail_offers_count=max_one_detail_offers_count,
+        detail_nums_to_load=detail_nums_to_load,
+        login=login,
+        password=password,
+        service_url=service_url,
     )
-    safe_params = {
-        key: ("***" if key == "password" and value else _redact_account(str(value)) if key == "login" and value else value)
-        for key, value in params.items()
-        if value not in (None, "")
-    }
-    return {
-        "ok": not missing,
-        "provider": "emex",
-        "configured": not any(name in {"EMEX_LOGIN", "EMEX_PASSWORD"} for name in missing),
-        "method": "POST",
-        "emex_method": "FindDetailAdv5",
-        "endpoint": actual_service_url,
-        "soap_action": f"{EMEX_SOAP_NAMESPACE}FindDetailAdv5",
-        "params": safe_params,
-        "missing_env_names": [name for name in missing if name.startswith("EMEX_")],
-        "missing_params": [name for name in missing if not name.startswith("EMEX_")],
-        "body": soap_body if not missing else None,
-        "body_sha256": hashlib.sha256(soap_body.encode("utf-8")).hexdigest() if not missing else None,
-        "secret_exposed": False,
-    }
+    return plan
 
 
 def _xml_local_name(tag: str) -> str:
@@ -777,7 +947,9 @@ def parse_emex_find_detail_response(raw_xml: str) -> dict[str, Any]:
             result = element
             break
     if result is None:
-        detail_nodes = [element for element in root.iter() if _xml_local_name(element.tag) in {"DetailItem", "FindDetailAdv5Result"}]
+        detail_nodes = [
+            element for element in root.iter() if _xml_local_name(element.tag) in {"DetailItem", "FindDetailAdv5Result"}
+        ]
         return {
             "is_success": bool(detail_nodes),
             "error_message": None if detail_nodes else "FindDetailAdv5Result not found in SOAP response.",
@@ -815,7 +987,7 @@ def emex_price_lookup(
     timeout: float = 20.0,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    request_plan = build_emex_find_detail_request(
+    request_plan, soap_body = _build_emex_find_detail_material(
         part_number=part_number,
         brand=brand,
         subst_level=subst_level,
@@ -834,11 +1006,27 @@ def emex_price_lookup(
         "emex_method": "FindDetailAdv5",
         "docs_url": EMEX_SEARCH_DOCS_URL,
         "role": "Official Emex SOAP read-only price/stock/lead-time lookup by exact article.",
-        "request_plan": {key: value for key, value in request_plan.items() if key != "body"},
+        "request_plan": request_plan,
         "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
     }
     if request_plan["missing_params"]:
-        return {**base, "ok": False, "missing_params": request_plan["missing_params"], "error": "part_number is required."}
+        return {
+            **base,
+            "ok": False,
+            "missing_params": request_plan["missing_params"],
+            "error": "part_number is required.",
+        }
+    if (
+        request_plan.get("error_code") == "secure_endpoint_required"
+        or "EMEX_SERVICE_URL" in request_plan["missing_env_names"]
+    ):
+        return {
+            **base,
+            "ok": False,
+            "error_code": "secure_endpoint_required",
+            "missing_env_names": request_plan["missing_env_names"],
+            "error": "Emex is unavailable until an explicit HTTPS EMEX_SERVICE_URL is configured.",
+        }
     if request_plan["missing_env_names"]:
         return {
             **base,
@@ -849,9 +1037,12 @@ def emex_price_lookup(
     if dry_run:
         return {**base, "ok": True, "dry_run": True}
 
+    if soap_body is None:
+        return {**base, "ok": False, "error": "Emex request material was not prepared."}
+
     request = Request(
         request_plan["endpoint"],
-        data=str(request_plan["body"]).encode("utf-8"),
+        data=soap_body.encode("utf-8"),
         headers={
             "User-Agent": "AutostopManager/0.1",
             "Content-Type": "text/xml; charset=utf-8",
@@ -860,8 +1051,8 @@ def emex_price_lookup(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            raw_xml = response.read().decode("utf-8", errors="replace")
+        with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+            raw_xml = _read_response_text(response, errors="replace")
         parsed = parse_emex_find_detail_response(raw_xml)
     except (HTTPError, URLError, TimeoutError, ElementTree.ParseError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
@@ -1134,7 +1325,9 @@ def _exist_bool(value: Any) -> bool | None:
 
 def _exist_offer(raw_offer: dict[str, Any], *, offer_type: str) -> dict[str, Any]:
     statistic_html = raw_offer.get("StatisticHTML") or raw_offer.get("statisticHTML") or raw_offer.get("deliveryHTML")
-    availability_html = raw_offer.get("availString") or raw_offer.get("AvailString") or raw_offer.get("availabilityHTML")
+    availability_html = (
+        raw_offer.get("availString") or raw_offer.get("AvailString") or raw_offer.get("availabilityHTML")
+    )
     price_label = (
         raw_offer.get("priceString")
         or raw_offer.get("PriceString")
@@ -1156,12 +1349,19 @@ def _exist_offer(raw_offer: dict[str, Any], *, offer_type: str) -> dict[str, Any
         "offer_type": offer_type,
         "price_rub": _exist_number(raw_offer.get("price") or raw_offer.get("Price") or raw_offer.get("priceRub")),
         "price_label": _clean_exist_text(price_label) or None,
-        "lead_time_minutes": _exist_int(raw_offer.get("minutes") or raw_offer.get("Minutes") or raw_offer.get("deliveryMinutes")),
+        "lead_time_minutes": _exist_int(
+            raw_offer.get("minutes") or raw_offer.get("Minutes") or raw_offer.get("deliveryMinutes")
+        ),
         "lead_time_label": lead_time_label,
         "lead_time_date": _exist_first_html_title(statistic_html),
         "availability_label": availability_label,
-        "pack": raw_offer.get("pack") or raw_offer.get("Pack") or raw_offer.get("lotQuantity") or raw_offer.get("LotQuantity"),
-        "not_return": _exist_bool(raw_offer.get("notReturn") if "notReturn" in raw_offer else raw_offer.get("NotReturn")),
+        "pack": raw_offer.get("pack")
+        or raw_offer.get("Pack")
+        or raw_offer.get("lotQuantity")
+        or raw_offer.get("LotQuantity"),
+        "not_return": _exist_bool(
+            raw_offer.get("notReturn") if "notReturn" in raw_offer else raw_offer.get("NotReturn")
+        ),
         "warehouse_hint": _exist_warehouse_hint(raw_offer),
     }
 
@@ -1185,22 +1385,37 @@ def _exist_item(raw_item: dict[str, Any], *, max_offers: int = 10, base_url: str
     offers = [
         *[_exist_offer(offer, offer_type="aggregated") for offer in aggregated],
         *[_exist_offer(offer, offer_type="direct") for offer in direct],
-    ][:_clamp_page_size(max_offers, default=10, maximum=50)]
+    ][: _clamp_page_size(max_offers, default=10, maximum=50)]
     is_original = _exist_bool(raw_item.get("IsOriginal") if "IsOriginal" in raw_item else raw_item.get("isOriginal"))
     return {
-        "brand": raw_item.get("CatalogName") or raw_item.get("catalogName") or raw_item.get("Brand") or raw_item.get("brand"),
+        "brand": raw_item.get("CatalogName")
+        or raw_item.get("catalogName")
+        or raw_item.get("Brand")
+        or raw_item.get("brand"),
         "part_number": raw_item.get("PartNumber") or raw_item.get("partNumber"),
-        "name": raw_item.get("PartName") or raw_item.get("Name") or raw_item.get("Description") or raw_item.get("partName"),
+        "name": raw_item.get("PartName")
+        or raw_item.get("Name")
+        or raw_item.get("Description")
+        or raw_item.get("partName"),
         "pid": str(pid) if pid not in (None, "") else None,
-        "product_url": f"{_exist_base_url(base_url)}/Price/?{urlencode({'pid': str(pid)})}" if pid not in (None, "") else None,
+        "product_url": f"{_exist_base_url(base_url)}/Price/?{urlencode({'pid': str(pid)})}"
+        if pid not in (None, "")
+        else None,
         "is_original": is_original,
-        "block_text": raw_item.get("BlockName") or raw_item.get("BlockText") or raw_item.get("Block") or raw_item.get("blockName"),
+        "block_text": raw_item.get("BlockName")
+        or raw_item.get("BlockText")
+        or raw_item.get("Block")
+        or raw_item.get("blockName"),
         "block_type_id": _exist_int(raw_item.get("BlockTypeId") or raw_item.get("blockTypeId")),
         "price_count": _exist_int(raw_item.get("PriceCount") or raw_item.get("priceCount")),
-        "min_price_rub": _exist_number(raw_item.get("MinPrice") or raw_item.get("MinPriceString") or raw_item.get("minPriceString")),
+        "min_price_rub": _exist_number(
+            raw_item.get("MinPrice") or raw_item.get("MinPriceString") or raw_item.get("minPriceString")
+        ),
         "min_price_label": _clean_exist_text(raw_item.get("MinPriceString") or raw_item.get("minPriceString")) or None,
         "min_delivery_label": _clean_exist_text(
-            raw_item.get("MinDeliveryDaysString") or raw_item.get("DeliveryDaysString") or raw_item.get("minDeliveryDaysString")
+            raw_item.get("MinDeliveryDaysString")
+            or raw_item.get("DeliveryDaysString")
+            or raw_item.get("minDeliveryDaysString")
         )
         or None,
         "offers": offers,
@@ -1239,7 +1454,9 @@ def parse_exist_price_page(
         raw_items = []
     return {
         "ok": True,
-        "items": [_exist_item(item, max_offers=max_offers, base_url=base_url) for item in raw_items if isinstance(item, dict)],
+        "items": [
+            _exist_item(item, max_offers=max_offers, base_url=base_url) for item in raw_items if isinstance(item, dict)
+        ],
         "hidden_fields": _exist_hidden_fields(html_text),
         "total_offers": _exist_total_offers(html_text),
     }
@@ -1298,14 +1515,14 @@ def _exist_headers(*, office_id: int, accept: str) -> dict[str, str]:
 
 def _exist_read_text(url: str, *, office_id: int, timeout: float) -> str:
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="text/html,application/xhtml+xml"))
-    with urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+    with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+        return _read_response_text(response, errors="replace")
 
 
 def _exist_read_json(url: str, *, office_id: int, timeout: float) -> Any:
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="application/json"))
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", errors="replace"))
+    with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+        return json.loads(_read_response_text(response, errors="replace"))
 
 
 def _exist_search_suggestions(payload: Any, *, base_url: str | None = None) -> list[dict[str, Any]]:
@@ -1380,13 +1597,12 @@ def _exist_more_offers(
         },
         method="POST",
     )
-    with urlopen(request, timeout=timeout) as response:
-        wrapper = json.loads(response.read().decode("utf-8", errors="replace"))
+    with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+        wrapper = json.loads(_read_response_text(response, errors="replace"))
     raw_offers = json.loads(wrapper.get("d") or "[]") if isinstance(wrapper, dict) else []
-    offers = [
-        _exist_offer(offer, offer_type="direct")
-        for offer in _exist_raw_offer_list(raw_offers)
-    ][:_clamp_page_size(max_offers, default=10, maximum=50)]
+    offers = [_exist_offer(offer, offer_type="direct") for offer in _exist_raw_offer_list(raw_offers)][
+        : _clamp_page_size(max_offers, default=10, maximum=50)
+    ]
     return {"ok": True, "offers": offers, "offer_count": len(_exist_raw_offer_list(raw_offers))}
 
 
@@ -1464,7 +1680,9 @@ def exist_price_lookup(
                     }
                 price_url = selected_candidate["url"]
             else:
-                parsed_pcode = parse_exist_price_page(pcode_html, base_url=request_plan["base_url"], max_offers=max_offers_value)
+                parsed_pcode = parse_exist_price_page(
+                    pcode_html, base_url=request_plan["base_url"], max_offers=max_offers_value
+                )
                 selected_item = parsed_pcode["items"][0] if parsed_pcode.get("items") else None
                 return {
                     **base,
@@ -1479,7 +1697,9 @@ def exist_price_lookup(
                 }
 
         price_html = _exist_read_text(price_url, office_id=office, timeout=timeout)
-        parsed_price = parse_exist_price_page(price_html, base_url=request_plan["base_url"], max_offers=max_offers_value)
+        parsed_price = parse_exist_price_page(
+            price_html, base_url=request_plan["base_url"], max_offers=max_offers_value
+        )
         selected_item = parsed_price["items"][0] if parsed_price.get("items") else None
         if selected_item and selected_candidate:
             selected_item["catalog_candidate"] = selected_candidate
@@ -1517,8 +1737,25 @@ def _vin17_credentials() -> dict[str, Any]:
     load_runtime_env()
     user = os.getenv("VIN17_ACCOUNT") or ""
     secret = os.getenv("VIN17_SECRET") or ""
-    missing = [name for name, value in {"VIN17_ACCOUNT": user, "VIN17_SECRET": secret}.items() if not value]
-    return {"configured": not missing, "user": user, "secret": secret, "missing_env_names": missing}
+    raw_base_url = os.getenv("VIN17_BASE_URL") or ""
+    base_url = _https_endpoint(raw_base_url)
+    missing = [
+        name
+        for name, value in {
+            "VIN17_ACCOUNT": user,
+            "VIN17_SECRET": secret,
+            "VIN17_BASE_URL": raw_base_url,
+        }.items()
+        if not value
+    ]
+    return {
+        "configured": not missing and base_url is not None,
+        "user": user,
+        "secret": secret,
+        "base_url": base_url,
+        "missing_env_names": missing,
+        "endpoint_error": "secure_endpoint_required" if raw_base_url and base_url is None else None,
+    }
 
 
 def _partsapi_credentials() -> dict[str, Any]:
@@ -1545,7 +1782,11 @@ def _parts_catalogs_credentials() -> dict[str, Any]:
     load_runtime_env()
     key = os.getenv("PARTS_CATALOGS_API_KEY") or ""
     base_url = os.getenv("PARTS_CATALOGS_BASE_URL") or ""
-    missing = [name for name, value in {"PARTS_CATALOGS_API_KEY": key, "PARTS_CATALOGS_BASE_URL": base_url}.items() if not value]
+    missing = [
+        name
+        for name, value in {"PARTS_CATALOGS_API_KEY": key, "PARTS_CATALOGS_BASE_URL": base_url}.items()
+        if not value
+    ]
     return {"configured": not missing, "key": key, "base_url": base_url, "missing_env_names": missing}
 
 
@@ -1553,14 +1794,18 @@ def _emex_credentials() -> dict[str, Any]:
     load_runtime_env()
     login = os.getenv("EMEX_LOGIN") or ""
     password = os.getenv("EMEX_PASSWORD") or ""
-    service_url = os.getenv("EMEX_SERVICE_URL") or os.getenv("EMEX_SEARCH_SERVICE_URL") or EMEX_SEARCH_SERVICE_URL
+    raw_service_url = os.getenv("EMEX_SERVICE_URL") or os.getenv("EMEX_SEARCH_SERVICE_URL") or ""
+    service_url = _https_endpoint(raw_service_url)
     missing = [name for name, value in {"EMEX_LOGIN": login, "EMEX_PASSWORD": password}.items() if not value]
+    if not raw_service_url:
+        missing.append("EMEX_SERVICE_URL")
     return {
-        "configured": not missing,
+        "configured": not missing and service_url is not None,
         "login": login,
         "password": password,
         "service_url": service_url,
         "missing_env_names": missing,
+        "endpoint_error": "secure_endpoint_required" if raw_service_url and service_url is None else None,
     }
 
 
@@ -1611,7 +1856,9 @@ def _candidate_confidence(raw: dict[str, Any], evidence: dict[str, Any]) -> floa
     return 0.55
 
 
-def extract_oem_candidates(*, provider: str, payload: dict[str, Any], operation: str | None = None) -> list[dict[str, Any]]:
+def extract_oem_candidates(
+    *, provider: str, payload: dict[str, Any], operation: str | None = None
+) -> list[dict[str, Any]]:
     candidates = []
     seen: set[tuple[str, str | None, str | None]] = set()
     for item in _iter_oem_candidate_dicts(payload):
@@ -1747,7 +1994,9 @@ def _partsapi_parts_by_vin_records(payload: Any) -> list[dict[str, Any]]:
     return records
 
 
-def extract_partsapi_parts_by_vin_candidates(*, payload: Any, operation: str | None = "parts_by_vin") -> list[dict[str, Any]]:
+def extract_partsapi_parts_by_vin_candidates(
+    *, payload: Any, operation: str | None = "parts_by_vin"
+) -> list[dict[str, Any]]:
     candidates = []
     seen: set[tuple[str, str | None, str | None]] = set()
     for item in _partsapi_parts_by_vin_records(payload):
@@ -1823,7 +2072,9 @@ def extract_partsapi_cross_candidates(*, payload: Any, operation: str | None = N
             continue
         source_brand = _first_value(item, ("brand", "partBrand", "sourceBrand"))
         source_part_number = _first_value(item, ("partNumber", "part_number", "number", "sourceNumber"))
-        cross_brand = _first_value(item, ("crossBrand", "cross_brand", "replacementBrand", "replacement_brand", "brandName"))
+        cross_brand = _first_value(
+            item, ("crossBrand", "cross_brand", "replacementBrand", "replacement_brand", "brandName")
+        )
         part_name = _first_value(item, ("partname", "partName", "title", "name", "shortname"))
         normalized_cross_number = str(cross_number).strip()
         identity = (cross_brand, normalized_cross_number, source_brand, source_part_number)
@@ -1859,7 +2110,10 @@ def _partsapi_article_records(payload: Any) -> list[dict[str, Any]]:
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    if any(key in payload for key in ("ART_ID", "ART_ARTICLE_NR", "ART_SUP_BRAND", "ARL_ART_ID", "ARL_DISPLAY_NR", "ARL_BRA_BRAND")):
+    if any(
+        key in payload
+        for key in ("ART_ID", "ART_ARTICLE_NR", "ART_SUP_BRAND", "ARL_ART_ID", "ARL_DISPLAY_NR", "ARL_BRA_BRAND")
+    ):
         return [payload]
     records: list[dict[str, Any]] = []
     for key in ("result", "data", "items", "articles"):
@@ -1871,16 +2125,24 @@ def _partsapi_article_records(payload: Any) -> list[dict[str, Any]]:
     return records
 
 
-def extract_partsapi_article_candidates(*, payload: Any, operation: str | None = "search_articles") -> list[dict[str, Any]]:
+def extract_partsapi_article_candidates(
+    *, payload: Any, operation: str | None = "search_articles"
+) -> list[dict[str, Any]]:
     candidates = []
     seen: set[tuple[str | None, str | None, str | None]] = set()
     for item in _partsapi_article_records(payload):
-        part_number = _first_value(item, ("ART_ARTICLE_NR", "ARL_DISPLAY_NR", "articleNumber", "article_number", "number"))
+        part_number = _first_value(
+            item, ("ART_ARTICLE_NR", "ARL_DISPLAY_NR", "articleNumber", "article_number", "number")
+        )
         article_id = _first_value(item, ("ART_ID", "ARL_ART_ID", "articleId", "article_id"))
         brand = _first_value(item, ("ART_SUP_BRAND", "ARL_BRA_BRAND", "brand", "supplierBrand"))
         if part_number in (None, "") and article_id in (None, ""):
             continue
-        identity = (str(article_id) if article_id not in (None, "") else None, str(part_number) if part_number not in (None, "") else None, str(brand) if brand not in (None, "") else None)
+        identity = (
+            str(article_id) if article_id not in (None, "") else None,
+            str(part_number) if part_number not in (None, "") else None,
+            str(brand) if brand not in (None, "") else None,
+        )
         if identity in seen:
             continue
         seen.add(identity)
@@ -1930,17 +2192,25 @@ def build_parts_catalogs_request(
         }
 
     spec = PARTS_CATALOGS_OPERATIONS[operation]
-    clean_catalog_id = str(catalog_id or "").strip("/")
-    path = spec["path"].format(catalog_id=quote(clean_catalog_id)) if "{catalog_id}" in spec["path"] else spec["path"]
+    clean_catalog_id = _provider_path_segment(catalog_id)
+    path_error = "invalid_catalog_id" if "{catalog_id}" in spec["path"] and clean_catalog_id is None else None
+    path = spec["path"].format(catalog_id=clean_catalog_id) if "{catalog_id}" in spec["path"] else spec["path"]
     query_params = {key: value for key, value in params.items() if value not in (None, "")}
     query = urlencode(query_params)
-    url = f"{actual_base_url}{path}?{query}" if actual_base_url and query else f"{actual_base_url}{path}" if actual_base_url else None
+    url = (
+        f"{actual_base_url}{path}?{query}"
+        if actual_base_url and query
+        else f"{actual_base_url}{path}"
+        if actual_base_url
+        else None
+    )
     headers = {"Authorization": actual_key} if actual_key else {}
     return {
-        "ok": not missing_env,
+        "ok": not missing_env and path_error is None,
         "provider": "parts_catalogs_api",
         "operation": operation,
-        "configured": not missing_env,
+        "configured": not missing_env and path_error is None,
+        "error_code": path_error,
         "method": "GET",
         "path": path,
         "params": query_params,
@@ -1948,8 +2218,8 @@ def build_parts_catalogs_request(
         "missing_env_names": missing_env,
         "headers": headers,
         "redacted_headers": {"Authorization": "***"} if actual_key else {},
-        "url": url if not missing_env else None,
-        "redacted_url": _redact_sensitive_query_text(url) if url else None,
+        "url": url if not missing_env and path_error is None else None,
+        "redacted_url": _redact_sensitive_query_text(url) if url and path_error is None else None,
         "secret_exposed": False,
     }
 
@@ -2011,7 +2281,19 @@ def parts_catalogs_lookup(
         "privacy": {"raw_identifier_is_sensitive": bool(identifier), "secret_exposed": False},
     }
     if missing_params:
-        return {**base, "ok": False, "missing_params": missing_params, "error": "Required Parts-Catalogs parameters are missing."}
+        return {
+            **base,
+            "ok": False,
+            "missing_params": missing_params,
+            "error": "Required Parts-Catalogs parameters are missing.",
+        }
+    if request_plan.get("error_code") == "invalid_catalog_id":
+        return {
+            **base,
+            "ok": False,
+            "error_code": "invalid_catalog_id",
+            "error": "catalog_id is not a safe path segment.",
+        }
     if not request_plan["configured"]:
         return {
             **base,
@@ -2027,8 +2309,8 @@ def parts_catalogs_lookup(
         headers={"User-Agent": "AutostopManager/0.1", "Accept": "application/json", **request_plan["headers"]},
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+            payload = json.loads(_read_response_text(response))
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
@@ -2155,6 +2437,7 @@ def partsapi_catalog_lookup(
             "available_operations": sorted(PARTSAPI_OPERATIONS),
         }
 
+    timeout_value, attempt_count = _partsapi_request_budget(timeout, max_attempts)
     spec = PARTSAPI_OPERATIONS[operation]
     input_values = dict(spec.get("defaults", {}))
     input_values.update(
@@ -2197,12 +2480,22 @@ def partsapi_catalog_lookup(
         "docs_url": spec["docs_url"],
         "role": spec["role"],
         "quota_cost_estimate": 1,
+        "request_budget": {
+            "timeout_seconds": timeout_value,
+            "max_attempts": attempt_count,
+            "total_timeout_seconds": timeout_value * attempt_count,
+        },
         "request_plan": _safe_request_plan(request_plan, omit={"url"}),
         "redacted_identifier": _redact_identifier(identifier or "") if identifier else None,
         "privacy": {"raw_identifier_is_sensitive": bool(identifier), "secret_exposed": False},
     }
     if missing_params:
-        return {**base, "ok": False, "missing_params": missing_params, "error": "Required PartsAPI parameters are missing."}
+        return {
+            **base,
+            "ok": False,
+            "missing_params": missing_params,
+            "error": "Required PartsAPI parameters are missing.",
+        }
     if not request_plan["configured"]:
         return {
             **base,
@@ -2211,16 +2504,15 @@ def partsapi_catalog_lookup(
             "error": "PARTSAPI_KEY and PARTSAPI_BASE_URL are required for live PartsAPI requests.",
         }
     if dry_run:
-        return {**base, "ok": True, "dry_run": True, "attempt_count": 0, "max_attempts": max(1, int(max_attempts or 1)), "attempts": []}
+        return {**base, "ok": True, "dry_run": True, "attempt_count": 0, "max_attempts": attempt_count, "attempts": []}
 
     request = Request(request_plan["url"], headers={"User-Agent": "AutostopManager/0.1"})
     attempts: list[dict[str, Any]] = []
     payload: Any = None
-    attempt_count = max(1, int(max_attempts or 1))
     for attempt in range(1, attempt_count + 1):
         try:
-            with urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            with urlopen(request, timeout=timeout_value) as response:
+                payload = json.loads(_read_response_text(response))
             attempts.append({"attempt": attempt, "ok": True})
             break
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
@@ -2247,7 +2539,17 @@ def partsapi_catalog_lookup(
     )
     oem_candidates = (
         []
-        if operation in {"crosses", "crosses_with_brand", "crosses_title", "article_crosses", "search_articles", "articles", "article", "article_criteria"}
+        if operation
+        in {
+            "crosses",
+            "crosses_with_brand",
+            "crosses_title",
+            "article_crosses",
+            "search_articles",
+            "articles",
+            "article",
+            "article_criteria",
+        }
         else extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation)
     )
     if operation == "parts_by_vin":
@@ -2272,55 +2574,114 @@ def build_17vin_token(*, user: str, secret: str, url_parameters: str) -> str:
     return _md5(_md5(user) + _md5(secret) + url_parameters)
 
 
+def _build_17vin_request_material(
+    *,
+    path: str = "/",
+    params: dict[str, str | int | None],
+    user: str | None = None,
+    secret: str | None = None,
+    base_url: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    credentials = _vin17_credentials()
+    actual_user = user if user is not None else credentials["user"]
+    actual_secret = secret if secret is not None else credentials["secret"]
+    actual_base_url = _https_endpoint(base_url) if base_url is not None else credentials["base_url"]
+    endpoint_error = (
+        "secure_endpoint_required"
+        if (base_url is not None and actual_base_url is None) or credentials.get("endpoint_error")
+        else None
+    )
+    missing: list[str] = []
+    if not actual_user:
+        missing.append("VIN17_ACCOUNT")
+    if not actual_secret:
+        missing.append("VIN17_SECRET")
+    if actual_base_url is None and endpoint_error is None:
+        missing.append("VIN17_BASE_URL")
+
+    raw_path = str(path or "").strip()
+    if raw_path == "/":
+        clean_path = "/"
+        path_error = None
+    else:
+        path_segment = _provider_path_segment(raw_path[1:] if raw_path.startswith("/") else raw_path)
+        clean_path = f"/{path_segment}" if path_segment else "/"
+        path_error = "invalid_provider_path" if path_segment is None else None
+    filtered = {key: value for key, value in params.items() if value not in (None, "")}
+    query = urlencode(filtered)
+    url_parameters = f"{clean_path}?{query}" if query else clean_path
+    request_ready = not missing and endpoint_error is None and path_error is None
+    signed_url = None
+    if request_ready:
+        token = build_17vin_token(user=actual_user, secret=actual_secret, url_parameters=url_parameters)
+        signed_query = (
+            f"{query}&user={quote(actual_user)}&token={token}" if query else f"user={quote(actual_user)}&token={token}"
+        )
+        signed_url = f"{actual_base_url}{clean_path}?{signed_query}"
+
+    plan = {
+        "ok": request_ready,
+        "provider": "vin17_api",
+        "configured": request_ready,
+        "missing_env_names": missing,
+        "error_code": endpoint_error or path_error,
+        "method": "GET",
+        "endpoint": actual_base_url,
+        "endpoint_configured": actual_base_url is not None,
+        "url_parameters": url_parameters,
+        "redacted_url": _without_secret_query(signed_url, {"token"}, account_param_names={"user"})
+        if signed_url
+        else None,
+        "token_algorithm": "MD5(MD5(user) + MD5(secret) + url_parameters)",
+        "secret_exposed": False,
+    }
+    return plan, signed_url
+
+
 def build_17vin_signed_request(
     *,
     path: str = "/",
     params: dict[str, str | int | None],
     user: str | None = None,
     secret: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, Any]:
-    credentials = _vin17_credentials()
-    actual_user = user or credentials["user"]
-    actual_secret = secret or credentials["secret"]
-    missing = []
-    if not actual_user:
-        missing.append("VIN17_ACCOUNT")
-    if not actual_secret:
-        missing.append("VIN17_SECRET")
+    """Build a redacted 17VIN plan; the signed URL never leaves this module."""
 
-    clean_path = path if path.startswith("/") else f"/{path}"
-    filtered = {key: value for key, value in params.items() if value not in (None, "")}
-    query = urlencode(filtered)
-    url_parameters = f"{clean_path}?{query}" if query else clean_path
-    token = build_17vin_token(user=actual_user, secret=actual_secret, url_parameters=url_parameters) if not missing else ""
-    signed_query = f"{query}&user={quote(actual_user)}&token={token}" if query else f"user={quote(actual_user)}&token={token}"
-    signed_url = f"{VIN17_BASE_URL}{clean_path}?{signed_query}"
+    plan, _signed_url = _build_17vin_request_material(
+        path=path,
+        params=params,
+        user=user,
+        secret=secret,
+        base_url=base_url,
+    )
+    return plan
 
-    return {
-        "ok": not missing,
-        "provider": "vin17_api",
-        "configured": not missing,
-        "missing_env_names": missing,
-        "method": "GET",
-        "url_parameters": url_parameters,
-        "signed_url": signed_url if not missing else None,
-        "redacted_url": _without_secret_query(signed_url, {"token"}, account_param_names={"user"}),
-        "token_algorithm": "MD5(MD5(user) + MD5(secret) + url_parameters)",
-        "secret_exposed": False,
-    }
+
+def _vin17_configuration_error(request_plan: dict[str, Any]) -> tuple[str, str | None]:
+    if request_plan.get("error_code") == "invalid_provider_path":
+        return "17VIN EPC must be one safe path segment.", "invalid_provider_path"
+    if (
+        request_plan.get("error_code") == "secure_endpoint_required"
+        or "VIN17_BASE_URL" in request_plan["missing_env_names"]
+    ):
+        return "17VIN is unavailable until an explicit HTTPS VIN17_BASE_URL is configured.", "secure_endpoint_required"
+    return "VIN17_ACCOUNT and VIN17_SECRET are required for live 17VIN requests.", None
 
 
 def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: bool = False) -> dict[str, Any]:
     normalized = normalize_vin(identifier)
-    request_plan = build_17vin_signed_request(path="/", params={"vin": normalized})
+    request_plan, signed_url = _build_17vin_request_material(path="/", params={"vin": normalized})
     if not request_plan["configured"]:
+        error, error_code = _vin17_configuration_error(request_plan)
         return {
             "ok": False,
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
             "missing_env_names": request_plan["missing_env_names"],
-            "error": "VIN17_ACCOUNT and VIN17_SECRET are required for live 17VIN requests.",
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "error_code": error_code,
+            "error": error,
+            "request_plan": request_plan,
         }
     if dry_run:
         return {
@@ -2328,27 +2689,29 @@ def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: boo
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
             "dry_run": True,
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "request_plan": request_plan,
         }
 
-    request = Request(request_plan["signed_url"], headers={"User-Agent": "AutostopManager/0.1"})
+    if signed_url is None:
+        return {"ok": False, "provider": "vin17_api", "error": "17VIN request material was not prepared."}
+    request = Request(signed_url, headers={"User-Agent": "AutostopManager/0.1"})
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+            payload = json.loads(_read_response_text(response))
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {
             "ok": False,
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
             "error": str(exc),
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "request_plan": request_plan,
         }
 
     return {
         "ok": payload.get("code") == 1,
         "provider": "vin17_api",
         "redacted_identifier": _redact_identifier(identifier),
-        "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+        "request_plan": request_plan,
         "payload": payload,
         "oem_candidates": extract_oem_candidates(provider="vin17_api", payload=payload, operation="search_part_number"),
     }
@@ -2364,7 +2727,7 @@ def vin17_search_std_part_name_by_vin(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     normalized = normalize_vin(identifier)
-    request_plan = build_17vin_signed_request(
+    request_plan, signed_url = _build_17vin_request_material(
         path=f"/{epc.strip('/')}",
         params={
             "action": "search_std_part_name",
@@ -2379,23 +2742,27 @@ def vin17_search_std_part_name_by_vin(
         "docs_url": "https://www.17vin.com/doc/5101.html",
         "role": "17VIN standard part-name search scoped by VIN and EPC code.",
         "redacted_identifier": _redact_identifier(identifier),
-        "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+        "request_plan": _safe_request_plan(request_plan),
         "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False},
     }
     if not request_plan["configured"]:
+        error, error_code = _vin17_configuration_error(request_plan)
         return {
             **base,
             "ok": False,
             "missing_env_names": request_plan["missing_env_names"],
-            "error": "VIN17_ACCOUNT and VIN17_SECRET are required for live 17VIN requests.",
+            "error_code": error_code,
+            "error": error,
         }
     if dry_run:
         return {**base, "ok": True, "dry_run": True}
 
-    request = Request(request_plan["signed_url"], headers={"User-Agent": "AutostopManager/0.1"})
+    if signed_url is None:
+        return {**base, "ok": False, "error": "17VIN request material was not prepared."}
+    request = Request(signed_url, headers={"User-Agent": "AutostopManager/0.1"})
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+            payload = json.loads(_read_response_text(response))
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
@@ -2403,7 +2770,9 @@ def vin17_search_std_part_name_by_vin(
         **base,
         "ok": payload.get("code") == 1,
         "payload": payload,
-        "oem_candidates": extract_oem_candidates(provider="vin17_api", payload=payload, operation="search_std_part_name"),
+        "oem_candidates": extract_oem_candidates(
+            provider="vin17_api", payload=payload, operation="search_std_part_name"
+        ),
     }
 
 
@@ -2412,7 +2781,9 @@ def _result_oem_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
         return [candidate for candidate in result["oem_candidates"] if isinstance(candidate, dict)]
     payload = result.get("payload")
     if isinstance(payload, dict):
-        return extract_oem_candidates(provider=str(result.get("provider") or "unknown"), payload=payload, operation=result.get("operation"))
+        return extract_oem_candidates(
+            provider=str(result.get("provider") or "unknown"), payload=payload, operation=result.get("operation")
+        )
     return []
 
 
@@ -2433,7 +2804,9 @@ def resolve_partsapi_category(
     category_index_path: str | None = None,
 ) -> dict[str, Any]:
     part_profile = normalize_part_intent(requested_part)
-    raw_candidates = [str(value).strip() for value in part_profile.get("partsapi_cat_candidates", []) if str(value).strip()]
+    raw_candidates = [
+        str(value).strip() for value in part_profile.get("partsapi_cat_candidates", []) if str(value).strip()
+    ]
     numeric_candidates = [value for value in raw_candidates if value.isdigit()]
     text_candidates = [value for value in raw_candidates if not value.isdigit()]
     index_result = search_partsapi_category_index(
@@ -2442,7 +2815,11 @@ def resolve_partsapi_category(
         path=category_index_path,
         limit=5,
     )
-    index_numeric_candidates = [str(row.get("cat_id") or "").strip() for row in index_result.get("matches", []) if str(row.get("cat_id") or "").strip().isdigit()]
+    index_numeric_candidates = [
+        str(row.get("cat_id") or "").strip()
+        for row in index_result.get("matches", [])
+        if str(row.get("cat_id") or "").strip().isdigit()
+    ]
 
     def _profile_digest() -> dict[str, Any]:
         return {
@@ -2591,7 +2968,10 @@ def lookup_oem_catalog_candidates(
             }
         )
 
-    if category and (dry_run or (partsapi_category_resolution.get("category_kind") == "numeric_id" and not part_clarification_required)):
+    if category and (
+        dry_run
+        or (partsapi_category_resolution.get("category_kind") == "numeric_id" and not part_clarification_required)
+    ):
         provider_results.append(
             partsapi_catalog_lookup(
                 operation="parts_by_vin",
@@ -2618,7 +2998,9 @@ def lookup_oem_catalog_candidates(
                 "provider": "partsapi_ru",
                 "operation": "parts_by_vin",
                 "missing_params": ["cat"] if not category else [],
-                "clarification_fields": part_profile.get("clarification_fields", []) if part_clarification_required else [],
+                "clarification_fields": part_profile.get("clarification_fields", [])
+                if part_clarification_required
+                else [],
                 "category_resolution": partsapi_category_resolution,
                 "fallback_operation": "vin_decode_oe",
                 "error": (
@@ -2682,7 +3064,7 @@ def vin17_search_part_number_by_vin(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     normalized = normalize_vin(identifier)
-    request_plan = build_17vin_signed_request(
+    request_plan, signed_url = _build_17vin_request_material(
         path=f"/{epc.strip('/')}",
         params={
             "action": "search_part_number",
@@ -2692,13 +3074,15 @@ def vin17_search_part_number_by_vin(
         },
     )
     if not request_plan["configured"]:
+        error, error_code = _vin17_configuration_error(request_plan)
         return {
             "ok": False,
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
             "missing_env_names": request_plan["missing_env_names"],
-            "error": "VIN17_ACCOUNT and VIN17_SECRET are required for live 17VIN requests.",
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "error_code": error_code,
+            "error": error,
+            "request_plan": _safe_request_plan(request_plan),
         }
     if dry_run:
         return {
@@ -2706,26 +3090,28 @@ def vin17_search_part_number_by_vin(
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
             "dry_run": True,
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "request_plan": _safe_request_plan(request_plan),
         }
 
-    request = Request(request_plan["signed_url"], headers={"User-Agent": "AutostopManager/0.1"})
+    if signed_url is None:
+        return {"ok": False, "provider": "vin17_api", "error": "17VIN request material was not prepared."}
+    request = Request(signed_url, headers={"User-Agent": "AutostopManager/0.1"})
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(request, timeout=_clamp_timeout(timeout)) as response:
+            payload = json.loads(_read_response_text(response))
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {
             "ok": False,
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
             "error": str(exc),
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "request_plan": _safe_request_plan(request_plan),
         }
 
     return {
         "ok": payload.get("code") == 1,
         "provider": "vin17_api",
         "redacted_identifier": _redact_identifier(identifier),
-            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+        "request_plan": _safe_request_plan(request_plan),
         "payload": payload,
     }

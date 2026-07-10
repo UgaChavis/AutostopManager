@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Iterator
@@ -11,6 +13,23 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT, get_db_path
+from .data_policy import (
+    DataPolicyResult,
+    untrusted_context_envelope,
+    validate_durable_memory,
+    validate_run_checkpoint,
+)
+
+
+SCHEMA_VERSION = 2
+SQLITE_BUSY_TIMEOUT_MS = 10_000
+TERMINAL_RUN_STATUSES = frozenset({"blocked", "cancelled", "completed", "failed", "partial", "rolled_back"})
+RESUME_STATUSES = frozenset({"closed", "not_required", "paused", "requires_reauthorization", "resumable", "resuming"})
+MIGRATION_NAMES = {1: "baseline_schema", 2: "run_ledger_idempotency_and_resume"}
+
+
+class StorageVerificationError(RuntimeError):
+    """Raised when a local write cannot be read back exactly."""
 
 
 def _now() -> str:
@@ -48,6 +67,61 @@ def _decode_json(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return fallback
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _payload_hash(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _policy_error(error: str, result: DataPolicyResult) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": error,
+        "violations": list(result.violations),
+        "size_chars": result.size_chars,
+    }
+
+
+def _safe_validate_run_checkpoint(*, message: str, payload: dict[str, Any] | None) -> DataPolicyResult:
+    try:
+        return validate_run_checkpoint(message=message, payload=payload)
+    except (TypeError, ValueError):
+        return DataPolicyResult(ok=False, violations=("payload_not_json_serializable",), size_chars=len(message))
+
+
+def _normalize_idempotency_key(value: str | None) -> tuple[str | None, str | None]:
+    if value is None:
+        return None, None
+    normalized = value.strip()
+    if not normalized:
+        return None, None
+    if len(normalized) > 200 or "\x00" in normalized:
+        return None, "invalid_idempotency_key"
+    return normalized, None
+
+
+def _trusted_rule_envelope(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **item,
+        "trust": {
+            "instruction_authority": True,
+            "provenance": str(item.get("source") or "manager_rules"),
+            "handling": "Trusted manager rule; apply only within its declared scope.",
+        },
+    }
+
+
+def _memory_trust_envelope(item: dict[str, Any]) -> dict[str, Any]:
+    kind = str(item.get("kind") or "")
+    if kind in {"fact", "lesson", "note"}:
+        return untrusted_context_envelope(item)
+    if kind == "rule":
+        return _trusted_rule_envelope(item)
+    return item
 
 
 def _tokens(value: str) -> list[str]:
@@ -271,7 +345,9 @@ def _is_context_noise(
             (["bmw f15", "n63"], ["bmw", "f15", "n63", "x5"]),
         ]
         for item_markers, task_markers in vehicle_families:
-            if any(marker in text for marker in item_markers) and not any(marker in task_text for marker in task_markers):
+            if any(marker in text for marker in item_markers) and not any(
+                marker in task_text for marker in task_markers
+            ):
                 return True
     return False
 
@@ -333,9 +409,15 @@ class ManagerMemoryStore:
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1_000)
+        os.chmod(self.path, 0o600)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).casefold()
+        if journal_mode != "wal":
+            conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         try:
             yield conn
             conn.commit()
@@ -349,6 +431,7 @@ class ManagerMemoryStore:
         with self.connect() as conn:
             conn.executescript(
                 """
+                BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS notes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL DEFAULT '',
@@ -579,10 +662,100 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
                     ON memory_review_items(status, created_at);
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
+                COMMIT;
                 """
             )
-            self._ensure_columns(conn)
+            self._apply_migrations(conn)
             self._ensure_memory_fts(conn)
+
+    def _apply_migrations(self, conn: sqlite3.Connection) -> None:
+        current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(f"database schema version {current} is newer than supported version {SCHEMA_VERSION}")
+        if current == SCHEMA_VERSION:
+            self._verify_migration_history(conn, current=current)
+            return
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if current < 1:
+                self._migrate_v1(conn)
+                current = 1
+            if current < 2:
+                self._migrate_v2(conn)
+                current = 2
+            self._verify_migration_history(conn, current=current)
+        except Exception:
+            conn.rollback()
+            raise
+
+    def _verify_migration_history(self, conn: sqlite3.Connection, *, current: int) -> None:
+        rows = conn.execute(
+            "SELECT version, name FROM schema_migrations WHERE version <= ? ORDER BY version",
+            (current,),
+        ).fetchall()
+        actual = {int(row["version"]): str(row["name"]) for row in rows}
+        expected = {version: MIGRATION_NAMES[version] for version in range(1, current + 1)}
+        if actual != expected:
+            raise RuntimeError("database migration history does not match the supported schema")
+
+    def _record_migration(self, conn: sqlite3.Connection, *, version: int, name: str) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (version, name, _now()),
+        )
+        conn.execute(f"PRAGMA user_version = {version}")
+
+    def _migrate_v1(self, conn: sqlite3.Connection) -> None:
+        """Adopt and normalize the original inline schema."""
+
+        self._ensure_columns(conn)
+        self._record_migration(conn, version=1, name=MIGRATION_NAMES[1])
+
+    def _migrate_v2(self, conn: sqlite3.Connection) -> None:
+        """Add durable idempotency and resumable run-ledger metadata."""
+
+        desired = {
+            "manager_runs": {
+                "run_key": "TEXT",
+                "request_hash": "TEXT NOT NULL DEFAULT ''",
+                "resume_status": "TEXT NOT NULL DEFAULT 'not_required'",
+                "resume_metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+                "requires_reauthorization": "INTEGER NOT NULL DEFAULT 0",
+                "terminal_hash": "TEXT NOT NULL DEFAULT ''",
+            },
+            "manager_run_events": {
+                "event_key": "TEXT",
+                "event_hash": "TEXT NOT NULL DEFAULT ''",
+            },
+        }
+        self._add_missing_columns(conn, desired)
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_manager_runs_run_key
+            ON manager_runs(run_key)
+            WHERE run_key IS NOT NULL AND run_key != ''
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_manager_run_events_key
+            ON manager_run_events(run_id, event_key)
+            WHERE event_key IS NOT NULL AND event_key != ''
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_manager_runs_resume
+            ON manager_runs(status, resume_status, updated_at)
+            """
+        )
+        self._record_migration(conn, version=2, name=MIGRATION_NAMES[2])
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
         desired = {
@@ -613,6 +786,9 @@ class ManagerMemoryStore:
                 "reference_files_json": "TEXT NOT NULL DEFAULT '[]'",
             },
         }
+        self._add_missing_columns(conn, desired)
+
+    def _add_missing_columns(self, conn: sqlite3.Connection, desired: dict[str, dict[str, str]]) -> None:
         for table, columns in desired.items():
             existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             for column, definition in columns.items():
@@ -737,6 +913,31 @@ class ManagerMemoryStore:
                 inserted += 1
         return {"ok": True, "inserted": inserted, "updated": updated}
 
+    def _verify_exact_row(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        row_id: int,
+        expected: dict[str, Any],
+    ) -> sqlite3.Row:
+        row = conn.execute(f"SELECT * FROM {table} WHERE id = ? LIMIT 1", (row_id,)).fetchone()
+        if row is None:
+            raise StorageVerificationError(f"{table} readback missing")
+        mismatched = [column for column, value in expected.items() if row[column] != value]
+        if mismatched:
+            raise StorageVerificationError(f"{table} readback mismatch: {','.join(sorted(mismatched))}")
+        return row
+
+    @staticmethod
+    def _verification_error(exc: StorageVerificationError) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": "post_write_verification_failed",
+            "error_detail": str(exc),
+            "written": False,
+        }
+
     def remember(
         self,
         content: str,
@@ -752,60 +953,75 @@ class ManagerMemoryStore:
         supersedes_id: int | None = None,
         sensitivity: str = "normal",
     ) -> dict[str, Any]:
+        policy = validate_durable_memory(
+            content,
+            title=title,
+            source=source,
+            structured_payload={"tags": tags or []},
+        )
+        if not policy.ok:
+            return _policy_error("durable_memory_policy_violation", policy)
         self.initialize()
         now = _now()
         table = "facts" if kind == "fact" else "notes"
         importance = _clamp01(importance)
         confidence = _clamp01(confidence)
         row_id = 0
-        with self.connect() as conn:
-            if table == "facts":
-                cursor = conn.execute(
-                    """
-                    INSERT INTO facts
-                        (content, category, source, confidence, importance, expires_at, supersedes_id, sensitivity, tags_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        content,
-                        category,
-                        source,
-                        float(confidence),
-                        float(importance),
-                        expires_at,
-                        supersedes_id,
-                        sensitivity,
-                        _json_list(tags),
-                        now,
-                        now,
-                    ),
-                )
-                row_id = int(cursor.lastrowid)
-                self._upsert_memory_fts(conn, table, row_id)
-            else:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO notes
-                        (title, content, category, source, importance, expires_at, supersedes_id, sensitivity, tags_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        title,
-                        content,
-                        category,
-                        source,
-                        float(importance),
-                        expires_at,
-                        supersedes_id,
-                        sensitivity,
-                        _json_list(tags),
-                        now,
-                        now,
-                    ),
-                )
-                row_id = int(cursor.lastrowid)
-                self._upsert_memory_fts(conn, table, row_id)
+        try:
+            with self.connect() as conn:
+                if table == "facts":
+                    expected = {
+                        "content": content,
+                        "category": category,
+                        "source": source,
+                        "confidence": float(confidence),
+                        "importance": float(importance),
+                        "expires_at": expires_at,
+                        "supersedes_id": supersedes_id,
+                        "sensitivity": sensitivity,
+                        "tags_json": _json_list(tags),
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO facts
+                            (content, category, source, confidence, importance, expires_at, supersedes_id, sensitivity, tags_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        tuple(expected.values()),
+                    )
+                    row_id = int(cursor.lastrowid or 0)
+                    self._upsert_memory_fts(conn, table, row_id)
+                else:
+                    expected = {
+                        "title": title,
+                        "content": content,
+                        "category": category,
+                        "source": source,
+                        "importance": float(importance),
+                        "expires_at": expires_at,
+                        "supersedes_id": supersedes_id,
+                        "sensitivity": sensitivity,
+                        "tags_json": _json_list(tags),
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO notes
+                            (title, content, category, source, importance, expires_at, supersedes_id, sensitivity, tags_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        tuple(expected.values()),
+                    )
+                    row_id = int(cursor.lastrowid or 0)
+                    self._upsert_memory_fts(conn, table, row_id)
+                self._verify_exact_row(conn, table=table, row_id=row_id, expected=expected)
+        except StorageVerificationError as exc:
+            return self._verification_error(exc)
         result = {"ok": True, "kind": table[:-1], "id": row_id, "created_at": now}
+        result["verification"] = {"readback": True}
         if table == "facts":
             result["confidence"] = float(confidence)
         return result
@@ -824,43 +1040,58 @@ class ManagerMemoryStore:
         source: str = "codex",
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
+        policy = validate_durable_memory(
+            "\n".join(part for part in (content, recommendation, avoid) if part),
+            title=title,
+            source=source,
+            structured_payload={"tags": tags or []},
+        )
+        if not policy.ok:
+            return _policy_error("durable_memory_policy_violation", policy)
         self.initialize()
         now = _now()
         importance = _clamp01(importance)
         confidence = _clamp01(confidence)
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO lessons (
-                    title, content, applies_to, signal, recommendation, avoid,
-                    importance, confidence, source, tags_json, created_at, updated_at
+        expected = {
+            "title": title,
+            "content": content,
+            "applies_to": applies_to,
+            "signal": signal,
+            "recommendation": recommendation,
+            "avoid": avoid,
+            "importance": importance,
+            "confidence": confidence,
+            "source": source,
+            "tags_json": _json_list(tags),
+            "created_at": now,
+            "updated_at": now,
+        }
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO lessons (
+                        title, content, applies_to, signal, recommendation, avoid,
+                        importance, confidence, source, tags_json, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    tuple(expected.values()),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    title,
-                    content,
-                    applies_to,
-                    signal,
-                    recommendation,
-                    avoid,
-                    importance,
-                    confidence,
-                    source,
-                    _json_list(tags),
-                    now,
-                    now,
-                ),
-            )
+                row_id = int(cursor.lastrowid or 0)
+                self._verify_exact_row(conn, table="lessons", row_id=row_id, expected=expected)
+        except StorageVerificationError as exc:
+            return self._verification_error(exc)
         return {
             "ok": True,
             "kind": "lesson",
-            "id": cursor.lastrowid,
+            "id": row_id,
             "created_at": now,
             "applies_to": applies_to,
             "signal": signal,
             "importance": importance,
             "confidence": confidence,
+            "verification": {"readback": True},
         }
 
     def add_task(
@@ -872,17 +1103,39 @@ class ManagerMemoryStore:
         source: str = "codex",
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
+        policy = validate_durable_memory(
+            details,
+            title=title,
+            source=source,
+            structured_payload={"tags": tags or []},
+        )
+        if not policy.ok:
+            return _policy_error("durable_memory_policy_violation", policy)
         self.initialize()
         now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO tasks (title, details, due_at, source, tags_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (title, details, due_at, source, _json_list(tags), now, now),
-            )
-        return {"ok": True, "id": cursor.lastrowid, "created_at": now}
+        expected = {
+            "title": title,
+            "details": details,
+            "due_at": due_at,
+            "source": source,
+            "tags_json": _json_list(tags),
+            "created_at": now,
+            "updated_at": now,
+        }
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO tasks (title, details, due_at, source, tags_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    tuple(expected.values()),
+                )
+                row_id = int(cursor.lastrowid or 0)
+                self._verify_exact_row(conn, table="tasks", row_id=row_id, expected=expected)
+        except StorageVerificationError as exc:
+            return self._verification_error(exc)
+        return {"ok": True, "id": row_id, "created_at": now, "verification": {"readback": True}}
 
     def add_reminder(
         self,
@@ -893,27 +1146,62 @@ class ManagerMemoryStore:
         source: str = "codex",
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
+        policy = validate_durable_memory(
+            details,
+            title=title,
+            source=source,
+            structured_payload={"tags": tags or []},
+        )
+        if not policy.ok:
+            return _policy_error("durable_memory_policy_violation", policy)
         self.initialize()
         now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO reminders (title, remind_at, details, source, tags_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (title, remind_at, details, source, _json_list(tags), now, now),
-            )
-        return {"ok": True, "id": cursor.lastrowid, "created_at": now}
+        expected = {
+            "title": title,
+            "remind_at": remind_at,
+            "details": details,
+            "source": source,
+            "tags_json": _json_list(tags),
+            "created_at": now,
+            "updated_at": now,
+        }
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO reminders (title, remind_at, details, source, tags_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    tuple(expected.values()),
+                )
+                row_id = int(cursor.lastrowid or 0)
+                self._verify_exact_row(conn, table="reminders", row_id=row_id, expected=expected)
+        except StorageVerificationError as exc:
+            return self._verification_error(exc)
+        return {"ok": True, "id": row_id, "created_at": now, "verification": {"readback": True}}
 
     def journal(self, event: str, *, source: str = "codex", tags: list[str] | None = None) -> dict[str, Any]:
+        policy = validate_durable_memory(
+            event,
+            source=source,
+            structured_payload={"tags": tags or []},
+        )
+        if not policy.ok:
+            return _policy_error("durable_memory_policy_violation", policy)
         self.initialize()
         now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO journal (event, source, tags_json, created_at) VALUES (?, ?, ?, ?)",
-                (event, source, _json_list(tags), now),
-            )
-        return {"ok": True, "id": cursor.lastrowid, "created_at": now}
+        expected = {"event": event, "source": source, "tags_json": _json_list(tags), "created_at": now}
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    "INSERT INTO journal (event, source, tags_json, created_at) VALUES (?, ?, ?, ?)",
+                    tuple(expected.values()),
+                )
+                row_id = int(cursor.lastrowid or 0)
+                self._verify_exact_row(conn, table="journal", row_id=row_id, expected=expected)
+        except StorageVerificationError as exc:
+            return self._verification_error(exc)
+        return {"ok": True, "id": row_id, "created_at": now, "verification": {"readback": True}}
 
     def recall(
         self,
@@ -1020,6 +1308,7 @@ class ManagerMemoryStore:
                     table = "notes" if item_kind == "note" else "facts"
                     conn.execute("UPDATE " + table + " SET last_used_at = ? WHERE id = ?", (used_at, item["id"]))
                     item["last_used_at"] = used_at
+        selected = [_memory_trust_envelope(item) for item in selected]
         return {
             "ok": True,
             "query": query,
@@ -1076,11 +1365,12 @@ class ManagerMemoryStore:
             ),
             reverse=True,
         )
+        selected = [_memory_trust_envelope(item) for item in results[:limit]]
         return {
             "ok": True,
             "query": query,
             "filters": {"applies_to": applies_to, "signal": signal, "tags": tags or []},
-            "items": results[:limit],
+            "items": selected,
             "total_returned": min(len(results), limit),
             "total_matches": len(results),
         }
@@ -1159,11 +1449,7 @@ class ManagerMemoryStore:
         lessons = [
             item
             for item in _unique_memory_items(
-                [
-                    item
-                    for query in lesson_queries
-                    for item in self.recall_lessons(query, limit=limit)["items"]
-                ]
+                [item for query in lesson_queries for item in self.recall_lessons(query, limit=limit)["items"]]
             )
             if not _is_context_noise(
                 item,
@@ -1187,11 +1473,7 @@ class ManagerMemoryStore:
             ]
 
         recalled = _unique_memory_items(
-            [
-                item
-                for query in context_queries
-                for item in self.recall(query, limit=limit * 3)["items"]
-            ]
+            [item for query in context_queries for item in self.recall(query, limit=limit * 3)["items"]]
         )
         recalled = [
             item
@@ -1205,9 +1487,7 @@ class ManagerMemoryStore:
             )
         ]
         preferences_or_facts = [
-            item
-            for item in recalled
-            if item.get("kind") in {"fact", "note", "rule"} and item.get("kind") != "lesson"
+            item for item in recalled if item.get("kind") in {"fact", "note", "rule"} and item.get("kind") != "lesson"
         ][:limit]
         if not preferences_or_facts:
             preferences_or_facts = self.recall("", limit=limit, kind="fact")["items"]
@@ -1328,7 +1608,7 @@ class ManagerMemoryStore:
                 ).fetchall()
             ]
             rules = [
-                self._row_to_dict(row)
+                _trusted_rule_envelope(self._row_to_dict(row))
                 for row in conn.execute(
                     "SELECT *, 'rule' AS kind FROM manager_rules ORDER BY priority ASC, updated_at DESC LIMIT ?",
                     (limit,),
@@ -1369,19 +1649,110 @@ class ManagerMemoryStore:
         dry_run: bool = False,
         source: str = "codex",
         metadata: dict[str, Any] | None = None,
+        run_key: str | None = None,
+        resume_status: str = "not_required",
+        resume_metadata: dict[str, Any] | None = None,
+        requires_reauthorization: bool = False,
     ) -> dict[str, Any]:
+        intent = intent.strip()
+        if not intent:
+            return {"ok": False, "error": "invalid_run_intent"}
+        run_key, key_error = _normalize_idempotency_key(run_key)
+        if key_error:
+            return {"ok": False, "error": key_error}
+        resume_status = resume_status.strip().casefold()
+        if requires_reauthorization:
+            resume_status = "requires_reauthorization"
+        elif resume_status == "requires_reauthorization":
+            requires_reauthorization = True
+        if resume_status not in RESUME_STATUSES or resume_status == "closed":
+            return {"ok": False, "error": "invalid_resume_status", "allowed": sorted(RESUME_STATUSES - {"closed"})}
+        checkpoint_policy = _safe_validate_run_checkpoint(
+            message=f"{intent}\n{query}",
+            payload={"metadata": metadata or {}, "resume_metadata": resume_metadata or {}},
+        )
+        if not checkpoint_policy.ok:
+            return _policy_error("run_checkpoint_policy_violation", checkpoint_policy)
         self.initialize()
         now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO manager_runs
-                    (intent, query, status, dry_run, source, metadata_json, started_at, updated_at)
-                VALUES (?, ?, 'running', ?, ?, ?, ?, ?)
-                """,
-                (intent, query, 1 if dry_run else 0, source, json.dumps(metadata or {}, ensure_ascii=False), now, now),
-            )
-        return {"ok": True, "id": cursor.lastrowid, "started_at": now, "status": "running"}
+        metadata_json = _canonical_json(metadata or {})
+        resume_metadata_json = _canonical_json(resume_metadata or {})
+        request_hash = _payload_hash(
+            {
+                "intent": intent,
+                "query": query,
+                "dry_run": bool(dry_run),
+                "source": source,
+                "metadata": metadata or {},
+                "resume_status": resume_status,
+                "resume_metadata": resume_metadata or {},
+                "requires_reauthorization": bool(requires_reauthorization),
+            }
+        )
+        expected = {
+            "intent": intent,
+            "query": query,
+            "status": "running",
+            "dry_run": 1 if dry_run else 0,
+            "source": source,
+            "metadata_json": metadata_json,
+            "summary": "",
+            "verification_json": "{}",
+            "started_at": now,
+            "finished_at": None,
+            "updated_at": now,
+            "run_key": run_key,
+            "request_hash": request_hash,
+            "resume_status": resume_status,
+            "resume_metadata_json": resume_metadata_json,
+            "requires_reauthorization": 1 if requires_reauthorization else 0,
+            "terminal_hash": "",
+        }
+        try:
+            with self.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if run_key is not None:
+                    existing = conn.execute(
+                        "SELECT * FROM manager_runs WHERE run_key = ? LIMIT 1", (run_key,)
+                    ).fetchone()
+                    if existing is not None:
+                        if existing["request_hash"] != request_hash:
+                            return {"ok": False, "error": "run_key_conflict", "run_key": run_key}
+                        return {
+                            "ok": True,
+                            "id": int(existing["id"]),
+                            "started_at": existing["started_at"],
+                            "status": existing["status"],
+                            "run_key": run_key,
+                            "resume_status": existing["resume_status"],
+                            "requires_reauthorization": bool(existing["requires_reauthorization"]),
+                            "idempotent_replay": True,
+                        }
+                cursor = conn.execute(
+                    """
+                    INSERT INTO manager_runs (
+                        intent, query, status, dry_run, source, metadata_json, summary, verification_json,
+                        started_at, finished_at, updated_at, run_key, request_hash, resume_status,
+                        resume_metadata_json, requires_reauthorization, terminal_hash
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    tuple(expected.values()),
+                )
+                row_id = int(cursor.lastrowid or 0)
+                self._verify_exact_row(conn, table="manager_runs", row_id=row_id, expected=expected)
+        except StorageVerificationError as exc:
+            return self._verification_error(exc)
+        return {
+            "ok": True,
+            "id": row_id,
+            "started_at": now,
+            "status": "running",
+            "run_key": run_key,
+            "resume_status": resume_status,
+            "requires_reauthorization": requires_reauthorization,
+            "verification": {"readback": True},
+        }
 
     def record_manager_run_event(
         self,
@@ -1392,31 +1763,161 @@ class ManagerMemoryStore:
         target_type: str = "",
         target_id: str = "",
         payload: dict[str, Any] | None = None,
+        event_key: str | None = None,
+        expected_updated_at: str | None = None,
+        resume_status: str | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        requires_reauthorization: bool | None = None,
     ) -> dict[str, Any]:
+        event_type = event_type.strip()
+        if not event_type:
+            return {"ok": False, "error": "invalid_event_type", "run_id": run_id}
+        event_key, key_error = _normalize_idempotency_key(event_key)
+        if key_error:
+            return {"ok": False, "error": key_error, "run_id": run_id}
+        if resume_status is not None:
+            resume_status = resume_status.strip().casefold()
+            if resume_status not in RESUME_STATUSES or resume_status == "closed":
+                return {
+                    "ok": False,
+                    "error": "invalid_resume_status",
+                    "allowed": sorted(RESUME_STATUSES - {"closed"}),
+                    "run_id": run_id,
+                }
+        if requires_reauthorization:
+            resume_status = "requires_reauthorization"
+        elif resume_status == "requires_reauthorization":
+            requires_reauthorization = True
+        checkpoint_payload = dict(payload or {})
+        if resume_metadata is not None:
+            checkpoint_payload["resume_metadata"] = resume_metadata
+        policy = _safe_validate_run_checkpoint(message=message or event_type, payload=checkpoint_payload)
+        if not policy.ok:
+            return {**_policy_error("run_checkpoint_policy_violation", policy), "run_id": run_id}
         self.initialize()
         now = _now()
-        with self.connect() as conn:
-            run = conn.execute("SELECT id FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
-            if not run:
-                return {"ok": False, "error": "manager run not found", "run_id": run_id}
-            cursor = conn.execute(
-                """
-                INSERT INTO manager_run_events
-                    (run_id, event_type, message, target_type, target_id, payload_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    event_type,
-                    message,
-                    target_type,
-                    target_id,
-                    json.dumps(payload or {}, ensure_ascii=False),
-                    now,
-                ),
-            )
-            conn.execute("UPDATE manager_runs SET updated_at = ? WHERE id = ?", (now, run_id))
-        return {"ok": True, "id": cursor.lastrowid, "run_id": run_id, "created_at": now}
+        payload_json = _canonical_json(payload or {})
+        event_hash = _payload_hash(
+            {
+                "event_type": event_type,
+                "message": message,
+                "target_type": target_type,
+                "target_id": target_id,
+                "payload": payload or {},
+                "resume_status": resume_status,
+                "resume_metadata": resume_metadata,
+                "requires_reauthorization": requires_reauthorization,
+            }
+        )
+        expected_event = {
+            "run_id": run_id,
+            "event_type": event_type,
+            "message": message,
+            "target_type": target_type,
+            "target_id": target_id,
+            "payload_json": payload_json,
+            "created_at": now,
+            "event_key": event_key,
+            "event_hash": event_hash,
+        }
+        try:
+            with self.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+                if not run:
+                    return {"ok": False, "error": "manager run not found", "run_id": run_id}
+                if run["status"] in TERMINAL_RUN_STATUSES:
+                    return {"ok": False, "error": "manager_run_terminal", "run_id": run_id, "status": run["status"]}
+                if expected_updated_at is not None and run["updated_at"] != expected_updated_at:
+                    return {"ok": False, "error": "run_precondition_failed", "run_id": run_id}
+                if event_key is not None:
+                    existing = conn.execute(
+                        "SELECT * FROM manager_run_events WHERE run_id = ? AND event_key = ? LIMIT 1",
+                        (run_id, event_key),
+                    ).fetchone()
+                    if existing is not None:
+                        if existing["event_hash"] != event_hash:
+                            return {
+                                "ok": False,
+                                "error": "event_key_conflict",
+                                "run_id": run_id,
+                                "event_key": event_key,
+                            }
+                        return {
+                            "ok": True,
+                            "id": int(existing["id"]),
+                            "run_id": run_id,
+                            "created_at": existing["created_at"],
+                            "event_key": event_key,
+                            "idempotent_replay": True,
+                        }
+                cursor = conn.execute(
+                    """
+                    INSERT INTO manager_run_events (
+                        run_id, event_type, message, target_type, target_id, payload_json,
+                        created_at, event_key, event_hash
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    tuple(expected_event.values()),
+                )
+                row_id = int(cursor.lastrowid or 0)
+                self._verify_exact_row(
+                    conn,
+                    table="manager_run_events",
+                    row_id=row_id,
+                    expected=expected_event,
+                )
+                next_resume_status = resume_status if resume_status is not None else str(run["resume_status"])
+                if (
+                    requires_reauthorization is False
+                    and resume_status is None
+                    and next_resume_status == "requires_reauthorization"
+                ):
+                    next_resume_status = "resumable"
+                next_resume_metadata_json = (
+                    _canonical_json(resume_metadata)
+                    if resume_metadata is not None
+                    else str(run["resume_metadata_json"])
+                )
+                next_requires_reauthorization = (
+                    1
+                    if requires_reauthorization
+                    else 0
+                    if requires_reauthorization is not None
+                    else int(run["requires_reauthorization"])
+                )
+                conn.execute(
+                    """
+                    UPDATE manager_runs
+                    SET updated_at = ?, resume_status = ?, resume_metadata_json = ?, requires_reauthorization = ?
+                    WHERE id = ?
+                    """,
+                    (now, next_resume_status, next_resume_metadata_json, next_requires_reauthorization, run_id),
+                )
+                self._verify_exact_row(
+                    conn,
+                    table="manager_runs",
+                    row_id=run_id,
+                    expected={
+                        "updated_at": now,
+                        "resume_status": next_resume_status,
+                        "resume_metadata_json": next_resume_metadata_json,
+                        "requires_reauthorization": next_requires_reauthorization,
+                    },
+                )
+        except StorageVerificationError as exc:
+            return {**self._verification_error(exc), "run_id": run_id}
+        return {
+            "ok": True,
+            "id": row_id,
+            "run_id": run_id,
+            "created_at": now,
+            "event_key": event_key,
+            "resume_status": next_resume_status,
+            "requires_reauthorization": bool(next_requires_reauthorization),
+            "verification": {"readback": True},
+        }
 
     def finish_manager_run(
         self,
@@ -1425,21 +1926,83 @@ class ManagerMemoryStore:
         status: str = "completed",
         summary: str = "",
         verification: dict[str, Any] | None = None,
+        expected_updated_at: str | None = None,
     ) -> dict[str, Any]:
+        status = status.strip().casefold()
+        if status not in TERMINAL_RUN_STATUSES:
+            return {"ok": False, "error": "invalid_terminal_status", "allowed": sorted(TERMINAL_RUN_STATUSES)}
+        policy = _safe_validate_run_checkpoint(message=summary or status, payload=verification or {})
+        if not policy.ok:
+            return {**_policy_error("run_checkpoint_policy_violation", policy), "run_id": run_id}
         self.initialize()
         now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE manager_runs
-                SET status = ?, summary = ?, verification_json = ?, finished_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (status, summary, json.dumps(verification or {}, ensure_ascii=False), now, now, run_id),
-            )
-        if cursor.rowcount == 0:
-            return {"ok": False, "error": "manager run not found", "run_id": run_id}
-        return {"ok": True, "id": run_id, "status": status, "finished_at": now}
+        verification_json = _canonical_json(verification or {})
+        terminal_hash = _payload_hash({"status": status, "summary": summary, "verification": verification or {}})
+        try:
+            with self.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+                if run is None:
+                    return {"ok": False, "error": "manager run not found", "run_id": run_id}
+                if expected_updated_at is not None and run["updated_at"] != expected_updated_at:
+                    return {"ok": False, "error": "run_precondition_failed", "run_id": run_id}
+                if run["status"] in TERMINAL_RUN_STATUSES:
+                    existing_terminal_hash = str(run["terminal_hash"] or "")
+                    if not existing_terminal_hash:
+                        existing_terminal_hash = _payload_hash(
+                            {
+                                "status": run["status"],
+                                "summary": run["summary"],
+                                "verification": _decode_json(run["verification_json"], {}),
+                            }
+                        )
+                    if existing_terminal_hash != terminal_hash:
+                        return {
+                            "ok": False,
+                            "error": "manager_run_terminal_conflict",
+                            "run_id": run_id,
+                            "status": run["status"],
+                        }
+                    return {
+                        "ok": True,
+                        "id": run_id,
+                        "status": run["status"],
+                        "finished_at": run["finished_at"],
+                        "idempotent_replay": True,
+                    }
+                conn.execute(
+                    """
+                    UPDATE manager_runs
+                    SET status = ?, summary = ?, verification_json = ?, finished_at = ?, updated_at = ?,
+                        resume_status = 'closed', requires_reauthorization = 0, terminal_hash = ?
+                    WHERE id = ?
+                    """,
+                    (status, summary, verification_json, now, now, terminal_hash, run_id),
+                )
+                self._verify_exact_row(
+                    conn,
+                    table="manager_runs",
+                    row_id=run_id,
+                    expected={
+                        "status": status,
+                        "summary": summary,
+                        "verification_json": verification_json,
+                        "finished_at": now,
+                        "updated_at": now,
+                        "resume_status": "closed",
+                        "requires_reauthorization": 0,
+                        "terminal_hash": terminal_hash,
+                    },
+                )
+        except StorageVerificationError as exc:
+            return {**self._verification_error(exc), "run_id": run_id}
+        return {
+            "ok": True,
+            "id": run_id,
+            "status": status,
+            "finished_at": now,
+            "verification": {"readback": True},
+        }
 
     def list_manager_runs(self, *, limit: int = 20, include_events: bool = False) -> dict[str, Any]:
         self.initialize()
@@ -1476,10 +2039,14 @@ class ManagerMemoryStore:
             item["metadata"] = _decode_json(item.pop("metadata_json"), {})
         if "verification_json" in item:
             item["verification"] = _decode_json(item.pop("verification_json"), {})
+        if "resume_metadata_json" in item:
+            item["resume_metadata"] = _decode_json(item.pop("resume_metadata_json"), {})
         if "payload_json" in item:
             item["payload"] = _decode_json(item.pop("payload_json"), {})
         if "dry_run" in item:
             item["dry_run"] = bool(item["dry_run"])
+        if "requires_reauthorization" in item:
+            item["requires_reauthorization"] = bool(item["requires_reauthorization"])
         return item
 
     def _manager_rule_count(self) -> int:

@@ -41,7 +41,8 @@ def build_provider_smoke_report(
         result
         for result in results
         if result["mode"] == "live-readonly"
-        and result["live_readonly_status"] in {"missing_env", "blocked_manual_or_write_risk"}
+        and result["live_readonly_status"]
+        in {"missing_env", "blocked_manual_or_write_risk", "configured_not_exercised"}
     ]
     return {
         "ok": True,
@@ -54,7 +55,10 @@ def build_provider_smoke_report(
             "provider_count": len(results),
             "configured_count": sum(1 for result in results if result["configured"]),
             "dry_run_valid_count": sum(1 for result in results if result["dry_run_payload_valid"]),
-            "live_readonly_ready_count": sum(1 for result in results if result["live_readonly_status"] == "ready"),
+            "live_readonly_ready_count": sum(
+                1 for result in results if result["live_readonly_status"] in {"verified_local", "verified_live"}
+            ),
+            "network_calls_performed": sum(1 for result in results if result["network_call_performed"]),
             "blocked_count": len(blockers),
             "no_order_guarantee": all(result["no_order_guarantee"] for result in results),
             "redaction_check": all(result["redaction_check"] for result in results),
@@ -72,9 +76,7 @@ def _provider_smoke_result(provider: dict[str, Any], *, mode: str) -> dict[str, 
     capabilities = [str(value) for value in provider.get("capabilities") or []]
     configured = bool(provider.get("configured"))
     has_write_capability = any(
-        marker in capability.casefold()
-        for marker in WRITE_CAPABILITY_MARKERS
-        for capability in capabilities
+        marker in capability.casefold() for marker in WRITE_CAPABILITY_MARKERS for capability in capabilities
     )
     safe_access = str(provider.get("access_mode") or "") in READ_ONLY_ACCESS_MODES
     live_status = "not_requested"
@@ -89,9 +91,14 @@ def _provider_smoke_result(provider: dict[str, Any], *, mode: str) -> dict[str, 
             live_status = "missing_env"
         elif not safe_access:
             live_status = "blocked_manual_or_write_risk"
-        else:
-            live_status = "ready"
+        elif str(provider.get("access_mode") or "") == "local_rules":
+            live_status = "verified_local"
             latency_ms = 0
+        else:
+            # This generic inventory does not know a provider-specific harmless
+            # endpoint.  Do not report a live success without an actual request.
+            live_status = "configured_not_exercised"
+            warnings.append("provider_specific_readonly_probe_required")
 
     return {
         "provider": provider["source_id"],
@@ -102,6 +109,7 @@ def _provider_smoke_result(provider: dict[str, Any], *, mode: str) -> dict[str, 
         "dry_run_payload_valid": bool(provider.get("source_id")) and bool(provider.get("name")),
         "live_readonly_status": live_status,
         "latency_ms": latency_ms,
+        "network_call_performed": False,
         "redaction_check": not provider.get("present_env_values"),
         "no_order_guarantee": True,
         "warnings": warnings,

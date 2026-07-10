@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 import autostop_manager.knowledge_base as kb
-from autostop_manager.knowledge_base import audit_knowledge_annotations, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from autostop_manager.knowledge_base import (
+    audit_knowledge_annotations,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
 from autostop_manager.storage import ManagerMemoryStore
 
 
@@ -17,7 +22,7 @@ def test_probe_routes_ip_requisites_to_private_business_identity(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = probe_knowledge_base(store, "актуальные реквизиты ИП Гришкявичус карточка предприятия", limit=5)
+    result = probe_knowledge_base(store, "актуальные реквизиты ИП карточка предприятия", limit=5)
 
     assert result["ok"] is True
     assert result["has_knowledge"] is True
@@ -31,7 +36,7 @@ def test_business_identity_search_returns_public_route_when_private_runtime_file
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = search_knowledge_base(store, "ОГРНИП ИНН ОКВЭД ИП Гришкевичус", domain="business_identity", limit=5)
+    result = search_knowledge_base(store, "ОГРНИП ИНН ОКВЭД ИП", domain="business_identity", limit=5)
 
     assert result["ok"] is True
     assert result["items"]
@@ -58,7 +63,7 @@ def test_business_identity_probe_reports_optional_runtime_status(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = probe_knowledge_base(store, "актуальные реквизиты ИП Гришкевичус ОГРНИП", limit=5)
+    result = probe_knowledge_base(store, "актуальные реквизиты ИП ОГРНИП", limit=5)
 
     assert result["ok"] is True
     assert result["best_domain"] == "business_identity"

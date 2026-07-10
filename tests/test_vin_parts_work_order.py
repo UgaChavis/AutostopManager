@@ -65,8 +65,14 @@ def test_vin_parts_work_order_builds_actionable_routes_without_raw_identifier(mo
     assert result["work_order_summary"]["count"] == 2
     assert result["benchmark_summary"]["part_intent_recognized_count"] == 2
     assert result["items"][0]["status"] == "ready_for_manual_epc_and_market_search_but_live_credentials_missing"
-    assert any(route["name"].startswith("BMW ETK") for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"])
-    assert any(route["source_id"] == "honda_brand_epc_manual" for route in result["items"][1]["oem_lookup_routes"]["brand_or_market_manual"])
+    assert any(
+        route["name"].startswith("BMW ETK")
+        for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"]
+    )
+    assert any(
+        route["source_id"] == "honda_brand_epc_manual"
+        for route in result["items"][1]["oem_lookup_routes"]["brand_or_market_manual"]
+    )
     assert "PARTSAPI_KEY" in result["items"][0]["oem_lookup_routes"]["missing_live_env_names"]
     assert "ROSSKO_KEY1" in result["items"][0]["procurement_lookup_routes"]["missing_live_env_names"]
     assert result["items"][0]["crm_writeback_gate"]["can_write_final_material_line_now"] is False
@@ -169,7 +175,11 @@ def test_vin_parts_work_order_uses_oem_resolution_status(monkeypatch):
                     "index": 1,
                     "identifier": {"redacted": {"display": "1HG***352"}, "kind": "vin"},
                     "identity": {"vehicle_profile": {"make": "HONDA"}, "ready_for_oem_candidate_lookup": True},
-                    "requested_part": {"recognized": True, "catalog_search_terms": ["передние колодки"], "clarification_required": False},
+                    "requested_part": {
+                        "recognized": True,
+                        "catalog_search_terms": ["передние колодки"],
+                        "clarification_required": False,
+                    },
                     "live_capability": {},
                     "blockers": [],
                     "prepared_calls": {},
@@ -201,4 +211,7 @@ def test_vin_parts_work_order_reports_no_items_next_decision():
 
     assert result["work_order_summary"]["count"] == 0
     assert result["benchmark_summary"]["benchmark_status"] == "no_items"
-    assert result["next_decision"] == "No VIN/frame items supplied; add at least one item before planning OEM and supplier lookup."
+    assert (
+        result["next_decision"]
+        == "No VIN/frame items supplied; add at least one item before planning OEM and supplier lookup."
+    )

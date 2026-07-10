@@ -37,8 +37,14 @@ def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
 
     assert status["ok"] is True
     assert any(provider["source_id"] == "nhtsa_vpic" and provider["configured"] for provider in status["providers"])
-    assert any(provider["source_id"] == "mann_filter_catalog" and provider["live_callable_now"] for provider in status["providers"])
-    assert any(provider["source_id"] == "denso_aftermarket_catalog" and provider["live_callable_now"] for provider in status["providers"])
+    assert any(
+        provider["source_id"] == "mann_filter_catalog" and provider["live_callable_now"]
+        for provider in status["providers"]
+    )
+    assert any(
+        provider["source_id"] == "denso_aftermarket_catalog" and provider["live_callable_now"]
+        for provider in status["providers"]
+    )
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
     assert partsapi["configured"] is False
     assert "PARTSAPI_BASE_URL" in partsapi["missing_env_names"]
@@ -53,7 +59,10 @@ def test_aftermarket_catalog_status_has_two_public_live_sources():
     assert status["ok"] is True
     assert status["configured_count"] == 2
     assert status["live_callable_count"] == 2
-    assert {provider["source_id"] for provider in status["providers"]} == {"mann_filter_catalog", "denso_aftermarket_catalog"}
+    assert {provider["source_id"] for provider in status["providers"]} == {
+        "mann_filter_catalog",
+        "denso_aftermarket_catalog",
+    }
 
 
 def test_catalog_provider_status_detects_configured_partsapi(monkeypatch):
@@ -85,26 +94,48 @@ def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypa
 def test_catalog_provider_status_detects_configured_17vin_account(monkeypatch):
     monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
     monkeypatch.setenv("VIN17_SECRET", "test-secret")
+    monkeypatch.setenv("VIN17_BASE_URL", "https://api.17vin.example.test")
 
     status = catalog_provider_status(stage="oem_catalog")
     vin17 = next(provider for provider in status["providers"] if provider["source_id"] == "vin17_api")
 
     assert vin17["configured"] is True
     assert vin17["live_callable_now"] is True
-    assert vin17["present_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
+    assert vin17["present_env_names"] == ["VIN17_ACCOUNT", "VIN17_BASE_URL", "VIN17_SECRET"]
 
 
 def test_catalog_provider_status_detects_emex_account(monkeypatch):
     monkeypatch.setenv("EMEX_LOGIN", "test-user")
     monkeypatch.setenv("EMEX_PASSWORD", "test-secret")
+    monkeypatch.setenv("EMEX_SERVICE_URL", "https://emex.example.test/EmExService.asmx")
 
     status = catalog_provider_status(stage="procurement_price")
     emex = next(provider for provider in status["providers"] if provider["source_id"] == "emex")
 
     assert emex["configured"] is True
     assert emex["live_callable_now"] is True
-    assert emex["present_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD"]
+    assert emex["present_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD", "EMEX_SERVICE_URL"]
     assert "whitelist" in emex["limits"]
+
+
+def test_catalog_provider_status_rejects_cleartext_credential_endpoints(monkeypatch):
+    monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
+    monkeypatch.setenv("VIN17_SECRET", "test-secret")
+    monkeypatch.setenv("VIN17_BASE_URL", "http://api.17vin.example.test")
+    monkeypatch.setenv("EMEX_LOGIN", "test-user")
+    monkeypatch.setenv("EMEX_PASSWORD", "test-secret")
+    monkeypatch.setenv("EMEX_SERVICE_URL", "http://emex.example.test/EmExService.asmx")
+
+    status = catalog_provider_status()
+    vin17 = next(provider for provider in status["providers"] if provider["source_id"] == "vin17_api")
+    emex = next(provider for provider in status["providers"] if provider["source_id"] == "emex")
+
+    assert vin17["configured"] is False
+    assert vin17["live_callable_now"] is False
+    assert "VIN17_BASE_URL" in vin17["missing_env_names"]
+    assert emex["configured"] is False
+    assert emex["live_callable_now"] is False
+    assert "EMEX_SERVICE_URL" in emex["missing_env_names"]
 
 
 def test_catalog_provider_status_accepts_rossko_app_key_aliases(monkeypatch):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import wraps
 from typing import Any
 
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
@@ -28,13 +29,18 @@ from .knowledge_base import (
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
 from .memory_review import apply_memory_review_item, build_memory_review
-from .partsapi_category_index import explain_partsapi_category_for_intent, search_partsapi_category_index, validate_partsapi_category_index
+from .partsapi_category_index import (
+    explain_partsapi_category_for_intent,
+    search_partsapi_category_index,
+    validate_partsapi_category_index,
+)
 from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
+from .tool_contracts import contract_for_tool
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
@@ -50,14 +56,49 @@ def _registered_tool_names(server: Any) -> list[str] | None:
     return None
 
 
+def _normalize_tool_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Add a stable additive envelope while preserving every legacy field."""
+
+    normalized = dict(result)
+    if "ok" not in normalized:
+        normalized["ok"] = not bool(normalized.get("error") or normalized.get("errors"))
+    contract = contract_for_tool(name)
+    normalized["_meta"] = {
+        "result_contract": contract.result_contract,
+        "tool": name,
+        "operation_kind": contract.operation_kind,
+        "risk": contract.risk,
+    }
+    return normalized
+
+
+def _contract_tool(server: Any, *, name: str, description: str = "") -> Any:
+    """Register a tool with the common result envelope and intact signature."""
+
+    register = server.tool(name=name, description=description)
+
+    def decorator(func: Any) -> Any:
+        @wraps(func)
+        def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            result = func(*args, **kwargs)
+            if not isinstance(result, dict):
+                raise TypeError(f"MCP tool {name} returned a non-object result")
+            return _normalize_tool_result(name, result)
+
+        return register(wrapped)
+
+    return decorator
+
+
 def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:
     memory = store or ManagerMemoryStore()
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="remember",
         description=(
             "Store long-term manager memory that does not belong in AutoStop CRM cards: "
-            "facts, agreements, personal matters, rent notes, operating context, durable conclusions from approved source files, or useful experience."
+            "durable preferences, rules, manager-level tasks, minimal source references, compact verified conclusions, or reusable operating experience; never raw CRM/Gmail records or secrets."
         ),
     )
     def remember(
@@ -87,7 +128,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             sensitivity=sensitivity,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="recall",
         description=(
             "Search the manager long-term memory with relevance scoring and optional kind/category/tag filters. "
@@ -103,7 +145,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return memory.recall(query, limit=limit, kind=kind, category=category, tags=tags)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="learn_from_feedback",
         description=(
             "Store a concise reusable lesson when owner feedback, praise, criticism, clear success, or clear failure "
@@ -135,7 +178,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             tags=tags,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="recall_lessons",
         description="Search reusable manager lessons by task text, applies_to, signal, and tags before similar work.",
     )
@@ -148,21 +192,24 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return memory.recall_lessons(query, limit=limit, applies_to=applies_to, signal=signal, tags=tags)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="memory_map",
         description="Return compact counts and sections for manager memory so the agent can navigate memory before broad recall.",
     )
     def memory_map() -> dict[str, Any]:
         return memory.memory_map()
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="memory_topics",
         description="Return memory categories and tags with counts and examples for navigation and review.",
     )
     def memory_topics(examples_limit: int = 3) -> dict[str, Any]:
         return memory.memory_topics(examples_limit=examples_limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="memory_context_for",
         description=(
             "Build compact memory context for a task: relevant preferences, rules, lessons, source boundaries, and suggested use. "
@@ -172,14 +219,16 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def memory_context_for(task: str, limit: int = 5) -> dict[str, Any]:
         return memory.memory_context_for(task, limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="memory_gaps",
         description="Return sparse or empty memory areas and review prompts without copying CRM or Gmail data.",
     )
     def memory_gaps() -> dict[str, Any]:
         return memory.memory_gaps()
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="add_manager_task",
         description="Add a manager-level task that is not a CRM vehicle card or repair order.",
     )
@@ -192,14 +241,16 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return memory.add_task(title, details=details, due_at=due_at, source=source, tags=tags)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="today_context",
         description="Return manager memory context for today's work: due tasks, due reminders, recent journal, rules, and reusable routing context.",
     )
     def today_context(limit: int = 20) -> dict[str, Any]:
         return memory.today_context(limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="prepare_manager_context",
         description=(
             "Prepare task-specific context by combining owner command routes, relevant memory/rules, "
@@ -213,7 +264,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return prepare_manager_context(memory, query, intent=intent, limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="agent_brief",
         description=(
             "Return a compact startup package for an agent before broad document reads: role, route, source boundaries, hot rules, "
@@ -227,7 +279,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return build_agent_brief(memory, query, intent=intent, limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="prepare_crm_card_action",
         description=(
             "Build a dry-run CRM card edit contract for AutoStopManager: exact description patch, vehicle_profile patch "
@@ -258,7 +311,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="manager_journal",
         description="Append a short manager journal entry after important decisions, source changes, file intake, or CRM work.",
     )
@@ -269,7 +323,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return memory.journal(event, source=source, tags=tags)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="sync_knowledge_base",
         description=(
             "Index docs/agent/knowledge_map.json, routed playbooks, source catalogs, and model-specific skills into SQLite "
@@ -279,7 +334,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def sync_knowledge_base_tool() -> dict[str, Any]:
         return sync_knowledge_base(memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="probe_knowledge_base",
         description=(
             "Cheaply check whether the local knowledge base has relevant knowledge for a vehicle, brand, model, system, or task. "
@@ -292,7 +348,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return probe_knowledge_base(memory, query, limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="search_knowledge_base",
         description=(
             "Search the indexed AutostopManager knowledge base by query and optional domain. "
@@ -306,7 +363,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return search_knowledge_base(memory, query, domain=domain, limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="audit_knowledge_base",
         description=(
             "Audit docs/agent/knowledge_map.json, compact route cards, mapped source files, and SQLite index counts. "
@@ -316,35 +374,40 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def audit_knowledge_base_tool() -> dict[str, Any]:
         return audit_knowledge_base(memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="audit_knowledge_annotations",
         description="Audit compact knowledge annotations that improve fast routing before broad section reads.",
     )
     def audit_knowledge_annotations_tool() -> dict[str, Any]:
         return audit_knowledge_annotations(memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="audit_skill_registry",
         description="Audit local Codex skills linked from AutostopManager knowledge routes.",
     )
     def audit_skill_registry_tool() -> dict[str, Any]:
         return audit_skill_registry()
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="cleanup_audit",
         description="Run the dry-run cleanup audit for cache, duplicate, and knowledge cleanup candidates without deleting files.",
     )
     def cleanup_audit_tool() -> dict[str, Any]:
         return build_cleanup_audit(store=memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="system_audit",
         description="Run the canonical read-only AutoStop Manager health audit without running pytest or mutating CRM/files.",
     )
     def system_audit_tool() -> dict[str, Any]:
         return build_system_audit(store=memory, registered_tool_names=_registered_tool_names(server))
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="control_report",
         description=(
             "Generate ControlReportV1: server/runtime/Codex readiness, system health, git state, tests/doctor route, "
@@ -355,10 +418,16 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def control_report_tool(format: str = "json") -> dict[str, Any]:
         report = build_control_report(store=memory)
         if format == "markdown":
-            return {"ok": True, "format": "markdown", "markdown": format_control_report_markdown(report), "report": report}
+            return {
+                "ok": True,
+                "format": "markdown",
+                "markdown": format_control_report_markdown(report),
+                "report": report,
+            }
         return report
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="crm_health_plan",
         description="Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads.",
     )
@@ -373,28 +442,32 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             today_context=today_context,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="audit_memory",
         description="Audit long-term manager memory for duplicate, expired, and superseded memories.",
     )
     def audit_memory_tool() -> dict[str, Any]:
         return audit_memory(memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="curate_memory",
         description="Non-destructively curate long-term memory. With apply=true, archive duplicate note/fact copies.",
     )
     def curate_memory_tool(apply: bool = False) -> dict[str, Any]:
         return curate_memory(memory, apply=apply)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="memory_review",
         description="Generate rule-based MemoryReviewItem proposals without copying raw CRM, email, or secret content.",
     )
     def memory_review_tool() -> dict[str, Any]:
         return build_memory_review(memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="memory_review_apply",
         description=(
             "Apply a MemoryReviewItem decision. Supports accept, reject, or archive_duplicate; never deletes source memory records."
@@ -403,7 +476,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def memory_review_apply_tool(item_id: str, action: str) -> dict[str, Any]:
         return apply_memory_review_item(item_id, action, store=memory)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="knowledge_intake_plan",
         description=(
             "Classify a source file into KnowledgeIntakeDraft with safety flags and target metadata updates. "
@@ -413,7 +487,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def knowledge_intake_plan_tool(path: str, apply: bool = False) -> dict[str, Any]:
         return build_knowledge_intake_plan(path, apply=apply)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="provider_smoke_report",
         description=(
             "Run safe ProviderSmokeResult readiness checks for one provider or all providers. "
@@ -423,7 +498,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def provider_smoke_report_tool(provider: str = "all", mode: str = "dry-run") -> dict[str, Any]:
         return build_provider_smoke_report(provider=provider, mode=mode)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="start_manager_run",
         description="Start an auditable manager operation run for autopilot, procurement, finance, or knowledge work.",
     )
@@ -442,7 +518,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             metadata=metadata,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="record_manager_run_event",
         description="Record a planned action, write, skip, risk, or verification event for a manager operation run.",
     )
@@ -463,7 +540,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             payload=payload,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="finish_manager_run",
         description="Finish a manager operation run with final status, summary, and verification evidence.",
     )
@@ -475,14 +553,16 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return memory.finish_manager_run(run_id, status=status, summary=summary, verification=verification)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="list_manager_runs",
         description="List recent manager operation runs and optionally include their events.",
     )
     def list_manager_runs_tool(limit: int = 20, include_events: bool = False) -> dict[str, Any]:
         return memory.list_manager_runs(limit=limit, include_events=include_events)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="lookup_original_parts",
         description=(
             "Build a VIN, chassis, or market-code OEM lookup dossier with catalog routes, OEM candidates, confidence, and missing context."
@@ -517,7 +597,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             captured_note=captured_note,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="estimate_repair_work_cost",
         description=(
             "Build a read-only labor cost estimate from vehicle/work items, public Russia STO labor-only prices, "
@@ -558,7 +639,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             labor_time_policy=labor_time_policy,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="decode_vehicle_identity",
         description=(
             "Build a source-aware vehicle identity dossier from a VIN/frame/body number: "
@@ -599,7 +681,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             live_wmi=live_wmi,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="decode_vehicle_identities",
         description=(
             "Batch vehicle identity dossiers for VIN/frame/body-number lists. "
@@ -613,7 +696,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return decode_vehicle_identities(items, live_vpic=live_vpic, use_vpic_batch=use_vpic_batch)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="catalog_provider_status",
         description=(
             "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
@@ -623,7 +707,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def catalog_provider_status_tool(stage: str | None = None) -> dict[str, Any]:
         return catalog_provider_status(stage=stage)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="plan_oem_parts_providers",
         description=(
             "Build provider readiness and blocker plan for VIN/frame -> OEM candidates -> crosses/applicability "
@@ -643,7 +728,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             city=city,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="vin17_decode_vehicle",
         description=(
             "Call or dry-run the configured 17VIN API vehicle decoder. Requires VIN17_ACCOUNT/VIN17_SECRET; "
@@ -653,7 +739,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def vin17_decode_vehicle_tool(identifier: str, dry_run: bool = False) -> dict[str, Any]:
         return vin17_decode_vehicle(identifier, dry_run=dry_run)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="vin17_search_part_number_by_vin",
         description=(
             "Call or dry-run 17VIN search_part_number by VIN after a 17VIN decode returns an EPC code. "
@@ -675,7 +762,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="partsapi_catalog_lookup",
         description=(
             "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup. Live calls require PARTSAPI_BASE_URL plus "
@@ -717,7 +805,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="search_partsapi_category_index",
         description="Search the local PartsAPI numeric category index by query/intent without live calls or secrets.",
     )
@@ -729,7 +818,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return search_partsapi_category_index(query, intent_id=intent_id, path=path, limit=limit)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="explain_partsapi_category_for_intent",
         description="Explain why a PartsAPI numeric category was selected for a part intent.",
     )
@@ -740,14 +830,16 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     ) -> dict[str, Any]:
         return explain_partsapi_category_for_intent(intent_id, query=query, path=path)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="validate_partsapi_category_index",
         description="Validate the tracked local PartsAPI category index fixture without exposing secrets or identifiers.",
     )
     def validate_partsapi_category_index_tool(path: str | None = None) -> dict[str, Any]:
         return validate_partsapi_category_index(path=path)
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="public_aftermarket_catalog_lookup",
         description=(
             "Call public aftermarket catalogs by part/OE number. Supports MANN-FILTER and DENSO live public endpoints; "
@@ -771,7 +863,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="exist_price_lookup",
         description=(
             "Call or dry-run public read-only Exist article lookup for catalog disambiguation, analog visibility, "
@@ -799,7 +892,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="lookup_oem_catalog_candidates",
         description=(
             "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part. "
@@ -835,7 +929,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="resolve_vin_oem_parts",
         description=(
             "Resolve one VIN/frame/body-number and requested part into a read-only VinOemResolution: "
@@ -889,7 +984,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             dry_run=dry_run,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="plan_crm_vin_oem_parts_lookup",
         description=(
             "Build the CRM card workflow for VIN/frame/body-number OEM lookup, replacements/crosses, "
@@ -941,7 +1037,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             vin_oem_resolution=vin_oem_resolution,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="benchmark_vin_parts_lookup",
         description=(
             "Read-only benchmark for a batch of CRM VIN/frame/body-number items: identity confidence, part-intent recognition, "
@@ -983,7 +1080,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             partsapi_timeout=partsapi_timeout,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="build_vin_parts_work_order",
         description=(
             "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, "
@@ -1018,7 +1116,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             partsapi_category_index=partsapi_category_index,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="recommend_automotive_sources",
         description=(
             "Recommend authoritative repair, TSB, recall, diagnostic, wiring, labor, fluid, torque, or OEM source routes "
@@ -1038,7 +1137,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             limit=limit,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="recommend_fluid_maintenance_sources",
         description=(
             "Build a source-backed plan for oils, operating fluids, fill capacities, and ТО fluid service by vehicle unit. "
@@ -1082,7 +1182,8 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             limit=limit,
         )
 
-    @server.tool(
+    @_contract_tool(
+        server,
         name="recommend_service_management_actions",
         description=(
             "Build a Krasnoyarsk AutoStop/Автоспорт workshop-management action plan for parts procurement, "

@@ -10,6 +10,11 @@ from .work_pricing_research import collect_public_work_pricing_research
 ROUNDING_STEP_RUB = 100
 AUTOSTOP_MARKUP = 1.50
 MIN_CONFIDENT_QUOTES = 3
+MIN_INDEPENDENT_QUOTE_SOURCES = 2
+MAX_WORK_ITEMS = 20
+MAX_WORK_ITEM_CHARS = 240
+MAX_QUOTE_ROWS = 100
+MAX_LABOR_TIME_ROWS = 100
 
 COMMON_OPERATION_WORDS = {
     "замена",
@@ -333,7 +338,9 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
     confidence = _normalize_key(str(row.get("confidence") or "low"))
     public_source = _parse_bool(row.get("public_source"))
     official = _parse_bool(row.get("official"))
-    hours, hours_range = _coerce_first_hours(row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours"))
+    hours, hours_range = _coerce_first_hours(
+        row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours")
+    )
 
     reasons: list[str] = []
     if not source:
@@ -401,7 +408,10 @@ def _outlier_filter(quotes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
 
 def _vehicle_class(vehicle_context: dict[str, Any]) -> str:
     text = _clean_text(" ".join(str(value) for value in vehicle_context.values() if value))
-    if any(token in text for token in ("x5", "x6", "gle", "q7", "touareg", "range rover", "premium", "bmw", "mercedes", "audi")):
+    if any(
+        token in text
+        for token in ("x5", "x6", "gle", "q7", "touareg", "range rover", "premium", "bmw", "mercedes", "audi")
+    ):
         return "premium_or_large_suv"
     if any(token in text for token in ("dsg", "s tronic", "0am", "0cw", "02e", "0d9", "0gc")):
         return "vag_dsg"
@@ -489,18 +499,20 @@ def _operation_estimate(
 
     after_outliers, outliers = _outlier_filter(matched)
     prices = [int(quote["price_rub"]) for quote in after_outliers if quote.get("price_rub") is not None]
+    source_count = len({quote.get("source") for quote in after_outliers if quote.get("source")})
     weak_average = int(round(sum(prices) / len(prices))) if prices else None
-    enough_quotes = len(prices) >= MIN_CONFIDENT_QUOTES
+    enough_quotes = len(prices) >= MIN_CONFIDENT_QUOTES and source_count >= MIN_INDEPENDENT_QUOTE_SOURCES
     russia_average = weak_average if enough_quotes else None
     autostop_price = _round_to_100(russia_average * AUTOSTOP_MARKUP) if russia_average is not None else None
 
     missing_context = _operation_context_requirements(operation, vehicle_context)
     if len(prices) < MIN_CONFIDENT_QUOTES:
         missing_context.append("at_least_3_comparable_labor_only_public_prices")
+    if prices and source_count < MIN_INDEPENDENT_QUOTE_SOURCES:
+        missing_context.append("at_least_2_independent_public_sources")
     if not matched:
         missing_context.append("public_russia_labor_only_price_sample")
 
-    source_count = len({quote.get("source") for quote in after_outliers if quote.get("source")})
     low_quote_confidence = any(quote.get("confidence") == "low" for quote in after_outliers)
     if not prices:
         confidence = "blocked"
@@ -560,7 +572,7 @@ def _operation_labor_time_analysis(
     elif len(matched) >= 2 and source_count >= 2 and not any(row.get("confidence") == "low" for row in matched):
         confidence = "high"
     elif len(matched) >= 1:
-        confidence = "medium" if not all(row.get("confidence") == "low" for row in matched) else "low"
+        confidence = "low"
     else:
         confidence = "blocked"
 
@@ -608,7 +620,9 @@ def _detect_overlap_adjustments(normalized_operations: list[dict[str, Any]]) -> 
         else:
             seen[key] = name
 
-    names = [str(operation.get("normalized_name") or operation.get("input") or "") for operation in normalized_operations]
+    names = [
+        str(operation.get("normalized_name") or operation.get("input") or "") for operation in normalized_operations
+    ]
     for left in names:
         left_text = _clean_text(left)
         for right in names:
@@ -623,7 +637,11 @@ def _detect_overlap_adjustments(normalized_operations: list[dict[str, Any]]) -> 
                         "action": "verify_strut_remove_install_is_not_counted_twice",
                     }
                 )
-            if "пыльник" in left_text and "шрус" in left_text and any(token in right_text for token in ("привод", "шрус")):
+            if (
+                "пыльник" in left_text
+                and "шрус" in left_text
+                and any(token in right_text for token in ("привод", "шрус"))
+            ):
                 adjustments.append(
                     {
                         "type": "possible_included_driveshaft_operation",
@@ -634,10 +652,13 @@ def _detect_overlap_adjustments(normalized_operations: list[dict[str, Any]]) -> 
     unique: list[dict[str, Any]] = []
     seen_adjustments: set[tuple[str, tuple[str, ...]]] = set()
     for adjustment in adjustments:
-        key = (str(adjustment.get("type")), tuple(sorted(str(item) for item in adjustment.get("operations", []))))
-        if key in seen_adjustments:
+        adjustment_key = (
+            str(adjustment.get("type")),
+            tuple(sorted(str(item) for item in adjustment.get("operations", []))),
+        )
+        if adjustment_key in seen_adjustments:
             continue
-        seen_adjustments.add(key)
+        seen_adjustments.add(adjustment_key)
         unique.append(adjustment)
     return unique
 
@@ -680,6 +701,33 @@ def estimate_repair_work_cost(
 ) -> dict[str, Any]:
     """Build a read-only labor-price estimate with a public labor-time check layer."""
 
+    raw_work_items = _as_text_list(work_items)
+    input_errors: list[str] = []
+    if len(raw_work_items) > MAX_WORK_ITEMS:
+        input_errors.append(f"work_items exceeds maximum of {MAX_WORK_ITEMS}")
+    if any(len(item) > MAX_WORK_ITEM_CHARS for item in raw_work_items):
+        input_errors.append(f"each work item must be at most {MAX_WORK_ITEM_CHARS} characters")
+    manual_quote_rows = _quote_rows(quotes_json)
+    embedded_labor_time_rows = _labor_time_rows(quotes_json)
+    if len(manual_quote_rows) > MAX_QUOTE_ROWS:
+        input_errors.append(f"quotes exceeds maximum of {MAX_QUOTE_ROWS}")
+    if len(embedded_labor_time_rows) > MAX_LABOR_TIME_ROWS:
+        input_errors.append(f"labor_time_sample exceeds maximum of {MAX_LABOR_TIME_ROWS}")
+    if input_errors:
+        return {
+            "ok": False,
+            "error": "invalid_input",
+            "errors": input_errors,
+            "limits": {
+                "work_items": MAX_WORK_ITEMS,
+                "work_item_chars": MAX_WORK_ITEM_CHARS,
+                "quotes": MAX_QUOTE_ROWS,
+                "labor_time_rows": MAX_LABOR_TIME_ROWS,
+            },
+            "read_only": True,
+            "crm_write_allowed": False,
+        }
+
     vehicle_context = {
         "vehicle": vehicle,
         "vin": vin,
@@ -694,9 +742,7 @@ def estimate_repair_work_cost(
     }
     vehicle_context["vehicle_class"] = _vehicle_class(vehicle_context)
 
-    normalized_operations, complaint_only = _normalize_operations(_as_text_list(work_items), complaint)
-    manual_quote_rows = _quote_rows(quotes_json)
-    embedded_labor_time_rows = _labor_time_rows(quotes_json)
+    normalized_operations, complaint_only = _normalize_operations(raw_work_items, complaint)
     research = collect_public_work_pricing_research(
         vehicle_context=_research_vehicle_context(vehicle_context),
         operations=normalized_operations,
@@ -706,8 +752,7 @@ def estimate_repair_work_cost(
     )
     quote_sample = [_normalize_quote(row) for row in [*manual_quote_rows, *research.get("quotes", [])]]
     labor_time_sample = [
-        _normalize_labor_time_row(row)
-        for row in [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
+        _normalize_labor_time_row(row) for row in [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
     ]
 
     missing_context: list[str] = []
@@ -775,29 +820,27 @@ def estimate_repair_work_cost(
         confidence = "medium"
 
     valid_quotes = [
-        quote
-        for estimate in operation_estimates
-        for quote in estimate.get("sample", {}).get("valid_quotes", [])
+        quote for estimate in operation_estimates for quote in estimate.get("sample", {}).get("valid_quotes", [])
     ]
     excluded_outliers = [
-        quote
-        for estimate in operation_estimates
-        for quote in estimate.get("sample", {}).get("excluded_outliers", [])
+        quote for estimate in operation_estimates for quote in estimate.get("sample", {}).get("excluded_outliers", [])
     ]
     invalid_quotes = [quote for quote in quote_sample if not quote.get("valid_input")]
     valid_labor_times = [row for row in labor_time_sample if row.get("valid_input")]
     labor_time_operation_averages = [
-        item["average_hours"]
-        for item in labor_time_analysis
-        if item.get("average_hours") is not None
+        item["average_hours"] for item in labor_time_analysis if item.get("average_hours") is not None
     ]
     if labor_time_operation_averages:
         labor_time_average_hours = round(sum(labor_time_operation_averages), 2)
         labor_time_ranges = [item["range_hours"] for item in labor_time_analysis if item.get("range_hours")]
-        labor_time_range_hours = [
-            round(sum(item[0] for item in labor_time_ranges), 2),
-            round(sum(item[1] for item in labor_time_ranges), 2),
-        ] if labor_time_ranges else None
+        labor_time_range_hours = (
+            [
+                round(sum(item[0] for item in labor_time_ranges), 2),
+                round(sum(item[1] for item in labor_time_ranges), 2),
+            ]
+            if labor_time_ranges
+            else None
+        )
     else:
         labor_time_average_hours = None
         labor_time_range_hours = None
@@ -829,13 +872,19 @@ def estimate_repair_work_cost(
     if any(estimate.get("autostop_price_rub") is None for estimate in operation_estimates):
         next_actions.append("Собрать минимум 3 сопоставимые публичные labor-only цены СТО по России.")
     if labor_time_confidence == "blocked" and normalized_operations:
-        next_actions.append("Автоматически найти публичные нормо-часы/трудоемкость не удалось; использовать цену как рыночную оценку без второго слоя.")
+        next_actions.append(
+            "Автоматически найти публичные нормо-часы/трудоемкость не удалось; использовать цену как рыночную оценку без второго слоя."
+        )
     if overlap_adjustments:
         next_actions.append("Проверить пересечения работ при оформлении ЗН, чтобы не считать одну операцию дважды.")
     if any(operation.get("safety_flags") for operation in normalized_operations):
-        next_actions.append("Для safety-critical работ сверить состав операции по VIN/OEM или профессиональному service-source.")
+        next_actions.append(
+            "Для safety-critical работ сверить состав операции по VIN/OEM или профессиональному service-source."
+        )
     if not next_actions:
-        next_actions.append("Перед записью в ЗН проверить, что цена без запчастей и операция совпадает с фактической работой.")
+        next_actions.append(
+            "Перед записью в ЗН проверить, что цена без запчастей и операция совпадает с фактической работой."
+        )
 
     manager_lines = [
         {
@@ -910,6 +959,7 @@ def estimate_repair_work_cost(
             "markup_multiplier": AUTOSTOP_MARKUP,
             "rounding": "round_to_nearest_100_rub",
             "minimum_confident_quotes": MIN_CONFIDENT_QUOTES,
+            "minimum_independent_sources": MIN_INDEPENDENT_QUOTE_SOURCES,
         },
         "warnings": [
             "Do not call replace_repair_order_works from this estimate.",
@@ -917,8 +967,12 @@ def estimate_repair_work_cost(
             "Public labor-time rows are plausibility checks, not the primary price basis or official OEM norm-hours.",
         ],
         "privacy": {
-            "raw_vehicle_identifier_redacted_from_output": bool(vehicle_context.get("vin") or vehicle_context.get("chassis")),
-            "raw_vehicle_identifier_removed_from_public_research_queries": bool(vehicle_context.get("vin") or vehicle_context.get("chassis")),
+            "raw_vehicle_identifier_redacted_from_output": bool(
+                vehicle_context.get("vin") or vehicle_context.get("chassis")
+            ),
+            "raw_vehicle_identifier_removed_from_public_research_queries": bool(
+                vehicle_context.get("vin") or vehicle_context.get("chassis")
+            ),
         },
         "research": {
             "enabled": research.get("enabled", False),

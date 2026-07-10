@@ -24,6 +24,8 @@ from autostop_manager.catalog_clients import (
     public_aftermarket_catalog_lookup,
     resolve_partsapi_category,
     vin17_decode_vehicle,
+    vin17_search_part_number_by_vin,
+    vin17_search_std_part_name_by_vin,
 )
 
 
@@ -157,6 +159,7 @@ def test_17vin_signed_request_redacts_secret_and_token():
         params={"vin": "LFMGJE720DS070251"},
         user="myusername",
         secret="mypassword",
+        base_url="https://api.17vin.example.test",
     )
 
     assert request["ok"] is True
@@ -168,16 +171,20 @@ def test_17vin_signed_request_redacts_secret_and_token():
     assert "user=my***me" in request["redacted_url"]
     assert "token=***" in request["redacted_url"]
     assert request["url_parameters"] == "/?vin=LFMGJE720DS070251"
+    assert "signed_url" not in request
+    assert "mypassword" not in str(request)
 
 
 def test_vin17_decode_reports_missing_credentials_without_calling_network(monkeypatch):
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
+    monkeypatch.delenv("VIN17_BASE_URL", raising=False)
 
     result = vin17_decode_vehicle("LFMGJE720DS070251")
 
     assert result["ok"] is False
-    assert result["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
+    assert result["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET", "VIN17_BASE_URL"]
+    assert result["error_code"] == "secure_endpoint_required"
     assert result["redacted_identifier"] == "LFM***251"
 
 
@@ -380,17 +387,21 @@ def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
 def test_emex_lookup_reports_missing_credentials(monkeypatch):
     monkeypatch.delenv("EMEX_LOGIN", raising=False)
     monkeypatch.delenv("EMEX_PASSWORD", raising=False)
+    monkeypatch.delenv("EMEX_SERVICE_URL", raising=False)
+    monkeypatch.delenv("EMEX_SEARCH_SERVICE_URL", raising=False)
 
     result = emex_price_lookup(part_number="9091901164", dry_run=True)
 
     assert result["ok"] is False
-    assert result["missing_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD"]
+    assert result["missing_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD", "EMEX_SERVICE_URL"]
+    assert result["error_code"] == "secure_endpoint_required"
     assert result["request_plan"]["secret_exposed"] is False
 
 
 def test_emex_request_redacts_credentials(monkeypatch):
     monkeypatch.setenv("EMEX_LOGIN", "client-login")
     monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+    monkeypatch.setenv("EMEX_SERVICE_URL", "https://emex.example.test/EmExService.asmx")
 
     request = build_emex_find_detail_request(part_number="9091901164", brand="TY")
 
@@ -398,13 +409,15 @@ def test_emex_request_redacts_credentials(monkeypatch):
     assert request["secret_exposed"] is False
     assert request["params"]["login"] == "cl***in"
     assert request["params"]["password"] == "***"
-    assert "client-password" in request["body"]
+    assert "body" not in request
+    assert "client-password" not in str(request)
     assert "client-password" not in request["body_sha256"]
 
 
 def test_emex_lookup_dry_run_with_configured_env(monkeypatch):
     monkeypatch.setenv("EMEX_LOGIN", "client-login")
     monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+    monkeypatch.setenv("EMEX_SERVICE_URL", "https://emex.example.test/EmExService.asmx")
 
     result = emex_price_lookup(part_number="9091901164", dry_run=True)
 
@@ -412,6 +425,62 @@ def test_emex_lookup_dry_run_with_configured_env(monkeypatch):
     assert result["dry_run"] is True
     assert result["emex_method"] == "FindDetailAdv5"
     assert result["request_plan"]["params"]["password"] == "***"
+
+
+def test_emex_rejects_cleartext_endpoint_before_dry_or_live_network(monkeypatch):
+    monkeypatch.setenv("EMEX_LOGIN", "client-login")
+    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+    monkeypatch.setenv("EMEX_SERVICE_URL", "http://emex.example.test/EmExService.asmx")
+    calls = []
+
+    def fail_urlopen(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+
+    for dry_run in (True, False):
+        result = emex_price_lookup(part_number="9091901164", dry_run=dry_run)
+        assert result["ok"] is False
+        assert result["error_code"] == "secure_endpoint_required"
+        assert "client-login" not in str(result)
+        assert "client-password" not in str(result)
+    assert calls == []
+
+
+def test_all_vin17_routes_reject_cleartext_endpoint_without_credentials_in_result(monkeypatch):
+    monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
+    monkeypatch.setenv("VIN17_SECRET", "vin17-secret")
+    monkeypatch.setenv("VIN17_BASE_URL", "http://api.17vin.example.test")
+    calls = []
+
+    def fail_urlopen(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+
+    for dry_run in (True, False):
+        results = [
+            vin17_decode_vehicle("LFMGJE720DS070251", dry_run=dry_run),
+            vin17_search_std_part_name_by_vin(
+                epc="toyota",
+                identifier="LFMGJE720DS070251",
+                query_part_name="brake pad",
+                dry_run=dry_run,
+            ),
+            vin17_search_part_number_by_vin(
+                epc="toyota",
+                identifier="LFMGJE720DS070251",
+                query_part_number="04465-60280",
+                dry_run=dry_run,
+            ),
+        ]
+        assert all(result["ok"] is False for result in results)
+        assert all(result["error_code"] == "secure_endpoint_required" for result in results)
+        assert all("vin17-user" not in str(result) for result in results)
+        assert all("vin17-secret" not in str(result) for result in results)
+    assert calls == []
 
 
 def test_parse_emex_find_detail_response_extracts_detail_items():
@@ -504,7 +573,9 @@ def test_exist_lookup_returns_disambiguation_when_brand_missing(monkeypatch):
         url = request.full_url
         calls.append(url)
         if "/Api/Parts/Search" in url:
-            return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
+            return _FakeRawResponse(
+                '[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]'
+            )
         if "pcode=9091901164" in url:
             return _FakeRawResponse(EXIST_CATALOG_HTML)
         message = f"unexpected Exist URL: {url}"
@@ -525,7 +596,9 @@ def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
     def fake_urlopen(request, timeout=20.0):
         url = request.full_url
         if "/Api/Parts/Search" in url:
-            return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
+            return _FakeRawResponse(
+                '[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]'
+            )
         if "pcode=9091901164" in url:
             return _FakeRawResponse(EXIST_CATALOG_HTML)
         if "pid=02201730" in url:
@@ -727,6 +800,75 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
     assert "network timeout" in result["error"]
     assert "secret-key" not in result["request_plan"]["redacted_url"]
     assert len(calls) == 2
+
+
+def test_partsapi_clamps_forwarded_timeout_attempts_and_total_budget(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    seen_timeouts = []
+
+    def fake_urlopen(_request, timeout=20.0):
+        seen_timeouts.append(timeout)
+        raise TimeoutError("network timeout")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = partsapi_catalog_lookup(
+        operation="crosses",
+        part_number="04465-60280",
+        timeout=12_345,
+        max_attempts=99_999,
+    )
+
+    assert result["ok"] is False
+    assert result["max_attempts"] == 3
+    assert result["attempt_count"] == 3
+    assert seen_timeouts == [20.0, 20.0, 20.0]
+    assert result["request_budget"] == {
+        "timeout_seconds": 20.0,
+        "max_attempts": 3,
+        "total_timeout_seconds": 60.0,
+    }
+
+
+def test_partsapi_dry_run_reports_clamped_budget(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    result = partsapi_catalog_lookup(
+        operation="crosses",
+        part_number="04465-60280",
+        timeout=float("inf"),
+        max_attempts=-10,
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["max_attempts"] == 1
+    assert result["request_budget"]["timeout_seconds"] == 20.0
+    assert result["request_budget"]["total_timeout_seconds"] == 20.0
+
+
+def test_partsapi_rejects_oversized_provider_response(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    class OversizedResponse(_FakeRawResponse):
+        def read(self, _size=None):
+            return b"x" * (2 * 1024 * 1024 + 1)
+
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda _request, timeout=20.0: OversizedResponse(b""),
+    )
+
+    result = partsapi_catalog_lookup(operation="crosses", part_number="04465-60280")
+
+    assert result["ok"] is False
+    assert "safety limit" in result["error"]
 
 
 def test_partsapi_oe_applicability_allows_empty_payload(monkeypatch):

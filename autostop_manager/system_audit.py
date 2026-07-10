@@ -7,9 +7,11 @@ from typing import Any
 
 from .cleanup_audit import build_cleanup_audit
 from .config import PROJECT_ROOT
+from .documentation_audit import audit_documentation
 from .knowledge_base import audit_knowledge_annotations, audit_knowledge_base
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore, _now
+from .tool_contracts import audit_tool_contract_registry
 
 
 MANAGER_MCP_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent" / "manager_mcp_catalog.json"
@@ -36,6 +38,7 @@ def build_system_audit(
         Path(manager_mcp_catalog_path),
         registered_tool_names=registered_tool_names,
     )
+    documentation = audit_documentation(project_root)
 
     warnings = _collect_warnings(
         {
@@ -44,6 +47,7 @@ def build_system_audit(
             "skills_audit": skills,
             "cleanup_audit": cleanup,
             "manager_mcp_catalog": catalog,
+            "documentation_audit": documentation,
         }
     )
     summary = {
@@ -54,6 +58,7 @@ def build_system_audit(
         "local_sqlite_size_bytes": int(sqlite_stats.get("size_bytes") or 0),
         "local_memory_sections": memory_sections,
         "manager_mcp_catalog_ok": bool(catalog.get("ok")),
+        "documentation_ok": bool(documentation.get("ok")),
         "tests_status": "external",
     }
     ok = all(
@@ -63,6 +68,7 @@ def build_system_audit(
             summary["skills_ok"],
             bool(cleanup.get("ok")),
             summary["manager_mcp_catalog_ok"],
+            summary["documentation_ok"],
         ]
     )
     return {
@@ -76,6 +82,7 @@ def build_system_audit(
             "cleanup_audit": cleanup,
             "sqlite_stats": sqlite_stats,
             "manager_mcp_catalog": catalog,
+            "documentation_audit": documentation,
             "tests": {"status": "external", "note": "system_audit does not run pytest in v1"},
         },
         "warnings": warnings,
@@ -136,6 +143,10 @@ def audit_manager_mcp_catalog(
     if declared_count != len(all_tools):
         warnings.append("manager_mcp_catalog_tool_count_mismatch")
 
+    contract_audit = audit_tool_contract_registry(all_tools)
+    if not contract_audit["ok"]:
+        warnings.append("manager_mcp_tool_contract_registry_incomplete")
+
     missing_required_tools = sorted(REQUIRED_HEALTH_TOOLS.difference(all_tools))
     if missing_required_tools:
         warnings.append("manager_mcp_catalog_missing_required_health_tools")
@@ -162,6 +173,7 @@ def audit_manager_mcp_catalog(
         "missing_required_tools": missing_required_tools,
         "missing_registered_tools": missing_registered_tools,
         "unknown_catalog_tools": unknown_catalog_tools,
+        "contract_registry": contract_audit,
         "warnings": warnings,
     }
 

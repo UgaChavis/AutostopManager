@@ -56,7 +56,9 @@ def _load_knowledge_map() -> dict[str, Any]:
         }
     return {
         **payload,
-        "domains": {str(key): _normalize_route_list_fields(value) for key, value in domains.items() if isinstance(value, dict)},
+        "domains": {
+            str(key): _normalize_route_list_fields(value) for key, value in domains.items() if isinstance(value, dict)
+        },
     }
 
 

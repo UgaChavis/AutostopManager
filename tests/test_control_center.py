@@ -24,6 +24,8 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "git" in report
     assert "providers" in report
     assert "provider_readiness" in report
+    assert "web_search_readiness" in report
+    assert "web_page_readiness" in report
     assert "server_environment" in report
     assert "codex_readiness" in report
     assert "runtime" in report["codex_readiness"]
@@ -39,6 +41,8 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert report["server_environment"]["core_tools"]["required_present_count"] <= len(REQUIRED_CORE_TOOLS)
     assert report["provider_readiness"]["safety"]["orders_blocked"] is True
     assert report["provider_readiness"]["safety"]["basket_blocked"] is True
+    assert report["web_search_readiness"]["safety"]["secrets_redacted"] is True
+    assert report["web_page_readiness"]["safety"]["secrets_redacted"] is True
     assert report["production_ops"]["forbidden_without_explicit_owner_command"]
 
     markdown = format_control_report_markdown(report)
@@ -48,6 +52,8 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "Stale app-server processes" in markdown
     assert "Production Ops" in markdown
     assert "Provider Matrix" in markdown
+    assert "Web search APIs configured" in markdown
+    assert "Web page extractors configured" in markdown
     assert "python -m autostop_manager.cli control-report" in markdown
     assert "autostop-" + "manager control-report" not in markdown
     assert ".venv/" + "bin/python" not in str(report["tests_doctor"]["commands"])
@@ -55,16 +61,25 @@ def test_control_report_schema_and_markdown(tmp_path):
 
 def test_control_report_redacts_secret_like_text():
     rendered = _redact_text(
-        'OPENAI_API_KEY=sk-testsecret123456789 ghp_secretsecretsecret CRM_PASSWORD: hunter2 ROSSKO_KEY1: "quoted secret"'
+        'OPENAI_API_KEY=sk-testsecret123456789 ghp_secretsecretsecret CRM_PASSWORD: hunter2 ROSSKO_KEY1: "quoted secret" '
+        "Authorization: Bearer bearer-secret Cookie: session=secret-value\n"
+        "DATABASE_URL=postgresql://manager:db-secret@db/manager github_pat_long_secret_value"
     )
 
     assert "sk-testsecret" not in rendered
     assert "ghp_secret" not in rendered
     assert "hunter2" not in rendered
     assert "quoted secret" not in rendered
+    assert "bearer-secret" not in rendered
+    assert "session=secret-value" not in rendered
+    assert "db-secret" not in rendered
+    assert "github_pat_long_secret_value" not in rendered
     assert "OPENAI_API_KEY=***" in rendered
     assert "CRM_PASSWORD: ***" in rendered
     assert "ROSSKO_KEY1: ***" in rendered
+    assert "Authorization: Bearer ***" in rendered
+    assert "Cookie: ***" in rendered
+    assert "postgresql://manager:***@db/manager" in rendered
 
 
 def test_env_file_status_reports_key_names_without_values(tmp_path):

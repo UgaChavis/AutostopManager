@@ -91,6 +91,8 @@ run "manager control report" bash -c '"$1" -m autostop_manager.cli control-repor
 run "manager environment report" bash -c '"$1" -m autostop_manager.cli environment-report --format json >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager memory review" bash -c '"$1" -m autostop_manager.cli memory-review >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager provider smoke" bash -c '"$1" -m autostop_manager.cli provider-smoke --provider all --mode dry-run >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
+run "manager web search readiness" bash -c '"$1" -m autostop_manager.cli web-search-readiness --mode dry-run >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
+run "manager web page readiness" bash -c '"$1" -m autostop_manager.cli web-page-readiness --mode dry-run >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager knowledge intake smoke" bash -c '"$1" -m autostop_manager.cli knowledge-intake --path docs/agent/knowledge_map.json --dry-run >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager MCP import" "$MANAGER_ROOT/.venv/bin/python" -c 'from mcp.server.fastmcp import FastMCP'
 run "manager ruff" "$MANAGER_ROOT/.venv/bin/ruff" check "$MANAGER_ROOT"
@@ -131,13 +133,17 @@ if [[ -z "$CRM_RUNTIME_OPERATOR_PASSWORD" ]]; then
   CRM_RUNTIME_OPERATOR_PASSWORD="$(env_file_value "$CRM_ROOT/.env" "AUTOSTOP_SMOKE_OPERATOR_PASSWORD" || true)"
 fi
 if [[ -n "$CRM_RUNTIME_OPERATOR_USERNAME" && -n "$CRM_RUNTIME_OPERATOR_PASSWORD" ]]; then
-  run "crm runtime check" "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/check_agent_runtime.py" \
-    --local-api-url "$CRM_API_URL" \
-    --operator-username "$CRM_RUNTIME_OPERATOR_USERNAME" \
-    --operator-password "$CRM_RUNTIME_OPERATOR_PASSWORD"
+  crm_runtime_check() {
+    AUTOSTOP_SMOKE_OPERATOR_USERNAME="$CRM_RUNTIME_OPERATOR_USERNAME" \
+      AUTOSTOP_SMOKE_OPERATOR_PASSWORD="$CRM_RUNTIME_OPERATOR_PASSWORD" \
+      "$CRM_ROOT/.venv/bin/python" "$CRM_ROOT/scripts/check_agent_runtime.py" \
+      --local-api-url "$CRM_API_URL"
+  }
+  run "crm runtime check" crm_runtime_check
 else
   skip "crm runtime check needs AUTOSTOP_CRM_OPERATOR_USERNAME/PASSWORD or AUTOSTOP_SMOKE_OPERATOR_USERNAME/PASSWORD in CRM .env"
 fi
+unset CRM_RUNTIME_OPERATOR_PASSWORD
 if [[ "$FULL" -eq 1 ]]; then
   mkdir -p "$(dirname "$CRM_PYTEST_BASETEMP")"
   run "crm pytest" bash -c 'cd "$1" && PYTHONPATH="$1/src:$1${PYTHONPATH:+:$PYTHONPATH}" "$1/.venv/bin/python" -m pytest tests --basetemp "$2"' _ "$CRM_ROOT" "$CRM_PYTEST_BASETEMP"
@@ -147,6 +153,8 @@ section "Production Read-Only"
 if [[ -f "$CRM_ROOT/docker-compose.yml" ]]; then
   run "docker compose config" docker compose -f "$CRM_ROOT/docker-compose.yml" config --quiet
   run "docker compose ps" docker compose -f "$CRM_ROOT/docker-compose.yml" ps
+  run "manager searxng web search readiness" bash -c '"$1" -m autostop_manager.cli web-search-readiness --provider searxng --mode live-readonly >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
+  run "manager crawl4ai web page readiness" bash -c '"$1" -m autostop_manager.cli web-page-readiness --provider crawl4ai --mode live-readonly >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 fi
 run "nginx config" nginx -t
 if systemctl show autostopcrm-watchdog.timer --property=LoadState --value --no-pager | grep -qx loaded; then

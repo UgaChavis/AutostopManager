@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import autostop_manager.knowledge_base as knowledge_base_module
-from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from autostop_manager.knowledge_base import (
+    audit_knowledge_base,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
 from autostop_manager.storage import ManagerMemoryStore
 
 

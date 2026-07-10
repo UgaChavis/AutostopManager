@@ -40,6 +40,7 @@ def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch
         "PARTS_CATALOGS_BASE_URL",
         "VIN17_ACCOUNT",
         "VIN17_SECRET",
+        "VIN17_BASE_URL",
         "ROSSKO_KEY1",
         "ROSSKO_KEY2",
         "AUTOEURO_API_KEY",
@@ -84,7 +85,11 @@ def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch
     assert "PARTSAPI_KEY" in result["summary"]["missing_env_names"]
     assert "PARTSAPI_BASE_URL" in result["summary"]["missing_env_names"]
     assert result["items"][0]["prepared_calls"]["partsapi"][0]["request_param_names"] == ["vin"]
-    assert result["items"][0]["prepared_calls"]["vin17"]["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
+    assert result["items"][0]["prepared_calls"]["vin17"]["missing_env_names"] == [
+        "VIN17_ACCOUNT",
+        "VIN17_SECRET",
+        "VIN17_BASE_URL",
+    ]
 
     rendered = json.dumps(result, ensure_ascii=False)
     assert "MR41S123456" not in rendered
@@ -99,6 +104,7 @@ def test_vin_parts_benchmark_status_tracks_identity_ready_but_missing_live_sourc
     monkeypatch.delenv("PARTS_CATALOGS_BASE_URL", raising=False)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
+    monkeypatch.delenv("VIN17_BASE_URL", raising=False)
 
     result = benchmark_vin_parts_lookup(
         [
@@ -163,7 +169,11 @@ def test_vin_parts_benchmark_allows_read_only_lookup_after_partsapi_oe_agreement
                 "provider": "partsapi_ru",
                 "operation": operation,
                 "partsapi_method": "VINdecodeOE",
-                "request_plan": {"configured": True, "params": {"vin": "1HG***352"}, "redacted_url": "https://api.partsapi.ru?key=***"},
+                "request_plan": {
+                    "configured": True,
+                    "params": {"vin": "1HG***352"},
+                    "redacted_url": "https://api.partsapi.ru?key=***",
+                },
                 "vehicle_profiles": [{"make": "HONDA", "catalog": "HONDA2017", "grade": "EXV6"}],
             }
         return {
@@ -212,7 +222,11 @@ def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(
                 {
                     "confidence": 0.7,
                     "confidence_label": "medium",
-                    "parts_lookup_readiness": {"ready_for_oem_lookup": False, "ready_for_oem_candidate_lookup": False, "ready_for_crm_writeback": False},
+                    "parts_lookup_readiness": {
+                        "ready_for_oem_lookup": False,
+                        "ready_for_oem_candidate_lookup": False,
+                        "ready_for_crm_writeback": False,
+                    },
                     "vehicle_profile": {"make": "HONDA", "model": "Accord"},
                     "diagnostics": {},
                     "warnings": [],
@@ -260,6 +274,7 @@ def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example/api")
     monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
     monkeypatch.setenv("VIN17_SECRET", "vin17-secret")
+    monkeypatch.setenv("VIN17_BASE_URL", "https://api.17vin.example.test")
 
     result = benchmark_vin_parts_lookup(
         [

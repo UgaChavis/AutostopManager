@@ -28,7 +28,14 @@ UNIT_ALIASES: dict[str, set[str]] = {
 
 UNIT_REQUIREMENTS: dict[str, list[str]] = {
     "engine_oil": ["VIN/chassis or exact model", "market", "year", "engine_code", "oil/filter service type"],
-    "automatic_transmission": ["VIN/chassis", "market", "transmission_code", "drivetrain", "service operation", "level-check temperature/procedure"],
+    "automatic_transmission": [
+        "VIN/chassis",
+        "market",
+        "transmission_code",
+        "drivetrain",
+        "service operation",
+        "level-check temperature/procedure",
+    ],
     "manual_transmission": ["VIN/chassis", "market", "transmission_code", "drivetrain"],
     "cvt": ["VIN/chassis", "market", "transmission_code", "fluid generation/spec", "level-check temperature/procedure"],
     "dct": ["VIN/chassis", "market", "transmission_code", "wet/dry clutch type", "mechatronic/clutch oil distinction"],
@@ -192,7 +199,10 @@ def load_fluid_source_catalog() -> dict[str, Any]:
     if selectors is not None and not isinstance(selectors, list):
         return {k: v for k, v in payload.items() if k != "lubricant_product_selectors"}
     if isinstance(selectors, list):
-        payload = {**payload, "lubricant_product_selectors": [selector for selector in selectors if isinstance(selector, dict)]}
+        payload = {
+            **payload,
+            "lubricant_product_selectors": [selector for selector in selectors if isinstance(selector, dict)],
+        }
     return payload
 
 
@@ -262,7 +272,9 @@ def build_fluid_maintenance_plan(
     limit: int = 10,
 ) -> dict[str, Any]:
     canonical_unit = normalize_unit(unit)
-    required_inputs = UNIT_REQUIREMENTS.get(canonical_unit or "", ["VIN/chassis", "market", "year", "make", "model", "unit"])
+    required_inputs = UNIT_REQUIREMENTS.get(
+        canonical_unit or "", ["VIN/chassis", "market", "year", "make", "model", "unit"]
+    )
     source_catalog = load_fluid_source_catalog()
     source_routes = _source_routes(brand, canonical_unit, include_licensed, limit)
     warnings = [
@@ -271,9 +283,13 @@ def build_fluid_maintenance_plan(
         "Use OEM approval/specification first; viscosity alone is not enough.",
     ]
     if canonical_unit in HIGH_RISK_UNITS:
-        warnings.append("High-risk driveline unit: verify exact transmission/axle/transfer-case code before recommending fluid or quantity.")
+        warnings.append(
+            "High-risk driveline unit: verify exact transmission/axle/transfer-case code before recommending fluid or quantity."
+        )
     if not vin and not chassis:
-        warnings.append("VIN or chassis/frame number is missing; treat the plan as routing only, not confirmed fitment.")
+        warnings.append(
+            "VIN or chassis/frame number is missing; treat the plan as routing only, not confirmed fitment."
+        )
     if not canonical_unit:
         warnings.append("Unit is missing; ask which unit needs service before selecting oil/fluid.")
 
@@ -327,7 +343,9 @@ def build_fluid_maintenance_plan(
         "missing_context": list(dict.fromkeys(missing_context)),
         "source_priority": source_catalog.get("source_priority", []),
         "authority_source_routes": source_routes,
-        "public_oem_owner_manual_sources": source_catalog.get("public_oem_owner_manual_sources", [])[: max(1, min(limit, 50))],
+        "public_oem_owner_manual_sources": source_catalog.get("public_oem_owner_manual_sources", [])[
+            : max(1, min(limit, 50))
+        ],
         "lubricant_product_selectors": _selector_sources(limit),
         "checks": [
             "Confirm exact unit variant by VIN/chassis before final capacity.",

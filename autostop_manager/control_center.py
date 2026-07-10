@@ -17,6 +17,8 @@ from .memory_curator import audit_memory
 from .provider_smoke import build_provider_smoke_report
 from .storage import ManagerMemoryStore, _now
 from .system_audit import build_system_audit
+from .web_page_readiness import build_web_page_readiness
+from .web_search_readiness import build_web_search_readiness
 
 
 MANAGER_MCP_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent" / "manager_mcp_catalog.json"
@@ -66,7 +68,10 @@ SECRET_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
         r"sk-[A-Za-z0-9_\-]{12,}",
-        r"ghp_[A-Za-z0-9_]{12,}",
+        r"(?:ghp|github_pat)_[A-Za-z0-9_\-]{12,}",
+        r"(\bAuthorization\s*:\s*(?:Bearer|Basic)\s+)[^\s,;]+",
+        r"(\bCookie\s*:\s*)[^\r\n]+",
+        r"(\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis)://[^\s:/@]+:)[^\s@/]+(?=@)",
         r"(\b(?:[A-Z0-9]+_)*(?:TOKEN|SECRET|PASSWORD|KEY)(?:[0-9]+|_[A-Z0-9]+)*\s*[:=]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s]+)",
     ]
 ]
@@ -87,6 +92,8 @@ def build_control_report(
     memory_summary = _memory_summary(memory)
     mcp = _mcp_catalog_summary()
     providers = _provider_summary()
+    web_search = build_web_search_readiness(mode="dry-run")
+    web_page = build_web_page_readiness(mode="dry-run")
     ports = _public_ports()
     server_environment = _server_environment(root, ports=ports)
     codex_readiness = _codex_readiness(root)
@@ -135,6 +142,12 @@ def build_control_report(
             "mcp_manager_tools": mcp["manager"].get("tool_count"),
             "providers_configured": providers["configured_count"],
             "providers_total": providers["provider_count"],
+            "web_search_quality_configured": (web_search.get("summary") or {}).get("quality_configured_count", 0),
+            "web_search_quality_total": (web_search.get("summary") or {}).get("quality_provider_count", 0),
+            "web_search_fallback_only": bool((web_search.get("summary") or {}).get("fallback_only")),
+            "web_page_extractors_configured": (web_page.get("summary") or {}).get("configured_count", 0),
+            "web_page_extractors_total": (web_page.get("summary") or {}).get("extractor_count", 0),
+            "web_page_primary_configured": bool((web_page.get("summary") or {}).get("primary_configured")),
             "open_risk_score": open_risk["score"],
             "open_risk_level": open_risk["level"],
         },
@@ -153,6 +166,8 @@ def build_control_report(
         "mcp": mcp,
         "providers": providers,
         "provider_readiness": provider_readiness,
+        "web_search_readiness": web_search,
+        "web_page_readiness": web_page,
         "production": production,
         "production_ops": production_ops,
         "open_risk": open_risk,
@@ -217,6 +232,9 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         f"- MCP manager tools: `{summary.get('mcp_manager_tools', 0)}`",
         f"- Providers configured: `{summary.get('providers_configured', 0)}/{summary.get('providers_total', 0)}`",
         f"- Provider external access backlog: `{((report.get('provider_readiness') or {}).get('external_access_backlog_count', 0))}`",
+        f"- Web search APIs configured: `{summary.get('web_search_quality_configured', 0)}/{summary.get('web_search_quality_total', 0)}`",
+        f"- Web search fallback-only: `{summary.get('web_search_fallback_only', False)}`",
+        f"- Web page extractors configured: `{summary.get('web_page_extractors_configured', 0)}/{summary.get('web_page_extractors_total', 0)}`",
         "",
         "## Provider Matrix",
     ]
@@ -532,11 +550,7 @@ def _runtime_readiness(root: Path, *, memory: ManagerMemoryStore) -> dict[str, A
 
 def _provider_readiness(providers: dict[str, Any]) -> dict[str, Any]:
     smoke = build_provider_smoke_report(provider="all", mode="dry-run")
-    missing = [
-        provider
-        for provider in providers.get("providers") or []
-        if not bool(provider.get("configured"))
-    ]
+    missing = [provider for provider in providers.get("providers") or [] if not bool(provider.get("configured"))]
     return {
         "ok": providers.get("ok") and smoke.get("ok") and bool((smoke.get("summary") or {}).get("no_order_guarantee")),
         "matrix": providers.get("stage_matrix") or [],

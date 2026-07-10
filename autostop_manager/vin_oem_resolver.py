@@ -63,17 +63,31 @@ def _identity_digest(identity: dict[str, Any]) -> dict[str, Any]:
         "confidence": identity.get("confidence"),
         "confidence_label": identity.get("confidence_label"),
         "ready_for_oem_lookup": readiness.get("ready_for_oem_lookup"),
-        "ready_for_oem_candidate_lookup": readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")),
+        "ready_for_oem_candidate_lookup": readiness.get(
+            "ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")
+        ),
         "ready_for_crm_writeback": readiness.get("ready_for_crm_writeback", False),
         "cross_source_agreement": readiness.get("cross_source_agreement") or {},
         "blocking_reasons": readiness.get("blocking_reasons") or [],
         "vehicle_profile": {
             key: profile.get(key)
-            for key in ("make", "model", "model_family", "platform", "model_year", "engine", "transmission", "market", "production_date")
+            for key in (
+                "make",
+                "model",
+                "model_family",
+                "platform",
+                "model_year",
+                "engine",
+                "transmission",
+                "market",
+                "production_date",
+            )
             if profile.get(key) not in (None, "")
         },
         "conflict_count": len(identity.get("conflicts") or []),
-        "high_severity_conflict_count": sum(1 for item in identity.get("conflicts") or [] if item.get("severity") == "high"),
+        "high_severity_conflict_count": sum(
+            1 for item in identity.get("conflicts") or [] if item.get("severity") == "high"
+        ),
         "warning_count": len(identity.get("warnings") or []),
     }
 
@@ -94,7 +108,10 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
     profile = identity.get("vehicle_profile") or {}
     compare_fields = {
         "make": (profile.get("make"), oe_profile.get("make")),
-        "model": (profile.get("model") or profile.get("model_family"), oe_profile.get("model") or oe_profile.get("model_family")),
+        "model": (
+            profile.get("model") or profile.get("model_family"),
+            oe_profile.get("model") or oe_profile.get("model_family"),
+        ),
         "transmission": (profile.get("transmission"), oe_profile.get("transmission")),
     }
     matched: list[str] = []
@@ -109,10 +126,25 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
         else:
             conflicts.append({"field": field, "identity": left, "partsapi_oe": right})
     if conflicts:
-        return {"status": "conflict", "matched_fields": matched, "conflicting_fields": conflicts, "partsapi_profile": oe_profile}
+        return {
+            "status": "conflict",
+            "matched_fields": matched,
+            "conflicting_fields": conflicts,
+            "partsapi_profile": oe_profile,
+        }
     if matched:
-        return {"status": "matched", "matched_fields": matched, "conflicting_fields": [], "partsapi_profile": oe_profile}
-    return {"status": "profile_present_uncompared", "matched_fields": [], "conflicting_fields": [], "partsapi_profile": oe_profile}
+        return {
+            "status": "matched",
+            "matched_fields": matched,
+            "conflicting_fields": [],
+            "partsapi_profile": oe_profile,
+        }
+    return {
+        "status": "profile_present_uncompared",
+        "matched_fields": [],
+        "conflicting_fields": [],
+        "partsapi_profile": oe_profile,
+    }
 
 
 def _identity_with_partsapi_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
@@ -186,7 +218,9 @@ def _rank_oem_candidate(
         "name": candidate.get("name"),
         "source": candidate.get("provider"),
         "source_operation": source_operation,
-        "category_id": category_resolution.get("category") if category_resolution.get("category_kind") == "numeric_id" else None,
+        "category_id": category_resolution.get("category")
+        if category_resolution.get("category_kind") == "numeric_id"
+        else None,
         "fitment_scope": "vin_specific" if source_is_vin_specific else "not_vin_specific",
         "position_match": position_match,
         "quantity_basis": part_profile.get("quantity_basis"),
@@ -271,7 +305,7 @@ def resolve_vin_oem_parts(
     manual_actions: list[dict[str, Any]] = []
     live_calls_used = 0
 
-    identity = (
+    identity: dict[str, Any] = (
         decode_vehicle_identity(
             raw_identifier,
             crm_context=context,
@@ -331,33 +365,63 @@ def resolve_vin_oem_parts(
     high_identity_conflict = any(item.get("severity") == "high" for item in identity.get("conflicts") or [])
     has_identifier = bool(raw_identifier)
     part_actionable = bool(part_profile.get("recognized")) and not bool(part_profile.get("clarification_required"))
-    category_numeric = category_resolution.get("category_kind") == "numeric_id" and not category_resolution.get("category_unresolved")
+    category_numeric = category_resolution.get("category_kind") == "numeric_id" and not category_resolution.get(
+        "category_unresolved"
+    )
     readiness = {
         "has_identifier": has_identifier,
         "ready_for_identity_crosscheck": has_identifier and not high_identity_conflict,
         "ready_for_category_lookup": part_actionable,
         "needs_partsapi_category_mapping": part_actionable and not category_numeric,
-        "ready_for_oem_candidate_lookup": bool(identity_readiness.get("ready_for_oem_candidate_lookup")) and part_actionable and category_numeric,
+        "ready_for_oem_candidate_lookup": bool(identity_readiness.get("ready_for_oem_candidate_lookup"))
+        and part_actionable
+        and category_numeric,
         "ready_for_applicability_enrichment": False,
         "ready_for_crm_writeback": False,
         "blocking_reasons": list(identity_readiness.get("blocking_reasons") or []),
     }
     if not has_identifier:
-        manual_actions.append(_manual_action("request_identifier", "Указать VIN, frame или body number перед OEM-поиском."))
+        manual_actions.append(
+            _manual_action("request_identifier", "Указать VIN, frame или body number перед OEM-поиском.")
+        )
     if not part_profile.get("recognized"):
-        manual_actions.append(_manual_action("clarify_part", "Уточнить точную группу детали и старый номер/OEM при наличии."))
+        manual_actions.append(
+            _manual_action("clarify_part", "Уточнить точную группу детали и старый номер/OEM при наличии.")
+        )
     elif part_profile.get("clarification_required"):
-        manual_actions.append(_manual_action("clarify_part_position", part_profile.get("crm_clarification_prompt") or part_profile.get("clarification_prompt") or "Уточнить позицию детали."))
+        manual_actions.append(
+            _manual_action(
+                "clarify_part_position",
+                part_profile.get("crm_clarification_prompt")
+                or part_profile.get("clarification_prompt")
+                or "Уточнить позицию детали.",
+            )
+        )
     if part_actionable and not category_numeric:
-        manual_actions.append(_manual_action("map_partsapi_category", "Построить или обновить PartsAPI category index и выбрать numeric cat для getPartsbyVIN."))
+        manual_actions.append(
+            _manual_action(
+                "map_partsapi_category",
+                "Построить или обновить PartsAPI category index и выбрать numeric cat для getPartsbyVIN.",
+            )
+        )
     if not identity_readiness.get("ready_for_oem_candidate_lookup"):
-        manual_actions.append(_manual_action("confirm_identity", "Подтвердить identity через VINdecodeOE/vPIC/CRM перед поиском OEM-кандидатов.", priority=2))
+        manual_actions.append(
+            _manual_action(
+                "confirm_identity",
+                "Подтвердить identity через VINdecodeOE/vPIC/CRM перед поиском OEM-кандидатов.",
+                priority=2,
+            )
+        )
 
     parts_call = None
-    if raw_identifier and category_resolution.get("category") and (readiness["ready_for_oem_candidate_lookup"] or dry_run or not live_partsapi_oem):
+    if (
+        raw_identifier
+        and category_resolution.get("category")
+        and (readiness["ready_for_oem_candidate_lookup"] or dry_run or not live_partsapi_oem)
+    ):
         parts_call = partsapi_call(
             "parts_by_vin",
-            live_allowed=live_partsapi_oem and readiness["ready_for_oem_candidate_lookup"],
+            live_allowed=bool(live_partsapi_oem and readiness["ready_for_oem_candidate_lookup"]),
             identifier=raw_identifier,
             part_type="oem",
             category=str(category_resolution.get("category")),
@@ -372,19 +436,43 @@ def resolve_vin_oem_parts(
             }
         )
 
-    raw_candidates = [candidate for candidate in (parts_call or {}).get("oem_candidates", []) if isinstance(candidate, dict)]
+    raw_candidates = [
+        candidate for candidate in (parts_call or {}).get("oem_candidates", []) if isinstance(candidate, dict)
+    ]
     ranked_candidates = [
-        _rank_oem_candidate(candidate, index=index, category_resolution=category_resolution, part_profile=part_profile, identity=identity)
+        _rank_oem_candidate(
+            candidate,
+            index=index,
+            category_resolution=category_resolution,
+            part_profile=part_profile,
+            identity=identity,
+        )
         for index, candidate in enumerate(raw_candidates[:max_candidates], start=1)
     ]
-    ranked_candidates.sort(key=lambda item: (-float(item.get("confidence_score") or 0.0), item.get("part_number") or ""))
+    ranked_candidates.sort(
+        key=lambda item: (-float(item.get("confidence_score") or 0.0), item.get("part_number") or "")
+    )
     if ranked_candidates:
         readiness["ready_for_applicability_enrichment"] = True
-        manual_actions.append(_manual_action("review_oem_candidates", "Проверить OEM-кандидаты, применимость, quantity basis и выбрать строку для ручного подтверждения."))
+        manual_actions.append(
+            _manual_action(
+                "review_oem_candidates",
+                "Проверить OEM-кандидаты, применимость, quantity basis и выбрать строку для ручного подтверждения.",
+            )
+        )
     elif readiness["ready_for_oem_candidate_lookup"] and live_partsapi_oem:
-        manual_actions.append(_manual_action("manual_epc_fallback", "OEM-кандидаты не найдены: проверить брендовый EPC/Parts-Catalogs/17VIN вручную."))
+        manual_actions.append(
+            _manual_action(
+                "manual_epc_fallback", "OEM-кандидаты не найдены: проверить брендовый EPC/Parts-Catalogs/17VIN вручную."
+            )
+        )
     elif readiness["ready_for_oem_candidate_lookup"]:
-        manual_actions.append(_manual_action("run_live_get_parts_by_vin", f"Вызвать getPartsbyVIN cat={category_resolution.get('category')} с лимитом live-запросов."))
+        manual_actions.append(
+            _manual_action(
+                "run_live_get_parts_by_vin",
+                f"Вызвать getPartsbyVIN cat={category_resolution.get('category')} с лимитом live-запросов.",
+            )
+        )
 
     article_enrichment: list[dict[str, Any]] = []
     applicability_evidence: list[dict[str, Any]] = []
@@ -400,11 +488,19 @@ def resolve_vin_oem_parts(
         for article in (search_call.get("article_candidates") or [])[:max_candidates]:
             article_id = article.get("article_id") if isinstance(article, dict) else None
             if article_id not in (None, ""):
-                candidate_checks.append(partsapi_call("article_crosses", live_allowed=live_partsapi_oem, article_id=article_id))
-        candidate_checks.append(partsapi_call("oe_applicability", live_allowed=live_partsapi_oem, part_number=part_number))
+                candidate_checks.append(
+                    partsapi_call("article_crosses", live_allowed=live_partsapi_oem, article_id=article_id)
+                )
+        candidate_checks.append(
+            partsapi_call("oe_applicability", live_allowed=live_partsapi_oem, part_number=part_number)
+        )
         candidate_checks.append(partsapi_call("crosses_title", live_allowed=live_partsapi_oem, part_number=part_number))
         if brand:
-            candidate_checks.append(partsapi_call("crosses_with_brand", live_allowed=live_partsapi_oem, part_number=part_number, brand=str(brand)))
+            candidate_checks.append(
+                partsapi_call(
+                    "crosses_with_brand", live_allowed=live_partsapi_oem, part_number=part_number, brand=str(brand)
+                )
+            )
         else:
             candidate_checks.append(partsapi_call("crosses", live_allowed=live_partsapi_oem, part_number=part_number))
         article_enrichment.append(
@@ -440,7 +536,9 @@ def resolve_vin_oem_parts(
             if isinstance(cross, dict)
         )
 
-    current_status = _status(readiness, candidates=ranked_candidates, live_partsapi_oem=live_partsapi_oem and not dry_run)
+    current_status = _status(
+        readiness, candidates=ranked_candidates, live_partsapi_oem=live_partsapi_oem and not dry_run
+    )
     return {
         "ok": True,
         "schema": "VinOemResolution",

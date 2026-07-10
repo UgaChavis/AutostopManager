@@ -84,9 +84,7 @@ def test_crm_health_plan_accepts_manager_board_scan_sections():
                 "ready_unpaid": [{"id": "card-ready", "heading": "Готов без оплаты"}],
                 "inbox": [{"id": "card-inbox", "heading": "Новая заявка"}],
                 "repair_order_consistency": [{"card_id": "card-ready", "code": "ready_without_closed_order"}],
-                "overloaded_columns": [
-                    {"column": "ready", "column_label": "Готовые автомобили", "active_cards": 13}
-                ],
+                "overloaded_columns": [{"column": "ready", "column_label": "Готовые автомобили", "active_cards": 13}],
             },
             "meta": {"response_mode": "manager_board_scan", "view_mode": "compact"},
         },
@@ -103,9 +101,7 @@ def test_crm_health_plan_accepts_manager_board_scan_sections():
     assert result["manager_signals"]["missing_manager_data"][0]["missing"] == ["board_summary"]
     assert result["manager_signals"]["repair_order_consistency"][0]["code"] == "ready_without_closed_order"
     assert {
-        action["category"]
-        for action in result["suggested_actions"]
-        if action["category"] != "overloaded_column"
+        action["category"] for action in result["suggested_actions"] if action["category"] != "overloaded_column"
     } >= {"ready_unpaid", "inbox", "missing_manager_data", "overdue", "critical", "repair_order_consistency"}
 
 

@@ -76,7 +76,7 @@ def test_pipeline_returns_crm_output_format_and_frame_workflow():
     assert "decode_vehicle_identity" in result["pipeline"][1]["manager_tools"]
     assert result["vehicle_identity"]["identifier"]["kind"] == "frame_number"
     assert result["provider_plan"]["live_capability"]["can_complete_full_auto_lookup_now"] is False
-    assert any(step["step"] == "write_structured_result_to_crm_card" for step in result["pipeline"])
+    assert any(step["step"] == "prepare_optional_crm_writeback" for step in result["pipeline"])
     assert any(step["step"] == "reopen_and_verify_crm_write" for step in result["pipeline"])
     assert any(step["step"] == "prepare_card_write_contract" for step in result["pipeline"])
     rendered = json.dumps(result, ensure_ascii=False)
@@ -89,6 +89,8 @@ def test_pipeline_returns_crm_output_format_and_frame_workflow():
     assert "price_public_retail" in result["pipeline"][5]["schema"]
     assert "price_client_sale" in result["pipeline"][5]["schema"]
     assert result["material_line_rule"]["write_to_materials"] == "selected part with selected price only"
+    assert result["write_gate"]["card_write_authorized"] is False
+    assert result["write_gate"]["requires_exact_owner_command"] is True
     assert result["procurement_backlog_candidates"][0]["source_id"] == "rossko"
     assert result["procurement_backlog_candidates"][0]["env"]
     assert result["procurement_backlog_candidates"][0]["acceptance"]
@@ -171,13 +173,17 @@ def test_pipeline_requires_prepare_card_action_before_card_writeback():
         make="Toyota",
     )
 
-    prepare_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "prepare_card_write_contract")
-    write_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "write_structured_result_to_crm_card")
+    prepare_index = next(
+        index for index, step in enumerate(result["pipeline"]) if step["step"] == "prepare_card_write_contract"
+    )
+    write_index = next(
+        index for index, step in enumerate(result["pipeline"]) if step["step"] == "prepare_optional_crm_writeback"
+    )
 
     assert prepare_index < write_index
     assert "prepare_crm_card_action" in result["pipeline"][prepare_index]["manager_tools"]
     assert "expected_updated_at is present before update_card" in result["pipeline"][prepare_index]["checks"]
-    assert any("prepare_crm_card_action" in rule for rule in result["pipeline"][write_index]["rules"])
+    assert any("never authorizes or performs" in rule for rule in result["pipeline"][write_index]["rules"])
 
 
 def test_rules_forbid_hallucinated_oem_and_require_price_separation():
@@ -220,9 +226,7 @@ def test_integration_backlog_names_required_catalog_cross_and_price_sources():
 def test_command_route_and_annotation_point_to_crm_vin_domain():
     command_routes = json.loads(_read("docs/agent/command_routes.json"))
     annotations = [
-        json.loads(line)
-        for line in _read("docs/agent/knowledge_annotations.jsonl").splitlines()
-        if line.strip()
+        json.loads(line) for line in _read("docs/agent/knowledge_annotations.jsonl").splitlines() if line.strip()
     ]
 
     route = next(route for route in command_routes["routes"] if route["command_id"] == "crm_vin_oem_parts_lookup")

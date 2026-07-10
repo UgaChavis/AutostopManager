@@ -52,6 +52,12 @@ def test_doctor_script_syntax_and_readiness_checks():
     assert "manager MCP import" in content
     assert "crm MCP import" in content
     assert "manager environment report" in content
+    assert "manager web search readiness" in content
+    assert "manager web page readiness" in content
+    assert "manager crawl4ai web page readiness" in content
     assert "crm playwright version" in content
     assert "nginx config" in content
     assert "production watchdog timer active" in content
+    assert "--operator-password" not in content
+    assert 'AUTOSTOP_SMOKE_OPERATOR_PASSWORD="$CRM_RUNTIME_OPERATOR_PASSWORD"' in content
+    assert "unset CRM_RUNTIME_OPERATOR_PASSWORD" in content

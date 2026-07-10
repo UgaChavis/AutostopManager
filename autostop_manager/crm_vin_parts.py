@@ -175,7 +175,9 @@ def _redact_identifier_payload(value: Any, identifier: str | None) -> Any:
     return value
 
 
-def _public_context(context: dict[str, Any], *, identifier_source: str | None, identifier: str | None) -> dict[str, Any]:
+def _public_context(
+    context: dict[str, Any], *, identifier_source: str | None, identifier: str | None
+) -> dict[str, Any]:
     safe = _redact_identifier_payload(context, identifier)
     safe["identifier"] = {
         "source": identifier_source,
@@ -301,7 +303,9 @@ def _manual_writeback_package(resolution: dict[str, Any] | None) -> dict[str, An
     selected_candidate_id = gate.get("selected_candidate_id")
     selected = None
     if can_prepare and selected_candidate_id:
-        selected = next((candidate for candidate in candidates if candidate.get("candidate_id") == selected_candidate_id), None)
+        selected = next(
+            (candidate for candidate in candidates if candidate.get("candidate_id") == selected_candidate_id), None
+        )
     elif can_prepare and candidates:
         selected = candidates[0]
     rejected = [candidate for candidate in candidates if candidate is not selected]
@@ -318,7 +322,9 @@ def _manual_writeback_package(resolution: dict[str, Any] | None) -> dict[str, An
             "readiness": resolution.get("readiness"),
             "enrichment": resolution.get("enrichment"),
         },
-        "quantity_basis": selected.get("quantity_basis") if selected else (resolution.get("part_intent") or {}).get("quantity_basis"),
+        "quantity_basis": selected.get("quantity_basis")
+        if selected
+        else (resolution.get("part_intent") or {}).get("quantity_basis"),
         "crm_note": (
             "VIN/OEM подбор готов к ручной проверке: подтвердить OEM-кандидат, применимость, quantity basis и цену перед записью материалов."
             if selected
@@ -395,7 +401,7 @@ def build_crm_vin_parts_lookup_pipeline(
         )
         provider_plan = build_oem_parts_provider_plan(
             identifier=identifier,
-            requested_part=context["requested_part"],
+            requested_part=str(context["requested_part"] or ""),
             vehicle_identity=vehicle_identity,
             city=city,
         )
@@ -422,6 +428,19 @@ def build_crm_vin_parts_lookup_pipeline(
         "provider_plan": provider_plan,
         "vin_oem_resolution": public_resolution,
         "manual_writeback_package": _manual_writeback_package(public_resolution),
+        "write_gate": {
+            "planner_performs_writes": False,
+            "card_write_authorized": False,
+            "repair_order_material_write_authorized": False,
+            "requires_exact_owner_command": True,
+            "required_before_apply": [
+                "exact card id and repair-order id",
+                "current card/order reread",
+                "expected_updated_at concurrency token",
+                "selected part, quantity basis, unit price, and source confirmation",
+                "dry-run diff and rollback pre-state",
+            ],
+        },
         "source_registry_warnings": [
             warning
             for warning in (
@@ -439,23 +458,55 @@ def build_crm_vin_parts_lookup_pipeline(
             {
                 "step": "identify_vehicle_by_vin_frame",
                 "manager_tools": ["decode_vehicle_identity", "lookup_original_parts"],
-                "checks": ["ISO VIN vs Japan frame/body number vs Korea/KDM VIN", "market", "build window", "engine", "transmission", "drivetrain"],
+                "checks": [
+                    "ISO VIN vs Japan frame/body number vs Korea/KDM VIN",
+                    "market",
+                    "build window",
+                    "engine",
+                    "transmission",
+                    "drivetrain",
+                ],
             },
             {
                 "step": "find_oem_for_requested_part",
-                "sources": ["official EPC/dealer", "Parts-Catalogs", "PartsAPI", "17VIN", "AUTOPOISK", "PartSouq", "epc-data"],
+                "sources": [
+                    "official EPC/dealer",
+                    "Parts-Catalogs",
+                    "PartsAPI",
+                    "17VIN",
+                    "AUTOPOISK",
+                    "PartSouq",
+                    "epc-data",
+                ],
                 "checks": ["group", "side", "axis", "position", "production date", "grade/options", "quantity"],
                 "catalog_search_terms": part_profile.get("catalog_search_terms", [])[:8],
                 "critical_vehicle_fields": part_profile.get("critical_vehicle_fields", []),
             },
             {
                 "step": "find_replacements_and_crosses",
-                "sources": ["OEM supersession chain", "PartsAPI/TecDoc", "CROSSBASE-style cross methods", "ZZap replacements", "supplier substitutions"],
+                "sources": [
+                    "OEM supersession chain",
+                    "PartsAPI/TecDoc",
+                    "CROSSBASE-style cross methods",
+                    "ZZap replacements",
+                    "supplier substitutions",
+                ],
                 "checks": ["do not upgrade title-match cross to confirmed fitment without applicability evidence"],
             },
             {
                 "step": "quote_procurement_and_market_prices",
-                "sources": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter", "Emex", "Exist", "Autodoc", "ZZap", "Drom", "Avito"],
+                "sources": [
+                    "ROSSKO",
+                    "AutoEuro",
+                    "Armtek",
+                    "Autopiter",
+                    "Emex",
+                    "Exist",
+                    "Autodoc",
+                    "ZZap",
+                    "Drom",
+                    "Avito",
+                ],
                 "source_roles": {
                     "procurement_first": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter", "Emex"],
                     "public_retail_reference": ["Exist", "Autodoc", "ZZap", "Drom", "Avito"],
@@ -478,30 +529,42 @@ def build_crm_vin_parts_lookup_pipeline(
                 "manager_tools": ["prepare_crm_card_action"],
                 "checks": [
                     "expected_updated_at is present before update_card",
-                    "description patch contains quote matrix and source confidence",
+                    "public description contains only the compact selected working fact allowed by crm_card_description_standard.md",
+                    "quote matrix, source confidence, rejected candidates, and provenance stay out of the public description",
                     "board_summary is <=5 non-empty lines and excludes VIN/client private data",
                 ],
             },
             {
-                "step": "write_structured_result_to_crm_card",
-                "crm_tools": ["update_card", "replace_repair_order_materials", "set_card_board_summary"],
+                "step": "prepare_optional_crm_writeback",
+                "crm_tools": ["prepare_crm_card_action"],
                 "rules": [
-                    "apply card description and board_summary writes from prepare_crm_card_action contract",
-                    "description gets OEM/replacements/quote matrix/source/confidence",
-                    "repair-order materials get selected priced part only",
-                    "board_summary stays short and excludes raw VIN/client private data",
+                    "this planner never authorizes or performs a CRM write",
+                    "apply card description/board_summary only after a separate exact owner command and a green prepare_crm_card_action contract",
+                    "do not call replace_repair_order_materials unless the owner separately names the exact repair order and material change",
+                    "capture current card/order state for rollback before any later authorized write",
                 ],
             },
             {
                 "step": "reopen_and_verify_crm_write",
                 "crm_tools": ["get_card_context", "get_repair_order"],
-                "checks": ["description persisted", "material total equals manual sum", "selected part line has one price basis", "confidence and needs-confirmation are visible"],
+                "checks": [
+                    "description persisted",
+                    "material total equals manual sum",
+                    "selected part line has one price basis",
+                    "confidence and needs-confirmation are visible",
+                ],
             },
         ],
         "crm_note_template": _crm_note_template(),
         "material_line_rule": {
             "write_to_materials": "selected part with selected price only",
-            "keep_in_description": ["OEM reference", "supersession", "crosses/analogs", "rejected candidates", "source matrix"],
+            "keep_in_description": [
+                "OEM reference",
+                "supersession",
+                "crosses/analogs",
+                "rejected candidates",
+                "source matrix",
+            ],
             "quantity_rule": "quantity=1 for kit/package/service set; numeric quantity only when price is per piece",
         },
         "confidence_rules": {
@@ -512,9 +575,12 @@ def build_crm_vin_parts_lookup_pipeline(
         "safety_rules": [
             "Do not invent OEM, cross, supersession, price, stock, or fitment.",
             "Do not store raw VIN/client data, supplier secrets, or raw CRM records in durable memory or Git.",
+            "This planner is read-only and does not grant authority to update a card or repair-order material row.",
             "Do not place supplier orders or change financial CRM records without a separate explicit owner command.",
         ],
-        "catalog_backlog_candidates": [_source_digest(source) for source in _catalog_backlog_candidates(limit, registry=vin_oem_sources)],
+        "catalog_backlog_candidates": [
+            _source_digest(source) for source in _catalog_backlog_candidates(limit, registry=vin_oem_sources)
+        ],
         "procurement_backlog_candidates": [
             _source_digest(source) for source in _procurement_backlog_candidates(limit, registry=procurement_sources)
         ],

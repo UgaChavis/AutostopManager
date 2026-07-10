@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from autostop_manager.catalog_clients import (
+    build_17vin_signed_request,
     build_parts_catalogs_request,
     extract_oem_candidates,
     lookup_oem_catalog_candidates,
@@ -40,6 +41,35 @@ def test_parts_catalogs_request_uses_authorization_header_and_redacts_key():
     assert "JTEBU3FJX05027767" not in request["redacted_url"]
     assert "vin=JTE***767" in request["redacted_url"]
     assert request["secret_exposed"] is False
+
+
+def test_parts_catalogs_rejects_catalog_path_confusion():
+    request = build_parts_catalogs_request(
+        operation="groups",
+        params={"carId": "car-1"},
+        catalog_id="../outside",
+        api_key="pc-secret",
+        base_url="https://api.parts-catalogs.example/v1",
+    )
+
+    assert request["ok"] is False
+    assert request["error_code"] == "invalid_catalog_id"
+    assert request["url"] is None
+
+
+def test_vin17_rejects_epc_path_confusion_without_signed_url():
+    request = build_17vin_signed_request(
+        path="//other.example/path",
+        params={"vin": "LFMGJE720DS070251"},
+        user="myusername",
+        secret="mypassword",
+        base_url="https://api.17vin.example.test",
+    )
+
+    assert request["ok"] is False
+    assert request["error_code"] == "invalid_provider_path"
+    assert request["redacted_url"] is None
+    assert "signed_url" not in request
 
 
 def test_parts_catalogs_lookup_normalizes_parts_payload(monkeypatch):
@@ -119,6 +149,7 @@ def test_extract_oem_candidates_handles_partsapi_and_17vin_payloads():
 def test_vin17_std_part_name_lookup_builds_signed_request(monkeypatch):
     monkeypatch.setenv("VIN17_ACCOUNT", "myusername")
     monkeypatch.setenv("VIN17_SECRET", "mypassword")
+    monkeypatch.setenv("VIN17_BASE_URL", "https://api.17vin.example.test")
 
     result = vin17_search_std_part_name_by_vin(
         epc="toyota",
@@ -143,6 +174,7 @@ def test_lookup_oem_catalog_candidates_combines_three_catalogs(monkeypatch):
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example/api")
     monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
     monkeypatch.setenv("VIN17_SECRET", "vin17-secret")
+    monkeypatch.setenv("VIN17_BASE_URL", "https://api.17vin.example.test")
 
     def fake_parts_catalogs_lookup(**kwargs):
         return {
@@ -189,7 +221,9 @@ def test_lookup_oem_catalog_candidates_combines_three_catalogs(monkeypatch):
 
     monkeypatch.setattr("autostop_manager.catalog_clients.parts_catalogs_lookup", fake_parts_catalogs_lookup)
     monkeypatch.setattr("autostop_manager.catalog_clients.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
-    monkeypatch.setattr("autostop_manager.catalog_clients.vin17_search_std_part_name_by_vin", fake_vin17_search_std_part_name_by_vin)
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.vin17_search_std_part_name_by_vin", fake_vin17_search_std_part_name_by_vin
+    )
 
     result = lookup_oem_catalog_candidates(
         identifier="JTEBU3FJX05027767",

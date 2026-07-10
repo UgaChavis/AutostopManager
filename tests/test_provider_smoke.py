@@ -9,7 +9,14 @@ def test_catalog_status_includes_stage_matrix():
 
     assert status["ok"] is True
     stages = {row["stage"] for row in status["stage_matrix"]}
-    assert {"identity", "oem_catalog", "catalog_cross", "aftermarket_catalog", "procurement_price", "market_price"}.issubset(stages)
+    assert {
+        "identity",
+        "oem_catalog",
+        "catalog_cross",
+        "aftermarket_catalog",
+        "procurement_price",
+        "market_price",
+    }.issubset(stages)
     identity = next(row for row in status["stage_matrix"] if row["stage"] == "identity")
     assert identity["configured_count"] >= 1
 
@@ -46,8 +53,23 @@ def test_provider_smoke_live_readonly_allows_local_rules():
 
     assert result["provider"] == "local_platform_rules"
     assert result["configured"] is True
-    assert result["live_readonly_status"] == "ready"
+    assert result["live_readonly_status"] == "verified_local"
+    assert result["network_call_performed"] is False
     assert report["summary"]["blocked_count"] == 0
+
+
+def test_provider_smoke_never_claims_network_success_without_a_request(monkeypatch):
+    monkeypatch.setenv("ROSSKO_KEY1", "synthetic-key-1")
+    monkeypatch.setenv("ROSSKO_KEY2", "synthetic-key-2")
+
+    report = build_provider_smoke_report(provider="rossko", mode="live-readonly")
+    result = report["results"][0]
+
+    assert result["live_readonly_status"] == "configured_not_exercised"
+    assert result["network_call_performed"] is False
+    assert result["latency_ms"] is None
+    assert report["summary"]["live_readonly_ready_count"] == 0
+    assert report["summary"]["network_calls_performed"] == 0
 
 
 def test_provider_smoke_rejects_unknown_provider():

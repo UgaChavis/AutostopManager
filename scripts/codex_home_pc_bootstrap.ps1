@@ -1,13 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$ServerHost = "46.8.254.243",
-    [string]$ServerUser = "codex-home-tunnel",
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$ServerHost,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$ServerUser,
     [int]$ServerSshPort = 22,
     [string]$RemoteListenHost = "127.0.0.1",
-    [int]$ServerListenPort = 22220,
+    [Parameter(Mandatory = $true)][ValidateRange(1024, 65535)][int]$ServerListenPort,
     [string]$LocalSshHost = "127.0.0.1",
     [int]$LocalSshPort = 22,
-    [string]$CodexUser = "codexadmin"
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$CodexUser
 )
 
 $ErrorActionPreference = "Stop"
@@ -167,7 +167,7 @@ function Ensure-OpenSshHostKeyAcl {
         }
 }
 
-function Ensure-CodexAdminUser {
+function Ensure-RemoteAdminUser {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$SecretPath
@@ -183,9 +183,9 @@ function Ensure-CodexAdminUser {
         New-LocalUser -Name $Name -Password $secure -FullName "Codex Remote Admin" -Description "Admin account for Codex reverse SSH access." -PasswordNeverExpires | Out-Null
         Set-Content -LiteralPath $SecretPath -Value $plain -Encoding ascii
         Set-PrivateAcl -Path $SecretPath
-        Write-Host "codexadmin_created=true"
+        Write-Host "remote_user_created=true"
     } else {
-        Write-Host "codexadmin_created=false"
+        Write-Host "remote_user_created=false"
     }
 
     $members = @(Get-LocalGroupMember -Group $adminGroup -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
@@ -193,7 +193,7 @@ function Ensure-CodexAdminUser {
     if ($memberNames -notcontains $Name) {
         Add-LocalGroupMember -Group $adminGroup -Member $Name
     }
-    Write-Host "codexadmin_is_admin=true"
+    Write-Host "remote_user_is_admin=true"
 }
 
 function Ensure-AdminAuthorizedKey {
@@ -260,7 +260,7 @@ function Redact-Text {
     `$safe = `$Text
     `$safe = `$safe -replace [regex]::Escape(`$Key), "[private-key-file]"
     `$safe = `$safe -replace "home_reverse_to_server_ed25519", "[private-key-file]"
-    `$safe = `$safe -replace "codexadmin-password\.txt", "[secret-file]"
+    `$safe = `$safe -replace "remote-admin-password\.txt", "[secret-file]"
     `$safe = `$safe -replace "(?i)(password|token|secret)\s*[:=]\s*\S+", '`$1=[redacted]'
     return `$safe
 }
@@ -376,13 +376,13 @@ if (-not (Test-Path -LiteralPath $serverPublicKeySource)) {
 $reverseKeyDest = Join-Path $sshDir "home_reverse_to_server_ed25519"
 $knownHostsPath = Join-Path $sshDir "known_hosts"
 $runnerPath = Join-Path $scriptDir "Start-CodexReverseTunnel.ps1"
-$passwordPath = Join-Path $secretDir "codexadmin-password.txt"
+$passwordPath = Join-Path $secretDir "remote-admin-password.txt"
 
 Copy-Item -LiteralPath $reverseKeySource -Destination $reverseKeyDest -Force
 Set-PrivateAcl -Path $reverseKeyDest
 
 Ensure-OpenSshServer
-Ensure-CodexAdminUser -Name $CodexUser -SecretPath $passwordPath
+Ensure-RemoteAdminUser -Name $CodexUser -SecretPath $passwordPath
 
 $programDataSsh = Join-Path $env:ProgramData "ssh"
 New-Item -ItemType Directory -Force -Path $programDataSsh | Out-Null

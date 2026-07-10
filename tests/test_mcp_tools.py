@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 from autostop_manager import config as manager_config
 import autostop_manager.mcp_tools as mcp_tools_module
 from autostop_manager.mcp_tools import register_manager_memory_tools
+from autostop_manager.mcp_server import build_server
 from autostop_manager.storage import ManagerMemoryStore
 
 
@@ -62,6 +64,12 @@ def test_lookup_original_parts_tool_is_registered(tmp_path):
     assert result["catalog_routes"] == result["steps"]
     assert "oem_candidates" in result
     assert "fitment_confidence" in result
+    assert result["_meta"] == {
+        "result_contract": "operation_v1",
+        "tool": "lookup_original_parts",
+        "operation_kind": "read",
+        "risk": "low",
+    }
 
     captured = server.tools["lookup_original_parts"](
         "GXE10-0088644",
@@ -71,6 +79,16 @@ def test_lookup_original_parts_tool_is_registered(tmp_path):
         captured_source="Toyota EPC Mirror",
     )
     assert captured["oem_candidates"][0]["normalized_number"] == "9031189014"
+
+
+def test_fastmcp_surface_matches_catalog_and_exposes_json_schemas():
+    catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
+
+    tools = asyncio.run(build_server().list_tools())
+
+    assert len(tools) == catalog["tool_count"] == 56
+    assert {tool.name for tool in tools} == set(catalog["all_tools"])
+    assert all(tool.inputSchema.get("type") == "object" for tool in tools)
 
 
 def test_decode_vehicle_identity_tool_is_registered(tmp_path):
@@ -183,6 +201,7 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
 def test_vin17_adapter_tools_are_registered(tmp_path, monkeypatch):
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
+    monkeypatch.delenv("VIN17_BASE_URL", raising=False)
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -192,7 +211,7 @@ def test_vin17_adapter_tools_are_registered(tmp_path, monkeypatch):
     assert "vin17_search_part_number_by_vin" in server.tools
     decode = server.tools["vin17_decode_vehicle"]("LFMGJE720DS070251", dry_run=True)
     assert decode["ok"] is False
-    assert decode["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
+    assert decode["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET", "VIN17_BASE_URL"]
 
 
 def test_partsapi_adapter_tool_is_registered(tmp_path, monkeypatch):
@@ -252,6 +271,7 @@ def test_oem_catalog_lookup_tool_is_registered(tmp_path, monkeypatch):
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example/api")
     monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
     monkeypatch.setenv("VIN17_SECRET", "vin17-secret")
+    monkeypatch.setenv("VIN17_BASE_URL", "https://api.17vin.example.test")
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -321,13 +341,16 @@ def test_plan_crm_vin_oem_parts_lookup_tool_is_registered(tmp_path):
     )
     assert result["playbook"] == "docs/agent/crm_vin_oem_parts_lookup_playbook.md"
     assert result["identifier_lookup"]["identifier"]["kind"] == "frame_number"
-    assert any(step["step"] == "write_structured_result_to_crm_card" for step in result["pipeline"])
+    assert any(step["step"] == "prepare_optional_crm_writeback" for step in result["pipeline"])
+    assert result["write_gate"]["planner_performs_writes"] is False
+    assert result["write_gate"]["repair_order_material_write_authorized"] is False
 
 
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
+    monkeypatch.delenv("VIN17_BASE_URL", raising=False)
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -389,7 +412,10 @@ def test_build_vin_parts_work_order_tool_is_registered(tmp_path, monkeypatch):
 
     assert result["work_order_summary"]["count"] == 1
     assert result["items"][0]["oem_lookup_routes"]["automated_first"]
-    assert any(route["name"].startswith("partslink24") for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"])
+    assert any(
+        route["name"].startswith("partslink24")
+        for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"]
+    )
 
 
 def test_recommend_automotive_sources_tool_is_registered(tmp_path):

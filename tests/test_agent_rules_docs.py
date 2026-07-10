@@ -92,27 +92,26 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
     for expected in [
         "home-pc",
         "ssh home-pc",
+        "private runtime",
+        "no public SSH",
+        "sftp",
+        "scp",
+    ]:
+        assert expected in combined
+
+    for forbidden in [
         "DESKTOP-BUSO4I8",
         "127.0.0.1:22220",
         "codex-home-tunnel",
         "codexadmin",
-        "do not rotate",
-        "no public home SSH",
-        "sftp",
-        "scp",
-        "pwsh",
         "PowerShell 7.6.3",
         "Python 3.14.6",
-        "write-public-desktop-note.ps1",
-        "open-in-user-session.ps1",
     ]:
-        assert expected in combined
+        assert forbidden not in combined
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]
-    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"][
-        "source_of_truth_files"
-    ]
+    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"]["source_of_truth_files"]
 
 
 def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
@@ -335,7 +334,7 @@ def test_source_pack_playbook_navigation_uses_repo_relative_paths():
     checked_paths = [
         ROOT / "docs" / "agent" / "bmw_repair_playbook.md",
         ROOT / "docs" / "agent" / "ecu_calibration_programming_playbook.md",
-        ROOT / "docs" / "agent" / "ai_parts_krasnoyarsk_playbook.md",
+        ROOT / "docs" / "agent" / "parts_search_playbook.md",
     ]
     ambiguous_prefixes = ("`data/", "`md/", "`markdown/", "`sources/")
     offenders: list[str] = []
@@ -366,15 +365,10 @@ def test_bmw_jsonl_indexes_keep_canonical_lookup_fields():
 
     for filename, fields in required.items():
         rows = [
-            json.loads(line)
-            for line in (data_root / filename).read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            json.loads(line) for line in (data_root / filename).read_text(encoding="utf-8").splitlines() if line.strip()
         ]
         missing = [
-            (index, field)
-            for index, row in enumerate(rows, 1)
-            for field in fields
-            if row.get(field) in (None, "")
+            (index, field) for index, row in enumerate(rows, 1) for field in fields if row.get(field) in (None, "")
         ]
         assert missing == []
 

@@ -72,6 +72,40 @@ def test_less_than_three_prices_returns_low_confidence_without_confident_price()
     assert "at_least_3_comparable_labor_only_public_prices" in result["missing_context"]
 
 
+def test_three_quotes_from_one_source_do_not_create_a_confident_price():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена свечей"],
+        quotes_json=[
+            _quote("same-search-domain", 3000, operation="замена свечей"),
+            _quote("same-search-domain", 3500, operation="замена свечей"),
+            _quote("same-search-domain", 4000, operation="замена свечей"),
+        ],
+        auto_research=False,
+    )
+
+    assert result["confidence"] == "low"
+    assert result["russia_average_rub"] is None
+    assert result["autostop_price_rub"] is None
+    assert "at_least_2_independent_public_sources" in result["missing_context"]
+
+
+def test_work_item_budget_fails_before_research(monkeypatch):
+    def unexpected_research(**_kwargs):
+        raise AssertionError("research must not run for an over-budget request")
+
+    monkeypatch.setattr("autostop_manager.work_pricing.collect_public_work_pricing_research", unexpected_research)
+
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=[f"operation {index}" for index in range(21)],
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "invalid_input"
+    assert result["limits"]["work_items"] == 20
+
+
 def test_quotes_with_parts_are_excluded_from_labor_only_sample():
     result = estimate_repair_work_cost(
         vehicle="Lexus RX",

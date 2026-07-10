@@ -275,7 +275,15 @@ def _sync_review_items(memory: ManagerMemoryStore, items: list[dict[str, Any]]) 
                     (id, kind, source_ref, proposal_json, reason, risk, status, created_at, decided_at)
                 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
                 """,
-                (item["id"], item["kind"], item["source_ref"], proposal_json, item["reason"], item["risk"], item["created_at"]),
+                (
+                    item["id"],
+                    item["kind"],
+                    item["source_ref"],
+                    proposal_json,
+                    item["reason"],
+                    item["risk"],
+                    item["created_at"],
+                ),
             )
 
 
@@ -328,7 +336,11 @@ def _archive_duplicate_refs(memory: ManagerMemoryStore, source_ref: str) -> dict
         return {"ok": False, "error": "duplicate review item is stale", "archived_ids": []}
     normalized = [_normalize_memory_text(active_by_id[item_id]) for item_id in ids]
     if not normalized[0] or len(set(normalized)) != 1:
-        return {"ok": False, "error": "duplicate review item no longer points to duplicate memories", "archived_ids": []}
+        return {
+            "ok": False,
+            "error": "duplicate review item no longer points to duplicate memories",
+            "archived_ids": [],
+        }
     archived_at = _now()
     archive_ids = ids[1:]
     with memory.connect() as conn:

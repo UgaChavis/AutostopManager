@@ -125,7 +125,9 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
             "matched_fields": [],
             "conflicting_fields": [],
             "error": call.get("error"),
-            "missing_env_names": call.get("missing_env_names") or (call.get("request_plan") or {}).get("missing_env_names") or [],
+            "missing_env_names": call.get("missing_env_names")
+            or (call.get("request_plan") or {}).get("missing_env_names")
+            or [],
         }
 
     local_profile = identity.get("vehicle_profile") or {}
@@ -140,7 +142,10 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
 
     field_pairs = {
         "make": (local_profile.get("make"), oe_profile.get("make")),
-        "model": (_first_nonempty(local_profile.get("model"), local_profile.get("model_family")), _first_nonempty(oe_profile.get("model"), oe_profile.get("model_family"))),
+        "model": (
+            _first_nonempty(local_profile.get("model"), local_profile.get("model_family")),
+            _first_nonempty(oe_profile.get("model"), oe_profile.get("model_family")),
+        ),
         "model_year": (local_profile.get("model_year"), oe_profile.get("model_year")),
         "transmission": (local_profile.get("transmission"), oe_profile.get("transmission")),
     }
@@ -153,7 +158,9 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
         compared_fields.append(field)
         left_norm = _normalize_compare_value(left)
         right_norm = _normalize_compare_value(right)
-        if left_norm == right_norm or (field == "transmission" and (left_norm in right_norm or right_norm in left_norm)):
+        if left_norm == right_norm or (
+            field == "transmission" and (left_norm in right_norm or right_norm in left_norm)
+        ):
             matched_fields.append(field)
         else:
             conflicting_fields.append({"field": field, "identity_value": left, "partsapi_value": right})
@@ -203,7 +210,11 @@ def _identity_with_partsapi_agreement(identity: dict[str, Any], call: dict[str, 
         blocking_reasons = [reason for reason in blocking_reasons if reason != "identity_confidence_below_high"]
     if agreement["status"] == "conflict" and "partsapi_oe_identity_conflict" not in blocking_reasons:
         blocking_reasons.append("partsapi_oe_identity_conflict")
-    if not can_read_candidates and agreement["status"] in {"provider_failed", "no_profile", "profile_present_uncompared"}:
+    if not can_read_candidates and agreement["status"] in {
+        "provider_failed",
+        "no_profile",
+        "profile_present_uncompared",
+    }:
         reason = f"partsapi_oe_{agreement['status']}"
         if reason not in blocking_reasons:
             blocking_reasons.append(reason)
@@ -224,7 +235,13 @@ def _identity_with_partsapi_agreement(identity: dict[str, Any], call: dict[str, 
     )
     updated["parts_lookup_readiness"] = readiness
     evidence_sources = list(updated.get("evidence_sources") or [])
-    evidence_sources.append({"source": "PartsAPI VINdecodeOE", "status": agreement["status"], "matched_fields": agreement.get("matched_fields", [])})
+    evidence_sources.append(
+        {
+            "source": "PartsAPI VINdecodeOE",
+            "status": agreement["status"],
+            "matched_fields": agreement.get("matched_fields", []),
+        }
+    )
     updated["evidence_sources"] = evidence_sources
     return updated
 
@@ -254,7 +271,9 @@ def _identity_digest(identity: dict[str, Any], identifier: str) -> dict[str, Any
         "confidence": identity.get("confidence"),
         "confidence_label": identity.get("confidence_label"),
         "ready_for_oem_lookup": readiness.get("ready_for_oem_lookup"),
-        "ready_for_oem_candidate_lookup": readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")),
+        "ready_for_oem_candidate_lookup": readiness.get(
+            "ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")
+        ),
         "ready_for_crm_writeback": readiness.get("ready_for_crm_writeback", readiness.get("ready_for_oem_lookup")),
         "cross_source_agreement": readiness.get("cross_source_agreement") or {},
         "blocking_reasons": readiness.get("blocking_reasons") or [],
@@ -290,7 +309,9 @@ def _identity_digest(identity: dict[str, Any], identifier: str) -> dict[str, Any
             for source in identity.get("evidence_sources", [])
         ],
         "conflict_count": len(identity.get("conflicts", [])),
-        "high_severity_conflict_count": sum(1 for item in identity.get("conflicts", []) if item.get("severity") == "high"),
+        "high_severity_conflict_count": sum(
+            1 for item in identity.get("conflicts", []) if item.get("severity") == "high"
+        ),
         "warning_count": len(identity.get("warnings", [])),
         "warnings": [_redact_text(value, identifier) for value in identity.get("warnings", [])[:5]],
         "required_next_sources": identity.get("required_next_sources", []),
@@ -304,7 +325,11 @@ def _partsapi_lookup_calls(
     identity_call: dict[str, Any] | None = None,
     dry_run: bool = True,
 ) -> list[dict[str, Any]]:
-    calls = [identity_call] if identity_call is not None else [partsapi_catalog_lookup(operation="vin_decode_oe", identifier=identifier, dry_run=dry_run)]
+    calls = (
+        [identity_call]
+        if identity_call is not None
+        else [partsapi_catalog_lookup(operation="vin_decode_oe", identifier=identifier, dry_run=dry_run)]
+    )
     categories = part_profile.get("partsapi_cat_candidates") or []
     if categories:
         calls.append(
@@ -354,8 +379,8 @@ def _vin17_dry_run_call(identifier: str) -> dict[str, Any]:
 
 
 def _oem_catalog_smoke_digest(call: dict[str, Any]) -> dict[str, Any]:
-    blockers = []
-    missing_env_names = set()
+    blockers: list[dict[str, Any]] = []
+    missing_env_names: set[str] = set()
     for blocker in call.get("blockers", []):
         missing_env_names.update(blocker.get("missing_env_names") or [])
         blockers.append(
@@ -394,7 +419,9 @@ def _oem_catalog_smoke_digest(call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _oem_catalog_lookup_call(identifier: str, item: dict[str, Any], requested_part: str, *, dry_run: bool = True, timeout: float = 20.0) -> dict[str, Any]:
+def _oem_catalog_lookup_call(
+    identifier: str, item: dict[str, Any], requested_part: str, *, dry_run: bool = True, timeout: float = 20.0
+) -> dict[str, Any]:
     context = _merged_item_context(item)
     call = lookup_oem_catalog_candidates(
         identifier=identifier,
@@ -403,7 +430,12 @@ def _oem_catalog_lookup_call(identifier: str, item: dict[str, Any], requested_pa
         car_id=_compact(item.get("car_id") or context.get("car_id")),
         group_id=_compact(item.get("group_id") or context.get("group_id")),
         epc=_compact(item.get("epc") or context.get("epc")),
-        partsapi_category=_compact(item.get("partsapi_category") or context.get("partsapi_category") or item.get("partsapi_cat") or context.get("partsapi_cat")),
+        partsapi_category=_compact(
+            item.get("partsapi_category")
+            or context.get("partsapi_category")
+            or item.get("partsapi_cat")
+            or context.get("partsapi_cat")
+        ),
         timeout=timeout,
         dry_run=dry_run,
     )
@@ -453,7 +485,10 @@ def _benchmark_status(summary: dict[str, Any]) -> str:
         return "no_items"
     if summary["full_auto_lookup_count"] == summary["count"]:
         return "live_full_auto_lookup_ready"
-    if summary.get("ready_for_oem_candidate_lookup_count") == summary["count"] and summary["part_intent_actionable_count"] == summary["count"]:
+    if (
+        summary.get("ready_for_oem_candidate_lookup_count") == summary["count"]
+        and summary["part_intent_actionable_count"] == summary["count"]
+    ):
         return "identity_ready_but_blocked_by_live_catalog_or_supplier_credentials"
     return "partial_identity_or_part_intent_coverage"
 
@@ -620,13 +655,21 @@ def benchmark_vin_parts_lookup(
         "medium_identity_count": sum(1 for item in benchmark_items if item["identity"]["confidence_label"] == "medium"),
         "low_identity_count": sum(1 for item in benchmark_items if item["identity"]["confidence_label"] == "low"),
         "ready_for_oem_lookup_count": sum(1 for item in benchmark_items if item["identity"]["ready_for_oem_lookup"]),
-        "ready_for_oem_candidate_lookup_count": sum(1 for item in benchmark_items if item["identity"]["ready_for_oem_candidate_lookup"]),
-        "ready_for_crm_writeback_count": sum(1 for item in benchmark_items if item["identity"]["ready_for_crm_writeback"]),
+        "ready_for_oem_candidate_lookup_count": sum(
+            1 for item in benchmark_items if item["identity"]["ready_for_oem_candidate_lookup"]
+        ),
+        "ready_for_crm_writeback_count": sum(
+            1 for item in benchmark_items if item["identity"]["ready_for_crm_writeback"]
+        ),
         "part_intent_recognized_count": sum(1 for item in benchmark_items if item["requested_part"]["recognized"]),
         "part_intent_actionable_count": sum(
-            1 for item in benchmark_items if item["requested_part"]["recognized"] and not item["requested_part"]["clarification_required"]
+            1
+            for item in benchmark_items
+            if item["requested_part"]["recognized"] and not item["requested_part"]["clarification_required"]
         ),
-        "part_intent_clarification_required_count": sum(1 for item in benchmark_items if item["requested_part"]["clarification_required"]),
+        "part_intent_clarification_required_count": sum(
+            1 for item in benchmark_items if item["requested_part"]["clarification_required"]
+        ),
         "manual_public_search_count": sum(item["manual_public_search"]["count"] for item in benchmark_items),
         "manual_public_queries_with_raw_identifier_count": sum(
             1
@@ -634,14 +677,24 @@ def benchmark_vin_parts_lookup(
             for row in item["manual_public_search"]["queries"]
             if row["raw_identifier_in_query"]
         ),
-        "live_oem_ready_count": sum(1 for item in benchmark_items if item["live_capability"].get("live_oem_catalog_available")),
-        "live_price_ready_count": sum(1 for item in benchmark_items if item["live_capability"].get("live_procurement_available")),
-        "full_auto_lookup_count": sum(1 for item in benchmark_items if item["live_capability"].get("can_complete_full_auto_lookup_now")),
+        "live_oem_ready_count": sum(
+            1 for item in benchmark_items if item["live_capability"].get("live_oem_catalog_available")
+        ),
+        "live_price_ready_count": sum(
+            1 for item in benchmark_items if item["live_capability"].get("live_procurement_available")
+        ),
+        "full_auto_lookup_count": sum(
+            1 for item in benchmark_items if item["live_capability"].get("can_complete_full_auto_lookup_now")
+        ),
         "partsapi_request_shape_count": sum(len(item["prepared_calls"]["partsapi"]) for item in benchmark_items),
         "vin17_request_shape_count": sum(1 for item in benchmark_items if item["prepared_calls"]["vin17"] is not None),
-        "oem_catalog_request_shape_count": sum(1 for item in benchmark_items if item["prepared_calls"]["oem_catalog_lookup"] is not None),
+        "oem_catalog_request_shape_count": sum(
+            1 for item in benchmark_items if item["prepared_calls"]["oem_catalog_lookup"] is not None
+        ),
         "oem_resolution_count": sum(1 for item in benchmark_items if item.get("oem_resolution")),
-        "oem_candidate_count": sum(int((item.get("oem_resolution") or {}).get("candidate_count") or 0) for item in benchmark_items),
+        "oem_candidate_count": sum(
+            int((item.get("oem_resolution") or {}).get("candidate_count") or 0) for item in benchmark_items
+        ),
         "missing_env_names": sorted(missing_env_names),
     }
     summary["benchmark_status"] = _benchmark_status(summary)
@@ -658,8 +711,12 @@ def benchmark_vin_parts_lookup(
             "medium_confidence_count": identity_batch.get("medium_confidence_count"),
             "low_confidence_count": identity_batch.get("low_confidence_count"),
             "identity_coverage": identity_batch.get("identity_coverage"),
-            "ready_for_oem_candidate_lookup_count": sum(1 for item in benchmark_items if item["identity"]["ready_for_oem_candidate_lookup"]),
-            "ready_for_crm_writeback_count": sum(1 for item in benchmark_items if item["identity"]["ready_for_crm_writeback"]),
+            "ready_for_oem_candidate_lookup_count": sum(
+                1 for item in benchmark_items if item["identity"]["ready_for_oem_candidate_lookup"]
+            ),
+            "ready_for_crm_writeback_count": sum(
+                1 for item in benchmark_items if item["identity"]["ready_for_crm_writeback"]
+            ),
             "vpic_batch": identity_batch.get("vpic_batch"),
         },
         "provider_status_summary": {
@@ -673,7 +730,13 @@ def benchmark_vin_parts_lookup(
                 "priority": 1,
                 "need": "VIN/frame-specific OEM catalog coverage for production date, options, OEM groups, and exact applicability.",
                 "candidate_sources": ["Parts-Catalogs API", "17VIN API", "partslink24/brand EPC", "AUTOPOISK"],
-                "env_names": ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "VIN17_ACCOUNT", "VIN17_SECRET", "AUTOPOISK_TOKEN"],
+                "env_names": [
+                    "PARTS_CATALOGS_API_KEY",
+                    "PARTS_CATALOGS_BASE_URL",
+                    "VIN17_ACCOUNT",
+                    "VIN17_SECRET",
+                    "AUTOPOISK_TOKEN",
+                ],
             },
             {
                 "priority": 2,

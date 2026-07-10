@@ -45,3 +45,25 @@ def test_prepare_card_action_flags_private_data_in_board_summary():
     )
 
     assert "board_summary_contains_private_identifier" in result["risk_flags"]
+    assert result["ok"] is False
+    assert result["ready_to_apply"] is False
+
+
+def test_prepare_card_action_fails_closed_without_concurrency_token_or_patch():
+    result = prepare_crm_card_action(card_id="card-123")
+
+    assert result["ok"] is False
+    assert result["ready_to_apply"] is False
+    assert result["blocking_risk_flags"] == ["missing_expected_updated_at", "no_target_fields"]
+
+
+def test_prepare_card_action_is_only_a_dry_run_planner():
+    result = prepare_crm_card_action(
+        card_id="card-123",
+        expected_updated_at="2026-06-08T10:00:00+07:00",
+        description="Проверить течь",
+        dry_run=False,
+    )
+
+    assert result["ok"] is False
+    assert "planner_apply_mode_not_supported" in result["blocking_risk_flags"]

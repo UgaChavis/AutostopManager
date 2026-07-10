@@ -73,8 +73,14 @@ def test_nhtsa_tsbs_routes_use_current_received_zip_sources():
 
 
 def test_data_type_source_map_references_have_catalog_cards():
-    catalog = json.loads((ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json").read_text(encoding="utf-8"))
-    data_type_map = json.loads((ROOT / "docs" / "agent" / "automotive_sources" / "data_type_source_map.json").read_text(encoding="utf-8"))
+    catalog = json.loads(
+        (ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    data_type_map = json.loads(
+        (ROOT / "docs" / "agent" / "automotive_sources" / "data_type_source_map.json").read_text(encoding="utf-8")
+    )
     catalog_ids = {row.get("id") or row.get("source_id") for row in catalog["sources"]}
 
     missing = sorted(
