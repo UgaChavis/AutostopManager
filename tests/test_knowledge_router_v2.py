@@ -69,6 +69,10 @@ def test_probe_routes_timer_floor_to_manager_data_playbook(tmp_path):
     assert result["best_domain"] == "service_management"
     assert result["command_route"]["command_id"] == "timer_floor_control"
     assert result["open_first"].endswith("crm_manager_data_playbook.md")
+    next_actions = "\n".join(result["command_route"]["next_actions"])
+    assert "include_archived=false" in next_actions
+    assert "target_total_seconds=173700" in next_actions
+    assert "eligible_count=0" in next_actions
 
 
 def test_probe_routes_gmail_connector_work_to_gmail_operations(tmp_path):

@@ -12,6 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .routing import (
+    MIN_ROUTE_MARGIN,
+    assess_domain,
+    classify_query,
+    phrase_present,
+    route_confidence,
+    specific_term_count,
+)
 from .storage import ManagerMemoryStore, _json_list, _now, _string_list
 
 
@@ -152,7 +160,9 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                 raw_path: (_resolve_path(raw_path).exists() and _resolve_path(raw_path).is_file())
                 for raw_path in optional_runtime_files
             }
-            optional_missing_for_domain = [raw_path for raw_path, is_present in optional_status.items() if not is_present]
+            optional_missing_for_domain = [
+                raw_path for raw_path, is_present in optional_status.items() if not is_present
+            ]
             optional_present_for_domain = [raw_path for raw_path, is_present in optional_status.items() if is_present]
             optional_missing.extend(optional_missing_for_domain)
             skill_path = str(route.get("skill_path") or "")
@@ -170,7 +180,9 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                     *[f"- missing locally: {item}" for item in optional_missing_for_domain],
                 ]
                 if optional_missing_for_domain:
-                    optional_runtime_lines.append("Current private facts are unavailable until these local runtime files exist.")
+                    optional_runtime_lines.append(
+                        "Current private facts are unavailable until these local runtime files exist."
+                    )
             route_content = "\n".join(
                 [
                     f"Domain: {domain}",
@@ -267,24 +279,21 @@ def probe_knowledge_base(
     store: ManagerMemoryStore | None,
     query: str,
     *,
+    intent: str | None = None,
     limit: int = 5,
 ) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     memory.initialize()
     limit = max(1, min(limit, 20))
     query = (query or "").strip()
-    if _route_card_count(memory) == 0:
+    route_definitions = (_load_knowledge_map().get("domains") or {}) if KNOWLEDGE_MAP_PATH.exists() else {}
+    if _route_card_count(memory) != len(route_definitions):
         sync_knowledge_base(memory)
 
     tokens = _tokens(query)
-    command_route = find_command_route(query)
+    semantics = classify_query(query)
+    command_route = find_command_route(query, intent=intent)
     domain_hints = _domain_hints(query)
-    route_definitions = (_load_knowledge_map().get("domains") or {}) if KNOWLEDGE_MAP_PATH.exists() else {}
-    if command_route:
-        domain_hints[str(command_route.get("domain") or "")] = max(
-            domain_hints.get(str(command_route.get("domain") or ""), 0),
-            int(command_route.get("score") or 0),
-        )
     with memory.connect() as conn:
         rows = conn.execute(
             """
@@ -320,9 +329,15 @@ def probe_knowledge_base(
     for row in rows:
         item = dict(row)
         item["annotation_text"] = "\n".join(
-            str(annotation.get("search_text") or "") for annotation in annotations_by_domain.get(str(item["domain"]), [])
+            str(annotation.get("search_text") or "")
+            for annotation in annotations_by_domain.get(str(item["domain"]), [])
         )
-        score, matching_terms = _score_route_card(item, tokens, query, domain_hints=domain_hints)
+        lexical_score, matching_terms = _score_route_card(item, tokens, query, domain_hints=domain_hints)
+        assessment = assess_domain(str(item["domain"]), semantics)
+        command_match = bool(command_route and item["domain"] == command_route.get("domain"))
+        command_kind = str((command_route or {}).get("match_kind") or "")
+        command_exact = bool(command_match and command_kind in {"exact_alias", "explicit_intent"})
+        score = lexical_score + assessment.score + (120 if command_exact else 55 if command_match else 0)
         if tokens and score <= 0:
             continue
         source_of_truth = json.loads(item["source_of_truth_json"] or "[]")
@@ -338,7 +353,12 @@ def probe_knowledge_base(
             "domain": item["domain"],
             "title": item["title"],
             "score": score,
-            "confidence": _confidence(score),
+            "confidence": 0.0,
+            "lexical_score": lexical_score,
+            "semantic_score": assessment.score,
+            "semantic_evidence": list(assessment.evidence),
+            "negative_evidence": list(assessment.negative_evidence),
+            "applicable": assessment.applicable or command_exact,
             "matching_terms": matching_terms,
             "open_first": open_first,
             "source_of_truth": source_of_truth,
@@ -355,17 +375,102 @@ def probe_knowledge_base(
         }
         routes.append(route)
 
-    routes.sort(key=lambda value: (value["score"], len(value["matching_terms"])), reverse=True)
+    command_is_exact = bool(command_route and command_route.get("match_kind") in {"exact_alias", "explicit_intent"})
+    has_viable_candidate = command_is_exact or (
+        len(tokens) >= 2
+        and any(
+            route.get("applicable")
+            and int(route["score"]) >= 24
+            and (
+                len(route.get("semantic_evidence") or []) >= 2
+                or specific_term_count(route.get("matching_terms") or []) >= 2
+            )
+            for route in routes
+        )
+    )
+    if not has_viable_candidate:
+        highest_score = max((int(route["score"]) for route in routes), default=0)
+        fallback_route = next((route for route in routes if route["domain"] == "project_maintenance"), None)
+        if fallback_route is None:
+            fallback_route = _fallback_project_route(rows, route_definitions)
+            if fallback_route:
+                routes.append(fallback_route)
+        if fallback_route:
+            fallback_route["score"] = max(0, highest_score) + 1
+            fallback_route["applicable"] = True
+            fallback_route["negative_evidence"] = list(
+                dict.fromkeys([*(fallback_route.get("negative_evidence") or []), "safe_general_fallback"])
+            )
+
+    routes.sort(
+        key=lambda value: (
+            bool(value.get("applicable")),
+            value["score"],
+            len(value["semantic_evidence"]),
+            len(value["matching_terms"]),
+        ),
+        reverse=True,
+    )
     routes = routes[:limit]
     best = routes[0] if routes else None
-    confidence = float(best["confidence"]) if best else 0.0
-    has_knowledge = bool(best and best["score"] >= 12 and confidence >= 0.45)
+    second_score = int(routes[1]["score"]) if len(routes) > 1 else 0
+    margin = int(best["score"]) - second_score if best else 0
+    exact_command = command_is_exact
+    is_fallback = bool(best and "safe_general_fallback" in (best.get("negative_evidence") or []))
+    evidence_count = 0
+    if best:
+        evidence_count = len(best.get("semantic_evidence") or []) + min(
+            3,
+            specific_term_count(best.get("matching_terms") or []),
+        )
+        if len(tokens) < 2 and not exact_command:
+            evidence_count = min(evidence_count, 1)
+    confidence = route_confidence(
+        score=int(best["score"]) if best else 0,
+        margin=margin,
+        evidence_count=evidence_count,
+        exact_command=exact_command,
+        fallback=is_fallback,
+    )
+    if best:
+        best["confidence"] = confidence
+    has_knowledge = bool(
+        best
+        and best.get("applicable")
+        and int(best["score"]) >= 24
+        and confidence >= 0.55
+        and (exact_command or margin >= MIN_ROUTE_MARGIN)
+    )
+    mixed_mutation = semantics.access_mode in {"write", "mixed"} and {"crm", "gmail"}.issubset(semantics.objects)
+    if mixed_mutation:
+        ambiguous_candidates = [
+            route["domain"]
+            for route in routes[:5]
+            if route["domain"] in {"gmail_operations", "service_management", "board_cleanup_autopilot"}
+        ]
+    elif best and len(routes) > 1 and not exact_command and not is_fallback and margin < MIN_ROUTE_MARGIN:
+        ambiguous_candidates = [
+            route["domain"] for route in routes[:3] if int(best["score"]) - int(route["score"]) < MIN_ROUTE_MARGIN
+        ]
+    else:
+        ambiguous_candidates = []
+    if mixed_mutation:
+        has_knowledge = False
+    if ambiguous_candidates:
+        confidence = min(confidence, 0.49)
+        if best:
+            best["confidence"] = confidence
+    route_status = "matched" if has_knowledge else "ambiguous" if ambiguous_candidates else "fallback"
 
     return {
         "ok": True,
         "query": query,
         "has_knowledge": has_knowledge,
         "confidence": confidence,
+        "route_status": route_status,
+        "route_margin": margin,
+        "ambiguous_candidates": ambiguous_candidates,
+        "semantics": semantics.as_dict(),
         "best_domain": best["domain"] if best else None,
         "open_first": best["open_first"] if best else None,
         "source_of_truth": best["source_of_truth"] if best else [],
@@ -380,6 +485,40 @@ def probe_knowledge_base(
         "next_action": "open_source_of_truth" if has_knowledge else "route_external_sources",
         "needs_broad_search": not has_knowledge,
         "probed_at": _now(),
+    }
+
+
+def _fallback_project_route(rows: list[Any], route_definitions: dict[str, Any]) -> dict[str, Any] | None:
+    row = next((dict(item) for item in rows if str(item["domain"]) == "project_maintenance"), None)
+    if row is None:
+        return None
+    source_of_truth = json.loads(row["source_of_truth_json"] or "[]")
+    primary_files = json.loads(row["primary_files_json"] or "[]")
+    reference_files = json.loads(row["reference_files_json"] or "[]")
+    runtime_status = _optional_runtime_status(route_definitions.get("project_maintenance", {}))
+    return {
+        "domain": "project_maintenance",
+        "title": row["title"],
+        "score": 0,
+        "confidence": 0.2,
+        "lexical_score": 0,
+        "semantic_score": 0,
+        "semantic_evidence": [],
+        "negative_evidence": ["safe_general_fallback"],
+        "applicable": True,
+        "matching_terms": [],
+        "open_first": (source_of_truth or primary_files or ["README.md"])[0],
+        "source_of_truth": source_of_truth,
+        "primary_files": primary_files,
+        "reference_files": reference_files,
+        "optional_runtime_files": runtime_status["files"],
+        "optional_available_files": runtime_status["available_files"],
+        "optional_missing_files": runtime_status["missing_files"],
+        "optional_runtime_available": runtime_status["all_available"],
+        "optional_runtime_note": runtime_status["note"],
+        "required_context": json.loads(row["required_context_json"] or "[]"),
+        "use_when": json.loads(row["use_when_json"] or "[]"),
+        "indexed_at": row["indexed_at"],
     }
 
 
@@ -452,11 +591,21 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
                 optional_missing_files.append(raw_path)
 
     with memory.connect() as conn:
-        route_cards_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0)
-        documents_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()["count"] or 0)
-        sections_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections").fetchone()["count"] or 0)
-        sections_fts_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()["count"] or 0)
-        annotations_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()["count"] or 0)
+        route_cards_indexed = int(
+            conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0
+        )
+        documents_indexed = int(
+            conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()["count"] or 0
+        )
+        sections_indexed = int(
+            conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections").fetchone()["count"] or 0
+        )
+        sections_fts_indexed = int(
+            conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()["count"] or 0
+        )
+        annotations_indexed = int(
+            conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()["count"] or 0
+        )
         annotations_fts_indexed = int(
             conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations_fts").fetchone()["count"] or 0
         )
@@ -514,7 +663,9 @@ def audit_knowledge_annotations(store: ManagerMemoryStore | None = None) -> dict
         sync_knowledge_base(memory)
 
     payload = _load_knowledge_map()
-    domains = set((payload.get("domains") or {}).keys())
+    domain_definitions = payload.get("domains") or {}
+    all_domains = set(domain_definitions)
+    domains = {domain for domain, route in domain_definitions.items() if not bool(route.get("annotation_optional"))}
     with memory.connect() as conn:
         rows = conn.execute(
             """
@@ -526,7 +677,7 @@ def audit_knowledge_annotations(store: ManagerMemoryStore | None = None) -> dict
         ).fetchall()
     by_domain = {str(row["domain"]): int(row["count"] or 0) for row in rows}
     missing_domains = sorted(domain for domain in domains if by_domain.get(domain, 0) == 0)
-    unknown_domains = sorted(domain for domain in by_domain if domain not in domains)
+    unknown_domains = sorted(domain for domain in by_domain if domain not in all_domains)
     warnings: list[str] = []
     if missing_domains:
         warnings.append("some knowledge_map domains have no compact annotation")
@@ -623,11 +774,7 @@ def search_knowledge_base(
     ranked.sort(
         key=lambda value: (
             value["score"],
-            2
-            if value["document_type"] == "domain_route"
-            else 1
-            if value["document_type"] == "annotation"
-            else 0,
+            2 if value["document_type"] == "domain_route" else 1 if value["document_type"] == "annotation" else 0,
         ),
         reverse=True,
     )
@@ -843,43 +990,75 @@ def _load_command_routes() -> dict[str, Any]:
         return {"routes": []}
     return {
         **payload,
-        "routes": [_normalize_list_fields(route, _COMMAND_ROUTE_LIST_FIELDS) for route in routes if isinstance(route, dict)],
+        "routes": [
+            _normalize_list_fields(route, _COMMAND_ROUTE_LIST_FIELDS) for route in routes if isinstance(route, dict)
+        ],
     }
 
 
 def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
-    lowered = (query or "").casefold()
-    normalized_intent = (intent or "").casefold()
-    best: dict[str, Any] | None = None
-    best_score = 0
+    lowered = " ".join((query or "").casefold().replace("ё", "е").split())
+    normalized_intent = " ".join((intent or "").casefold().split())
+    semantics = classify_query(query)
+    candidates: list[dict[str, Any]] = []
     for raw_route in _load_command_routes().get("routes", []):
         route = dict(raw_route)
         score = 0
         matching_terms: list[str] = []
+        match_kind = "semantic_keywords"
         if normalized_intent and normalized_intent == str(route.get("intent") or "").casefold():
-            score += 40
+            score += 140
             matching_terms.append(str(route.get("intent")))
+            match_kind = "explicit_intent"
         for alias in _string_list(route.get("aliases")):
-            text = str(alias).casefold()
+            text = " ".join(str(alias).casefold().replace("ё", "е").split())
             if not text:
                 continue
             if lowered == text:
-                score += 100
+                score += 160
                 matching_terms.append(str(alias))
-            elif text in lowered:
-                score += 70
+                match_kind = "exact_alias"
+            elif len(text) >= 8 and phrase_present(lowered, text):
+                score += 58
                 matching_terms.append(str(alias))
         for keyword in _string_list(route.get("keywords")):
-            text = str(keyword).casefold()
-            if text and text in lowered:
-                score += 15
+            text = " ".join(str(keyword).casefold().replace("ё", "е").split())
+            if text and phrase_present(lowered, text):
+                score += 10 if " " in text else 6
                 matching_terms.append(str(keyword))
-        if score > best_score:
-            route["score"] = score
-            route["matching_terms"] = list(dict.fromkeys(matching_terms))
-            best = route
-            best_score = score
-    return best if best_score >= 30 else None
+        assessment = assess_domain(str(route.get("domain") or ""), semantics)
+        exact = match_kind in {"exact_alias", "explicit_intent"}
+        if semantics.broad_project_request and not exact and route.get("domain") != "project_maintenance":
+            continue
+        if not assessment.applicable and not exact:
+            continue
+        score += assessment.score
+        route["score"] = score
+        route["matching_terms"] = list(dict.fromkeys(matching_terms))
+        route["match_kind"] = match_kind
+        route["semantic_evidence"] = list(assessment.evidence)
+        route["negative_evidence"] = list(assessment.negative_evidence)
+        route["access_mode"] = semantics.access_mode
+        route["risk_level"] = semantics.risk_level
+        candidates.append(route)
+
+    candidates.sort(key=lambda item: int(item.get("score") or 0), reverse=True)
+    if not candidates:
+        return None
+    best = candidates[0]
+    second_score = int(candidates[1].get("score") or 0) if len(candidates) > 1 else 0
+    margin = int(best.get("score") or 0) - second_score
+    exact = best.get("match_kind") in {"exact_alias", "explicit_intent"}
+    if not exact and (int(best.get("score") or 0) < 48 or margin < MIN_ROUTE_MARGIN):
+        return None
+    best["confidence"] = route_confidence(
+        score=int(best["score"]),
+        margin=margin,
+        evidence_count=len(best.get("semantic_evidence") or []) + min(2, specific_term_count(best["matching_terms"])),
+        exact_command=exact,
+    )
+    best["route_margin"] = margin
+    return best
 
 
 def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
@@ -965,7 +1144,9 @@ def _optional_runtime_status(route: dict[str, Any]) -> dict[str, Any]:
 
     note = ""
     if files and missing_files:
-        note = "optional runtime files are missing; exact private facts are unavailable until local runtime files exist."
+        note = (
+            "optional runtime files are missing; exact private facts are unavailable until local runtime files exist."
+        )
     elif files:
         note = "optional runtime files are available locally."
 
@@ -1593,7 +1774,10 @@ def _domain_hints(query: str) -> dict[str, int]:
     if (
         any(word in lowered for word in identifier_terms)
         and any(word in lowered for word in part_terms)
-        and (any(word in lowered for word in crm_vin_terms) or any(word in lowered for word in ["закуп", "цена", "аналог", "кросс"]))
+        and (
+            any(word in lowered for word in crm_vin_terms)
+            or any(word in lowered for word in ["закуп", "цена", "аналог", "кросс"])
+        )
     ):
         hints["crm_vin_oem_parts_lookup"] = max(hints.get("crm_vin_oem_parts_lookup", 0), 34)
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 12)
@@ -1644,14 +1828,15 @@ def _score_route_card(
     aliases = " ".join(json.loads(item.get("aliases_json") or "[]")).lower()
     keywords = " ".join(json.loads(item.get("keywords_json") or "[]")).lower()
     source_paths = " ".join(json.loads(item.get("source_of_truth_json") or "[]")).lower()
-    score = domain_hints.get(domain, 0)
+    score = min(domain_hints.get(domain, 0), 55)
     matching_terms: list[str] = []
     lowered_query = query.lower()
 
-    if lowered_query and lowered_query in haystack:
-        score += 30
+    if len(tokens) >= 2 and lowered_query and lowered_query in haystack:
+        score += 24
         matching_terms.append(lowered_query)
 
+    token_total = 0
     for token in tokens:
         token_score = 0
         if token in domain:
@@ -1670,16 +1855,12 @@ def _score_route_card(
         if occurrences:
             token_score += min(occurrences, 4)
         if token_score:
-            score += token_score
+            token_total += min(token_score, 10)
             matching_terms.append(token)
 
+    score += min(token_total, 40)
+
     return score, list(dict.fromkeys(matching_terms))[:12]
-
-
-def _confidence(score: int) -> float:
-    if score <= 0:
-        return 0.0
-    return round(min(0.99, score / 35), 2)
 
 
 def _score(item: dict[str, Any], tokens: list[str], query: str, *, domain_hints: dict[str, int]) -> int:

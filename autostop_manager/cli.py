@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,8 @@ from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
+from .web_page_readiness import build_web_page_readiness
+from .web_search_readiness import build_web_search_readiness
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_oem_resolver import resolve_vin_oem_parts
@@ -77,9 +81,24 @@ def _print_text(payload: str) -> None:
 def _write_output(raw_path: str | None, payload: str) -> None:
     if not raw_path:
         return
-    path = Path(raw_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(payload, encoding="utf-8")
+    requested = Path(raw_path).expanduser()
+    requested.parent.mkdir(parents=True, exist_ok=True)
+    if requested.is_symlink():
+        raise ValueError("output path must not be a symbolic link")
+    path = requested.parent.resolve() / requested.name
+    if path.exists() and not path.is_file():
+        raise ValueError("output path must be a regular file")
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _json_object(raw: str | None) -> dict[str, Any]:
@@ -147,7 +166,9 @@ def build_parser() -> argparse.ArgumentParser:
     recall = sub.add_parser("recall", help="Search manager memory")
     recall.add_argument("query", nargs="?", default="")
     recall.add_argument("--limit", type=int, default=20)
-    recall.add_argument("--kind", choices=["note", "fact", "lesson", "task", "reminder", "journal", "rule"], default=None)
+    recall.add_argument(
+        "--kind", choices=["note", "fact", "lesson", "task", "reminder", "journal", "rule"], default=None
+    )
     recall.add_argument("--category", default=None)
     recall.add_argument("--tags", default="")
 
@@ -269,7 +290,9 @@ def build_parser() -> argparse.ArgumentParser:
     vehicle_identities.add_argument("--no-live-vpic", action="store_true")
     vehicle_identities.add_argument("--no-vpic-batch", action="store_true")
 
-    catalog_status = sub.add_parser("catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness")
+    catalog_status = sub.add_parser(
+        "catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness"
+    )
     catalog_status.add_argument("--stage", default=None)
 
     provider_smoke = sub.add_parser(
@@ -278,6 +301,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
+
+    web_search = sub.add_parser(
+        "web-search-readiness",
+        help="Check public web-search provider readiness without exposing API keys",
+    )
+    web_search.add_argument(
+        "--provider",
+        default="all",
+        choices=["all", "searxng", "marginalia", "brave", "tavily", "google_cse", "duckduckgo"],
+    )
+    web_search.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
+    web_search.add_argument("--query", default="AutoStop web search readiness")
+
+    web_page = sub.add_parser(
+        "web-page-readiness",
+        help="Check public web-page extractor readiness without exposing bearer tokens",
+    )
+    web_page.add_argument("--provider", default="all", choices=["all", "crawl4ai"])
+    web_page.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
+    web_page.add_argument("--url", default="https://example.com/")
 
     oem_parts_provider_plan = sub.add_parser(
         "oem-parts-provider-plan",
@@ -372,7 +415,11 @@ def build_parser() -> argparse.ArgumentParser:
         "public-catalog-lookup",
         help="Call public aftermarket catalogs such as MANN-FILTER and DENSO by part/OE number",
     )
-    public_catalog.add_argument("--provider", required=True, choices=["mann_filter_catalog", "denso_aftermarket_catalog", "mann", "denso", "all"])
+    public_catalog.add_argument(
+        "--provider",
+        required=True,
+        choices=["mann_filter_catalog", "denso_aftermarket_catalog", "mann", "denso", "all"],
+    )
     public_catalog.add_argument("--part-number", required=True)
     public_catalog.add_argument("--page-size", type=int, default=5)
     public_catalog.add_argument("--country", default="europe")
@@ -676,7 +723,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("memory-review", help="Generate rule-based, non-destructive memory review proposals")
 
-    memory_review_apply = sub.add_parser("memory-review-apply", help="Accept, reject, or archive duplicate memory review items")
+    memory_review_apply = sub.add_parser(
+        "memory-review-apply", help="Accept, reject, or archive duplicate memory review items"
+    )
     memory_review_apply.add_argument("--id", required=True)
     memory_review_apply.add_argument("--action", required=True, choices=["accept", "reject", "archive_duplicate"])
 
@@ -936,11 +985,17 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(items, list):
             message = "--items-json must be a JSON array"
             raise SystemExit(message)
-        _print_json(decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch))
+        _print_json(
+            decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch)
+        )
     elif args.command == "catalog-status":
         _print_json(catalog_provider_status(stage=args.stage))
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
+    elif args.command == "web-search-readiness":
+        _print_json(build_web_search_readiness(provider=args.provider, mode=args.mode, query=args.query))
+    elif args.command == "web-page-readiness":
+        _print_json(build_web_page_readiness(provider=args.provider, mode=args.mode, url=args.url))
     elif args.command == "oem-parts-provider-plan":
         identity = _json_dict_arg(args.vehicle_identity_json, option_name="--vehicle-identity-json")
         _print_json(
@@ -995,7 +1050,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.category_index_command == "search":
-            _print_json(search_partsapi_category_index(args.query, intent_id=args.intent_id, path=args.path, limit=args.limit))
+            _print_json(
+                search_partsapi_category_index(args.query, intent_id=args.intent_id, path=args.path, limit=args.limit)
+            )
         elif args.category_index_command == "explain":
             _print_json(explain_partsapi_category_for_intent(args.intent_id, query=args.query, path=args.path))
         elif args.category_index_command == "validate":
@@ -1063,26 +1120,31 @@ def main(argv: list[str] | None = None) -> int:
         if args.repair_orders_json:
             raw_orders = _json_value(args.repair_orders_json, option_name="--repair-orders-json")
             if isinstance(raw_orders, dict):
-                raw_orders = ((raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or [])
+                raw_orders = (
+                    (raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or []
+                )
             if not isinstance(raw_orders, list):
                 message = "--repair-orders-json must be a JSON array or connector response object"
                 raise SystemExit(message)
-            selected = select_crm_partsapi_smoke_case(raw_orders, random_seed=args.random_seed, include_raw_identifier=True)
+            selected = select_crm_partsapi_smoke_case(
+                raw_orders, random_seed=args.random_seed, include_raw_identifier=True
+            )
             if not selected.get("ok"):
                 _print_json(selected)
                 return 0
             selected_item = selected["selected"]
-            item = {
+            item: dict[str, Any] = {
                 key: value
                 for key, value in selected_item.items()
                 if key not in {"identifier", "raw_identifier", "raw_identifier_is_sensitive"}
             }
             item["identifier"] = selected_item.get("raw_identifier")
         elif args.item_json:
-            item = _json_dict_arg(args.item_json, option_name="--item-json")
-            if not isinstance(item, dict):
+            parsed_item = _json_dict_arg(args.item_json, option_name="--item-json")
+            if not isinstance(parsed_item, dict):
                 message = "--item-json must be a JSON object"
                 raise SystemExit(message)
+            item = parsed_item
         else:
             item = {
                 "identifier": args.identifier,

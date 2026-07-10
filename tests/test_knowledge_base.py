@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 import autostop_manager.knowledge_base as kb
-from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from autostop_manager.knowledge_base import (
+    audit_knowledge_base,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
 from autostop_manager.storage import ManagerMemoryStore
 
 
@@ -270,7 +275,9 @@ def test_search_finds_ecu_programming_pack_kombi_content(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = search_knowledge_base(store, "KOMBI coding комбинация приборов", domain="ecu_calibration_programming", limit=5)
+    result = search_knowledge_base(
+        store, "KOMBI coding комбинация приборов", domain="ecu_calibration_programming", limit=5
+    )
 
     assert result["ok"] is True
     assert result["items"]
@@ -448,8 +455,10 @@ def test_search_finds_ai_parts_playbook_for_local_vendor_scoring(tmp_path):
     )
 
     assert result["ok"] is True
-    assert any("ai_parts_krasnoyarsk_playbook.md" in item["path"] for item in result["items"])
-    assert not any("/docs/" in item["path"] and "ai_parts_krasnoyarsk_project_pack" in item["path"] for item in result["items"])
+    assert any("parts_search_playbook.md" in item["path"] for item in result["items"])
+    assert not any(
+        "/docs/" in item["path"] and "ai_parts_krasnoyarsk_project_pack" in item["path"] for item in result["items"]
+    )
 
 
 def test_probe_returns_low_confidence_for_unknown_vehicle_corpus(tmp_path):
@@ -504,7 +513,9 @@ def test_parts_sourcing_pack_keeps_compact_manifest_without_draft_noise(tmp_path
     assert audit["missing_files"] == []
     assert probe["best_domain"] == "parts_sourcing"
     assert any(item.endswith("MANIFEST.md") for item in probe["source_of_truth"])
-    assert not any("openapi" in item["path"].lower() or "code_skeleton" in item["path"].lower() for item in result["items"])
+    assert not any(
+        "openapi" in item["path"].lower() or "code_skeleton" in item["path"].lower() for item in result["items"]
+    )
 
 
 def test_bmw_compacted_pack_keeps_fault_examples_searchable(tmp_path):
@@ -527,8 +538,12 @@ def test_ecu_reference_glossary_stays_linked_without_hiding_format_docs(tmp_path
     sync_knowledge_base(store)
 
     probe = probe_knowledge_base(store, "A2L ODX DCM glossary ECU")
-    glossary_result = search_knowledge_base(store, "glossary_ecu_programming", domain="ecu_calibration_programming", limit=20)
-    format_result = search_knowledge_base(store, "A2L DCM ODX calibration format", domain="ecu_calibration_programming", limit=10)
+    glossary_result = search_knowledge_base(
+        store, "glossary_ecu_programming", domain="ecu_calibration_programming", limit=20
+    )
+    format_result = search_knowledge_base(
+        store, "A2L DCM ODX calibration format", domain="ecu_calibration_programming", limit=10
+    )
 
     assert probe["best_domain"] == "ecu_calibration_programming"
     assert any(item.endswith("glossary_ecu_programming.jsonl") for item in probe["reference_files"])

@@ -24,12 +24,12 @@ def test_prepare_manager_context_combines_rules_memory_and_knowledge_route(tmp_p
     assert result["command_route"]["command_id"] == "board_cleanup_autopilot"
     assert result["knowledge"]["best_domain"] == "board_cleanup_autopilot"
     assert result["knowledge"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
-    assert any(item["kind"] == "rule" and item["title"] == "board-cleanup-no-card-movement" for item in result["relevant_memory"])
-    assert any(item["kind"] == "fact" and item["category"] == "owner_preference" for item in result["relevant_memory"])
-    assert (
-        "read live CRM board state with bootstrap_context and manager_board_scan"
-        in result["next_actions"]
+    assert any(
+        item["kind"] == "rule" and item["title"] == "board-cleanup-no-card-movement"
+        for item in result["relevant_memory"]
     )
+    assert any(item["kind"] == "fact" and item["category"] == "owner_preference" for item in result["relevant_memory"])
+    assert "read live CRM board state with bootstrap_context and manager_board_scan" in result["next_actions"]
     assert any("cleanup_card dry_run/apply" in action for action in result["next_actions"])
 
 
@@ -142,8 +142,7 @@ def test_prepare_context_uses_focused_memory_for_vin_oem_parts_lookup(tmp_path):
 
     assert result["knowledge"]["best_domain"] == "crm_vin_oem_parts_lookup"
     context_text = "\n".join(
-        str(item.get("title") or item.get("content") or item.get("rule") or "")
-        for item in result["relevant_memory"]
+        str(item.get("title") or item.get("content") or item.get("rule") or "") for item in result["relevant_memory"]
     ).casefold()
     assert "vin-oem-lookup-workflow" in context_text
     assert "board-cleanup" not in context_text

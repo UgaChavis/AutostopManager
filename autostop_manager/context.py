@@ -9,7 +9,12 @@ from .storage import ManagerMemoryStore
 DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
     "bmw_f15_n63": ["VIN or chassis", "production date", "market", "BMW fault memory with module names"],
     "service_management": ["live CRM board state"],
-    "crm_vin_oem_parts_lookup": ["live CRM card id", "VIN or frame/body number", "requested part", "repair-order target if materials will be written"],
+    "crm_vin_oem_parts_lookup": [
+        "live CRM card id",
+        "VIN or frame/body number",
+        "requested part",
+        "repair-order target if materials will be written",
+    ],
     "vehicle_identity_and_oem": ["VIN or chassis"],
     "fluids": ["VIN or chassis", "market", "engine code", "transmission code", "exact unit"],
 }
@@ -153,6 +158,22 @@ def _unique_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _memory_item_matches_domain(item: dict[str, Any], domain: str | None) -> bool:
+    if domain != "crm_vin_oem_parts_lookup":
+        return True
+    category = str(item.get("category") or "").casefold()
+    tags = {str(tag).casefold() for tag in item.get("tags") or []}
+    title = str(item.get("title") or "").casefold()
+    return not (
+        category in {"board_cleanup", "crm_style"}
+        or tags & {"board-cleanup", "board_cleanup"}
+        or "приберись" in title
+        or "board-cleanup" in title
+        or "board_cleanup" in title
+        or title.startswith("fluid-")
+    )
+
+
 def _query_has_context(query: str, context_name: str) -> bool:
     lowered = query.casefold()
     name = context_name.casefold()
@@ -212,16 +233,11 @@ def prepare_manager_context(
     query = (query or "").strip()
     limit = max(1, min(limit, 50))
 
-    command_route = find_command_route(query, intent=intent)
-    knowledge = probe_knowledge_base(memory, query, limit=limit)
+    knowledge = probe_knowledge_base(memory, query, intent=intent, limit=limit)
+    command_route = knowledge.get("command_route") or find_command_route(query, intent=intent)
     recall_queries: list[str] = []
     if command_route:
         recall_queries.extend(command_route.get("memory_queries", []))
-        # Command routes are owner-intent level and should override broad domain open order.
-        knowledge["best_domain"] = command_route.get("domain") or knowledge.get("best_domain")
-        knowledge["open_first"] = command_route.get("open_first") or knowledge.get("open_first")
-        knowledge["has_knowledge"] = True
-        knowledge["command_route"] = command_route
     if intent:
         recall_queries.append(intent)
 
@@ -232,7 +248,11 @@ def prepare_manager_context(
     ]
     for recall_query in dict.fromkeys(item for item in recall_queries if item):
         relevant.extend(memory.recall(recall_query, limit=limit).get("items", []))
-    relevant = _unique_items(relevant)[:limit]
+    relevant = [
+        item
+        for item in _unique_items(relevant)
+        if _memory_item_matches_domain(item, str(knowledge.get("best_domain") or ""))
+    ][:limit]
 
     required_context = []
     for route in knowledge.get("routes", []):
@@ -253,6 +273,10 @@ def prepare_manager_context(
             "best_domain": knowledge.get("best_domain"),
             "open_first": knowledge.get("open_first"),
             "confidence": knowledge.get("confidence"),
+            "route_status": knowledge.get("route_status"),
+            "route_margin": knowledge.get("route_margin"),
+            "ambiguous_candidates": knowledge.get("ambiguous_candidates", []),
+            "semantics": knowledge.get("semantics", {}),
             "source_of_truth": knowledge.get("source_of_truth", []),
             "reference_files": knowledge.get("reference_files", []),
             "optional_runtime_files": knowledge.get("optional_runtime_files", []),

@@ -15,7 +15,9 @@ def test_cli_parser_has_core_commands():
     assert args.kind == "fact"
     assert args.confidence == 0.7
 
-    args = parser.parse_args(["recall", "живой стиль", "--kind", "fact", "--category", "style", "--tags", "карточки,стиль"])
+    args = parser.parse_args(
+        ["recall", "живой стиль", "--kind", "fact", "--category", "style", "--tags", "карточки,стиль"]
+    )
     assert args.command == "recall"
     assert args.kind == "fact"
     assert args.category == "style"
@@ -61,6 +63,21 @@ def test_cli_parser_has_core_commands():
     assert args.command == "provider-smoke"
     assert args.provider == "all"
     assert args.mode == "dry-run"
+
+    args = parser.parse_args(["web-search-readiness", "--provider", "brave", "--mode", "dry-run"])
+    assert args.command == "web-search-readiness"
+    assert args.provider == "brave"
+    assert args.mode == "dry-run"
+
+    args = parser.parse_args(["web-search-readiness", "--provider", "searxng", "--mode", "live-readonly"])
+    assert args.command == "web-search-readiness"
+    assert args.provider == "searxng"
+    assert args.mode == "live-readonly"
+
+    args = parser.parse_args(["web-page-readiness", "--provider", "crawl4ai", "--mode", "live-readonly"])
+    assert args.command == "web-page-readiness"
+    assert args.provider == "crawl4ai"
+    assert args.mode == "live-readonly"
 
     args = parser.parse_args(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки"])
     assert args.command == "oem-parts-provider-plan"
@@ -165,7 +182,9 @@ def test_cli_parser_has_core_commands():
     assert args.command == "partsapi-lookup"
     assert args.operation == "search_tree"
 
-    args = parser.parse_args(["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"])
+    args = parser.parse_args(
+        ["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"]
+    )
     assert args.command == "partsapi-category-index"
     assert args.category_index_command == "explain"
     assert args.intent_id == "front_brake_pads"
@@ -637,3 +656,26 @@ def test_cli_rejects_invalid_json_file_input(tmp_path):
 def test_cli_rejects_invalid_vehicle_identity_json():
     with pytest.raises(SystemExit, match="--vehicle-identity-json"):
         cli.main(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки", "--vehicle-identity-json", "[]"])
+
+
+def test_cli_output_write_is_atomic_and_private(tmp_path):
+    target = tmp_path / "nested" / "report.json"
+
+    cli._write_output(str(target), '{"ok": true}\n')
+    cli._write_output(str(target), '{"ok": false}\n')
+
+    assert target.read_text(encoding="utf-8") == '{"ok": false}\n'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert not list(target.parent.glob("*.tmp"))
+
+
+def test_cli_output_rejects_symbolic_link_target(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text("original", encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        cli._write_output(str(link), "replacement")
+
+    assert real.read_text(encoding="utf-8") == "original"

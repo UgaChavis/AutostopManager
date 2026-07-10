@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export NUMBA_DISABLE_JIT="${NUMBA_DISABLE_JIT:-1}"
+exec /opt/AutostopManager/.venv/bin/python /opt/AutostopManager/scripts/cortex_image_tool.py "$@"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import ipaddress
 from pathlib import Path
 
 
@@ -58,7 +59,19 @@ def get_db_path() -> Path:
 
 
 def get_mcp_host() -> str:
-    return os.environ.get("AUTOSTOP_MANAGER_MCP_HOST", "127.0.0.1")
+    host = os.environ.get("AUTOSTOP_MANAGER_MCP_HOST", "127.0.0.1").strip()
+    if host.casefold() == "localhost":
+        return host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError("AUTOSTOP_MANAGER_MCP_HOST must be a loopback IP address or localhost") from exc
+    if not address.is_loopback:
+        raise ValueError(
+            "AutoStop Manager MCP has no built-in authentication and must bind to loopback; "
+            "publish it only through an authenticated reverse proxy"
+        )
+    return host
 
 
 def get_mcp_port() -> int:

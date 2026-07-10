@@ -181,7 +181,12 @@ PLATFORM_RULES: tuple[PlatformRule, ...] = (
         "mercedes_gle_c292_wdc292",
         r"^WDC292",
         "vin_prefix",
-        {"make": "Mercedes-Benz", "model_family": "GLE Coupe / GLE-Class", "platform": "C292/W292", "market": "Europe/ROW"},
+        {
+            "make": "Mercedes-Benz",
+            "model_family": "GLE Coupe / GLE-Class",
+            "platform": "C292/W292",
+            "market": "Europe/ROW",
+        },
         "Mercedes-Benz WDC WMI plus 292 GLE Coupe/GLE family platform prefix; exact options need Mercedes EPC.",
         0.78,
     ),
@@ -221,7 +226,14 @@ PLATFORM_RULES: tuple[PlatformRule, ...] = (
         "jeep_wk2_overland_5_7",
         r"^1C4RJFCT",
         "vin_prefix",
-        {"make": "Jeep", "model": "Grand Cherokee", "platform": "WK2", "trim": "Overland", "engine": "5.7 V8 gasoline", "drivetrain": "4WD"},
+        {
+            "make": "Jeep",
+            "model": "Grand Cherokee",
+            "platform": "WK2",
+            "trim": "Overland",
+            "engine": "5.7 V8 gasoline",
+            "drivetrain": "4WD",
+        },
         "North-American VIN prefix and vPIC-clean pattern for WK2 Grand Cherokee Overland 5.7.",
         0.9,
     ),
@@ -253,7 +265,12 @@ PLATFORM_RULES: tuple[PlatformRule, ...] = (
         "mitsubishi_l200_mmcjjjkl",
         r"^MMCJJJKL",
         "vin_prefix",
-        {"make": "Mitsubishi", "model_family": "L200 / Triton", "engine": "4N15 2.4 diesel likely when CRM confirms", "market": "Asia/ROW"},
+        {
+            "make": "Mitsubishi",
+            "model_family": "L200 / Triton",
+            "engine": "4N15 2.4 diesel likely when CRM confirms",
+            "market": "Asia/ROW",
+        },
         "Mitsubishi MMC WMI plus L200/Triton-style prefix; exact trim needs Mitsubishi EPC.",
         0.7,
     ),
@@ -277,7 +294,13 @@ PLATFORM_RULES: tuple[PlatformRule, ...] = (
         "toyota_prado_150_jtebu3fj",
         r"^JTEBU3FJ",
         "vin_prefix",
-        {"make": "Toyota", "model": "Land Cruiser Prado 150", "engine": "1GR-FE 4.0 V6 gasoline", "drivetrain": "4WD", "market": "Japan/ROW"},
+        {
+            "make": "Toyota",
+            "model": "Land Cruiser Prado 150",
+            "engine": "1GR-FE 4.0 V6 gasoline",
+            "drivetrain": "4WD",
+            "market": "Japan/ROW",
+        },
         "Toyota JTE WMI plus Prado 150 1GR-FE prefix; exact production/options need Toyota EPC.",
         0.82,
     ),
@@ -285,11 +308,18 @@ PLATFORM_RULES: tuple[PlatformRule, ...] = (
         "toyota_prado_120_jtebu29j",
         r"^JTEBU29J",
         "vin_prefix",
-        {"make": "Toyota", "model": "Land Cruiser Prado 120", "engine": "1GR-FE 4.0 V6 gasoline", "drivetrain": "4WD", "market": "Japan/ROW"},
+        {
+            "make": "Toyota",
+            "model": "Land Cruiser Prado 120",
+            "engine": "1GR-FE 4.0 V6 gasoline",
+            "drivetrain": "4WD",
+            "market": "Japan/ROW",
+        },
         "Toyota JTE WMI plus Prado 120 1GR-FE prefix; exact production/options need Toyota EPC.",
         0.82,
     ),
 )
+
 
 def _compact(value: Any) -> str:
     return str(value or "").strip()
@@ -433,7 +463,9 @@ def _frame_query_hint(identifier: str) -> str | None:
     return f"{match.group(1)}-{match.group(2)}"
 
 
-def _merge_field(profile: dict[str, Any], evidence: list[dict[str, Any]], field: str, value: Any, source: str, confidence: float) -> None:
+def _merge_field(
+    profile: dict[str, Any], evidence: list[dict[str, Any]], field: str, value: Any, source: str, confidence: float
+) -> None:
     if value in (None, "", []):
         return
     key = field
@@ -500,7 +532,9 @@ def _uses_strict_north_american_vin(profile: dict[str, Any]) -> bool:
     )
 
 
-def _conflicts(profile: dict[str, Any], crm_context: dict[str, Any], diagnostics: dict[str, Any]) -> list[dict[str, Any]]:
+def _conflicts(
+    profile: dict[str, Any], crm_context: dict[str, Any], diagnostics: dict[str, Any]
+) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
     if crm_context.get("model_year") and diagnostics.get("model_year", {}).get("candidate_years"):
         years = diagnostics["model_year"]["candidate_years"]
@@ -508,7 +542,11 @@ def _conflicts(profile: dict[str, Any], crm_context: dict[str, Any], diagnostics
             crm_year = int(crm_context["model_year"])
         except (TypeError, ValueError):
             crm_year = None
-        if crm_year is not None and crm_year not in [int(year) for year in years] and _uses_strict_north_american_vin(profile):
+        if (
+            crm_year is not None
+            and crm_year not in [int(year) for year in years]
+            and _uses_strict_north_american_vin(profile)
+        ):
             conflicts.append(
                 {
                     "field": "model_year",
@@ -641,12 +679,21 @@ def decode_vehicle_identity(
             for source_field, target_field in field_map.items():
                 if source_field == "modelyear" and not vpic_clean:
                     continue
-                _merge_field(profile, field_evidence, target_field, vehicle.get(source_field), "NHTSA vPIC", vpic_field_confidence)
+                _merge_field(
+                    profile,
+                    field_evidence,
+                    target_field,
+                    vehicle.get(source_field),
+                    "NHTSA vPIC",
+                    vpic_field_confidence,
+                )
             evidence_sources.append(
                 {
                     "source": "NHTSA vPIC",
                     "status": "ok",
-                    "mode": "batch" if vpic_result.get("batch") else ("extended" if vpic_result.get("extended") else "single"),
+                    "mode": "batch"
+                    if vpic_result.get("batch")
+                    else ("extended" if vpic_result.get("extended") else "single"),
                     "decoded_fields": sorted(vehicle.keys()),
                     "error_code": vpic_result.get("error_code"),
                     "error_text": vpic_result.get("error_text"),
@@ -664,8 +711,10 @@ def decode_vehicle_identity(
 
     wmi_result: dict[str, Any] | None = None
     if live_wmi and classification.kind in {"vin", "vin_partial"} and wmi:
-        needs_wmi = not vpic_result or not (vpic_result.get("vehicle") or {}).get("make") or any(
-            _compact(source.get("source")) == "local WMI hints" for source in evidence_sources
+        needs_wmi = (
+            not vpic_result
+            or not (vpic_result.get("vehicle") or {}).get("make")
+            or any(_compact(source.get("source")) == "local WMI hints" for source in evidence_sources)
         )
         if needs_wmi:
             wmi_result = decode_wmi_vpic(wmi)
@@ -679,7 +728,9 @@ def decode_vehicle_identity(
                     "country": "plant_country",
                 }
                 for source_field, target_field in wmi_field_map.items():
-                    _merge_field(profile, field_evidence, target_field, profile_wmi.get(source_field), "NHTSA vPIC WMI", 0.6)
+                    _merge_field(
+                        profile, field_evidence, target_field, profile_wmi.get(source_field), "NHTSA vPIC WMI", 0.6
+                    )
                 evidence_sources.append(
                     {
                         "source": "NHTSA vPIC WMI",
@@ -690,7 +741,9 @@ def decode_vehicle_identity(
                     }
                 )
             else:
-                evidence_sources.append({"source": "NHTSA vPIC WMI", "status": "failed", "wmi": wmi, "error": wmi_result.get("error")})
+                evidence_sources.append(
+                    {"source": "NHTSA vPIC WMI", "status": "failed", "wmi": wmi, "error": wmi_result.get("error")}
+                )
 
     if diagnostics["frame_query_hint"]:
         warnings.append(f"Try frame query form {diagnostics['frame_query_hint']} in Japan/EPC catalogs.")
@@ -786,8 +839,10 @@ def decode_vehicle_identity(
     return _redact_identifier_payload(result, normalized)
 
 
-def decode_vehicle_identities(items: list[dict[str, Any]], *, live_vpic: bool = True, use_vpic_batch: bool = True) -> dict[str, Any]:
-    results = []
+def decode_vehicle_identities(
+    items: list[dict[str, Any]], *, live_vpic: bool = True, use_vpic_batch: bool = True
+) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
     prepared_items: list[tuple[dict[str, Any], dict[str, Any], str]] = []
     for item in items:
         context = _flatten_crm_context(item.get("crm_context") or item)
@@ -801,16 +856,21 @@ def decode_vehicle_identities(items: list[dict[str, Any]], *, live_vpic: bool = 
         )
         prepared_items.append((item, context, identifier))
 
-    batch_result = decode_vins_vpic_batch(
-        [
-            {
-                "identifier": identifier,
-                "model_year": item.get("model_year") or item.get("production_year") or context.get("model_year"),
-            }
-            for item, context, identifier in prepared_items
-        ]
-    ) if live_vpic and use_vpic_batch else {"ok": True, "results_by_vin": {}}
-    batch_by_vin = batch_result.get("results_by_vin") or {}
+    batch_result: dict[str, Any] = (
+        decode_vins_vpic_batch(
+            [
+                {
+                    "identifier": identifier,
+                    "model_year": item.get("model_year") or item.get("production_year") or context.get("model_year"),
+                }
+                for item, context, identifier in prepared_items
+            ]
+        )
+        if live_vpic and use_vpic_batch
+        else {"ok": True, "results_by_vin": {}}
+    )
+    raw_batch_by_vin = batch_result.get("results_by_vin")
+    batch_by_vin: dict[str, Any] = raw_batch_by_vin if isinstance(raw_batch_by_vin, dict) else {}
 
     for item, context, identifier in prepared_items:
         batch_vpic = batch_by_vin.get(str(identifier).upper().replace(" ", "").replace("-", ""))
@@ -852,12 +912,14 @@ def decode_vehicle_identities(items: list[dict[str, Any]], *, live_vpic: bool = 
         "configured_paid_sources": [
             source["source_id"]
             for source in catalog_provider_status()["providers"]
-            if source["configured"] and source["stage"] in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
+            if source["configured"]
+            and source["stage"] in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
         ],
         "missing_paid_sources": [
             source["source_id"]
             for source in catalog_provider_status()["providers"]
-            if not source["configured"] and source["stage"] in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
+            if not source["configured"]
+            and source["stage"] in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
         ],
         "results": results,
     }
