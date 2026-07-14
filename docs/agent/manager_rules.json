@@ -153,7 +153,7 @@
     {
       "id": "crm-card-action-session",
       "priority": 24,
-      "rule": "For card description or vehicle_profile edits orchestrated by AutoStopManager, use MCP prepare_crm_card_action before writing; for local runs or stale discovery sessions, run python -m autostop_manager.cli prepare-card-action locally. The operation must carry expected_updated_at, exact description text, vehicle_profile manual/autofilled/tentative/source metadata, optional board_summary, risk flags, and a reread verification spec before update_card/set_card_board_summary."
+      "rule": "For card description or vehicle_profile edits, read the exact target with agent_entity_context, build prepare_action_contract, and run agent_board_workflow operation cleanup_card in dry-run then apply mode. Carry expected_updated_at, exact description text, vehicle_profile metadata, optional board_summary, a unique idempotency key, and a reread verification spec."
     },
     {
       "id": "memory-curator",
@@ -188,7 +188,7 @@
     {
       "id": "crm-read-order",
       "priority": 30,
-      "rule": "For CRM orientation, start with get_connector_identity or get_runtime_status when tool availability is uncertain, then bootstrap_context or get_board_context; use search and focused card/client/order reads before heavy board exports."
+      "rule": "For CRM orientation, start with agent_bootstrap, then agent_board_digest; use agent_search and agent_entity_context before heavy board exports. Use get_connector_identity or get_runtime_status when connector availability or auth behavior is uncertain."
     },
     {
       "id": "automotive-do-not-invent",
@@ -293,7 +293,7 @@
     {
       "id": "gmail-write-safety",
       "priority": 36,
-      "rule": "Do not send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail unless the owner explicitly asks for that exact mailbox-changing action. Preview targets before bulk operations."
+      "rule": "Do not send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail unless the active workflow contains task-specific owner intent and the exact mailbox targets. Agent Gateway v2 adds no second confirmation state: preview targets, apply automatic preflight and idempotency, inspect the active connector schema, execute once, verify result refs, and never store raw bodies in manager SQLite."
     },
     {
       "id": "write-safety",

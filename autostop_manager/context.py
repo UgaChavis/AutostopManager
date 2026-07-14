@@ -92,8 +92,8 @@ BOARD_CLEANUP_VERIFICATION = [
 LONG_RUN_CONTEXT_SAFETY = {
     "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
     "rules": [
-        "Start start_manager_run before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, or knowledge-intake batches.",
-        "Record checkpoint events after scope selection, candidate filtering, each write batch, each skip batch, and each verification batch.",
+        "Start start_workflow for v2 work (or legacy start_manager_run) before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, CRM+Gmail work, or knowledge-intake batches.",
+        "Use workflow_checkpoint after scope selection, candidate filtering, each write/skip/verification batch, and before any external connector wait.",
         "Keep raw board snapshots, full card dumps, phone lists, VIN/license tables, and repair-order dumps out of chat; save full machine data to local private files only when needed and report compact counts.",
         "Prefer compact manager tools and focused get_card_context/get_repair_order reads over full-board Markdown or full JSON output.",
         "Process large CRM work in small verified batches and leave a resume point in the run ledger before continuing.",
@@ -107,6 +107,7 @@ LONG_RUN_CONTEXT_SAFETY = {
         "verification",
     ],
     "recovery": [
+        "Call agent_bootstrap, then workflow_status and workflow_resume for the newest unfinished v2 workflow; external_wait resumes only after complete_external_step.",
         "After a stalled or compacted thread, call list_manager_runs(include_events=true) and resume from the latest running run.",
         "If the Codex UI fails immediately after automatic context compaction with an invalid enum for context_compaction, restart the Codex app-server/Desktop so the active process matches the installed CLI.",
     ],
@@ -220,6 +221,25 @@ def prepare_manager_context(
         # Command routes are owner-intent level and should override broad domain open order.
         knowledge["best_domain"] = command_route.get("domain") or knowledge.get("best_domain")
         knowledge["open_first"] = command_route.get("open_first") or knowledge.get("open_first")
+        matched_route = next(
+            (
+                route
+                for route in knowledge.get("routes", [])
+                if route.get("domain") == command_route.get("domain")
+            ),
+            None,
+        )
+        if matched_route:
+            for field in (
+                "source_of_truth",
+                "reference_files",
+                "optional_runtime_files",
+                "optional_available_files",
+                "optional_missing_files",
+                "optional_runtime_available",
+                "optional_runtime_note",
+            ):
+                knowledge[field] = matched_route.get(field, knowledge.get(field))
         knowledge["has_knowledge"] = True
         knowledge["command_route"] = command_route
     if intent:
@@ -316,6 +336,7 @@ def build_agent_brief(
         "memory_sources": MEMORY_SOURCES,
         "route": {
             "command_id": command_route.get("command_id"),
+            "workflow_id": command_route.get("workflow_id") or command_route.get("command_id"),
             "domain": domain or None,
             "open_first": knowledge.get("open_first"),
             "source_of_truth": knowledge.get("source_of_truth", []),
@@ -326,6 +347,10 @@ def build_agent_brief(
             "optional_runtime_available": knowledge.get("optional_runtime_available", False),
             "optional_runtime_note": knowledge.get("optional_runtime_note", ""),
             "confidence": knowledge.get("confidence"),
+            "required_reads": command_route.get("required_reads", []),
+            "write_domains": command_route.get("write_domains", []),
+            "external_connectors": command_route.get("external_connectors", []),
+            "completion_checks": command_route.get("completion_checks", []),
         },
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",

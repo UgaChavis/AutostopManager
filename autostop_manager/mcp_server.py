@@ -10,7 +10,10 @@ def build_server() -> FastMCP:
     server = FastMCP(
         name="AutostopManager",
         instructions=(
-            "Headless manager memory and source-routing layer for AutoStop CRM. "
+            "Headless Agent Gateway, manager memory, workflow ledger, and source-routing layer for AutoStop CRM. "
+            "Start non-trivial CRM/Gmail work with agent_bootstrap, use the named workflow registry, "
+            "prepare ActionContractV2 before writes, and keep resumable progress in the workflow lifecycle tools. "
+            "Gmail remains a separate connector: store only message/thread/file result references through complete_external_step, never bodies. "
             "Use these tools only for durable non-CRM memory, routing rules, knowledge navigation, and knowledge intake. "
             "Probe the knowledge base first, then open the returned source-of-truth route before broad file reads when the task involves diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge. "
             "When new files are supplied, extract durable conclusions and update the relevant playbooks or catalogs; do not store raw dumps. "

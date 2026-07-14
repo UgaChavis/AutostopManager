@@ -48,9 +48,9 @@ owner already gives an OEM/article and only asks for price or availability, use
 ## CRM Intake
 
 1. Start with live CRM, not memory:
-   - `bootstrap_context` if connector state is uncertain;
-   - `get_card_context` or `get_card` for the exact `card_id`;
-   - `list_repair_orders` / `get_repair_order` only when materials will be
+   - `agent_bootstrap` if connector state is uncertain;
+   - `agent_search` and `agent_entity_context` for the exact `card_id`;
+   - `agent_entity_context(entity="repair_order")` only when materials will be
      updated.
 2. Extract only the fields needed for the quote:
    - `card_id`, title, vehicle fields, description snippets that name the part;
@@ -278,15 +278,15 @@ that is the priced selected part.
    Do not write basket links, add-to-cart URLs, private-cabinet data, or raw
    HTML into the CRM card.
 6. Build an internal quote matrix / lookup dossier.
-7. Write the public card description via `update_card` using
+7. Write the public card description through
+   `agent_board_workflow(operation="cleanup_card")` using
    `docs/agent/crm_card_description_standard.md`, preserving old useful facts.
-8. Update repair-order materials via `replace_repair_order_materials` only for
+8. Update repair-order materials through `agent_finance_workflow` only for
    selected priced parts, not OEM references.
 9. Update `board_summary` with a short plain result without VIN/client private
    data, source lists, or confidence/provenance text:
    `OEM найден, выбран NGK 91568`.
-10. Re-open the card and repair order with `get_card_context` /
-    `get_repair_order`.
+10. Re-open the card and repair order with `agent_entity_context`.
 11. Verify description, board summary, material totals, quantity basis, and the
     internal confidence/evidence record.
 12. Finish the manager run with verification evidence.
@@ -316,8 +316,8 @@ Keep implementation candidates in:
 
 MVP tool chain:
 
-1. `read CRM card vehicle data`: AutoStop CRM `get_card_context`, repair-order
-   reads, attachment reads for old-part photos.
+1. `read CRM card vehicle data`: AutoStop CRM `agent_entity_context` for card,
+   repair-order, and file metadata reads.
 2. `identify vehicle by VIN/frame`: `decode_vehicle_identity` first, then
    `lookup_original_parts` and Parts-Catalogs/PartsAPI/17VIN/AUTOPOISK or
    brand EPC adapters when confidence is not high.

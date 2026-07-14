@@ -91,8 +91,8 @@ instead of overwriting blindly.
 ## Read Order
 
 1. `today_context`
-2. CRM `bootstrap_context`
-3. `manager_board_scan`
+2. CRM `agent_bootstrap`
+3. `agent_board_workflow(operation="manager_board_scan", mode="dry_run")`
 4. Focused diagnostics: `triage_inbox_cards`, `list_ready_unpaid_cards`,
    `list_cards_missing_manager_data`, `audit_repair_order_consistency`,
    `audit_client_links`
@@ -106,14 +106,14 @@ instead of overwriting blindly.
 For card text or vehicle passport writes orchestrated by AutostopManager:
 
 1. Start or reuse a manager run.
-2. Read `agent_brief` and focused `get_card_context`.
-3. Build a dry-run contract with `prepare_crm_card_action`.
-4. Write with `update_card` using `expected_updated_at` when available.
-5. Update `board_summary` with `set_card_board_summary` when text/profile/tags
-   changed.
-6. Reread and verify description, visible text, vehicle_profile metadata,
+2. Read `agent_brief` and focused `agent_entity_context`.
+3. Build a contract with `prepare_action_contract`.
+4. Preview and apply through
+   `agent_board_workflow(operation="cleanup_card")`, carrying
+   `expected_updated_at` and a unique idempotency key.
+5. Reread and verify description, visible text, vehicle_profile metadata,
    `board_summary_stale=false`, and no unplanned field changes.
-7. Record planned patch, write result, diff, warnings, and verification.
+6. Record planned patch, write result, diff, warnings, and verification.
 
 ## Structured Identity First
 

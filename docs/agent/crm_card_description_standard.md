@@ -97,5 +97,6 @@ identity, raw VIN, or long issue lists. Use 1-4 short lines.
 ## Write Flow
 
 Before writing, read the current card and identify the exact card id. Use
-`prepare_crm_card_action` where available, then write the compact text and
-reread the card to verify the visible CRM preview.
+`agent_entity_context`, build `prepare_action_contract`, preview with
+`agent_board_workflow(operation="cleanup_card", mode="dry_run")`, then apply
+with a unique idempotency key and reread through `agent_entity_context`.

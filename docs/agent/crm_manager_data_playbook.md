@@ -51,21 +51,20 @@ privacy instruction.
 Use the live AutoStop CRM MCP connector, not stale local files, for operational
 summaries:
 
-1. `bootstrap_context` - verify board identity, scope, active/archive counts,
-   columns, and attention cards.
-2. `manager_board_scan` - gather compact active/archived counts, inbox, ready
-   unpaid cards, missing manager data, timer risks, and ЗН consistency signals.
-3. `list_clients(include_stats=true)` - gather compact client totals and
-   quality signals. Do not copy full phone rows.
-4. `list_cashboxes` - gather balances and transaction counts.
-5. `list_repair_orders(status=all, compact=true, redact_private=true)` - gather
-   status counts, unpaid/due totals, and inconsistent order count.
-6. `list_shared_files` - record metadata for files such as `Клиенты.xls`.
+1. `agent_bootstrap` - verify board identity, scope, active/archive counts,
+   columns, and policy state.
+2. `agent_board_digest` - gather the compact active or archived card view.
+3. `agent_board_workflow(operation="manager_board_scan", mode="dry_run")` -
+   gather inbox, ready unpaid, missing-data, timer, and ЗН consistency signals.
+4. `agent_search` - gather focused client, repair-order, cashbox, inventory, or
+   file results without copying private rows into chat.
+5. `agent_entity_context` - read one exact client, card, order, cashbox,
+   inventory item, or file when detail is required.
 7. Return a compact report in chat, a manager run ledger event, or a short
    `manager_journal` entry only when the result is durable.
 
-For exact client/card/order work, read back the live target with `get_client`,
-`get_card_context`, `get_repair_order`, or `get_cashbox`.
+For exact client/card/order work, read back the live target with
+`agent_entity_context`.
 
 ## Read-Only CRM Health Flow
 
@@ -73,20 +72,19 @@ Use this flow before proposing CRM hygiene work. It is read-only and must not
 write to CRM, move cards, archive cards, or edit runtime files unless the owner
 gives a separate explicit command.
 
-1. Call `bootstrap_context` to confirm board identity and connector health.
-2. Call `manager_board_scan` to get active counts, overloaded columns,
+1. Call `agent_bootstrap` to confirm board identity and connector health.
+2. Call `agent_board_workflow(operation="manager_board_scan", mode="dry_run")`
+   to get active counts, overloaded columns,
    stale/attention cards, ready unpaid cards, inbox cards, and repair-order
    consistency issues.
-3. Use `get_board_context` or `review_board` only when the high-level scan is
-   not enough.
+3. Use `agent_board_digest` when the high-level scan is not enough.
 4. Flag overloaded columns before card-level work. Current known risk signals
    to watch are `Запись на ремонт` and `Готовые автомобили`.
-5. For focused targets, use `search_cards` and `get_card_context`; check for
+5. For focused targets, use `agent_search` and `agent_entity_context`; check for
    missing next action, stale or missing `board_summary`, missing deadline,
    unclear payment/parts state, or unclear repair-order closure state.
-6. If money, works, materials, ready state, or closure matters, read
-   `get_repair_order`; if payment evidence matters, read `get_cashbox` or the
-   relevant cash journal.
+6. If money, works, materials, ready state, closure, or payment evidence
+   matters, use `agent_entity_context` or the finance workflow.
 7. Produce proposed actions only: summary refresh, tag/indicator/deadline
    suggestion, missing-data question, archive recommendation, or owner decision
    blocker.
@@ -94,12 +92,13 @@ gives a separate explicit command.
 
 For safe bulk writes, use high-level operations first:
 
-- timer floor: `bulk_set_deadline_if_below(mode=dry_run)` then `apply`;
-- missing/stale previews: `bulk_refresh_board_summaries(mode=dry_run)` then
-  `apply`;
-- ready unpaid follow-up: `apply_ready_unpaid_followups(mode=dry_run)` then
-  `apply`;
-- one-card cleanup: `cleanup_card(mode=dry_run)` then `apply`.
+- timer floor: `agent_board_workflow(operation="bulk_set_deadline_if_below")`,
+  dry-run then apply;
+- missing/stale previews:
+  `agent_board_workflow(operation="bulk_refresh_board_summaries")`, dry-run then apply;
+- ready unpaid follow-up:
+  `agent_board_workflow(operation="apply_ready_unpaid_followups")`, dry-run then apply;
+- one-card cleanup: `agent_board_workflow(operation="cleanup_card")`, dry-run then apply.
 
 Recent QA/test-card events can pollute board history. Treat them as connector
 health evidence, not as live customer-work priority signals.

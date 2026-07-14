@@ -7,7 +7,7 @@ control, CRM hygiene, and knowledge intake for a Krasnoyarsk workshop.
 ## Daily Manager Loop
 
 1. Read `today_context`.
-2. Read CRM board context with `bootstrap_context` or `get_board_context`.
+2. Read CRM board context with `agent_bootstrap` and `agent_board_digest`.
 3. Check overdue cards, ready unpaid cars, parts-order columns, and cars in
    repair zones with no recent event.
 4. For each blocker, decide whether the next action is parts, client approval,
@@ -16,7 +16,7 @@ control, CRM hygiene, and knowledge intake for a Krasnoyarsk workshop.
 
 ## Current CRM Operating Model
 
-Refresh this model with `get_board_context` when the board changes.
+Refresh this model with `agent_bootstrap` and `agent_board_digest` when the board changes.
 
 - `Машины в ремзоне`: cars physically in the repair zone; check stale work,
   missing diagnosis, and client/parts blockers first.
@@ -26,7 +26,7 @@ Refresh this model with `get_board_context` when the board changes.
   `В работе Слава`, `В работе Валера`, `Электрик Александр`,
   `в работе артем студент`, `В работе Максим Курсеич`, `В работе Кирилл`,
   `КПП - Дмитрий`, and assistant/reception columns are load signals, not
-  final payroll records. Refresh the exact labels from live `get_board_context`
+  final payroll records. Refresh the exact labels from live `agent_board_digest`
   before staff-load decisions.
 - `Снабжение` and `Заказы запчастей`: procurement blocker queues; every card
   should show the exact part identity, source, price, delivery date, and next

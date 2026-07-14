@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .action_contract import prepare_action_contract
+from .agent_gateway import agent_envelope, build_agent_bootstrap, list_agent_workflows
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
     exist_price_lookup,
@@ -28,7 +30,11 @@ from .knowledge_base import (
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
 from .memory_review import apply_memory_review_item, build_memory_review
-from .partsapi_category_index import explain_partsapi_category_for_intent, search_partsapi_category_index, validate_partsapi_category_index
+from .partsapi_category_index import (
+    explain_partsapi_category_for_intent,
+    search_partsapi_category_index,
+    validate_partsapi_category_index,
+)
 from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
@@ -48,6 +54,20 @@ def _registered_tool_names(server: Any) -> list[str] | None:
     if isinstance(tools, dict):
         return sorted(str(name) for name in tools)
     return None
+
+
+def _workflow_envelope(result: dict[str, Any], *, next_actions: list[str] | None = None) -> dict[str, Any]:
+    ok = bool(result.get("ok"))
+    run_id = result.get("run_id") or result.get("id")
+    warnings = [] if ok else [str(result.get("error") or "workflow_operation_failed")]
+    return agent_envelope(
+        ok=ok,
+        status=str(result.get("status") or ("failed" if not ok else "completed")),
+        run_id=int(run_id) if isinstance(run_id, int) else None,
+        summary=result,
+        warnings=warnings,
+        next_actions=next_actions or [],
+    )
 
 
 def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:
@@ -228,6 +248,66 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return build_agent_brief(memory, query, intent=intent, limit=limit)
 
     @server.tool(
+        name="agent_bootstrap",
+        description=(
+            "Return the compact Agent Gateway v2 startup envelope: deterministic workflow, source boundaries, "
+            "internal safety policy, missing context, and resumable unfinished runs. It never reads or writes live CRM/Gmail."
+        ),
+    )
+    def agent_bootstrap_tool(
+        query: str = "",
+        intent: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        return build_agent_bootstrap(memory, query=query, intent=intent, limit=limit)
+
+    @server.tool(
+        name="list_agent_workflows",
+        description=(
+            "List the compact named Codex workflow registry and resolve a query/intent without exposing raw CRM or Gmail data."
+        ),
+    )
+    def list_agent_workflows_tool(
+        query: str = "",
+        intent: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        return list_agent_workflows(query=query, intent=intent, limit=limit)
+
+    @server.tool(
+        name="prepare_action_contract",
+        description=(
+            "Build a connector-neutral ActionContractV2 for CRM, finance, inventory, documents, files, or Gmail writes. "
+            "Requires task intent, exact target where applicable, idempotency, concurrency, automatic preflight, compensation, "
+            "and readback verification; never performs the write."
+        ),
+    )
+    def prepare_action_contract_tool(
+        domain: str,
+        action: str,
+        target_id: str = "",
+        planned_changes: dict[str, Any] | None = None,
+        owner_intent: str = "",
+        expected_revision: str | None = None,
+        idempotency_key: str = "",
+        run_id: int | None = None,
+        actor: str = "codex-owner-agent",
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return prepare_action_contract(
+            domain=domain,
+            action=action,
+            target_id=target_id,
+            planned_changes=planned_changes,
+            owner_intent=owner_intent,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            run_id=run_id,
+            actor=actor,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
         name="prepare_crm_card_action",
         description=(
             "Build a dry-run CRM card edit contract for AutoStopManager: exact description patch, vehicle_profile patch "
@@ -355,7 +435,12 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     def control_report_tool(format: str = "json") -> dict[str, Any]:
         report = build_control_report(store=memory)
         if format == "markdown":
-            return {"ok": True, "format": "markdown", "markdown": format_control_report_markdown(report), "report": report}
+            return {
+                "ok": True,
+                "format": "markdown",
+                "markdown": format_control_report_markdown(report),
+                "report": report,
+            }
         return report
 
     @server.tool(
@@ -481,6 +566,196 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
     )
     def list_manager_runs_tool(limit: int = 20, include_events: bool = False) -> dict[str, Any]:
         return memory.list_manager_runs(limit=limit, include_events=include_events)
+
+    @server.tool(
+        name="start_workflow",
+        description=(
+            "Start an idempotent Agent Gateway v2 workflow in planned state. This records compact scope/refs only and does not call CRM or Gmail."
+        ),
+    )
+    def start_workflow_tool(
+        workflow_id: str,
+        intent: str,
+        idempotency_key: str,
+        query: str = "",
+        request_id: str = "",
+        correlation_id: str = "",
+        actor: str = "codex-owner-agent",
+        scope: dict[str, Any] | None = None,
+        selected_ids: list[str] | None = None,
+        dry_run: bool = False,
+        source: str = "codex",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = memory.start_workflow_run(
+            workflow_id=workflow_id,
+            intent=intent,
+            query=query,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            actor=actor,
+            scope=scope,
+            selected_ids=selected_ids,
+            dry_run=dry_run,
+            source=source,
+            metadata=metadata,
+        )
+        return _workflow_envelope(result, next_actions=["workflow_transition to executing after automatic preflight"])
+
+    @server.tool(
+        name="workflow_status",
+        description="Read one compact workflow state, checkpoint, events, and external connector step references.",
+    )
+    def workflow_status_tool(
+        run_id: int,
+        include_events: bool = False,
+        include_external_steps: bool = True,
+    ) -> dict[str, Any]:
+        result = memory.get_manager_run(
+            run_id,
+            include_events=include_events,
+            include_external_steps=include_external_steps,
+        )
+        if result.get("ok"):
+            item = result.get("item", {})
+            return agent_envelope(
+                ok=True,
+                status=str(item.get("status") or "completed"),
+                run_id=run_id,
+                summary=item,
+            )
+        return _workflow_envelope(result)
+
+    @server.tool(
+        name="workflow_transition",
+        description=(
+            "Advance a workflow through planned, executing, external_wait, verifying, compensating, and terminal states "
+            "using strict transitions and expected_state_version compare-and-swap. Completed requires positive evidence "
+            "and rejects explicit executor or verification failure markers."
+        ),
+    )
+    def workflow_transition_tool(
+        run_id: int,
+        status: str,
+        message: str = "",
+        verification: dict[str, Any] | None = None,
+        summary: str = "",
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        return _workflow_envelope(
+            memory.transition_workflow_run(
+                run_id,
+                status=status,
+                message=message,
+                verification=verification,
+                summary=summary,
+                expected_state_version=expected_state_version,
+            )
+        )
+
+    @server.tool(
+        name="workflow_checkpoint",
+        description=(
+            "Persist a compact resumable checkpoint and selected IDs with expected_state_version compare-and-swap. "
+            "Raw CRM dumps and email bodies are rejected."
+        ),
+    )
+    def workflow_checkpoint_tool(
+        run_id: int,
+        checkpoint: dict[str, Any],
+        selected_ids: list[str] | None = None,
+        message: str = "",
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        return _workflow_envelope(
+            memory.checkpoint_workflow_run(
+                run_id,
+                checkpoint=checkpoint,
+                selected_ids=selected_ids,
+                message=message,
+                expected_state_version=expected_state_version,
+            )
+        )
+
+    @server.tool(
+        name="workflow_wait_for_external",
+        description=(
+            "Register a refs-only step for a separate connector such as Gmail and move the workflow to external_wait. "
+            "Use expected_state_version compare-and-swap; message bodies, snippets, and raw content are rejected."
+        ),
+    )
+    def workflow_wait_for_external_tool(
+        run_id: int,
+        step_id: str,
+        connector: str,
+        action: str,
+        request_refs: dict[str, Any] | None = None,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        return _workflow_envelope(
+            memory.register_external_step(
+                run_id,
+                step_id=step_id,
+                connector=connector,
+                action=action,
+                request_refs=request_refs,
+                expected_state_version=expected_state_version,
+            ),
+            next_actions=["call the separate connector", "complete_external_step with result IDs only"],
+        )
+
+    @server.tool(
+        name="complete_external_step",
+        description=(
+            "Complete one external connector step with message/thread/draft/attachment/file IDs and timestamps only. "
+            "Use expected_state_version compare-and-swap and never store raw Gmail bodies in the manager ledger."
+        ),
+    )
+    def complete_external_step_tool(
+        run_id: int,
+        step_id: str,
+        result_refs: dict[str, Any] | None = None,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        return _workflow_envelope(
+            memory.complete_external_step(
+                run_id,
+                step_id=step_id,
+                result_refs=result_refs,
+                expected_state_version=expected_state_version,
+            ),
+            next_actions=["workflow_resume after all external steps are complete"],
+        )
+
+    @server.tool(
+        name="workflow_resume",
+        description=(
+            "Resume a planned or externally-waiting workflow from its compact checkpoint with expected_state_version "
+            "compare-and-swap; refuses while external steps remain pending."
+        ),
+    )
+    def workflow_resume_tool(run_id: int, expected_state_version: int | None = None) -> dict[str, Any]:
+        return _workflow_envelope(memory.resume_workflow_run(run_id, expected_state_version=expected_state_version))
+
+    @server.tool(
+        name="workflow_cancel",
+        description=(
+            "Cancel a non-terminal workflow with expected_state_version compare-and-swap without changing CRM or Gmail state."
+        ),
+    )
+    def workflow_cancel_tool(
+        run_id: int,
+        reason: str = "",
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        return _workflow_envelope(
+            memory.cancel_workflow_run(
+                run_id,
+                reason=reason,
+                expected_state_version=expected_state_version,
+            )
+        )
 
     @server.tool(
         name="lookup_original_parts",

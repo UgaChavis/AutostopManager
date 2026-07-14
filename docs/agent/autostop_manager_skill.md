@@ -18,12 +18,14 @@ Default owner-facing style: Russian, short, practical, direct.
    routing, missing context, or next actions.
 3. Run `probe_knowledge_base` before broad local reads. If it finds a route,
    open `open_first` / source-of-truth files first.
-4. For CRM work, start with `bootstrap_context` and `manager_board_scan`; use
-   focused card/client/order reads before heavy exports.
+4. For CRM work, start with `agent_bootstrap` and `agent_board_digest`; use
+   `agent_search` and `agent_entity_context` before heavy exports. Invoke broad
+   scans through `agent_board_workflow`.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md` and read/search
    before any mailbox mutation.
 6. For broad CRM, procurement, finance, knowledge-intake, or multi-step work,
-   start a manager run, checkpoint compact events, and finish with verification.
+   start a Gateway v2 workflow, checkpoint compact events with
+   `expected_state_version`, and finish only with positive readback evidence.
 
 ## Source Boundaries
 
@@ -44,8 +46,8 @@ does not mean live CRM or MCP context is empty.
 | CRM manager summaries | `docs/agent/crm_manager_data_playbook.md` | Return safe summaries and quality signals only. |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup; no movement/archive/order/payment/cashbox writes without separate explicit command. |
 | CRM card descriptions | `docs/agent/crm_card_description_standard.md` | Use for public description create/update/cleanup/writeback; keep text laconic, formatted, and free of sources/provenance, risk blocks, selection method, and supplier-check reminders. |
-| Ready unpaid / daily control | `list_ready_unpaid_cards`, `apply_ready_unpaid_followups` dry-run | Use service-management playbook. |
-| Timer floor | `bulk_set_deadline_if_below` dry-run | Active cards only unless owner expands scope. |
+| Ready unpaid / daily control | `agent_board_workflow` with `list_ready_unpaid_cards` / `apply_ready_unpaid_followups` | Use service-management playbook; dry-run before writes. |
+| Timer floor | `agent_board_workflow(operation="bulk_set_deadline_if_below")` dry-run | Active cards only unless owner expands scope. |
 | CRM VIN/OEM parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md`, `plan_crm_vin_oem_parts_lookup` | Never invent OEM, applicability, stock, or prices. |
 | Vehicle identity / VIN/frame | `docs/agent/vehicle_identity_playbook.md`, `decode_vehicle_identity` | Classify identifier and market before OEM or parts work. |
 | Oils/fluids/capacities | `docs/agent/fluid_maintenance_playbook.md`, `recommend_fluid_maintenance_sources` | Do not confirm specs/capacities without source route. |
@@ -63,15 +65,18 @@ does not mean live CRM or MCP context is empty.
 
 - Identify the exact target id.
 - Use preflight/dry-run tools when available.
-- Use `prepare_crm_card_action` before card description or vehicle_profile
-  writes orchestrated by AutostopManager.
+- Read the target with `agent_entity_context`, build `prepare_action_contract`,
+  and use `agent_board_workflow(operation="cleanup_card")` in dry-run and apply
+  modes for card description or vehicle_profile writes.
 - Public card descriptions must follow
   `docs/agent/crm_card_description_standard.md`.
 - Reread after saving and record verification.
 - Preserve user-entered CRM data.
 - Do not write repair-order rows, payments, cashbox records, deadlines,
-  indicators, moves, archives, or deletes without separate explicit owner
-  approval for that exact target.
+  indicators, moves, archives, or deletes without task-specific owner intent
+  and an exact target. Agent Gateway v2 does not require a second confirmation
+  after automatic preflight, idempotency, concurrency checks, and readback are
+  ready.
 
 ## Memory Use
 
@@ -121,6 +126,13 @@ risks, writes, and verification.
 
 After context compaction or stalled work, resume from
 `list_manager_runs(include_events=true)` instead of re-reading everything.
+
+For Agent Gateway v2 lifecycle mutations, carry `state_version` from the latest
+response into `expected_state_version` on transition, checkpoint, external wait,
+external completion, resume, and cancel calls. A stale version returns
+`workflow_state_conflict`; reread with `workflow_status` before retrying. Never
+mark a workflow `completed` when executor or readback/verification evidence is
+explicitly false or failed.
 
 ## After Important Work
 

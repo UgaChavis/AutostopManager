@@ -1,8 +1,11 @@
 {
-  "purpose": "Canonical natural-language owner command routes for AutostopManager.",
+  "purpose": "Canonical deterministic Agent Gateway v2 workflow registry and natural-language owner routes for AutostopManager.",
+  "format": "agent_workflow_registry_v2",
   "routes": [
     {
       "command_id": "board_cleanup_autopilot",
+      "workflow_id": "board_cleanup_autopilot",
+      "priority": 80,
       "intent": "board_cleanup",
       "domain": "board_cleanup_autopilot",
       "open_first": "docs/agent/board_cleanup_autopilot_playbook.md",
@@ -16,11 +19,11 @@
         "board-cleanup-no-card-movement"
       ],
       "next_actions": [
-        "read live CRM board state with bootstrap_context and manager_board_scan",
+        "read live CRM board state with agent_bootstrap and agent_board_digest",
         "classify blockers",
         "when the owner asks to run Приберись for many or all active cards, apply the same one-card cleanup locally to each card that actually needs it; select the explicit group or top-priority board candidates, process in small verified batches, and leave already-clear cards unchanged",
         "use list_cards_missing_manager_data, triage_inbox_cards, audit_repair_order_consistency, audit_client_links, suggest_clients_for_card, search_clients, and get_client before one-card writes when relevant",
-        "prepare focused CRM card description or vehicle_profile writes through MCP prepare_crm_card_action, or python -m autostop_manager.cli prepare-card-action for local/stale-discovery fallback, so expected_updated_at, exact description text, vehicle_profile metadata, board_summary target, and reread verification are explicit before update_card",
+        "prepare focused CRM card description or vehicle_profile writes through Gateway v2 agent_entity_context, prepare_action_contract, and agent_board_workflow cleanup_card dry-run/apply so expected_updated_at, exact text, metadata, board_summary target, idempotency, and reread verification are explicit",
         "use cleanup_card dry_run/apply for compact safe card patches; follow the canonical field contract in board_cleanup_autopilot_playbook.md and docs/agent/crm_card_description_standard.md: if description is empty leave it empty, otherwise compress it into a very short rich-text working summary with sparse emoji while preserving prices/OEM/facts; never add risks, sources/provenance, selection method, or supplier-check reminders; move phone/VIN/plate/mileage/aggregates into client or vehicle-profile fields after verification; keep vehicle as make/model, title as short issue/work essence, and tags rare with no more than three",
         "if the card description contains a direct safe task such as find parts, find OEM, price ТО, or decode VIN, perform it during cleanup and write back only the compact result",
         "do not edit repair orders, works, materials, prices, payments, cashboxes, or cash records unless the owner explicitly asks for that exact target",
@@ -30,6 +33,8 @@
     },
     {
       "command_id": "daily_ready_unpaid_check",
+      "workflow_id": "daily_ready_unpaid_check",
+      "priority": 85,
       "intent": "daily_control",
       "domain": "service_management",
       "open_first": "docs/agent/krasnoyarsk_service_management_playbook.md",
@@ -56,7 +61,7 @@
         "service-management"
       ],
       "next_actions": [
-        "read live CRM board state with bootstrap_context and manager_board_scan",
+        "read live CRM board state with agent_bootstrap and agent_board_digest",
         "check ready cars and due totals with list_ready_unpaid_cards",
         "classify payment blockers",
         "run apply_ready_unpaid_followups in dry_run, then apply with actor_name when safe",
@@ -65,6 +70,8 @@
     },
     {
       "command_id": "inbox_triage",
+      "workflow_id": "inbox_triage",
+      "priority": 80,
       "intent": "inbox_triage",
       "domain": "board_cleanup_autopilot",
       "open_first": "docs/agent/board_cleanup_autopilot_playbook.md",
@@ -87,7 +94,7 @@
         "manager operations"
       ],
       "next_actions": [
-        "read bootstrap_context and triage_inbox_cards",
+        "read agent_bootstrap, then run triage_inbox_cards through agent_board_workflow",
         "use audit_client_links and list_cards_missing_manager_data for incomplete cards",
         "use cleanup_card dry_run/apply for safe one-card cleanup patches",
         "do not move or archive cards without a separate explicit owner command"
@@ -95,6 +102,8 @@
     },
     {
       "command_id": "timer_floor_control",
+      "workflow_id": "timer_floor_control",
+      "priority": 90,
       "intent": "timer_floor",
       "domain": "service_management",
       "open_first": "docs/agent/crm_manager_data_playbook.md",
@@ -118,14 +127,16 @@
         "bulk_set_deadline_if_below"
       ],
       "next_actions": [
-        "read bootstrap_context and manager_board_scan",
-        "run bulk_set_deadline_if_below dry_run with min_total_seconds=172800 and target_total_seconds=172800",
+        "read agent_bootstrap and agent_board_digest",
+        "run bulk_set_deadline_if_below through agent_board_workflow in dry_run with min_total_seconds=172800 and target_total_seconds=173700 so every changed timer is strictly above two days",
         "apply with actor_name only after dry_run shows eligible cards and no unexpected errors",
         "verify changed cards with response verification and a compact reread"
       ]
     },
     {
       "command_id": "manager_documentation_hygiene",
+      "workflow_id": "manager_documentation_hygiene",
+      "priority": 50,
       "intent": "documentation_hygiene",
       "domain": "knowledge_intake",
       "open_first": "docs/agent/knowledge_shelves.md",
@@ -173,6 +184,8 @@
     },
     {
       "command_id": "vehicle_identity_decode",
+      "workflow_id": "vehicle_identity_decode",
+      "priority": 70,
       "intent": "vehicle_identity_decode",
       "domain": "vehicle_identity_and_oem",
       "open_first": "docs/agent/vehicle_identity_playbook.md",
@@ -211,6 +224,8 @@
     },
     {
       "command_id": "crm_vin_oem_parts_lookup",
+      "workflow_id": "crm_vin_oem_parts_lookup",
+      "priority": 75,
       "intent": "crm_vin_oem_parts_lookup",
       "domain": "crm_vin_oem_parts_lookup",
       "open_first": "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
@@ -251,6 +266,219 @@
         "find source-backed OEM number for requested part and verify applicability",
         "find supersession, crosses, analogs, procurement price, and RF market range",
         "write only the compact public result to card description using docs/agent/crm_card_description_standard.md, write selected priced part only to materials, then reread CRM and verify"
+      ]
+    },
+    {
+      "command_id": "crm_agent_integration_audit",
+      "workflow_id": "crm_agent_integration_audit",
+      "priority": 100,
+      "intent": "crm_agent_integration_audit",
+      "domain": "startup_and_identity",
+      "open_first": "AGENTS.md",
+      "aliases": [
+        "проанализируй связь Codex с CRM",
+        "проанализируй связь Codex с Автостоп CRM",
+        "аудит MCP CRM",
+        "проверь MCP коннектор CRM",
+        "оптимизируй связь с CRM",
+        "CRM Agent Gateway"
+      ],
+      "keywords": [
+        "MCP",
+        "Codex",
+        "тестовый профиль",
+        "перегруженные ответы",
+        "связь Codex",
+        "MCP коннектор",
+        "команды CRM",
+        "перегружены ответы",
+        "Codex с CRM",
+        "связь с автотоп CRM",
+        "связь с автостоп CRM",
+        "тестовый профиль CRM"
+      ],
+      "memory_queries": [
+        "CRM MCP integration",
+        "Agent Gateway",
+        "connector payload"
+      ],
+      "required_reads": [
+        "agent_bootstrap",
+        "list_agent_workflows",
+        "manager MCP and CRM MCP catalogs",
+        "read-only connector status and representative compact responses"
+      ],
+      "write_domains": [],
+      "external_connectors": [],
+      "completion_checks": [
+        "tool routing is deterministic",
+        "payload budgets are measured",
+        "no live CRM or Gmail mutation occurred"
+      ],
+      "next_actions": [
+        "inspect the manager workflow registry and active MCP schemas",
+        "measure representative compact CRM reads without dumping private data",
+        "compare routing, payload size, latency, and verification coverage",
+        "report implementation-ready fixes and preserve live CRM/Gmail state"
+      ]
+    },
+    {
+      "command_id": "crm_finance_operation",
+      "workflow_id": "crm_finance_operation",
+      "priority": 95,
+      "intent": "crm_finance_operation",
+      "domain": "service_management",
+      "open_first": "docs/agent/krasnoyarsk_service_management_playbook.md",
+      "aliases": [
+        "проведи оплату в CRM",
+        "проведи оплату",
+        "оплата по заказ-наряду",
+        "запиши оплату",
+        "внеси оплату по заказ-наряду",
+        "сделай приход в кассу",
+        "сделай расход из кассы",
+        "переведи между кассами"
+      ],
+      "keywords": [
+        "провести оплату",
+        "внести оплату",
+        "кассовая операция",
+        "приход в кассу",
+        "расход из кассы",
+        "перевод между кассами"
+      ],
+      "memory_queries": [
+        "finance control",
+        "repair order payment",
+        "cashbox verification"
+      ],
+      "required_reads": [
+        "exact repair order",
+        "current debt and payments",
+        "target cashbox and journal tail"
+      ],
+      "write_domains": [
+        "payment",
+        "cashbox",
+        "repair_order"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "idempotency key prevents duplicate money movement",
+        "amount, payment method, cashbox, and debt reconcile",
+        "cash journal and repair order are reread"
+      ],
+      "next_actions": [
+        "resolve the exact repair order and cashbox",
+        "build prepare_action_contract with card_id, amount, payment_method, current expected_updated_at, current debt, and idempotency key",
+        "apply the CRM finance command only after automatic preflight",
+        "reread the cash journal and repair order balance and record verification"
+      ]
+    },
+    {
+      "command_id": "business_document_workflow",
+      "workflow_id": "business_document_workflow",
+      "priority": 90,
+      "intent": "business_document_workflow",
+      "domain": "business_documents",
+      "open_first": "docs/agent/business_document_quality_playbook.md",
+      "aliases": [
+        "создай документ в CRM",
+        "создай счет в CRM",
+        "сформируй акт и прикрепи к карточке",
+        "сделай заказ-наряд PDF",
+        "отправь документ клиенту"
+      ],
+      "keywords": [
+        "документ в CRM",
+        "счет PDF",
+        "акт PDF",
+        "заказ-наряд PDF",
+        "прикрепи документ",
+        "отправь документ"
+      ],
+      "memory_queries": [
+        "business document quality",
+        "CRM print module",
+        "document render QA"
+      ],
+      "required_reads": [
+        "exact card or document-without-card inputs",
+        "business identity and line totals",
+        "active CRM print tool schema"
+      ],
+      "write_domains": [
+        "document",
+        "file"
+      ],
+      "external_connectors": [
+        "gmail when delivery is requested"
+      ],
+      "completion_checks": [
+        "CRM print module produced the file",
+        "render and totals QA passed",
+        "CRM file readback and optional Gmail result refs are recorded"
+      ],
+      "next_actions": [
+        "collect exact document inputs and build prepare_action_contract",
+        "generate only through the CRM print module",
+        "render and verify every page, totals, tax wording, and requisites",
+        "upload to CRM and use a refs-only Gmail external step when delivery is requested"
+      ]
+    },
+    {
+      "command_id": "crm_gmail_workflow",
+      "workflow_id": "crm_gmail_workflow",
+      "priority": 95,
+      "intent": "crm_gmail_workflow",
+      "domain": "gmail_operations",
+      "open_first": "docs/agent/gmail_workflow_playbook.md",
+      "aliases": [
+        "обработай письмо и обнови CRM",
+        "ответь клиенту по карточке CRM",
+        "письмо в карточку CRM",
+        "отправь из CRM по Gmail",
+        "свяжи Gmail и CRM"
+      ],
+      "keywords": [
+        "письмо и CRM",
+        "Gmail и CRM",
+        "письмо в карточку",
+        "ответ клиенту по карточке",
+        "вложение поставщика в CRM"
+      ],
+      "memory_queries": [
+        "Gmail CRM workflow",
+        "external connector step",
+        "email attachment CRM"
+      ],
+      "required_reads": [
+        "exact Gmail message or thread",
+        "exact CRM card, client, vehicle, or repair order",
+        "active Gmail tool schema before mutation"
+      ],
+      "write_domains": [
+        "card",
+        "client",
+        "vehicle",
+        "repair_order",
+        "document",
+        "file"
+      ],
+      "external_connectors": [
+        "gmail"
+      ],
+      "completion_checks": [
+        "CRM changes pass readback verification",
+        "Gmail step completes once with message/thread IDs only",
+        "no raw email body is stored in manager SQLite"
+      ],
+      "next_actions": [
+        "start a workflow with one correlation and idempotency key",
+        "read the exact Gmail thread and exact CRM context",
+        "build and execute CRM action contracts",
+        "register workflow_wait_for_external and call the separate Gmail connector",
+        "complete_external_step with refs only, resume, and verify both systems"
       ]
     }
   ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 
 from autostop_manager import config as manager_config
@@ -389,7 +390,10 @@ def test_build_vin_parts_work_order_tool_is_registered(tmp_path, monkeypatch):
 
     assert result["work_order_summary"]["count"] == 1
     assert result["items"][0]["oem_lookup_routes"]["automated_first"]
-    assert any(route["name"].startswith("partslink24") for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"])
+    assert any(
+        route["name"].startswith("partslink24")
+        for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"]
+    )
 
 
 def test_recommend_automotive_sources_tool_is_registered(tmp_path):
@@ -584,6 +588,57 @@ def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
     assert runs["items"][0]["events"]
 
 
+def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    register_manager_memory_tools(server, store)
+
+    expected = {
+        "agent_bootstrap",
+        "list_agent_workflows",
+        "prepare_action_contract",
+        "start_workflow",
+        "workflow_status",
+        "workflow_transition",
+        "workflow_checkpoint",
+        "workflow_wait_for_external",
+        "complete_external_step",
+        "workflow_resume",
+        "workflow_cancel",
+    }
+    assert expected.issubset(server.tools)
+
+    bootstrap = server.tools["agent_bootstrap"](
+        "проведи оплату в CRM",
+        intent="crm_finance_operation",
+    )
+    assert bootstrap["format"] == "agent_envelope_v2"
+    assert bootstrap["summary"]["selected_workflow"]["workflow_id"] == "crm_finance_operation"
+
+    started = server.tools["start_workflow"](
+        workflow_id="crm_finance_operation",
+        intent="crm_finance_operation",
+        idempotency_key="mcp-finance-v2",
+        query="проведи оплату в CRM",
+    )
+    assert started["ok"] is True
+    assert started["status"] == "planned"
+    run_id = started["run_id"]
+    status = server.tools["workflow_status"](run_id)
+    assert status["format"] == "agent_envelope_v2"
+    assert status["summary"]["idempotency_key"] == "mcp-finance-v2"
+
+    for tool_name in {
+        "workflow_transition",
+        "workflow_checkpoint",
+        "workflow_wait_for_external",
+        "complete_external_step",
+        "workflow_resume",
+        "workflow_cancel",
+    }:
+        assert "expected_state_version" in inspect.signature(server.tools[tool_name]).parameters
+
+
 def test_prepare_crm_card_action_returns_strict_write_and_verification_contract(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -728,9 +783,11 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
-    assert catalog["tool_counts"]["crm_base_tools"] == 92
-    assert catalog["tool_counts"]["optional_autostop_manager_tools"] == 56
-    assert catalog["tool_counts"]["production_tools_with_manager_mounted"] == 148
+    assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 92
+    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 67
+    assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
+    assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"
+    assert "call_raw_capability" in catalog["agent_gateway_v2"]["raw_escape"]
     assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]

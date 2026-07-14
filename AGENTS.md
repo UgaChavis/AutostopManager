@@ -16,6 +16,9 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 - Do not store raw CRM exports, full Gmail threads, phone/VIN/license tables,
   cashbox ledgers, credentials, OAuth state, or secrets in docs, Git, memory, or
   chat summaries.
+- Never dump `.env`, Docker `.Config.Env`, or a process environment. Inspect
+  only an explicit allowlist of non-secret names and print secret presence or
+  validation booleans, never values.
 
 ## Startup
 
@@ -25,18 +28,25 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 2. For local knowledge/docs work, run `knowledge-probe "<query>"` and open the
    returned `open_first` / source-of-truth files before broad reads.
 3. For live CRM work, use the AutoStop CRM MCP connector. Start with
-   `bootstrap_context` and `manager_board_scan`; prefer focused reads.
+   `agent_bootstrap`, then `agent_board_digest`; use `agent_search` and
+   `agent_entity_context` for focused detail. Run broad control through
+   `agent_board_workflow`, not the hidden legacy surface.
 4. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
 5. For broad CRM, procurement, finance, knowledge-intake, or other multi-step
-   work, use a manager run ledger and record compact checkpoints.
+   work, use the Gateway v2 workflow ledger and compact state-versioned
+   checkpoints. Use raw discovery only when no named workflow covers the task.
 
 ## Write Safety
 
 - Before CRM writes: exact target id, dry-run/preflight where available, then
   reread and verify.
-- Use `prepare_crm_card_action` before card `description` or vehicle_profile
-  writes orchestrated by AutostopManager.
+- For finance, inventory, documents, files, Gmail, or destructive writes, build
+  the action contract, use a unique idempotency key, and keep any applied but
+  unverified result in `compensating` until exact-target reconciliation.
+- For card `description` or vehicle_profile writes, read the exact target with
+  `agent_entity_context`, build `prepare_action_contract`, then use
+  `agent_board_workflow(operation="cleanup_card")` in dry-run and apply modes.
 - Public CRM card descriptions must follow
   `docs/agent/crm_card_description_standard.md`: laconic working facts only;
   no risks, provenance, selection method, supplier-check reminders, or long AI
@@ -44,8 +54,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 - Do not move, archive, delete, change deadlines/indicators, edit repair-order
   rows/totals, payments, or cashboxes unless the owner gives a separate explicit
   command for that exact target.
-- Gmail send/archive/delete/label/draft mutations require explicit approval for
-  the exact mailbox target.
+- Gmail send/archive/delete/label/draft mutations require task-specific owner
+  intent and an exact mailbox target. Agent Gateway v2 does not add a second
+  confirmation state: after exact targets pass preflight, execute once with
+  idempotency and record only message/thread/file refs in the run ledger.
 
 ## Standing Routes
 
@@ -53,7 +65,7 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 - CRM card descriptions -> `docs/agent/crm_card_description_standard.md`.
 - `ready unpaid` / daily control -> `docs/agent/krasnoyarsk_service_management_playbook.md`.
 - Timer floor -> `docs/agent/crm_manager_data_playbook.md` and
-  `bulk_set_deadline_if_below` dry-run first.
+  `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run first.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
 - Internet/repair web research -> CRM agent `search_web_multi` first
   (Brave -> Tavily -> Google CSE -> DuckDuckGo), then excerpt; use

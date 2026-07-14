@@ -6,11 +6,43 @@
   "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-06-15",
+  "last_verified": "2026-07-11",
   "tool_counts": {
-    "crm_base_tools": 92,
-    "optional_autostop_manager_tools": 56,
-    "production_tools_with_manager_mounted": 148
+    "crm_legacy_tools_hidden_by_gateway": 92,
+    "autostop_manager_tools_in_raw_registry": 67,
+    "production_visible_agent_gateway_v2": 24,
+    "guarded_internal_api_write_routes_are_virtual_and_not_counted_as_tools": true
+  },
+  "agent_gateway_v2": {
+    "startup": "agent_bootstrap",
+    "focused_reads": [
+      "agent_board_digest",
+      "agent_search",
+      "agent_entity_context"
+    ],
+    "named_workflows": [
+      "agent_board_workflow",
+      "agent_finance_workflow",
+      "agent_inventory_workflow",
+      "agent_document_workflow"
+    ],
+    "raw_escape": [
+      "discover_raw_capabilities",
+      "get_raw_capability_schema",
+      "call_raw_capability"
+    ],
+    "finance_payment_operation": "record_repair_order_payment",
+    "finance_payment_requirements": [
+      "exact card and cashbox ids",
+      "amount and payment_method",
+      "current expected_updated_at",
+      "idempotency key",
+      "repair-order and cash-journal readback"
+    ],
+    "virtual_api_fallback": "api:/api/... capabilities cover guarded CRM reads and writes not represented by a focused MCP tool; writes remain hidden, route-hash checked, idempotent, kill-switch controlled, ledgered, and forced to the audited service identity",
+    "applied_write_verification_failure": "workflow remains non-terminal in compensating until exact-target reconciliation",
+    "operator_admin_auth": "local codex-owner-agent service identity plus MCP bearer; never accepted through the public proxy",
+    "mail_boundary": "refs-only manager bridge; Gmail remains a separate authenticated connector and source of truth"
   },
   "source_documents": [
     "README.md",
@@ -26,7 +58,8 @@
   ],
   "connector_modes": {
     "streamable_http": true,
-    "oauth_embedded": true,
+    "oauth_embedded_local_compatibility": true,
+    "oauth_embedded_production": false,
     "bearer_token": true,
     "public_https_url_required_for_chatgpt": true,
     "responses_api_direct_authorization": true
@@ -41,6 +74,13 @@
       "MINIMAL_KANBAN_MCP_BEARER_TOKEN",
       "MINIMAL_KANBAN_MCP_ALLOWED_HOSTS",
       "MINIMAL_KANBAN_MCP_ALLOWED_ORIGINS",
+      "AUTOSTOP_MCP_EMBEDDED_OAUTH_ENABLED",
+      "AUTOSTOP_AGENT_GATEWAY_ENABLED",
+      "AUTOSTOP_AGENT_GATEWAY_WRITES_ENABLED",
+      "AUTOSTOP_AGENT_GATEWAY_FINANCE_ENABLED",
+      "AUTOSTOP_AGENT_GATEWAY_MAIL_ENABLED",
+      "AUTOSTOP_AGENT_GATEWAY_DESTRUCTIVE_ENABLED",
+      "AUTOSTOP_AGENT_GATEWAY_RAW_ENABLED",
       "AUTOSTOP_MANAGER_PATH"
     ],
     "board_api": [
@@ -374,8 +414,11 @@
     "autofill_repair_order"
   ],
   "operation_notes": [
+    "In production begin with agent_bootstrap, then use agent_board_digest/agent_search/agent_entity_context and a named domain workflow; use lazy raw discovery only when no named workflow fits.",
+    "For repair-order payments use agent_finance_workflow operation record_repair_order_payment with exact target ids, amount, payment method, current expected_updated_at, and an idempotency key. It verifies the repair-order payment row, linked cash transaction, and cash-journal entry.",
+    "If a CRM mutation is missing from the legacy MCP registry, search discover_raw_capabilities for api:/api/<route>; the virtual fallback never enlarges tools/list and still enforces the durable ledger, payload fingerprint, schema hash, and finance/destructive switches.",
     "Always use ping_connector/get_connector_identity/get_runtime_status when connector availability or auth behavior is uncertain.",
-    "Start broad CRM orientation with bootstrap_context and manager_board_scan; use get_board_context or review_board when a legacy/full view is needed.",
+    "Start broad CRM orientation with agent_bootstrap and agent_board_digest; use agent_search and agent_entity_context for focused detail, and raw discovery only for a legacy capability not covered by a named workflow.",
     "Route 'готовые без оплаты' through list_ready_unpaid_cards first; use apply_ready_unpaid_followups in dry_run before apply.",
     "Route 'разбери входящие' through triage_inbox_cards, then use cleanup_card or focused CRUD writes only for eligible cards.",
     "Route 'поставь таймеры' or timer-floor requests through bulk_set_deadline_if_below; default is dry_run and apply requires actor_name.",

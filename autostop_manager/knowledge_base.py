@@ -91,7 +91,16 @@ _KNOWLEDGE_ROUTE_LIST_FIELDS = (
     "optional_files",
 )
 
-_COMMAND_ROUTE_LIST_FIELDS = ("aliases", "keywords", "memory_queries", "next_actions")
+_COMMAND_ROUTE_LIST_FIELDS = (
+    "aliases",
+    "keywords",
+    "memory_queries",
+    "next_actions",
+    "required_reads",
+    "write_domains",
+    "external_connectors",
+    "completion_checks",
+)
 
 _ANNOTATION_LIST_FIELDS = ("use_when", "keywords", "questions", "safety_flags", "related_skills")
 
@@ -850,15 +859,29 @@ def _load_command_routes() -> dict[str, Any]:
 def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
     lowered = (query or "").casefold()
     normalized_intent = (intent or "").casefold()
+    routes = [dict(route) for route in _load_command_routes().get("routes", [])]
+    if normalized_intent:
+        exact_intent_routes = [
+            route for route in routes if normalized_intent == str(route.get("intent") or "").casefold()
+        ]
+        if exact_intent_routes:
+            exact_intent_routes.sort(
+                key=lambda route: (
+                    -int(route.get("priority") or 0),
+                    str(route.get("workflow_id") or route.get("command_id") or ""),
+                )
+            )
+            selected = exact_intent_routes[0]
+            selected["score"] = 1000
+            selected["matching_terms"] = [str(selected.get("intent"))]
+            return selected
+
     best: dict[str, Any] | None = None
     best_score = 0
-    for raw_route in _load_command_routes().get("routes", []):
-        route = dict(raw_route)
+    best_priority = -1
+    for route in routes:
         score = 0
         matching_terms: list[str] = []
-        if normalized_intent and normalized_intent == str(route.get("intent") or "").casefold():
-            score += 40
-            matching_terms.append(str(route.get("intent")))
         for alias in _string_list(route.get("aliases")):
             text = str(alias).casefold()
             if not text:
@@ -874,11 +897,13 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
             if text and text in lowered:
                 score += 15
                 matching_terms.append(str(keyword))
-        if score > best_score:
+        priority = int(route.get("priority") or 0)
+        if score > best_score or (score == best_score and score > 0 and priority > best_priority):
             route["score"] = score
             route["matching_terms"] = list(dict.fromkeys(matching_terms))
             best = route
             best_score = score
+            best_priority = priority
     return best if best_score >= 30 else None
 
 

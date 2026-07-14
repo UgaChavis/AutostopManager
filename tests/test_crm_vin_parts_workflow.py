@@ -49,9 +49,9 @@ def test_playbook_covers_identifier_markets_confidence_and_crm_writeback():
         "oem reference",
         "selected part",
         "quote matrix",
-        "replace_repair_order_materials",
-        "update_card",
-        "get_card_context",
+        "agent_finance_workflow",
+        "agent_board_workflow",
+        "agent_entity_context",
     ]:
         assert fragment in text
 
@@ -163,7 +163,7 @@ def test_manual_writeback_package_blocks_when_resolution_gate_disallows_prepare(
     assert package["confidence"] == "blocked"
 
 
-def test_pipeline_requires_prepare_card_action_before_card_writeback():
+def test_pipeline_requires_v2_action_contract_before_card_writeback():
     result = build_crm_vin_parts_lookup_pipeline(
         card_id="card_123",
         requested_part="колодки передние",
@@ -175,9 +175,9 @@ def test_pipeline_requires_prepare_card_action_before_card_writeback():
     write_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "write_structured_result_to_crm_card")
 
     assert prepare_index < write_index
-    assert "prepare_crm_card_action" in result["pipeline"][prepare_index]["manager_tools"]
-    assert "expected_updated_at is present before update_card" in result["pipeline"][prepare_index]["checks"]
-    assert any("prepare_crm_card_action" in rule for rule in result["pipeline"][write_index]["rules"])
+    assert "prepare_action_contract" in result["pipeline"][prepare_index]["manager_tools"]
+    assert any("expected_updated_at" in check for check in result["pipeline"][prepare_index]["checks"])
+    assert any("prepare_action_contract" in rule for rule in result["pipeline"][write_index]["rules"])
 
 
 def test_rules_forbid_hallucinated_oem_and_require_price_separation():

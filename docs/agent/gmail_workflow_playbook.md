@@ -32,7 +32,8 @@ Read-only or inspection tools:
 - `_list_drafts`
 - `_read_attachment`
 
-Mutating or sending tools, all requiring explicit owner approval:
+Mutating or sending tools, all requiring task-specific owner intent and exact
+targets in the active workflow:
 
 - `_create_label`
 - `_apply_labels_to_emails`
@@ -49,15 +50,21 @@ Mutating or sending tools, all requiring explicit owner approval:
 ## Write Safety
 
 Before any mutating Gmail command, identify the exact action, target messages or
-query, labels, recipients, subject, attachments, and intended result.
+query, labels, recipients, subject, attachments, and intended result. Agent
+Gateway v2 has no second owner-confirmation state once that task-specific intent
+and target are present: use automatic preflight, an idempotency key, active tool
+schema inspection, and result readback.
 
 - For individual changes, use message IDs returned by Gmail search/read tools.
 - For server-side bulk labeling or archiving, preview the Gmail query with
   `_search_emails` first and report the query/target class before executing.
 - Prefer archive over delete for routine cleanup; delete moves messages to
-  Trash and still needs explicit owner approval.
+  Trash and must be explicitly within the workflow's owner-authorized target.
 - For sends/forwards, confirm recipients, subject, body, attachment paths, and
   whether the message is a new email, reply, draft, or forward.
+- For CRM+Gmail workflows, store only connector, action, message/thread/draft/
+  attachment/file IDs, timestamps, and status in manager SQLite. Never store
+  the raw body, HTML, snippet, or full subject there.
 
 Attachment schema note: current exposed tool metadata may describe
 `attachment_files` as an absolute-path string, while some connector surfaces

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -11,6 +12,81 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT, get_db_path
+
+
+WORKFLOW_TERMINAL_STATES = {"completed", "failed", "cancelled"}
+WORKFLOW_TRANSITIONS = {
+    "planned": {"executing", "failed", "cancelled"},
+    "executing": {"external_wait", "verifying", "compensating", "failed", "cancelled"},
+    "external_wait": {"executing", "verifying", "compensating", "failed", "cancelled"},
+    "verifying": {"completed", "compensating", "failed", "cancelled"},
+    "compensating": {"completed", "failed", "cancelled"},
+    # Compatibility for runs created by the v1 ledger.
+    "running": {"executing", "external_wait", "verifying", "compensating", "completed", "failed", "cancelled"},
+}
+
+_VERIFICATION_FAILURE_BOOL_KEYS = {
+    "executor_ok",
+    "executor_success",
+    "execution_ok",
+    "execution_success",
+    "verification_ok",
+    "verification_passed",
+    "verified",
+    "passed",
+}
+_VERIFICATION_FAILURE_CONTEXT_TOKENS = {
+    "executor",
+    "execution",
+    "verification",
+    "verify",
+    "readback",
+    "check",
+}
+_VERIFICATION_FAILURE_STRINGS = {
+    "blocked",
+    "error",
+    "failed",
+    "failure",
+    "false",
+    "invalid",
+    "not_passed",
+    "rejected",
+}
+
+EXTERNAL_REF_KEYS = {
+    "message_id",
+    "message_ids",
+    "thread_id",
+    "thread_ids",
+    "draft_id",
+    "attachment_id",
+    "attachment_ids",
+    "file_id",
+    "file_ids",
+    "label_id",
+    "label_ids",
+    "external_ref",
+    "provider",
+    "status",
+    "sent_at",
+    "completed_at",
+    "recipient_count",
+    "subject_hash",
+    "error_code",
+}
+EXTERNAL_BODY_KEYS = {
+    "body",
+    "body_text",
+    "body_html",
+    "html",
+    "content",
+    "raw",
+    "raw_body",
+    "message_body",
+    "thread_body",
+    "snippet",
+}
 
 
 def _now() -> str:
@@ -48,6 +124,119 @@ def _decode_json(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return fallback
+
+
+def _verification_failure_paths(value: Any, *, prefix: str = "") -> list[str]:
+    """Return explicit executor/readback failure markers from completion evidence."""
+
+    failures: list[str] = []
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = str(raw_key or "").strip().casefold().replace("-", "_")
+            path = f"{prefix}.{key}" if prefix else key
+            path_tokens = set(path.replace(".", "_").split("_"))
+            failure_context = bool(path_tokens & _VERIFICATION_FAILURE_CONTEXT_TOKENS)
+            if nested is False and (
+                key in _VERIFICATION_FAILURE_BOOL_KEYS
+                or bool(set(key.split("_")) & _VERIFICATION_FAILURE_CONTEXT_TOKENS)
+                or (failure_context and key in {"ok", "passed", "success", "verified"})
+            ):
+                failures.append(path)
+            elif (
+                isinstance(nested, str) and nested.strip().casefold().replace(" ", "_") in _VERIFICATION_FAILURE_STRINGS
+            ):
+                if failure_context or key in {"executor", "execution", "verification", "readback"}:
+                    failures.append(path)
+            failures.extend(_verification_failure_paths(nested, prefix=path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            failures.extend(_verification_failure_paths(nested, prefix=f"{prefix}[{index}]"))
+    return failures
+
+
+def _workflow_state_conflict(
+    run_id: int,
+    *,
+    expected_state_version: int | None,
+    current_state_version: int,
+) -> dict[str, Any] | None:
+    if expected_state_version is None or int(expected_state_version) == current_state_version:
+        return None
+    return {
+        "ok": False,
+        "error": "workflow_state_conflict",
+        "run_id": run_id,
+        "expected_state_version": int(expected_state_version),
+        "current_state_version": current_state_version,
+    }
+
+
+def _completion_verification_error(
+    run_id: int, *, current_status: str, verification: dict[str, Any]
+) -> dict[str, Any] | None:
+    if not verification:
+        return {
+            "ok": False,
+            "error": "verification_required_before_completion",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    failure_paths = sorted(set(_verification_failure_paths(verification)))
+    if failure_paths:
+        return {
+            "ok": False,
+            "error": "verification_failed_before_completion",
+            "run_id": run_id,
+            "status": current_status,
+            "failure_paths": failure_paths,
+        }
+    return None
+
+
+def _unique_string_values(values: list[str] | None, *, limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _find_forbidden_body_keys(value: Any, *, prefix: str = "") -> list[str]:
+    found: list[str] = []
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = str(raw_key or "").strip().casefold()
+            path = f"{prefix}.{key}" if prefix else key
+            if key in EXTERNAL_BODY_KEYS or "body" in key:
+                found.append(path)
+            found.extend(_find_forbidden_body_keys(nested, prefix=path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            found.extend(_find_forbidden_body_keys(nested, prefix=f"{prefix}[{index}]"))
+    return list(dict.fromkeys(found))
+
+
+def _sanitize_external_refs(value: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    payload = value if isinstance(value, dict) else {}
+    forbidden = _find_forbidden_body_keys(payload)
+    if forbidden:
+        return {}, forbidden
+    sanitized: dict[str, Any] = {}
+    for raw_key, raw_value in payload.items():
+        key = str(raw_key or "").strip().casefold()
+        if key not in EXTERNAL_REF_KEYS or raw_value is None:
+            continue
+        if isinstance(raw_value, (str, int, float, bool)):
+            sanitized[key] = raw_value
+        elif isinstance(raw_value, list):
+            sanitized[key] = [item for item in raw_value if isinstance(item, (str, int, float, bool))][:100]
+    return sanitized, []
 
 
 def _tokens(value: str) -> list[str]:
@@ -271,7 +460,9 @@ def _is_context_noise(
             (["bmw f15", "n63"], ["bmw", "f15", "n63", "x5"]),
         ]
         for item_markers, task_markers in vehicle_families:
-            if any(marker in text for marker in item_markers) and not any(marker in task_text for marker in task_markers):
+            if any(marker in text for marker in item_markers) and not any(
+                marker in task_text for marker in task_markers
+            ):
                 return True
     return False
 
@@ -535,10 +726,20 @@ class ManagerMemoryStore:
                 CREATE TABLE IF NOT EXISTS manager_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     intent TEXT NOT NULL DEFAULT '',
+                    workflow_id TEXT NOT NULL DEFAULT '',
                     query TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'running',
                     dry_run INTEGER NOT NULL DEFAULT 0,
                     source TEXT NOT NULL DEFAULT 'codex',
+                    request_id TEXT NOT NULL DEFAULT '',
+                    idempotency_key TEXT NOT NULL DEFAULT '',
+                    correlation_id TEXT NOT NULL DEFAULT '',
+                    actor TEXT NOT NULL DEFAULT 'codex-owner-agent',
+                    scope_json TEXT NOT NULL DEFAULT '{}',
+                    selected_ids_json TEXT NOT NULL DEFAULT '[]',
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                    compensation_json TEXT NOT NULL DEFAULT '[]',
+                    state_version INTEGER NOT NULL DEFAULT 1,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     summary TEXT NOT NULL DEFAULT '',
                     verification_json TEXT NOT NULL DEFAULT '{}',
@@ -556,6 +757,22 @@ class ManagerMemoryStore:
                     target_id TEXT NOT NULL DEFAULT '',
                     payload_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES manager_runs(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS manager_run_external_steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    step_id TEXT NOT NULL,
+                    connector TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    request_refs_json TEXT NOT NULL DEFAULT '{}',
+                    result_refs_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    UNIQUE(run_id, step_id),
                     FOREIGN KEY(run_id) REFERENCES manager_runs(id) ON DELETE CASCADE
                 );
 
@@ -577,11 +794,18 @@ class ManagerMemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_manager_run_events_run_id
                     ON manager_run_events(run_id, created_at);
 
+                CREATE INDEX IF NOT EXISTS idx_manager_run_external_steps_run_id
+                    ON manager_run_external_steps(run_id, status, created_at);
+
                 CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
                     ON memory_review_items(status, created_at);
                 """
             )
             self._ensure_columns(conn)
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_runs_idempotency "
+                "ON manager_runs(idempotency_key) WHERE idempotency_key <> ''"
+            )
             self._ensure_memory_fts(conn)
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
@@ -611,6 +835,18 @@ class ManagerMemoryStore:
             },
             "knowledge_route_cards": {
                 "reference_files_json": "TEXT NOT NULL DEFAULT '[]'",
+            },
+            "manager_runs": {
+                "workflow_id": "TEXT NOT NULL DEFAULT ''",
+                "request_id": "TEXT NOT NULL DEFAULT ''",
+                "idempotency_key": "TEXT NOT NULL DEFAULT ''",
+                "correlation_id": "TEXT NOT NULL DEFAULT ''",
+                "actor": "TEXT NOT NULL DEFAULT 'codex-owner-agent'",
+                "scope_json": "TEXT NOT NULL DEFAULT '{}'",
+                "selected_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "checkpoint_json": "TEXT NOT NULL DEFAULT '{}'",
+                "compensation_json": "TEXT NOT NULL DEFAULT '[]'",
+                "state_version": "INTEGER NOT NULL DEFAULT 1",
             },
         }
         for table, columns in desired.items():
@@ -1159,11 +1395,7 @@ class ManagerMemoryStore:
         lessons = [
             item
             for item in _unique_memory_items(
-                [
-                    item
-                    for query in lesson_queries
-                    for item in self.recall_lessons(query, limit=limit)["items"]
-                ]
+                [item for query in lesson_queries for item in self.recall_lessons(query, limit=limit)["items"]]
             )
             if not _is_context_noise(
                 item,
@@ -1187,11 +1419,7 @@ class ManagerMemoryStore:
             ]
 
         recalled = _unique_memory_items(
-            [
-                item
-                for query in context_queries
-                for item in self.recall(query, limit=limit * 3)["items"]
-            ]
+            [item for query in context_queries for item in self.recall(query, limit=limit * 3)["items"]]
         )
         recalled = [
             item
@@ -1205,9 +1433,7 @@ class ManagerMemoryStore:
             )
         ]
         preferences_or_facts = [
-            item
-            for item in recalled
-            if item.get("kind") in {"fact", "note", "rule"} and item.get("kind") != "lesson"
+            item for item in recalled if item.get("kind") in {"fact", "note", "rule"} and item.get("kind") != "lesson"
         ][:limit]
         if not preferences_or_facts:
             preferences_or_facts = self.recall("", limit=limit, kind="fact")["items"]
@@ -1383,6 +1609,624 @@ class ManagerMemoryStore:
             )
         return {"ok": True, "id": cursor.lastrowid, "started_at": now, "status": "running"}
 
+    def start_workflow_run(
+        self,
+        *,
+        workflow_id: str,
+        intent: str,
+        query: str = "",
+        request_id: str = "",
+        idempotency_key: str,
+        correlation_id: str = "",
+        actor: str = "codex-owner-agent",
+        scope: dict[str, Any] | None = None,
+        selected_ids: list[str] | None = None,
+        dry_run: bool = False,
+        source: str = "codex",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Start an idempotent v2 workflow without changing any external system."""
+
+        self.initialize()
+        workflow_id = str(workflow_id or "").strip()
+        intent = str(intent or "").strip()
+        idempotency_key = str(idempotency_key or "").strip()
+        if not workflow_id:
+            return {"ok": False, "error": "workflow_id is required"}
+        if not intent:
+            return {"ok": False, "error": "intent is required"}
+        if not idempotency_key:
+            return {"ok": False, "error": "idempotency_key is required"}
+
+        now = _now()
+        effective_request_id = str(request_id or "").strip() or str(uuid.uuid4())
+        effective_correlation_id = str(correlation_id or "").strip() or effective_request_id
+        normalized_ids = _unique_string_values(selected_ids, limit=1000)
+        scope_provided = isinstance(scope, dict)
+        selected_ids_provided = selected_ids is not None
+        scope_payload = scope if scope_provided else {}
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        forbidden = _find_forbidden_body_keys({"scope": scope_payload, "metadata": metadata_payload})
+        if forbidden:
+            return {
+                "ok": False,
+                "error": "raw_external_body_not_allowed_in_manager_ledger",
+                "forbidden_keys": forbidden,
+            }
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT * FROM manager_runs WHERE idempotency_key = ? LIMIT 1",
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                item = self._row_to_dict(existing)
+                conflict_fields: list[str] = []
+                if item.get("workflow_id") != workflow_id:
+                    conflict_fields.append("workflow_id")
+                if item.get("intent") != intent:
+                    conflict_fields.append("intent")
+                if scope_provided and _decode_json(existing["scope_json"], {}) != scope_payload:
+                    conflict_fields.append("scope")
+                if selected_ids_provided and _decode_json(existing["selected_ids_json"], []) != normalized_ids:
+                    conflict_fields.append("selected_ids")
+                if bool(existing["dry_run"]) != bool(dry_run):
+                    conflict_fields.append("dry_run")
+                if conflict_fields:
+                    return {
+                        "ok": False,
+                        "error": "idempotency_key_conflict",
+                        "id": item.get("id"),
+                        "status": item.get("status"),
+                        "conflict_fields": conflict_fields,
+                    }
+                return {"ok": True, **item, "deduplicated": True}
+
+            cursor = conn.execute(
+                """
+                INSERT INTO manager_runs (
+                    intent, workflow_id, query, status, dry_run, source, request_id,
+                    idempotency_key, correlation_id, actor, scope_json, selected_ids_json,
+                    checkpoint_json, compensation_json, state_version, metadata_json,
+                    started_at, updated_at
+                ) VALUES (?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, '{}', '[]', 1, ?, ?, ?)
+                """,
+                (
+                    intent,
+                    workflow_id,
+                    query,
+                    1 if dry_run else 0,
+                    source,
+                    effective_request_id,
+                    idempotency_key,
+                    effective_correlation_id,
+                    str(actor or "codex-owner-agent"),
+                    json.dumps(scope_payload, ensure_ascii=False),
+                    json.dumps(normalized_ids, ensure_ascii=False),
+                    json.dumps(metadata_payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            run_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO manager_run_events
+                    (run_id, event_type, message, payload_json, created_at)
+                VALUES (?, 'workflow_started', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    workflow_id,
+                    json.dumps(
+                        {"workflow_id": workflow_id, "request_id": effective_request_id},
+                        ensure_ascii=False,
+                    ),
+                    now,
+                ),
+            )
+        return {
+            "ok": True,
+            "id": run_id,
+            "workflow_id": workflow_id,
+            "intent": intent,
+            "request_id": effective_request_id,
+            "correlation_id": effective_correlation_id,
+            "idempotency_key": idempotency_key,
+            "status": "planned",
+            "state_version": 1,
+            "started_at": now,
+            "deduplicated": False,
+        }
+
+    def transition_workflow_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        message: str = "",
+        verification: dict[str, Any] | None = None,
+        summary: str = "",
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        target_status = str(status or "").strip().casefold()
+        now = _now()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            current = str(row["status"] or "")
+            current_version = int(row["state_version"] or 1)
+            conflict = _workflow_state_conflict(
+                run_id,
+                expected_state_version=expected_state_version,
+                current_state_version=current_version,
+            )
+            if conflict:
+                return conflict
+            if current == target_status:
+                if target_status == "completed":
+                    verification_payload = (
+                        verification if isinstance(verification, dict) else _decode_json(row["verification_json"], {})
+                    )
+                    completion_error = _completion_verification_error(
+                        run_id,
+                        current_status=current,
+                        verification=verification_payload,
+                    )
+                    if completion_error:
+                        return completion_error
+                return {
+                    "ok": True,
+                    "id": run_id,
+                    "status": current,
+                    "state_version": current_version,
+                    "deduplicated": True,
+                }
+            allowed = WORKFLOW_TRANSITIONS.get(current, set())
+            if target_status not in allowed:
+                return {
+                    "ok": False,
+                    "error": "invalid_workflow_transition",
+                    "run_id": run_id,
+                    "from_status": current,
+                    "to_status": target_status,
+                    "allowed": sorted(allowed),
+                }
+            if current == "external_wait" and target_status in {"executing", "verifying"}:
+                pending = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM manager_run_external_steps
+                    WHERE run_id = ? AND status <> 'completed'
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if int(pending["count"] or 0) > 0:
+                    return {
+                        "ok": False,
+                        "error": "external_steps_pending",
+                        "run_id": run_id,
+                        "status": current,
+                    }
+            next_version = current_version + 1
+            finished_at = now if target_status in WORKFLOW_TERMINAL_STATES else None
+            verification_payload = (
+                verification if isinstance(verification, dict) else _decode_json(row["verification_json"], {})
+            )
+            if target_status == "completed":
+                completion_error = _completion_verification_error(
+                    run_id,
+                    current_status=current,
+                    verification=verification_payload,
+                )
+                if completion_error:
+                    return completion_error
+            effective_summary = str(summary) if summary else str(row["summary"] or "")
+            cursor = conn.execute(
+                """
+                UPDATE manager_runs
+                SET status = ?, state_version = ?, summary = ?, verification_json = ?,
+                    finished_at = ?, updated_at = ?
+                WHERE id = ? AND state_version = ?
+                """,
+                (
+                    target_status,
+                    next_version,
+                    effective_summary,
+                    json.dumps(verification_payload, ensure_ascii=False),
+                    finished_at,
+                    now,
+                    run_id,
+                    current_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return {"ok": False, "error": "workflow_state_conflict", "run_id": run_id}
+            conn.execute(
+                """
+                INSERT INTO manager_run_events
+                    (run_id, event_type, message, payload_json, created_at)
+                VALUES (?, 'state_transition', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    message,
+                    json.dumps(
+                        {"from": current, "to": target_status, "state_version": next_version}, ensure_ascii=False
+                    ),
+                    now,
+                ),
+            )
+        return {
+            "ok": True,
+            "id": run_id,
+            "status": target_status,
+            "state_version": next_version,
+            "finished_at": finished_at,
+            "deduplicated": False,
+        }
+
+    def checkpoint_workflow_run(
+        self,
+        run_id: int,
+        *,
+        checkpoint: dict[str, Any],
+        selected_ids: list[str] | None = None,
+        message: str = "",
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        checkpoint_payload = checkpoint if isinstance(checkpoint, dict) else {}
+        invalid_keys = _find_forbidden_body_keys(checkpoint_payload)
+        if invalid_keys:
+            return {
+                "ok": False,
+                "error": "raw_external_body_not_allowed_in_manager_ledger",
+                "forbidden_keys": invalid_keys,
+            }
+        encoded = json.dumps(checkpoint_payload, ensure_ascii=False, default=str)
+        if len(encoded.encode("utf-8")) > 16_384:
+            return {"ok": False, "error": "checkpoint_too_large", "max_bytes": 16_384}
+        now = _now()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            current_version = int(row["state_version"] or 1)
+            conflict = _workflow_state_conflict(
+                run_id,
+                expected_state_version=expected_state_version,
+                current_state_version=current_version,
+            )
+            if conflict:
+                return conflict
+            if str(row["status"] or "") in WORKFLOW_TERMINAL_STATES:
+                return {"ok": False, "error": "workflow_is_terminal", "run_id": run_id, "status": row["status"]}
+            next_version = current_version + 1
+            ids_json = row["selected_ids_json"]
+            if selected_ids is not None:
+                ids_json = json.dumps(_unique_string_values(selected_ids, limit=1000), ensure_ascii=False)
+            cursor = conn.execute(
+                """
+                UPDATE manager_runs
+                SET checkpoint_json = ?, selected_ids_json = ?, state_version = ?, updated_at = ?
+                WHERE id = ? AND state_version = ?
+                """,
+                (encoded, ids_json, next_version, now, run_id, current_version),
+            )
+            if cursor.rowcount != 1:
+                return {
+                    "ok": False,
+                    "error": "workflow_state_conflict",
+                    "run_id": run_id,
+                    "expected_state_version": current_version,
+                }
+            conn.execute(
+                """
+                INSERT INTO manager_run_events
+                    (run_id, event_type, message, payload_json, created_at)
+                VALUES (?, 'checkpoint', ?, ?, ?)
+                """,
+                (run_id, message, json.dumps({"state_version": next_version}, ensure_ascii=False), now),
+            )
+        return {
+            "ok": True,
+            "id": run_id,
+            "status": row["status"],
+            "state_version": next_version,
+            "checkpoint": checkpoint_payload,
+        }
+
+    def register_external_step(
+        self,
+        run_id: int,
+        *,
+        step_id: str,
+        connector: str,
+        action: str,
+        request_refs: dict[str, Any] | None = None,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        step_id = str(step_id or "").strip()
+        connector = str(connector or "").strip().casefold()
+        action = str(action or "").strip()
+        if not step_id or not connector or not action:
+            return {"ok": False, "error": "step_id, connector, and action are required"}
+        sanitized, forbidden = _sanitize_external_refs(request_refs)
+        if forbidden:
+            return {
+                "ok": False,
+                "error": "raw_external_body_not_allowed_in_manager_ledger",
+                "forbidden_keys": forbidden,
+            }
+        now = _now()
+        with self.connect() as conn:
+            run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+            if not run:
+                return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            status = str(run["status"] or "")
+            current_version = int(run["state_version"] or 1)
+            conflict = _workflow_state_conflict(
+                run_id,
+                expected_state_version=expected_state_version,
+                current_state_version=current_version,
+            )
+            if conflict:
+                return conflict
+            if status not in {"executing", "external_wait"}:
+                return {
+                    "ok": False,
+                    "error": "external_step_requires_executing_workflow",
+                    "run_id": run_id,
+                    "status": status,
+                }
+            existing = conn.execute(
+                "SELECT * FROM manager_run_external_steps WHERE run_id = ? AND step_id = ? LIMIT 1",
+                (run_id, step_id),
+            ).fetchone()
+            if existing:
+                return {
+                    "ok": True,
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "status": existing["status"],
+                    "state_version": current_version,
+                    "deduplicated": True,
+                }
+            next_version = current_version + 1
+            cursor = conn.execute(
+                """
+                UPDATE manager_runs
+                SET status = 'external_wait', state_version = ?, updated_at = ?
+                WHERE id = ? AND state_version = ?
+                """,
+                (next_version, now, run_id, current_version),
+            )
+            if cursor.rowcount != 1:
+                return {
+                    "ok": False,
+                    "error": "workflow_state_conflict",
+                    "run_id": run_id,
+                    "expected_state_version": current_version,
+                }
+            conn.execute(
+                """
+                INSERT INTO manager_run_external_steps
+                    (run_id, step_id, connector, action, status, request_refs_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+                """,
+                (run_id, step_id, connector, action, json.dumps(sanitized, ensure_ascii=False), now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO manager_run_events
+                    (run_id, event_type, message, target_type, target_id, payload_json, created_at)
+                VALUES (?, 'external_step_requested', ?, 'external_step', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    f"{connector}:{action}",
+                    step_id,
+                    json.dumps({"connector": connector, "action": action}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "step_id": step_id,
+            "connector": connector,
+            "action": action,
+            "status": "pending",
+            "workflow_status": "external_wait",
+            "state_version": next_version,
+            "deduplicated": False,
+        }
+
+    def complete_external_step(
+        self,
+        run_id: int,
+        *,
+        step_id: str,
+        result_refs: dict[str, Any] | None = None,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        step_id = str(step_id or "").strip()
+        sanitized, forbidden = _sanitize_external_refs(result_refs)
+        if forbidden:
+            return {
+                "ok": False,
+                "error": "raw_external_body_not_allowed_in_manager_ledger",
+                "forbidden_keys": forbidden,
+            }
+        if not step_id:
+            return {"ok": False, "error": "step_id is required"}
+        if not sanitized:
+            return {"ok": False, "error": "at least one external result reference is required"}
+        now = _now()
+        with self.connect() as conn:
+            run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+            if not run:
+                return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            current_version = int(run["state_version"] or 1)
+            conflict = _workflow_state_conflict(
+                run_id,
+                expected_state_version=expected_state_version,
+                current_state_version=current_version,
+            )
+            if conflict:
+                return conflict
+            if str(run["status"] or "") in WORKFLOW_TERMINAL_STATES:
+                return {
+                    "ok": False,
+                    "error": "workflow_is_terminal",
+                    "run_id": run_id,
+                    "status": run["status"],
+                }
+            step = conn.execute(
+                "SELECT * FROM manager_run_external_steps WHERE run_id = ? AND step_id = ? LIMIT 1",
+                (run_id, step_id),
+            ).fetchone()
+            if not step:
+                return {"ok": False, "error": "external step not found", "run_id": run_id, "step_id": step_id}
+            if step["connector"] == "gmail" and step["action"] in {"send", "forward"}:
+                if not any(sanitized.get(key) for key in ("message_id", "thread_id", "draft_id", "external_ref")):
+                    return {
+                        "ok": False,
+                        "error": "gmail_message_or_thread_result_ref_required",
+                        "run_id": run_id,
+                        "step_id": step_id,
+                    }
+            if step["status"] == "completed":
+                previous = _decode_json(step["result_refs_json"], {})
+                if previous != sanitized:
+                    return {
+                        "ok": False,
+                        "error": "external_step_result_conflict",
+                        "run_id": run_id,
+                        "step_id": step_id,
+                    }
+                return {
+                    "ok": True,
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "status": "completed",
+                    "state_version": current_version,
+                    "deduplicated": True,
+                }
+            next_version = current_version + 1
+            cursor = conn.execute(
+                """
+                UPDATE manager_runs
+                SET state_version = ?, updated_at = ?
+                WHERE id = ? AND state_version = ?
+                """,
+                (next_version, now, run_id, current_version),
+            )
+            if cursor.rowcount != 1:
+                return {
+                    "ok": False,
+                    "error": "workflow_state_conflict",
+                    "run_id": run_id,
+                    "expected_state_version": current_version,
+                }
+            conn.execute(
+                """
+                UPDATE manager_run_external_steps
+                SET status = 'completed', result_refs_json = ?, updated_at = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (json.dumps(sanitized, ensure_ascii=False), now, now, step["id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO manager_run_events
+                    (run_id, event_type, message, target_type, target_id, payload_json, created_at)
+                VALUES (?, 'external_step_completed', ?, 'external_step', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    f"{step['connector']}:{step['action']}",
+                    step_id,
+                    json.dumps({"result_ref_keys": sorted(sanitized)}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "step_id": step_id,
+            "status": "completed",
+            "state_version": next_version,
+            "result_refs": sanitized,
+            "deduplicated": False,
+        }
+
+    def resume_workflow_run(self, run_id: int, *, expected_state_version: int | None = None) -> dict[str, Any]:
+        self.initialize()
+        run = self.get_manager_run(run_id, include_events=False, include_external_steps=True)
+        if not run.get("ok"):
+            return run
+        item = run["item"]
+        status = str(item.get("status") or "")
+        current_version = int(item.get("state_version") or 1)
+        conflict = _workflow_state_conflict(
+            run_id,
+            expected_state_version=expected_state_version,
+            current_state_version=current_version,
+        )
+        if conflict:
+            return conflict
+        if status in WORKFLOW_TERMINAL_STATES:
+            return {"ok": False, "error": "workflow_is_terminal", "run_id": run_id, "status": status}
+        pending = [step for step in item.get("external_steps", []) if step.get("status") != "completed"]
+        if status == "external_wait" and pending:
+            return {
+                "ok": False,
+                "error": "external_steps_pending",
+                "run_id": run_id,
+                "status": status,
+                "pending_step_ids": [step.get("step_id") for step in pending],
+                "checkpoint": item.get("checkpoint", {}),
+            }
+        if status in {"planned", "external_wait"}:
+            transitioned = self.transition_workflow_run(
+                run_id,
+                status="executing",
+                message="workflow resumed",
+                expected_state_version=current_version,
+            )
+            if not transitioned.get("ok"):
+                return transitioned
+            status = "executing"
+            current_version = int(transitioned.get("state_version") or current_version)
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "status": status,
+            "state_version": current_version,
+            "checkpoint": item.get("checkpoint", {}),
+            "selected_ids": item.get("selected_ids", []),
+            "next_action": (item.get("checkpoint") or {}).get("next_action"),
+        }
+
+    def cancel_workflow_run(
+        self,
+        run_id: int,
+        *,
+        reason: str = "",
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        return self.transition_workflow_run(
+            run_id,
+            status="cancelled",
+            message=reason or "workflow cancelled",
+            expected_state_version=expected_state_version,
+        )
+
     def record_manager_run_event(
         self,
         run_id: int,
@@ -1394,6 +2238,15 @@ class ManagerMemoryStore:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
+        event_payload = payload if isinstance(payload, dict) else {}
+        forbidden = _find_forbidden_body_keys(event_payload)
+        if forbidden:
+            return {
+                "ok": False,
+                "error": "raw_external_body_not_allowed_in_manager_ledger",
+                "forbidden_keys": forbidden,
+                "run_id": run_id,
+            }
         now = _now()
         with self.connect() as conn:
             run = conn.execute("SELECT id FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
@@ -1411,7 +2264,7 @@ class ManagerMemoryStore:
                     message,
                     target_type,
                     target_id,
-                    json.dumps(payload or {}, ensure_ascii=False),
+                    json.dumps(event_payload, ensure_ascii=False),
                     now,
                 ),
             )
@@ -1427,9 +2280,24 @@ class ManagerMemoryStore:
         verification: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT workflow_id FROM manager_runs WHERE id = ? LIMIT 1",
+                (run_id,),
+            ).fetchone()
+        if not existing:
+            return {"ok": False, "error": "manager run not found", "run_id": run_id}
+        if str(existing["workflow_id"] or "").strip():
+            return self.transition_workflow_run(
+                run_id,
+                status=status,
+                message="workflow finished through compatibility API",
+                summary=summary,
+                verification=verification,
+            )
         now = _now()
         with self.connect() as conn:
-            cursor = conn.execute(
+            conn.execute(
                 """
                 UPDATE manager_runs
                 SET status = ?, summary = ?, verification_json = ?, finished_at = ?, updated_at = ?
@@ -1437,8 +2305,6 @@ class ManagerMemoryStore:
                 """,
                 (status, summary, json.dumps(verification or {}, ensure_ascii=False), now, now, run_id),
             )
-        if cursor.rowcount == 0:
-            return {"ok": False, "error": "manager run not found", "run_id": run_id}
         return {"ok": True, "id": run_id, "status": status, "finished_at": now}
 
     def list_manager_runs(self, *, limit: int = 20, include_events: bool = False) -> dict[str, Any]:
@@ -1468,6 +2334,33 @@ class ManagerMemoryStore:
                     item["events"] = events_by_run[int(item["id"])]
         return {"ok": True, "items": items, "total_returned": len(items)}
 
+    def get_manager_run(
+        self,
+        run_id: int,
+        *,
+        include_events: bool = True,
+        include_external_steps: bool = True,
+    ) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            item = self._row_to_dict(row)
+            if include_events:
+                event_rows = conn.execute(
+                    "SELECT * FROM manager_run_events WHERE run_id = ? ORDER BY created_at ASC",
+                    (run_id,),
+                ).fetchall()
+                item["events"] = [self._row_to_dict(event) for event in event_rows]
+            if include_external_steps:
+                step_rows = conn.execute(
+                    "SELECT * FROM manager_run_external_steps WHERE run_id = ? ORDER BY created_at ASC",
+                    (run_id,),
+                ).fetchall()
+                item["external_steps"] = [self._row_to_dict(step) for step in step_rows]
+        return {"ok": True, "item": item}
+
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)
         if "tags_json" in item:
@@ -1478,6 +2371,18 @@ class ManagerMemoryStore:
             item["verification"] = _decode_json(item.pop("verification_json"), {})
         if "payload_json" in item:
             item["payload"] = _decode_json(item.pop("payload_json"), {})
+        if "scope_json" in item:
+            item["scope"] = _decode_json(item.pop("scope_json"), {})
+        if "selected_ids_json" in item:
+            item["selected_ids"] = _decode_json(item.pop("selected_ids_json"), [])
+        if "checkpoint_json" in item:
+            item["checkpoint"] = _decode_json(item.pop("checkpoint_json"), {})
+        if "compensation_json" in item:
+            item["compensation"] = _decode_json(item.pop("compensation_json"), [])
+        if "request_refs_json" in item:
+            item["request_refs"] = _decode_json(item.pop("request_refs_json"), {})
+        if "result_refs_json" in item:
+            item["result_refs"] = _decode_json(item.pop("result_refs_json"), {})
         if "dry_run" in item:
             item["dry_run"] = bool(item["dry_run"])
         return item

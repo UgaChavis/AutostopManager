@@ -433,7 +433,7 @@ def build_crm_vin_parts_lookup_pipeline(
         "pipeline": [
             {
                 "step": "read_crm_card_vehicle_data",
-                "crm_tools": ["bootstrap_context", "get_card_context", "list_repair_orders", "get_repair_order"],
+                "crm_tools": ["agent_bootstrap", "agent_search", "agent_entity_context"],
                 "output": "vehicle, VIN/frame/body source, requested part, existing OEM/article, repair-order material context",
             },
             {
@@ -475,18 +475,18 @@ def build_crm_vin_parts_lookup_pipeline(
             },
             {
                 "step": "prepare_card_write_contract",
-                "manager_tools": ["prepare_crm_card_action"],
+                "manager_tools": ["prepare_action_contract"],
                 "checks": [
-                    "expected_updated_at is present before update_card",
+                    "expected_updated_at is present before agent_board_workflow cleanup_card apply",
                     "description patch contains quote matrix and source confidence",
                     "board_summary is <=5 non-empty lines and excludes VIN/client private data",
                 ],
             },
             {
                 "step": "write_structured_result_to_crm_card",
-                "crm_tools": ["update_card", "replace_repair_order_materials", "set_card_board_summary"],
+                "crm_tools": ["agent_board_workflow", "agent_finance_workflow"],
                 "rules": [
-                    "apply card description and board_summary writes from prepare_crm_card_action contract",
+                    "apply card description and board_summary through agent_board_workflow cleanup_card from prepare_action_contract",
                     "description gets OEM/replacements/quote matrix/source/confidence",
                     "repair-order materials get selected priced part only",
                     "board_summary stays short and excludes raw VIN/client private data",
@@ -494,7 +494,7 @@ def build_crm_vin_parts_lookup_pipeline(
             },
             {
                 "step": "reopen_and_verify_crm_write",
-                "crm_tools": ["get_card_context", "get_repair_order"],
+                "crm_tools": ["agent_entity_context"],
                 "checks": ["description persisted", "material total equals manual sum", "selected part line has one price basis", "confidence and needs-confirmation are visible"],
             },
         ],
