@@ -10,8 +10,6 @@ from .config import PROJECT_ROOT
 
 CATALOG_DIR = PROJECT_ROOT / "docs" / "agent" / "automotive_sources"
 SOURCE_CATALOG_PATH = CATALOG_DIR / "automotive_repair_sources_catalog.json"
-BRAND_SOURCE_MAP_PATH = CATALOG_DIR / "brand_source_map.json"
-DATA_TYPE_SOURCE_MAP_PATH = CATALOG_DIR / "data_type_source_map.json"
 OPEN_DATASET_ENDPOINTS_PATH = CATALOG_DIR / "open_dataset_endpoints.json"
 
 _LICENSED_STATUSES = {
@@ -94,12 +92,35 @@ def load_source_catalog() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def load_brand_source_map() -> dict[str, list[dict[str, Any]]]:
-    return _read_json(BRAND_SOURCE_MAP_PATH, {})
+    return _project_source_map("brands")
 
 
 @lru_cache(maxsize=1)
 def load_data_type_source_map() -> dict[str, list[dict[str, Any]]]:
-    return _read_json(DATA_TYPE_SOURCE_MAP_PATH, {})
+    return _project_source_map("data_types")
+
+
+def _project_source_map(dimension: str) -> dict[str, list[dict[str, Any]]]:
+    """Derive routing maps from the canonical source catalog.
+
+    Keeping separate generated JSON projections made documentation reviews
+    noisy and allowed the maps to drift from the catalog.
+    """
+    fields = ("name", "category", "access", "priority_score_1_5", "legal_ingestion_status", "url")
+    result: dict[str, list[dict[str, Any]]] = {}
+    for source in load_source_catalog().get("sources", []):
+        source_id = _source_id(source)
+        if not source_id:
+            continue
+        row = {"source_id": source_id, **{field: source.get(field) for field in fields}}
+        values = source.get(dimension)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            key = str(value or "").strip()
+            if key:
+                result.setdefault(key, []).append(row)
+    return result
 
 
 @lru_cache(maxsize=1)

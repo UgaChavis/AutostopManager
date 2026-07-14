@@ -60,8 +60,8 @@ summaries:
    file results without copying private rows into chat.
 5. `agent_entity_context` - read one exact client, card, order, cashbox,
    inventory item, or file when detail is required.
-7. Return a compact report in chat, a manager run ledger event, or a short
-   `manager_journal` entry only when the result is durable.
+6. Return a compact report in chat, a Gateway v2 workflow checkpoint, or a
+   schema-hashed raw `manager_journal` entry only when the result is durable.
 
 For exact client/card/order work, read back the live target with
 `agent_entity_context`.
@@ -78,8 +78,8 @@ gives a separate explicit command.
    stale/attention cards, ready unpaid cards, inbox cards, and repair-order
    consistency issues.
 3. Use `agent_board_digest` when the high-level scan is not enough.
-4. Flag overloaded columns before card-level work. Current known risk signals
-   to watch are `Запись на ремонт` and `Готовые автомобили`.
+4. Flag overloaded columns returned by the current scan before card-level work;
+   do not hard-code transient load signals into durable documentation.
 5. For focused targets, use `agent_search` and `agent_entity_context`; check for
    missing next action, stale or missing `board_summary`, missing deadline,
    unclear payment/parts state, or unclear repair-order closure state.

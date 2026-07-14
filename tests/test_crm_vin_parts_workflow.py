@@ -194,11 +194,12 @@ def test_rules_forbid_hallucinated_oem_and_require_price_separation():
     assert "raw customer vin" in combined
 
 
-def test_integration_backlog_names_required_catalog_cross_and_price_sources():
+def test_provider_registries_name_required_catalog_cross_and_price_sources():
     vin_sources = json.loads(_read("docs/agent/vin_oem_sources.json"))
     price_sources = json.loads(_read("docs/agent/procurement_price_sources.json"))
 
-    catalog_ids = {item["source_id"] for item in vin_sources["crm_vin_oem_parts_lookup_backlog"]}
+    catalog_rows = [item for item in vin_sources["sources"] if item.get("mvp_priority")]
+    catalog_ids = {item["source_id"] for item in catalog_rows}
     assert {
         "parts_catalogs_api",
         "partsapi_ru",
@@ -208,13 +209,24 @@ def test_integration_backlog_names_required_catalog_cross_and_price_sources():
         "epc_data_manual",
     }.issubset(catalog_ids)
 
-    price_ids = {item["source_id"] for item in price_sources["crm_vin_oem_parts_pricing_backlog"]}
+    price_rows = [item for item in price_sources["sources"] if item.get("integration_priority")]
+    price_ids = {item["source_id"] for item in price_rows}
     assert {"rossko", "autoeuro_api", "zzap", "armtek", "autopiter", "emex", "exist", "autodoc"}.issubset(price_ids)
 
-    for row in vin_sources["crm_vin_oem_parts_lookup_backlog"] + price_sources["crm_vin_oem_parts_pricing_backlog"]:
+    for row in catalog_rows:
         assert row["role"]
         assert row["mvp_priority"] in {"high", "medium", "low"}
-        assert row["acceptance"] if "acceptance" in row else row["test_vin_checks"]
+    for row in price_rows:
+        assert row["integration_priority"] in {"high", "medium", "low"}
+        assert row["verification"]
+
+    assert "crm_vin_oem_parts_lookup_backlog" not in vin_sources
+    assert "crm_vin_oem_parts_pricing_backlog" not in price_sources
+    vin_source_ids = [item["source_id"] for item in vin_sources["sources"]]
+    price_source_ids = [item["source_id"] for item in price_sources["sources"]]
+    assert len(vin_source_ids) == len(set(vin_source_ids))
+    assert len(price_source_ids) == len(set(price_source_ids))
+    assert all(step["status"] for step in price_sources["integration_next_steps"])
 
 
 def test_command_route_and_annotation_point_to_crm_vin_domain():

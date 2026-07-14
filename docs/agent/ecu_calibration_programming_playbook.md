@@ -37,11 +37,8 @@ Purpose: route ECU programming, calibration, coding, instrument-cluster/KOMBI, a
 Retained pack files:
 
 - `README.md` - provenance, purpose, and safety boundary.
-- `MANIFEST.md` - retained-file list and compacted-pack metadata.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md` and
-  `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv`
-  - public standards/source routes.
-
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md`
+  - retained-file list and compacted-pack metadata.
 Data indexes:
 
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl` - ECU/programming abbreviations and Russian explanations.
@@ -52,7 +49,7 @@ Data indexes:
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/programming_precheck_matrix.csv` - programming precheck matrix.
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/risk_register.jsonl` - programming/coding risk register.
 - `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/repair_scenario_cards.jsonl` - scenario cards for repair knowledge workflows.
-- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md` and `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv` - public standards/source routes.
+- `docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv` - public standards and official source routes.
 
 ## Operating Rules
 

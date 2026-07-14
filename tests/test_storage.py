@@ -287,6 +287,36 @@ def test_seed_default_rules_updates_existing_rule(tmp_path):
     assert rule["priority"] == 10
 
 
+def test_seed_default_rules_removes_only_obsolete_docs_seeded_rules(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+
+    with store.connect() as conn:
+        now = "2026-07-14T00:00:00+00:00"
+        conn.execute(
+            """
+            INSERT INTO manager_rules (title, rule, scope, priority, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("obsolete-doc-rule", "stale", "general", 100, "docs/agent/manager_rules.json", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO manager_rules (title, rule, scope, priority, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("custom-rule", "keep", "general", 100, "owner", now, now),
+        )
+
+    result = store.seed_default_rules()
+
+    assert result["removed"] == 1
+    with store.connect() as conn:
+        titles = {row["title"] for row in conn.execute("SELECT title FROM manager_rules")}
+    assert "obsolete-doc-rule" not in titles
+    assert "custom-rule" in titles
+
+
 def test_seed_default_rules_handles_invalid_manager_rules_payload(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     rules_path = root / "docs" / "agent" / "manager_rules.json"

@@ -1,6 +1,6 @@
 # Krasnoyarsk Service Management Playbook
 
-Purpose: make the AutoStop/Автоспорт manager useful beyond one vehicle card:
+Purpose: make the AutoStop manager useful beyond one vehicle card:
 parts procurement, repair routing, customer flow, staff management, finance
 control, CRM hygiene, and knowledge intake for a Krasnoyarsk workshop.
 
@@ -12,7 +12,8 @@ control, CRM hygiene, and knowledge intake for a Krasnoyarsk workshop.
    repair zones with no recent event.
 4. For each blocker, decide whether the next action is parts, client approval,
    technician assignment, diagnostic data, payment, or archive/ready state.
-5. Write `manager_journal` after meaningful changes.
+5. Checkpoint meaningful changes in the Gateway v2 workflow; add a compact
+   schema-hashed raw `manager_journal` entry only for a durable conclusion.
 
 ## Current CRM Operating Model
 
@@ -22,12 +23,9 @@ Refresh this model with `agent_bootstrap` and `agent_board_digest` when the boar
   missing diagnosis, and client/parts blockers first.
 - `Запись на ремонт` and `Ресепшен`: appointment and intake flow; check
   date mismatch, no-show risk, and missing VIN/contact details.
-- Technician columns such as `В работе, Константин`, `В работе Немец`,
-  `В работе Слава`, `В работе Валера`, `Электрик Александр`,
-  `в работе артем студент`, `В работе Максим Курсеич`, `В работе Кирилл`,
-  `КПП - Дмитрий`, and assistant/reception columns are load signals, not
-  final payroll records. Refresh the exact labels from live `agent_board_digest`
-  before staff-load decisions.
+- Classify current technician, assistant, and reception columns from live
+  `agent_board_digest`. They are load signals, not final payroll records; do not
+  hardcode names or labels into durable documentation.
 - `Снабжение` and `Заказы запчастей`: procurement blocker queues; every card
   should show the exact part identity, source, price, delivery date, and next
   supplier action.
@@ -49,11 +47,12 @@ Use this order:
 3. Confirm OEM or replacement number through the VIN/OEM dossier workflow:
    catalog route, EPC evidence, OEM candidates, supersessions, confidence, and
    missing context.
-4. Search exact number in Drom, ZZap, Emex/Exist/Autodoc, then local
-   Krasnoyarsk suppliers.
+4. Check contracted supplier/API/price-list routes first, then Drom, ZZap,
+   Avito, and other public market sources for local or used/contract options.
 5. Rank by exact article, city pickup, delivery time, seller reliability,
    return terms, and total price.
-6. Record only the chosen offer and reusable search rule in memory.
+6. Keep the chosen offer in the live CRM/workflow. Store only a reusable search
+   rule in manager memory.
 
 Urgency routing:
 
@@ -75,8 +74,9 @@ Use this order:
 
 ## Work Labor Pricing
 
-For labor-only work estimates, use `work_labor_pricing_playbook.md` and
-`estimate_repair_work_cost`.
+For labor-only estimates, use `work_labor_pricing_playbook.md`; on Gateway v2,
+resolve `estimate_repair_work_cost` through raw discovery and schema lookup
+before calling it.
 
 Rules:
 
@@ -141,5 +141,5 @@ Check daily:
 
 ## Knowledge Intake
 
-New files are source material. Follow `knowledge_intake_playbook.md`, then
-promote only durable rules into memory or docs.
+New files are source material. Follow `knowledge_shelves.md` and promote only
+durable rules into the smallest canonical playbook, catalog, or memory rule.

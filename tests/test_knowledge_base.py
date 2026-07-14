@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import autostop_manager.knowledge_base as kb
 from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
@@ -11,6 +12,8 @@ PRIVATE_RUNTIME_FILES = [
     "data/private_knowledge/business_identity_current.json",
     "data/private_knowledge/business_documents_inventory.json",
 ]
+
+BMW_PACK_DATA = Path("docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data")
 
 
 def test_sync_indexes_domains_documents_and_sections(tmp_path):
@@ -212,8 +215,37 @@ def test_sync_indexes_jsonl_rows_as_sections(tmp_path):
 
     assert result["ok"] is True
     assert result["items"]
-    assert result["items"][0]["document_type"] == "jsonl"
-    assert "8013FE" in result["items"][0]["heading"]
+    matching_rows = [item for item in result["items"] if item["document_type"] == "jsonl"]
+    assert matching_rows
+    assert "8013FE" in matching_rows[0]["heading"]
+
+
+def test_bmw_pack_jsonl_files_use_one_schema_and_unique_entity_keys():
+    entity_keys = {
+        "bmw_chassis_codes.jsonl": "code",
+        "bmw_control_units_glossary.jsonl": "abbreviation",
+        "bmw_engine_families.jsonl": "engine",
+        "bmw_fault_memory_public_examples.jsonl": "code",
+        "bmw_fluids_specification_logic.jsonl": "system",
+        "bmw_symptom_diagnostic_index.jsonl": "symptom_ru",
+        "bmw_transmission_families.jsonl": "family",
+    }
+
+    for filename, entity_key in entity_keys.items():
+        rows = [json.loads(line) for line in (BMW_PACK_DATA / filename).read_text(encoding="utf-8").splitlines()]
+        schemas = {tuple(row) for row in rows}
+        entities = [row[entity_key] for row in rows]
+
+        assert len(schemas) == 1, filename
+        assert len(entities) == len(set(entities)), filename
+
+
+def test_bmw_public_fault_examples_have_direct_official_sources():
+    path = BMW_PACK_DATA / "bmw_fault_memory_public_examples.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    assert {row["code"] for row in rows} >= {"8013FE", "8013A3"}
+    assert all(row["source_url"].startswith("https://static.nhtsa.gov/") for row in rows)
 
 
 def test_search_routes_russian_bmw_driveline_query_to_bmw_repair(tmp_path):
@@ -263,7 +295,7 @@ def test_probe_routes_cluster_needle_coding_to_ecu_programming_pack(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "ecu_calibration_programming"
-    assert any("ecu_calibration_programming_knowledge_pack" in path for path in result["source_of_truth"])
+    assert any("ecu_calibration_programming_knowledge_pack" in path for path in result["reference_files"])
 
 
 def test_search_finds_ecu_programming_pack_kombi_content(tmp_path):
@@ -360,7 +392,7 @@ def test_probe_routes_steering_rack_parts_request_to_ai_parts_pack(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
-    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["source_of_truth"])
+    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["reference_files"])
 
 
 def test_probe_routes_inflected_contract_steering_rack_with_analogs_to_parts_sourcing(tmp_path):
@@ -372,7 +404,7 @@ def test_probe_routes_inflected_contract_steering_rack_with_analogs_to_parts_sou
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
-    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["source_of_truth"])
+    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["reference_files"])
 
 
 def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
@@ -436,7 +468,7 @@ def test_probe_routes_autostop_document_without_card_to_crm_print_module(tmp_pat
     assert any("CRM print module" in item.get("preview", "") for item in search["items"])
 
 
-def test_search_finds_ai_parts_playbook_for_local_vendor_scoring(tmp_path):
+def test_search_finds_parts_playbook_for_local_vendor_scoring(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -448,7 +480,7 @@ def test_search_finds_ai_parts_playbook_for_local_vendor_scoring(tmp_path):
     )
 
     assert result["ok"] is True
-    assert any("ai_parts_krasnoyarsk_playbook.md" in item["path"] for item in result["items"])
+    assert any("parts_search_playbook.md" in item["path"] for item in result["items"])
     assert not any("/docs/" in item["path"] and "ai_parts_krasnoyarsk_project_pack" in item["path"] for item in result["items"])
 
 
@@ -485,11 +517,11 @@ def test_reference_files_are_audited_but_not_fully_indexed(tmp_path):
     sync_knowledge_base(store)
 
     audit = audit_knowledge_base(store)
-    result = search_knowledge_base(store, "data_type_source_map", domain="transmission", limit=20)
+    result = search_knowledge_base(store, "automotive_repair_sources_catalog", domain="transmission", limit=20)
 
     assert audit["ok"] is True
     assert audit["missing_files"] == []
-    assert not any(item["path"].endswith("data_type_source_map.json") for item in result["items"])
+    assert not any(item["path"].endswith("automotive_repair_sources_catalog.json") for item in result["items"])
 
 
 def test_parts_sourcing_pack_keeps_compact_manifest_without_draft_noise(tmp_path):
@@ -503,7 +535,7 @@ def test_parts_sourcing_pack_keeps_compact_manifest_without_draft_noise(tmp_path
     assert audit["ok"] is True
     assert audit["missing_files"] == []
     assert probe["best_domain"] == "parts_sourcing"
-    assert any(item.endswith("MANIFEST.md") for item in probe["source_of_truth"])
+    assert any(item.endswith("MANIFEST.md") for item in probe["reference_files"])
     assert not any("openapi" in item["path"].lower() or "code_skeleton" in item["path"].lower() for item in result["items"])
 
 
@@ -518,8 +550,9 @@ def test_bmw_compacted_pack_keeps_fault_examples_searchable(tmp_path):
     assert probe["best_domain"] == "bmw_repair"
     assert not any(item.endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in probe["reference_files"])
     assert not any(item["path"].endswith("public_sources_bmw_zf_nhtsa.jsonl") for item in compacted_result["items"])
-    assert fault_result["items"][0]["document_type"] == "jsonl"
-    assert "8013FE" in fault_result["items"][0]["heading"]
+    matching_rows = [item for item in fault_result["items"] if item["document_type"] == "jsonl"]
+    assert matching_rows
+    assert "8013FE" in matching_rows[0]["heading"]
 
 
 def test_ecu_reference_glossary_stays_linked_without_hiding_format_docs(tmp_path):

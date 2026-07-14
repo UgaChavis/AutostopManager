@@ -62,9 +62,9 @@ record or compact public card result.
 If the selected part is genuine BMW, the material line may contain the BMW
 number because that is the priced selected part.
 
-If no selected part and no confirmed price exist yet, do not present the repair
-order as a payable invoice. Mark it as `предварительная смета` and list
-`needs supplier confirmation`.
+If no selected part and confirmed price exist, do not write a material line or
+present the repair order as payable. Report the estimate internally as
+preliminary and name the missing supplier confirmation.
 
 ## Search Order
 
@@ -75,13 +75,12 @@ order as a payable invoice. Mark it as `предварительная смет�
    ROSSKO/Armtek/Autopiter/Emex/Exist/Autodoc/fifth-gear/local suppliers if
    accessible, Drom Красноярск, Avito Красноярск, ZZap with region, and direct
    supplier phone confirmation when web data is weak. For public discovery,
-   use CRM agent `search_web_multi` before opening result excerpts.
+   resolve `search_web_multi` through the Gateway v2 raw-capability route before
+   opening result excerpts.
 3. Search nearby Siberia if Krasnoyarsk is weak:
    Novosibirsk, Kemerovo, Tomsk, Irkutsk, Barnaul.
-4. Search Moscow/Russia order:
-   Autopiter, AutoEuro, Emex, Exist, Autodoc, Mikado/other contracted
-   suppliers, AutoOpt/АвтоАльянс, MotorOil24, Toyota-specialized sellers, oil
-   shops, Drom/ZZap Russia-wide, and brand-specific stores.
+4. Search Russia-wide order through configured routes such as Autopiter,
+   AutoEuro, Emex, Exist, Autodoc, AutoSputnik/APEC, ZZap, and Drom.
 5. Keep international prices only as sanity checks, not as a primary Russian
    procurement price.
 
@@ -130,7 +129,7 @@ High-priority API candidates:
   AutoStop.
 - ZZap: use public search for market comparison; partner API requires request
   and should be treated as benchmark until contract is confirmed.
-- AutoSputnik/Mikado/APEC: evaluate as additional supplier API candidates, but
+- AutoSputnik/APEC: evaluate as additional supplier API candidates, but
   confirm account, current endpoint, delivery route, returns, and commercial
   terms before treating results as закупка.
 - PartsAPI/UMAPI/AUTOPOISK: evaluate for catalog, cross, VIN, fitment,
@@ -144,11 +143,11 @@ Do not scrape private supplier cabinets. If an API does not exist or terms are
 unclear, mark the line `needs account/API confirmation` and use manual
 checking.
 
-For public JS-heavy pages, use the CRM agent browser layer only after
-`search_web_multi` and ordinary excerpt fail to expose useful text. Do not use
-it to bypass CAPTCHA, login walls, paywalls, IP blocks, or supplier cabinet
-restrictions; record the access flag and ask for manual/approved account
-access.
+For public JS-heavy pages, resolve the browser through the Gateway v2
+raw-capability route only after `search_web_multi` and ordinary excerpt fail to
+expose useful text. Do not use it to bypass CAPTCHA, login walls, paywalls, IP
+blocks, or supplier cabinet restrictions; record the access flag and ask for
+manual/approved account access.
 
 ## Query Pattern
 

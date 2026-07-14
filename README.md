@@ -6,8 +6,8 @@ verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
 ## Start Here
 
 - `AGENTS.md` - canonical compact startup instruction for Codex.
-- `docs/agent/knowledge_base_index.md` - compact human navigation.
-- `docs/agent/knowledge_shelves.md` - file placement and deletion policy.
+- `docs/agent/knowledge_shelves.md` - human navigation, file placement, and
+  deletion policy.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access,
   toolset, and helper workflow.
 - `docs/agent/knowledge_map.json` - machine route cards for `knowledge-probe`.
@@ -69,7 +69,7 @@ separately after code, docs contracts, or route behavior changes.
 | Business documents | `docs/agent/business_document_quality_playbook.md` |
 | VIN/OEM/parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle identity / OEM | `docs/agent/vehicle_identity_playbook.md` |
-| Parts sourcing | `docs/agent/ai_parts_krasnoyarsk_playbook.md` |
+| Parts sourcing | `docs/agent/parts_search_playbook.md` |
 | Internet / repair web research | `docs/agent/automotive_repair_source_playbook.md` |
 | Service management | `docs/agent/krasnoyarsk_service_management_playbook.md` |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
@@ -77,8 +77,9 @@ separately after code, docs contracts, or route behavior changes.
 
 ## Documentation Hygiene
 
-Keep procedures in playbooks, route metadata in `knowledge_map.json`, and short
-search summaries in `knowledge_annotations.jsonl`. Keep large source packs cold:
+Keep procedures in playbooks, route metadata in
+`docs/agent/knowledge_map.json`, and short search summaries in
+`docs/agent/knowledge_annotations.jsonl`. Keep large source packs cold:
 README/MANIFEST, source/license notes, and important structured tables only.
 Prefer updating an existing canonical file over creating a new one. Delete only
 fully migrated/obsolete tracked docs after `cleanup-audit` and green knowledge

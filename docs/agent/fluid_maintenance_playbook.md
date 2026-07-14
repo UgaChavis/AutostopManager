@@ -26,10 +26,8 @@ For AT, CVT, DCT, AMT, and heavy-duty gearbox fluids, also consult
 capacity, or level-check procedure.
 
 For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS, also consult
-`docs/agent/toyota_gr_yaris_playbook.md`. The Toyota Japan public owner manual
-has useful preliminary capacities for 2024+ Japan-market GXPA16, but the final
-answer still needs VIN/frame, market, production date, transmission, LSD,
-sub-radiator, and grade verification.
+`docs/agent/toyota_gr_yaris_playbook.md`; final data still requires the exact
+market, production date, unit, and option package.
 
 ## Required Distinctions
 
@@ -63,7 +61,9 @@ results as supplemental unless they are explicitly quoting OEM data.
 
 ## Tooling
 
-Use `recommend_fluid_maintenance_sources` or:
+On production Gateway v2, use raw capability discovery, schema lookup, and
+`call_raw_capability` for `recommend_fluid_maintenance_sources`. For local
+manager use:
 
 ```powershell
 python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia

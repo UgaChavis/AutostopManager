@@ -47,8 +47,8 @@ python -m autostop_manager.cli knowledge-search "route card aliases source_of_tr
 Use this order when the owner asks to clean up, update docs, publish to GitHub,
 and deploy:
 
-1. Update `AGENTS.md`, `README.md`, `docs/agent/knowledge_base_index.md`,
-   `docs/agent/knowledge_shelves.md`, playbooks, source catalogs, and tests for
+1. Update `AGENTS.md`, `README.md`, `docs/agent/knowledge_shelves.md`,
+   playbooks, source catalogs, and tests for
    any new commands or route cards.
 2. Run `python -m autostop_manager.cli knowledge-sync`.
 3. Run `python -m autostop_manager.cli knowledge-audit` and confirm
@@ -129,11 +129,11 @@ Release flow:
 ```bash
 cd /opt/AutostopManager
 git switch AutostopManager
-python -m autostop_manager.cli knowledge-sync
-python -m autostop_manager.cli knowledge-audit
-python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli skills-audit
-python -m pytest -q
+.venv/bin/python -m autostop_manager.cli knowledge-sync
+.venv/bin/python -m autostop_manager.cli knowledge-audit
+.venv/bin/python -m autostop_manager.cli annotations-audit
+.venv/bin/python -m autostop_manager.cli skills-audit
+.venv/bin/python -m pytest -q
 git status --short
 git fetch origin AutostopManager
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/AutostopManager)"
@@ -173,9 +173,10 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 cd /opt/autostopcrm
 docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
   --mcp-url http://127.0.0.1:41831/mcp --exhaustive
-python -m autostop_manager.cli knowledge-audit
-python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli skills-audit
-python -m autostop_manager.cli control-report --format markdown
+cd /opt/AutostopManager
+.venv/bin/python -m autostop_manager.cli knowledge-audit
+.venv/bin/python -m autostop_manager.cli annotations-audit
+.venv/bin/python -m autostop_manager.cli skills-audit
+.venv/bin/python -m autostop_manager.cli control-report --format markdown
 ./scripts/doctor.sh --full
 ```

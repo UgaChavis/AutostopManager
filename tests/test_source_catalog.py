@@ -57,8 +57,6 @@ def test_nhtsa_tsbs_routes_use_current_received_zip_sources():
     checked_paths = [
         ROOT / "docs" / "agent" / "automotive_sources" / "open_dataset_endpoints.json",
         ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json",
-        ROOT / "docs" / "agent" / "automotive_sources" / "brand_source_map.json",
-        ROOT / "docs" / "agent" / "automotive_sources" / "data_type_source_map.json",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
 
@@ -72,21 +70,40 @@ def test_nhtsa_tsbs_routes_use_current_received_zip_sources():
         json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_data_type_source_map_references_have_catalog_cards():
-    catalog = json.loads((ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json").read_text(encoding="utf-8"))
-    data_type_map = json.loads((ROOT / "docs" / "agent" / "automotive_sources" / "data_type_source_map.json").read_text(encoding="utf-8"))
-    catalog_ids = {row.get("id") or row.get("source_id") for row in catalog["sources"]}
+def test_source_maps_are_derived_from_the_canonical_catalog():
+    from autostop_manager.source_catalog import load_brand_source_map, load_data_type_source_map
 
-    missing = sorted(
-        {
-            row["source_id"]
-            for rows in data_type_map.values()
-            for row in rows
-            if isinstance(row, dict) and row.get("source_id") and row["source_id"] not in catalog_ids
-        }
-    )
+    catalog_path = ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog_ids = [row["id"] for row in catalog["sources"]]
+    by_id = {row["id"]: row for row in catalog["sources"]}
+    projected_fields = ["name", "category", "access", "priority_score_1_5", "legal_ingestion_status", "url"]
 
-    assert missing == []
+    assert catalog["source_count"] == len(catalog_ids) == len(set(catalog_ids))
+    for actual, dimension in [
+        (load_brand_source_map(), "brands"),
+        (load_data_type_source_map(), "data_types"),
+    ]:
+        expected: dict[str, list[dict[str, object]]] = {}
+        for source_id in catalog_ids:
+            source = by_id[source_id]
+            row = {"source_id": source_id, **{field: source[field] for field in projected_fields}}
+            for key in source[dimension]:
+                expected.setdefault(key, []).append(row)
+
+        assert actual == expected
+
+
+def test_source_catalog_has_specific_publishers_and_current_verified_routes():
+    catalog_path = ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    by_id = {row["id"]: row for row in catalog["sources"]}
+
+    assert all(row["publisher"] != "Public source route" for row in catalog["sources"])
+    assert by_id["hyundai_oem_parts"]["url"].startswith("https://www.hyundai.com/eu/")
+    assert by_id["toyota_jp_owner_manuals"]["brands"] == ["Toyota"]
+    assert by_id["toyota_jp_owner_manuals"]["regions"] == ["Japan"]
+    assert "fluids" in by_id["toyota_jp_owner_manuals"]["data_types"]
 
 
 def test_open_dataset_endpoints_are_normalized_for_source_routing():

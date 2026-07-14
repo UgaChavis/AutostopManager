@@ -26,19 +26,13 @@ banking/contact contents into public playbooks.
 
 ## Current Selection Rule
 
-Use only the newest reliable source for current facts:
-
-1. Current legal and bank requisites: `Карточка предприятия (1).doc`,
-   last modified `2025-10-28T15:52:24+07:00`.
-2. Current customer-facing commercial/service wording: `КП НОВОЕ!.doc`,
-   last modified `2025-10-22T13:28:01+07:00`.
-3. Latest historical tender response wording for ИП Гришкявичус:
-   `Тендер Администрация/Ответ на запрос ИП Гришкявичус.docx`, last modified
-   `2020-11-09T15:43:47+07:00`.
-4. Historical fallback registration source: `выписка.pdf`, generated in 2019.
-
-Older response drafts, old commercial offers, and scanned lease files are not
-current sources unless the owner explicitly asks to inspect history.
+Use `data/private_knowledge/business_identity_current.json` when present.
+Otherwise inspect `data/private_knowledge/business_documents_inventory.json`,
+select the newest reliable document for
+the requested fact class, and verify the original before external use. A file
+name or old modification date in a tracked playbook is never proof of current
+requisites. Historical tender, registration, offer, and lease documents are
+sources only when the owner explicitly asks for history.
 
 ## Use When
 

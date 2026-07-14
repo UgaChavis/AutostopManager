@@ -165,6 +165,7 @@ on an ambiguous `getPartsbyVIN` call.
 
 ## Memory Rule
 
-Store only durable conclusions: identifier class, authoritative route, chosen
-OEM/replacement number, and reusable compatibility caveat. Do not store raw VIN,
-client data, secrets, full payloads, or temporary search lists.
+Store only reusable conclusions: identifier class, authoritative source route,
+and a general compatibility caveat that will improve future work. Do not store
+customer-specific chosen numbers, raw VIN, client data, secrets, full payloads,
+or temporary search lists.

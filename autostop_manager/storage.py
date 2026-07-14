@@ -922,8 +922,32 @@ class ManagerMemoryStore:
             }
         inserted = 0
         updated = 0
+        removed = 0
         now = _now()
+        source = "docs/agent/manager_rules.json"
+        active_titles = {
+            str(rule.get("id") or "").strip()
+            for rule in rules
+            if isinstance(rule, dict)
+            and str(rule.get("id") or "").strip()
+            and str(rule.get("rule") or "").strip()
+        }
         with self.connect() as conn:
+            stale_rows = conn.execute(
+                "SELECT id, title FROM manager_rules WHERE source = ?",
+                (source,),
+            ).fetchall()
+            stale_ids = [
+                int(row["id"])
+                for row in stale_rows
+                if str(row["title"]) not in active_titles
+            ]
+            if stale_ids:
+                conn.executemany(
+                    "DELETE FROM manager_rules WHERE id = ?",
+                    [(row_id,) for row_id in stale_ids],
+                )
+                removed = len(stale_ids)
             for rule in rules:
                 if not isinstance(rule, dict):
                     continue
@@ -933,7 +957,6 @@ class ManagerMemoryStore:
                     continue
                 scope = str(rule.get("scope") or "general")
                 priority = int(rule.get("priority") or 100)
-                source = "docs/agent/manager_rules.json"
                 exists = conn.execute(
                     "SELECT id, rule, scope, priority, source FROM manager_rules WHERE title = ? LIMIT 1",
                     (title,),
@@ -971,7 +994,7 @@ class ManagerMemoryStore:
                     ),
                 )
                 inserted += 1
-        return {"ok": True, "inserted": inserted, "updated": updated}
+        return {"ok": True, "inserted": inserted, "updated": updated, "removed": removed}
 
     def remember(
         self,

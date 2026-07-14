@@ -20,8 +20,9 @@ the material without reading every attachment first.
 Generated PDF duplicates were removed on 2026-05-08. Synthetic examples,
 flashcards, and duplicate CSV glossary output were removed during the
 documentation reduction pass. During the 2026-05-29 hard cleanup, long
-Markdown modules were migrated into `ecu_calibration_programming_playbook.md`
-and deleted. The retained pack is README plus data/sources.
+Markdown modules were migrated into
+`docs/agent/ecu_calibration_programming_playbook.md` and deleted. The retained
+pack is README plus data/sources.
 
 ## Safety Boundary
 

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from autostop_manager.service_management import build_service_management_plan, normalize_area
+from autostop_manager.service_management import (
+    build_service_management_plan,
+    load_service_management_catalog,
+    normalize_area,
+)
 
 
 def test_normalize_area_accepts_russian_parts_alias():
@@ -38,6 +42,18 @@ def test_staff_management_plan_has_role_context_and_kpis():
     assert result["kpis"]
     assert any("выработка" in item.casefold() or "hours" in item.casefold() for item in result["kpis"])
     assert any(source["source_id"] in {"hh_ru", "superjob"} for source in result["sources"])
+
+
+def test_service_catalog_merges_procurement_without_duplicate_ids():
+    catalog = load_service_management_catalog()
+    source_ids = [source["source_id"] for source in catalog["sources"]]
+
+    assert "rossko" in source_ids
+    assert "hh_ru" in source_ids
+    assert "mikado" not in source_ids
+    assert len(source_ids) == len(set(source_ids))
+    for area in catalog["areas"].values():
+        assert set(area["source_ids"]) <= set(source_ids)
 
 
 def test_service_management_plan_redacts_sensitive_context_from_public_output():

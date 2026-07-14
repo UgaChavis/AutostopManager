@@ -56,8 +56,9 @@ Use these families as the first non-OEM routing layer:
 - AISIN and JATCO for AT / CVT / MT product family orientation and CVT data.
 - Valeo, Schaeffler / LuK, and BorgWarner for DCT and clutch-system guidance.
 
-Use `recommend_automotive_sources(data_type="transmission")` for the first
-source route pass, then narrow by brand and exact unit.
+On production Gateway v2, discover the raw catalog, read the schema, then call
+`recommend_automotive_sources` with `data_type="transmission"`; locally, use
+the corresponding manager CLI. Narrow the result by brand and exact unit.
 
 ## VAG DSG / Audi S Tronic Route
 
@@ -125,7 +126,8 @@ Rules:
 ## Manager Checklist
 
 - Confirm the exact unit before ordering fluid or parts.
-- Record source, confidence, and caveats in the work order.
+- Keep source, confidence, and caveats in internal workflow evidence; write only
+  confirmed compact facts to the public work order.
 - Treat community posts as clues only.
 - On repeat complaints, compare prior measurements, parts, technician notes,
   source used, and QC result before opening a new diagnostic branch.

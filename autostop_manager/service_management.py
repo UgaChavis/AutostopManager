@@ -9,6 +9,7 @@ from .config import PROJECT_ROOT
 from .storage import _string_list
 
 SERVICE_MANAGEMENT_SOURCE_PATH = PROJECT_ROOT / "docs" / "agent" / "service_management_sources.json"
+PROCUREMENT_PRICE_SOURCE_PATH = PROJECT_ROOT / "docs" / "agent" / "procurement_price_sources.json"
 
 AREA_ALIASES: dict[str, set[str]] = {
     "daily_control": {"daily", "overview", "control", "board", "день", "ежедневно", "контроль", "доска"},
@@ -79,6 +80,21 @@ def load_service_management_catalog() -> dict[str, Any]:
         sources = []
     if not isinstance(areas, dict):
         areas = {}
+    procurement_sources: list[dict[str, Any]] = []
+    if PROCUREMENT_PRICE_SOURCE_PATH.exists():
+        try:
+            procurement_payload = json.loads(PROCUREMENT_PRICE_SOURCE_PATH.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            procurement_payload = {}
+        if isinstance(procurement_payload, dict) and isinstance(procurement_payload.get("sources"), list):
+            procurement_sources = [source for source in procurement_payload["sources"] if isinstance(source, dict)]
+
+    source_index: dict[str, dict[str, Any]] = {}
+    for source in [*procurement_sources, *sources]:
+        source_id = str(source.get("source_id") or "").strip()
+        if source_id:
+            source_index[source_id] = source
+
     normalized_areas: dict[str, Any] = {}
     for name, area_config in areas.items():
         if not isinstance(area_config, dict):
@@ -87,7 +103,7 @@ def load_service_management_catalog() -> dict[str, Any]:
         for field in _AREA_LIST_FIELDS:
             normalized_area_config[field] = _string_list(normalized_area_config.get(field))
         normalized_areas[str(name)] = normalized_area_config
-    return {**payload, "sources": [source for source in sources if isinstance(source, dict)], "areas": normalized_areas}
+    return {**payload, "sources": list(source_index.values()), "areas": normalized_areas}
 
 
 def normalize_area(area: str | None) -> str:

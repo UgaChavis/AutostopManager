@@ -48,7 +48,9 @@ def test_system_audit_flags_broken_manager_mcp_catalog_count(tmp_path):
         json.dumps(
             {
                 "tool_count": 3,
+                "all_tools_count": 2,
                 "all_tools": ["system_audit", "cleanup_audit"],
+                "tool_contracts": {"system_audit": {}, "cleanup_audit": {}},
             }
         ),
         encoding="utf-8",
@@ -63,6 +65,31 @@ def test_system_audit_flags_broken_manager_mcp_catalog_count(tmp_path):
     assert result["ok"] is False
     assert result["summary"]["manager_mcp_catalog_ok"] is False
     assert "manager_mcp_catalog_tool_count_mismatch" in result["warnings"]
+
+
+def test_system_audit_flags_stale_secondary_count_and_contracts(tmp_path):
+    catalog_path = tmp_path / "manager_mcp_catalog.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "tool_count": 2,
+                "all_tools_count": 3,
+                "all_tools": ["system_audit", "cleanup_audit"],
+                "tool_contracts": {"system_audit": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = build_system_audit(
+        store=ManagerMemoryStore(tmp_path / "memory.sqlite3"),
+        manager_mcp_catalog_path=catalog_path,
+        registered_tool_names=["system_audit", "cleanup_audit"],
+    )
+
+    assert result["ok"] is False
+    assert "manager_mcp_catalog_all_tools_count_mismatch" in result["warnings"]
+    assert "manager_mcp_catalog_tool_contracts_mismatch" in result["warnings"]
 
 
 def test_system_audit_handles_invalid_manager_mcp_catalog_structure(tmp_path):

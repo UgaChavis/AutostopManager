@@ -1,5 +1,5 @@
 {
-  "generated_on": "2026-05-03",
+  "generated_on": "2026-07-14",
   "city": "Красноярск",
   "purpose": "Catalog of supplier, marketplace, and API routes for AutoStop procurement price and availability checks.",
   "principles": [
@@ -77,7 +77,18 @@
         "https://aksys.info/help/rossko.html"
       ],
       "integration_priority": "high",
-      "verification": "Use as a high-priority Krasnoyarsk source after AutoStop account/API keys are available. Confirm warehouse, pickup address, price type, and return terms before writing закупка."
+      "verification": "Use as a high-priority Krasnoyarsk source after AutoStop account/API keys are available. Confirm warehouse, pickup address, price type, and return terms before writing закупка.",
+      "role": "Krasnoyarsk-first procurement, stock, lead time, order/reserve candidate.",
+      "env_names": [
+        "ROSSKO_KEY1",
+        "ROSSKO_KEY2"
+      ],
+      "test_vin_checks": [
+        "exact selected article price",
+        "analog setting behavior",
+        "Krasnoyarsk delivery wave",
+        "vendor-code article handling"
+      ]
     },
     {
       "source_id": "armtek",
@@ -97,7 +108,17 @@
         "https://etp.armtek.ru/"
       ],
       "integration_priority": "high",
-      "verification": "Treat as B2B supplier route. Use only account-approved API/ETP or exported price lists; confirm Krasnoyarsk logistics."
+      "verification": "Treat as B2B supplier route. Use only account-approved API/ETP or exported price lists; confirm Krasnoyarsk logistics.",
+      "role": "B2B procurement and stock/lead-time benchmark candidate.",
+      "env_names": [
+        "ARMTEK_LOGIN",
+        "ARMTEK_PASSWORD"
+      ],
+      "test_vin_checks": [
+        "exact article with brand normalization",
+        "Krasnoyarsk logistics",
+        "return terms"
+      ]
     },
     {
       "source_id": "autopiter",
@@ -119,7 +140,17 @@
         "https://autopiter.ru/opt"
       ],
       "integration_priority": "high",
-      "verification": "Use for Russia-wide закупка and supplier comparison; оптовые цены require legal-entity registration/account."
+      "verification": "Use for Russia-wide закупка and supplier comparison; оптовые цены require legal-entity registration/account.",
+      "role": "Russia-wide procurement, OEM/analog search, and webservice candidate.",
+      "env_names": [
+        "AUTOPITER_USER_ID",
+        "AUTOPITER_PASSWORD"
+      ],
+      "test_vin_checks": [
+        "exact selected article search",
+        "brand disambiguation",
+        "delivery to Krasnoyarsk"
+      ]
     },
     {
       "source_id": "autoeuro_api",
@@ -139,7 +170,18 @@
         "https://api.autoeuro.ru/doc/v2"
       ],
       "integration_priority": "high",
-      "verification": "API can confirm price, stock, delivery, create orders, and check order status after API activation in the client account."
+      "verification": "API can confirm price, stock, delivery, create orders, and check order status after API activation in the client account.",
+      "role": "Supplier API for price/stock confirmation and order status after account activation.",
+      "env_names": [
+        "AUTOEURO_API_KEY"
+      ],
+      "test_vin_checks": [
+        "brand+article exact search",
+        "stock amount",
+        "delivery time",
+        "returnable/cancelable flags",
+        "status mapping"
+      ]
     },
     {
       "source_id": "zzap",
@@ -160,7 +202,17 @@
         "https://wiki.zzap.ru/zzap/zzap-iframe/"
       ],
       "integration_priority": "medium",
-      "verification": "Use public search as price benchmark and seller comparison; API route requires partner approval and should not replace supplier-confirmed закупка."
+      "verification": "Use public search as price benchmark and seller comparison; API route requires partner approval and should not replace supplier-confirmed закупка.",
+      "role": "RF market benchmark, replacements visibility, seller comparison, and average/stat price candidate.",
+      "env_names": [
+        "ZZAP_API_KEY"
+      ],
+      "test_vin_checks": [
+        "exact OEM search",
+        "selected analog search",
+        "replacement list",
+        "3-5 offer market range"
+      ]
     },
     {
       "source_id": "partsapi",
@@ -245,45 +297,6 @@
       "verification": "Evaluate for supplier price-list exchange and catalog enrichment; do not assume it provides Красноярск stock without connected suppliers."
     },
     {
-      "source_id": "autopiter_docs",
-      "name": "Autopiter Webservice Docs",
-      "category": "supplier_api_docs",
-      "city_focus": "Россия",
-      "url": "https://docum.autopiter.ru/",
-      "use_for": [
-        "brand_by_part_number",
-        "parts_by_article",
-        "cart",
-        "order_status"
-      ],
-      "access_mode": "account_required",
-      "api_status": "public docs visible; supplier account required for live use",
-      "api_evidence_urls": [
-        "https://docum.autopiter.ru/"
-      ],
-      "integration_priority": "medium",
-      "verification": "Use docs for implementation planning; live price/order calls need real account credentials."
-    },
-    {
-      "source_id": "mikado",
-      "name": "Mikado Webservice",
-      "category": "supplier_api_docs",
-      "city_focus": "Россия",
-      "url": "https://mikado-parts.ru/ws1/Docs",
-      "use_for": [
-        "parts_search",
-        "price_and_stock_check",
-        "supplier_benchmark"
-      ],
-      "access_mode": "account_required",
-      "api_status": "public webservice documentation",
-      "api_evidence_urls": [
-        "https://mikado-parts.ru/ws1/Docs"
-      ],
-      "integration_priority": "medium",
-      "verification": "Use as an additional API candidate after commercial access is confirmed."
-    },
-    {
       "source_id": "auto_sputnik",
       "name": "AutoSputnik / Автоспутник API",
       "category": "supplier_api",
@@ -366,7 +379,17 @@
         "http://wsdoc.emex.ru/EmExService.html"
       ],
       "integration_priority": "medium",
-      "verification": "Use city/account settings and compare exact article, delivery time, delivery probability, quantity, price, and return terms. Do not scrape closed cabinet/API pages."
+      "verification": "Use city/account settings and compare exact article, delivery time, delivery probability, quantity, price, and return terms. Do not scrape closed cabinet/API pages.",
+      "role": "Russia-wide cabinet benchmark and official SOAP price/stock candidate for exact article and delivery.",
+      "env_names": [
+        "EMEX_LOGIN",
+        "EMEX_PASSWORD"
+      ],
+      "test_vin_checks": [
+        "exact article",
+        "delivery time",
+        "return terms"
+      ]
     },
     {
       "source_id": "exist",
@@ -397,7 +420,14 @@
         "cookie": "_go=905"
       },
       "integration_priority": "medium",
-      "verification": "Use VIN/catalog route first, then exact article price and delivery check. Write Exist to CRM only as public_retail_reference with confidence and requires-confirmation flag; do not use login, basket, order, private cabinet, or raw HTML."
+      "verification": "Use VIN/catalog route first, then exact article price and delivery check. Keep Exist as public_retail_reference with confidence and requires-confirmation in internal quote evidence, not in the public card description; do not use login, basket, order, private cabinet, or raw HTML.",
+      "role": "Public read-only Exist retail benchmark, catalog disambiguation, analog visibility, and lead-time reference for exact article checks.",
+      "env_names": [],
+      "test_vin_checks": [
+        "OEM article price",
+        "analog comparison",
+        "delivery city"
+      ]
     },
     {
       "source_id": "autodoc",
@@ -413,7 +443,17 @@
       "access_mode": "account_or_public_site",
       "api_status": "not_confirmed_for_autostop; treat as cabinet/manual until contract exists",
       "integration_priority": "medium",
-      "verification": "Use as secondary supplier and cross-check; confirm city delivery and returns."
+      "verification": "Use as secondary supplier and cross-check; confirm city delivery and returns.",
+      "role": "Russia/Europe retail benchmark and secondary article availability check.",
+      "env_names": [
+        "AUTODOC_LOGIN",
+        "AUTODOC_PASSWORD"
+      ],
+      "test_vin_checks": [
+        "exact article search",
+        "kit/side ambiguity",
+        "delivery estimate"
+      ]
     },
     {
       "source_id": "fifth_gear_krasnoyarsk",
@@ -437,7 +477,7 @@
       "name": "Liqui Moly Красноярск",
       "category": "local_fluids_supplier",
       "city_focus": "Красноярск",
-      "url": "https://liqui-moly24.ru/",
+      "url": "https://liquimoly24.ru/",
       "use_for": [
         "fluids",
         "additives",
@@ -481,33 +521,54 @@
       "api_status": "manual",
       "integration_priority": "low",
       "verification": "Use only after checking photos, exact article, seller reliability, return terms, and whether the part is damaged or incomplete."
-    }
-  ],
-  "integration_backlog": [
-    {
-      "step": 1,
-      "task": "Collect AutoStop supplier accounts and contacts for ROSSKO, ARMTEK, Autopiter, AutoEuro, Emex, Exist, Autodoc, and local Krasnoyarsk suppliers.",
-      "done_when": "For each supplier, account status, city, price type, API/export availability, and manager contact are recorded outside Git in private settings."
     },
     {
-      "step": 2,
-      "task": "Request API keys or price-list exports where allowed.",
-      "done_when": "Credentials are stored in environment variables or a private secrets store, never in docs or repo."
+      "source_id": "metro_avtodom",
+      "name": "МЕТРО / Автодом",
+      "category": "local_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://metro-avtodom.ru/",
+      "use_for": ["local_stock", "common_service_parts", "same_day_check"],
+      "access_mode": "public_site_or_phone",
+      "api_status": "manual",
+      "integration_priority": "low",
+      "verification": "Confirm exact article, physical stock, pickup address, package, and return terms by phone or written quote."
     },
     {
-      "step": 3,
-      "task": "Implement a read-only quote normalizer that maps every supplier response to normalized_quote_fields.",
-      "done_when": "One query returns comparable offers with source, stock, lead time, package, закупка, and confidence."
+      "source_id": "krasdetal",
+      "name": "КрасДеталь",
+      "category": "local_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://krasdetal.orgs.biz/",
+      "use_for": ["vin_parts_inquiry", "local_delivery", "import_vehicle_parts"],
+      "access_mode": "public_page_or_phone",
+      "api_status": "manual",
+      "integration_priority": "low",
+      "verification": "Confirm the selected part number, current stock, price, and return terms in writing."
     },
     {
-      "step": 4,
-      "task": "Add cache with timestamp and source quote id.",
-      "done_when": "The agent can reuse fresh quotes but knows when price must be rechecked."
+      "source_id": "porshenkras",
+      "name": "Porshenkras",
+      "category": "local_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://porshenkras.ru/",
+      "use_for": ["local_stock", "common_parts", "same_day_check"],
+      "access_mode": "public_site_or_phone",
+      "api_status": "manual",
+      "integration_priority": "low",
+      "verification": "Confirm article, package, physical stock, price, and return terms."
     },
     {
-      "step": 5,
-      "task": "Allow order creation only after manual owner approval.",
-      "done_when": "No API integration can place paid supplier orders silently."
+      "source_id": "avtopostavka",
+      "name": "Автопоставка",
+      "category": "contract_parts_supplier",
+      "city_focus": "Красноярск",
+      "url": "https://avtopostavka.ru/",
+      "use_for": ["contract_parts", "japan_vehicle_parts", "local_stock"],
+      "access_mode": "public_site_or_phone",
+      "api_status": "manual",
+      "integration_priority": "low",
+      "verification": "Verify donor identity, exact part number, condition, completeness, warranty, and return terms."
     }
   ],
   "secret_names_to_use_if_integrated": [
@@ -522,8 +583,6 @@
     "PARTSAPI_KEY",
     "PARTSAPI_BASE_URL",
     "UMAPI_TOKEN",
-    "MIKADO_LOGIN",
-    "MIKADO_PASSWORD",
     "AUTO_SPUTNIK_LOGIN",
     "AUTO_SPUTNIK_PASSWORD",
     "APEC_USERNAME",
@@ -539,188 +598,36 @@
     "AUTODOC_LOGIN",
     "AUTODOC_PASSWORD"
   ],
-  "crm_vin_oem_parts_pricing_backlog": [
+  "integration_next_steps": [
     {
-      "source_id": "rossko",
-      "role": "Krasnoyarsk-first procurement, stock, lead time, order/reserve candidate.",
-      "access": "Registered account API keys; confirm HTTPS API 2.1, delivery address/type, analog settings, and manager terms.",
-      "data": [
-        "GetSearch",
-        "GetCheckout",
-        "GetDeliveryDetails",
-        "GetOrders"
-      ],
-      "limits": "Analogs may be disabled; no-stock cards require manager settings; API has minute/day limits; do not order without explicit approval.",
-      "env_names": [
-        "ROSSKO_KEY1",
-        "ROSSKO_KEY2"
-      ],
-      "mvp_priority": "high",
-      "test_vin_checks": [
-        "exact selected article price",
-        "analog setting behavior",
-        "Krasnoyarsk delivery wave",
-        "vendor-code article handling"
-      ]
+      "step": 1,
+      "task": "Collect AutoStop supplier accounts and contacts for ROSSKO, ARMTEK, Autopiter, AutoEuro, Emex, Exist, Autodoc, and local Krasnoyarsk suppliers.",
+      "done_when": "For each supplier, account status, city, price type, API/export availability, and manager contact are recorded outside Git in private settings.",
+      "status": "external_input_required"
     },
     {
-      "source_id": "autoeuro_api",
-      "role": "Supplier API for price/stock confirmation and order status after account activation.",
-      "access": "API key activated in shop.autoeuro.ru account.",
-      "data": [
-        "search_brands",
-        "search_items",
-        "get_deliveries",
-        "create_order",
-        "get_orders",
-        "get_statuses"
-      ],
-      "limits": "New accounts have daily search limits; use price-list export for broad проценка and API for confirmation/order status.",
-      "env_names": [
-        "AUTOEURO_API_KEY"
-      ],
-      "mvp_priority": "high",
-      "test_vin_checks": [
-        "brand+article exact search",
-        "stock amount",
-        "delivery time",
-        "returnable/cancelable flags",
-        "status mapping"
-      ]
+      "step": 2,
+      "task": "Request API keys or price-list exports where allowed.",
+      "done_when": "Credentials are stored in environment variables or a private secrets store, never in docs or repo.",
+      "status": "external_input_required"
     },
     {
-      "source_id": "zzap",
-      "role": "RF market benchmark, replacements visibility, seller comparison, and average/stat price candidate.",
-      "access": "Public site manually; partner/API/stat access by request/contract.",
-      "data": [
-        "exact article offers",
-        "all replacements",
-        "seller/city/lead time",
-        "market price range/statistics if available"
-      ],
-      "limits": "Benchmark/retail source, not supplier-confirmed закупка unless a contracted supplier result is visible and current.",
-      "env_names": [
-        "ZZAP_API_KEY"
-      ],
-      "mvp_priority": "medium",
-      "test_vin_checks": [
-        "exact OEM search",
-        "selected analog search",
-        "replacement list",
-        "3-5 offer market range"
-      ]
+      "step": 3,
+      "task": "Complete the shared read-only quote normalizer beyond the implemented Emex and Exist adapters.",
+      "done_when": "One query returns comparable offers with source, stock, lead time, package, закупка, and confidence.",
+      "status": "partial"
     },
     {
-      "source_id": "armtek",
-      "role": "B2B procurement and stock/lead-time benchmark candidate.",
-      "access": "Partner account/ETP or approved export/API route required.",
-      "data": [
-        "brand/article offers",
-        "stock",
-        "lead time",
-        "price type"
-      ],
-      "limits": "Treat as account route until API/export terms are confirmed for AutoStop.",
-      "env_names": [
-        "ARMTEK_LOGIN",
-        "ARMTEK_PASSWORD"
-      ],
-      "mvp_priority": "high",
-      "test_vin_checks": [
-        "exact article with brand normalization",
-        "Krasnoyarsk logistics",
-        "return terms"
-      ]
+      "step": 4,
+      "task": "Add cache with timestamp and source quote id.",
+      "done_when": "The agent can reuse fresh quotes but knows when price must be rechecked.",
+      "status": "planned"
     },
     {
-      "source_id": "autopiter",
-      "role": "Russia-wide procurement, OEM/analog search, and webservice candidate.",
-      "access": "Supplier registration and API/webservice request in account tools.",
-      "data": [
-        "brand by part number",
-        "parts by article",
-        "price/stock",
-        "cart/order status where available"
-      ],
-      "limits": "Wholesale prices require legal-entity account; public website is retail/benchmark only.",
-      "env_names": [
-        "AUTOPITER_USER_ID",
-        "AUTOPITER_PASSWORD"
-      ],
-      "mvp_priority": "medium",
-      "test_vin_checks": [
-        "exact selected article search",
-        "brand disambiguation",
-        "delivery to Krasnoyarsk"
-      ]
-    },
-    {
-      "source_id": "emex",
-      "role": "Russia-wide cabinet benchmark and official SOAP price/stock candidate for exact article and delivery.",
-      "access": "Account or public site manually; official SOAP FindDetailAdv5 after EMEX_LOGIN/EMEX_PASSWORD, service approval, and server IP whitelist.",
-      "data": [
-        "exact article price",
-        "delivery time",
-        "delivery probability",
-        "quantity",
-        "analogs/catalog hints"
-      ],
-      "limits": "AutostopManager has an Emex dry-run/read-only adapter, but ws.emex.ru timed out from the production server before whitelist. Do not scrape closed cabinet, basket, or /api pages.",
-      "env_names": [
-        "EMEX_LOGIN",
-        "EMEX_PASSWORD"
-      ],
-      "mvp_priority": "medium",
-      "test_vin_checks": [
-        "exact article",
-        "delivery time",
-        "return terms"
-      ]
-    },
-    {
-      "source_id": "exist",
-      "role": "Public read-only Exist retail benchmark, catalog disambiguation, analog visibility, and lead-time reference for exact article checks.",
-      "access": "Public site read-only route is implemented for /Api/Parts/Search, /Price/?pcode=..., /Price/?pid=..., and Krasnoyarsk office cookie _go=905; account route remains future work only.",
-      "data": [
-        "brand/article catalog disambiguation",
-        "exact article retail price/delivery",
-        "analogs/replacements",
-        "Krasnoyarsk public retail benchmark"
-      ],
-      "limits": "Use as public_retail_reference, not confirmed закупка. Do not use login, private cabinet, basket/order links, closed APIs, or raw HTML in CRM writeback.",
-      "env_names": [],
-      "future_env_names": [
-        "EXIST_LOGIN",
-        "EXIST_PASSWORD"
-      ],
-      "mvp_priority": "medium",
-      "test_vin_checks": [
-        "OEM article price",
-        "analog comparison",
-        "delivery city"
-      ]
-    },
-    {
-      "source_id": "autodoc",
-      "role": "Russia/Europe retail benchmark and secondary article availability check.",
-      "access": "Account/public website; API not confirmed for AutoStop.",
-      "data": [
-        "brand/article price",
-        "availability",
-        "delivery estimate",
-        "analog suggestions"
-      ],
-      "limits": "Treat as retail/benchmark; confirm fitment by OEM/cross source first.",
-      "env_names": [
-        "AUTODOC_LOGIN",
-        "AUTODOC_PASSWORD"
-      ],
-      "mvp_priority": "medium",
-      "test_vin_checks": [
-        "exact article search",
-        "kit/side ambiguity",
-        "delivery estimate"
-      ]
+      "step": 5,
+      "task": "Keep supplier order mutations outside current read-only adapters; add them only inside an exact owner-authorized order workflow.",
+      "done_when": "No adapter can place a paid supplier order without exact target preflight, idempotency, and result reconciliation.",
+      "status": "policy_enforced"
     }
   ]
 }

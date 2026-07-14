@@ -31,9 +31,9 @@ rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text
    `sources/offline_parts_catalog_sources.json` to identify title, publisher,
    source URL, scope, and limits.
 5. If needed, inspect the original PDF locally by path from
-   `catalog_index.json`.
+   `data/offline_parts_catalogs/catalog_index.json`.
 
-## Current Cache Contents
+## Last Recorded Cache Contents
 
 As of 2026-06-05, the local cache was built from official public sources for:
 
@@ -60,5 +60,6 @@ VIN-specific offline parts catalog.
   brand portal, dealer, or a configured catalog provider.
 - Use offline catalogs to check categories, dimensions, engine/date notes,
   OE-reference lines, competitor crosses, kit contents, and footnotes.
-- Keep CRM notes compact: source title, publisher, version/date, checked number,
-  and confidence. Do not paste catalog tables into CRM or durable memory.
+- Keep source, version, checked number, and confidence in internal workflow
+  evidence or the owner report. A public CRM description may contain only the
+  compact confirmed result. Never paste catalog tables into CRM or memory.

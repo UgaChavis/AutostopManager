@@ -532,7 +532,9 @@ def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
 
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
     assert catalog["tool_count"] == len(server.tools)
+    assert catalog["all_tools_count"] == len(server.tools)
     assert set(catalog["all_tools"]) == set(server.tools)
+    assert set(catalog["tool_contracts"]) == set(server.tools)
 
 
 def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):

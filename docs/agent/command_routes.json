@@ -18,6 +18,22 @@
         "Приберись",
         "board-cleanup-no-card-movement"
       ],
+      "required_reads": [
+        "agent_bootstrap and agent_board_digest",
+        "exact target card plus client, vehicle, and repair-order context when relevant",
+        "CRM card description standard"
+      ],
+      "write_domains": [
+        "card",
+        "client",
+        "vehicle"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "each changed card is reread and matches the prepared contract",
+        "cards_moved=0, cards_archived=0, repair_orders_changed=0, payments_changed=0",
+        "skips and unresolved blockers are reported"
+      ],
       "next_actions": [
         "read live CRM board state with agent_bootstrap and agent_board_digest",
         "classify blockers",
@@ -60,6 +76,20 @@
         "ready unpaid cars",
         "service-management"
       ],
+      "required_reads": [
+        "agent_bootstrap and agent_board_digest",
+        "ready-unpaid card list with repair-order due totals",
+        "current deadlines and board summaries for proposed follow-ups"
+      ],
+      "write_domains": [
+        "card"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "dry-run and apply target sets reconcile",
+        "changed deadlines and summaries are reread",
+        "no payment, cashbox, move, archive, or repair-order write occurred"
+      ],
       "next_actions": [
         "read live CRM board state with agent_bootstrap and agent_board_digest",
         "check ready cars and due totals with agent_board_workflow(operation=list_ready_unpaid_cards, mode=dry_run)",
@@ -93,6 +123,22 @@
         "board-cleanup",
         "manager operations"
       ],
+      "required_reads": [
+        "agent_bootstrap and agent_board_digest",
+        "inbox cards and missing-manager-data audit",
+        "exact client and vehicle context before cleanup writes"
+      ],
+      "write_domains": [
+        "card",
+        "client",
+        "vehicle"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "each cleanup write passes dry-run and reread verification",
+        "ambiguous client links remain unchanged",
+        "no card moved or archived"
+      ],
       "next_actions": [
         "read agent_bootstrap and agent_board_digest, then run triage_inbox_cards through agent_board_workflow",
         "run audit_client_links and list_cards_missing_manager_data through agent_board_workflow for incomplete cards",
@@ -125,6 +171,19 @@
         "timer floor",
         "deadline",
         "bulk_set_deadline_if_below"
+      ],
+      "required_reads": [
+        "agent_bootstrap and active-card board digest",
+        "dry-run result for cards below the timer floor"
+      ],
+      "write_domains": [
+        "card"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "only active eligible cards changed",
+        "each changed timer is strictly above two days",
+        "archived cards and unrelated card fields remain unchanged"
       ],
       "next_actions": [
         "read agent_bootstrap and agent_board_digest",
@@ -174,6 +233,22 @@
         "knowledge quality",
         "старые документы"
       ],
+      "required_reads": [
+        "knowledge-probe route and returned source-of-truth files",
+        "tracked-file inventory and reference graph",
+        "baseline knowledge, annotation, skill, cleanup, test, and lint results"
+      ],
+      "write_domains": [
+        "documentation",
+        "knowledge_catalog",
+        "manager_rules"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "obsolete content is migrated before deletion",
+        "knowledge-sync and all documentation audits pass",
+        "tests and lint pass with a clean reference graph"
+      ],
       "next_actions": [
         "classify files as active, source pack, runtime, generated, or archive",
         "delete fully migrated or obsolete historical implementation plans instead of keeping a growing archive",
@@ -214,6 +289,20 @@
         "decode_vehicle_identity",
         "VIN frame route",
         "ROW JDM VIN caveats"
+      ],
+      "required_reads": [
+        "exact identifier and market context",
+        "live CRM vehicle/card context when the identifier came from CRM",
+        "market-appropriate identity source route"
+      ],
+      "write_domains": [],
+      "external_connectors": [
+        "official or licensed identity provider when required"
+      ],
+      "completion_checks": [
+        "identifier class and market are explicit",
+        "confirmed fields are separated from inferred fields",
+        "raw customer identifier is not persisted in Git or manager memory"
       ],
       "next_actions": [
         "run decode_vehicle_identity or decode_vehicle_identities",
@@ -259,6 +348,25 @@
         "VIN OEM parts CRM writeback",
         "selected part price basis",
         "OEM no invention"
+      ],
+      "required_reads": [
+        "exact live CRM card, vehicle, and repair order",
+        "VIN/frame-specific OEM and applicability evidence",
+        "current supplier quote and public market evidence when price is requested"
+      ],
+      "write_domains": [
+        "card",
+        "vehicle",
+        "repair_order"
+      ],
+      "external_connectors": [
+        "official or licensed catalog provider",
+        "supplier or public market provider when configured"
+      ],
+      "completion_checks": [
+        "OEM reference, selected part, and each price basis remain separate",
+        "every CRM write has exact-target preflight and reread verification",
+        "public description contains no provenance, confidence, or private raw identifier"
       ],
       "next_actions": [
         "read exact live CRM card and repair order context",

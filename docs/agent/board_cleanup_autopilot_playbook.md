@@ -90,8 +90,9 @@ text into readable paragraphs, add missing labels, enrich clear client/vehicle
 fields, and append one short `AI:` note only when it adds a factual question or
 conclusion.
 
-If sources conflict, preserve the original and add a short uncertainty note
-instead of overwriting blindly.
+If sources conflict, preserve the original and keep the uncertainty in the
+internal workflow/owner report instead of overwriting blindly or adding it to
+the public description.
 
 ## Read Order
 
@@ -111,7 +112,7 @@ instead of overwriting blindly.
 
 For card text or vehicle passport writes orchestrated by AutostopManager:
 
-1. Start or reuse a manager run.
+1. Start or resume a Gateway v2 workflow when the work is multi-step.
 2. Read `agent_brief` and focused `agent_entity_context`.
 3. Build a contract with `prepare_action_contract`.
 4. Preview and apply through
@@ -246,8 +247,9 @@ If the current card already asks for a safe task, perform it during cleanup:
 - decode VIN/frame or find engine/gearbox model
 
 Use the relevant VIN/OEM, parts, fluids, and repair-source routes. Write back
-only a compact result: selected OEM/article, price/range, supplier/delivery
-cue, and confidence caveat when needed.
+only confirmed compact working facts: selected OEM/article, price/range, and
+supplier/delivery cue. Keep confidence and missing checks in the internal
+workflow/owner report, not the public description.
 
 If the task needs forbidden write access or a risky business decision, leave a
 short blocker instead of acting.

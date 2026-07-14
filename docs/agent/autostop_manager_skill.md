@@ -13,10 +13,10 @@ Default owner-facing style: Russian, short, practical, direct.
 
 ## Startup Routine
 
-1. Run `agent_brief` or CLI `agent-brief` for non-trivial tasks.
-2. Run `prepare_manager_context` when a task needs local memory, command
-   routing, missing context, or next actions.
-3. Run `probe_knowledge_base` before broad local reads. If it finds a route,
+1. Run CLI `agent-brief` for non-trivial tasks.
+2. Run CLI `prepare-context` when a task needs local memory, command routing,
+   missing context, or next actions.
+3. Run CLI `knowledge-probe` before broad local reads. If it finds a route,
    open `open_first` / source-of-truth files first.
 4. For CRM work, start with `agent_bootstrap` and `agent_board_digest`; use
    `agent_search` and `agent_entity_context` before heavy exports. Invoke broad
@@ -58,10 +58,10 @@ path whenever they cover the task.
 | Vehicle identity / VIN/frame | `docs/agent/vehicle_identity_playbook.md`, `decode_vehicle_identity` | Classify identifier and market before OEM or parts work. |
 | Oils/fluids/capacities | `docs/agent/fluid_maintenance_playbook.md`, `recommend_fluid_maintenance_sources` | Do not confirm specs/capacities without source route. |
 | Transmission/gearbox | `docs/agent/transmission_playbook.md`; DSG route opens `dsg_transmission_playbook.md` | Require exact gearbox/context before final repair facts. |
-| Repair diagnostics/source facts | `docs/agent/automotive_repair_source_playbook.md`, `recommend_automotive_sources` | Use CRM `search_web_multi`, then excerpt; use browser fetch only for public JS-heavy pages. Do not invent torque, pinout, labor time, ADAS/SRS/HV, programming facts. |
+| Repair diagnostics/source facts | `docs/agent/automotive_repair_source_playbook.md`, `recommend_automotive_sources` | Resolve public web tools through the Gateway v2 raw-capability route; search, then excerpt, then browser only for JS-heavy pages. Do not invent torque, pinout, labor time, ADAS/SRS/HV, or programming facts. |
 | BMW | `docs/agent/bmw_repair_playbook.md` | Use BMW pack as route/index; verify final VIN-specific facts through official/licensed sources. |
 | Toyota GR Yaris | `docs/agent/toyota_gr_yaris_playbook.md` | Verify frame/VIN, market, grade, transmission, diff package before final facts. |
-| Parts sourcing | `docs/agent/parts_search_playbook.md`, then `zzap_search_playbook.md` | Use CRM `search_web_multi` for public discovery; Drom first, then ZZap/Avito; browser fetch may help with public JS listings, but availability still needs confirmation beyond listing text. |
+| Parts sourcing | `docs/agent/parts_search_playbook.md`, `docs/agent/procurement_pricing_playbook.md` | Use contracted supplier routes first for new/procurement checks; for public used/contract scans use Drom, then ZZap and Avito. Availability still needs confirmation. |
 | Labor estimate | `docs/agent/work_labor_pricing_playbook.md`, `estimate_repair_work_cost` | Read-only estimate; no repair-order writes without exact approval. |
 | Business documents | `docs/agent/business_document_quality_playbook.md` | Use CRM print module for AutoStop service documents. |
 | Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current server-to-home Windows reverse SSH with `ssh`, `sftp`/`scp`, `pwsh`, Python, and helper scripts; do not rotate keys without Windows-side update. |
@@ -110,7 +110,6 @@ dump.
   surface; the canonical CRM branch is `autostopcrm-v1`.
 - `docs/agent/knowledge_map.json` is the machine route map.
 - `docs/agent/knowledge_annotations.jsonl` is the compact file-level index.
-- `docs/agent/knowledge_base_index.md` is the human route list.
 - `docs/agent/knowledge_shelves.md` is the placement/deletion policy.
 
 After durable route or catalog changes, run:

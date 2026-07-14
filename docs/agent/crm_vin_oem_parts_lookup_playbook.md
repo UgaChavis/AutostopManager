@@ -60,8 +60,8 @@ owner already gives an OEM/article and only asks for price or availability, use
    - engine, transmission, drivetrain, body, trim/grade/options if present;
    - requested detail, side, axle, position, quantity, condition, urgency;
    - existing OEM, article, old-part label, photos/files, repair-order rows.
-3. Preserve manual CRM fields. If fields conflict, do not overwrite them; add
-   a short uncertainty note.
+3. Preserve manual CRM fields. If fields conflict, do not overwrite them; keep
+   the uncertainty in the internal lookup result or owner report.
 
 ## Identifier Classification
 
@@ -173,11 +173,13 @@ Classify before decoding.
 If supplier/catalog APIs are not configured, use the generated
 `manual_public_search_queries` only as search starting points. They intentionally
 exclude raw VIN/frame values and must not be treated as OEM or закупка proof.
-For public catalog or marketplace discovery, use CRM agent `search_web_multi`
-first, then ordinary excerpt. For JS-heavy public pages, the CRM agent may use
-`fetch_page_browser` after that. Browser text can support a
-manual evidence trail, but CAPTCHA, login, paywall, IP block, or private
-cabinet pages require manual/approved account access and must not be bypassed.
+For public catalog or marketplace discovery, resolve `search_web_multi`, page
+excerpt, and `fetch_page_browser` through `discover_raw_capabilities`, inspect
+the selected schema with `get_raw_capability_schema`, and invoke it with
+`call_raw_capability`. Search first, then excerpt; use the browser only for
+public JS-heavy pages. Browser text can support a manual evidence trail, but
+CAPTCHA, login, paywall, IP block, or private cabinet pages require
+manual/approved account access and must not be bypassed.
 For 10-card or broad CRM quality checks, run `benchmark_vin_parts_lookup` /
 `vin-parts-benchmark` before claiming coverage. It reports identity confidence,
 part-intent recognition, safe public-query coverage, PartsAPI/17VIN dry-run
@@ -236,7 +238,7 @@ only the selected working facts, not the lookup dossier.
 Do not write source/provenance, lookup method, confidence, missing checks,
 supplier-check reminders, or `Нужна проверка` blocks into the public
 description. Keep source evidence and confidence in the internal owner report,
-manager run, or structured lookup result when needed.
+Gateway v2 workflow, or structured lookup result when needed.
 
 Do not put phone numbers, full client names, raw VIN dumps, or long private
 source excerpts into `board_summary`.
@@ -268,7 +270,7 @@ that is the priced selected part.
 
 ## Writeback Pipeline
 
-1. Start a manager run for auditability when the job is multi-step.
+1. Start or resume a Gateway v2 workflow when the job is multi-step.
 2. Read the target card and repair order.
 3. Build the vehicle identity and OEM lookup plan.
 4. Find OEM/replacements/crosses with source evidence.
@@ -281,15 +283,18 @@ that is the priced selected part.
 7. Write the public card description through
    `agent_board_workflow(operation="cleanup_card")` using
    `docs/agent/crm_card_description_standard.md`, preserving old useful facts.
-8. Update repair-order materials through `agent_finance_workflow` only for
-   selected priced parts, not OEM references.
+8. If the owner explicitly requested material changes, resolve
+   `replace_repair_order_materials` through `discover_raw_capabilities`, inspect
+   its schema, and call it through `call_raw_capability` only for selected
+   priced parts, not OEM references. This is not an `agent_finance_workflow`
+   operation.
 9. Update `board_summary` with a short plain result without VIN/client private
    data, source lists, or confidence/provenance text:
    `OEM найден, выбран NGK 91568`.
 10. Re-open the card and repair order with `agent_entity_context`.
 11. Verify description, board summary, material totals, quantity basis, and the
     internal confidence/evidence record.
-12. Finish the manager run with verification evidence.
+12. Complete the Gateway v2 workflow only with positive verification evidence.
 
 ## Confidence
 
@@ -306,42 +311,19 @@ confirmation is missing.
 Use `low` when the source is generic, marketplace-only, title-match-only, or
 missing VIN/frame applicability.
 
-## Integration Backlog
+## Provider Registry
 
-Keep implementation candidates in:
+Provider readiness and not-yet-implemented adapters live only in:
 
 - `docs/agent/vin_oem_sources.json` for VIN/OEM/catalog/cross/applicability;
-- `docs/agent/procurement_price_sources.json` for закупка, stock, and RF market
-  price sources.
+- `docs/agent/procurement_price_sources.json` for procurement, stock, and RF
+  market price sources.
 
-MVP tool chain:
-
-1. `read CRM card vehicle data`: AutoStop CRM `agent_entity_context` for card,
-   repair-order, and file metadata reads.
-2. `identify vehicle by VIN/frame`: `decode_vehicle_identity` first, then
-   `lookup_original_parts` and Parts-Catalogs/PartsAPI/17VIN/AUTOPOISK or
-   brand EPC adapters when confidence is not high.
-3. `plan provider readiness`: `catalog_provider_status` and
-   `plan_oem_parts_providers`; if live OEM/supplier APIs are missing, record the
-   exact missing adapter/env requirement instead of pretending the lookup is
-   complete.
-4. `benchmark batch readiness`: `benchmark_vin_parts_lookup` when working with
-   10-card or board-wide VIN/frame sets, especially before reporting that
-   decoding or parts search quality improved.
-5. `build per-card work orders`: `build_vin_parts_work_order` to choose exact
-   OEM/EPC routes, prepared API checks, supplier sequence, writeback gates, and
-   acceptance checklist per card.
-6. `find OEM for requested part`: catalog group search and VIN/frame part
-   lookup.
-7. `find replacements/crosses`: supersession, TecDoc/CROSSBASE-style crosses,
-   ZZap replacements, supplier substitutions.
-8. `quote procurement and market retail prices`: normalized supplier quote
-   adapters with stale-price checks.
-9. `build quote matrix`: internal lookup structure for owner report and write
-   decisions.
-10. `write structured result to CRM card`: description, selected material rows,
-    short board summary.
-11. `reopen/verify CRM write`: card/reorder reread and totals check.
+Use `catalog_provider_status`, `plan_oem_parts_providers`, and
+`build_vin_parts_work_order` through the Gateway v2 raw-capability route when a
+named workflow does not cover the task. For broad quality checks, use
+`benchmark_vin_parts_lookup`. Missing adapter or environment readiness is a
+blocker, not evidence that a lookup succeeded.
 
 No adapter may place supplier orders or change financial CRM records without a
 separate explicit owner command.

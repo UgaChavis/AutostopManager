@@ -34,8 +34,10 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 
 Retained pack files:
 
-- `README_ru.md` - provenance, source boundary, and load policy.
-- `manifest.json` - retained-file list and compacted-pack metadata.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md`
+  - provenance, source boundary, and load policy.
+- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json`
+  - retained-file list and compacted-pack metadata.
 
 Data indexes:
 

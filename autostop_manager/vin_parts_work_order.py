@@ -130,7 +130,11 @@ SUPPLIER_ROUTES = [
         "env_names": [],
         "query_after": "selected brand/article or OEM reference",
         "adapter": "exist-price-lookup",
-        "acceptance": "Public retail reference only: office 905, price/lead-time/analog summary, confidence, and requires-confirmation are visible; no basket/private-cabinet data.",
+        "acceptance": (
+            "Public retail reference only: keep office 905, price/lead-time/analog summary, confidence, "
+            "and requires-confirmation in internal quote evidence; expose no basket/private-cabinet data "
+            "and no uncertainty metadata in a public card description."
+        ),
     },
     {
         "source_id": "zzap",

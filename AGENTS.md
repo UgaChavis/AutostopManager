@@ -69,10 +69,11 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 - Timer floor -> `docs/agent/crm_manager_data_playbook.md` and
   `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run first.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
-- Internet/repair web research -> CRM agent `search_web_multi` first
-  (Brave -> Tavily -> Google CSE -> DuckDuckGo), then excerpt; use
-  `fetch_page_browser` only for public JS-heavy pages. Do not bypass CAPTCHA,
-  login, paywall, or IP blocks; report manual access needed.
+- Internet/repair web research -> resolve `search_web_multi`, excerpt, and
+  `fetch_page_browser` through `discover_raw_capabilities` ->
+  `get_raw_capability_schema` -> `call_raw_capability`. Search first; use the
+  browser only for public JS-heavy pages. Do not bypass CAPTCHA, login, paywall,
+  or IP blocks; report manual access needed.
 - Business documents -> `docs/agent/business_document_quality_playbook.md`.
 - Remote `home-pc` access -> `docs/agent/codex_home_pc_reverse_ssh.md`; use
   `ssh home-pc`, `sftp`/`scp`, `pwsh`, and Python only after opening that file.
@@ -90,5 +91,5 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 
 `README.md`, `docs/agent/autostop_manager_skill.md`,
 `docs/agent/manager_rules.json`, `docs/agent/command_routes.json`,
-`docs/agent/knowledge_base_index.md`, `docs/agent/knowledge_shelves.md`,
+`docs/agent/knowledge_shelves.md`,
 `docs/agent/manager_mcp_catalog.json`, `docs/agent/crm_mcp_catalog.json`.

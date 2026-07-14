@@ -15,10 +15,11 @@ Use this playbook when the owner asks to:
 
 The manager should treat the CRM card or repair order as the source for the
 vehicle context, then use public marketplaces for the market scan.
-Use CRM agent `search_web_multi` first, then page excerpt. If a public
-marketplace page is JS-heavy or the excerpt is empty, use `fetch_page_browser`
-for rendered text and visible links. Do not bypass CAPTCHA, login, paywall, IP
-block, or private cabinet pages; report that manual/approved access is needed.
+Resolve `search_web_multi`, page excerpt, and `fetch_page_browser` through the
+Gateway v2 raw-capability route. Search first, then excerpt; use the browser
+only when a public marketplace page is JS-heavy or the excerpt is empty. Do not
+bypass CAPTCHA, login, paywall, IP block, or private cabinet pages; report that
+manual/approved access is needed.
 If the input is a VIN, Japanese chassis number, or other market-specific
 vehicle code, decode it first with `docs/agent/vehicle_identity_playbook.md`
 before starting marketplace search. If the owner wants original catalog
@@ -117,7 +118,7 @@ same site.
 
 ## Avito Workflow
 
-Use Avito as the second marketplace and manual fallback.
+Use Avito as the third marketplace and manual fallback after Drom and ZZap.
 
 Recommended query pattern:
 
@@ -126,9 +127,8 @@ Recommended query pattern:
 - model + part description
 - city + part name
 
-Important note from testing: exact OEM searches for Avito are less reliable in
-external web search than Drom. Treat Avito as a direct-site search task, not as
-something that must be solved through search-engine snippets.
+External search snippets can omit or stale Avito listing details. Treat Avito
+as a direct public-site search when accessible and verify the live listing.
 
 What to check in each listing:
 
@@ -183,6 +183,11 @@ When prices are close, prefer:
 - explicit warranty or return terms
 - a seller who names the exact part number
 
+For steering racks and other high-return-risk aggregates, also require the old
+part label/connector, steering or driveline options, condition, photo proof,
+warranty, and return terms. Separate new, remanufactured, used, contract, and
+exchange offers; a title/model match alone is not fitment proof.
+
 ## Output Format
 
 When reporting back to the owner, keep it short:
@@ -197,30 +202,12 @@ When reporting back to the owner, keep it short:
 - confidence / risk note
 
 If the owner wants a purchase decision, give a recommendation and a backup
-option.
+option. If the result is written to a public CRM description, omit confidence,
+risk, source, and missing-check text and follow
+`docs/agent/crm_card_description_standard.md`.
 
-## What To Remember
+## Memory Boundary
 
-Store only the durable conclusion in manager memory:
-
-- which part was chosen
-- which seller was preferred
-- what search pattern worked
-- any compatibility warning that should be reused later
-
-Do not store full listing dumps in memory.
-
-## Test Observations
-
-The following patterns worked in live checks:
-
-- `863101G100` on Drom produced usable Красноярск offers and clear OEM-based
-  matches.
-- `G052182A2` and `02E305051C` are better searched together with the gearbox
-  context, not as a raw part number only.
-- Rare or awkward OEM numbers may not produce good exact hits on the first
-  search, so the fallback should move to model, platform, and part description.
-- Avito direct results were not reliable through external search snippets in
-  the test pass, so the playbook treats Avito as a direct manual search step.
-- ZZap gives the best value when used as a structured price-comparison layer
-  with region and filter control, not as a raw free-text search box.
+Do not store the chosen part, seller, current offer, price, listing dump, or
+customer vehicle identity in manager memory. Store only a reusable search or
+compatibility lesson that will improve future work.

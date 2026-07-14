@@ -18,7 +18,8 @@ Use this playbook when the owner asks:
 - нормо-часы по работе
 - трудоемкость ремонта
 
-Use `estimate_repair_work_cost` through MCP or:
+On Gateway v2, discover the raw capability, read its schema, then call
+`estimate_repair_work_cost`. For local manager use:
 
 ```powershell
 python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "замена рулевой рейки"
@@ -112,10 +113,8 @@ Examples:
 
 ## CRM Output Rule
 
-If later writing a short card summary, use only a compact result:
-
-`Работа: замена рулевой рейки. AutoStop: 15 000 ₽. Нормо-часы: 3,5-4,0 ч, public. Уверенность: medium. Проверить: VIN/состав работы.`
-
-If labor-time was not found, write only `Нормо-часы: публично не найдены`.
-Do not add source lists, full sample details, copied public price text, or long
-calculation prose into the card.
+If later writing a short public card summary, include only confirmed working
+facts, for example: `Работа: замена рулевой рейки — 15 000 ₽.` Keep confidence,
+sources, public norm-hour status, missing context, and required checks in the
+internal estimate/owner report. Do not add them, copied price text, or long
+calculation prose to the public card.

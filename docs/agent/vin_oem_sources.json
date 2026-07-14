@@ -46,7 +46,8 @@
         "vin"
       ],
       "url": "https://vpic.nhtsa.dot.gov/api/Home/Index",
-      "notes": "Primary VIN decode source for regulated vehicles. Supports decode and manufacturer data."
+      "notes": "Primary VIN decode source for regulated vehicles. Supports decode and manufacturer data.",
+      "source_id": "nhtsa_vpic"
     },
     {
       "name": "NHTSA vPIC Home",
@@ -56,7 +57,8 @@
         "vin"
       ],
       "url": "https://vpic.nhtsa.dot.gov/",
-      "notes": "Official home for VIN decoding, MID, and downloadable standalone datasets."
+      "notes": "Official home for VIN decoding, MID, and downloadable standalone datasets.",
+      "source_id": "nhtsa_vpic_home"
     },
     {
       "name": "Toyota Japan EPC Help",
@@ -69,7 +71,8 @@
         "catalog_code"
       ],
       "url": "https://spsepchtr.mx.toyota.co.jp/kN0k/CONTENTS/HELP/V2D00_E4.PDF",
-      "notes": "Documents Toyota Japan catalog inputs including VIN and frame number search flow."
+      "notes": "Documents Toyota Japan catalog inputs including VIN and frame number search flow.",
+      "source_id": "toyota_japan_epc_help"
     },
     {
       "name": "Toyota Recall Search",
@@ -79,7 +82,8 @@
         "chassis_number"
       ],
       "url": "https://www.toyota.co.jp/recall-search/dc/en/search/",
-      "notes": "Useful for Japan-market chassis-number confirmation."
+      "notes": "Useful for Japan-market chassis-number confirmation.",
+      "source_id": "toyota_recall_search"
     },
     {
       "name": "Honda EPC Mirror",
@@ -90,7 +94,8 @@
         "vin"
       ],
       "url": "https://honda.epc-data.com/",
-      "notes": "Public Honda catalog mirror with frame-number search entry and catalog navigation."
+      "notes": "Public Honda catalog mirror with frame-number search entry and catalog navigation.",
+      "source_id": "honda_epc_mirror"
     },
     {
       "name": "Honda Recall Lookup",
@@ -100,7 +105,8 @@
         "vin"
       ],
       "url": "https://owners.honda.com/service-maintenance/recalls/",
-      "notes": "Recall lookup only, but useful as a source-of-truth check when Honda VIN routing is needed."
+      "notes": "Recall lookup only, but useful as a source-of-truth check when Honda VIN routing is needed.",
+      "source_id": "honda_recall_lookup"
     },
     {
       "name": "Nissan EPC Mirror",
@@ -111,7 +117,8 @@
         "vin"
       ],
       "url": "https://nissan.epc-data.com/",
-      "notes": "Public Nissan catalog mirror with frame-number search entry and catalog navigation."
+      "notes": "Public Nissan catalog mirror with frame-number search entry and catalog navigation.",
+      "source_id": "nissan_epc_mirror"
     },
     {
       "name": "Nissan Recall Search",
@@ -122,7 +129,8 @@
         "vin"
       ],
       "url": "https://www.nissan.co.jp/RECALL/search_en.html",
-      "notes": "Official Japanese recall lookup that accepts chassis or vehicle-number style searches."
+      "notes": "Official Japanese recall lookup that accepts chassis or vehicle-number style searches.",
+      "source_id": "nissan_recall_search"
     },
     {
       "name": "Mazda Recall Search",
@@ -133,7 +141,8 @@
         "vin"
       ],
       "url": "https://www2.mazda.co.jp/service/recall/",
-      "notes": "Official Mazda recall lookup for Japan-market confirmation."
+      "notes": "Official Mazda recall lookup for Japan-market confirmation.",
+      "source_id": "mazda_recall_search"
     },
     {
       "name": "Subaru Recall Search",
@@ -144,7 +153,8 @@
         "vin"
       ],
       "url": "https://recall.subaru.co.jp/lqsb/",
-      "notes": "Official Subaru recall lookup for Japan-market confirmation."
+      "notes": "Official Subaru recall lookup for Japan-market confirmation.",
+      "source_id": "subaru_recall_search"
     },
     {
       "name": "Subaru EPC Mirror",
@@ -155,7 +165,8 @@
         "vin"
       ],
       "url": "https://subaru.epc-data.com/",
-      "notes": "Public Subaru catalog mirror with frame-number search entry and catalog navigation."
+      "notes": "Public Subaru catalog mirror with frame-number search entry and catalog navigation.",
+      "source_id": "subaru_epc_mirror"
     },
     {
       "name": "partslink24 Mobile",
@@ -172,7 +183,8 @@
         "supersessions"
       ],
       "url": "https://www.partslink24.com/partlink24mobile_en/index.html",
-      "notes": "VIN-scan entry and genuine parts access for participating brands; useful when dealership-grade catalog access is available."
+      "notes": "VIN-scan entry and genuine parts access for participating brands; useful when dealership-grade catalog access is available.",
+      "source_id": "partslink24_mobile"
     },
     {
       "name": "partslink24 Product Info",
@@ -182,7 +194,8 @@
         "vin"
       ],
       "url": "https://www.partslink24.com/pl24connectLounge/html/en/product.html",
-      "notes": "Explains VIN access and original parts access for authorized dealers."
+      "notes": "Explains VIN access and original parts access for authorized dealers.",
+      "source_id": "partslink24_product_info"
     },
     {
       "source_id": "man_service_portal_webmantis",
@@ -278,7 +291,7 @@
       "brands": [
         "Multi-brand"
       ],
-      "url": "https://www.tecalliance.net/tecdoc-catalogue/",
+      "url": "https://www.tecalliance.net/products/cards/tecdoc-catalogue",
       "role": "Licensed aftermarket catalog and data layer for article/OE-reference/cross/applicability checks after vehicle identity is known.",
       "access": "Commercial TecDoc Catalogue or TecDoc data user license.",
       "limits": "Aftermarket data; do not treat as the sole OEM EPC proof for configuration-sensitive original numbers.",
@@ -616,7 +629,7 @@
       "url": "https://aos.bmwgroup.com/",
       "role": "Authorized BMW/MINI route for VIN-specific vehicle identity, equipment, OEM catalog part numbers, and service information.",
       "access": "Paid authorized AOS login; credentials and contract must stay outside Git.",
-      "limits": "Use only with authorized access. Treat output as high-confidence catalog evidence, but keep source/date in CRM notes.",
+      "limits": "Use only with authorized access. Treat output as high-confidence catalog evidence; keep source/date in internal workflow evidence, not in the public card description.",
       "mvp_priority": "high",
       "notes": "Preferred BMW/MINI confirmation route when OEM numbers are VIN-critical."
     },
@@ -662,7 +675,8 @@
         "vin"
       ],
       "url": "https://toyota.epc-data.com/",
-      "notes": "Public Toyota catalog mirror with frame-number search entry."
+      "notes": "Public Toyota catalog mirror with frame-number search entry.",
+      "source_id": "toyota_epc_mirror"
     },
     {
       "name": "Hyundai EPC Mirror",
@@ -672,7 +686,8 @@
         "vin"
       ],
       "url": "https://hyundai.epc-data.com/",
-      "notes": "Public Hyundai catalog mirror with VIN search entry."
+      "notes": "Public Hyundai catalog mirror with VIN search entry.",
+      "source_id": "hyundai_epc_mirror"
     },
     {
       "name": "Kia EPC Mirror",
@@ -682,7 +697,8 @@
         "vin"
       ],
       "url": "https://kia.epc-data.com/",
-      "notes": "Public Kia catalog mirror with VIN search entry."
+      "notes": "Public Kia catalog mirror with VIN search entry.",
+      "source_id": "kia_epc_mirror"
     },
     {
       "name": "Renault EPC Mirror",
@@ -692,7 +708,8 @@
         "vin"
       ],
       "url": "https://renault.epc-data.com/",
-      "notes": "Public Renault catalog mirror with model and VIN-oriented catalog navigation."
+      "notes": "Public Renault catalog mirror with model and VIN-oriented catalog navigation.",
+      "source_id": "renault_epc_mirror"
     },
     {
       "source_id": "parts_catalogs_api",
@@ -755,9 +772,13 @@
         "getApplicability",
         "getEngine",
         "getCrosses",
-        "getCrossesWithBrand",
-        "getCrossesTitle",
-        "searchArticles"
+    "getCrossesWithBrand",
+    "getCrossesTitle",
+    "searchArticles",
+    "getSearchTree",
+    "getArticles",
+    "getArticle",
+    "getArticleCriteria"
       ],
       "limits": "Not a закупка source by itself unless connected price/stock data is explicitly available; validate license and regional data freshness.",
       "env_names": [
@@ -894,7 +915,7 @@
         "Hyundai/Kia VIN search",
         "catalog navigation"
       ],
-      "limits": "Public mirror, not official; must be cross-checked before high-confidence CRM writeback.",
+      "limits": "Public mirror, not official; cross-check before any confirmed writeback and keep provenance outside the public card description.",
       "env_names": [],
       "mvp_priority": "low",
       "test_vin_checks": [
@@ -904,78 +925,6 @@
         "part group navigation"
       ],
       "notes": "Useful JDM/KDM fallback because it explicitly exposes frame/VIN entry patterns."
-    }
-  ],
-  "crm_vin_oem_parts_lookup_backlog": [
-    {
-      "source_id": "parts_catalogs_api",
-      "role": "Primary OEM/VIN/FRAME catalog candidate.",
-      "mvp_priority": "high",
-      "adapter": "read-only vehicle_info, groups, parts, diagrams; no CRM writes inside adapter.",
-      "acceptance": "Given one ISO VIN and one JDM frame, return exact vehicle profile and requested service-part OEM candidates with production/option evidence."
-    },
-    {
-      "source_id": "partsapi_ru",
-      "role": "Cross/applicability and VIN/OE decode candidate.",
-      "mvp_priority": "high",
-      "adapter": "read-only VINdecode/VINdecodeOE/getPartsbyVIN/getOEApplicability/getCrosses/getCrossesWithBrand/getCrossesTitle/getArticleCrosses/searchArticles/getEngine/getSearchTree/getArticles/getArticle/getArticleCriteria normalizer.",
-      "acceptance": "For each test OEM, return applicability, crosses, and confidence flags without treating crosses as fitment-confirmed by default."
-    },
-    {
-      "source_id": "vin17_api",
-      "role": "Second-source VIN-to-parts and common-wear parts candidate.",
-      "mvp_priority": "medium",
-      "adapter": "read-only VIN category/part search and replacement normalizer.",
-      "acceptance": "Find plugs/pads/filters by VIN and expose replacement chain/source provenance."
-    },
-    {
-      "source_id": "autopoisk",
-      "role": "Manual/semiautomatic professional EPC, Cross tab, and supplier-statistics candidate.",
-      "mvp_priority": "medium",
-      "adapter": "manual workflow first; API only after legal-entity subscription/demo confirms access.",
-      "acceptance": "Show exact vehicle equipment and OEM/cross evidence for test VIN/frame without storing raw customer identifiers."
-    },
-    {
-      "source_id": "man_service_portal_webmantis",
-      "role": "Primary authorized MAN OEM route for MAN trucks, buses, vans, and engines.",
-      "mvp_priority": "high",
-      "adapter": "manual authorized-access checklist first; no scraping, no third-party MANTIS dumps.",
-      "acceptance": "Given an authorized MAN VIN or production number, confirm service-kit/filter/brake OEM candidates and cite only compact source metadata."
-    },
-    {
-      "source_id": "man_partslink24",
-      "role": "Official MAN Genuine Parts ordering and inventory handoff after OEM identification.",
-      "mvp_priority": "high",
-      "adapter": "manual portal workflow; keep customer number, login, baskets, and screenshots outside Git.",
-      "acceptance": "Identify MAN Genuine Parts by VIN and verify local distributor/order route without leaking credentials or raw VIN."
-    },
-    {
-      "source_id": "tecalliance_tecdoc_catalog",
-      "role": "Licensed aftermarket article, OE-reference, cross, and applicability layer.",
-      "mvp_priority": "high",
-      "adapter": "contract/API review or use through existing PartsAPI/TecDoc-style provider before direct integration.",
-      "acceptance": "For filters/plugs/sensors/brakes, return article, OE reference, linkage attributes, and confidence flags without promoting crosses to OEM."
-    },
-    {
-      "source_id": "manufacturer_aftermarket_catalogs",
-      "role": "Official MAHLE/Bosch/MANN/Hengst/Donaldson/Fleetguard/NGK analog and consumables verification.",
-      "mvp_priority": "medium",
-      "adapter": "manual source-route table first; direct API only when official terms allow it.",
-      "acceptance": "For common wear parts, confirm selected analogs against official manufacturer catalog evidence and preserve OEM/reference separation."
-    },
-    {
-      "source_id": "partsouq_manual",
-      "role": "Fallback/manual verification and international price sanity check.",
-      "mvp_priority": "low",
-      "adapter": "manual-only checklist, not automated scraping.",
-      "acceptance": "Use as second check for part diagram/OEM only; never mark as Russian закупка."
-    },
-    {
-      "source_id": "epc_data_manual",
-      "role": "Fallback/manual JDM/KDM frame/VIN catalog verification.",
-      "mvp_priority": "low",
-      "adapter": "manual-only checklist, not automated scraping.",
-      "acceptance": "For Japan/Korea test identifiers, confirm catalog entry and require second source before high confidence."
     }
   ]
 }

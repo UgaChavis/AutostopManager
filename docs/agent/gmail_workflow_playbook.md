@@ -23,9 +23,11 @@ attachment IDs.
 
 Read-only or inspection tools:
 
+- `_get_profile`
 - `_list_labels`
 - `_search_emails`
 - `_search_email_ids`
+- `_read_email`
 - `_batch_read_email`
 - `_read_email_thread`
 - `_batch_read_email_threads`
@@ -66,11 +68,11 @@ schema inspection, and result readback.
   attachment/file IDs, timestamps, and status in manager SQLite. Never store
   the raw body, HTML, snippet, or full subject there.
 
-Attachment schema note: current exposed tool metadata may describe
-`attachment_files` as an absolute-path string, while some connector surfaces
-accept or require a list/array for multiple files. Inspect the active tool schema
-immediately before sending and pass absolute local file paths in that exact
-shape; never pass base64 content.
+Attachment/body schema note: current exposed create/send metadata accepts
+`attachment_files` as an array of absolute local paths and also supports
+`body_file`, `html_body`, and `content_type`. Inspect the active schema
+immediately before sending, pass paths in its exact shape, and never pass base64
+content.
 
 ## Query Patterns
 
@@ -131,7 +133,7 @@ Gmail.
 
 ## Verification Record
 
-This playbook was refreshed on 2026-05-29 from the currently exposed Gmail
-connector metadata and recent successful owner-approved mailbox operations.
-Read-only commands are safe to use for task-relevant inspection. Mutating and
-sending commands are available but remain approval-gated.
+This playbook was refreshed on 2026-07-14 from the currently exposed Gmail
+connector metadata without mailbox mutation. Read-only commands are safe for
+task-relevant inspection. Mutating and sending commands remain gated by exact
+task-specific owner intent and target preflight.

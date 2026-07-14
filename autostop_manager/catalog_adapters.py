@@ -230,7 +230,7 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         priority="medium",
         role="Russia-wide wholesale/order benchmark candidate.",
         limits="Wholesale terms require account; public website is retail/benchmark only.",
-        docs_url="https://docum.autopiter.ru/",
+        docs_url="https://autopiter.ru/opt",
     ),
     CatalogProvider(
         source_id="emex",

@@ -40,7 +40,7 @@
     {
       "source_id": "autodata_cars_vans",
       "role": "professional_service_data",
-      "url": "https://www.autodata-group.com/uk/products/technical-information/",
+      "url": "https://www.autodata-group.com/uk/cars-vans/",
       "best_for": [
         "service schedules",
         "capacities",
@@ -108,7 +108,7 @@
       ]
     },
     {
-      "source_id": "toyota_gr_yaris_jp_2024_maintenance",
+      "source_id": "toyota_jp_owner_manuals",
       "name": "Toyota Japan GR Yaris Maintenance Data",
       "url": "https://manual.toyota.jp/gr_yaris/2408/cv/ja_JP/contents/vhch08se010401.php",
       "markets": [

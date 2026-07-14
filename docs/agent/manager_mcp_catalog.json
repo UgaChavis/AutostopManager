@@ -271,7 +271,7 @@
     }
   },
   "knowledge_intake": {
-    "entrypoint": "docs/agent/knowledge_base_index.md",
+    "entrypoint": "docs/agent/knowledge_shelves.md",
     "machine_map": "docs/agent/knowledge_map.json",
     "annotation_index": "docs/agent/knowledge_annotations.jsonl",
     "crm_manager_data_playbook": "docs/agent/crm_manager_data_playbook.md",
@@ -287,12 +287,12 @@
       "image_scans"
     ],
     "workflow": [
-      "inspect docs/agent/knowledge_base_index.md and docs/agent/knowledge_map.json",
+      "inspect docs/agent/knowledge_shelves.md and docs/agent/knowledge_map.json",
       "use probe_knowledge_base before broad file reads",
       "classify source and license",
       "extract durable conclusions",
       "update playbooks or source catalogs",
-      "update index/map routes when adding durable knowledge",
+      "update shelf/map routes when adding durable knowledge",
       "update compact annotations when a file should be found by fast routing",
       "run sync_knowledge_base after durable docs/catalog/skill changes",
       "run audit_knowledge_base after route-card or source changes",
@@ -367,5 +367,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 67
+  "all_tools_count": 63
 }

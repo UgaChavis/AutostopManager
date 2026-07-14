@@ -125,10 +125,10 @@ Automation option after explicit owner approval:
   documented local API is found. Do not reverse-engineer or reuse cloud tokens.
 - Do not install custom firmware, change root/SSH/ADB access, start heating, or
   launch a print without explicit owner confirmation for that operation.
-- Current local enhancement stack includes Blender, MeshLab, CloudCompare,
-  FreeCAD, OpenSCAD/BOSL2, build123d/CadQuery, Anycubic Slicer Next, OrcaSlicer,
-  Cura, Nmap, Tailscale, and local Rinkhals/Rinkhals.apps clones. Use
-  `scripts/cad.py check` before relying on paths.
+- Tool availability belongs to the external workspace, not this server or this
+  playbook. Run `scripts/cad.py check` in the configured
+  `AUTOSTOP_3D_WORKSPACE` before relying on any CAD, slicer, network, or
+  firmware path.
 
 ## Local Commands
 

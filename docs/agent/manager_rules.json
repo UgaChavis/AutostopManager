@@ -103,7 +103,7 @@
     {
       "id": "knowledge-catalog-sync",
       "priority": 22,
-      "rule": "If a new file changes the supported commands, source routing, or source catalog, update the relevant playbook or catalog first and append a manager_journal entry."
+      "rule": "If a new file changes the supported commands, source routing, or source catalog, update the relevant playbook or catalog first and add a compact durable note through schema-hashed raw manager_journal discovery when the change matters beyond the current task."
     },
     {
       "id": "knowledge-index-entrypoint",
@@ -118,7 +118,7 @@
     {
       "id": "model-specific-knowledge-route",
       "priority": 22,
-      "rule": "When a vehicle/model-specific corpus becomes substantial, store it as a focused Codex skill and add a route in docs/agent/automotive_sources/model_source_overrides.json, docs/agent/knowledge_base_index.md, and docs/agent/knowledge_map.json."
+      "rule": "When a vehicle/model-specific corpus becomes substantial, store it as a focused Codex skill and add its triggers, playbook, required context, and source route to docs/agent/knowledge_map.json and docs/agent/knowledge_shelves.md."
     },
     {
       "id": "crm-manager-data-boundary",
@@ -203,7 +203,7 @@
     {
       "id": "browser-web-research-boundary",
       "priority": 31,
-      "rule": "For public internet research, use CRM agent search_web_multi first, then excerpt, and use fetch_page_browser only for JS-heavy public pages. Do not bypass CAPTCHA, login walls, paywalls, IP blocks, private cabinets, or access restrictions; report manual or approved account access required."
+      "rule": "For public internet research, resolve search_web_multi, excerpt, and fetch_page_browser through discover_raw_capabilities, get_raw_capability_schema, and call_raw_capability. Search first; use the browser only for public JS-heavy pages. Do not bypass CAPTCHA, login walls, paywalls, IP blocks, private cabinets, or access restrictions; report manual or approved account access required."
     },
     {
       "id": "bmw-f15-n63-route",
@@ -223,12 +223,12 @@
     {
       "id": "fluid-maintenance-workflow",
       "priority": 31,
-      "rule": "For oils, operating fluids, fill capacities, and ТО fluid planning, consult docs/agent/fluid_maintenance_playbook.md and use recommend_fluid_maintenance_sources or maintenance-fluids. Collect VIN/chassis, market, year, brand, model, engine code, transmission code, drivetrain, exact unit, and service operation before confirming capacity or specification."
+      "rule": "For oils, operating fluids, fill capacities, and ТО fluid planning, consult docs/agent/fluid_maintenance_playbook.md. On production Gateway v2 resolve recommend_fluid_maintenance_sources through raw discovery and schema lookup; locally use maintenance-fluids. Collect VIN/chassis, market, year, brand, model, engine code, transmission code, drivetrain, exact unit, and service operation before confirming capacity or specification."
     },
     {
       "id": "krasnoyarsk-service-management-workflow",
       "priority": 31,
-      "rule": "For workshop-management tasks in Красноярск, route through docs/agent/krasnoyarsk_service_management_playbook.md and recommend_service_management_actions. Classify blockers as parts, client approval, technician load, diagnosis, payment, appointment, ready pickup, or knowledge intake before acting."
+      "rule": "For workshop-management tasks in Красноярск, route through docs/agent/krasnoyarsk_service_management_playbook.md. On production Gateway v2 resolve recommend_service_management_actions through raw discovery and schema lookup; locally use the manager CLI. Classify blockers as parts, client approval, technician load, diagnosis, payment, appointment, ready pickup, or knowledge intake before acting."
     },
     {
       "id": "toyota-gr-yaris-workflow",
@@ -238,7 +238,7 @@
     {
       "id": "transmission-workflow",
       "priority": 31,
-      "rule": "For gearbox, clutch, CVT, DCT, AMT, or heavy-duty transmission work, consult docs/agent/transmission_playbook.md first and use recommend_automotive_sources with data_type=\"transmission\" before confirming fluid, adaptation, torque, or repair facts."
+      "rule": "For gearbox, clutch, CVT, DCT, AMT, or heavy-duty transmission work, consult docs/agent/transmission_playbook.md first. On production Gateway v2 resolve recommend_automotive_sources through raw discovery and schema lookup and call it with data_type=\"transmission\" before confirming fluid, adaptation, torque, or repair facts."
     },
     {
       "id": "vehicle-identity-workflow",
@@ -268,17 +268,12 @@
     {
       "id": "work-labor-pricing-workflow",
       "priority": 32,
-      "rule": "When the owner asks to estimate repair work cost, use docs/agent/work_labor_pricing_playbook.md and estimate_repair_work_cost. Price labor only from public Russia STO samples, calculate the average after outlier filtering, apply AutoStop +50%, automatically add public norm-hours/labor-time plausibility when available, and do not call replace_repair_order_works without a separate explicit owner command."
+      "rule": "When the owner asks to estimate repair work cost, use docs/agent/work_labor_pricing_playbook.md. On production Gateway v2 resolve estimate_repair_work_cost through raw discovery and schema lookup. Price labor only from public Russia STO samples, calculate the average after outlier filtering, apply AutoStop +50%, add public norm-hours/labor-time plausibility when available, and do not call replace_repair_order_works without a separate explicit owner command."
     },
     {
       "id": "parts-search-workflow",
       "priority": 33,
-      "rule": "When the owner asks to source parts, first normalize the vehicle identity through the vehicle-identity playbook if the input is a VIN, chassis number, or market-specific code; then use the dedicated parts-search playbook: normalize OEM and fitment fields, search Drom first with exact number plus Krasnoyarsk context, then Avito, then broaden to model/platform and descriptive terms if exact hits are sparse."
-    },
-    {
-      "id": "zzap-search-workflow",
-      "priority": 34,
-      "rule": "Use ZZap as the price-comparison and replacement layer: search exact OEM first, switch region to Красноярск when possible, compare all/new/used modes, and use the 'all replacements' view for analogs while treating fitment as seller-confirmed until verified."
+      "rule": "When the owner asks to source parts, first normalize the vehicle identity through the vehicle-identity playbook if the input is a VIN, chassis number, or market-specific code; then use the dedicated parts-search playbook: normalize OEM and fitment fields, search Drom first with exact number plus Krasnoyarsk context, then ZZap and Avito, then broaden to model/platform and descriptive terms if exact hits are sparse."
     },
     {
       "id": "gmail-read-order",
@@ -303,12 +298,12 @@
     {
       "id": "journal-important-work",
       "priority": 50,
-      "rule": "After important decisions, new source intake, or multi-step CRM work, write a short manager_journal entry."
+      "rule": "After important decisions or source intake, add a short durable note through schema-hashed raw manager_journal discovery. For multi-step work, use Gateway v2 workflow checkpoints and complete only with positive readback evidence."
     },
     {
       "id": "crm-vin-oem-no-hallucination",
       "priority": 35,
-      "rule": "For CRM VIN/OEM parts lookup, never invent OEM numbers, supersessions, crosses, applicability, stock, procurement prices, retail prices, or client sale prices. If the exact source-backed number is unavailable, write confidence: low/medium and list the missing check."
+      "rule": "For CRM VIN/OEM parts lookup, never invent OEM numbers, supersessions, crosses, applicability, stock, procurement prices, retail prices, or client sale prices. If the exact source-backed number is unavailable, report low/medium confidence and the missing check internally; do not put uncertainty text into the public card description."
     },
     {
       "id": "crm-vin-oem-source-confidence",
@@ -323,7 +318,7 @@
     {
       "id": "crm-vin-oem-crm-writeback-format",
       "priority": 36,
-      "rule": "CRM VIN/OEM parts public card descriptions must follow docs/agent/crm_card_description_standard.md: compact formatted selected working facts only, such as auto, requested part/work, OEM/catalog number, selected part, quantity, price, and oil/fluid capacity. Do not write VIN/frame source, source/provenance, lookup method, confidence, missing checks, needs-confirmation, supplier-check reminders, or long quote matrices into the public description. Keep internal evidence in the manager run or owner report. board_summary stays short and excludes raw VIN/client private data."
+      "rule": "CRM VIN/OEM parts public card descriptions must follow docs/agent/crm_card_description_standard.md: compact formatted selected working facts only, such as auto, requested part/work, OEM/catalog number, selected part, quantity, price, and oil/fluid capacity. Do not write VIN/frame source, source/provenance, lookup method, confidence, missing checks, needs-confirmation, supplier-check reminders, or long quote matrices into the public description. Keep internal evidence in the Gateway v2 workflow or owner report. board_summary stays short and excludes raw VIN/client private data."
     },
     {
       "id": "crm-vin-oem-privacy-boundary",

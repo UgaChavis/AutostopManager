@@ -1,6 +1,6 @@
 # Knowledge Shelves
 
-Shelf map for routing, file placement, deletion, and source-pack policy.
+Human entrypoint for routing, file placement, deletion, and source-pack policy.
 
 ## Agent Loop
 
@@ -29,13 +29,13 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` |
 | CRM VIN/OEM parts | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` |
-| Parts sourcing | `parts_sourcing` | `docs/agent/ai_parts_krasnoyarsk_playbook.md` |
+| Parts sourcing | `parts_sourcing` | `docs/agent/parts_search_playbook.md` |
 | Labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` |
 | Repair sources | `automotive_repair` | `docs/agent/automotive_repair_source_playbook.md` |
 | BMW | `bmw_repair`, `bmw_f15_n63` | `docs/agent/bmw_repair_playbook.md` |
 | Toyota GR Yaris | `toyota_gr_yaris` | `docs/agent/toyota_gr_yaris_playbook.md` |
 | Fluids | `fluids` | `docs/agent/fluid_maintenance_playbook.md` |
-| Transmissions | `transmission` | `docs/agent/dsg_transmission_playbook.md` |
+| Transmissions | `transmission` | `docs/agent/transmission_playbook.md` |
 | ECU programming | `ecu_calibration_programming` | `docs/agent/ecu_calibration_programming_playbook.md` |
 | 3D printing CAD | `3d_printing_cad` | `docs/agent/3d_printing_cad_playbook.md` |
 | Remote Codex access | `remote_codex_access` | `docs/agent/codex_home_pc_reverse_ssh.md` |
@@ -43,7 +43,7 @@ Shelf map for routing, file placement, deletion, and source-pack policy.
 
 ## File Classes
 
-- `active_control`: `AGENTS.md`, README, route maps, MCP catalogs,
+- `active_control`: `AGENTS.md`, `README.md`, route maps, MCP catalogs,
   command routes, and startup rules.
 - `active_playbook`: workflow instructions opened by route cards.
 - `structured_catalog`: JSON/JSONL/CSV/YAML/SQL registries used by playbooks.
@@ -113,7 +113,7 @@ Do not keep a growing archive of obsolete plans. Prefer deletion after migration
 3. Place raw files in the smallest relevant shelf.
 4. Extract durable rules into the relevant playbook/catalog.
 5. Update `knowledge_map.json` and `knowledge_annotations.jsonl`.
-6. Link human-visible routes from `knowledge_base_index.md`.
+6. Update the shelf table when a new durable route is added.
 7. Run sync/audits and focused tests.
 
 ## Safety Boundaries

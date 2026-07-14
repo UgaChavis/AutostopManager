@@ -135,6 +135,13 @@ def audit_manager_mcp_catalog(
     declared_count = payload.get("tool_count")
     if declared_count != len(all_tools):
         warnings.append("manager_mcp_catalog_tool_count_mismatch")
+    declared_all_tools_count = payload.get("all_tools_count")
+    if declared_all_tools_count != len(all_tools):
+        warnings.append("manager_mcp_catalog_all_tools_count_mismatch")
+
+    tool_contracts = payload.get("tool_contracts") or {}
+    if not isinstance(tool_contracts, dict) or set(tool_contracts) != set(all_tools):
+        warnings.append("manager_mcp_catalog_tool_contracts_mismatch")
 
     missing_required_tools = sorted(REQUIRED_HEALTH_TOOLS.difference(all_tools))
     if missing_required_tools:
@@ -157,7 +164,9 @@ def audit_manager_mcp_catalog(
         "ok": not warnings,
         "path": str(path),
         "tool_count": declared_count,
+        "declared_all_tools_count": declared_all_tools_count,
         "all_tools_count": len(all_tools),
+        "tool_contract_count": len(tool_contracts) if isinstance(tool_contracts, dict) else None,
         "registered_tool_count": registered_count,
         "missing_required_tools": missing_required_tools,
         "missing_registered_tools": missing_registered_tools,

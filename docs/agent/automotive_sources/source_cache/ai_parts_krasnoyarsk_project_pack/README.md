@@ -2,9 +2,11 @@
 
 Дата сборки: 2026-05-03
 
-Назначение: дать агенту Codex структурированную методику поиска автозапчастей в наличии в Красноярске и под заказ по России.
+Назначение: источник исходной методики поиска автозапчастей в Красноярске и по
+России. Активные правила живут в канонических playbook ниже.
 
-Пакет не содержит коммерческие ключи API (Application Programming Interface — программный интерфейс приложения), не содержит кода обхода CAPTCHA (Completely Automated Public Turing test to tell Computers and Humans Apart — автоматический тест для отличия человека от компьютера) и не предполагает нарушение правил площадок.
+Пакет не содержит ключей API, кода обхода CAPTCHA или правил для закрытых
+кабинетов.
 
 Главная идея: агент должен строить проверяемую цепочку:
 
@@ -17,23 +19,22 @@
 
 ## Быстрый порядок загрузки в Codex
 
-1. `docs/agent/ai_parts_krasnoyarsk_playbook.md`
+1. `docs/agent/parts_search_playbook.md`
 2. `docs/agent/procurement_pricing_playbook.md`
 3. `docs/agent/procurement_price_sources.json`
-4. `docs/agent/parts_search_playbook.md`
-5. `docs/agent/zzap_search_playbook.md`
 
 Этот пакет был сокращен во время ревизии документации: удалены черновики API,
 prompts, schemas, configs, data samples, code skeleton, OpenAPI и длинные
 дублирующие Markdown-главы. Активные правила перенесены в
-`docs/agent/ai_parts_krasnoyarsk_playbook.md`,
-`docs/agent/procurement_pricing_playbook.md`,
-`docs/agent/procurement_price_sources.json`, `parts_search_playbook.md` и
-`zzap_search_playbook.md`.
+`docs/agent/parts_search_playbook.md`,
+`docs/agent/procurement_pricing_playbook.md` и
+`docs/agent/procurement_price_sources.json`.
 
 ## Что важно
 
 - Авито и Дром должны рассматриваться как каналы ручного или разрешенного поиска, а не как источник для агрессивного парсинга.
 - Основу автоматизации должны давать прямые API поставщиков, прайс-листы, официальные B2B-кабинеты, агрегаторы и проверка по телефону.
 - Наличие на сайте не равно фактическому наличию. Для срочного ремонта нужна фиксация подтверждения: кто подтвердил, когда, где физически лежит деталь, можно ли резервировать.
-- Для дорогих и VIN-зависимых деталей агент обязан явно показывать уровень уверенности и список причин риска.
+- Для дорогих и VIN-зависимых деталей уровень уверенности и причины риска
+  показывать во внутреннем отчете владельцу; в публичную карточку писать только
+  подтвержденный лаконичный результат.

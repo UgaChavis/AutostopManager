@@ -14,7 +14,6 @@ from .storage import ManagerMemoryStore, _now, _string_list
 PROTECTED_AGENT_DOCS = {
     "crm_mcp_catalog.json",
     "knowledge_annotations.jsonl",
-    "knowledge_base_index.md",
     "knowledge_map.json",
     "knowledge_shelves.md",
     "manager_mcp_catalog.json",

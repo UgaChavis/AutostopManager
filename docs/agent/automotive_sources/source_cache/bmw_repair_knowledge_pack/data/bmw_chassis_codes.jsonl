@@ -1,6 +1,3 @@
-{"chassis": "E-series", "body_code": "E", "scope": "Legacy BMW chassis families before F/G-series.", "notes_ru": "Использовать как ориентир поколения; точную модель и комплектацию проверять по VIN через BMW ETK/AIR/ISTA."}
-{"chassis": "F-series", "body_code": "F", "scope": "BMW F-series vehicles including F15/F16 generation systems.", "notes_ru": "Для F15/N63 сначала открывать маршрут BMW F15/N63 в knowledge_map, затем этот общий BMW pack."}
-{"chassis": "G-series", "body_code": "G", "scope": "BMW G-series vehicles with newer integration-level and software bulletin dependencies.", "notes_ru": "При программных ошибках важны I-level, ISTA test plan и сервисные бюллетени."}
 {"code": "E30", "series": "3 Series", "generation_years": "1982-1994", "body": "sedan/coupe/convertible/touring", "notes_ru": "Классическая E-серия; ремонтные данные зависят от двигателя M10/M20/M40/M42/S14.", "chassis": "E30", "body_code": "E"}
 {"code": "E36", "series": "3 Series", "generation_years": "1990-2000", "body": "sedan/coupe/convertible/touring/compact", "notes_ru": "OBD I/OBD II переходный период по рынку и году.", "chassis": "E36", "body_code": "E"}
 {"code": "E46", "series": "3 Series", "generation_years": "1998-2006", "body": "sedan/coupe/convertible/touring/compact", "notes_ru": "M52TU/M54/M56/N42/N46/M57 в зависимости от рынка.", "chassis": "E46", "body_code": "E"}

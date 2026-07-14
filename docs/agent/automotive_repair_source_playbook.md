@@ -8,22 +8,29 @@ source-backed parts decisions.
 
 Use the local knowledge package in `docs/agent/automotive_sources/`:
 
-- `automotive_repair_sources_catalog.json` is the main source catalog.
-- `brand_source_map.json` maps vehicle brands to preferred sources.
-- `data_type_source_map.json` maps work type to preferred sources.
-- `open_dataset_endpoints.json` lists legally open datasets and endpoints.
+- `docs/agent/automotive_sources/automotive_repair_sources_catalog.json` is the
+  main source catalog.
+- Brand and data-type routes are derived from each catalog record's `brands`
+  and `data_types`; do not maintain duplicate projection files.
+- `docs/agent/automotive_sources/open_dataset_endpoints.json` lists legally
+  open datasets and endpoints.
 
 Do not update `last_verified` fields in source catalogs during documentation
 hygiene unless the external source was actually checked in that pass.
+Treat an old `last_verified` value as a prompt to recheck the source before
+operational use, not as proof that the route is still current.
 
 ## Web Research Tools
 
 For public internet research, use the lightest route that works:
 
 1. source catalog / local knowledge route;
-2. CRM agent `search_web_multi` results, then HTTP page excerpt;
-3. CRM agent `fetch_page_browser` for public JS-heavy pages, forums, and
-   marketplace pages that do not render useful text through HTTP.
+2. resolve `search_web_multi` and page excerpt through
+   `discover_raw_capabilities` -> `get_raw_capability_schema` ->
+   `call_raw_capability`;
+3. resolve `fetch_page_browser` through the same route only for public
+   JS-heavy pages, forums, and marketplace pages that do not render useful text
+   through HTTP.
 
 `search_web_multi` tries configured providers in order:
 Brave Search API -> Tavily -> Google Custom Search JSON API -> DuckDuckGo HTML.
@@ -84,7 +91,9 @@ Required first-pass routing:
 2. market / region
 3. exact transmission code or family
 4. exact symptom and operating condition
-5. `recommend_automotive_sources(data_type="transmission")`
+5. Gateway v2 raw discovery, schema lookup, then
+   `call_raw_capability` for `recommend_automotive_sources` with
+   `data_type="transmission"` (or the equivalent local CLI)
 
 Prefer the exact OEM service document, then transmission-manufacturer
 documentation, then component-supplier documentation. For transmission work,

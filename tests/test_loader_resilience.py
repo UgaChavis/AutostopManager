@@ -12,8 +12,6 @@ from autostop_manager.storage import ManagerMemoryStore
 
 CASES = [
     ("autostop_manager.source_catalog", "load_source_catalog", "SOURCE_CATALOG_PATH", {"sources": [], "source_count": 0}),
-    ("autostop_manager.source_catalog", "load_brand_source_map", "BRAND_SOURCE_MAP_PATH", {}),
-    ("autostop_manager.source_catalog", "load_data_type_source_map", "DATA_TYPE_SOURCE_MAP_PATH", {}),
     ("autostop_manager.source_catalog", "load_open_dataset_endpoints", "OPEN_DATASET_ENDPOINTS_PATH", {"endpoints": []}),
     ("autostop_manager.vin_sources", "load_source_registry", "REGISTRY_PATH", {"version": 0, "purpose": "missing", "sources": []}),
     ("autostop_manager.fluid_maintenance", "load_fluid_source_catalog", "FLUID_SOURCE_PATH", {}),
@@ -22,6 +20,21 @@ CASES = [
     ("autostop_manager.knowledge_base", "_load_knowledge_map", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_command_routes", "COMMAND_ROUTES_PATH", {"routes": []}),
 ]
+
+
+def test_source_maps_fail_closed_with_invalid_canonical_catalog(tmp_path, monkeypatch):
+    module = importlib.import_module("autostop_manager.source_catalog")
+    bad_path = tmp_path / "broken.json"
+    bad_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(module, "SOURCE_CATALOG_PATH", bad_path)
+    for loader in (module.load_source_catalog, module.load_brand_source_map, module.load_data_type_source_map):
+        loader.cache_clear()
+
+    assert module.load_brand_source_map() == {}
+    assert module.load_data_type_source_map() == {}
+
+    for loader in (module.load_source_catalog, module.load_brand_source_map, module.load_data_type_source_map):
+        loader.cache_clear()
 
 
 @pytest.mark.parametrize("module_name, loader_name, path_attr, expected", CASES)
@@ -179,6 +192,7 @@ def test_service_management_string_lists_are_normalized(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "SERVICE_MANAGEMENT_SOURCE_PATH", catalog_path)
+    monkeypatch.setattr(module, "PROCUREMENT_PRICE_SOURCE_PATH", tmp_path / "missing-procurement.json")
     module.load_service_management_catalog.cache_clear()
 
     result = build_service_management_plan(area="daily_control", city="Красноярск")
@@ -237,7 +251,6 @@ def test_vin_sources_inputs_and_backlogs_are_normalized(tmp_path, monkeypatch):
                         "inputs": "vin",
                     }
                 ],
-                "integration_backlog": "backlog item",
             }
         ),
         encoding="utf-8",
@@ -253,8 +266,7 @@ def test_vin_sources_inputs_and_backlogs_are_normalized(tmp_path, monkeypatch):
                         "mvp_priority": "high",
                     }
                 ],
-                "integration_backlog": "procurement backlog",
-                "crm_vin_oem_parts_pricing_backlog": [{"source_id": "demo", "mvp_priority": "high"}],
+                "integration_next_steps": [{"step": 1, "task": "demo", "status": "planned"}],
             }
         ),
         encoding="utf-8",
@@ -272,9 +284,8 @@ def test_vin_sources_inputs_and_backlogs_are_normalized(tmp_path, monkeypatch):
     vin_oem_registry = crm_module._load_vin_oem_sources()
     procurement_registry = crm_module._load_procurement_sources()
 
-    assert vin_oem_registry["integration_backlog"] == ["backlog item"]
-    assert procurement_registry["integration_backlog"] == ["procurement backlog"]
-    assert procurement_registry["crm_vin_oem_parts_pricing_backlog"] == [{"source_id": "demo", "mvp_priority": "high"}]
+    assert "integration_backlog" not in vin_oem_registry
+    assert procurement_registry["integration_next_steps"] == [{"step": 1, "task": "demo", "status": "planned"}]
 
     vin_module.load_source_registry.cache_clear()
     crm_module._load_vin_oem_sources.cache_clear()

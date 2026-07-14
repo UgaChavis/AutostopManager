@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 import re
@@ -16,7 +17,7 @@ def test_codex_native_startup_files_are_present_and_safe():
     agents_path = ROOT / "AGENTS.md"
     config_path = ROOT / ".codex" / "config.toml"
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    index = (ROOT / "docs" / "agent" / "knowledge_base_index.md").read_text(encoding="utf-8")
+    shelves = (ROOT / "docs" / "agent" / "knowledge_shelves.md").read_text(encoding="utf-8")
 
     assert not (ROOT / "agent.md").exists()
     assert agents_path.is_file()
@@ -72,16 +73,15 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert not re.search(r"(api[_-]?key|token|secret|password|credential)", config_text)
 
     assert "`AGENTS.md` - canonical compact startup instruction for Codex." in readme
-    assert "`AGENTS.md` - canonical compact startup instruction for Codex." in index
+    assert "Manager startup" in shelves
     assert "agent.md" not in readme
-    assert "agent.md" not in index
+    assert "agent.md" not in shelves
 
 
 def test_home_pc_remote_access_is_documented_as_current_capability():
     checked_paths = [
         ROOT / "AGENTS.md",
         ROOT / "README.md",
-        ROOT / "docs" / "agent" / "knowledge_base_index.md",
         ROOT / "docs" / "agent" / "knowledge_shelves.md",
         ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md",
         ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
@@ -139,6 +139,55 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
     knowledge_intake = route["domains"]["knowledge_intake"]
     assert "cleanup-audit" in knowledge_intake["keywords"]
     assert "удалить устаревшие инструкции" in knowledge_intake["keywords"]
+
+
+def test_redundant_navigation_and_generated_source_maps_stay_removed():
+    removed = [
+        "docs/agent/knowledge_base_index.md",
+        "docs/agent/knowledge_intake_playbook.md",
+        "docs/agent/ai_parts_krasnoyarsk_playbook.md",
+        "docs/agent/zzap_search_playbook.md",
+        "docs/agent/manager_identity.json",
+        "docs/agent/memory_policy.json",
+        "docs/agent/phone_flow.json",
+        "docs/agent/automotive_sources/brand_source_map.json",
+        "docs/agent/automotive_sources/data_type_source_map.json",
+        "docs/agent/automotive_sources/dsg_transmission_sources.json",
+        "docs/agent/automotive_sources/model_source_overrides.json",
+        "docs/agent/gmail_mcp_catalog.json",
+    ]
+
+    assert all(not (ROOT / path).exists() for path in removed)
+
+
+def test_every_command_route_has_gateway_v2_execution_contract():
+    payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
+
+    assert payload["format"] == "agent_workflow_registry_v2"
+    command_ids = [route["command_id"] for route in payload["routes"]]
+    assert len(command_ids) == len(set(command_ids))
+    for route in payload["routes"]:
+        assert (ROOT / route["open_first"]).is_file()
+        assert route["required_reads"]
+        assert isinstance(route["write_domains"], list)
+        assert isinstance(route["external_connectors"], list)
+        assert route["completion_checks"]
+
+
+def test_gmail_playbook_lists_current_documented_surface():
+    playbook = (ROOT / "docs" / "agent" / "gmail_workflow_playbook.md").read_text(encoding="utf-8")
+    tools = [
+        "_get_profile", "_list_labels", "_search_emails", "_search_email_ids", "_read_email",
+        "_batch_read_email", "_read_email_thread", "_batch_read_email_threads", "_list_drafts",
+        "_read_attachment", "_create_label", "_apply_labels_to_emails", "_batch_modify_email",
+        "_bulk_label_matching_emails", "_archive_emails", "_delete_emails", "_create_draft",
+        "_update_draft", "_send_draft", "_send_email", "_forward_emails",
+    ]
+
+    assert len(tools) == len(set(tools)) == 21
+    assert all(tool in playbook for tool in tools)
+    for expected in ["attachment_files", "body_file", "html_body", "content_type", "2026-07-14"]:
+        assert expected in playbook
 
 
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():
@@ -211,7 +260,6 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
 def test_business_documents_route_requires_crm_print_module_for_autostop_documents():
     playbook = (ROOT / "docs" / "agent" / "business_document_quality_playbook.md").read_text(encoding="utf-8")
-    index = (ROOT / "docs" / "agent" / "knowledge_base_index.md").read_text(encoding="utf-8")
     annotations = (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").read_text(encoding="utf-8")
     manager_rules = json.loads((ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8"))
     crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
@@ -219,7 +267,7 @@ def test_business_documents_route_requires_crm_print_module_for_autostop_documen
         rule for rule in manager_rules["rules"] if rule["id"] == "business-document-quality-gate"
     )["rule"]
 
-    combined = "\n".join([playbook, index, annotations])
+    combined = "\n".join([playbook, annotations])
     assert "CRM print module" in combined
     assert "create_document_without_card_pdf" in combined
     assert "download_repair_order_print_pdf" in combined
@@ -332,11 +380,86 @@ def test_tracked_markdown_does_not_have_adjacent_duplicate_content_lines():
     assert offenders == []
 
 
+def test_every_tracked_agent_data_line_is_structurally_readable():
+    tracked = subprocess.run(
+        ["git", "ls-files", "AGENTS.md", "README.md", "docs/agent"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    failures: list[str] = []
+
+    for raw_path in tracked:
+        path = ROOT / raw_path
+        if not path.is_file():
+            continue
+        try:
+            if path.suffix == ".json":
+                json.loads(path.read_text(encoding="utf-8-sig"))
+            elif path.suffix == ".jsonl":
+                for line_number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+                    if line.strip():
+                        json.loads(line)
+            elif path.suffix == ".csv":
+                rows = list(csv.reader(path.read_text(encoding="utf-8-sig").splitlines()))
+                if not rows or any(len(row) != len(rows[0]) for row in rows):
+                    failures.append(f"{raw_path}:inconsistent_csv_width")
+            elif path.suffix == ".md":
+                fence_count = sum(line.lstrip().startswith("```") for line in path.read_text(encoding="utf-8").splitlines())
+                if fence_count % 2:
+                    failures.append(f"{raw_path}:unbalanced_code_fence")
+        except (csv.Error, json.JSONDecodeError, UnicodeError) as exc:
+            failures.append(f"{raw_path}:{exc}")
+
+    assert failures == []
+
+
+def test_compacted_source_pack_manifests_match_retained_files():
+    cache_root = ROOT / "docs" / "agent" / "automotive_sources" / "source_cache"
+    bmw_root = cache_root / "bmw_repair_knowledge_pack"
+    bmw_manifest = json.loads((bmw_root / "manifest.json").read_text(encoding="utf-8"))
+    bmw_files = sorted(
+        str(path.relative_to(bmw_root))
+        for path in bmw_root.rglob("*")
+        if path.is_file() and path.name != "manifest.json"
+    )
+
+    ai_root = cache_root / "ai_parts_krasnoyarsk_project_pack"
+    offline_root = cache_root / "offline_parts_catalogs_knowledge_pack"
+
+    assert bmw_manifest["file_count_excluding_manifest"] == len(bmw_files)
+    assert bmw_manifest["files"] == bmw_files
+    assert {path.name for path in ai_root.iterdir() if path.is_file()} == {"MANIFEST.md", "README.md"}
+    assert not (offline_root / "sources" / "citations.md").exists()
+    assert (offline_root / "sources" / "offline_parts_catalog_sources.json").is_file()
+
+
+def test_every_tracked_agent_document_has_a_knowledge_map_route():
+    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
+    routed: set[str] = set()
+    for domain in knowledge_map["domains"].values():
+        for field in ("source_of_truth_files", "primary_files", "reference_files", "optional_runtime_files"):
+            routed.update(domain.get(field, []))
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "AGENTS.md", "README.md", "docs/agent"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    existing = {raw_path for raw_path in tracked if (ROOT / raw_path).is_file()}
+
+    assert existing <= routed
+
+
 def test_source_pack_playbook_navigation_uses_repo_relative_paths():
     checked_paths = [
         ROOT / "docs" / "agent" / "bmw_repair_playbook.md",
         ROOT / "docs" / "agent" / "ecu_calibration_programming_playbook.md",
-        ROOT / "docs" / "agent" / "ai_parts_krasnoyarsk_playbook.md",
     ]
     ambiguous_prefixes = ("`data/", "`md/", "`markdown/", "`sources/")
     offenders: list[str] = []

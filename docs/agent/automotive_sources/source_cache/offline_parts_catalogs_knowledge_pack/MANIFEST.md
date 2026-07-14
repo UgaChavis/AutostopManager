@@ -12,7 +12,6 @@ Runtime cache path:
 - `MANIFEST.md` - this file.
 - `sources/offline_parts_catalog_sources.json` - official source records and
   local cache filenames.
-- `sources/citations.md` - browsed source citations and evidence notes.
 - `rules/offline_parts_catalog_usage_rules.jsonl` - compact machine-readable
   usage rules for offline catalog checks.
 

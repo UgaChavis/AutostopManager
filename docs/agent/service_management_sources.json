@@ -1,206 +1,9 @@
 {
-  "generated_on": "2026-05-03",
+  "generated_on": "2026-07-14",
   "city": "Красноярск",
-  "purpose": "Operational source routing for AutoStop/Автоспорт service management in Krasnoyarsk.",
+  "purpose": "Service-management routing; procurement sources are loaded from the canonical procurement catalog.",
+  "procurement_source_catalog": "docs/agent/procurement_price_sources.json",
   "sources": [
-    {
-      "source_id": "drom_parts",
-      "name": "Drom Parts",
-      "category": "marketplace_parts",
-      "city_focus": "Красноярск",
-      "url": "https://baza.drom.ru/krasnoyarsk/sell_spare_parts/",
-      "use_for": ["used_parts", "contract_parts", "local_exact_oem_search", "urgent_pickup"],
-      "verification": "Search exact OEM, compressed OEM, model plus part name, and inspect seller city/photos."
-    },
-    {
-      "source_id": "zzap",
-      "name": "ZZap",
-      "category": "parts_price_comparison",
-      "city_focus": "Красноярск",
-      "url": "https://www.zzap.ru/",
-      "use_for": ["new_parts", "replacement_numbers", "price_benchmark", "seller_comparison"],
-      "verification": "Use exact OEM first, city filter where available, and all replacements view for analogs. Treat API as partner-by-request until contract is confirmed."
-    },
-    {
-      "source_id": "rossko",
-      "name": "ROSSKO / Росско",
-      "category": "wholesale_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://rossko.ru/contacts/magaziny-avtozapchastei-krasnoyarsk-2400000100000/18019/",
-      "use_for": ["new_parts", "consumables", "local_stock", "procurement_price", "same_day_or_next_day"],
-      "verification": "High-priority source when AutoStop account/API keys are available; confirm warehouse, pickup, price type, and return terms."
-    },
-    {
-      "source_id": "armtek",
-      "name": "ARMTEK / Армтек",
-      "category": "wholesale_parts_supplier",
-      "city_focus": "Россия",
-      "url": "https://etp.armtek.ru/",
-      "use_for": ["new_parts", "b2b_procurement", "stock_and_delivery_check", "price_benchmark"],
-      "verification": "Use only account-approved ETP/API or exported price list; confirm Krasnoyarsk logistics and return terms."
-    },
-    {
-      "source_id": "autopiter",
-      "name": "Autopiter / Автопитер",
-      "category": "federal_parts_supplier",
-      "city_focus": "Россия",
-      "url": "https://autopiter.ru/",
-      "use_for": ["new_parts", "oem_parts", "analogs", "russia_order", "procurement_price"],
-      "verification": "Use for Russia-wide закупка and supplier comparison; wholesale/API access requires registration and account approval."
-    },
-    {
-      "source_id": "autoeuro_api",
-      "name": "AutoEuro API / АвтоЕвро",
-      "category": "supplier_api",
-      "city_focus": "Россия",
-      "url": "https://api.autoeuro.ru/doc/v2",
-      "use_for": ["new_parts", "price_and_stock_confirmation", "order_creation", "order_status"],
-      "verification": "Use after API activation only; good candidate for normalized price, stock, delivery, and order-status checks."
-    },
-    {
-      "source_id": "partsapi",
-      "name": "PARTSAPI.RU",
-      "category": "catalog_fitment_api",
-      "city_focus": "Россия",
-      "url": "https://partsapi.ru/",
-      "use_for": ["tecdoc_crosses", "vin_decode", "applicability", "oem_or_analog_identification"],
-      "verification": "Use for fitment and cross-reference enrichment, not as закупочная цена unless a connected supplier price is confirmed."
-    },
-    {
-      "source_id": "umapi",
-      "name": "UMAPI",
-      "category": "catalog_and_price_list_platform",
-      "city_focus": "Россия",
-      "url": "https://umapi.ru/",
-      "use_for": ["catalog_data", "price_list_exchange", "supplier_data_integration"],
-      "verification": "Evaluate for supplier price-list exchange and catalog enrichment; confirm connected suppliers before using prices."
-    },
-    {
-      "source_id": "mikado",
-      "name": "Mikado Webservice",
-      "category": "supplier_api_docs",
-      "city_focus": "Россия",
-      "url": "https://mikado-parts.ru/ws1/Docs",
-      "use_for": ["parts_search", "price_and_stock_check", "supplier_benchmark"],
-      "verification": "Use as an additional API candidate after commercial access is confirmed."
-    },
-    {
-      "source_id": "auto_sputnik",
-      "name": "AutoSputnik / Автоспутник API",
-      "category": "supplier_api",
-      "city_focus": "Россия",
-      "url": "https://api.auto-sputnik.ru/?act=api_search",
-      "use_for": ["parts_search", "price", "stock", "lead_time", "return_terms"],
-      "verification": "Use after supplier login and current API endpoint are confirmed; legacy docs mention migration."
-    },
-    {
-      "source_id": "apec_api",
-      "name": "APEC API",
-      "category": "supplier_api",
-      "city_focus": "Россия / импорт",
-      "url": "https://api.apecauto.com/",
-      "use_for": ["spare_parts_pricing", "delivery_days", "quantity_available", "order_creation", "order_status"],
-      "verification": "Use as import/Russia-order benchmark if commercial account and delivery route are relevant."
-    },
-    {
-      "source_id": "autopoisk",
-      "name": "AUTOPOISK",
-      "category": "catalog_and_supplier_data_platform",
-      "city_focus": "Россия",
-      "url": "https://autopoisk.su/ru",
-      "use_for": ["vin_identification", "catalogs", "crosses", "supplier_statistics", "repair_information"],
-      "verification": "Use for professional catalog/cross/OEM enrichment and supplier-market context, not direct закупка until connected supplier prices are verified."
-    },
-    {
-      "source_id": "fifth_gear_krasnoyarsk",
-      "name": "Пятая передача",
-      "category": "local_parts_and_fluids_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://xn--80atblfjdfd2l.xn--80aaaoea1ebkq6dxec.xn--p1ai/",
-      "use_for": ["local_fluids", "maintenance_parts", "vin_inquiry", "same_day_check"],
-      "verification": "Use for Krasnoyarsk fluids and common service materials; confirm live stock and package size."
-    },
-    {
-      "source_id": "liqui_moly_krasnoyarsk",
-      "name": "Liqui Moly Красноярск",
-      "category": "local_fluids_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://liqui-moly24.ru/",
-      "use_for": ["fluids", "additives", "maintenance_consumables", "local_stock"],
-      "verification": "Use as local fluids benchmark only when OEM approval/spec and package size are clear."
-    },
-    {
-      "source_id": "avito_parts",
-      "name": "Avito Parts",
-      "category": "marketplace_parts",
-      "city_focus": "Красноярск",
-      "url": "https://www.avito.ru/krasnoyarsk/zapchasti_i_aksessuary",
-      "use_for": ["used_parts", "urgent_local_pickup", "rare_parts"],
-      "verification": "Treat as manual direct-site search; verify photos, article, seller, and return terms."
-    },
-    {
-      "source_id": "emex",
-      "name": "Emex",
-      "category": "new_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://emex.ru/",
-      "use_for": ["new_parts", "oem_parts", "analogs", "delivery_price_benchmark"],
-      "verification": "Use account-specific city and delivery terms; compare exact article and analogs."
-    },
-    {
-      "source_id": "exist",
-      "name": "Exist",
-      "category": "new_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://www.exist.ru/",
-      "use_for": ["oem_parts", "catalog_cross_check", "new_parts"],
-      "verification": "Use VIN/catalog route first, then compare exact article price and delivery."
-    },
-    {
-      "source_id": "autodoc",
-      "name": "Autodoc",
-      "category": "new_parts_supplier",
-      "city_focus": "Россия",
-      "url": "https://www.autodoc.ru/",
-      "use_for": ["new_parts", "brand_cross_check", "price_benchmark"],
-      "verification": "Use as secondary supplier and cross-check; confirm city delivery and returns."
-    },
-    {
-      "source_id": "metro_avtodom",
-      "name": "Метро-Автодом",
-      "category": "local_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://www.metro-avtodom.ru/",
-      "use_for": ["local_stock", "same_day_call", "common_parts"],
-      "verification": "Call or check current stock; public site claims large local inventory."
-    },
-    {
-      "source_id": "krasdetal",
-      "name": "КрасDеталь",
-      "category": "local_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://krasdetal.orgs.biz/",
-      "use_for": ["vin_parts_selection", "local_delivery", "import_vehicle_parts"],
-      "verification": "Use for VIN-based inquiry and local availability; confirm part number in writing."
-    },
-    {
-      "source_id": "porshenkras",
-      "name": "Porshenkras",
-      "category": "local_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://porshenkras.ru/",
-      "use_for": ["local_stock", "europe_japan_korea_us_parts", "common_parts"],
-      "verification": "Use for local stock checks; confirm article and return terms."
-    },
-    {
-      "source_id": "avtopostavka",
-      "name": "Автопоставка",
-      "category": "contract_parts_supplier",
-      "city_focus": "Красноярск",
-      "url": "https://avtopostavka.ru/",
-      "use_for": ["contract_parts", "japan_vehicle_parts", "local_stock"],
-      "verification": "Use for used/contract Japanese parts; verify donor, condition, and warranty."
-    },
     {
       "source_id": "hh_ru",
       "name": "hh.ru",
@@ -226,7 +29,7 @@
       "city_focus": "Красноярск",
       "url": "https://dreamjob.ru/salary/avtomehanik/city-krasnoyarsk",
       "use_for": ["mechanic_salary_benchmark", "market_context"],
-      "verification": "Use as public benchmark only; compare with hh.ru and internal output."
+      "verification": "Use as a public benchmark only; compare it with current vacancies and internal output."
     },
     {
       "source_id": "finder_salary",
@@ -235,7 +38,7 @@
       "city_focus": "Красноярск",
       "url": "https://finder.work/salaries/avtoslesar_avtomobiley/krasnoiarsk",
       "use_for": ["mechanic_salary_benchmark", "market_context"],
-      "verification": "Use as public benchmark only; compare with current vacancy data."
+      "verification": "Use as a public benchmark only; compare it with current vacancy data."
     }
   ],
   "areas": {
@@ -243,54 +46,31 @@
       "source_ids": [],
       "required_context": ["crm_board_state"],
       "crm_tools": ["agent_bootstrap", "agent_board_digest", "agent_board_workflow(manager_board_scan)", "agent_search(repair_order)"],
-      "actions": [
-        "Check overdue cards and expired deadlines.",
-        "Check ready cars with unpaid due amounts.",
-        "Check parts-order and supply columns for blockers.",
-        "Journal important decisions and follow-ups."
-      ],
+      "actions": ["Check overdue cards and expired deadlines.", "Check ready cars with unpaid due amounts.", "Check parts-order and supply columns for blockers.", "Report important decisions and follow-ups."],
       "kpis": ["overdue cards", "ready unpaid cars", "blocked parts orders", "stale active cards"],
-      "memory_rules": ["Store durable operating rule only, not board snapshots."]
+      "memory_rules": ["Store durable operating rules only, not board snapshots."]
     },
     "parts_procurement": {
-      "source_ids": ["rossko", "armtek", "autopiter", "autoeuro_api", "emex", "exist", "autodoc", "zzap", "partsapi", "umapi", "mikado", "auto_sputnik", "apec_api", "autopoisk", "fifth_gear_krasnoyarsk", "liqui_moly_krasnoyarsk", "drom_parts", "avito_parts", "metro_avtodom", "krasdetal", "porshenkras", "avtopostavka"],
+      "source_ids": ["rossko", "armtek", "autopiter", "autoeuro_api", "emex", "exist", "autodoc", "zzap", "partsapi", "umapi", "auto_sputnik", "apec_api", "autopoisk", "fifth_gear_krasnoyarsk", "liqui_moly_krasnoyarsk", "drom_parts", "avito_parts", "metro_avtodom", "krasdetal", "porshenkras", "avtopostavka"],
       "required_context": ["vehicle", "part_number", "part_name", "urgency"],
       "crm_tools": ["agent_search", "agent_entity_context", "agent_inventory_workflow", "prepare_action_contract", "agent_board_workflow(cleanup_card)"],
-      "actions": [
-        "Normalize OEM, compressed OEM, vehicle, side, axle, and condition.",
-        "Check contracted supplier/API/price-list routes first when available: ROSSKO, Armtek, Autopiter, AutoEuro, Emex, Exist, Autodoc.",
-        "Use ZZap for price and replacement comparison, then PartsAPI/UMAPI/AUTOPOISK only for catalog/cross enrichment unless supplier price is connected.",
-        "Use AutoSputnik/APEC/Mikado as additional supplier API candidates after account and delivery terms are confirmed.",
-        "Use Drom and Avito for used, contract, rare, or urgent local offers.",
-        "Use Krasnoyarsk fluids/local suppliers for same-day consumables.",
-        "Call local Krasnoyarsk suppliers when same-day pickup matters."
-      ],
+      "actions": ["Normalize OEM, vehicle, side, axle, condition, package, and urgency.", "Check contracted supplier/API/price-list routes before public retail routes.", "Use catalog providers for identity and crosses, not as procurement evidence unless price and stock are connected.", "Use Drom/Avito for used, contract, rare, or urgent local offers.", "Confirm same-day local stock, price, package, warranty, and return terms directly."],
       "kpis": ["exact OEM hit rate", "local pickup availability", "delivery days", "return risk", "total landed cost"],
-      "memory_rules": ["Remember chosen supplier and reusable search heuristic only."]
+      "memory_rules": ["Store only a reusable supplier or search rule, never a selected one-off offer."]
     },
     "repair_triage": {
       "source_ids": [],
       "required_context": ["vin_or_chassis", "complaint", "dtc_or_scan", "engine", "transmission", "mileage"],
-      "crm_tools": ["agent_search", "agent_entity_context", "discover_raw_capabilities", "call_raw_capability(recommend_automotive_sources)", "agent_board_workflow(cleanup_card)"],
-      "actions": [
-        "Extract complaint and vehicle identity from CRM.",
-        "Route source-sensitive facts through the repair source catalog.",
-        "Build a technician diagnostic checklist before pricing parts.",
-        "Mark missing data explicitly in the card."
-      ],
+      "crm_tools": ["agent_search", "agent_entity_context", "discover_raw_capabilities", "get_raw_capability_schema", "call_raw_capability(recommend_automotive_sources)", "agent_board_workflow(cleanup_card)"],
+      "actions": ["Extract complaint and vehicle identity from CRM.", "Route source-sensitive facts through the repair source catalog.", "Build a technician diagnostic checklist before pricing parts.", "Report missing inputs; update a public card only on explicit intent and through the cleanup contract."],
       "kpis": ["diagnosis waiting time", "first-check completion", "parts-before-diagnosis risk", "rework signal"],
-      "memory_rules": ["Remember only durable diagnostic patterns confirmed by the shop."]
+      "memory_rules": ["Store only durable diagnostic patterns confirmed by the shop."]
     },
     "staff_management": {
       "source_ids": ["hh_ru", "superjob", "dreamjob_salary", "finder_salary"],
       "required_context": ["role", "current_load", "output_or_hours", "quality_signal"],
       "crm_tools": ["agent_bootstrap", "agent_board_digest", "agent_search(repair_order)", "agent_entity_context", "start_workflow"],
-      "actions": [
-        "Compare active card load by technician or column.",
-        "Track blocked cars separately from productive repair time.",
-        "Use market salary sources only as context.",
-        "Create follow-up tasks for hiring, training, or performance conversations."
-      ],
+      "actions": ["Compare active card load by technician or column.", "Track blocked cars separately from productive repair time.", "Use market salary sources only as context.", "Create follow-ups for hiring, training, or performance conversations."],
       "kpis": ["выработка per technician", "sold hours", "blocked hours", "rework count", "stale cards by assignee"],
       "memory_rules": ["Do not store candidate personal data; store hiring rules and role requirements."]
     },
@@ -298,54 +78,32 @@
       "source_ids": [],
       "required_context": ["card_id", "client_contact", "next_action", "approval_status"],
       "crm_tools": ["agent_search(card)", "agent_entity_context", "prepare_action_contract", "agent_board_workflow(cleanup_card)", "agent_board_workflow(bulk_set_deadline_if_below)"],
-      "actions": [
-        "Make the compact customer-flow fact visible in the card title, board_summary, or public description following docs/agent/crm_card_description_standard.md.",
-        "Separate estimate requested, prepared, approved, declined, and needs-data states.",
-        "Set follow-up deadlines for client approvals and pickups."
-      ],
+      "actions": ["Keep the next confirmed customer-flow fact compact under the CRM description standard.", "Separate estimate requested, prepared, approved, declined, and needs-data states.", "Change a deadline only under a separate explicit owner command for the exact scope."],
       "kpis": ["approval wait time", "pickup delay", "unanswered client requests", "visible next action coverage"],
-      "memory_rules": ["Store only reusable communication rules, not full client records."]
+      "memory_rules": ["Store only reusable communication rules, not client records."]
     },
     "finance_control": {
       "source_ids": [],
       "required_context": ["repair_orders", "cashbox", "payment_status"],
       "crm_tools": ["agent_finance_workflow(list_cashboxes)", "agent_finance_workflow(get_cashbox)", "agent_finance_workflow(get_cash_journal)", "agent_search(repair_order)"],
-      "actions": [
-        "Find ready cars with unpaid due totals.",
-        "Find orders with materials and no works.",
-        "Find cashbox transactions needing reconciliation.",
-        "Create owner-level tasks for unresolved payment blockers."
-      ],
+      "actions": ["Find ready cars with unpaid due totals.", "Find orders with materials and no works.", "Find cashbox transactions needing reconciliation.", "Report unresolved payment blockers without mutating finance state."],
       "kpis": ["unpaid ready total", "materials without labor", "cashbox mismatch count", "overdue receivables"],
-      "memory_rules": ["Do not duplicate cashbox ledger in memory."]
+      "memory_rules": ["Do not duplicate cashbox ledgers in memory."]
     },
     "work_pricing": {
       "source_ids": [],
       "required_context": ["vehicle", "work_items", "public_labor_only_quotes"],
-      "crm_tools": ["agent_search(card)", "agent_entity_context", "discover_raw_capabilities", "call_raw_capability(estimate_repair_work_cost)"],
-      "actions": [
-        "Normalize vehicle and exact labor operations.",
-        "Collect public Russia STO labor-only prices for comparable work.",
-        "Collect public norm-hours/labor-time mentions as a second plausibility layer when available.",
-        "Filter outliers, average valid quotes, and apply AutoStop +50%.",
-        "Use norm-hours to check complexity and overlaps, not as the primary price basis.",
-        "Return missing context when fewer than 3 valid quotes remain.",
-        "Keep the estimate read-only until the owner gives a separate ЗН write command."
-      ],
+      "crm_tools": ["agent_search(card)", "agent_entity_context", "discover_raw_capabilities", "get_raw_capability_schema", "call_raw_capability(estimate_repair_work_cost)"],
+      "actions": ["Normalize vehicle and exact labor operations.", "Collect comparable public Russia labor-only prices and optional norm-hour plausibility evidence.", "Filter outliers, average valid quotes, and apply AutoStop +50%.", "Return missing context when fewer than three valid quotes remain.", "Keep the estimate read-only until the owner separately authorizes an exact repair-order write."],
       "kpis": ["valid labor-only quote count", "source count", "confidence", "missing context"],
-      "memory_rules": ["Do not store full price lists; keep only durable pricing rules and short quote schema."]
+      "memory_rules": ["Do not store full price lists; keep only durable pricing rules and the compact quote schema."]
     },
     "knowledge_intake": {
       "source_ids": [],
       "required_context": ["file_path", "source_type", "license_status", "target_playbook"],
-      "crm_tools": ["remember", "manager_journal"],
-      "actions": [
-        "Classify source and license.",
-        "Extract durable conclusions only.",
-        "Update the relevant playbook or source catalog.",
-        "Journal the update."
-      ],
-      "kpis": ["files classified", "playbooks updated", "unsafe content rejected"],
+      "crm_tools": ["discover_raw_capabilities", "get_raw_capability_schema", "call_raw_capability(remember)", "call_raw_capability(manager_journal)"],
+      "actions": ["Classify source and license.", "Extract durable conclusions only.", "Update the smallest canonical playbook or catalog.", "Record only the compact durable result."],
+      "kpis": ["files classified", "canonical files updated", "unsafe content rejected"],
       "memory_rules": ["Never store raw manuals, full tables, or temporary search results."]
     }
   }

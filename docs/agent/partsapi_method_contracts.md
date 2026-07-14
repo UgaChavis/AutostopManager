@@ -42,15 +42,16 @@ and `PARTSAPI_ARTICLE_CRITERIA_KEY`.
 - `empty_payload`: true when the provider response is empty; callers must not
   interpret this as positive fitment or cross evidence.
 
-## Smoke Notes
+## Durable Provider Constraints
 
-- `getPartsbyVIN` has proven useful when a numeric group id is known.
+- `getPartsbyVIN` requires a numeric group id; text categories must be resolved
+  first.
 - `getPartsbyVIN` can be slow or time out; retry metadata must stay redacted
   and callers should cap live request count.
-- `getOEApplicability` can return empty payloads or provider-side failures for
-  otherwise valid-looking numbers; it is advisory.
-- `getCrosses`, `getCrossesWithBrand`, and `getCrossesTitle` can return empty
-  lists for cabinet examples; an empty list is not an adapter failure.
+- `getOEApplicability` is advisory: empty payloads and provider-side failures
+  are not fitment evidence.
+- Empty cross lists are valid provider results, not adapter failures or
+  evidence that no cross exists elsewhere.
 - `searchArticles` can return broad result sets and should be capped in reports.
 - `getSearchTree` is the preferred source for refreshing the local
   `partsapi_category_index`; batch live refreshes must be explicit and capped.

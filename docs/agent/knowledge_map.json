@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable navigation map for AutostopManager knowledge files.",
-  "entrypoint": "docs/agent/knowledge_base_index.md",
-  "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_base_index.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
+  "entrypoint": "docs/agent/knowledge_shelves.md",
+  "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_shelves.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
   "domains": {
     "startup_and_identity": {
       "title": "Manager startup, identity, and operating rules",
@@ -71,9 +71,7 @@
         "docs/agent/autostop_manager_skill.md",
         "docs/agent/manager_rules.json",
         "docs/agent/command_routes.json",
-        "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/manager_identity.json",
-        "docs/agent/memory_policy.json"
+        "docs/agent/manager_mcp_catalog.json"
       ]
     },
     "knowledge_intake": {
@@ -159,16 +157,12 @@
         "когда запускать cleanup-audit"
       ],
       "source_of_truth_files": [
-        "docs/agent/knowledge_intake_playbook.md",
         "docs/agent/knowledge_shelves.md",
-        "docs/agent/knowledge_base_index.md",
         "docs/agent/knowledge_map.json",
         "docs/agent/knowledge_annotations.jsonl"
       ],
       "primary_files": [
-        "docs/agent/knowledge_intake_playbook.md",
         "docs/agent/knowledge_shelves.md",
-        "docs/agent/knowledge_base_index.md",
         "docs/agent/knowledge_map.json",
         "docs/agent/knowledge_annotations.jsonl"
       ],
@@ -224,7 +218,6 @@
         "commercial offer",
         "tender response",
         "Карточка предприятия",
-        "КП НОВОЕ",
         "выписка ЕГРИП",
         "доверенность",
         "договор аренды"
@@ -419,12 +412,10 @@
       ],
       "source_of_truth_files": [
         "docs/agent/gmail_workflow_playbook.md",
-        "docs/agent/gmail_mcp_catalog.json",
         "docs/agent/manager_rules.json"
       ],
       "primary_files": [
         "docs/agent/gmail_workflow_playbook.md",
-        "docs/agent/gmail_mcp_catalog.json",
         "docs/agent/manager_rules.json"
       ],
       "required_context": [
@@ -485,15 +476,11 @@
       ],
       "source_of_truth_files": [
         "docs/agent/automotive_repair_source_playbook.md",
-        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
-        "docs/agent/automotive_sources/brand_source_map.json",
-        "docs/agent/automotive_sources/data_type_source_map.json"
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
       ],
       "primary_files": [
         "docs/agent/automotive_repair_source_playbook.md",
         "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
-        "docs/agent/automotive_sources/brand_source_map.json",
-        "docs/agent/automotive_sources/model_source_overrides.json",
         "docs/agent/automotive_sources/open_dataset_endpoints.json",
         "docs/agent/bmw_repair_playbook.md",
         "docs/agent/toyota_gr_yaris_playbook.md"
@@ -508,9 +495,7 @@
         "complaint",
         "scan results"
       ],
-      "reference_files": [
-        "docs/agent/automotive_sources/data_type_source_map.json"
-      ]
+      "reference_files": []
     },
     "ecu_calibration_programming": {
       "title": "ECU calibration, programming, coding, and instrument-cluster route",
@@ -630,9 +615,7 @@
         "что нельзя делать с EEPROM дампом пробегом иммобилайзером и emissions delete"
       ],
       "source_of_truth_files": [
-        "docs/agent/ecu_calibration_programming_playbook.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md"
+        "docs/agent/ecu_calibration_programming_playbook.md"
       ],
       "primary_files": [
         "docs/agent/ecu_calibration_programming_playbook.md",
@@ -661,7 +644,6 @@
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/glossary_ecu_programming.jsonl",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/uds_services_reference.csv",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/generic_dtc_examples_emissions_network.csv",
-        "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/citations_and_standards.md",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/sources/public_source_catalog.csv",
         "docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/MANIFEST.md"
       ]
@@ -716,9 +698,7 @@
         "какой BMW документ открыть первым"
       ],
       "source_of_truth_files": [
-        "docs/agent/bmw_repair_playbook.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json"
+        "docs/agent/bmw_repair_playbook.md"
       ],
       "primary_files": [
         "docs/agent/bmw_repair_playbook.md",
@@ -794,12 +774,10 @@
       ],
       "source_of_truth_files": [
         "docs/agent/toyota_gr_yaris_playbook.md",
-        "docs/agent/automotive_sources/model_source_overrides.json",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ],
       "primary_files": [
         "docs/agent/toyota_gr_yaris_playbook.md",
-        "docs/agent/automotive_sources/model_source_overrides.json",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ],
       "required_context": [
@@ -1022,18 +1000,15 @@
         "какие ограничения по контрактному мехатронику DSG"
       ],
       "source_of_truth_files": [
-        "docs/agent/dsg_transmission_playbook.md",
-        "docs/agent/automotive_sources/dsg_transmission_sources.json",
         "docs/agent/transmission_playbook.md",
-        "docs/agent/automotive_sources/data_type_source_map.json"
+        "docs/agent/dsg_transmission_playbook.md"
       ],
       "primary_files": [
-        "docs/agent/dsg_transmission_playbook.md",
-        "docs/agent/automotive_sources/dsg_transmission_sources.json",
-        "docs/agent/transmission_playbook.md"
+        "docs/agent/transmission_playbook.md",
+        "docs/agent/dsg_transmission_playbook.md"
       ],
       "reference_files": [
-        "docs/agent/automotive_sources/data_type_source_map.json"
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
       ]
     },
     "vehicle_identity_and_oem": {
@@ -1116,8 +1091,7 @@
         "docs/agent/vin_oem_lookup_playbook.md",
         "docs/agent/partsapi_method_contracts.md",
         "docs/agent/partsapi_category_index.json",
-        "docs/agent/vin_oem_sources.json",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md"
+        "docs/agent/vin_oem_sources.json"
       ],
       "primary_files": [
         "docs/agent/vehicle_identity_playbook.md",
@@ -1130,8 +1104,7 @@
       ],
       "reference_files": [
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/citations.md"
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json"
       ],
       "optional_runtime_files": [
         "data/offline_parts_catalogs/catalog_index.json",
@@ -1303,31 +1276,22 @@
         "какие workflow docs использовать для поиска и оценки предложений по запчастям"
       ],
       "source_of_truth_files": [
-        "docs/agent/ai_parts_krasnoyarsk_playbook.md",
-        "docs/agent/procurement_pricing_playbook.md",
-        "docs/agent/procurement_price_sources.json",
         "docs/agent/parts_search_playbook.md",
-        "docs/agent/zzap_search_playbook.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md"
+        "docs/agent/procurement_pricing_playbook.md",
+        "docs/agent/procurement_price_sources.json"
       ],
       "primary_files": [
-        "docs/agent/ai_parts_krasnoyarsk_playbook.md",
+        "docs/agent/parts_search_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
-        "docs/agent/parts_search_playbook.md",
-        "docs/agent/zzap_search_playbook.md",
-        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl"
       ],
       "reference_files": [
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/README.md",
         "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/MANIFEST.md",
-        "docs/agent/labor_pricing_sources.json",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/citations.md"
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json"
       ],
       "optional_runtime_files": [
         "data/offline_parts_catalogs/catalog_index.json",
@@ -1501,22 +1465,20 @@
         "как сделать менеджерский обзор клиентов, касс и заказ-нарядов"
       ],
       "source_of_truth_files": [
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
-        "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/service_management_sources.json",
         "docs/agent/board_cleanup_autopilot_playbook.md"
       ],
       "primary_files": [
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/crm_manager_data_playbook.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
-        "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/service_management_sources.json",
-        "docs/agent/service_patterns.json",
-        "docs/agent/board_cleanup_autopilot_playbook.md",
-        "docs/agent/phone_flow.json"
+        "docs/agent/board_cleanup_autopilot_playbook.md"
       ]
     },
     "deployment": {
@@ -1728,7 +1690,6 @@
         "docs/agent/partsapi_method_contracts.md",
         "docs/agent/partsapi_category_index.json",
         "docs/agent/vin_oem_sources.json",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
         "docs/agent/crm_card_description_standard.md",
         "docs/agent/procurement_pricing_playbook.md",
         "docs/agent/procurement_price_sources.json",
@@ -1748,8 +1709,7 @@
       ],
       "reference_files": [
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/citations.md"
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json"
       ],
       "optional_runtime_files": [
         "data/offline_parts_catalogs/catalog_index.json",
@@ -1911,7 +1871,6 @@
         "docs/agent/krasnoyarsk_service_management_playbook.md"
       ],
       "reference_files": [
-        "docs/agent/automotive_sources/data_type_source_map.json",
         "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
       ],
       "required_context": [
@@ -1937,5 +1896,5 @@
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
     "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md"
   },
-  "updated_at": "2026-06-16"
+  "updated_at": "2026-07-14"
 }

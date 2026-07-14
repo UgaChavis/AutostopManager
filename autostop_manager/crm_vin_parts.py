@@ -10,7 +10,6 @@ from .config import PROJECT_ROOT
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import decode_vehicle_identity
 from .vin_lookup import build_lookup_plan
-from .storage import _string_list
 
 VIN_OEM_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 PROCUREMENT_SOURCES_PATH = PROJECT_ROOT / "docs" / "agent" / "procurement_price_sources.json"
@@ -21,20 +20,18 @@ RAW_IDENTIFIER_KEYS = {"vin", "frame", "body_number", "chassis_number", "raw", "
 @lru_cache(maxsize=1)
 def _load_vin_oem_sources() -> dict[str, Any]:
     if not VIN_OEM_SOURCES_PATH.exists():
-        return {"sources": [], "integration_backlog": [], "load_error": "vin_oem_sources_missing"}
+        return {"sources": [], "load_error": "vin_oem_sources_missing"}
     try:
         payload = json.loads(VIN_OEM_SOURCES_PATH.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         return {
             "sources": [],
-            "integration_backlog": [],
             "load_error": "vin_oem_sources_invalid_json",
             "load_error_detail": str(exc),
         }
     if not isinstance(payload, dict):
         return {
             "sources": [],
-            "integration_backlog": [],
             "load_error": "vin_oem_sources_invalid_structure",
             "load_error_detail": type(payload).__name__,
         }
@@ -43,14 +40,12 @@ def _load_vin_oem_sources() -> dict[str, Any]:
         return {
             **payload,
             "sources": [],
-            "integration_backlog": _string_list(payload.get("integration_backlog")),
             "load_error": "vin_oem_sources_invalid_sources",
             "load_error_detail": type(sources).__name__,
         }
     return {
         **payload,
         "sources": [row for row in sources if isinstance(row, dict)],
-        "integration_backlog": _string_list(payload.get("integration_backlog")),
     }
 
 
@@ -59,8 +54,7 @@ def _load_procurement_sources() -> dict[str, Any]:
     if not PROCUREMENT_SOURCES_PATH.exists():
         return {
             "sources": [],
-            "integration_backlog": [],
-            "crm_vin_oem_parts_pricing_backlog": [],
+            "integration_next_steps": [],
             "load_error": "procurement_sources_missing",
         }
     try:
@@ -68,46 +62,41 @@ def _load_procurement_sources() -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         return {
             "sources": [],
-            "integration_backlog": [],
-            "crm_vin_oem_parts_pricing_backlog": [],
+            "integration_next_steps": [],
             "load_error": "procurement_sources_invalid_json",
             "load_error_detail": str(exc),
         }
     if not isinstance(payload, dict):
         return {
             "sources": [],
-            "integration_backlog": [],
-            "crm_vin_oem_parts_pricing_backlog": [],
+            "integration_next_steps": [],
             "load_error": "procurement_sources_invalid_structure",
             "load_error_detail": type(payload).__name__,
         }
     sources = payload.get("sources")
-    pricing_backlog = payload.get("crm_vin_oem_parts_pricing_backlog")
+    integration_next_steps = payload.get("integration_next_steps", payload.get("integration_backlog", []))
     if not isinstance(sources, list):
         return {
             **payload,
             "sources": [],
-            "integration_backlog": _string_list(payload.get("integration_backlog")),
-            "crm_vin_oem_parts_pricing_backlog": [row for row in pricing_backlog if isinstance(row, dict)]
-            if isinstance(pricing_backlog, list)
+            "integration_next_steps": [row for row in integration_next_steps if isinstance(row, dict)]
+            if isinstance(integration_next_steps, list)
             else [],
             "load_error": "procurement_sources_invalid_sources",
             "load_error_detail": type(sources).__name__,
         }
-    if not isinstance(pricing_backlog, list):
+    if not isinstance(integration_next_steps, list):
         return {
             **payload,
             "sources": [row for row in sources if isinstance(row, dict)],
-            "integration_backlog": _string_list(payload.get("integration_backlog")),
-            "crm_vin_oem_parts_pricing_backlog": [],
-            "load_error": "procurement_sources_invalid_pricing_backlog",
-            "load_error_detail": type(pricing_backlog).__name__,
+            "integration_next_steps": [],
+            "load_error": "procurement_sources_invalid_integration_next_steps",
+            "load_error_detail": type(integration_next_steps).__name__,
         }
     return {
         **payload,
         "sources": [row for row in sources if isinstance(row, dict)],
-        "integration_backlog": _string_list(payload.get("integration_backlog")),
-        "crm_vin_oem_parts_pricing_backlog": [row for row in pricing_backlog if isinstance(row, dict)],
+        "integration_next_steps": [row for row in integration_next_steps if isinstance(row, dict)],
     }
 
 
@@ -220,7 +209,11 @@ def _catalog_backlog_candidates(limit: int = 8, registry: dict[str, Any] | None 
 
 def _procurement_backlog_candidates(limit: int = 10, registry: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     registry = registry or _load_procurement_sources()
-    rows = list(registry.get("crm_vin_oem_parts_pricing_backlog") or registry.get("sources", []))
+    rows = [
+        source
+        for source in registry.get("sources", [])
+        if source.get("mvp_priority") or source.get("integration_priority")
+    ]
     priority = {"high": 0, "medium": 1, "low": 2}
     rows.sort(key=lambda row: priority.get(str(row.get("mvp_priority") or row.get("integration_priority") or "low"), 2))
     return rows[:limit]
@@ -237,7 +230,7 @@ def _source_digest(source: dict[str, Any]) -> dict[str, Any]:
         "env": source.get("env") or source.get("env_names") or source.get("secret_names"),
         "mvp_priority": source.get("mvp_priority") or source.get("integration_priority"),
         "adapter": source.get("adapter"),
-        "acceptance": source.get("acceptance") or source.get("test_vin_checks"),
+        "acceptance": source.get("acceptance") or source.get("test_vin_checks") or source.get("verification"),
     }
 
 
