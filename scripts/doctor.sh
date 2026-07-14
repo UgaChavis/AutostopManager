@@ -161,18 +161,26 @@ else
   skip "crm container healthcheck needs running autostopcrm container"
 fi
 run "crm public HTTPS" curl -fsS --max-time 8 -o /dev/null https://crm.autostopcrm.ru/
-run "crm local MCP initialize" curl -fsS --max-time 8 -o /dev/null \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"doctor-smoke","version":"1"}}}' \
-  "$CRM_MCP_URL"
-run "crm public MCP initialize" curl -fsS --max-time 8 -o /dev/null \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"doctor-smoke","version":"1"}}}' \
-  "$CRM_PUBLIC_MCP_URL"
+CRM_RUNTIME_MCP_TOKEN="${AUTOSTOP_CRM_MCP_BEARER_TOKEN:-}"
+if [[ -z "$CRM_RUNTIME_MCP_TOKEN" ]]; then
+  CRM_RUNTIME_MCP_TOKEN="$(env_file_value "$CRM_ROOT/.env" "MINIMAL_KANBAN_MCP_BEARER_TOKEN" || true)"
+fi
+if [[ -n "$CRM_RUNTIME_MCP_TOKEN" ]]; then
+  HAD_MCP_BEARER_TOKEN="${MINIMAL_KANBAN_MCP_BEARER_TOKEN+x}"
+  PREVIOUS_MCP_BEARER_TOKEN="${MINIMAL_KANBAN_MCP_BEARER_TOKEN:-}"
+  export MINIMAL_KANBAN_MCP_BEARER_TOKEN="$CRM_RUNTIME_MCP_TOKEN"
+  run "crm local Gateway v2" "$CRM_ROOT/.venv/bin/python" \
+    "$CRM_ROOT/scripts/check_agent_gateway_v2.py" --mcp-url "$CRM_MCP_URL"
+  run "crm public Gateway v2" "$CRM_ROOT/.venv/bin/python" \
+    "$CRM_ROOT/scripts/check_agent_gateway_v2.py" --mcp-url "$CRM_PUBLIC_MCP_URL"
+  if [[ -n "$HAD_MCP_BEARER_TOKEN" ]]; then
+    export MINIMAL_KANBAN_MCP_BEARER_TOKEN="$PREVIOUS_MCP_BEARER_TOKEN"
+  else
+    unset MINIMAL_KANBAN_MCP_BEARER_TOKEN
+  fi
+else
+  skip "crm Gateway v2 needs AUTOSTOP_CRM_MCP_BEARER_TOKEN or MINIMAL_KANBAN_MCP_BEARER_TOKEN in CRM .env"
+fi
 run "crm local board context" curl -fsS --max-time 8 -o /dev/null "$CRM_API_URL/api/get_board_context"
 
 exit "$status"
