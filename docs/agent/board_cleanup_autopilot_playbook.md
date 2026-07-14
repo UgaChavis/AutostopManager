@@ -20,7 +20,8 @@ The agent may:
 
 - read active board/card/client context needed for cleanup
 - read repair-order and cashbox context as evidence only
-- use manager diagnostics such as `manager_board_scan`, `triage_inbox_cards`,
+- use manager diagnostics through `agent_board_workflow`, including
+  `manager_board_scan`, `triage_inbox_cards`,
   `list_cards_missing_manager_data`, `audit_repair_order_consistency`, and
   `audit_client_links`
 - update confirmed card title, compact vehicle, existing public description,
@@ -44,14 +45,17 @@ owner gives a separate explicit command for that exact target.
 
 For multi-card runs:
 
-- start a manager run before changes and close it with counts and verification
-- read `bootstrap_context` and `manager_board_scan`
+- start a Gateway v2 workflow before changes and close it with counts and
+  positive verification
+- read `agent_bootstrap`, `agent_board_digest`, and
+  `agent_board_workflow(operation="manager_board_scan", mode="dry_run")`
 - prioritize critical/red cards, inbox, ready unpaid, stale/missing
   `board_summary`, missing manager data, payment blockers, parts blockers, and
   repair-order consistency issues
 - use high-level bulk tools first when they fit; timer floor and ready-unpaid
   followups are separate routes
-- use `cleanup_card(mode=dry_run)` before `apply`
+- use `agent_board_workflow(operation="cleanup_card", mode="dry_run")` before
+  the same workflow in `mode="apply"`
 - keep batches small enough to verify; default 10-15 eligible cards unless the
   owner asks to continue
 - skip cards that are already clear
@@ -60,14 +64,15 @@ For multi-card runs:
 
 Board-wide work must survive context compaction:
 
-- use `start_manager_run`, `record_manager_run_event`, and `finish_manager_run`
+- use `start_workflow`, `workflow_checkpoint`, `workflow_status`, and strict
+  `workflow_transition` calls
 - checkpoint scope, candidates, each write batch, each skip batch, and final
-  verification
+  verification with the latest `state_version`
 - prefer compact CRM manager tools before raw exports
 - keep raw board dumps, phone lists, VIN/license tables, and full repair orders
   out of chat and durable memory
-- resume from `list_manager_runs(include_events=true)` after a stalled or
-  compacted thread
+- resume from `agent_bootstrap` unfinished workflows, `workflow_status`, and
+  `workflow_resume` after a stalled or compacted thread
 
 ## Data Preservation
 
@@ -90,13 +95,14 @@ instead of overwriting blindly.
 
 ## Read Order
 
-1. `today_context`
-2. CRM `agent_bootstrap`
+1. CRM `agent_bootstrap`
+2. `agent_board_digest`
 3. `agent_board_workflow(operation="manager_board_scan", mode="dry_run")`
-4. Focused diagnostics: `triage_inbox_cards`, `list_ready_unpaid_cards`,
+4. Focused diagnostics through `agent_board_workflow`: `triage_inbox_cards`, `list_ready_unpaid_cards`,
    `list_cards_missing_manager_data`, `audit_repair_order_consistency`,
    `audit_client_links`
-5. Client candidates: `suggest_clients_for_card`, `search_clients`, `get_client`
+5. Client candidates through `agent_search(entity="client")` and focused
+   `agent_entity_context`
 6. Focused card/context reads
 7. Repair orders only where works, money, completion, or blockers matter
 8. Card logs only for stale, contradictory, or sensitive cards
@@ -293,7 +299,7 @@ Do not paste full card contents into the report.
 
 ## Memory
 
-After cleanup, write a compact `manager_journal` entry with date/time, major
-actions, unresolved blockers, and durable workflow lessons if any. Do not store
-live board state, full card text, client records, or cashbox data in manager
-memory.
+After cleanup, write a compact `manager_journal` entry through schema-hashed raw
+discovery only when the conclusion is durable. Include date/time, major actions,
+unresolved blockers, and reusable workflow lessons if any. Do not store live
+board state, full card text, client records, or cashbox data in manager memory.

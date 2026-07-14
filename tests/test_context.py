@@ -68,9 +68,9 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert any("empty leave it empty" in rule for rule in result["hot_rules"])
     assert any("phone is the primary client match key" in rule for rule in result["hot_rules"])
     assert any("rare operational tags capped at three" in rule for rule in result["hot_rules"])
-    assert "today_context" in result["read_order"][0]
+    assert "agent_bootstrap" in result["read_order"][0]
     assert any("audit_client_links" in action for action in result["read_order"])
-    assert "set_card_board_summary" in result["allowed_actions"]
+    assert any("board_summary" in action for action in result["allowed_actions"])
     assert any("client" in action and "vehicle" in action for action in result["allowed_actions"])
     assert any("direct safe card tasks" in action for action in result["allowed_actions"])
     assert any("at most three" in action and "tags" in action for action in result["allowed_actions"])
@@ -92,7 +92,7 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
         "risk",
         "verification",
     ]
-    assert any("list_manager_runs" in step for step in result["context_safety"]["recovery"])
+    assert any("workflow_status" in step for step in result["context_safety"]["recovery"])
     assert any("raw board snapshots" in rule for rule in result["context_safety"]["rules"])
 
 

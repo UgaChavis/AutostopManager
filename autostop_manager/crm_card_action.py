@@ -15,15 +15,14 @@ CARD_ACTION_LEDGER_SCHEMA = [
 ]
 
 CARD_ACTION_TOOL_SEQUENCE = [
-    "start_manager_run",
-    "agent_brief",
-    "get_card_context",
-    "prepare_crm_card_action",
-    "update_card",
-    "set_card_board_summary",
-    "get_card_context",
-    "record_manager_run_event",
-    "finish_manager_run",
+    "agent_bootstrap",
+    "agent_search",
+    "agent_entity_context",
+    "prepare_action_contract",
+    "agent_board_workflow(cleanup_card, mode=dry_run)",
+    "agent_board_workflow(cleanup_card, mode=apply)",
+    "agent_entity_context",
+    "workflow_status",
 ]
 
 VEHICLE_PROFILE_META_FIELDS = {

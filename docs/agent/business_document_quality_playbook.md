@@ -25,9 +25,11 @@ state which render or audit gate was available:
 2. AutoStop service documents must go through the CRM print module and standard
    AutoStop templates. This includes счета, акты, заказ-наряды, акты приема,
    счет-фактуры, дефектовки, акты выполненных работ, and продажа запчастей.
-   For a CRM card use `download_repair_order_print_pdf`; for "Документ без
-   карточки" use `create_document_without_card_pdf`. Do not build independent
-   PDF/HTML templates for these AutoStop documents.
+   For a CRM card use
+   `agent_document_workflow(operation="download_repair_order_print_pdf")`; for
+   "Документ без карточки" use
+   `agent_document_workflow(operation="create_document_without_card_pdf")`.
+   Do not build independent PDF/HTML templates for these AutoStop documents.
 3. Use `business_identity` for current AutoStop/IP реквизиты when company facts
    are needed. Do not copy private bank/contact facts into Git-tracked docs.
 4. For invoices, acts, КП, and accounting-like documents, verify:
@@ -45,10 +47,12 @@ state which render or audit gate was available:
 
 ## AutoStop CRM Print Route
 
-- Documents with an existing CRM card: call `download_repair_order_print_pdf`
-  and select the needed standard AutoStop template.
-- Documents without CRM cards: call `create_document_without_card_pdf` or open
-  the CRM print module in "Документ без карточки" mode, then provide the client,
+- Documents with an existing CRM card: call
+  `agent_document_workflow(operation="download_repair_order_print_pdf")` and
+  select the needed standard AutoStop template.
+- Documents without CRM cards: call
+  `agent_document_workflow(operation="create_document_without_card_pdf")` or
+  open the CRM print module in "Документ без карточки" mode, then provide the client,
   реквизиты, vehicle, works, materials, payments, dates, numbers, `tax_label`
   (`НДС (5%)` or `Без НДС`), and comments.
   If the request text already says `акт выполненных работ`, `дефектовка`,

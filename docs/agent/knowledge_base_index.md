@@ -63,8 +63,9 @@ playbooks instead of broad-reading the tree.
 ## Business Documents Rule
 
 AutoStop service documents are routed through the CRM print module and standard
-AutoStop templates. Use `download_repair_order_print_pdf` for documents with
-CRM cards and `create_document_without_card_pdf` for "Документ без карточки".
+AutoStop templates. Use `agent_document_workflow` with operation
+`download_repair_order_print_pdf` for documents with CRM cards and operation
+`create_document_without_card_pdf` for "Документ без карточки".
 Pass `tax_label` such as `Без НДС` through CRM when needed. Do not build
 independent PDF/HTML templates for AutoStop invoices, acts, repair orders,
 invoice-facturas, defect reports, completion acts, or parts-sale documents.

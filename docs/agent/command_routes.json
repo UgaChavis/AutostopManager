@@ -62,9 +62,9 @@
       ],
       "next_actions": [
         "read live CRM board state with agent_bootstrap and agent_board_digest",
-        "check ready cars and due totals with list_ready_unpaid_cards",
+        "check ready cars and due totals with agent_board_workflow(operation=list_ready_unpaid_cards, mode=dry_run)",
         "classify payment blockers",
-        "run apply_ready_unpaid_followups in dry_run, then apply with actor_name when safe",
+        "run agent_board_workflow(operation=apply_ready_unpaid_followups, mode=dry_run), then mode=apply with a unique idempotency key when safe",
         "create short follow-up notes or manager tasks only for blockers the CRM operation cannot resolve"
       ]
     },
@@ -94,9 +94,9 @@
         "manager operations"
       ],
       "next_actions": [
-        "read agent_bootstrap, then run triage_inbox_cards through agent_board_workflow",
-        "use audit_client_links and list_cards_missing_manager_data for incomplete cards",
-        "use cleanup_card dry_run/apply for safe one-card cleanup patches",
+        "read agent_bootstrap and agent_board_digest, then run triage_inbox_cards through agent_board_workflow",
+        "run audit_client_links and list_cards_missing_manager_data through agent_board_workflow for incomplete cards",
+        "run cleanup_card through agent_board_workflow in dry_run then apply mode for safe one-card cleanup patches",
         "do not move or archive cards without a separate explicit owner command"
       ]
     },

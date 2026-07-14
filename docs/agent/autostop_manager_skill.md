@@ -41,6 +41,12 @@ does not mean live CRM or MCP context is empty.
 
 ## Main Routes
 
+The table may name a hidden Manager capability to identify the intended
+operation. On the production CRM connector, never call that name directly:
+use `discover_raw_capabilities`, `get_raw_capability_schema`, and
+`call_raw_capability`. The four named CRM domain workflows remain the preferred
+path whenever they cover the task.
+
 | Task | Open first / tool | Notes |
 | --- | --- | --- |
 | CRM manager summaries | `docs/agent/crm_manager_data_playbook.md` | Return safe summaries and quality signals only. |
@@ -119,13 +125,15 @@ python -m autostop_manager.cli cleanup-audit
 
 ## Run Ledger
 
-Use `start_manager_run`, `record_manager_run_event`, and `finish_manager_run`
-for autopilot, procurement, finance, knowledge-intake, broad board work, and
-other multi-step operations. Events should capture planned actions, skips,
-risks, writes, and verification.
+Use `start_workflow`, `workflow_checkpoint`, `workflow_transition`, and
+`workflow_status` for autopilot, procurement, finance, knowledge-intake, broad
+board work, and other multi-step operations. Checkpoints should capture compact
+scope, selected IDs, skips, risks, writes, and verification without raw CRM or
+mail content.
 
-After context compaction or stalled work, resume from
-`list_manager_runs(include_events=true)` instead of re-reading everything.
+After context compaction or stalled work, use unfinished runs from
+`agent_bootstrap`, then `workflow_status` and `workflow_resume` instead of
+re-reading everything.
 
 For Agent Gateway v2 lifecycle mutations, carry `state_version` from the latest
 response into `expected_state_version` on transition, checkpoint, external wait,
@@ -136,7 +144,8 @@ explicitly false or failed.
 
 ## After Important Work
 
-Append a short `manager_journal` entry when work changed durable docs, routes,
-catalogs, operational policy, or source intake. Include what changed, affected
-object or domain, follow-up, and verification. Use `learn_from_feedback` instead
-when the important result is a reusable behavior lesson.
+Append a short `manager_journal` entry through schema-hashed raw discovery when
+work changed durable docs, routes, catalogs, operational policy, or source
+intake. Include what changed, affected object or domain, follow-up, and
+verification. Use `learn_from_feedback` through the same raw route instead when
+the important result is a reusable behavior lesson.

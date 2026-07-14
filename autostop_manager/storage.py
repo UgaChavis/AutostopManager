@@ -1568,12 +1568,12 @@ class ManagerMemoryStore:
             "recent_journal": journal_rows,
             "manager_rules": rules,
             "crm_read_order": [
-                "bootstrap_context",
-                "get_board_context",
-                "review_board",
-                "search_cards",
-                "get_card_context",
-                "list_repair_orders",
+                "agent_bootstrap",
+                "agent_board_digest",
+                "agent_search",
+                "agent_entity_context",
+                "named domain workflow in dry_run before apply",
+                "discover_raw_capabilities only when no named workflow covers the task",
             ],
             "memory_use_order": [
                 "today_context",

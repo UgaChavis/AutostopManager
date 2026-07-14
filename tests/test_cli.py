@@ -570,28 +570,9 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["skills-audit"])
     assert args.command == "skills-audit"
 
-    args = parser.parse_args(["run-start", "Приберись", "--intent", "board_cleanup", "--dry-run"])
-    assert args.command == "run-start"
-    assert args.query == "Приберись"
-    assert args.intent == "board_cleanup"
-    assert args.dry_run is True
-
-    args = parser.parse_args(["run-event", "1", "--type", "planned_action", "--message", "test"])
-    assert args.command == "run-event"
-    assert args.run_id == 1
-    assert args.event_type == "planned_action"
-    assert args.message == "test"
-
-    args = parser.parse_args(["run-finish", "1", "--status", "completed", "--summary", "done"])
-    assert args.command == "run-finish"
-    assert args.run_id == 1
-    assert args.status == "completed"
-    assert args.summary == "done"
-
-    args = parser.parse_args(["run-list", "--limit", "3", "--events"])
-    assert args.command == "run-list"
-    assert args.limit == 3
-    assert args.events is True
+    command_action = next(action for action in parser._actions if action.dest == "command")
+    for retired_command in {"run-start", "run-event", "run-finish", "run-list"}:
+        assert retired_command not in command_action.choices
 
 
 def test_prepare_card_action_cli_outputs_dry_run_contract(capsys):
@@ -624,6 +605,18 @@ def test_prepare_card_action_cli_outputs_dry_run_contract(capsys):
     assert payload["write_contract"]["expected_updated_at"] == "2026-06-08T10:00:00+07:00"
     assert payload["summary_contract"]["required"] is True
     assert payload["target_fields"] == ["description", "vehicle_profile", "board_summary"]
+
+
+def test_every_top_level_cli_command_has_working_help(capsys):
+    parser = cli.build_parser()
+    command_action = next(action for action in parser._actions if action.dest == "command")
+
+    for command in sorted(command_action.choices):
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args([command, "--help"])
+        assert exc_info.value.code == 0, command
+
+    assert "usage:" in capsys.readouterr().out
 
 
 def test_cli_rejects_invalid_json_file_input(tmp_path):

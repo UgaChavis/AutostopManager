@@ -242,7 +242,7 @@
     "daily_control": {
       "source_ids": [],
       "required_context": ["crm_board_state"],
-      "crm_tools": ["today_context", "bootstrap_context", "get_board_context", "list_overdue_cards", "list_repair_orders"],
+      "crm_tools": ["agent_bootstrap", "agent_board_digest", "agent_board_workflow(manager_board_scan)", "agent_search(repair_order)"],
       "actions": [
         "Check overdue cards and expired deadlines.",
         "Check ready cars with unpaid due amounts.",
@@ -255,7 +255,7 @@
     "parts_procurement": {
       "source_ids": ["rossko", "armtek", "autopiter", "autoeuro_api", "emex", "exist", "autodoc", "zzap", "partsapi", "umapi", "mikado", "auto_sputnik", "apec_api", "autopoisk", "fifth_gear_krasnoyarsk", "liqui_moly_krasnoyarsk", "drom_parts", "avito_parts", "metro_avtodom", "krasdetal", "porshenkras", "avtopostavka"],
       "required_context": ["vehicle", "part_number", "part_name", "urgency"],
-      "crm_tools": ["get_card_context", "get_repair_order", "update_card", "update_repair_order", "manager_journal"],
+      "crm_tools": ["agent_search", "agent_entity_context", "agent_inventory_workflow", "prepare_action_contract", "agent_board_workflow(cleanup_card)"],
       "actions": [
         "Normalize OEM, compressed OEM, vehicle, side, axle, and condition.",
         "Check contracted supplier/API/price-list routes first when available: ROSSKO, Armtek, Autopiter, AutoEuro, Emex, Exist, Autodoc.",
@@ -271,7 +271,7 @@
     "repair_triage": {
       "source_ids": [],
       "required_context": ["vin_or_chassis", "complaint", "dtc_or_scan", "engine", "transmission", "mileage"],
-      "crm_tools": ["get_card_context", "get_card_log", "recommend_automotive_sources", "update_card", "manager_journal"],
+      "crm_tools": ["agent_search", "agent_entity_context", "discover_raw_capabilities", "call_raw_capability(recommend_automotive_sources)", "agent_board_workflow(cleanup_card)"],
       "actions": [
         "Extract complaint and vehicle identity from CRM.",
         "Route source-sensitive facts through the repair source catalog.",
@@ -284,7 +284,7 @@
     "staff_management": {
       "source_ids": ["hh_ru", "superjob", "dreamjob_salary", "finder_salary"],
       "required_context": ["role", "current_load", "output_or_hours", "quality_signal"],
-      "crm_tools": ["get_board_context", "list_repair_orders", "get_card_log", "manager_journal", "add_manager_task"],
+      "crm_tools": ["agent_bootstrap", "agent_board_digest", "agent_search(repair_order)", "agent_entity_context", "start_workflow"],
       "actions": [
         "Compare active card load by technician or column.",
         "Track blocked cars separately from productive repair time.",
@@ -297,7 +297,7 @@
     "customer_flow": {
       "source_ids": [],
       "required_context": ["card_id", "client_contact", "next_action", "approval_status"],
-      "crm_tools": ["get_card_context", "update_card", "set_card_deadline", "manager_journal"],
+      "crm_tools": ["agent_search(card)", "agent_entity_context", "prepare_action_contract", "agent_board_workflow(cleanup_card)", "agent_board_workflow(bulk_set_deadline_if_below)"],
       "actions": [
         "Make the compact customer-flow fact visible in the card title, board_summary, or public description following docs/agent/crm_card_description_standard.md.",
         "Separate estimate requested, prepared, approved, declined, and needs-data states.",
@@ -309,7 +309,7 @@
     "finance_control": {
       "source_ids": [],
       "required_context": ["repair_orders", "cashbox", "payment_status"],
-      "crm_tools": ["list_cashboxes", "get_cashbox", "get_cash_journal", "list_repair_orders", "manager_journal"],
+      "crm_tools": ["agent_finance_workflow(list_cashboxes)", "agent_finance_workflow(get_cashbox)", "agent_finance_workflow(get_cash_journal)", "agent_search(repair_order)"],
       "actions": [
         "Find ready cars with unpaid due totals.",
         "Find orders with materials and no works.",
@@ -322,7 +322,7 @@
     "work_pricing": {
       "source_ids": [],
       "required_context": ["vehicle", "work_items", "public_labor_only_quotes"],
-      "crm_tools": ["estimate_repair_work_cost", "get_card_context", "manager_journal"],
+      "crm_tools": ["agent_search(card)", "agent_entity_context", "discover_raw_capabilities", "call_raw_capability(estimate_repair_work_cost)"],
       "actions": [
         "Normalize vehicle and exact labor operations.",
         "Collect public Russia STO labor-only prices for comparable work.",

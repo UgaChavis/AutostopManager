@@ -61,59 +61,25 @@ and deploy:
 6. Commit only code, tests, documentation, and safe owner-provided source packs.
 7. Push the current branch to GitHub.
 
-## GitHub SSH Access From Codex VPS
+## GitHub Access From Codex VPS
 
-Verified on the production Codex/server shell on 2026-05-29.
+Verified on the production server on 2026-07-14. The configured Manager remote
+uses the server SSH alias for fetch and the credentialed HTTPS push URL for
+publish. Treat the current `git remote -v` output as runtime truth; do not
+rewrite a working remote or print credentials.
 
-The GitHub deploy key is already present on the server:
-
-- SSH config: `/root/.ssh/config`
-- Host alias: `github.com-autostopcrm`
-- Identity file: `/root/.ssh/autostopcrm_github`
-- Repository SSH URL:
-  `git@github.com-autostopcrm:UgaChavis/AutostopManager.git`
-
-Important: this key is currently a read-only deploy key for GitHub. It is good
-for authentication checks and fetch/pull operations. A direct `git push` with
-this key fails with `The key you are authenticating with has been marked as read
-only.`
-
-Do not use the HTTPS remote for unattended operations from this shell; it will
-fail with `could not read Username for 'https://github.com'` unless a separate
-credential helper is configured. Do not assume raw `git@github.com` will pick
-the right key either; use the configured alias.
-
-Verify access without printing secrets:
-
-```bash
-ssh -T github.com-autostopcrm
-```
-
-Expected result is the normal GitHub authentication greeting for
-`UgaChavis/GITHUB`; GitHub still says it does not provide shell access.
-
-If `origin` points at HTTPS, fix it once:
-
-```bash
-git remote set-url origin git@github.com-autostopcrm:UgaChavis/AutostopManager.git
-```
-
-Normal server sync from `/opt/AutostopManager`:
+Normal publish check from `/opt/AutostopManager`:
 
 ```bash
 git status --short
 git branch --show-current
 git fetch origin AutostopManager
+git push origin AutostopManager
 ```
 
-For publishing, use one of these write-capable paths:
-
-- temporarily configure a GitHub write credential/token for `git push`;
-- use a separate write-enabled SSH key/alias;
-- use the GitHub connector/API from Codex when available.
-
-Keep private keys out of Git and never paste key contents into chat, docs, CRM,
-or logs.
+The expected branch is `AutostopManager`. Keep private keys, tokens, credential
+helper output, and remote URLs containing credentials out of Git, chat, CRM,
+and logs.
 
 ## Local MCP Server
 
@@ -134,7 +100,7 @@ $env:AUTOSTOP_MANAGER_DB = "C:\path\to\autostop_manager.sqlite3"
 
 ## Production Server Deployment
 
-Verified production shape on 2026-05-29:
+Verified production shape on 2026-07-14:
 
 - host: `vps26457.mnogoweb.in`
 - AutostopManager checkout: `/opt/AutostopManager`
@@ -145,7 +111,10 @@ Verified production shape on 2026-05-29:
 - host port for MCP: `127.0.0.1:8001`
 - public MCP endpoint: `https://crm.autostopcrm.ru/mcp`
 
-The CRM Docker compose mounts AutostopManager into the CRM container:
+The deploy script creates an immutable Manager snapshot under
+`/opt/autostop-manager-releases/` and atomically points
+`/opt/autostop-manager-releases/current` at it. Docker mounts that current
+release read-only and overlays only the Manager SQLite data directory.
 
 ```yaml
 AUTOSTOP_MANAGER_PATH: /opt/AutostopManager
@@ -155,24 +124,32 @@ There is no separate systemd service for AutostopManager in this setup. The
 manager MCP tools are loaded by the CRM container when the manager checkout is
 mounted and `autostop_manager.mcp_tools` can be imported.
 
-Server update flow for AutostopManager-only changes:
+Release flow:
 
 ```bash
 cd /opt/AutostopManager
 git switch AutostopManager
-git pull --ff-only origin AutostopManager
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-audit
 python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli system-audit
+python -m autostop_manager.cli skills-audit
+python -m pytest -q
+git status --short
+git fetch origin AutostopManager
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/AutostopManager)"
 
 cd /opt/autostopcrm
-AUTOSTOP_SKIP_GIT_SYNC=1 ./deploy.sh
+git fetch origin autostopcrm-v1
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/autostopcrm-v1)"
+./deploy.sh
 ```
 
-Use `AUTOSTOP_SKIP_GIT_SYNC=1` when only the mounted AutostopManager checkout
-changed and the CRM checkout should not be reset. Omit it only when the CRM repo
-itself must be synced from `origin/autostopcrm-v1`.
+The deploy script requires a clean CRM checkout, verifies its remote revision,
+prebuilds an immutable image, snapshots Manager, rotates connector auth,
+creates and verifies rollback data, replaces only the CRM service inside a
+bounded maintenance window, and runs internal plus public Gateway v2 smoke.
+`AUTOSTOP_SKIP_GIT_SYNC=1` is an exceptional recovery override, not the normal
+release path.
 
 Do not push private runtime data to make deployment appear complete.
 
@@ -182,11 +159,11 @@ After deployment, verify:
 
 - service process is running
 - MCP endpoint answers on configured host/port/path
-- `today_context` works
-- `probe_knowledge_base` works for a known new route such as DSG, ECU/KOMBI, or
-  Krasnoyarsk parts sourcing
-- `audit_knowledge_base` returns no required missing files or warnings
-- `recommend_service_management_actions` works
+- exactly 24 Gateway v2 tools are visible and legacy tools are absent
+- the standard Gateway v2 smoke passes internally and publicly
+- the exhaustive safe smoke invokes all 24 tools and leaves its synthetic
+  workflows terminal
+- Manager knowledge, annotation, skill, and system audits pass
 - logs do not contain secrets or CRM dumps
 
 Useful production checks:
@@ -194,11 +171,11 @@ Useful production checks:
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 cd /opt/autostopcrm
-docker compose exec -T autostopcrm python scripts/check_live_connector.py \
-  --strict \
-  --skip-public-site \
-  --skip-public-write-protection \
-  --local-api-url http://127.0.0.1:41731 \
-  --mcp-url http://127.0.0.1:41831/mcp \
-  --expect-admin
+docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
+  --mcp-url http://127.0.0.1:41831/mcp --exhaustive
+python -m autostop_manager.cli knowledge-audit
+python -m autostop_manager.cli annotations-audit
+python -m autostop_manager.cli skills-audit
+python -m autostop_manager.cli control-report --format markdown
+./scripts/doctor.sh --full
 ```

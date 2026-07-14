@@ -45,27 +45,27 @@ DEFAULT_READ_ORDER = [
 ]
 
 BOARD_CLEANUP_READ_ORDER = [
-    "today_context",
-    "bootstrap_context",
-    "manager_board_scan",
-    "triage_inbox_cards/list_ready_unpaid_cards/list_cards_missing_manager_data when relevant",
-    "audit_client_links/suggest_clients_for_card/search_clients/get_client when client data is incomplete or ambiguous",
-    "search_cards/get_card_context for focused targets",
-    "list_repair_orders/get_repair_order when money, works, materials, ready state, or closure matters",
-    "get_cashbox/get_cash_journal only when payment evidence must be checked",
+    "agent_bootstrap",
+    "agent_board_digest",
+    "agent_board_workflow(operation=manager_board_scan, mode=dry_run)",
+    "agent_board_workflow for triage_inbox_cards/list_ready_unpaid_cards/list_cards_missing_manager_data when relevant",
+    "agent_board_workflow(operation=audit_client_links) and agent_search(entity=client) when client data is incomplete or ambiguous",
+    "agent_search(entity=card) and agent_entity_context for focused targets",
+    "agent_search(entity=repair_order) and agent_entity_context when money, works, materials, ready state, or closure matters",
+    "agent_finance_workflow for cashbox evidence only when payment evidence must be checked",
 ]
 
 BOARD_CLEANUP_ALLOWED_ACTIONS = [
     "read live CRM board/card/client/order/cashbox context",
     "use high-level CRM manager operations in dry_run before apply",
-    "cleanup_card for compact safe one-card patches",
+    "agent_board_workflow(operation=cleanup_card) for compact safe one-card patches, dry_run before apply",
     "update confirmed title, vehicle, short description, at most three rare operational tags, and source-backed vehicle profile fields including engine/gearbox/drivetrain when evidence is adequate",
     "move phone/VIN/plate/mileage/aggregate facts into structured fields, link/update the clear matching client by phone first, and upsert confirmed client vehicle facts",
-    "set_card_board_summary",
+    "update board_summary only through the named card-cleanup workflow",
     "add one concise AI note or question only when it adds a factual blocker, missing data, or verified conclusion",
     "execute direct safe card tasks such as VIN decode, OEM/parts lookup, or maintenance price estimate and write back only the compact result",
     "update repair_order only when the owner explicitly asks to fill or расписывать the target ЗН/заказ-наряд",
-    "record manager run events and a short manager_journal after meaningful work",
+    "checkpoint the Gateway v2 workflow and add a short manager_journal entry through raw discovery only when the conclusion is durable",
 ]
 
 BOARD_CLEANUP_FORBIDDEN_ACTIONS = [
@@ -81,7 +81,7 @@ BOARD_CLEANUP_FORBIDDEN_ACTIONS = [
 ]
 
 BOARD_CLEANUP_VERIFICATION = [
-    "reread every written card with get_card_context or get_card",
+    "reread every written card with agent_entity_context",
     "verify board_summary_stale=false after summary/content/profile/tag changes",
     "verify client link/client vehicle changes after writes when cleanup touched client data",
     "report cards_moved=0 and cards_archived=0 unless the owner explicitly commanded those actions",
@@ -92,10 +92,10 @@ BOARD_CLEANUP_VERIFICATION = [
 LONG_RUN_CONTEXT_SAFETY = {
     "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
     "rules": [
-        "Start start_workflow for v2 work (or legacy start_manager_run) before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, CRM+Gmail work, or knowledge-intake batches.",
+        "Start start_workflow before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, CRM+Gmail work, or knowledge-intake batches.",
         "Use workflow_checkpoint after scope selection, candidate filtering, each write/skip/verification batch, and before any external connector wait.",
         "Keep raw board snapshots, full card dumps, phone lists, VIN/license tables, and repair-order dumps out of chat; save full machine data to local private files only when needed and report compact counts.",
-        "Prefer compact manager tools and focused get_card_context/get_repair_order reads over full-board Markdown or full JSON output.",
+        "Prefer agent_board_digest, agent_search, agent_entity_context, and named domain workflows over full-board Markdown, raw capabilities, or full JSON output.",
         "Process large CRM work in small verified batches and leave a resume point in the run ledger before continuing.",
     ],
     "checkpoint_event_types": [
@@ -108,7 +108,7 @@ LONG_RUN_CONTEXT_SAFETY = {
     ],
     "recovery": [
         "Call agent_bootstrap, then workflow_status and workflow_resume for the newest unfinished v2 workflow; external_wait resumes only after complete_external_step.",
-        "After a stalled or compacted thread, call list_manager_runs(include_events=true) and resume from the latest running run.",
+        "After a stalled or compacted thread, use agent_bootstrap unfinished workflows, then workflow_status and workflow_resume with the latest state_version.",
         "If the Codex UI fails immediately after automatic context compaction with an invalid enum for context_compaction, restart the Codex app-server/Desktop so the active process matches the installed CLI.",
     ],
 }

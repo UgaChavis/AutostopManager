@@ -509,65 +509,6 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return build_provider_smoke_report(provider=provider, mode=mode)
 
     @server.tool(
-        name="start_manager_run",
-        description="Start an auditable manager operation run for autopilot, procurement, finance, or knowledge work.",
-    )
-    def start_manager_run_tool(
-        intent: str,
-        query: str = "",
-        dry_run: bool = False,
-        source: str = "chatgpt",
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return memory.start_manager_run(
-            intent=intent,
-            query=query,
-            dry_run=dry_run,
-            source=source,
-            metadata=metadata,
-        )
-
-    @server.tool(
-        name="record_manager_run_event",
-        description="Record a planned action, write, skip, risk, or verification event for a manager operation run.",
-    )
-    def record_manager_run_event_tool(
-        run_id: int,
-        event_type: str,
-        message: str = "",
-        target_type: str = "",
-        target_id: str = "",
-        payload: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return memory.record_manager_run_event(
-            run_id,
-            event_type=event_type,
-            message=message,
-            target_type=target_type,
-            target_id=target_id,
-            payload=payload,
-        )
-
-    @server.tool(
-        name="finish_manager_run",
-        description="Finish a manager operation run with final status, summary, and verification evidence.",
-    )
-    def finish_manager_run_tool(
-        run_id: int,
-        status: str = "completed",
-        summary: str = "",
-        verification: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return memory.finish_manager_run(run_id, status=status, summary=summary, verification=verification)
-
-    @server.tool(
-        name="list_manager_runs",
-        description="List recent manager operation runs and optionally include their events.",
-    )
-    def list_manager_runs_tool(limit: int = 20, include_events: bool = False) -> dict[str, Any]:
-        return memory.list_manager_runs(limit=limit, include_events=include_events)
-
-    @server.tool(
         name="start_workflow",
         description=(
             "Start an idempotent Agent Gateway v2 workflow in planned state. This records compact scope/refs only and does not call CRM or Gmail."

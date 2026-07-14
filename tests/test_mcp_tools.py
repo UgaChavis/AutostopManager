@@ -535,7 +535,7 @@ def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     assert set(catalog["all_tools"]) == set(server.tools)
 
 
-def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
+def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -551,7 +551,7 @@ def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
     assert brief["ok"] is True
     assert brief["format"] == "agent_brief_v1"
     assert brief["route"]["domain"] == "board_cleanup_autopilot"
-    assert "set_card_board_summary" in brief["allowed_actions"]
+    assert any("board_summary" in action for action in brief["allowed_actions"])
 
     assert "audit_skill_registry" in server.tools
     skills = server.tools["audit_skill_registry"]()
@@ -574,18 +574,13 @@ def test_manager_context_skill_and_run_tools_are_registered(tmp_path):
     assert crm_health["mode"] == "read_only"
     assert crm_health["verification"]["cards_moved"] == 0
 
-    assert "start_manager_run" in server.tools
-    assert "record_manager_run_event" in server.tools
-    assert "finish_manager_run" in server.tools
-    assert "list_manager_runs" in server.tools
-
-    started = server.tools["start_manager_run"](intent="board_cleanup", query="Приберись", dry_run=True)
-    server.tools["record_manager_run_event"](started["id"], event_type="planned_action", message="No card moves")
-    server.tools["finish_manager_run"](started["id"], status="completed", verification={"cards_moved": 0})
-    runs = server.tools["list_manager_runs"](limit=3, include_events=True)
-
-    assert runs["items"][0]["id"] == started["id"]
-    assert runs["items"][0]["events"]
+    for retired_tool in {
+        "start_manager_run",
+        "record_manager_run_event",
+        "finish_manager_run",
+        "list_manager_runs",
+    }:
+        assert retired_tool not in server.tools
 
 
 def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_path):
@@ -691,15 +686,14 @@ def test_prepare_crm_card_action_returns_strict_write_and_verification_contract(
         "warnings",
     ]
     assert result["tool_sequence"] == [
-        "start_manager_run",
-        "agent_brief",
-        "get_card_context",
-        "prepare_crm_card_action",
-        "update_card",
-        "set_card_board_summary",
-        "get_card_context",
-        "record_manager_run_event",
-        "finish_manager_run",
+        "agent_bootstrap",
+        "agent_search",
+        "agent_entity_context",
+        "prepare_action_contract",
+        "agent_board_workflow(cleanup_card, mode=dry_run)",
+        "agent_board_workflow(cleanup_card, mode=apply)",
+        "agent_entity_context",
+        "workflow_status",
     ]
 
 
@@ -784,19 +778,20 @@ def test_crm_mcp_catalog_counts_are_current():
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
     assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 92
-    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 67
+    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 63
     assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"
     assert "call_raw_capability" in catalog["agent_gateway_v2"]["raw_escape"]
     assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
-    assert len(catalog["live_tools_verified"]) == 148
+    assert len(catalog["production_tools_verified"]) == 24
     assert "create_document_without_card_pdf" in catalog["tool_families"]["repair_order"]
-    assert "create_document_without_card_pdf" in catalog["live_tools_verified"]
+    assert "agent_document_workflow" in catalog["production_tools_verified"]
     assert "tax_label" in catalog["schema_notes"]["autostop_document_printing"]
     assert "Без НДС" in catalog["schema_notes"]["autostop_document_printing"]
-    assert "prepare_crm_card_action" in catalog["live_tools_verified"]
+    assert "prepare_action_contract" in catalog["production_tools_verified"]
+    assert "prepare_crm_card_action" not in catalog["production_tools_verified"]
     assert catalog["pending_local_manager_tools"] == []
     assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]

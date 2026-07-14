@@ -143,12 +143,12 @@
     {
       "id": "manager-run-ledger",
       "priority": 24,
-      "rule": "For autopilot, procurement, finance, knowledge-intake, or multi-step CRM work, create a manager run ledger entry, record planned actions/skips/risks/writes, finish it with verification evidence, and store only the operational summary in memory."
+      "rule": "For autopilot, procurement, finance, knowledge-intake, or multi-step CRM work, use the Gateway v2 workflow ledger: start_workflow, compact workflow_checkpoint calls, strict state-versioned transitions, and positive readback evidence before completion. Store only operational refs and summaries, never raw CRM or mail content."
     },
     {
       "id": "context-window-safety",
       "priority": 24,
-      "rule": "For broad CRM scans, multi-card cleanup, ready-unpaid lists, procurement sweeps, or any task likely to exceed the chat context, checkpoint progress outside the model window: start a manager run, record compact checkpoint events after scope/candidates/batches/verification, keep raw board/card/order snapshots in private local temp files when needed, and resume through list_manager_runs(include_events=true) instead of re-reading everything after context compaction."
+      "rule": "For broad CRM scans, multi-card cleanup, ready-unpaid lists, procurement sweeps, or any task likely to exceed the chat context, checkpoint progress outside the model window: start_workflow, call workflow_checkpoint after scope/candidates/batches/verification, keep raw board/card/order snapshots in private local temp files when needed, and resume through agent_bootstrap, workflow_status, and workflow_resume instead of re-reading everything after context compaction."
     },
     {
       "id": "crm-card-action-session",

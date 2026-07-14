@@ -680,30 +680,6 @@ def build_parser() -> argparse.ArgumentParser:
     memory_review_apply.add_argument("--id", required=True)
     memory_review_apply.add_argument("--action", required=True, choices=["accept", "reject", "archive_duplicate"])
 
-    run_start = sub.add_parser("run-start", help="Start an auditable manager operation run")
-    run_start.add_argument("query")
-    run_start.add_argument("--intent", default="")
-    run_start.add_argument("--dry-run", action="store_true", dest="dry_run")
-    run_start.add_argument("--source", default="codex")
-    run_start.add_argument("--metadata", default="")
-
-    run_event = sub.add_parser("run-event", help="Record a manager run event")
-    run_event.add_argument("run_id", type=int)
-    run_event.add_argument("--type", dest="event_type", required=True)
-    run_event.add_argument("--message", default="")
-    run_event.add_argument("--target-type", default="")
-    run_event.add_argument("--target-id", default="")
-    run_event.add_argument("--payload", default="")
-
-    run_finish = sub.add_parser("run-finish", help="Finish a manager operation run")
-    run_finish.add_argument("run_id", type=int)
-    run_finish.add_argument("--status", default="completed")
-    run_finish.add_argument("--summary", default="")
-    run_finish.add_argument("--verification", default="")
-
-    run_list = sub.add_parser("run-list", help="List manager operation runs")
-    run_list.add_argument("--limit", type=int, default=20)
-    run_list.add_argument("--events", action="store_true")
     return parser
 
 
@@ -761,38 +737,6 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(build_memory_review(store))
     elif args.command == "memory-review-apply":
         _print_json(apply_memory_review_item(args.id, args.action, store=store))
-    elif args.command == "run-start":
-        _print_json(
-            store.start_manager_run(
-                intent=args.intent,
-                query=args.query,
-                dry_run=args.dry_run,
-                source=args.source,
-                metadata=_json_object(args.metadata),
-            )
-        )
-    elif args.command == "run-event":
-        _print_json(
-            store.record_manager_run_event(
-                args.run_id,
-                event_type=args.event_type,
-                message=args.message,
-                target_type=args.target_type,
-                target_id=args.target_id,
-                payload=_json_object(args.payload),
-            )
-        )
-    elif args.command == "run-finish":
-        _print_json(
-            store.finish_manager_run(
-                args.run_id,
-                status=args.status,
-                summary=args.summary,
-                verification=_json_object(args.verification),
-            )
-        )
-    elif args.command == "run-list":
-        _print_json(store.list_manager_runs(limit=args.limit, include_events=args.events))
     elif args.command == "remember":
         _print_json(
             store.remember(

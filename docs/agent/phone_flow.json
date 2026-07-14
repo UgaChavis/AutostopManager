@@ -1,19 +1,21 @@
 {
-  "goal": "Allow ChatGPT Android to add manager memory through MCP while existing CRM tools remain responsible for CRM operations.",
-  "preferred_endpoint_strategy": "Expose manager memory tools alongside AutoStop CRM MCP tools when deploying the shared connector.",
-  "memory_tools": {
+  "goal": "Allow ChatGPT Android to use manager memory through the same production Gateway v2 endpoint without exposing the legacy CRM or full manager tool registries.",
+  "preferred_endpoint_strategy": "Expose exactly the compact Gateway v2 surface. Discover a manager memory capability lazily and call it with the current schema hash only when no named workflow covers the request.",
+  "memory_capabilities_via_raw_gateway": {
     "remember": "Store general long-term memory.",
     "recall": "Search long-term memory.",
     "add_manager_task": "Create non-CRM manager task.",
     "today_context": "Read manager context for the day.",
     "manager_journal": "Append decision/action history."
   },
-  "crm_tools_not_replaced": [
-    "bootstrap_context",
-    "get_board_context",
-    "review_board",
-    "search_cards",
-    "get_card_context",
-    "list_repair_orders"
+  "crm_gateway_entrypoints": [
+    "agent_bootstrap",
+    "agent_board_digest",
+    "agent_search",
+    "agent_entity_context",
+    "agent_board_workflow",
+    "agent_finance_workflow",
+    "agent_inventory_workflow",
+    "agent_document_workflow"
   ]
 }

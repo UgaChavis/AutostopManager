@@ -1,10 +1,10 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-07-11",
-  "tool_count": 67,
+  "last_verified": "2026-07-14",
+  "tool_count": 63,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
-  "exposed_through_crm_when_mounted": "https://crm.autostopcrm.ru/mcp",
+  "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
   "memory_is_source_of_truth_for": [
     "owner preferences",
     "agreements and recurring rules",
@@ -87,10 +87,6 @@
     "memory_review_apply"
   ],
   "operation_tools": [
-    "start_manager_run",
-    "record_manager_run_event",
-    "finish_manager_run",
-    "list_manager_runs",
     "start_workflow",
     "workflow_status",
     "workflow_transition",
@@ -129,10 +125,6 @@
     "crm_health_plan",
     "audit_memory",
     "curate_memory",
-    "start_manager_run",
-    "record_manager_run_event",
-    "finish_manager_run",
-    "list_manager_runs",
     "start_workflow",
     "workflow_status",
     "workflow_transition",
@@ -198,10 +190,6 @@
     "crm_health_plan": "Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads; never calls live CRM write tools and reports cards_moved=0 and cards_archived=0.",
     "audit_memory": "Check long-term manager memory for duplicate, expired, and superseded note/fact records before cleanup without returning raw content previews.",
     "curate_memory": "Non-destructively curate manager memory; with apply=true, archive duplicate note/fact copies instead of deleting source records.",
-    "start_manager_run": "Start an auditable run for autopilot, procurement, finance, CRM, or knowledge work.",
-    "record_manager_run_event": "Record planned actions, writes, skips, risks, and verification events for a manager run.",
-    "finish_manager_run": "Close a manager run with status, summary, and verification evidence.",
-    "list_manager_runs": "List recent manager runs and optionally include their events.",
     "start_workflow": "Start an idempotent v2 workflow in planned state with request/correlation IDs, compact scope, selected IDs, and no external mutation.",
     "workflow_status": "Read one workflow state, checkpoint, events, and refs-only external steps in AgentEnvelopeV2.",
     "workflow_transition": "Advance a workflow through the strict planned/executing/external_wait/verifying/compensating/terminal state machine. Pass expected_state_version from the latest response for compare-and-swap; completed requires non-empty evidence and rejects explicit executor/readback/verification failure markers.",
@@ -341,7 +329,7 @@
       "failed",
       "cancelled"
     ],
-    "compatibility": "Legacy running runs and start/record/finish/list tools remain supported; v2 columns are added in place and v2 completion is routed through the strict state machine.",
+    "compatibility": "Historical v1 rows with status running remain readable and migratable in storage, but the retired start/record/finish/list tools and CLI commands are not exposed. All new work uses Gateway v2.",
     "use_when": [
       "board-cleanup autopilot",
       "parts procurement",

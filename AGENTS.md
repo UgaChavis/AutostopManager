@@ -35,7 +35,9 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    before any mailbox-changing action.
 5. For broad CRM, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
-   checkpoints. Use raw discovery only when no named workflow covers the task.
+   checkpoints. Use `discover_raw_capabilities` ->
+   `get_raw_capability_schema` -> `call_raw_capability` only when no named
+   workflow covers the task; never invoke a hidden capability directly.
 
 ## Write Safety
 
