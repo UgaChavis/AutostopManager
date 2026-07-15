@@ -67,6 +67,11 @@ def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _print_checked_json(payload: dict[str, Any]) -> int:
+    _print_json(payload)
+    return 0 if payload.get("ok") is True else 1
+
+
 def _print_text(payload: str) -> None:
     stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
     if stdout_reconfigure is not None:
@@ -705,7 +710,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     elif args.command == "seed-rules":
         _print_json(store.seed_default_rules())
     elif args.command == "knowledge-sync":
-        _print_json(sync_knowledge_base(store))
+        return _print_checked_json(sync_knowledge_base(store))
     elif args.command == "knowledge-intake":
         _print_json(build_knowledge_intake_plan(args.path, apply=args.apply))
     elif args.command == "knowledge-probe":
@@ -713,11 +718,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     elif args.command == "knowledge-search":
         _print_json(search_knowledge_base(store, args.query, domain=args.domain, limit=args.limit))
     elif args.command == "knowledge-audit":
-        _print_json(audit_knowledge_base(store))
+        return _print_checked_json(audit_knowledge_base(store))
     elif args.command == "cleanup-audit":
-        _print_json(build_cleanup_audit(store=store))
+        return _print_checked_json(build_cleanup_audit(store=store))
     elif args.command in {"system-audit", "doctor"}:
-        _print_json(build_system_audit(store=store))
+        return _print_checked_json(build_system_audit(store=store))
     elif args.command in {"control-report", "environment-report"}:
         report = build_control_report(store=store)
         if args.format == "markdown":
@@ -737,11 +742,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             )
         )
     elif args.command == "annotations-audit":
-        _print_json(audit_knowledge_annotations(store))
+        return _print_checked_json(audit_knowledge_annotations(store))
     elif args.command == "skills-audit":
-        _print_json(audit_skill_registry())
+        return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-audit":
-        _print_json(audit_memory(store))
+        return _print_checked_json(audit_memory(store))
     elif args.command == "memory-curate":
         _print_json(curate_memory(store, apply=args.apply))
     elif args.command == "memory-review":
@@ -1033,8 +1038,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 raw_orders, random_seed=args.random_seed, include_raw_identifier=True
             )
             if not selected.get("ok"):
-                _print_json(selected)
-                return 0
+                return _print_checked_json(selected)
             selected_item = selected["selected"]
             item = {
                 key: value

@@ -44,6 +44,20 @@ def test_prepare_manager_context_flags_missing_required_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
+def test_agent_brief_routes_compact_project_engineering_query_to_startup(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(
+        store,
+        "полный рефакторинг поиск багов отладка всего AutoStopManager",
+        limit=8,
+    )
+
+    assert result["route"]["domain"] == "startup_and_identity"
+    assert result["route"]["open_first"] == "AGENTS.md"
+
+
 def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()

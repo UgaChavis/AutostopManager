@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -166,6 +168,31 @@ def test_v2_idempotency_rejects_changed_scope_selected_ids_or_mode(tmp_path):
     assert changed_ids["conflict_fields"] == ["selected_ids"]
     assert changed_mode["ok"] is False
     assert changed_mode["conflict_fields"] == ["dry_run"]
+
+
+def test_v2_concurrent_idempotent_starts_deduplicate_without_integrity_errors(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.initialize()
+    workers = 24
+    barrier = Barrier(workers)
+
+    def start(_index):
+        barrier.wait()
+        return store.start_workflow_run(
+            workflow_id="crm_gmail_workflow",
+            intent="crm_gmail_workflow",
+            query="ответь клиенту",
+            idempotency_key="concurrent-same-key",
+            scope={"card_id": "C-1"},
+            selected_ids=["C-1"],
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(start, range(workers)))
+
+    assert all(result["ok"] is True for result in results)
+    assert len({result["id"] for result in results}) == 1
+    assert sum(result["deduplicated"] is False for result in results) == 1
 
 
 def test_v2_rejects_invalid_state_transition(tmp_path):

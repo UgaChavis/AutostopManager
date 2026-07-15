@@ -437,7 +437,7 @@ def test_compacted_source_pack_manifests_match_retained_files():
     bmw_root = cache_root / "bmw_repair_knowledge_pack"
     bmw_manifest = json.loads((bmw_root / "manifest.json").read_text(encoding="utf-8"))
     bmw_files = sorted(
-        str(path.relative_to(bmw_root))
+        path.relative_to(bmw_root).as_posix()
         for path in bmw_root.rglob("*")
         if path.is_file() and path.name != "manifest.json"
     )

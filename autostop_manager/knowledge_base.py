@@ -52,6 +52,28 @@ STOPWORDS = {
     "without",
 }
 
+PROJECT_ENGINEERING_CONTEXT_TERMS = (
+    "autostopmanager",
+    "autostop manager",
+    "автостоп менеджер",
+    "архитектур",
+    "исходный код",
+    "кодовая баз",
+    "проект",
+    "репозитор",
+)
+PROJECT_ENGINEERING_ACTION_TERMS = (
+    "аудит",
+    "баг",
+    "дефект",
+    "отлад",
+    "рефактор",
+    "тестирован",
+    "pytest",
+    "test suite",
+    "unit test",
+)
+
 
 @dataclass(frozen=True)
 class _Section:
@@ -1622,6 +1644,10 @@ def _knowledge_fts_query(tokens: list[str]) -> str:
 def _domain_hints(query: str) -> dict[str, int]:
     lowered = query.lower()
     hints: dict[str, int] = {}
+    if any(term in lowered for term in PROJECT_ENGINEERING_CONTEXT_TERMS) and any(
+        term in lowered for term in PROJECT_ENGINEERING_ACTION_TERMS
+    ):
+        hints["startup_and_identity"] = 55
     knowledge_intake_terms = [
         "база знаний",
         "базу знаний",

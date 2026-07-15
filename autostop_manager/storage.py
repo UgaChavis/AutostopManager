@@ -1679,6 +1679,9 @@ class ManagerMemoryStore:
                 "forbidden_keys": forbidden,
             }
         with self.connect() as conn:
+            # Serialize the idempotency lookup and insert so concurrent stateless
+            # MCP requests deduplicate instead of racing into the unique index.
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT * FROM manager_runs WHERE idempotency_key = ? LIMIT 1",
                 (idempotency_key,),

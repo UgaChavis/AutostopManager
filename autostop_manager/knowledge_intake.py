@@ -257,7 +257,7 @@ def _load_domains() -> dict[str, Any]:
 
 def _safe_relative(path: Path, root: Path) -> str | None:
     try:
-        return str(path.relative_to(root))
+        return path.relative_to(root).as_posix()
     except ValueError:
         return None
 

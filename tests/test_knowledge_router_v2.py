@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import autostop_manager.knowledge_base as knowledge_base
 from autostop_manager.knowledge_base import find_command_route, probe_knowledge_base, sync_knowledge_base
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -81,3 +82,25 @@ def test_probe_routes_gmail_connector_work_to_gmail_operations(tmp_path):
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "gmail_operations"
     assert result["open_first"].endswith("gmail_workflow_playbook.md")
+
+
+def test_probe_routes_project_refactoring_to_startup_sources(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "архитектура, системный аудит, тестирование, рефакторинг и поиск дефектов AutoStop Manager",
+        limit=5,
+    )
+
+    assert result["ok"] is True
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "startup_and_identity"
+    assert result["open_first"] == "AGENTS.md"
+
+
+def test_project_engineering_hint_does_not_capture_automotive_fault_code_tests():
+    hints = knowledge_base._domain_hints("код ошибки P0171 тест датчика кислорода")
+
+    assert "startup_and_identity" not in hints

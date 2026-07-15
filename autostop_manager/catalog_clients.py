@@ -612,23 +612,25 @@ def public_aftermarket_catalog_lookup(
             dry_run=dry_run,
         )
     if normalized_provider == "all":
+        results = [
+            mann_filter_catalog_lookup(part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run),
+            denso_aftermarket_catalog_lookup(
+                part_number=part_number,
+                country=country,
+                include_detail=include_detail,
+                detail_limit=page_size,
+                timeout=timeout,
+                dry_run=dry_run,
+            ),
+        ]
+        success_count = sum(result.get("ok") is True for result in results)
         return {
-            "ok": True,
+            "ok": success_count > 0,
             "provider": "public_aftermarket_catalogs",
             "operation": "part_number_search",
-            "results": [
-                mann_filter_catalog_lookup(
-                    part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run
-                ),
-                denso_aftermarket_catalog_lookup(
-                    part_number=part_number,
-                    country=country,
-                    include_detail=include_detail,
-                    detail_limit=page_size,
-                    timeout=timeout,
-                    dry_run=dry_run,
-                ),
-            ],
+            "success_count": success_count,
+            "failure_count": len(results) - success_count,
+            "results": results,
             "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
         }
     return {
