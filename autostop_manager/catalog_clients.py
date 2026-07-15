@@ -7,11 +7,10 @@ import json
 import os
 import re
 from typing import Any
-from defusedxml import ElementTree as SafeElementTree
-from defusedxml.common import DefusedXmlException
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, ParseError
 from xml.sax.saxutils import escape as xml_escape
 
@@ -29,6 +28,7 @@ DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"
 EMEX_SEARCH_SERVICE_URL = "http://ws.emex.ru/EmExService.asmx"
 EMEX_SEARCH_DOCS_URL = "http://wsdoc.emex.ru/FindDetailAdv5.html"
 EMEX_SOAP_NAMESPACE = "http://tempuri.org/"
+EMEX_MAX_RESPONSE_BYTES = 2_000_000
 EXIST_BASE_URL = "https://www.exist.ru"
 EXIST_OPEN_SEARCH_DOCS_URL = "https://s.exist.ru/xml/osd.xml"
 EXIST_DEFAULT_OFFICE_ID = 905
@@ -801,7 +801,7 @@ def _emex_detail_item(element: Element) -> dict[str, Any]:
 
 
 def parse_emex_find_detail_response(raw_xml: str) -> dict[str, Any]:
-    root = SafeElementTree.fromstring(raw_xml)
+    root = _safe_emex_xml_root(raw_xml)
     result = None
     for element in root.iter():
         if _xml_local_name(element.tag) == "FindDetailAdv5Result":
@@ -830,6 +830,16 @@ def parse_emex_find_detail_response(raw_xml: str) -> dict[str, Any]:
         "block_date_end": _xml_child_text(result, "BlockDateEnd"),
         "details": details,
     }
+
+
+def _safe_emex_xml_root(raw_xml: str) -> Element:
+    if not isinstance(raw_xml, str):
+        raise ValueError("invalid_xml_payload")
+    if len(raw_xml.encode("utf-8", errors="replace")) > EMEX_MAX_RESPONSE_BYTES:
+        raise ValueError("xml_response_too_large")
+    if re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", raw_xml, flags=re.IGNORECASE):
+        raise ValueError("EntitiesForbidden: DTD and entity declarations are not allowed")
+    return ElementTree.fromstring(raw_xml)
 
 
 def emex_price_lookup(
@@ -899,9 +909,12 @@ def emex_price_lookup(
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            raw_xml = response.read().decode("utf-8", errors="replace")
+            raw_xml_bytes = response.read(EMEX_MAX_RESPONSE_BYTES + 1)
+        if len(raw_xml_bytes) > EMEX_MAX_RESPONSE_BYTES:
+            raise ValueError("xml_response_too_large")
+        raw_xml = raw_xml_bytes.decode("utf-8", errors="replace")
         parsed = parse_emex_find_detail_response(raw_xml)
-    except (HTTPError, URLError, TimeoutError, ParseError, DefusedXmlException, ValueError) as exc:
+    except (HTTPError, URLError, TimeoutError, ParseError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
     return {
