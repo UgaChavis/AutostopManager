@@ -20,7 +20,9 @@ Default owner-facing style: Russian, short, practical, direct.
    open `open_first` / source-of-truth files first.
 4. For CRM work, start with `agent_bootstrap` and `agent_board_digest`; use
    `agent_search` and `agent_entity_context` before heavy exports. Invoke broad
-   scans through `agent_board_workflow`.
+   scans through `agent_board_workflow`. For any write, build
+   `prepare_action_contract`, run the named workflow in `dry_run` and `apply`
+   modes, then reread the exact target and verify it.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md` and read/search
    before any mailbox mutation.
 6. For broad CRM, procurement, finance, knowledge-intake, or multi-step work,
@@ -41,11 +43,12 @@ does not mean live CRM or MCP context is empty.
 
 ## Main Routes
 
-The table may name a hidden Manager capability to identify the intended
-operation. On the production CRM connector, never call that name directly:
-use `discover_raw_capabilities`, `get_raw_capability_schema`, and
-`call_raw_capability`. The four named CRM domain workflows remain the preferred
-path whenever they cover the task.
+The production CRM connector exposes exactly 24 Gateway v2 tools over
+owner-approved OAuth 2.1 with PKCE and rotating refresh tokens. The table may
+name a hidden Manager capability to identify the intended operation. Never call
+that name directly: use a named CRM workflow first. Only when no named workflow
+covers the task may you use `discover_raw_capabilities`,
+`get_raw_capability_schema`, and `call_raw_capability`.
 
 | Task | Open first / tool | Notes |
 | --- | --- | --- |

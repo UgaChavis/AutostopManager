@@ -6,7 +6,7 @@
   "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-07-14",
+  "last_verified": "2026-07-15",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 92,
     "autostop_manager_tools_in_raw_registry": 63,
@@ -48,6 +48,7 @@
       "get_raw_capability_schema",
       "call_raw_capability"
     ],
+    "required_protocol": "agent_bootstrap -> agent_board_digest -> agent_search/agent_entity_context -> prepare_action_contract -> named workflow dry_run/apply -> exact-target reread and verification",
     "finance_payment_operation": "record_repair_order_payment",
     "finance_payment_requirements": [
       "exact card and cashbox ids",
@@ -58,7 +59,7 @@
     ],
     "virtual_api_fallback": "api:/api/... capabilities cover guarded CRM reads and writes not represented by a focused MCP tool; writes remain hidden, route-hash checked, idempotent, kill-switch controlled, ledgered, and forced to the audited service identity",
     "applied_write_verification_failure": "workflow remains non-terminal in compensating until exact-target reconciliation",
-    "operator_admin_auth": "local codex-owner-agent service identity plus MCP bearer; never accepted through the public proxy",
+    "operator_admin_auth": "public Codex/Apps use owner-approved OAuth 2.1; local codex-owner-agent internal compatibility may use the deployment bearer and is never accepted as a claimed public identity",
     "mail_boundary": "refs-only manager bridge; Gmail remains a separate authenticated connector and source of truth"
   },
   "source_documents": [
@@ -75,9 +76,13 @@
   ],
   "connector_modes": {
     "streamable_http": true,
-    "oauth_embedded_local_compatibility": true,
+    "oauth_2_1_pkce_production": true,
+    "oauth_owner_approval": true,
+    "oauth_rotating_refresh_tokens": true,
+    "oauth_exact_audience_and_scopes": true,
+    "oauth_encrypted_persistent_state": true,
     "oauth_embedded_production": false,
-    "bearer_token": true,
+    "bearer_internal_compatibility_only": true,
     "public_https_url_required_for_chatgpt": true,
     "responses_api_direct_authorization": true
   },
@@ -91,6 +96,8 @@
       "MINIMAL_KANBAN_MCP_BEARER_TOKEN",
       "MINIMAL_KANBAN_MCP_ALLOWED_HOSTS",
       "MINIMAL_KANBAN_MCP_ALLOWED_ORIGINS",
+      "AUTOSTOP_MCP_OAUTH_ENABLED",
+      "AUTOSTOP_MCP_OAUTH_STATE_KEY",
       "AUTOSTOP_MCP_EMBEDDED_OAUTH_ENABLED",
       "AUTOSTOP_AGENT_GATEWAY_ENABLED",
       "AUTOSTOP_AGENT_GATEWAY_WRITES_ENABLED",
@@ -313,10 +320,10 @@
     "autofill_repair_order"
   ],
   "operation_notes": [
-    "In production begin with agent_bootstrap, then use agent_board_digest/agent_search/agent_entity_context and a named domain workflow; use lazy raw discovery only when no named workflow fits.",
+    "In production follow one protocol: agent_bootstrap, agent_board_digest, agent_search/agent_entity_context, prepare_action_contract, named workflow dry_run/apply, then exact-target reread and verification; use lazy raw discovery only when no named workflow fits.",
     "For repair-order payments use agent_finance_workflow operation record_repair_order_payment with exact target ids, amount, payment method, current expected_updated_at, and an idempotency key. It verifies the repair-order payment row, linked cash transaction, and cash-journal entry.",
     "If no named Gateway v2 workflow covers a required CRM capability, use discover_raw_capabilities, get_raw_capability_schema, and call_raw_capability. Guarded api:/api/<route> fallbacks never enlarge tools/list and still enforce the durable ledger, payload fingerprint, schema hash, and finance/destructive switches.",
-    "Always use ping_connector/get_connector_identity/get_runtime_status when connector availability or auth behavior is uncertain.",
+    "Use ping_connector/get_connector_identity/get_runtime_status only when connector availability or auth behavior is uncertain.",
     "Start broad CRM orientation with agent_bootstrap and agent_board_digest; use agent_search and agent_entity_context for focused detail, and raw discovery only for a capability not covered by a named workflow.",
     "Route 'готовые без оплаты' through agent_board_workflow(operation=list_ready_unpaid_cards, mode=dry_run); use operation=apply_ready_unpaid_followups in dry_run before apply.",
     "Route 'разбери входящие' through agent_board_workflow(operation=triage_inbox_cards), then operation=cleanup_card in dry_run/apply modes only for eligible cards.",

@@ -66,6 +66,11 @@ summaries:
 For exact client/card/order work, read back the live target with
 `agent_entity_context`.
 
+For any write, continue with `prepare_action_contract`, run the applicable
+named workflow in `dry_run` and then `apply`, and reread the exact target. Do
+not invoke a hidden legacy capability directly; use guarded raw discovery only
+when no named workflow exists.
+
 ## Read-Only CRM Health Flow
 
 Use this flow before proposing CRM hygiene work. It is read-only and must not

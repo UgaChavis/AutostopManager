@@ -389,7 +389,9 @@
         "аудит MCP CRM",
         "проверь MCP коннектор CRM",
         "оптимизируй связь с CRM",
-        "CRM Agent Gateway"
+        "CRM Agent Gateway",
+        "устрани проблему подключения Codex к CRM",
+        "исправь OAuth Codex Apps CRM"
       ],
       "keywords": [
         "MCP",
@@ -398,6 +400,9 @@
         "перегруженные ответы",
         "связь Codex",
         "MCP коннектор",
+        "OAuth",
+        "Apps",
+        "24 tools",
         "команды CRM",
         "перегружены ответы",
         "Codex с CRM",
@@ -412,22 +417,28 @@
       ],
       "required_reads": [
         "agent_bootstrap",
-        "list_agent_workflows",
         "manager MCP and CRM MCP catalogs",
-        "read-only connector status and representative compact responses"
+        "OAuth protected-resource and authorization-server metadata",
+        "read-only connector status and representative Gateway v2 responses"
       ],
-      "write_domains": [],
+      "write_domains": [
+        "crm_repository",
+        "manager_documentation",
+        "server_runtime"
+      ],
       "external_connectors": [],
       "completion_checks": [
-        "tool routing is deterministic",
-        "payload budgets are measured",
-        "no live CRM or Gmail mutation occurred"
+        "public connector exposes exactly 24 Gateway v2 tools and no legacy surface",
+        "agent_bootstrap, agent_board_digest, and agent_search pass through the public endpoint",
+        "OAuth refresh survives a repeated deploy and 401 returns a standards-readable challenge",
+        "CRM, site, and VPN remain healthy; live logs and exact reread confirm the result"
       ],
       "next_actions": [
-        "inspect the manager workflow registry and active MCP schemas",
-        "measure representative compact CRM reads without dumping private data",
-        "compare routing, payload size, latency, and verification coverage",
-        "report implementation-ready fixes and preserve live CRM/Gmail state"
+        "take private rollback-safe repository, data, auth-config, and image backups",
+        "implement owner-approved production OAuth 2.1 with PKCE, rotating refresh tokens, exact audience/scopes, encrypted persistent state, and clear 401 discovery",
+        "make Codex URL-only OAuth config and enforce the 24-tool Gateway v2 manifest",
+        "synchronize CRM and Manager instructions to agent_bootstrap -> digest -> focused reads -> action contract -> named dry_run/apply -> reread",
+        "run focused/full tests and CI, publish both repositories, deploy twice, and verify refresh continuity, live CRM reread, site, and VPN"
       ]
     },
     {

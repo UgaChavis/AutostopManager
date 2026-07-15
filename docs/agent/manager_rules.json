@@ -188,7 +188,7 @@
     {
       "id": "crm-read-order",
       "priority": 30,
-      "rule": "For CRM orientation, start with agent_bootstrap, then agent_board_digest; use agent_search and agent_entity_context before heavy board exports. Use get_connector_identity or get_runtime_status when connector availability or auth behavior is uncertain."
+      "rule": "The production CRM connector must expose exactly 24 Gateway v2 tools over owner-approved OAuth 2.1 with PKCE and rotating refresh tokens; never depend on the deployment-rotated internal bearer or call hidden legacy tools. For CRM orientation, start with agent_bootstrap, then agent_board_digest, then agent_search and agent_entity_context. Before any write, build prepare_action_contract, run the applicable named workflow in dry_run and apply modes, then reread the exact target and verify it. Use raw discovery only when no named workflow covers the operation. Use get_connector_identity or get_runtime_status only when connector availability or auth behavior is uncertain."
     },
     {
       "id": "automotive-do-not-invent",

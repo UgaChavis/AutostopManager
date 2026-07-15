@@ -158,7 +158,8 @@ test "$(git rev-parse HEAD)" = "$(git rev-parse origin/autostopcrm-v1)"
 ```
 
 The deploy script requires a clean CRM checkout, verifies its remote revision,
-prebuilds an immutable image, snapshots Manager, rotates connector auth,
+prebuilds an immutable image, snapshots Manager, provisions stable production
+OAuth, rotates only the internal compatibility bearer,
 creates and verifies rollback data, replaces only the CRM service inside a
 bounded maintenance window, and runs internal plus public Gateway v2 smoke.
 `AUTOSTOP_SKIP_GIT_SYNC=1` is an exceptional recovery override, not the normal
@@ -173,6 +174,9 @@ After deployment, verify:
 - service process is running
 - MCP endpoint answers on configured host/port/path
 - exactly 24 Gateway v2 tools are visible and legacy tools are absent
+- OAuth protected-resource/server metadata, PKCE S256, owner approval, refresh
+  rotation, audience/scopes, and a clear 401 challenge are verified
+- a saved refresh session still works after a second deploy
 - the standard Gateway v2 smoke passes internally and publicly
 - the exhaustive safe smoke invokes all 24 tools and leaves its synthetic
   workflows terminal
@@ -186,6 +190,11 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 cd /opt/autostopcrm
 docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
   --mcp-url http://127.0.0.1:41831/mcp --exhaustive
+docker compose exec -T autostopcrm python scripts/check_live_connector.py \
+  --strict --site-url https://crm.autostopcrm.ru --expect-https \
+  --local-api-url http://127.0.0.1:41731 --expect-admin
+docker compose exec -T autostopcrm python scripts/check_mcp_oauth.py \
+  --mcp-url https://crm.autostopcrm.ru/mcp
 cd /opt/AutostopManager
 .venv/bin/python -m autostop_manager.cli knowledge-audit
 .venv/bin/python -m autostop_manager.cli annotations-audit

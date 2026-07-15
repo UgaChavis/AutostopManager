@@ -28,7 +28,12 @@ python -m autostop_manager.cli control-report --format markdown
 ```
 
 For a new non-trivial task: `agent-brief` or `prepare-context` first. For CRM:
-live MCP context first. For local docs: `knowledge-probe` first.
+live MCP context first. The public CRM connector exposes exactly 24 Gateway v2
+tools over owner-approved OAuth 2.1; use `agent_bootstrap` ->
+`agent_board_digest` -> `agent_search`/`agent_entity_context` ->
+`prepare_action_contract` -> named workflow `dry_run`/`apply` -> exact-target
+reread. Raw discovery is allowed only when no named workflow exists; never call
+a hidden legacy name directly. For local docs: `knowledge-probe` first.
 
 ## Core Audits
 

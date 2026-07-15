@@ -39,6 +39,13 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    `get_raw_capability_schema` -> `call_raw_capability` only when no named
    workflow covers the task; never invoke a hidden capability directly.
 
+The production connector must expose exactly 24 Gateway v2 tools. Codex/Apps
+authenticate through owner-approved OAuth 2.1 with PKCE and rotating refresh
+tokens; the deployment-rotated bearer is internal compatibility only. For a
+write, the mandatory order is focused reread -> `prepare_action_contract` ->
+named workflow `dry_run` -> named workflow `apply` -> exact-target reread and
+verification.
+
 ## Write Safety
 
 - Before CRM writes: exact target id, dry-run/preflight where available, then
