@@ -72,9 +72,7 @@ def _provider_smoke_result(provider: dict[str, Any], *, mode: str) -> dict[str, 
     capabilities = [str(value) for value in provider.get("capabilities") or []]
     configured = bool(provider.get("configured"))
     has_write_capability = any(
-        marker in capability.casefold()
-        for marker in WRITE_CAPABILITY_MARKERS
-        for capability in capabilities
+        marker in capability.casefold() for marker in WRITE_CAPABILITY_MARKERS for capability in capabilities
     )
     safe_access = str(provider.get("access_mode") or "") in READ_ONLY_ACCESS_MODES
     live_status = "not_requested"

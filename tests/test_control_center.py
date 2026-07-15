@@ -79,6 +79,41 @@ def test_env_file_status_reports_key_names_without_values(tmp_path):
     assert "hunter2" not in str(status)
 
 
+def test_tmp_writable_uses_an_os_managed_temporary_file(monkeypatch):
+    captured = {}
+
+    class _TemporaryFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def write(self, value):
+            captured["value"] = value
+
+    def fake_temporary_file(**kwargs):
+        captured["kwargs"] = kwargs
+        return _TemporaryFile()
+
+    monkeypatch.setattr(control_center_module.tempfile, "TemporaryFile", fake_temporary_file)
+
+    assert control_center_module._tmp_writable() is True
+    assert captured == {
+        "kwargs": {"mode": "w", "encoding": "utf-8", "dir": "/tmp"},
+        "value": "ok",
+    }
+
+
+def test_tmp_writable_reports_os_errors(monkeypatch):
+    def fail_temporary_file(**_kwargs):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(control_center_module.tempfile, "TemporaryFile", fail_temporary_file)
+
+    assert control_center_module._tmp_writable() is False
+
+
 def test_read_catalog_counts_handles_invalid_structure(tmp_path, monkeypatch):
     catalog_path = tmp_path / "manager_mcp_catalog.json"
     catalog_path.write_text("[]", encoding="utf-8")

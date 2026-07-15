@@ -189,7 +189,9 @@ def test_lookup_oem_catalog_candidates_combines_three_catalogs(monkeypatch):
 
     monkeypatch.setattr("autostop_manager.catalog_clients.parts_catalogs_lookup", fake_parts_catalogs_lookup)
     monkeypatch.setattr("autostop_manager.catalog_clients.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
-    monkeypatch.setattr("autostop_manager.catalog_clients.vin17_search_std_part_name_by_vin", fake_vin17_search_std_part_name_by_vin)
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.vin17_search_std_part_name_by_vin", fake_vin17_search_std_part_name_by_vin
+    )
 
     result = lookup_oem_catalog_candidates(
         identifier="JTEBU3FJX05027767",

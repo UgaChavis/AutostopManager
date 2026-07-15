@@ -28,7 +28,13 @@ Run before publishing:
 ```powershell
 python -m autostop_manager.cli knowledge-sync
 python -m autostop_manager.cli knowledge-audit
+python -m ruff check .
+python -m ruff format --check autostop_manager tests
+python -m mypy autostop_manager
 python -m pytest -q
+python -m coverage run -m pytest -q
+python -m coverage report
+node --check frontend/control-center/app.js
 ```
 
 Optional manual checks:
@@ -55,7 +61,8 @@ and deploy:
    `missing_files=[]` and `warnings=[]`. `optional_missing_files` may list
    `data/private_knowledge/*` in a clean checkout; restore those local runtime
    files only when a business-identity task needs exact current private facts.
-4. Run `python -m pytest -q`.
+4. Run Ruff check/format verification, Mypy, `python -m pytest -q`, branch
+   coverage with `coverage report`, and the Node syntax check shown above.
 5. Check `git status --short --ignored` and confirm `data/`, caches, SQLite
    files, runtime snapshots, credentials, and CRM evidence are not staged.
 6. Commit only code, tests, documentation, and safe owner-provided source packs.
@@ -133,7 +140,13 @@ git switch AutostopManager
 .venv/bin/python -m autostop_manager.cli knowledge-audit
 .venv/bin/python -m autostop_manager.cli annotations-audit
 .venv/bin/python -m autostop_manager.cli skills-audit
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check autostop_manager tests
+.venv/bin/python -m mypy autostop_manager
 .venv/bin/python -m pytest -q
+.venv/bin/python -m coverage run -m pytest -q
+.venv/bin/python -m coverage report
+node --check frontend/control-center/app.js
 git status --short
 git fetch origin AutostopManager
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/AutostopManager)"

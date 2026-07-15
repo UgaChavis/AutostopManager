@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import re
 from pathlib import Path
@@ -110,10 +111,8 @@ def _score_category(row: dict[str, Any], *, query: str | None = None, intent_id:
                 matched = True
     if not matched:
         return 0.0
-    try:
+    with suppress(TypeError, ValueError):
         score += min(max(float(row.get("confidence") or 0.0), 0.0), 1.0)
-    except (TypeError, ValueError):
-        pass
     return score
 
 

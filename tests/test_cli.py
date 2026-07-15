@@ -15,7 +15,9 @@ def test_cli_parser_has_core_commands():
     assert args.kind == "fact"
     assert args.confidence == 0.7
 
-    args = parser.parse_args(["recall", "живой стиль", "--kind", "fact", "--category", "style", "--tags", "карточки,стиль"])
+    args = parser.parse_args(
+        ["recall", "живой стиль", "--kind", "fact", "--category", "style", "--tags", "карточки,стиль"]
+    )
     assert args.command == "recall"
     assert args.kind == "fact"
     assert args.category == "style"
@@ -165,7 +167,9 @@ def test_cli_parser_has_core_commands():
     assert args.command == "partsapi-lookup"
     assert args.operation == "search_tree"
 
-    args = parser.parse_args(["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"])
+    args = parser.parse_args(
+        ["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"]
+    )
     assert args.command == "partsapi-category-index"
     assert args.category_index_command == "explain"
     assert args.intent_id == "front_brake_pads"

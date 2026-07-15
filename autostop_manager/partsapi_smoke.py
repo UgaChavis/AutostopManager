@@ -39,7 +39,9 @@ def _identity_digest(identity: dict[str, Any]) -> dict[str, Any]:
         "confidence": identity.get("confidence"),
         "confidence_label": identity.get("confidence_label"),
         "ready_for_oem_lookup": readiness.get("ready_for_oem_lookup"),
-        "ready_for_oem_candidate_lookup": readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")),
+        "ready_for_oem_candidate_lookup": readiness.get(
+            "ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")
+        ),
         "ready_for_crm_writeback": readiness.get("ready_for_crm_writeback", readiness.get("ready_for_oem_lookup")),
         "cross_source_agreement": readiness.get("cross_source_agreement") or {},
         "blocking_reasons": readiness.get("blocking_reasons") or [],
@@ -170,7 +172,11 @@ def build_partsapi_vin_smoke_report(
     if not identifier:
         return {"ok": False, "error": "VIN/frame/body identifier is required.", "privacy": {"secret_exposed": False}}
     if not part_text:
-        return {"ok": False, "error": "Requested part text is required.", "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False}}
+        return {
+            "ok": False,
+            "error": "Requested part text is required.",
+            "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False},
+        }
 
     classification = classify_identifier(identifier)
     part_profile = normalize_part_intent(part_text)
@@ -179,10 +185,11 @@ def build_partsapi_vin_smoke_report(
 
     calls: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
-    for operation, kwargs in (
+    identity_calls: tuple[tuple[str, dict[str, Any]], ...] = (
         ("vin_decode", {"identifier": identifier, "lang": "ru"}),
         ("vin_decode_oe", {"identifier": identifier}),
-    ):
+    )
+    for operation, kwargs in identity_calls:
         call = partsapi_catalog_lookup(operation=operation, timeout=timeout, dry_run=dry_run, **kwargs)
         calls.append(call)
 
@@ -209,25 +216,35 @@ def build_partsapi_vin_smoke_report(
         )
         parts_call = {"oem_candidates": []}
 
-    oem_candidates = [candidate for candidate in (parts_call.get("oem_candidates") or []) if isinstance(candidate, dict)]
+    oem_candidates = [
+        candidate for candidate in (parts_call.get("oem_candidates") or []) if isinstance(candidate, dict)
+    ]
     enriched: list[dict[str, Any]] = []
     for candidate in oem_candidates[:max_candidates]:
         part_number = str(candidate.get("part_number") or "").strip()
         brand = str(candidate.get("brand") or "").strip()
         if not part_number:
             continue
-        search_call = partsapi_catalog_lookup(operation="search_articles", part_number=part_number, timeout=timeout, dry_run=dry_run)
+        search_call = partsapi_catalog_lookup(
+            operation="search_articles", part_number=part_number, timeout=timeout, dry_run=dry_run
+        )
         candidate_calls = [search_call]
         for article in (search_call.get("article_candidates") or [])[:max_candidates]:
             article_id = article.get("article_id") if isinstance(article, dict) else None
             if article_id not in (None, ""):
                 candidate_calls.append(
-                    partsapi_catalog_lookup(operation="article_crosses", article_id=article_id, timeout=timeout, dry_run=dry_run)
+                    partsapi_catalog_lookup(
+                        operation="article_crosses", article_id=article_id, timeout=timeout, dry_run=dry_run
+                    )
                 )
         candidate_calls.extend(
             [
-                partsapi_catalog_lookup(operation="oe_applicability", part_number=part_number, timeout=timeout, dry_run=dry_run),
-                partsapi_catalog_lookup(operation="crosses_title", part_number=part_number, timeout=timeout, dry_run=dry_run),
+                partsapi_catalog_lookup(
+                    operation="oe_applicability", part_number=part_number, timeout=timeout, dry_run=dry_run
+                ),
+                partsapi_catalog_lookup(
+                    operation="crosses_title", part_number=part_number, timeout=timeout, dry_run=dry_run
+                ),
             ]
         )
         if brand:
@@ -241,7 +258,9 @@ def build_partsapi_vin_smoke_report(
                 )
             )
         else:
-            candidate_calls.append(partsapi_catalog_lookup(operation="crosses", part_number=part_number, timeout=timeout, dry_run=dry_run))
+            candidate_calls.append(
+                partsapi_catalog_lookup(operation="crosses", part_number=part_number, timeout=timeout, dry_run=dry_run)
+            )
         calls.extend(candidate_calls)
         enriched.append(
             {
@@ -270,7 +289,7 @@ def build_partsapi_vin_smoke_report(
     missing_env_names = sorted({name for call in required_calls for name in _call_missing_env_names(call)})
     optional_missing_env_names = sorted({name for call in optional_calls for name in _call_missing_env_names(call)})
     failed_required_calls = [call for call in required_calls if not call.get("ok")]
-    report = {
+    return {
         "ok": not missing_env_names and not blockers and not failed_required_calls,
         "provider": "partsapi_vin_smoke",
         "crm_order": {
@@ -303,4 +322,3 @@ def build_partsapi_vin_smoke_report(
         "optional_missing_env_names": optional_missing_env_names,
         "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False},
     }
-    return report

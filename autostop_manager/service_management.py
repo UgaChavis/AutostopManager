@@ -233,9 +233,13 @@ def build_service_management_plan(
         "Store only durable conclusions in memory; keep temporary market scans out of memory.",
     ]
     if resolved_area == "parts_procurement" and not part_number:
-        warnings.append("Part number is missing; search can start by description, but exact OEM or replacement number is safer.")
+        warnings.append(
+            "Part number is missing; search can start by description, but exact OEM or replacement number is safer."
+        )
     if resolved_area == "staff_management":
-        warnings.append("Market salary sources are context only; use internal output, quality, and attendance for decisions.")
+        warnings.append(
+            "Market salary sources are context only; use internal output, quality, and attendance for decisions."
+        )
     public_context, redacted_context_fields = _public_context(context)
 
     return {

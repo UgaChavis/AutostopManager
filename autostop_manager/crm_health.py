@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
 from .storage import _now
@@ -35,7 +35,7 @@ def build_crm_health_plan(
     """Build a read-only CRM health plan from already fetched payloads."""
 
     generated_at = _now()
-    now_dt = _parse_datetime(now) or datetime.now(timezone.utc)
+    now_dt = _parse_datetime(now) or datetime.now(UTC)
     review = _unwrap_payload(board_review)
     context = _unwrap_payload(board_context)
     today = _unwrap_payload(today_context)
@@ -126,8 +126,7 @@ def _column_sources(payload: dict[str, Any]) -> list[Any]:
         sources.extend(payload["column_counts"])
     if isinstance(payload.get("column_counts"), dict):
         sources.extend(
-            {"column_id": key, "label": key, "count": value}
-            for key, value in payload["column_counts"].items()
+            {"column_id": key, "label": key, "count": value} for key, value in payload["column_counts"].items()
         )
     if isinstance(payload.get("overloaded_columns"), list):
         sources.extend(payload["overloaded_columns"])
@@ -227,12 +226,7 @@ def _signal_identity(item: dict[str, Any]) -> tuple[str, str]:
         or ""
     )
     secondary = str(
-        item.get("code")
-        or item.get("issue")
-        or item.get("reason")
-        or item.get("heading")
-        or item.get("title")
-        or ""
+        item.get("code") or item.get("issue") or item.get("reason") or item.get("heading") or item.get("title") or ""
     )
     if primary or secondary:
         return primary, secondary
@@ -272,7 +266,7 @@ def _event_noise(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _extract_tasks(today: dict[str, Any]) -> list[dict[str, Any]]:
-    tasks = []
+    tasks: list[dict[str, Any]] = []
     for key in ("tasks", "live_tasks", "items"):
         value = today.get(key)
         if isinstance(value, list):
@@ -306,7 +300,7 @@ def _stale_tasks(tasks: list[dict[str, Any]], now_dt: datetime) -> list[dict[str
 
 def _parse_datetime(value: str | datetime | Any) -> datetime | None:
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip()
@@ -316,7 +310,7 @@ def _parse_datetime(value: str | datetime | Any) -> datetime | None:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _suggested_actions(

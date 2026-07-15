@@ -123,9 +123,7 @@ def _memory_text(row: dict[str, Any]) -> str:
 
 
 def _normalize_memory_text(row: dict[str, Any]) -> str:
-    text = _memory_text(row).casefold()
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", _memory_text(row).casefold()).strip()
 
 
 def _compact_memory(row: dict[str, Any]) -> dict[str, Any]:

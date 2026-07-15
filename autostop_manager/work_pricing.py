@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
@@ -201,7 +201,7 @@ def _coerce_price(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
-        price = int(round(float(value)))
+        price = round(float(value))
         return price if price > 0 else None
     text = str(value).replace(",", ".")
     match = re.search(r"\d+(?:[ .]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?", text)
@@ -209,7 +209,7 @@ def _coerce_price(value: Any) -> int | None:
         return None
     raw = match.group(0).replace(" ", "")
     try:
-        price = int(round(float(raw)))
+        price = round(float(raw))
     except ValueError:
         return None
     return price if price > 0 else None
@@ -257,7 +257,7 @@ def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
     includes_parts = _parse_bool(row.get("includes_parts"))
     labor_only = _parse_bool(row.get("labor_only"))
     price = _coerce_first_price(row.get("price_rub"), row.get("price"))
-    captured_at = str(row.get("captured_at") or date.today().isoformat())
+    captured_at = str(row.get("captured_at") or datetime.now(UTC).date().isoformat())
     confidence = _normalize_key(str(row.get("confidence") or "medium"))
 
     reasons: list[str] = []
@@ -329,11 +329,13 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
     source = str(row.get("source") or row.get("source_name") or "").strip()
     city_region = str(row.get("city") or row.get("region") or row.get("city_region") or "").strip()
     operation_name = str(row.get("operation_name") or row.get("operation") or row.get("work_item") or "").strip()
-    captured_at = str(row.get("captured_at") or date.today().isoformat())
+    captured_at = str(row.get("captured_at") or datetime.now(UTC).date().isoformat())
     confidence = _normalize_key(str(row.get("confidence") or "low"))
     public_source = _parse_bool(row.get("public_source"))
     official = _parse_bool(row.get("official"))
-    hours, hours_range = _coerce_first_hours(row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours"))
+    hours, hours_range = _coerce_first_hours(
+        row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours")
+    )
 
     reasons: list[str] = []
     if not source:
@@ -401,7 +403,10 @@ def _outlier_filter(quotes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
 
 def _vehicle_class(vehicle_context: dict[str, Any]) -> str:
     text = _clean_text(" ".join(str(value) for value in vehicle_context.values() if value))
-    if any(token in text for token in ("x5", "x6", "gle", "q7", "touareg", "range rover", "premium", "bmw", "mercedes", "audi")):
+    if any(
+        token in text
+        for token in ("x5", "x6", "gle", "q7", "touareg", "range rover", "premium", "bmw", "mercedes", "audi")
+    ):
         return "premium_or_large_suv"
     if any(token in text for token in ("dsg", "s tronic", "0am", "0cw", "02e", "0d9", "0gc")):
         return "vag_dsg"
@@ -489,7 +494,7 @@ def _operation_estimate(
 
     after_outliers, outliers = _outlier_filter(matched)
     prices = [int(quote["price_rub"]) for quote in after_outliers if quote.get("price_rub") is not None]
-    weak_average = int(round(sum(prices) / len(prices))) if prices else None
+    weak_average = round(sum(prices) / len(prices)) if prices else None
     enough_quotes = len(prices) >= MIN_CONFIDENT_QUOTES
     russia_average = weak_average if enough_quotes else None
     autostop_price = _round_to_100(russia_average * AUTOSTOP_MARKUP) if russia_average is not None else None
@@ -564,8 +569,8 @@ def _operation_labor_time_analysis(
     else:
         confidence = "blocked"
 
-    market_rate = int(round(russia_average_rub / average_hours)) if russia_average_rub and average_hours else None
-    autostop_rate = int(round(autostop_price_rub / average_hours)) if autostop_price_rub and average_hours else None
+    market_rate = round(russia_average_rub / average_hours) if russia_average_rub and average_hours else None
+    autostop_rate = round(autostop_price_rub / average_hours) if autostop_price_rub and average_hours else None
     if average_hours is None:
         cross_check = "blocked"
     elif autostop_rate is not None and autostop_rate < 500:
@@ -596,19 +601,21 @@ def _detect_overlap_adjustments(normalized_operations: list[dict[str, Any]]) -> 
     seen: dict[str, str] = {}
     for operation in normalized_operations:
         name = str(operation.get("normalized_name") or operation.get("input") or "")
-        key = _normalize_key(name)
-        if key in seen:
+        operation_key = _normalize_key(name)
+        if operation_key in seen:
             adjustments.append(
                 {
                     "type": "duplicate_operation",
-                    "operations": [seen[key], name],
+                    "operations": [seen[operation_key], name],
                     "action": "do_not_price_twice",
                 }
             )
         else:
-            seen[key] = name
+            seen[operation_key] = name
 
-    names = [str(operation.get("normalized_name") or operation.get("input") or "") for operation in normalized_operations]
+    names = [
+        str(operation.get("normalized_name") or operation.get("input") or "") for operation in normalized_operations
+    ]
     for left in names:
         left_text = _clean_text(left)
         for right in names:
@@ -623,7 +630,11 @@ def _detect_overlap_adjustments(normalized_operations: list[dict[str, Any]]) -> 
                         "action": "verify_strut_remove_install_is_not_counted_twice",
                     }
                 )
-            if "пыльник" in left_text and "шрус" in left_text and any(token in right_text for token in ("привод", "шрус")):
+            if (
+                "пыльник" in left_text
+                and "шрус" in left_text
+                and any(token in right_text for token in ("привод", "шрус"))
+            ):
                 adjustments.append(
                     {
                         "type": "possible_included_driveshaft_operation",
@@ -659,6 +670,139 @@ def _diagnostic_checklist(complaint: str | None, vehicle_context: dict[str, Any]
     if not (vehicle_context.get("vin") or vehicle_context.get("chassis")):
         checklist.append("Запросить VIN или номер кузова перед точной технической сметой.")
     return checklist
+
+
+def _pricing_totals(
+    operation_estimates: list[dict[str, Any]],
+    normalized_operations: list[dict[str, Any]],
+    quote_sample: list[dict[str, Any]],
+    labor_time_analysis: list[dict[str, Any]],
+    *,
+    complaint_only: bool,
+) -> dict[str, Any]:
+    confident_prices = [
+        estimate["autostop_price_rub"]
+        for estimate in operation_estimates
+        if estimate.get("autostop_price_rub") is not None and estimate.get("confidence") in {"high", "medium"}
+    ]
+    all_operations_priced = bool(operation_estimates) and len(confident_prices) == len(operation_estimates)
+    total_works_rub = int(sum(confident_prices)) if all_operations_priced else None
+    russia_average_values = [
+        estimate["russia_average_rub"]
+        for estimate in operation_estimates
+        if estimate.get("russia_average_rub") is not None
+    ]
+    russia_average_rub = int(sum(russia_average_values)) if all_operations_priced else None
+
+    operation_confidences = [str(estimate.get("confidence")) for estimate in operation_estimates]
+    if not normalized_operations:
+        confidence = "blocked"
+    elif all(conf == "high" for conf in operation_confidences):
+        confidence = "high"
+    elif all_operations_priced and all(conf in {"high", "medium"} for conf in operation_confidences):
+        confidence = "medium"
+    elif any(conf == "blocked" for conf in operation_confidences) and not quote_sample:
+        confidence = "blocked"
+    else:
+        confidence = "low"
+    if complaint_only:
+        return {
+            "all_operations_priced": all_operations_priced,
+            "russia_average_rub": None,
+            "autostop_price_rub": None,
+            "total_works_rub": None,
+            "confidence": "low",
+        }
+    if confidence == "high" and not any(item.get("confidence") in {"high", "medium"} for item in labor_time_analysis):
+        confidence = "medium"
+    return {
+        "all_operations_priced": all_operations_priced,
+        "russia_average_rub": russia_average_rub,
+        "autostop_price_rub": total_works_rub,
+        "total_works_rub": total_works_rub,
+        "confidence": confidence,
+    }
+
+
+def _labor_time_summary(
+    normalized_operations: list[dict[str, Any]],
+    labor_time_sample: list[dict[str, Any]],
+    labor_time_analysis: list[dict[str, Any]],
+) -> dict[str, Any]:
+    valid_rows = [row for row in labor_time_sample if row.get("valid_input")]
+    operation_averages = [
+        item["average_hours"] for item in labor_time_analysis if item.get("average_hours") is not None
+    ]
+    range_hours = None
+    if operation_averages:
+        ranges = [item["range_hours"] for item in labor_time_analysis if item.get("range_hours")]
+        if ranges:
+            range_hours = [
+                round(sum(item[0] for item in ranges), 2),
+                round(sum(item[1] for item in ranges), 2),
+            ]
+
+    if not normalized_operations:
+        confidence = "blocked"
+    elif len(operation_averages) == len(normalized_operations) and all(
+        item.get("confidence") in {"high", "medium"} for item in labor_time_analysis
+    ):
+        confidence = "medium"
+    elif valid_rows:
+        confidence = "low"
+    else:
+        confidence = "blocked"
+
+    cross_checks = {str(item.get("cross_check")) for item in labor_time_analysis if item.get("cross_check")}
+    if cross_checks.intersection({"too_high", "too_low"}):
+        cross_check = "needs_review"
+    elif cross_checks == {"ok"}:
+        cross_check = "ok"
+    elif valid_rows:
+        cross_check = "partial"
+    else:
+        cross_check = "blocked"
+    return {
+        "valid_rows": valid_rows,
+        "operation_averages": operation_averages,
+        "average_hours": round(sum(operation_averages), 2) if operation_averages else None,
+        "range_hours": range_hours,
+        "confidence": confidence,
+        "cross_check": cross_check,
+    }
+
+
+def _pricing_next_actions(
+    *,
+    complaint_only: bool,
+    complaint: str | None,
+    vehicle_context: dict[str, Any],
+    operation_estimates: list[dict[str, Any]],
+    normalized_operations: list[dict[str, Any]],
+    labor_time_confidence: str,
+    overlap_adjustments: list[dict[str, Any]],
+) -> list[str]:
+    next_actions: list[str] = []
+    if complaint_only:
+        next_actions.append("Оценить только диагностику; финальный ремонт считать после результата диагностики.")
+        next_actions.extend(_diagnostic_checklist(complaint, vehicle_context))
+    if any(estimate.get("autostop_price_rub") is None for estimate in operation_estimates):
+        next_actions.append("Собрать минимум 3 сопоставимые публичные labor-only цены СТО по России.")
+    if labor_time_confidence == "blocked" and normalized_operations:
+        next_actions.append(
+            "Автоматически найти публичные нормо-часы/трудоемкость не удалось; использовать цену как рыночную оценку без второго слоя."
+        )
+    if overlap_adjustments:
+        next_actions.append("Проверить пересечения работ при оформлении ЗН, чтобы не считать одну операцию дважды.")
+    if any(operation.get("safety_flags") for operation in normalized_operations):
+        next_actions.append(
+            "Для safety-critical работ сверить состав операции по VIN/OEM или профессиональному service-source."
+        )
+    if not next_actions:
+        next_actions.append(
+            "Перед записью в ЗН проверить, что цена без запчастей и операция совпадает с фактической работой."
+        )
+    return next_actions
 
 
 def estimate_repair_work_cost(
@@ -706,8 +850,7 @@ def estimate_repair_work_cost(
     )
     quote_sample = [_normalize_quote(row) for row in [*manual_quote_rows, *research.get("quotes", [])]]
     labor_time_sample = [
-        _normalize_labor_time_row(row)
-        for row in [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
+        _normalize_labor_time_row(row) for row in [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
     ]
 
     missing_context: list[str] = []
@@ -739,103 +882,32 @@ def estimate_repair_work_cost(
     if complaint_only:
         missing_context.extend(["confirmed_repair_work_items", "diagnostic_result_before_final_repair_estimate"])
 
-    confident_prices = [
-        estimate["autostop_price_rub"]
-        for estimate in operation_estimates
-        if estimate.get("autostop_price_rub") is not None and estimate.get("confidence") in {"high", "medium"}
-    ]
-    all_operations_priced = bool(operation_estimates) and len(confident_prices) == len(operation_estimates)
-    total_works_rub = int(sum(confident_prices)) if all_operations_priced else None
-
-    russia_average_values = [
-        estimate["russia_average_rub"]
-        for estimate in operation_estimates
-        if estimate.get("russia_average_rub") is not None
-    ]
-    russia_average_rub = int(sum(russia_average_values)) if all_operations_priced else None
-    autostop_price_rub = total_works_rub
-
-    operation_confidences = [str(estimate.get("confidence")) for estimate in operation_estimates]
-    if not normalized_operations:
-        confidence = "blocked"
-    elif all(conf == "high" for conf in operation_confidences):
-        confidence = "high"
-    elif all_operations_priced and all(conf in {"high", "medium"} for conf in operation_confidences):
-        confidence = "medium"
-    elif any(conf == "blocked" for conf in operation_confidences) and not quote_sample:
-        confidence = "blocked"
-    else:
-        confidence = "low"
-    if complaint_only:
-        confidence = "low"
-        russia_average_rub = None
-        autostop_price_rub = None
-        total_works_rub = None
-    if confidence == "high" and not any(item.get("confidence") in {"high", "medium"} for item in labor_time_analysis):
-        confidence = "medium"
+    totals = _pricing_totals(
+        operation_estimates,
+        normalized_operations,
+        quote_sample,
+        labor_time_analysis,
+        complaint_only=complaint_only,
+    )
 
     valid_quotes = [
-        quote
-        for estimate in operation_estimates
-        for quote in estimate.get("sample", {}).get("valid_quotes", [])
+        quote for estimate in operation_estimates for quote in estimate.get("sample", {}).get("valid_quotes", [])
     ]
     excluded_outliers = [
-        quote
-        for estimate in operation_estimates
-        for quote in estimate.get("sample", {}).get("excluded_outliers", [])
+        quote for estimate in operation_estimates for quote in estimate.get("sample", {}).get("excluded_outliers", [])
     ]
     invalid_quotes = [quote for quote in quote_sample if not quote.get("valid_input")]
-    valid_labor_times = [row for row in labor_time_sample if row.get("valid_input")]
-    labor_time_operation_averages = [
-        item["average_hours"]
-        for item in labor_time_analysis
-        if item.get("average_hours") is not None
-    ]
-    if labor_time_operation_averages:
-        labor_time_average_hours = round(sum(labor_time_operation_averages), 2)
-        labor_time_ranges = [item["range_hours"] for item in labor_time_analysis if item.get("range_hours")]
-        labor_time_range_hours = [
-            round(sum(item[0] for item in labor_time_ranges), 2),
-            round(sum(item[1] for item in labor_time_ranges), 2),
-        ] if labor_time_ranges else None
-    else:
-        labor_time_average_hours = None
-        labor_time_range_hours = None
-    if not normalized_operations:
-        labor_time_confidence = "blocked"
-    elif len(labor_time_operation_averages) == len(normalized_operations) and all(
-        item.get("confidence") in {"high", "medium"} for item in labor_time_analysis
-    ):
-        labor_time_confidence = "medium"
-    elif valid_labor_times:
-        labor_time_confidence = "low"
-    else:
-        labor_time_confidence = "blocked"
-    labor_time_cross_checks = {str(item.get("cross_check")) for item in labor_time_analysis if item.get("cross_check")}
-    if "too_high" in labor_time_cross_checks or "too_low" in labor_time_cross_checks:
-        labor_time_cross_check = "needs_review"
-    elif labor_time_cross_checks == {"ok"}:
-        labor_time_cross_check = "ok"
-    elif valid_labor_times:
-        labor_time_cross_check = "partial"
-    else:
-        labor_time_cross_check = "blocked"
+    labor_summary = _labor_time_summary(normalized_operations, labor_time_sample, labor_time_analysis)
     overlap_adjustments = _detect_overlap_adjustments(normalized_operations)
-
-    next_actions = []
-    if complaint_only:
-        next_actions.append("Оценить только диагностику; финальный ремонт считать после результата диагностики.")
-        next_actions.extend(_diagnostic_checklist(complaint, vehicle_context))
-    if any(estimate.get("autostop_price_rub") is None for estimate in operation_estimates):
-        next_actions.append("Собрать минимум 3 сопоставимые публичные labor-only цены СТО по России.")
-    if labor_time_confidence == "blocked" and normalized_operations:
-        next_actions.append("Автоматически найти публичные нормо-часы/трудоемкость не удалось; использовать цену как рыночную оценку без второго слоя.")
-    if overlap_adjustments:
-        next_actions.append("Проверить пересечения работ при оформлении ЗН, чтобы не считать одну операцию дважды.")
-    if any(operation.get("safety_flags") for operation in normalized_operations):
-        next_actions.append("Для safety-critical работ сверить состав операции по VIN/OEM или профессиональному service-source.")
-    if not next_actions:
-        next_actions.append("Перед записью в ЗН проверить, что цена без запчастей и операция совпадает с фактической работой.")
+    next_actions = _pricing_next_actions(
+        complaint_only=complaint_only,
+        complaint=complaint,
+        vehicle_context=vehicle_context,
+        operation_estimates=operation_estimates,
+        normalized_operations=normalized_operations,
+        labor_time_confidence=str(labor_summary["confidence"]),
+        overlap_adjustments=overlap_adjustments,
+    )
 
     manager_lines = [
         {
@@ -857,8 +929,8 @@ def estimate_repair_work_cost(
         "normalized_operations": normalized_operations,
         "operation_estimates": operation_estimates,
         "labor_time_sample": {
-            "rows": valid_labor_times,
-            "valid_count": len(valid_labor_times),
+            "rows": labor_summary["valid_rows"],
+            "valid_count": len(labor_summary["valid_rows"]),
             "invalid_count": len([row for row in labor_time_sample if not row.get("valid_input")]),
             "sample_rules": [
                 "public labor-time mentions only",
@@ -867,10 +939,10 @@ def estimate_repair_work_cost(
             ],
         },
         "labor_time_analysis": labor_time_analysis,
-        "labor_time_range_hours": labor_time_range_hours,
-        "labor_time_average_hours": labor_time_average_hours,
-        "labor_time_confidence": labor_time_confidence,
-        "labor_time_cross_check": labor_time_cross_check,
+        "labor_time_range_hours": labor_summary["range_hours"],
+        "labor_time_average_hours": labor_summary["average_hours"],
+        "labor_time_confidence": labor_summary["confidence"],
+        "labor_time_cross_check": labor_summary["cross_check"],
         "overlap_adjustments": overlap_adjustments,
         "sources_checked": research.get("sources_checked", []),
         "pricing_basis": {
@@ -895,10 +967,10 @@ def estimate_repair_work_cost(
                 "exclude outliers before arithmetic mean",
             ],
         },
-        "russia_average_rub": russia_average_rub,
-        "autostop_price_rub": autostop_price_rub,
-        "total_works_rub": total_works_rub,
-        "confidence": confidence,
+        "russia_average_rub": totals["russia_average_rub"],
+        "autostop_price_rub": totals["autostop_price_rub"],
+        "total_works_rub": totals["total_works_rub"],
+        "confidence": totals["confidence"],
         "missing_context": _dedupe(missing_context),
         "next_actions": _dedupe(next_actions),
         "manager_summary": {
@@ -917,8 +989,12 @@ def estimate_repair_work_cost(
             "Public labor-time rows are plausibility checks, not the primary price basis or official OEM norm-hours.",
         ],
         "privacy": {
-            "raw_vehicle_identifier_redacted_from_output": bool(vehicle_context.get("vin") or vehicle_context.get("chassis")),
-            "raw_vehicle_identifier_removed_from_public_research_queries": bool(vehicle_context.get("vin") or vehicle_context.get("chassis")),
+            "raw_vehicle_identifier_redacted_from_output": bool(
+                vehicle_context.get("vin") or vehicle_context.get("chassis")
+            ),
+            "raw_vehicle_identifier_removed_from_public_research_queries": bool(
+                vehicle_context.get("vin") or vehicle_context.get("chassis")
+            ),
         },
         "research": {
             "enabled": research.get("enabled", False),

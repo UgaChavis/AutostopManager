@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import autostop_manager.knowledge_base as knowledge_base_module
-from autostop_manager.knowledge_base import audit_knowledge_base, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from autostop_manager.knowledge_base import (
+    audit_knowledge_base,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
 from autostop_manager.storage import ManagerMemoryStore
 
 
@@ -49,7 +54,7 @@ def test_sync_knowledge_base_handles_unreadable_annotations_file(tmp_path, monke
     def fake_read_text(self, encoding="utf-8-sig", *args, **kwargs):
         if self == annotations_path:
             raise OSError("permission denied")
-        return original_read_text(self, encoding=encoding, *args, **kwargs)
+        return original_read_text(self, *args, encoding=encoding, **kwargs)
 
     monkeypatch.setattr(knowledge_base_module.Path, "read_text", fake_read_text)
 

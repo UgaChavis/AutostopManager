@@ -19,5 +19,9 @@ def test_control_center_dashboard_static_assets_exist():
     assert "ControlReportV1" in app
     assert "renderEnvironment" in app
     assert "renderRuntimeProduction" in app
+    assert "function asArray" in app
+    assert "function metricRow" in app
+    assert "escapeHtml(value)" in app
+    assert "Array.isArray(rawReport)" in app
     assert "summary-grid" in styles
     assert "status-green" in styles

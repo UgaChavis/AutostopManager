@@ -58,12 +58,11 @@ def prepare_crm_card_action(
 ) -> dict[str, Any]:
     card_id = str(card_id or "").strip()
     current = current_card if isinstance(current_card, dict) else {}
-    current_profile = (
-        current.get("vehicle_profile") if isinstance(current.get("vehicle_profile"), dict) else {}
+    raw_current_profile = current.get("vehicle_profile")
+    current_profile: dict[str, Any] = (
+        {str(key): value for key, value in raw_current_profile.items()} if isinstance(raw_current_profile, dict) else {}
     )
-    effective_expected_updated_at = str(
-        expected_updated_at or current.get("updated_at") or ""
-    ).strip()
+    effective_expected_updated_at = str(expected_updated_at or current.get("updated_at") or "").strip()
 
     planned_patch: dict[str, Any] = {}
     if description is not None:

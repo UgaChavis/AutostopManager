@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from autostop_manager.action_contract import EXECUTOR_TOOLS, INVENTORY_EXECUTOR_TOOLS, prepare_action_contract
 
 
@@ -58,6 +60,49 @@ def test_payment_action_contract_blocks_unapproved_overpayment():
     assert "overpayment_not_explicitly_allowed" in result["preflight"]["blocking_reasons"]
 
 
+@pytest.mark.parametrize("amount", ["NaN", "Infinity", "-Infinity", True])
+def test_payment_action_contract_rejects_non_finite_or_boolean_amounts(amount):
+    result = prepare_action_contract(
+        domain="payment",
+        action="record_payment",
+        planned_changes={
+            "amount": amount,
+            "cashbox_id": "cashbox-main",
+            "card_id": "card-42",
+            "payment_method": "cash",
+            "outstanding_amount": 12_500,
+            "allow_overpayment": True,
+        },
+        owner_intent="Проведи оплату по ro-42",
+        expected_revision="ro-42@2026-07-11T10:00:00+07:00",
+        idempotency_key=f"payment-invalid-{amount!s}",
+    )
+
+    assert result["ok"] is False
+    assert "invalid_positive_amount" in result["preflight"]["blocking_reasons"]
+
+
+@pytest.mark.parametrize("outstanding", ["NaN", "Infinity", "-Infinity", True])
+def test_payment_action_contract_rejects_non_finite_or_boolean_outstanding_amount(outstanding):
+    result = prepare_action_contract(
+        domain="payment",
+        action="record_payment",
+        planned_changes={
+            "amount": 1_000,
+            "cashbox_id": "cashbox-main",
+            "card_id": "card-42",
+            "payment_method": "cash",
+            "outstanding_amount": outstanding,
+        },
+        owner_intent="Проведи оплату по ro-42",
+        expected_revision="ro-42@2026-07-11T10:00:00+07:00",
+        idempotency_key=f"payment-invalid-outstanding-{outstanding!s}",
+    )
+
+    assert result["ok"] is False
+    assert "missing_outstanding_amount" in result["preflight"]["blocking_reasons"]
+
+
 def test_gmail_action_contract_uses_external_connector_without_confirmation_state():
     result = prepare_action_contract(
         domain="gmail",
@@ -110,9 +155,7 @@ def test_action_contract_executor_tools_exist_in_the_tracked_crm_catalog():
 
     catalog_strings = set(strings(catalog))
     configured = {
-        tool
-        for tool in [*EXECUTOR_TOOLS.values(), *INVENTORY_EXECUTOR_TOOLS.values()]
-        if not tool.startswith("gmail:")
+        tool for tool in [*EXECUTOR_TOOLS.values(), *INVENTORY_EXECUTOR_TOOLS.values()] if not tool.startswith("gmail:")
     }
 
     assert configured.issubset(catalog_strings)

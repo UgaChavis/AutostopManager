@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 
@@ -70,6 +71,16 @@ DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive"}
 EXTERNAL_DOMAINS = {"gmail"}
 
 
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def prepare_action_contract(
     *,
     domain: str,
@@ -117,9 +128,8 @@ def prepare_action_contract(
         _validate_financial_changes(normalized_domain, normalized_action, changes, blockers, warnings)
     if normalized_domain == "gmail":
         _validate_gmail_changes(normalized_action, changes, blockers)
-    if normalized_domain == "document":
-        if not str(changes.get("document_type") or "").strip():
-            blockers.append("missing_document_type")
+    if normalized_domain == "document" and not str(changes.get("document_type") or "").strip():
+        blockers.append("missing_document_type")
     if normalized_action in DESTRUCTIVE_ACTIONS:
         warnings.append("destructive_action_requires_backup_or_compensation")
     if normalized_domain in EXTERNAL_DOMAINS:
@@ -147,9 +157,7 @@ def prepare_action_contract(
     if revision:
         preflight_checks.append("expected_revision_matches")
     if normalized_domain in FINANCIAL_DOMAINS:
-        preflight_checks.extend(
-            ["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"]
-        )
+        preflight_checks.extend(["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"])
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
 
@@ -216,12 +224,8 @@ def _validate_financial_changes(
     blockers: list[str],
     warnings: list[str],
 ) -> None:
-    amount = changes.get("amount")
-    try:
-        numeric_amount = float(amount)
-    except (TypeError, ValueError):
-        numeric_amount = 0.0
-    if numeric_amount <= 0:
+    numeric_amount = _finite_number(changes.get("amount"))
+    if numeric_amount is None or numeric_amount <= 0:
         blockers.append("invalid_positive_amount")
     if not str(changes.get("cashbox_id") or "").strip():
         blockers.append("missing_cashbox_id")
@@ -232,16 +236,16 @@ def _validate_financial_changes(
             blockers.append("missing_card_id")
         if not str(changes.get("payment_method") or "").strip():
             blockers.append("missing_payment_method")
-        outstanding = changes.get("outstanding_amount")
-        try:
-            numeric_outstanding = float(outstanding)
-        except (TypeError, ValueError):
-            numeric_outstanding = -1.0
-        if numeric_outstanding < 0:
+        numeric_outstanding = _finite_number(changes.get("outstanding_amount"))
+        if numeric_outstanding is None or numeric_outstanding < 0:
             blockers.append("missing_outstanding_amount")
-        elif numeric_amount > numeric_outstanding and not bool(changes.get("allow_overpayment")):
+        elif (
+            numeric_amount is not None
+            and numeric_amount > numeric_outstanding
+            and not bool(changes.get("allow_overpayment"))
+        ):
             blockers.append("overpayment_not_explicitly_allowed")
-        elif numeric_amount > numeric_outstanding:
+        elif numeric_amount is not None and numeric_amount > numeric_outstanding:
             warnings.append("explicit_overpayment")
 
 

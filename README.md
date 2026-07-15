@@ -39,11 +39,21 @@ python -m autostop_manager.cli annotations-audit
 python -m autostop_manager.cli skills-audit
 python -m autostop_manager.cli cleanup-audit
 python -m autostop_manager.cli system-audit
+python -m ruff check .
+python -m ruff format --check autostop_manager tests
+python -m mypy autostop_manager
 python -m pytest -q
+python -m coverage run -m pytest -q
+python -m coverage report
+node --check frontend/control-center/app.js
 ```
 
 `system-audit` is read-only and reports test status as external; run pytest
-separately after code, docs contracts, or route behavior changes.
+separately after code, docs contracts, or route behavior changes. The coverage
+gate measures branch coverage for the production package and currently requires
+at least 82%. Ruff also enforces a complexity ceiling of 20 for business logic;
+the flat CLI and MCP registration dispatchers are the only documented
+declarative exceptions.
 
 ## Source Boundaries
 

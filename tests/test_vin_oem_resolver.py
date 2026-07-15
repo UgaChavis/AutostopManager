@@ -22,7 +22,9 @@ def _medium_identity() -> dict:
 
 
 def test_resolver_allows_candidate_lookup_after_partsapi_oe_agreement(monkeypatch):
-    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: _medium_identity())
+    monkeypatch.setattr(
+        "autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: _medium_identity()
+    )
     calls = []
 
     def fake_partsapi_catalog_lookup(**kwargs):

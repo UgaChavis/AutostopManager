@@ -131,6 +131,51 @@ def test_decode_vehicle_identities_normalizes_common_crm_make_typos():
     assert result["results"][0]["vehicle_profile"]["make"] == "Volkswagen"
 
 
+def test_decode_vehicle_identity_tolerates_invalid_crm_source_confidence():
+    result = decode_vehicle_identity(
+        "MR41S123456",
+        crm_context={
+            "make": "Suzuki",
+            "model": "Hustler",
+            "source_confidence": "high",
+        },
+        live_vpic=False,
+        live_wmi=False,
+    )
+
+    assert result["ok"] is True
+    assert result["vehicle_profile"]["make"] == "Suzuki"
+    assert 0.0 <= result["confidence"] <= 0.95
+
+
+def test_decode_vehicle_identities_ignores_malformed_batch_map(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.vehicle_identity.decode_vins_vpic_batch",
+        lambda *_args, **_kwargs: {"ok": True, "results_by_vin": ["unexpected"]},
+    )
+    monkeypatch.setattr(
+        "autostop_manager.vehicle_identity.decode_vehicle_identity",
+        lambda *_args, **_kwargs: {
+            "confidence_label": "low",
+            "parts_lookup_readiness": {
+                "ready_for_oem_lookup": False,
+                "ready_for_oem_candidate_lookup": False,
+                "ready_for_crm_writeback": False,
+            },
+            "required_next_sources": [],
+        },
+    )
+
+    result = decode_vehicle_identities(
+        [{"identifier": "1HGCM82633A004352"}],
+        live_vpic=True,
+        use_vpic_batch=True,
+    )
+
+    assert result["count"] == 1
+    assert result["vpic_batch"]["decoded_count"] == 0
+
+
 def test_decode_vehicle_identity_treats_european_check_digit_failure_as_caveat_not_conflict():
     result = decode_vehicle_identity(
         "WVWZZZAUZFP000000",

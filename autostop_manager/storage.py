@@ -93,6 +93,13 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _required_lastrowid(cursor: sqlite3.Cursor) -> int:
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise RuntimeError("SQLite insert did not return a row id")
+    return row_id
+
+
 def _json_list(values: list[str] | None) -> str:
     return json.dumps(values or [], ensure_ascii=False)
 
@@ -143,10 +150,11 @@ def _verification_failure_paths(value: Any, *, prefix: str = "") -> list[str]:
             ):
                 failures.append(path)
             elif (
-                isinstance(nested, str) and nested.strip().casefold().replace(" ", "_") in _VERIFICATION_FAILURE_STRINGS
+                isinstance(nested, str)
+                and nested.strip().casefold().replace(" ", "_") in _VERIFICATION_FAILURE_STRINGS
+                and (failure_context or key in {"executor", "execution", "verification", "readback"})
             ):
-                if failure_context or key in {"executor", "execution", "verification", "readback"}:
-                    failures.append(path)
+                failures.append(path)
             failures.extend(_verification_failure_paths(nested, prefix=path))
     elif isinstance(value, list):
         for index, nested in enumerate(value):
@@ -928,20 +936,14 @@ class ManagerMemoryStore:
         active_titles = {
             str(rule.get("id") or "").strip()
             for rule in rules
-            if isinstance(rule, dict)
-            and str(rule.get("id") or "").strip()
-            and str(rule.get("rule") or "").strip()
+            if isinstance(rule, dict) and str(rule.get("id") or "").strip() and str(rule.get("rule") or "").strip()
         }
         with self.connect() as conn:
             stale_rows = conn.execute(
                 "SELECT id, title FROM manager_rules WHERE source = ?",
                 (source,),
             ).fetchall()
-            stale_ids = [
-                int(row["id"])
-                for row in stale_rows
-                if str(row["title"]) not in active_titles
-            ]
+            stale_ids = [int(row["id"]) for row in stale_rows if str(row["title"]) not in active_titles]
             if stale_ids:
                 conn.executemany(
                     "DELETE FROM manager_rules WHERE id = ?",
@@ -1039,7 +1041,7 @@ class ManagerMemoryStore:
                         now,
                     ),
                 )
-                row_id = int(cursor.lastrowid)
+                row_id = _required_lastrowid(cursor)
                 self._upsert_memory_fts(conn, table, row_id)
             else:
                 cursor = conn.execute(
@@ -1062,7 +1064,7 @@ class ManagerMemoryStore:
                         now,
                     ),
                 )
-                row_id = int(cursor.lastrowid)
+                row_id = _required_lastrowid(cursor)
                 self._upsert_memory_fts(conn, table, row_id)
         result = {"ok": True, "kind": table[:-1], "id": row_id, "created_at": now}
         if table == "facts":
@@ -1730,7 +1732,7 @@ class ManagerMemoryStore:
                     now,
                 ),
             )
-            run_id = int(cursor.lastrowid)
+            run_id = _required_lastrowid(cursor)
             conn.execute(
                 """
                 INSERT INTO manager_run_events
@@ -2115,14 +2117,17 @@ class ManagerMemoryStore:
             ).fetchone()
             if not step:
                 return {"ok": False, "error": "external step not found", "run_id": run_id, "step_id": step_id}
-            if step["connector"] == "gmail" and step["action"] in {"send", "forward"}:
-                if not any(sanitized.get(key) for key in ("message_id", "thread_id", "draft_id", "external_ref")):
-                    return {
-                        "ok": False,
-                        "error": "gmail_message_or_thread_result_ref_required",
-                        "run_id": run_id,
-                        "step_id": step_id,
-                    }
+            if (
+                step["connector"] == "gmail"
+                and step["action"] in {"send", "forward"}
+                and not any(sanitized.get(key) for key in ("message_id", "thread_id", "draft_id", "external_ref"))
+            ):
+                return {
+                    "ok": False,
+                    "error": "gmail_message_or_thread_result_ref_required",
+                    "run_id": run_id,
+                    "step_id": step_id,
+                }
             if step["status"] == "completed":
                 previous = _decode_json(step["result_refs_json"], {})
                 if previous != sanitized:

@@ -9,7 +9,14 @@ def test_catalog_status_includes_stage_matrix():
 
     assert status["ok"] is True
     stages = {row["stage"] for row in status["stage_matrix"]}
-    assert {"identity", "oem_catalog", "catalog_cross", "aftermarket_catalog", "procurement_price", "market_price"}.issubset(stages)
+    assert {
+        "identity",
+        "oem_catalog",
+        "catalog_cross",
+        "aftermarket_catalog",
+        "procurement_price",
+        "market_price",
+    }.issubset(stages)
     identity = next(row for row in status["stage_matrix"] if row["stage"] == "identity")
     assert identity["configured_count"] >= 1
 
