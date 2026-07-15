@@ -9,7 +9,12 @@ from .storage import ManagerMemoryStore
 DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
     "bmw_f15_n63": ["VIN or chassis", "production date", "market", "BMW fault memory with module names"],
     "service_management": ["live CRM board state"],
-    "crm_vin_oem_parts_lookup": ["live CRM card id", "VIN or frame/body number", "requested part", "repair-order target if materials will be written"],
+    "crm_vin_oem_parts_lookup": [
+        "live CRM card id",
+        "VIN or frame/body number",
+        "requested part",
+        "repair-order target if materials will be written",
+    ],
     "vehicle_identity_and_oem": ["VIN or chassis"],
     "fluids": ["VIN or chassis", "market", "engine code", "transmission code", "exact unit"],
 }
@@ -222,11 +227,7 @@ def prepare_manager_context(
         knowledge["best_domain"] = command_route.get("domain") or knowledge.get("best_domain")
         knowledge["open_first"] = command_route.get("open_first") or knowledge.get("open_first")
         matched_route = next(
-            (
-                route
-                for route in knowledge.get("routes", [])
-                if route.get("domain") == command_route.get("domain")
-            ),
+            (route for route in knowledge.get("routes", []) if route.get("domain") == command_route.get("domain")),
             None,
         )
         if matched_route:

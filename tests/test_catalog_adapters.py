@@ -37,8 +37,14 @@ def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
 
     assert status["ok"] is True
     assert any(provider["source_id"] == "nhtsa_vpic" and provider["configured"] for provider in status["providers"])
-    assert any(provider["source_id"] == "mann_filter_catalog" and provider["live_callable_now"] for provider in status["providers"])
-    assert any(provider["source_id"] == "denso_aftermarket_catalog" and provider["live_callable_now"] for provider in status["providers"])
+    assert any(
+        provider["source_id"] == "mann_filter_catalog" and provider["live_callable_now"]
+        for provider in status["providers"]
+    )
+    assert any(
+        provider["source_id"] == "denso_aftermarket_catalog" and provider["live_callable_now"]
+        for provider in status["providers"]
+    )
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
     assert partsapi["configured"] is False
     assert "PARTSAPI_BASE_URL" in partsapi["missing_env_names"]
@@ -53,7 +59,10 @@ def test_aftermarket_catalog_status_has_two_public_live_sources():
     assert status["ok"] is True
     assert status["configured_count"] == 2
     assert status["live_callable_count"] == 2
-    assert {provider["source_id"] for provider in status["providers"]} == {"mann_filter_catalog", "denso_aftermarket_catalog"}
+    assert {provider["source_id"] for provider in status["providers"]} == {
+        "mann_filter_catalog",
+        "denso_aftermarket_catalog",
+    }
 
 
 def test_catalog_provider_status_detects_configured_partsapi(monkeypatch):

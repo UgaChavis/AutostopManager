@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 import autostop_manager.knowledge_base as kb
-from autostop_manager.knowledge_base import audit_knowledge_annotations, probe_knowledge_base, search_knowledge_base, sync_knowledge_base
+from autostop_manager.knowledge_base import (
+    audit_knowledge_annotations,
+    probe_knowledge_base,
+    search_knowledge_base,
+    sync_knowledge_base,
+)
 from autostop_manager.storage import ManagerMemoryStore
 
 

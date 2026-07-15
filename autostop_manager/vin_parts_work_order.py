@@ -54,12 +54,30 @@ EUROPEAN_BRAND_ROUTES = {
 }
 
 ASIAN_BRAND_ROUTES = {
-    "toyota": ("Toyota/Lexus EPC", "Toyota frame/VIN catalog route; confirm production date, model code, grade, and OEM group."),
-    "lexus": ("Toyota/Lexus EPC", "Toyota/Lexus VIN/frame catalog route; confirm production date, model code, grade, and OEM group."),
-    "honda": ("Honda EPC / epc-data", "Honda VIN/frame catalog route; confirm frame form, production date, trim, and OEM group."),
-    "nissan": ("Nissan EPC / epc-data", "Nissan VIN/frame catalog route; confirm model code, production date, trim, and OEM group."),
-    "mazda": ("Mazda EPC", "Mazda VIN/chassis catalog route; confirm engine code, production date, drive, and OEM group."),
-    "mitsubishi": ("Mitsubishi ASA/EPC", "Mitsubishi VIN/frame catalog route; confirm engine, transmission, body, and OEM group."),
+    "toyota": (
+        "Toyota/Lexus EPC",
+        "Toyota frame/VIN catalog route; confirm production date, model code, grade, and OEM group.",
+    ),
+    "lexus": (
+        "Toyota/Lexus EPC",
+        "Toyota/Lexus VIN/frame catalog route; confirm production date, model code, grade, and OEM group.",
+    ),
+    "honda": (
+        "Honda EPC / epc-data",
+        "Honda VIN/frame catalog route; confirm frame form, production date, trim, and OEM group.",
+    ),
+    "nissan": (
+        "Nissan EPC / epc-data",
+        "Nissan VIN/frame catalog route; confirm model code, production date, trim, and OEM group.",
+    ),
+    "mazda": (
+        "Mazda EPC",
+        "Mazda VIN/chassis catalog route; confirm engine code, production date, drive, and OEM group.",
+    ),
+    "mitsubishi": (
+        "Mitsubishi ASA/EPC",
+        "Mitsubishi VIN/frame catalog route; confirm engine, transmission, body, and OEM group.",
+    ),
     "suzuki": ("Suzuki EPC", "Suzuki frame catalog route; confirm model code, production date, grade, and OEM group."),
 }
 
@@ -189,7 +207,7 @@ def _brand_epc_routes(vehicle_profile: dict[str, Any], identifier_kind: str) -> 
 
 
 def _missing_env_for_stage(blockers: list[dict[str, Any]], stage: str) -> list[str]:
-    names = set()
+    names: set[str] = set()
     for blocker in blockers:
         if blocker.get("stage") == stage:
             for field in ("missing_env_names", "missing_env"):
@@ -287,7 +305,9 @@ def _work_order_item(item: dict[str, Any]) -> dict[str, Any]:
                 if oem_resolution
                 else item["identity"].get("ready_for_oem_candidate_lookup") and item["requested_part"].get("recognized")
             ),
-            "requires_manual_confirmation_before_writeback": bool(resolver_gate.get("requires_manual_confirmation_before_writeback", True))
+            "requires_manual_confirmation_before_writeback": bool(
+                resolver_gate.get("requires_manual_confirmation_before_writeback", True)
+            )
             if resolver_gate
             else not bool(item["identity"].get("ready_for_crm_writeback")),
             "can_prepare_manual_writeback": bool(resolver_gate.get("can_prepare_manual_writeback", False)),
@@ -348,7 +368,9 @@ def build_vin_parts_work_order(
         "work_order_summary": {
             "count": len(work_items),
             "ready_for_manual_epc_and_market_search_count": sum(
-                1 for item in work_items if item["status"] == "ready_for_manual_epc_and_market_search_but_live_credentials_missing"
+                1
+                for item in work_items
+                if item["status"] == "ready_for_manual_epc_and_market_search_but_live_credentials_missing"
             ),
             "ready_for_oem_candidate_lookup_needs_manual_confirmation_count": sum(
                 1 for item in work_items if item["status"] == "ready_for_oem_candidate_lookup_needs_manual_confirmation"
@@ -366,17 +388,27 @@ def build_vin_parts_work_order(
                 1 for item in work_items if item["status"] == "needs_part_position_clarification_before_catalog_search"
             ),
             "needs_vin_or_frame_count": sum(1 for item in work_items if item["status"] == "needs_vin_or_frame"),
-            "needs_identity_confirmation_resolver_count": sum(1 for item in work_items if item["status"] == "needs_identity_confirmation"),
-            "needs_part_clarification_resolver_count": sum(1 for item in work_items if item["status"] == "needs_part_clarification"),
-            "needs_partsapi_category_mapping_count": sum(1 for item in work_items if item["status"] == "needs_partsapi_category_mapping"),
-            "ready_for_live_oem_candidate_lookup_count": sum(1 for item in work_items if item["status"] == "ready_for_live_oem_candidate_lookup"),
+            "needs_identity_confirmation_resolver_count": sum(
+                1 for item in work_items if item["status"] == "needs_identity_confirmation"
+            ),
+            "needs_part_clarification_resolver_count": sum(
+                1 for item in work_items if item["status"] == "needs_part_clarification"
+            ),
+            "needs_partsapi_category_mapping_count": sum(
+                1 for item in work_items if item["status"] == "needs_partsapi_category_mapping"
+            ),
+            "ready_for_live_oem_candidate_lookup_count": sum(
+                1 for item in work_items if item["status"] == "ready_for_live_oem_candidate_lookup"
+            ),
             "oem_candidates_found_needs_manual_confirmation_count": sum(
                 1 for item in work_items if item["status"] == "oem_candidates_found_needs_manual_confirmation"
             ),
             "no_oem_candidate_found_needs_manual_epc_count": sum(
                 1 for item in work_items if item["status"] == "no_oem_candidate_found_needs_manual_epc"
             ),
-            "confirmed_for_manual_crm_writeback_count": sum(1 for item in work_items if item["status"] == "confirmed_for_manual_crm_writeback"),
+            "confirmed_for_manual_crm_writeback_count": sum(
+                1 for item in work_items if item["status"] == "confirmed_for_manual_crm_writeback"
+            ),
         },
         "next_decision": (
             "No VIN/frame items supplied; add at least one item before planning OEM and supplier lookup."

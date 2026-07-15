@@ -450,6 +450,24 @@ def test_parse_emex_find_detail_response_extracts_detail_items():
     assert parsed["details"][0]["price_rub"] == 437.23
 
 
+def test_emex_lookup_rejects_xml_entities_without_crashing(monkeypatch):
+    monkeypatch.setenv("EMEX_LOGIN", "client-login")
+    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+    malicious_xml = """<?xml version="1.0"?>
+    <!DOCTYPE response [<!ENTITY payload "unexpected">]>
+    <FindDetailAdv5Result><ErrorMessage>&payload;</ErrorMessage></FindDetailAdv5Result>
+    """
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeRawResponse(malicious_xml),
+    )
+
+    result = emex_price_lookup(part_number="9091901164")
+
+    assert result["ok"] is False
+    assert "EntitiesForbidden" in result["error"]
+
+
 def test_exist_request_builds_public_read_only_dry_run_plan():
     request = build_exist_price_lookup_request(part_number="9091901164", brand="Toyota", office_id=905)
 
@@ -504,7 +522,9 @@ def test_exist_lookup_returns_disambiguation_when_brand_missing(monkeypatch):
         url = request.full_url
         calls.append(url)
         if "/Api/Parts/Search" in url:
-            return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
+            return _FakeRawResponse(
+                '[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]'
+            )
         if "pcode=9091901164" in url:
             return _FakeRawResponse(EXIST_CATALOG_HTML)
         message = f"unexpected Exist URL: {url}"
@@ -525,7 +545,9 @@ def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
     def fake_urlopen(request, timeout=20.0):
         url = request.full_url
         if "/Api/Parts/Search" in url:
-            return _FakeRawResponse('[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]')
+            return _FakeRawResponse(
+                '[{"Name":"9091901164","InputText":"9091901164","NavigateUrl":"/Price/?pcode=9091901164","Relevance":0}]'
+            )
         if "pcode=9091901164" in url:
             return _FakeRawResponse(EXIST_CATALOG_HTML)
         if "pid=02201730" in url:
@@ -1080,6 +1102,18 @@ def test_mann_filter_lookup_normalizes_graphql_payload(monkeypatch):
     assert result["items"][0]["comparison_numbers"][0]["values"] == ["LX 2108"]
 
 
+def test_mann_filter_lookup_rejects_malformed_payload_without_crashing(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse({"data": ["unexpected"]}),
+    )
+
+    result = mann_filter_catalog_lookup(part_number="C 2029")
+
+    assert result["ok"] is False
+    assert result["error"] == "MANN-FILTER returned a malformed data payload."
+
+
 def test_denso_request_uses_public_api_without_secret():
     request = build_denso_aftermarket_search_request(part_number="90919-01275")
 
@@ -1138,6 +1172,18 @@ def test_denso_lookup_normalizes_search_and_detail_payload(monkeypatch):
     assert result["items"][0]["part_name"] == "IXEH20TT"
     assert result["details"][0]["items"][0]["title"] == "Spark Plug"
     assert result["details"][0]["items"][0]["criteria"][0]["label"] == "Electrode Gap [mm]"
+
+
+def test_denso_lookup_rejects_malformed_payload_without_crashing(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse({"status": "success", "data": "unexpected"}),
+    )
+
+    result = denso_aftermarket_catalog_lookup(part_number="90919-01275", include_detail=False)
+
+    assert result["ok"] is False
+    assert result["error"] == "DENSO returned a malformed search data payload."
 
 
 def test_public_aftermarket_catalog_lookup_rejects_unknown_provider():

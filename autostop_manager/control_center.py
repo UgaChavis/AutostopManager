@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -193,7 +194,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         f"- Kernel: `{((report.get('server_environment') or {}).get('os') or {}).get('kernel', 'unknown')}`",
         f"- /tmp writable: `{((report.get('server_environment') or {}).get('paths') or {}).get('tmp_writable', False)}`",
         f"- Required tools present: `{((report.get('server_environment') or {}).get('core_tools') or {}).get('required_present_count', 0)}`/`{len(REQUIRED_CORE_TOOLS)}`",
-        f"- Public listeners: `{len(((report.get('ports') or {}).get('public_listeners') or []))}`",
+        f"- Public listeners: `{len((report.get('ports') or {}).get('public_listeners') or [])}`",
         "",
         "## Runtime Readiness",
         f"- Manager venv: `{((report.get('runtime_readiness') or {}).get('manager_venv') or {}).get('ok', False)}`",
@@ -204,7 +205,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         "",
         "## Codex Readiness",
         f"- CLI version: `{(((report.get('codex_readiness') or {}).get('runtime') or {}).get('active_version', 'unknown'))}`",
-        f"- Stale app-server processes: `{len((((report.get('codex_readiness') or {}).get('runtime') or {}).get('stale_app_server_processes') or []))}`",
+        f"- Stale app-server processes: `{len(((report.get('codex_readiness') or {}).get('runtime') or {}).get('stale_app_server_processes') or [])}`",
         f"- System skills: `{((report.get('codex_readiness') or {}).get('skills') or {}).get('system_skill_count', 0)}`",
         f"- Plugin skills: `{((report.get('codex_readiness') or {}).get('skills') or {}).get('plugin_skill_count', 0)}`",
         f"- Manager MCP import: `{(((report.get('codex_readiness') or {}).get('mcp_imports') or {}).get('manager') or {}).get('ok', False)}`",
@@ -532,11 +533,7 @@ def _runtime_readiness(root: Path, *, memory: ManagerMemoryStore) -> dict[str, A
 
 def _provider_readiness(providers: dict[str, Any]) -> dict[str, Any]:
     smoke = build_provider_smoke_report(provider="all", mode="dry-run")
-    missing = [
-        provider
-        for provider in providers.get("providers") or []
-        if not bool(provider.get("configured"))
-    ]
+    missing = [provider for provider in providers.get("providers") or [] if not bool(provider.get("configured"))]
     return {
         "ok": providers.get("ok") and smoke.get("ok") and bool((smoke.get("summary") or {}).get("no_order_guarantee")),
         "matrix": providers.get("stage_matrix") or [],
@@ -790,9 +787,8 @@ def _tool_status(name: str, commands: list[list[str]]) -> dict[str, Any]:
 
 def _tmp_writable() -> bool:
     try:
-        with Path("/tmp/autostop-control-report.tmp").open("w", encoding="utf-8") as handle:
+        with tempfile.TemporaryFile(mode="w", encoding="utf-8", dir="/tmp") as handle:
             handle.write("ok")
-        Path("/tmp/autostop-control-report.tmp").unlink(missing_ok=True)
     except OSError:
         return False
     else:
@@ -1135,7 +1131,7 @@ def _public_ports() -> dict[str, Any]:
         parts = redacted.split()
         local = parts[4] if len(parts) > 4 else redacted
         listener = {"line": redacted[:240], "local_address": local}
-        if local.startswith("127.") or local.startswith("[::1]") or local.startswith("::1"):
+        if local.startswith(("127.", "[::1]", "::1")):
             local_listeners.append(listener)
         else:
             public_listeners.append(listener)

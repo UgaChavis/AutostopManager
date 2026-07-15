@@ -46,7 +46,7 @@ def build_knowledge_intake_plan(
     source_type = _source_type(resolved)
     target_updates = _target_updates(domain, source_type, path_text, safety_flags=safety_flags)
     apply_allowed = exists and not any(flag in safety_flags for flag in UNSAFE_METADATA_FLAGS)
-    draft = {
+    return {
         "ok": apply_allowed or not apply,
         "schema": "KnowledgeIntakeDraft",
         "generated_at": _now(),
@@ -77,7 +77,6 @@ def build_knowledge_intake_plan(
             "content_preview_included": False,
         },
     }
-    return draft
 
 
 def _classify_domain(path_text: str, sample: str) -> str:

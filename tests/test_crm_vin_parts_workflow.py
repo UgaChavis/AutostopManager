@@ -171,8 +171,12 @@ def test_pipeline_requires_v2_action_contract_before_card_writeback():
         make="Toyota",
     )
 
-    prepare_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "prepare_card_write_contract")
-    write_index = next(index for index, step in enumerate(result["pipeline"]) if step["step"] == "write_structured_result_to_crm_card")
+    prepare_index = next(
+        index for index, step in enumerate(result["pipeline"]) if step["step"] == "prepare_card_write_contract"
+    )
+    write_index = next(
+        index for index, step in enumerate(result["pipeline"]) if step["step"] == "write_structured_result_to_crm_card"
+    )
 
     assert prepare_index < write_index
     assert "prepare_action_contract" in result["pipeline"][prepare_index]["manager_tools"]
@@ -232,9 +236,7 @@ def test_provider_registries_name_required_catalog_cross_and_price_sources():
 def test_command_route_and_annotation_point_to_crm_vin_domain():
     command_routes = json.loads(_read("docs/agent/command_routes.json"))
     annotations = [
-        json.loads(line)
-        for line in _read("docs/agent/knowledge_annotations.jsonl").splitlines()
-        if line.strip()
+        json.loads(line) for line in _read("docs/agent/knowledge_annotations.jsonl").splitlines() if line.strip()
     ]
 
     route = next(route for route in command_routes["routes"] if route["command_id"] == "crm_vin_oem_parts_lookup")

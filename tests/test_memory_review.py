@@ -80,4 +80,6 @@ def test_memory_review_archive_duplicate_fails_closed_for_stale_item(tmp_path):
 
 def test_memory_review_private_data_validator():
     assert memory_review_payload_has_raw_private_data({"proposal": "email test@example.com"})
-    assert not memory_review_payload_has_raw_private_data({"source_ref": "fact:1", "proposal": {"content_included": False}})
+    assert not memory_review_payload_has_raw_private_data(
+        {"source_ref": "fact:1", "proposal": {"content_included": False}}
+    )

@@ -251,7 +251,13 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         stage="procurement_price",
         access_mode="public_site_read_only",
         env_names=(),
-        capabilities=("brand_article_search", "retail_price_benchmark", "lead_time", "replacements", "catalog_disambiguation"),
+        capabilities=(
+            "brand_article_search",
+            "retail_price_benchmark",
+            "lead_time",
+            "replacements",
+            "catalog_disambiguation",
+        ),
         priority="medium",
         role="Public read-only retail benchmark and catalog disambiguation route for exact article checks in Krasnoyarsk office 905.",
         limits="Use as public_retail_reference only; do not use login, cabinet, basket, orders, private APIs, or raw HTML as procurement confirmation.",
@@ -261,7 +267,9 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
 )
 
 
-def _env_configured(names: tuple[str, ...], any_groups: tuple[tuple[str, ...], ...] = ()) -> tuple[bool, list[str], list[str], list[list[str]]]:
+def _env_configured(
+    names: tuple[str, ...], any_groups: tuple[tuple[str, ...], ...] = ()
+) -> tuple[bool, list[str], list[str], list[list[str]]]:
     present = [name for name in names if os.getenv(name)]
     missing = [name for name in names if not os.getenv(name)]
     missing_groups = [[name for name in group if not os.getenv(name)] for group in any_groups]
@@ -289,7 +297,11 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
             continue
         configured, present, missing, missing_groups = _env_configured(provider.env_names, provider.env_any_groups)
         if not provider.env_names:
-            configured = bool(provider.env_any_groups and configured) or provider.access_mode in {"public_api", "public_site_read_only", "local_rules"}
+            configured = bool(provider.env_any_groups and configured) or provider.access_mode in {
+                "public_api",
+                "public_site_read_only",
+                "local_rules",
+            }
         providers.append(
             {
                 **asdict(provider),
@@ -300,7 +312,9 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
                 "present_env_names": present,
                 "missing_env_names": missing,
                 "missing_env_groups": missing_groups,
-                "live_callable_now": configured and provider.access_mode not in {"manual_subscription", "subscription_or_manual", "partner_or_manual", "local_rules"},
+                "live_callable_now": configured
+                and provider.access_mode
+                not in {"manual_subscription", "subscription_or_manual", "partner_or_manual", "local_rules"},
             }
         )
     stage_matrix = _provider_stage_matrix(providers)
@@ -316,7 +330,14 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
 
 
 def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    stage_order = ["identity", "oem_catalog", "catalog_cross", "aftermarket_catalog", "procurement_price", "market_price"]
+    stage_order = [
+        "identity",
+        "oem_catalog",
+        "catalog_cross",
+        "aftermarket_catalog",
+        "procurement_price",
+        "market_price",
+    ]
     stage_labels = {
         "identity": "identity",
         "oem_catalog": "OEM",
@@ -338,7 +359,9 @@ def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, An
                 "provider_ids": [provider["source_id"] for provider in stage_providers],
                 "configured_count": sum(1 for provider in stage_providers if provider["configured"]),
                 "live_callable_count": sum(1 for provider in stage_providers if provider["live_callable_now"]),
-                "missing_provider_ids": [provider["source_id"] for provider in stage_providers if not provider["configured"]],
+                "missing_provider_ids": [
+                    provider["source_id"] for provider in stage_providers if not provider["configured"]
+                ],
             }
         )
     return matrix
@@ -420,7 +443,9 @@ def build_oem_parts_provider_plan(
         conflict.get("severity") == "high" for conflict in identity.get("conflicts", [])
     )
     readiness = identity.get("parts_lookup_readiness") or {}
-    identity_ready = bool(readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup", strict_identity_ready)))
+    identity_ready = bool(
+        readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup", strict_identity_ready))
+    )
     writeback_ready = bool(readiness.get("ready_for_crm_writeback", strict_identity_ready))
 
     identity_providers = _pick_configured(_providers_for_stage("identity"))
@@ -431,7 +456,11 @@ def build_oem_parts_provider_plan(
     market_providers = _pick_configured(_providers_for_stage("market_price"))
 
     oem_capable_source_ids = {"parts_catalogs_api", "vin17_api", "partsapi_ru"}
-    live_oem = [provider for provider in oem_providers + cross_providers if provider["live_callable_now"] and provider["source_id"] in oem_capable_source_ids]
+    live_oem = [
+        provider
+        for provider in oem_providers + cross_providers
+        if provider["live_callable_now"] and provider["source_id"] in oem_capable_source_ids
+    ]
     live_aftermarket = [provider for provider in aftermarket_providers if provider["live_callable_now"]]
     live_price_references = [provider for provider in procurement_providers if provider["live_callable_now"]]
     live_procurement = [
@@ -459,7 +488,9 @@ def build_oem_parts_provider_plan(
             }
         )
     if not live_procurement:
-        missing_env = sorted({name for provider in _providers_for_stage("procurement_price") for name in provider["missing_env_names"]})
+        missing_env = sorted(
+            {name for provider in _providers_for_stage("procurement_price") for name in provider["missing_env_names"]}
+        )
         blockers.append(
             {
                 "stage": "procurement_price",
@@ -482,7 +513,17 @@ def build_oem_parts_provider_plan(
         "city": city,
         "vehicle_profile": {
             key: profile.get(key)
-            for key in ["make", "model", "model_family", "platform", "model_year", "engine", "transmission", "drivetrain", "market"]
+            for key in [
+                "make",
+                "model",
+                "model_family",
+                "platform",
+                "model_year",
+                "engine",
+                "transmission",
+                "drivetrain",
+                "market",
+            ]
             if profile.get(key) not in (None, "")
         },
         "identity_confidence": confidence_label,
@@ -493,7 +534,9 @@ def build_oem_parts_provider_plan(
             "live_oem_catalog_available": bool(live_oem),
             "live_aftermarket_catalog_available": bool(live_aftermarket),
             "live_price_reference_available": bool(live_price_references),
-            "live_public_retail_reference_available": any(provider["source_id"] == "exist" for provider in live_price_references),
+            "live_public_retail_reference_available": any(
+                provider["source_id"] == "exist" for provider in live_price_references
+            ),
             "live_procurement_available": bool(live_procurement),
             "can_complete_full_auto_lookup_now": writeback_ready and bool(live_oem) and bool(live_procurement),
         },

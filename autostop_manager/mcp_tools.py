@@ -70,7 +70,8 @@ def _workflow_envelope(result: dict[str, Any], *, next_actions: list[str] | None
     )
 
 
-def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:
+# Registration is intentionally declarative; each nested tool delegates to tested domain functions or storage methods.
+def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:  # noqa: C901
     memory = store or ManagerMemoryStore()
 
     @server.tool(

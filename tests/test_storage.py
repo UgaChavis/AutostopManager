@@ -171,8 +171,7 @@ def test_archived_lessons_are_not_recalled_or_used_for_context(tmp_path):
     recalled = store.recall_lessons("Старая инструкция", limit=5)
     context = store.memory_context_for("оформи описание CRM карточки", limit=5)
     context_text = "\n".join(
-        str(item.get("title") or item.get("content") or item.get("recommendation") or "")
-        for item in context["lessons"]
+        str(item.get("title") or item.get("content") or item.get("recommendation") or "") for item in context["lessons"]
     )
 
     assert recalled["items"] == []

@@ -25,7 +25,13 @@ _MAKE_SOURCE_MAP: dict[str, list[str]] = {
         "BMW Technical Information System",
         "partslink24 Product Info",
     ],
-    "VAG": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "Audi erWin", "partslink24 Product Info"],
+    "VAG": [
+        "partslink24 Mobile",
+        "Volkswagen Group ETKA",
+        "Volkswagen erWin",
+        "Audi erWin",
+        "partslink24 Product Info",
+    ],
     "VOLKSWAGEN": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
     "VW": ["partslink24 Mobile", "Volkswagen Group ETKA", "Volkswagen erWin", "partslink24 Product Info"],
     "AUDI": ["partslink24 Mobile", "Volkswagen Group ETKA", "Audi erWin", "partslink24 Product Info"],
@@ -45,7 +51,13 @@ _MAKE_SOURCE_MAP: dict[str, list[str]] = {
     "MITSUBISHI": ["epc-data manual catalog", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
     "CHANGAN": ["Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
     "JEEP": ["Parts-Catalogs API", "17VIN API", "PARTSAPI.RU", "AUTOPOISK"],
-    "MERCEDESBENZ": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU"],
+    "MERCEDESBENZ": [
+        "partslink24 Mobile",
+        "partslink24 Product Info",
+        "Parts-Catalogs API",
+        "17VIN API",
+        "PARTSAPI.RU",
+    ],
     "MERCEDES": ["partslink24 Mobile", "partslink24 Product Info", "Parts-Catalogs API", "17VIN API", "PARTSAPI.RU"],
 }
 

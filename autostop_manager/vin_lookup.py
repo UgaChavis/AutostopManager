@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 import json
 import re
@@ -163,7 +164,10 @@ def _redact_identifier_payload(value: Any, identifier: str | None) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if str(key).casefold() in {"vin", "vehicledescriptor", "vehicle_descriptor"} and _redact_identifier(identifier)["display"]:
+            if (
+                str(key).casefold() in {"vin", "vehicledescriptor", "vehicle_descriptor"}
+                and _redact_identifier(identifier)["display"]
+            ):
                 redacted[key] = _redact_identifier(identifier)["display"]
             else:
                 redacted[key] = _redact_identifier_payload(item, identifier)
@@ -224,9 +228,7 @@ def classify_identifier(raw: str) -> IdentifierClassification:
         )
 
     alnum = normalize_market_code(raw)
-    if len(alnum) >= 4 and len(alnum) <= 16 and any(ch.isalpha() for ch in alnum) and any(
-        ch.isdigit() for ch in alnum
-    ):
+    if len(alnum) >= 4 and len(alnum) <= 16 and any(ch.isalpha() for ch in alnum) and any(ch.isdigit() for ch in alnum):
         return IdentifierClassification(
             raw=original,
             normalized=alnum,
@@ -281,11 +283,10 @@ def _extract_vpic_vehicle(result: dict[str, Any]) -> dict[str, Any]:
         "GVWR",
     ]
     vehicle = {key.lower(): result.get(key) for key in keys if result.get(key) not in (None, "", "Not Applicable")}
-    if "modelyear" in vehicle:
-        try:
-            vehicle["modelyear"] = int(vehicle["modelyear"])
-        except (TypeError, ValueError):
-            pass
+    model_year_value = vehicle.get("modelyear")
+    if model_year_value is not None:
+        with suppress(TypeError, ValueError):
+            vehicle["modelyear"] = int(model_year_value)
     return vehicle
 
 
@@ -294,7 +295,13 @@ def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None =
     if data is not None:
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
     with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("vPIC returned a non-object JSON payload")
+    results = payload.get("Results")
+    if results is not None and (not isinstance(results, list) or any(not isinstance(row, dict) for row in results)):
+        raise ValueError("vPIC returned a malformed Results payload")
+    return payload
 
 
 def decode_vin_vpic(
@@ -366,11 +373,24 @@ def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
     try:
         payload = _vpic_request_json(request_url, timeout=timeout)
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        return {"ok": False, "source": "NHTSA vPIC WMI", "request_url": request_url, "wmi": normalized, "error": str(exc)}
+        return {
+            "ok": False,
+            "source": "NHTSA vPIC WMI",
+            "request_url": request_url,
+            "wmi": normalized,
+            "error": str(exc),
+        }
 
     results = payload.get("Results") or []
     if not results:
-        return {"ok": False, "source": "NHTSA vPIC WMI", "request_url": request_url, "wmi": normalized, "error": "vPIC returned no WMI results", "payload": payload}
+        return {
+            "ok": False,
+            "source": "NHTSA vPIC WMI",
+            "request_url": request_url,
+            "wmi": normalized,
+            "error": "vPIC returned no WMI results",
+            "payload": payload,
+        }
 
     first = results[0]
     return {
@@ -379,9 +399,7 @@ def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
         "request_url": request_url,
         "wmi": normalized,
         "wmi_profile": {
-            key.lower(): value
-            for key, value in first.items()
-            if value not in (None, "", "Not Applicable")
+            key.lower(): value for key, value in first.items() if value not in (None, "", "Not Applicable")
         },
         "payload": payload,
     }
@@ -403,7 +421,9 @@ def _batch_item(item: str | dict[str, Any]) -> tuple[str, int | None]:
 
 def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float = 20.0) -> dict[str, Any]:
     normalized_items = [_batch_item(item) for item in items]
-    vin_rows = [(vin, year) for vin, year in normalized_items if classify_identifier(vin).kind in {"vin", "vin_partial"}]
+    vin_rows = [
+        (vin, year) for vin, year in normalized_items if classify_identifier(vin).kind in {"vin", "vin_partial"}
+    ]
     if not vin_rows:
         return {"ok": True, "source": "NHTSA vPIC Batch", "count": 0, "results_by_vin": {}, "request_url": None}
 
@@ -496,7 +516,9 @@ def _catalog_steps_for_frame_number(query: str, make_hint: str | None = None) ->
     official_first = [source for source in ordered_sources if source.get("authority") == "official"]
     public_second = [source for source in ordered_sources if source.get("authority") != "official"]
     steps = official_first + public_second
-    return [_step_from_source(source, query, notes_prefix="Confirm the brand before trusting fitment. ") for source in steps]
+    return [
+        _step_from_source(source, query, notes_prefix="Confirm the brand before trusting fitment. ") for source in steps
+    ]
 
 
 def _catalog_steps_for_market_code(query: str, make_hint: str | None = None) -> list[dict[str, Any]]:
@@ -508,7 +530,9 @@ def _catalog_steps_for_market_code(query: str, make_hint: str | None = None) -> 
                 for source in hinted_sources
             ]
     ordered_sources = sources_for_inputs("vin", "frame_number", "chassis_number", "model_name", "catalog_code")
-    return [_step_from_source(source, query, notes_prefix="Resolve the market family first. ") for source in ordered_sources]
+    return [
+        _step_from_source(source, query, notes_prefix="Resolve the market family first. ") for source in ordered_sources
+    ]
 
 
 def _resolved_make(plan: dict[str, Any], make_hint: str | None) -> str:
@@ -534,7 +558,9 @@ def _part_text(part_name: str | None, part_group: str | None) -> str:
     return " ".join(part for part in (part_name or "", part_group or "") if part).strip()
 
 
-def _provider_adapters(catalog_routes: list[dict[str, Any]], *, captured_oem_number: str | None) -> list[dict[str, Any]]:
+def _provider_adapters(
+    catalog_routes: list[dict[str, Any]], *, captured_oem_number: str | None
+) -> list[dict[str, Any]]:
     connected_routes = [
         route["source_name"]
         for route in catalog_routes
@@ -789,9 +815,13 @@ def _next_actions(
     if not part_name:
         actions.append("Add part_name/part_group before OEM lookup.")
     if preferred and not oem_candidates:
-        actions.append(f"Open {preferred['source_name']} and capture VIN-specific OEM number, supersession, and quantity.")
+        actions.append(
+            f"Open {preferred['source_name']} and capture VIN-specific OEM number, supersession, and quantity."
+        )
     elif catalog_routes and not oem_candidates:
-        actions.append(f"Open {catalog_routes[0]['source_name']} and capture the OEM number from the matching catalog group.")
+        actions.append(
+            f"Open {catalog_routes[0]['source_name']} and capture the OEM number from the matching catalog group."
+        )
     if family == "bmw" and not oem_candidates:
         actions.append("For BMW, verify the result in AOS/AIR/ETK with VIN and SA/options before purchase search.")
     if family == "vag" and not oem_candidates:
@@ -912,7 +942,12 @@ def build_lookup_plan(
         elif live_vpic:
             decode = decode_vin_vpic(classification.normalized, model_year=model_year)
         else:
-            decode = {"ok": False, "vehicle": {}, "error": "vPIC decode skipped because live_vpic is false", "skipped": True}
+            decode = {
+                "ok": False,
+                "vehicle": {},
+                "error": "vPIC decode skipped because live_vpic is false",
+                "skipped": True,
+            }
         plan["decoded_vehicle"] = _redact_identifier_payload(decode.get("vehicle"), classification.normalized)
         if not decode.get("ok"):
             plan["warnings"].append(decode.get("error", "VIN decode failed"))
@@ -1020,7 +1055,7 @@ def lookup_original_parts(
     captured_supersedes: str | None = None,
     captured_note: str | None = None,
 ) -> dict[str, Any]:
-    plan = build_lookup_plan(
+    return build_lookup_plan(
         raw_identifier,
         model_year=model_year,
         make_hint=make_hint,
@@ -1034,4 +1069,3 @@ def lookup_original_parts(
         captured_supersedes=captured_supersedes,
         captured_note=captured_note,
     )
-    return plan

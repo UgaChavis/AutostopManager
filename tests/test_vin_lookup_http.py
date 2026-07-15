@@ -126,3 +126,28 @@ def test_vpic_batch_decode_posts_vins_and_maps_results(monkeypatch):
     assert "DecodeVINValuesBatch" in captured["url"]
     assert "1HGCM82633A004352" in captured["data"]
     assert result["results_by_vin"]["1HGCM82633A004352"]["vehicle"]["model"] == "Accord"
+
+
+def test_vpic_decode_rejects_malformed_results_without_crashing(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout=10.0: _FakeResponse({"Results": ["unexpected-row"]}),
+    )
+
+    result = decode_vin_vpic("1HGCM82633A004352")
+
+    assert result["ok"] is False
+    assert result["error"] == "vPIC returned a malformed Results payload"
+
+
+def test_vpic_batch_rejects_malformed_results_without_crashing(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout=20.0: _FakeResponse({"Results": {"VIN": "1HGCM82633A004352"}}),
+    )
+
+    result = decode_vins_vpic_batch(["1HGCM82633A004352"])
+
+    assert result["ok"] is False
+    assert result["error"] == "vPIC returned a malformed Results payload"
+    assert result["results_by_vin"] == {}

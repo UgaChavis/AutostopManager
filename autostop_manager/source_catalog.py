@@ -150,7 +150,9 @@ def _source_index() -> dict[str, dict[str, Any]]:
     return {_source_id(source): source for source in load_source_catalog().get("sources", []) if _source_id(source)}
 
 
-def _find_map_values(mapping: dict[str, list[dict[str, Any]]], query: str | None) -> tuple[str | None, list[dict[str, Any]]]:
+def _find_map_values(
+    mapping: dict[str, list[dict[str, Any]]], query: str | None
+) -> tuple[str | None, list[dict[str, Any]]]:
     if not query:
         return None, []
     normalized = _normalize_key(query)
@@ -210,7 +212,9 @@ def recommend_automotive_sources(
     brand_ids = {_source_id(source) for source in brand_sources if _source_id(source)}
     data_type_ids = {_source_id(source) for source in data_type_sources if _source_id(source)}
     brand_order = {_source_id(source): index for index, source in enumerate(brand_sources) if _source_id(source)}
-    data_type_order = {_source_id(source): index for index, source in enumerate(data_type_sources) if _source_id(source)}
+    data_type_order = {
+        _source_id(source): index for index, source in enumerate(data_type_sources) if _source_id(source)
+    }
     for source in [*brand_sources, *data_type_sources]:
         source_id = _source_id(source)
         if not source_id:

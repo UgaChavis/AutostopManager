@@ -183,7 +183,9 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                 raw_path: (_resolve_path(raw_path).exists() and _resolve_path(raw_path).is_file())
                 for raw_path in optional_runtime_files
             }
-            optional_missing_for_domain = [raw_path for raw_path, is_present in optional_status.items() if not is_present]
+            optional_missing_for_domain = [
+                raw_path for raw_path, is_present in optional_status.items() if not is_present
+            ]
             optional_present_for_domain = [raw_path for raw_path, is_present in optional_status.items() if is_present]
             optional_missing.extend(optional_missing_for_domain)
             skill_path = str(route.get("skill_path") or "")
@@ -201,7 +203,9 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
                     *[f"- missing locally: {item}" for item in optional_missing_for_domain],
                 ]
                 if optional_missing_for_domain:
-                    optional_runtime_lines.append("Current private facts are unavailable until these local runtime files exist.")
+                    optional_runtime_lines.append(
+                        "Current private facts are unavailable until these local runtime files exist."
+                    )
             route_content = "\n".join(
                 [
                     f"Domain: {domain}",
@@ -351,7 +355,8 @@ def probe_knowledge_base(
     for row in rows:
         item = dict(row)
         item["annotation_text"] = "\n".join(
-            str(annotation.get("search_text") or "") for annotation in annotations_by_domain.get(str(item["domain"]), [])
+            str(annotation.get("search_text") or "")
+            for annotation in annotations_by_domain.get(str(item["domain"]), [])
         )
         score, matching_terms = _score_route_card(item, tokens, query, domain_hints=domain_hints)
         if tokens and score <= 0:
@@ -414,6 +419,98 @@ def probe_knowledge_base(
     }
 
 
+def _audit_route_paths(
+    domains: dict[str, Any],
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    missing_files: list[str] = []
+    optional_missing_files: list[str] = []
+    domains_without_source_of_truth: list[str] = []
+    domains_without_aliases: list[str] = []
+    checked_paths: set[str] = set()
+    checked_optional_paths: set[str] = set()
+
+    for domain, route in domains.items():
+        if not route.get("source_of_truth_files") and not route.get("primary_files"):
+            domains_without_source_of_truth.append(domain)
+        if not route.get("aliases"):
+            domains_without_aliases.append(domain)
+        required_paths = _unique_strings(
+            [
+                *_string_list(route.get("source_of_truth_files")),
+                *_string_list(route.get("primary_files")),
+                *_string_list(route.get("reference_files")),
+            ]
+        )
+        for raw_path in required_paths:
+            if raw_path in checked_paths:
+                continue
+            checked_paths.add(raw_path)
+            resolved = _resolve_path(raw_path)
+            if not resolved.exists() or not resolved.is_file():
+                missing_files.append(raw_path)
+        for raw_path in _optional_runtime_files(route):
+            if raw_path in checked_paths or raw_path in checked_optional_paths:
+                continue
+            checked_optional_paths.add(raw_path)
+            resolved = _resolve_path(raw_path)
+            if not resolved.exists() or not resolved.is_file():
+                optional_missing_files.append(raw_path)
+    return (
+        missing_files,
+        optional_missing_files,
+        domains_without_source_of_truth,
+        domains_without_aliases,
+    )
+
+
+def _knowledge_index_counts(memory: ManagerMemoryStore) -> dict[str, int]:
+    with memory.connect() as conn:
+        return {
+            "route_cards": int(
+                conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0
+            ),
+            "documents": int(
+                conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()["count"] or 0
+            ),
+            "sections": int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections").fetchone()["count"] or 0),
+            "sections_fts": int(
+                conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()["count"] or 0
+            ),
+            "annotations": int(
+                conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()["count"] or 0
+            ),
+            "annotations_fts": int(
+                conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations_fts").fetchone()["count"] or 0
+            ),
+        }
+
+
+def _knowledge_audit_warnings(
+    *,
+    domain_count: int,
+    counts: dict[str, int],
+    missing_files: list[str],
+    domains_without_source_of_truth: list[str],
+    domains_without_aliases: list[str],
+) -> list[str]:
+    warnings: list[str] = []
+    if counts["route_cards"] != domain_count:
+        warnings.append("route card count does not match knowledge_map domain count")
+    if domains_without_source_of_truth:
+        warnings.append("some domains do not declare source_of_truth_files")
+    if domains_without_aliases:
+        warnings.append("some domains do not declare aliases")
+    if missing_files:
+        warnings.append("some mapped files are missing")
+    if KNOWLEDGE_ANNOTATIONS_PATH.exists() and counts["annotations"] == 0:
+        warnings.append("knowledge_annotations.jsonl exists but no annotations are indexed")
+    if counts["sections_fts"] != counts["sections"]:
+        warnings.append("knowledge_sections_fts_count_mismatch")
+    if counts["annotations_fts"] != counts["annotations"]:
+        warnings.append("knowledge_annotations_fts_count_mismatch")
+    return warnings
+
+
 def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     memory.initialize()
@@ -449,64 +546,26 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
             "warnings": ["knowledge_map_has_no_valid_domains"],
             "checked_at": _now(),
         }
-    missing_files: list[str] = []
-    optional_missing_files: list[str] = []
-    domains_without_source_of_truth: list[str] = []
-    domains_without_aliases: list[str] = []
-    checked_paths: set[str] = set()
-    checked_optional_paths: set[str] = set()
-
-    for domain, route in domains.items():
-        if not route.get("source_of_truth_files") and not route.get("primary_files"):
-            domains_without_source_of_truth.append(domain)
-        if not route.get("aliases"):
-            domains_without_aliases.append(domain)
-        for raw_path in _unique_strings(
-            [
-                *_string_list(route.get("source_of_truth_files")),
-                *_string_list(route.get("primary_files")),
-                *_string_list(route.get("reference_files")),
-            ]
-        ):
-            if raw_path in checked_paths:
-                continue
-            checked_paths.add(raw_path)
-            resolved = _resolve_path(raw_path)
-            if not resolved.exists() or not resolved.is_file():
-                missing_files.append(raw_path)
-        for raw_path in _optional_runtime_files(route):
-            if raw_path in checked_paths or raw_path in checked_optional_paths:
-                continue
-            checked_optional_paths.add(raw_path)
-            resolved = _resolve_path(raw_path)
-            if not resolved.exists() or not resolved.is_file():
-                optional_missing_files.append(raw_path)
-
-    with memory.connect() as conn:
-        route_cards_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0)
-        documents_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()["count"] or 0)
-        sections_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections").fetchone()["count"] or 0)
-        sections_fts_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()["count"] or 0)
-        annotations_indexed = int(conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations").fetchone()["count"] or 0)
-        annotations_fts_indexed = int(
-            conn.execute("SELECT COUNT(*) AS count FROM knowledge_annotations_fts").fetchone()["count"] or 0
-        )
-
-    warnings: list[str] = []
-    if route_cards_indexed != len(domains):
-        warnings.append("route card count does not match knowledge_map domain count")
-    if domains_without_source_of_truth:
-        warnings.append("some domains do not declare source_of_truth_files")
-    if domains_without_aliases:
-        warnings.append("some domains do not declare aliases")
-    if missing_files:
-        warnings.append("some mapped files are missing")
-    if KNOWLEDGE_ANNOTATIONS_PATH.exists() and annotations_indexed == 0:
-        warnings.append("knowledge_annotations.jsonl exists but no annotations are indexed")
-    if sections_fts_indexed != sections_indexed:
-        warnings.append("knowledge_sections_fts_count_mismatch")
-    if annotations_fts_indexed != annotations_indexed:
-        warnings.append("knowledge_annotations_fts_count_mismatch")
+    (
+        missing_files,
+        optional_missing_files,
+        domains_without_source_of_truth,
+        domains_without_aliases,
+    ) = _audit_route_paths(domains)
+    counts = _knowledge_index_counts(memory)
+    route_cards_indexed = counts["route_cards"]
+    documents_indexed = counts["documents"]
+    sections_indexed = counts["sections"]
+    sections_fts_indexed = counts["sections_fts"]
+    annotations_indexed = counts["annotations"]
+    annotations_fts_indexed = counts["annotations_fts"]
+    warnings = _knowledge_audit_warnings(
+        domain_count=len(domains),
+        counts=counts,
+        missing_files=missing_files,
+        domains_without_source_of_truth=domains_without_source_of_truth,
+        domains_without_aliases=domains_without_aliases,
+    )
 
     ok = (
         not missing_files
@@ -654,11 +713,7 @@ def search_knowledge_base(
     ranked.sort(
         key=lambda value: (
             value["score"],
-            2
-            if value["document_type"] == "domain_route"
-            else 1
-            if value["document_type"] == "annotation"
-            else 0,
+            2 if value["document_type"] == "domain_route" else 1 if value["document_type"] == "annotation" else 0,
         ),
         reverse=True,
     )
@@ -874,7 +929,9 @@ def _load_command_routes() -> dict[str, Any]:
         return {"routes": []}
     return {
         **payload,
-        "routes": [_normalize_list_fields(route, _COMMAND_ROUTE_LIST_FIELDS) for route in routes if isinstance(route, dict)],
+        "routes": [
+            _normalize_list_fields(route, _COMMAND_ROUTE_LIST_FIELDS) for route in routes if isinstance(route, dict)
+        ],
     }
 
 
@@ -1012,7 +1069,9 @@ def _optional_runtime_status(route: dict[str, Any]) -> dict[str, Any]:
 
     note = ""
     if files and missing_files:
-        note = "optional runtime files are missing; exact private facts are unavailable until local runtime files exist."
+        note = (
+            "optional runtime files are missing; exact private facts are unavailable until local runtime files exist."
+        )
     elif files:
         note = "optional runtime files are available locally."
 
@@ -1644,7 +1703,10 @@ def _domain_hints(query: str) -> dict[str, int]:
     if (
         any(word in lowered for word in identifier_terms)
         and any(word in lowered for word in part_terms)
-        and (any(word in lowered for word in crm_vin_terms) or any(word in lowered for word in ["закуп", "цена", "аналог", "кросс"]))
+        and (
+            any(word in lowered for word in crm_vin_terms)
+            or any(word in lowered for word in ["закуп", "цена", "аналог", "кросс"])
+        )
     ):
         hints["crm_vin_oem_parts_lookup"] = max(hints.get("crm_vin_oem_parts_lookup", 0), 34)
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 12)

@@ -137,23 +137,7 @@ def prepare_action_contract(
     if not changes and normalized_action not in TARGET_ONLY_ACTIONS:
         blockers.append("missing_planned_changes")
 
-    if (normalized_domain, normalized_action) in FINANCIAL_TRANSACTION_ACTIONS:
-        _validate_financial_changes(normalized_domain, normalized_action, changes, blockers, warnings)
-    if normalized_domain == "cashbox" and normalized_action == "create" and not str(changes.get("name") or "").strip():
-        blockers.append("missing_cashbox_name")
-    if normalized_domain == "inventory" and normalized_action == "adjust":
-        _validate_inventory_changes(changes, blockers)
-    if normalized_domain == "card":
-        _validate_card_changes(normalized_action, changes, blockers)
-    if normalized_domain == "gmail":
-        _validate_gmail_changes(normalized_action, changes, blockers)
-    if normalized_domain == "document" and normalized_action == "generate" and not str(changes.get("request_text") or "").strip():
-        blockers.append("missing_request_text")
-    if normalized_domain == "file" and normalized_action == "upload":
-        if not str(changes.get("file_name") or "").strip():
-            blockers.append("missing_file_name")
-        if not str(changes.get("content_base64") or "").strip():
-            blockers.append("missing_content_base64")
+    _validate_domain_changes(normalized_domain, normalized_action, changes, blockers, warnings)
     if normalized_action in DESTRUCTIVE_ACTIONS:
         warnings.append("destructive_action_requires_backup_or_compensation")
     if normalized_domain in EXTERNAL_DOMAINS:
@@ -181,9 +165,7 @@ def prepare_action_contract(
     if revision:
         preflight_checks.append("expected_revision_matches")
     if (normalized_domain, normalized_action) in FINANCIAL_TRANSACTION_ACTIONS:
-        preflight_checks.extend(
-            ["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"]
-        )
+        preflight_checks.extend(["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"])
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
 
@@ -243,6 +225,32 @@ def prepare_action_contract(
     }
 
 
+def _validate_domain_changes(
+    domain: str,
+    action: str,
+    changes: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> None:
+    if (domain, action) in FINANCIAL_TRANSACTION_ACTIONS:
+        _validate_financial_changes(domain, action, changes, blockers, warnings)
+    if domain == "cashbox" and action == "create" and not str(changes.get("name") or "").strip():
+        blockers.append("missing_cashbox_name")
+    if domain == "inventory" and action == "adjust":
+        _validate_inventory_changes(changes, blockers)
+    if domain == "card":
+        _validate_card_changes(action, changes, blockers)
+    if domain == "gmail":
+        _validate_gmail_changes(action, changes, blockers)
+    if domain == "document" and action == "generate" and not str(changes.get("request_text") or "").strip():
+        blockers.append("missing_request_text")
+    if domain == "file" and action == "upload":
+        if not str(changes.get("file_name") or "").strip():
+            blockers.append("missing_file_name")
+        if not str(changes.get("content_base64") or "").strip():
+            blockers.append("missing_content_base64")
+
+
 def _validate_financial_changes(
     domain: str,
     action: str,
@@ -250,9 +258,12 @@ def _validate_financial_changes(
     blockers: list[str],
     warnings: list[str],
 ) -> None:
+    numeric_amount: float | int | None
     raw_amount_minor = changes.get("amount_minor") if action == "cash_transaction" else None
     if action == "cash_transaction" and raw_amount_minor not in (None, ""):
-        numeric_amount = raw_amount_minor if isinstance(raw_amount_minor, int) and not isinstance(raw_amount_minor, bool) else None
+        numeric_amount = (
+            raw_amount_minor if isinstance(raw_amount_minor, int) and not isinstance(raw_amount_minor, bool) else None
+        )
         if numeric_amount is None or not 0 < numeric_amount <= MAX_MONEY_MINOR:
             blockers.append("invalid_positive_amount_minor")
     else:
@@ -282,7 +293,11 @@ def _validate_financial_changes(
         numeric_outstanding = _finite_number(changes.get("outstanding_amount"))
         if numeric_outstanding is None or numeric_outstanding < 0:
             blockers.append("missing_outstanding_amount")
-        elif numeric_amount is not None and numeric_amount > numeric_outstanding and changes.get("allow_overpayment") is not True:
+        elif (
+            numeric_amount is not None
+            and numeric_amount > numeric_outstanding
+            and changes.get("allow_overpayment") is not True
+        ):
             blockers.append("overpayment_not_explicitly_allowed")
         elif numeric_amount is not None and numeric_amount > numeric_outstanding:
             warnings.append("explicit_overpayment")
@@ -394,9 +409,7 @@ def _nonempty_string(value: Any) -> bool:
 
 def _nonempty_string_list(value: Any) -> bool:
     return (
-        isinstance(value, list)
-        and bool(value)
-        and all(isinstance(item, str) and bool(item.strip()) for item in value)
+        isinstance(value, list) and bool(value) and all(isinstance(item, str) and bool(item.strip()) for item in value)
     )
 
 

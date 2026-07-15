@@ -152,7 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
     recall = sub.add_parser("recall", help="Search manager memory")
     recall.add_argument("query", nargs="?", default="")
     recall.add_argument("--limit", type=int, default=20)
-    recall.add_argument("--kind", choices=["note", "fact", "lesson", "task", "reminder", "journal", "rule"], default=None)
+    recall.add_argument(
+        "--kind", choices=["note", "fact", "lesson", "task", "reminder", "journal", "rule"], default=None
+    )
     recall.add_argument("--category", default=None)
     recall.add_argument("--tags", default="")
 
@@ -274,7 +276,9 @@ def build_parser() -> argparse.ArgumentParser:
     vehicle_identities.add_argument("--no-live-vpic", action="store_true")
     vehicle_identities.add_argument("--no-vpic-batch", action="store_true")
 
-    catalog_status = sub.add_parser("catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness")
+    catalog_status = sub.add_parser(
+        "catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness"
+    )
     catalog_status.add_argument("--stage", default=None)
 
     provider_smoke = sub.add_parser(
@@ -377,7 +381,11 @@ def build_parser() -> argparse.ArgumentParser:
         "public-catalog-lookup",
         help="Call public aftermarket catalogs such as MANN-FILTER and DENSO by part/OE number",
     )
-    public_catalog.add_argument("--provider", required=True, choices=["mann_filter_catalog", "denso_aftermarket_catalog", "mann", "denso", "all"])
+    public_catalog.add_argument(
+        "--provider",
+        required=True,
+        choices=["mann_filter_catalog", "denso_aftermarket_catalog", "mann", "denso", "all"],
+    )
     public_catalog.add_argument("--part-number", required=True)
     public_catalog.add_argument("--page-size", type=int, default=5)
     public_catalog.add_argument("--country", default="europe")
@@ -681,14 +689,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("memory-review", help="Generate rule-based, non-destructive memory review proposals")
 
-    memory_review_apply = sub.add_parser("memory-review-apply", help="Accept, reject, or archive duplicate memory review items")
+    memory_review_apply = sub.add_parser(
+        "memory-review-apply", help="Accept, reject, or archive duplicate memory review items"
+    )
     memory_review_apply.add_argument("--id", required=True)
     memory_review_apply.add_argument("--action", required=True, choices=["accept", "reject", "archive_duplicate"])
 
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+# This intentionally flat dispatcher mirrors argparse commands; domain logic lives in focused modules above.
+def main(argv: list[str] | None = None) -> int:  # noqa: C901
     args = build_parser().parse_args(argv)
     store = ManagerMemoryStore()
 
@@ -885,7 +896,9 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(items, list):
             message = "--items-json must be a JSON array"
             raise SystemExit(message)
-        _print_json(decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch))
+        _print_json(
+            decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch)
+        )
     elif args.command == "catalog-status":
         _print_json(catalog_provider_status(stage=args.stage))
     elif args.command == "provider-smoke":
@@ -944,7 +957,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.category_index_command == "search":
-            _print_json(search_partsapi_category_index(args.query, intent_id=args.intent_id, path=args.path, limit=args.limit))
+            _print_json(
+                search_partsapi_category_index(args.query, intent_id=args.intent_id, path=args.path, limit=args.limit)
+            )
         elif args.category_index_command == "explain":
             _print_json(explain_partsapi_category_for_intent(args.intent_id, query=args.query, path=args.path))
         elif args.category_index_command == "validate":
@@ -1009,14 +1024,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.command == "partsapi-vin-smoke":
+        item: dict[str, Any]
         if args.repair_orders_json:
             raw_orders = _json_value(args.repair_orders_json, option_name="--repair-orders-json")
             if isinstance(raw_orders, dict):
-                raw_orders = ((raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or [])
+                raw_orders = (
+                    (raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or []
+                )
             if not isinstance(raw_orders, list):
                 message = "--repair-orders-json must be a JSON array or connector response object"
                 raise SystemExit(message)
-            selected = select_crm_partsapi_smoke_case(raw_orders, random_seed=args.random_seed, include_raw_identifier=True)
+            selected = select_crm_partsapi_smoke_case(
+                raw_orders, random_seed=args.random_seed, include_raw_identifier=True
+            )
             if not selected.get("ok"):
                 return _print_checked_json(selected)
             selected_item = selected["selected"]
@@ -1027,10 +1047,11 @@ def main(argv: list[str] | None = None) -> int:
             }
             item["identifier"] = selected_item.get("raw_identifier")
         elif args.item_json:
-            item = _json_dict_arg(args.item_json, option_name="--item-json")
-            if not isinstance(item, dict):
+            parsed_item = _json_dict_arg(args.item_json, option_name="--item-json")
+            if not isinstance(parsed_item, dict):
                 message = "--item-json must be a JSON object"
                 raise SystemExit(message)
+            item = parsed_item
         else:
             item = {
                 "identifier": args.identifier,

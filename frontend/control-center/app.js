@@ -44,7 +44,16 @@ function metric(label, value, tone = "blue") {
   </div>`;
 }
 
-function render(report) {
+function metricRow(label, value) {
+  return `<div class="metric-row"><div class="label-row"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div></div>`;
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function render(rawReport) {
+  const report = rawReport && typeof rawReport === "object" && !Array.isArray(rawReport) ? rawReport : emptyReport;
   const summary = report.summary || {};
   setStatus(summary.status || "unknown");
   document.querySelector("#summaryGrid").innerHTML = [
@@ -59,7 +68,7 @@ function render(report) {
     metric("Open Risk", `${summary.open_risk_score ?? report.open_risk?.score ?? 0}`, summary.open_risk_level === "red" ? "red" : summary.open_risk_level === "yellow" ? "yellow" : "green"),
   ].join("");
 
-  renderRisks(report.risks || []);
+  renderRisks(asArray(report.risks));
   renderGit(report.git || {});
   renderProviders(report.providers || {});
   renderKnowledgeMemory(report);
@@ -90,19 +99,20 @@ function renderRisks(risks) {
 
 function renderGit(git) {
   document.querySelector("#gitState").textContent = git.dirty ? "dirty" : "clean";
-  const lines = git.status_short && git.status_short.length ? git.status_short.join("\n") : `branch ${git.branch || "unknown"}`;
+  const statusLines = asArray(git.status_short);
+  const lines = statusLines.length ? statusLines.join("\n") : `branch ${git.branch || "unknown"}`;
   document.querySelector("#gitLines").textContent = lines;
 }
 
 function renderProviders(providers) {
   document.querySelector("#providerRatio").textContent =
     `${providers.configured_count || 0}/${providers.provider_count || 0}`;
-  const rows = providers.stage_matrix || [];
+  const rows = asArray(providers.stage_matrix);
   document.querySelector("#providers").innerHTML = rows.length
     ? rows
       .map((row) => `<div class="matrix-row">
         <div class="label-row"><strong>${escapeHtml(row.label || row.stage)}</strong><span class="small">${escapeHtml(row.stage)}</span></div>
-        <span class="small">${row.configured_count || 0} configured, ${row.live_callable_count || 0} live-readable</span>
+        <span class="small">${escapeHtml(row.configured_count || 0)} configured, ${escapeHtml(row.live_callable_count || 0)} live-readable</span>
       </div>`)
       .join("")
     : `<div class="matrix-row"><strong>No provider matrix</strong><span class="small">unknown</span></div>`;
@@ -120,7 +130,7 @@ function renderKnowledgeMemory(report) {
     ["Knowledge docs", knowledge.documents_indexed || 0],
     ["Annotations", knowledge.annotation_count || 0],
   ]
-    .map(([label, value]) => `<div class="metric-row"><div class="label-row"><strong>${label}</strong><span>${value}</span></div></div>`)
+    .map(([label, value]) => metricRow(label, value))
     .join("");
 }
 
@@ -134,12 +144,12 @@ function renderMcp(mcp) {
     ["Manager catalog", mcp.manager?.ok ? "ok" : "check"],
     ["CRM catalog", mcp.crm?.ok ? "ok" : "check"],
   ]
-    .map(([label, value]) => `<div class="metric-row"><div class="label-row"><strong>${label}</strong><span>${value}</span></div></div>`)
+    .map(([label, value]) => metricRow(label, value))
     .join("");
 }
 
 function renderPorts(ports) {
-  const listeners = [...(ports.public_listeners || []), ...(ports.local_listeners || [])];
+  const listeners = [...asArray(ports.public_listeners), ...asArray(ports.local_listeners)];
   document.querySelector("#portCount").textContent = String(listeners.length);
   document.querySelector("#ports").innerHTML = listeners.length
     ? listeners.slice(0, 10).map((item) => `<div class="port-row"><span class="small">${escapeHtml(item.line || item.local_address)}</span></div>`).join("")
@@ -167,7 +177,7 @@ function renderEnvironment(report) {
     ["Manager MCP import", boolLabel(codex.mcp_imports?.manager?.ok)],
     ["CRM MCP import", boolLabel(codex.mcp_imports?.crm?.ok)],
   ]
-    .map(([label, value]) => `<div class="metric-row"><div class="label-row"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div></div>`)
+    .map(([label, value]) => metricRow(label, value))
     .join("");
 }
 
@@ -186,7 +196,7 @@ function renderRuntimeProduction(report) {
     ["Watchdog timer", prod.watchdog?.timer?.active_state || "unknown"],
     ["CRM container", prod.container?.autostopcrm?.health || prod.container?.autostopcrm?.state || "unknown"],
   ]
-    .map(([label, value]) => `<div class="metric-row"><div class="label-row"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div></div>`)
+    .map(([label, value]) => metricRow(label, value))
     .join("");
 }
 

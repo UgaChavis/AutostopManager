@@ -163,7 +163,11 @@ def test_vin_parts_benchmark_allows_read_only_lookup_after_partsapi_oe_agreement
                 "provider": "partsapi_ru",
                 "operation": operation,
                 "partsapi_method": "VINdecodeOE",
-                "request_plan": {"configured": True, "params": {"vin": "1HG***352"}, "redacted_url": "https://api.partsapi.ru?key=***"},
+                "request_plan": {
+                    "configured": True,
+                    "params": {"vin": "1HG***352"},
+                    "redacted_url": "https://api.partsapi.ru?key=***",
+                },
                 "vehicle_profiles": [{"make": "HONDA", "catalog": "HONDA2017", "grade": "EXV6"}],
             }
         return {
@@ -212,7 +216,11 @@ def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(
                 {
                     "confidence": 0.7,
                     "confidence_label": "medium",
-                    "parts_lookup_readiness": {"ready_for_oem_lookup": False, "ready_for_oem_candidate_lookup": False, "ready_for_crm_writeback": False},
+                    "parts_lookup_readiness": {
+                        "ready_for_oem_lookup": False,
+                        "ready_for_oem_candidate_lookup": False,
+                        "ready_for_crm_writeback": False,
+                    },
                     "vehicle_profile": {"make": "HONDA", "model": "Accord"},
                     "diagnostics": {},
                     "warnings": [],

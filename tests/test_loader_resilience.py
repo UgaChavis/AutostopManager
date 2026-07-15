@@ -11,11 +11,31 @@ from autostop_manager.storage import ManagerMemoryStore
 
 
 CASES = [
-    ("autostop_manager.source_catalog", "load_source_catalog", "SOURCE_CATALOG_PATH", {"sources": [], "source_count": 0}),
-    ("autostop_manager.source_catalog", "load_open_dataset_endpoints", "OPEN_DATASET_ENDPOINTS_PATH", {"endpoints": []}),
-    ("autostop_manager.vin_sources", "load_source_registry", "REGISTRY_PATH", {"version": 0, "purpose": "missing", "sources": []}),
+    (
+        "autostop_manager.source_catalog",
+        "load_source_catalog",
+        "SOURCE_CATALOG_PATH",
+        {"sources": [], "source_count": 0},
+    ),
+    (
+        "autostop_manager.source_catalog",
+        "load_open_dataset_endpoints",
+        "OPEN_DATASET_ENDPOINTS_PATH",
+        {"endpoints": []},
+    ),
+    (
+        "autostop_manager.vin_sources",
+        "load_source_registry",
+        "REGISTRY_PATH",
+        {"version": 0, "purpose": "missing", "sources": []},
+    ),
     ("autostop_manager.fluid_maintenance", "load_fluid_source_catalog", "FLUID_SOURCE_PATH", {}),
-    ("autostop_manager.service_management", "load_service_management_catalog", "SERVICE_MANAGEMENT_SOURCE_PATH", {"sources": [], "areas": {}}),
+    (
+        "autostop_manager.service_management",
+        "load_service_management_catalog",
+        "SERVICE_MANAGEMENT_SOURCE_PATH",
+        {"sources": [], "areas": {}},
+    ),
     ("autostop_manager.knowledge_intake", "_load_domains", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_knowledge_map", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_command_routes", "COMMAND_ROUTES_PATH", {"routes": []}),
@@ -38,7 +58,9 @@ def test_source_maps_fail_closed_with_invalid_canonical_catalog(tmp_path, monkey
 
 
 @pytest.mark.parametrize("module_name, loader_name, path_attr, expected", CASES)
-def test_json_loaders_handle_invalid_top_level_payload(tmp_path, monkeypatch, module_name, loader_name, path_attr, expected):
+def test_json_loaders_handle_invalid_top_level_payload(
+    tmp_path, monkeypatch, module_name, loader_name, path_attr, expected
+):
     module = importlib.import_module(module_name)
     loader = getattr(module, loader_name)
     if hasattr(loader, "cache_clear"):

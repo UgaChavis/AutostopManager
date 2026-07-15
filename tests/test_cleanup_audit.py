@@ -150,7 +150,7 @@ def test_cleanup_audit_handles_unreadable_knowledge_annotations(tmp_path, monkey
     def fake_read_text(self, encoding="utf-8-sig", *args, **kwargs):
         if self == annotations_path:
             raise OSError("permission denied")
-        return original_read_text(self, encoding=encoding, *args, **kwargs)
+        return original_read_text(self, *args, encoding=encoding, **kwargs)
 
     monkeypatch.setattr(cleanup_audit_module.Path, "read_text", fake_read_text)
 

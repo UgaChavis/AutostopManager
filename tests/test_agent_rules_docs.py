@@ -111,9 +111,7 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]
-    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"][
-        "source_of_truth_files"
-    ]
+    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"]["source_of_truth_files"]
 
 
 def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
@@ -177,11 +175,27 @@ def test_every_command_route_has_gateway_v2_execution_contract():
 def test_gmail_playbook_lists_current_documented_surface():
     playbook = (ROOT / "docs" / "agent" / "gmail_workflow_playbook.md").read_text(encoding="utf-8")
     tools = [
-        "_get_profile", "_list_labels", "_search_emails", "_search_email_ids", "_read_email",
-        "_batch_read_email", "_read_email_thread", "_batch_read_email_threads", "_list_drafts",
-        "_read_attachment", "_create_label", "_apply_labels_to_emails", "_batch_modify_email",
-        "_bulk_label_matching_emails", "_archive_emails", "_delete_emails", "_create_draft",
-        "_update_draft", "_send_draft", "_send_email", "_forward_emails",
+        "_get_profile",
+        "_list_labels",
+        "_search_emails",
+        "_search_email_ids",
+        "_read_email",
+        "_batch_read_email",
+        "_read_email_thread",
+        "_batch_read_email_threads",
+        "_list_drafts",
+        "_read_attachment",
+        "_create_label",
+        "_apply_labels_to_emails",
+        "_batch_modify_email",
+        "_bulk_label_matching_emails",
+        "_archive_emails",
+        "_delete_emails",
+        "_create_draft",
+        "_update_draft",
+        "_send_draft",
+        "_send_email",
+        "_forward_emails",
     ]
 
     assert len(tools) == len(set(tools)) == 21
@@ -399,7 +413,7 @@ def test_every_tracked_agent_data_line_is_structurally_readable():
             if path.suffix == ".json":
                 json.loads(path.read_text(encoding="utf-8-sig"))
             elif path.suffix == ".jsonl":
-                for line_number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+                for _line_number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
                     if line.strip():
                         json.loads(line)
             elif path.suffix == ".csv":
@@ -407,7 +421,9 @@ def test_every_tracked_agent_data_line_is_structurally_readable():
                 if not rows or any(len(row) != len(rows[0]) for row in rows):
                     failures.append(f"{raw_path}:inconsistent_csv_width")
             elif path.suffix == ".md":
-                fence_count = sum(line.lstrip().startswith("```") for line in path.read_text(encoding="utf-8").splitlines())
+                fence_count = sum(
+                    line.lstrip().startswith("```") for line in path.read_text(encoding="utf-8").splitlines()
+                )
                 if fence_count % 2:
                     failures.append(f"{raw_path}:unbalanced_code_fence")
         except (csv.Error, json.JSONDecodeError, UnicodeError) as exc:
@@ -490,15 +506,10 @@ def test_bmw_jsonl_indexes_keep_canonical_lookup_fields():
 
     for filename, fields in required.items():
         rows = [
-            json.loads(line)
-            for line in (data_root / filename).read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            json.loads(line) for line in (data_root / filename).read_text(encoding="utf-8").splitlines() if line.strip()
         ]
         missing = [
-            (index, field)
-            for index, row in enumerate(rows, 1)
-            for field in fields
-            if row.get(field) in (None, "")
+            (index, field) for index, row in enumerate(rows, 1) for field in fields if row.get(field) in (None, "")
         ]
         assert missing == []
 

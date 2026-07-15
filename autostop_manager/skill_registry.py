@@ -56,7 +56,9 @@ def _load_knowledge_map() -> dict[str, Any]:
         }
     return {
         **payload,
-        "domains": {str(key): _normalize_route_list_fields(value) for key, value in domains.items() if isinstance(value, dict)},
+        "domains": {
+            str(key): _normalize_route_list_fields(value) for key, value in domains.items() if isinstance(value, dict)
+        },
     }
 
 
@@ -181,9 +183,7 @@ def audit_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
         items.append(item)
     return {
         "ok": not any(
-            warning.startswith("missing skill file")
-            or warning.startswith("knowledge_map_load_error")
-            or warning.startswith("unsafe skill path")
+            warning.startswith(("missing skill file", "knowledge_map_load_error", "unsafe skill path"))
             for warning in warnings
         ),
         "skill_root": registry["skill_root"],
