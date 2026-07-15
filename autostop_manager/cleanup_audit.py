@@ -18,6 +18,13 @@ PROTECTED_AGENT_DOCS = {
     "knowledge_shelves.md",
     "manager_mcp_catalog.json",
 }
+IGNORED_CACHE_SCAN_ROOTS = {
+    ".codex-remote-attachments",
+    ".git",
+    ".venv",
+    "data",
+    "output",
+}
 
 
 @dataclass(frozen=True)
@@ -85,7 +92,12 @@ def build_cleanup_audit(
 
 def _ignored_cache_candidates(root: Path) -> list[CleanupCandidate]:
     candidates: list[CleanupCandidate] = []
-    for cache_path in [root / ".pytest_cache", root / ".ruff_cache", *sorted(root.rglob("__pycache__"))]:
+    project_bytecode_caches = [
+        cache_path
+        for cache_path in sorted(root.rglob("__pycache__"))
+        if not _is_under_ignored_cache_root(cache_path, root)
+    ]
+    for cache_path in [root / ".pytest_cache", root / ".ruff_cache", *project_bytecode_caches]:
         if not cache_path.exists():
             continue
         candidates.append(
@@ -100,6 +112,14 @@ def _ignored_cache_candidates(root: Path) -> list[CleanupCandidate]:
             )
         )
     return candidates
+
+
+def _is_under_ignored_cache_root(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return True
+    return bool(relative.parts and relative.parts[0] in IGNORED_CACHE_SCAN_ROOTS)
 
 
 def _untracked_generated_artifact_candidates(root: Path) -> list[CleanupCandidate]:
@@ -293,8 +313,8 @@ def _referenced_agent_paths(root: Path) -> set[str]:
             annotations_content = annotations_path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeError):
             annotations_content = ""
-        for line in annotations_content.splitlines():
-            line = line.strip()
+        for raw_line in annotations_content.splitlines():
+            line = raw_line.strip()
             if not line:
                 continue
             try:

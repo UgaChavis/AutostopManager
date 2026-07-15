@@ -607,6 +607,39 @@ def test_prepare_card_action_cli_outputs_dry_run_contract(capsys):
     assert payload["target_fields"] == ["description", "vehicle_profile", "board_summary"]
 
 
+@pytest.mark.parametrize("command", ["system-audit", "doctor"])
+def test_system_audit_commands_return_nonzero_when_audit_fails(command, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "build_system_audit", lambda **_kwargs: {"ok": False, "warnings": ["broken"]})
+
+    exit_code = cli.main([command])
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_system_audit_command_returns_zero_when_audit_passes(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "build_system_audit", lambda **_kwargs: {"ok": True, "warnings": []})
+
+    exit_code = cli.main(["system-audit"])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_partsapi_vin_smoke_returns_nonzero_when_no_case_can_be_selected(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_json_value", lambda *_args, **_kwargs: {"data": {"repair_orders": []}})
+    monkeypatch.setattr(
+        cli,
+        "select_crm_partsapi_smoke_case",
+        lambda *_args, **_kwargs: {"ok": False, "error": "no_eligible_case"},
+    )
+
+    exit_code = cli.main(["partsapi-vin-smoke", "--repair-orders-json", "orders.json"])
+
+    assert exit_code == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "no_eligible_case"}
+
+
 def test_every_top_level_cli_command_has_working_help(capsys):
     parser = cli.build_parser()
     command_action = next(action for action in parser._actions if action.dest == "command")

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from typing import Any
 
 
@@ -25,6 +27,7 @@ MUTATING_ACTIONS = {
 }
 
 CREATE_ACTIONS = {"create", "record_payment", "cash_transaction", "transfer", "upload", "generate", "send", "forward"}
+COLLECTION_TARGET_ACTIONS = {("gmail", "label")}
 
 DOMAIN_ALIASES = {
     "cards": "card",
@@ -51,6 +54,8 @@ EXECUTOR_TOOLS = {
     ("vehicle", "update"): "upsert_client_vehicle",
     ("repair_order", "update"): "update_repair_order",
     ("payment", "record_payment"): "agent_finance_workflow",
+    ("cashbox", "create"): "create_cashbox",
+    ("cashbox", "delete"): "delete_cashbox",
     ("cashbox", "cash_transaction"): "create_cash_transaction",
     ("document", "generate"): "create_document_without_card_pdf",
     ("file", "upload"): "upload_shared_file",
@@ -66,8 +71,23 @@ INVENTORY_EXECUTOR_TOOLS = {
 }
 
 FINANCIAL_DOMAINS = {"payment", "cashbox"}
+FINANCIAL_TRANSACTION_ACTIONS = {
+    ("payment", "record_payment"),
+    ("cashbox", "cash_transaction"),
+    ("cashbox", "transfer"),
+}
 DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive"}
+TARGET_ONLY_ACTIONS = {"delete", "archive"}
 EXTERNAL_DOMAINS = {"gmail"}
+MAX_MONEY_MINOR = 100_000_000_000_000
+MAX_MONEY_AMOUNT = MAX_MONEY_MINOR / 100
+DEADLINE_PART_MAXIMUMS = {
+    "days": 365,
+    "hours": 23,
+    "minutes": 59,
+    "seconds": 59,
+    "total_seconds": 31_536_000,
+}
 
 
 def prepare_action_contract(
@@ -92,7 +112,11 @@ def prepare_action_contract(
     intent = str(owner_intent or "").strip()
     key = str(idempotency_key or "").strip()
     revision = str(expected_revision or "").strip() or None
-    concurrency_required = normalized_action not in CREATE_ACTIONS or normalized_domain in FINANCIAL_DOMAINS
+    exact_target_id_required = (
+        normalized_action not in CREATE_ACTIONS
+        and (normalized_domain, normalized_action) not in COLLECTION_TARGET_ACTIONS
+    )
+    concurrency_required = exact_target_id_required or normalized_domain in FINANCIAL_DOMAINS
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -102,7 +126,7 @@ def prepare_action_contract(
         blockers.append("missing_action")
     if normalized_action not in MUTATING_ACTIONS:
         blockers.append("unsupported_mutating_action")
-    if normalized_action not in CREATE_ACTIONS and not normalized_target:
+    if exact_target_id_required and not normalized_target:
         blockers.append("missing_exact_target_id")
     if not intent:
         blockers.append("missing_task_specific_owner_intent")
@@ -110,16 +134,26 @@ def prepare_action_contract(
         blockers.append("missing_idempotency_key")
     if concurrency_required and not revision:
         blockers.append("missing_expected_revision")
-    if not changes:
+    if not changes and normalized_action not in TARGET_ONLY_ACTIONS:
         blockers.append("missing_planned_changes")
 
-    if normalized_domain in FINANCIAL_DOMAINS:
+    if (normalized_domain, normalized_action) in FINANCIAL_TRANSACTION_ACTIONS:
         _validate_financial_changes(normalized_domain, normalized_action, changes, blockers, warnings)
+    if normalized_domain == "cashbox" and normalized_action == "create" and not str(changes.get("name") or "").strip():
+        blockers.append("missing_cashbox_name")
+    if normalized_domain == "inventory" and normalized_action == "adjust":
+        _validate_inventory_changes(changes, blockers)
+    if normalized_domain == "card":
+        _validate_card_changes(normalized_action, changes, blockers)
     if normalized_domain == "gmail":
         _validate_gmail_changes(normalized_action, changes, blockers)
-    if normalized_domain == "document":
-        if not str(changes.get("document_type") or "").strip():
-            blockers.append("missing_document_type")
+    if normalized_domain == "document" and normalized_action == "generate" and not str(changes.get("request_text") or "").strip():
+        blockers.append("missing_request_text")
+    if normalized_domain == "file" and normalized_action == "upload":
+        if not str(changes.get("file_name") or "").strip():
+            blockers.append("missing_file_name")
+        if not str(changes.get("content_base64") or "").strip():
+            blockers.append("missing_content_base64")
     if normalized_action in DESTRUCTIVE_ACTIONS:
         warnings.append("destructive_action_requires_backup_or_compensation")
     if normalized_domain in EXTERNAL_DOMAINS:
@@ -146,7 +180,7 @@ def prepare_action_contract(
     ]
     if revision:
         preflight_checks.append("expected_revision_matches")
-    if normalized_domain in FINANCIAL_DOMAINS:
+    if (normalized_domain, normalized_action) in FINANCIAL_TRANSACTION_ACTIONS:
         preflight_checks.extend(
             ["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"]
         )
@@ -216,58 +250,159 @@ def _validate_financial_changes(
     blockers: list[str],
     warnings: list[str],
 ) -> None:
-    amount = changes.get("amount")
-    try:
-        numeric_amount = float(amount)
-    except (TypeError, ValueError):
-        numeric_amount = 0.0
-    if numeric_amount <= 0:
-        blockers.append("invalid_positive_amount")
+    raw_amount_minor = changes.get("amount_minor") if action == "cash_transaction" else None
+    if action == "cash_transaction" and raw_amount_minor not in (None, ""):
+        numeric_amount = raw_amount_minor if isinstance(raw_amount_minor, int) and not isinstance(raw_amount_minor, bool) else None
+        if numeric_amount is None or not 0 < numeric_amount <= MAX_MONEY_MINOR:
+            blockers.append("invalid_positive_amount_minor")
+    else:
+        numeric_amount = _finite_number(changes.get("amount"))
+        if numeric_amount is None or not 0 < numeric_amount <= MAX_MONEY_AMOUNT:
+            blockers.append("invalid_positive_amount")
     if not str(changes.get("cashbox_id") or "").strip():
         blockers.append("missing_cashbox_id")
-    if action == "transfer" and not str(changes.get("target_cashbox_id") or "").strip():
-        blockers.append("missing_target_cashbox_id")
+    if action == "cash_transaction":
+        direction = str(changes.get("direction") or "")
+        if direction not in {"income", "expense"}:
+            blockers.append("invalid_cash_transaction_direction")
+        if direction == "expense" and len(str(changes.get("note") or "").strip()) < 10:
+            blockers.append("expense_note_too_short")
+    if action == "transfer":
+        source_cashbox_id = str(changes.get("cashbox_id") or "").strip()
+        target_cashbox_id = str(changes.get("target_cashbox_id") or "").strip()
+        if not target_cashbox_id:
+            blockers.append("missing_target_cashbox_id")
+        elif source_cashbox_id == target_cashbox_id:
+            blockers.append("cashbox_transfer_target_must_differ")
     if domain == "payment" or action == "record_payment":
         if not str(changes.get("card_id") or "").strip():
             blockers.append("missing_card_id")
         if not str(changes.get("payment_method") or "").strip():
             blockers.append("missing_payment_method")
-        outstanding = changes.get("outstanding_amount")
-        try:
-            numeric_outstanding = float(outstanding)
-        except (TypeError, ValueError):
-            numeric_outstanding = -1.0
-        if numeric_outstanding < 0:
+        numeric_outstanding = _finite_number(changes.get("outstanding_amount"))
+        if numeric_outstanding is None or numeric_outstanding < 0:
             blockers.append("missing_outstanding_amount")
-        elif numeric_amount > numeric_outstanding and not bool(changes.get("allow_overpayment")):
+        elif numeric_amount is not None and numeric_amount > numeric_outstanding and changes.get("allow_overpayment") is not True:
             blockers.append("overpayment_not_explicitly_allowed")
-        elif numeric_amount > numeric_outstanding:
+        elif numeric_amount is not None and numeric_amount > numeric_outstanding:
             warnings.append("explicit_overpayment")
+
+
+def _validate_inventory_changes(changes: dict[str, Any], blockers: list[str]) -> None:
+    movement_type = str(changes.get("movement_type") or "").strip().casefold().replace("-", "_")
+    if movement_type not in INVENTORY_EXECUTOR_TOOLS:
+        blockers.append("unsupported_inventory_movement_type")
+        return
+    if movement_type in {"replenish", "write_off"}:
+        quantity = _finite_number(changes.get("quantity"))
+        if quantity is None or quantity <= 0:
+            blockers.append("invalid_positive_quantity")
+    if movement_type == "write_off" and not str(changes.get("card_id") or "").strip():
+        blockers.append("missing_card_id")
+
+
+def _validate_card_changes(action: str, changes: dict[str, Any], blockers: list[str]) -> None:
+    if action == "move" and not str(changes.get("column") or "").strip():
+        blockers.append("missing_target_column_id")
+    if action == "set_deadline":
+        _validate_deadline(changes.get("deadline"), blockers)
+
+
+def _validate_deadline(deadline: Any, blockers: list[str]) -> None:
+    if not isinstance(deadline, dict) or not deadline:
+        blockers.append("missing_deadline")
+        return
+    if any(field not in DEADLINE_PART_MAXIMUMS for field in deadline):
+        blockers.append("unsupported_deadline_field")
+    total_seconds = 0
+    parts_valid = True
+    for field, maximum in DEADLINE_PART_MAXIMUMS.items():
+        value = deadline.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
+            parts_valid = False
+            continue
+        if field == "days":
+            total_seconds += value * 24 * 3600
+        elif field == "hours":
+            total_seconds += value * 3600
+        elif field == "minutes":
+            total_seconds += value * 60
+        else:
+            total_seconds += value
+    if not parts_valid:
+        blockers.append("invalid_deadline_part")
+    elif total_seconds <= 0:
+        blockers.append("invalid_positive_deadline")
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value or any(character.isspace() and character != " " for character in value):
+            return None
+        if " " in value:
+            if re.fullmatch(r"[+-]?\d{1,3}(?: \d{3})+(?:[.,]\d+)?", value) is None:
+                return None
+            value = value.replace(" ", "")
+        elif re.fullmatch(r"[+-]?\d+(?:[.,]\d+)?", value) is None:
+            return None
+        value = value.replace(",", ".")
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
 
 
 def _validate_gmail_changes(action: str, changes: dict[str, Any], blockers: list[str]) -> None:
     if action == "send":
-        recipients = changes.get("recipients")
-        if not isinstance(recipients, list) or not any(str(item or "").strip() for item in recipients):
+        if not _gmail_recipients_are_exact(changes):
             blockers.append("missing_exact_recipients")
-        if not str(changes.get("subject") or "").strip():
+        if not _nonempty_string(changes.get("subject")):
             blockers.append("missing_subject")
-        if not str(changes.get("body_intent") or "").strip():
+        if not _nonempty_string(changes.get("body_intent")):
             blockers.append("missing_body_intent")
     elif action == "forward":
-        if not str(changes.get("message_id") or changes.get("thread_id") or "").strip():
+        if not (
+            _nonempty_string_list(changes.get("message_ids"))
+            or _nonempty_string(changes.get("message_id"))
+            or _nonempty_string(changes.get("thread_id"))
+        ):
             blockers.append("missing_message_or_thread_id")
-        recipients = changes.get("recipients")
-        if not isinstance(recipients, list) or not any(str(item or "").strip() for item in recipients):
+        if not _gmail_recipients_are_exact(changes):
             blockers.append("missing_exact_recipients")
     elif action == "label":
-        if not changes.get("message_ids") or not changes.get("label_ids"):
+        message_ids_valid = _nonempty_string_list(changes.get("message_ids"))
+        label_names_valid = _nonempty_string_list(changes.get("add_label_names")) or _nonempty_string_list(
+            changes.get("remove_label_names")
+        )
+        if not message_ids_valid or not label_names_valid:
             blockers.append("missing_message_or_label_ids")
+        if "create_missing_labels" in changes and not isinstance(changes["create_missing_labels"], bool):
+            blockers.append("invalid_create_missing_labels_flag")
+
+
+def _gmail_recipients_are_exact(changes: dict[str, Any]) -> bool:
+    return _nonempty_string_list(changes.get("recipients")) or _nonempty_string(changes.get("to"))
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _nonempty_string_list(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and bool(item.strip()) for item in value)
+    )
 
 
 def _verification_checks(domain: str, action: str) -> list[str]:
     checks = ["write_response_ok", "target_reread", "planned_diff_exact", "no_unplanned_fields"]
-    if domain in FINANCIAL_DOMAINS:
+    if (domain, action) in FINANCIAL_TRANSACTION_ACTIONS:
         checks.extend(["cash_journal_entry_exists", "repair_order_balance_reconciled", "amount_exact"])
     if domain == "gmail":
         checks = ["connector_result_ref_present", "message_or_thread_id_present", "external_step_completed_once"]
@@ -286,6 +421,10 @@ def _executor_tool(domain: str, action: str, changes: dict[str, Any]) -> str | N
 
 
 def _compensation_strategy(domain: str, action: str) -> str | None:
+    if domain == "cashbox" and action == "create":
+        return "delete_empty_created_cashbox"
+    if domain == "cashbox" and action == "delete":
+        return "restore_empty_cashbox_from_verified_snapshot"
     if domain in FINANCIAL_DOMAINS:
         return "compensating_transaction_never_history_delete"
     if action == "delete":

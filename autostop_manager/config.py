@@ -20,7 +20,7 @@ def _strip_env_value(value: str) -> str:
 def _iter_runtime_env_files() -> list[Path]:
     configured = os.environ.get("AUTOSTOP_MANAGER_ENV_FILE")
     if configured:
-        return [Path(item).expanduser() for item in configured.split(os.pathsep) if item.strip()]
+        return [Path(item.strip()).expanduser() for item in configured.split(os.pathsep) if item.strip()]
     return [PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.local"]
 
 

@@ -12,6 +12,7 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     root = tmp_path / "repo"
     (root / ".pytest_cache").mkdir(parents=True)
     (root / "autostop_manager" / "__pycache__").mkdir(parents=True)
+    (root / ".venv" / "Lib" / "site-packages" / "demo" / "__pycache__").mkdir(parents=True)
     source_pack = root / "docs" / "agent" / "automotive_sources" / "source_cache" / "pack"
     (source_pack / "pdf").mkdir(parents=True)
     (source_pack / "md").mkdir(parents=True)
@@ -79,6 +80,9 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     assert ("ob" + "sidian_duplicate") not in categories
     assert all(item["requires_approval"] is True for item in result["candidates"])
     assert all(item["recommended_action"] in allowed_actions for item in result["candidates"])
+    ignored_cache_paths = {item["path"] for item in result["candidates"] if item["category"] == "ignored_cache"}
+    assert "autostop_manager/__pycache__" in ignored_cache_paths
+    assert not any(path.startswith(".venv/") for path in ignored_cache_paths)
     assert not any(item["path"] == "docs/agent/reference_only.md" for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/partsapi_category_index.json" for item in result["candidates"])
     generated_artifacts = [item for item in result["candidates"] if item["category"] == "untracked_generated_artifact"]

@@ -1145,3 +1145,30 @@ def test_public_aftermarket_catalog_lookup_rejects_unknown_provider():
 
     assert result["ok"] is False
     assert "mann_filter_catalog" in result["available_providers"]
+
+
+def test_public_aftermarket_all_reports_aggregate_provider_failures(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.mann_filter_catalog_lookup",
+        lambda **_kwargs: {"ok": False, "provider": "mann_filter_catalog"},
+    )
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.denso_aftermarket_catalog_lookup",
+        lambda **_kwargs: {"ok": False, "provider": "denso_aftermarket_catalog"},
+    )
+
+    failed = public_aftermarket_catalog_lookup(provider="all", part_number="123")
+
+    assert failed["ok"] is False
+    assert failed["success_count"] == 0
+    assert failed["failure_count"] == 2
+
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.mann_filter_catalog_lookup",
+        lambda **_kwargs: {"ok": True, "provider": "mann_filter_catalog"},
+    )
+    partial = public_aftermarket_catalog_lookup(provider="all", part_number="123")
+
+    assert partial["ok"] is True
+    assert partial["success_count"] == 1
+    assert partial["failure_count"] == 1

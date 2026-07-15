@@ -11,6 +11,25 @@ from urllib.request import Request, urlopen
 PUBLIC_RESEARCH_USER_AGENT = "AutostopManager/0.1 public labor research"
 PUBLIC_RESEARCH_TIMEOUT_SECONDS = 4
 MAX_PUBLIC_SEARCHES = 4
+LABOR_ONLY_MARKERS = (
+    "без запчаст",
+    "без учета запчаст",
+    "запчасти не включ",
+    "работа без материал",
+    "материалы не включ",
+    "только работа",
+    "только за работу",
+)
+PARTS_INCLUDED_MARKERS = (
+    "включая запчаст",
+    "не только работа",
+    "работа и запчаст",
+    "работа плюс запчаст",
+    "работа + запчаст",
+    "работа с запчаст",
+    "с запчастями",
+    "с материалами",
+)
 
 
 def _clean_text(value: Any) -> str:
@@ -128,6 +147,15 @@ def _prices_from_text(text: str) -> list[int]:
     return values[:3]
 
 
+def _labor_only_flags(text: str) -> tuple[bool | None, bool]:
+    normalized = _clean_text(text).casefold()
+    if any(marker in normalized for marker in PARTS_INCLUDED_MARKERS):
+        return True, False
+    if any(marker in normalized for marker in LABOR_ONLY_MARKERS):
+        return False, True
+    return None, False
+
+
 def _hours_from_text(text: str) -> list[tuple[float, float]]:
     values: list[tuple[float, float]] = []
     decimal = r"\d{1,2}(?:[,.]\d{1,2})?"
@@ -203,6 +231,7 @@ def collect_public_work_pricing_research(
             for row in search["results"]:
                 snippet = " ".join(part for part in (row.get("title"), row.get("snippet")) if part)
                 if query_type == "labor_prices":
+                    includes_parts, labor_only = _labor_only_flags(snippet)
                     for price in _prices_from_text(snippet):
                         result["quotes"].append(
                             {
@@ -210,7 +239,8 @@ def collect_public_work_pricing_research(
                                 "city": "",
                                 "operation_name": _operation_name_for_query(query, operations),
                                 "price_rub": price,
-                                "includes_parts": False,
+                                "includes_parts": includes_parts,
+                                "labor_only": labor_only,
                                 "captured_at": today,
                                 "confidence": "low",
                                 "capture_method": "public_search_snippet",
@@ -238,12 +268,12 @@ def collect_public_work_pricing_research(
             checked["rows_found"] = rows_found
             result["sources_checked"].append(checked)
 
+    result["quotes"] = _dedupe_quote_rows(result["quotes"])
+    result["labor_time_sample"] = _dedupe_rows(result["labor_time_sample"], ("source", "operation_name", "hours"))
     if not result["labor_time_sample"]:
         result["warnings"].append("Public labor-time mentions were not found automatically.")
-    if not result["quotes"]:
+    if not any(quote.get("labor_only") is True and quote.get("includes_parts") is False for quote in result["quotes"]):
         result["warnings"].append("Public labor-only price quotes were not found automatically.")
-    result["quotes"] = _dedupe_rows(result["quotes"], ("source", "operation_name", "price_rub"))
-    result["labor_time_sample"] = _dedupe_rows(result["labor_time_sample"], ("source", "operation_name", "hours"))
     return result
 
 
@@ -266,3 +296,25 @@ def _dedupe_rows(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> list[di
         seen.add(key)
         result.append(row)
     return result
+
+
+def _dedupe_quote_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fields = ("source", "operation_name", "price_rub")
+    by_key: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = tuple(str(row.get(field, "")).casefold() for field in fields)
+        existing = by_key.get(key)
+        if existing is None:
+            existing = dict(row)
+            by_key[key] = existing
+            continue
+        if existing.get("includes_parts") is True or row.get("includes_parts") is True:
+            existing["includes_parts"] = True
+            existing["labor_only"] = False
+        elif existing.get("labor_only") is True or row.get("labor_only") is True:
+            existing["includes_parts"] = False
+            existing["labor_only"] = True
+        else:
+            existing["includes_parts"] = None
+            existing["labor_only"] = False
+    return list(by_key.values())

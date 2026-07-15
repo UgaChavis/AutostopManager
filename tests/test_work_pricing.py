@@ -97,6 +97,25 @@ def test_quotes_with_parts_are_excluded_from_labor_only_sample():
     assert result["autostop_price_rub"] == 2400
 
 
+def test_quotes_without_explicit_labor_only_confirmation_are_excluded():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена масла"],
+        quotes_json=[
+            {"source": "sto-a", "operation_name": "замена масла", "price_rub": 2500},
+            {"source": "sto-b", "operation_name": "замена масла", "price_rub": 3000},
+            {"source": "sto-c", "operation_name": "замена масла", "price_rub": 3500},
+        ],
+        auto_research=False,
+    )
+
+    assert result["market_sample"]["valid_count"] == 0
+    assert result["market_sample"]["invalid_count"] == 3
+    assert result["autostop_price_rub"] is None
+    invalid_quotes = result["operation_estimates"][0]["sample"]["invalid_quotes"]
+    assert all("labor_only_not_confirmed" in quote["reasons"] for quote in invalid_quotes)
+
+
 def test_complaint_without_work_is_diagnostic_first_not_final_repair_price():
     result = estimate_repair_work_cost(
         vehicle="Volkswagen Tiguan DSG",
