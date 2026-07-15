@@ -78,8 +78,8 @@ class _FakeRawResponse:
     def __exit__(self, _exc_type, _exc, _tb):
         return False
 
-    def read(self):
-        return self.payload
+    def read(self, limit: int = -1):
+        return self.payload if limit < 0 else self.payload[:limit]
 
 
 EXIST_CATALOG_HTML = """
@@ -466,6 +466,20 @@ def test_emex_lookup_rejects_xml_entities_without_crashing(monkeypatch):
 
     assert result["ok"] is False
     assert "EntitiesForbidden" in result["error"]
+
+
+def test_emex_lookup_rejects_oversized_xml_response(monkeypatch):
+    monkeypatch.setenv("EMEX_LOGIN", "client-login")
+    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeRawResponse(b"x" * 2_000_001),
+    )
+
+    result = emex_price_lookup(part_number="9091901164")
+
+    assert result["ok"] is False
+    assert result["error"] == "xml_response_too_large"
 
 
 def test_exist_request_builds_public_read_only_dry_run_plan():
