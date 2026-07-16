@@ -14,6 +14,7 @@ from .catalog_clients import (
     vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
+from .config import get_store_api_url, get_store_read_token
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_card_action import prepare_crm_card_action
@@ -40,6 +41,7 @@ from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
+from .store_analytics import get_store_analytics_report
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
@@ -274,6 +276,31 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         limit: int = 50,
     ) -> dict[str, Any]:
         return list_agent_workflows(query=query, intent=intent, limit=limit)
+
+    @server.tool(
+        name="get_store_analytics_report",
+        description=(
+            "Read a compact aggregate-only first-party AutoStop storefront report for today, yesterday, "
+            "the last 7/30 days, or a custom Krasnoyarsk date range. Accepts a natural Russian query and "
+            "never returns raw events, visitor/session identifiers, search text, or customer data."
+        ),
+    )
+    def get_store_analytics_report_tool(
+        query: str = "",
+        period: str = "auto",
+        date_from: str | None = None,
+        date_to: str | None = None,
+        top_limit: int = 10,
+    ) -> dict[str, Any]:
+        return get_store_analytics_report(
+            api_url=get_store_api_url(),
+            read_token=get_store_read_token(),
+            query=query,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            top_limit=top_limit,
+        )
 
     @server.tool(
         name="prepare_action_contract",

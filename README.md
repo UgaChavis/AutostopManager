@@ -79,6 +79,7 @@ declarative exceptions.
 | Startup / identity | `AGENTS.md` |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` |
 | CRM manager data summaries | `docs/agent/crm_manager_data_playbook.md` |
+| Store analytics | `docs/agent/store_analytics_playbook.md` |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Gmail | `docs/agent/gmail_workflow_playbook.md` |
 | Business documents | `docs/agent/business_document_quality_playbook.md` |

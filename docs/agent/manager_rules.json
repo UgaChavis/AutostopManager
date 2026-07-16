@@ -1,6 +1,11 @@
 {
   "rules": [
     {
+      "id": "store-analytics-aggregate-only",
+      "priority": 40,
+      "rule": "For storefront analytics, use docs/agent/store_analytics_playbook.md and get_store_analytics_report. Return only aggregate metrics in Asia/Krasnoyarsk; never request, expose, persist, or place in prompts raw analytics events, visitor_id, session_id, IP, exact User-Agent, exact search text, form values, customer links, contacts, VIN, or click coordinates. Do not claim legal compliance; preserve the public notice, opt-out, and approximately 60-day raw retention boundary."
+    },
+    {
       "id": "codex-window-is-control-room",
       "priority": 5,
       "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."

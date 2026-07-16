@@ -24,6 +24,7 @@ Human entrypoint for routing, file placement, deletion, and source-pack policy.
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
+| Store analytics | `store_analytics_reporting` | `docs/agent/store_analytics_playbook.md` |
 | Gmail | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` |
 | Business identity | `business_identity` | `docs/agent/business_identity_playbook.md` |
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` |

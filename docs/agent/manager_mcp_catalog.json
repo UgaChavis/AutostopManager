@@ -1,8 +1,8 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-07-14",
-  "tool_count": 63,
+  "last_verified": "2026-07-16",
+  "tool_count": 64,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
   "memory_is_source_of_truth_for": [
@@ -43,6 +43,7 @@
     "manager_journal"
   ],
   "routing_tools": [
+    "get_store_analytics_report",
     "lookup_original_parts",
     "estimate_repair_work_cost",
     "decode_vehicle_identity",
@@ -111,6 +112,7 @@
     "agent_brief",
     "agent_bootstrap",
     "list_agent_workflows",
+    "get_store_analytics_report",
     "prepare_action_contract",
     "prepare_crm_card_action",
     "manager_journal",
@@ -176,6 +178,7 @@
     "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, context_safety, next actions, and verification.",
     "agent_bootstrap": "Return AgentEnvelopeV2 with the deterministic selected workflow, source boundaries, safety policy, missing context, and resumable unfinished runs without reading or writing live CRM/Gmail.",
     "list_agent_workflows": "List the compact named Agent Gateway v2 workflow registry and resolve a query or explicit intent deterministically.",
+    "get_store_analytics_report": "Read one bounded aggregate-only first-party storefront report in Asia/Krasnoyarsk for a preset or custom period, compare it with the previous equal period, and return a concise Russian answer without raw events, visitor/session identifiers, exact search text, or customer data.",
     "prepare_action_contract": "Build ActionContractV2 for CRM, finance, inventory, documents, files, or Gmail writes with task intent, exact target, idempotency, concurrency, automatic preflight, compensation, and readback verification; never performs the write.",
     "prepare_crm_card_action": "Build a dry-run CRM card edit contract with exact description patch, vehicle_profile metadata preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, risk flags, and strict reread verification; never writes CRM.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
@@ -227,6 +230,25 @@
     "provider_smoke_report": "Generate ProviderSmokeResult readiness checks for one provider or all providers in dry-run or live-readonly mode without order, basket, supplier write, or CRM writeback endpoints."
   },
   "natural_language_commands": {
+    "Store analytics": {
+      "aliases": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ",
+        "статистика магазина",
+        "аналитика сайта"
+      ],
+      "playbook": "docs/agent/store_analytics_playbook.md",
+      "authority": "aggregate-only first-party storefront statistics from the protected AutoStop App report endpoint",
+      "forbidden_data": [
+        "raw analytics events",
+        "visitor_id or session_id",
+        "IP or exact User-Agent",
+        "exact search queries, form values, customer contacts, or VIN"
+      ]
+    },
     "Приберись": {
       "aliases": [
         "Приберись"
@@ -367,5 +389,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 63
+  "all_tools_count": 64
 }

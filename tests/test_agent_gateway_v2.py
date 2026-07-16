@@ -12,12 +12,22 @@ def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
         "проведи оплату по заказ-наряду": "crm_finance_operation",
         "создай документ в CRM": "business_document_workflow",
         "обработай письмо и обнови CRM": "crm_gmail_workflow",
+        "сколько посетителей сегодня": "store_analytics_reporting",
+        "какие товары смотрели за неделю": "store_analytics_reporting",
+        "куда чаще нажимают": "store_analytics_reporting",
+        "сколько времени проводят на сайте": "store_analytics_reporting",
+        "какая конверсия в корзину и заказ": "store_analytics_reporting",
+        "покажи аналитику сайта за неделю": "store_analytics_reporting",
+        "сколько у сайта было посетителей сегодня?": "store_analytics_reporting",
     }
 
     for query, workflow_id in cases.items():
         route = find_command_route(query)
         assert route is not None
         assert route["workflow_id"] == workflow_id
+
+    store_orders = find_command_route("покажи заказы на сайте")
+    assert store_orders is None or store_orders["workflow_id"] != "store_analytics_reporting"
 
 
 def test_explicit_intent_wins_deterministically_over_query_keywords():
@@ -66,5 +76,5 @@ def test_workflow_registry_response_stays_named_and_compact():
     assert result["ok"] is True
     assert result["format"] == "agent_envelope_v2"
     assert result["summary"]["selected_workflow_id"] == "crm_gmail_workflow"
-    assert result["summary"]["workflow_count"] >= 11
+    assert result["summary"]["workflow_count"] >= 12
     assert len(str(result).encode("utf-8")) < 20_000

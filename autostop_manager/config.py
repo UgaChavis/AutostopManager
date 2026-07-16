@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "autostop_manager.sqlite3"
+STORE_AGENT_API_PREFIX = "/internal/agent/v1"
 _ENV_LOADED = False
 
 
@@ -68,3 +70,33 @@ def get_mcp_port() -> int:
 def get_mcp_path() -> str:
     path = os.environ.get("AUTOSTOP_MANAGER_MCP_PATH", "/mcp")
     return path if path.startswith("/") else f"/{path}"
+
+
+def get_store_api_url() -> str:
+    """Return the configured internal store API root without credentials."""
+
+    configured = os.environ.get("AUTOSTOP_STORE_API_URL", "").strip().rstrip("/")
+    if not configured:
+        return ""
+    candidate = configured if configured.endswith(STORE_AGENT_API_PREFIX) else f"{configured}{STORE_AGENT_API_PREFIX}"
+    try:
+        parsed = urlsplit(candidate)
+        hostname = (parsed.hostname or "").casefold()
+        port = parsed.port
+    except ValueError:
+        return ""
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return ""
+    if parsed.path.rstrip("/") != STORE_AGENT_API_PREFIX:
+        return ""
+    if hostname == "autostop24.shop":
+        return candidate if parsed.scheme == "https" and port in {None, 443} else ""
+    if hostname in {"127.0.0.1", "localhost", "::1"} and parsed.scheme in {"http", "https"}:
+        return candidate
+    return ""
+
+
+def get_store_read_token() -> str:
+    """Return the runtime-only store aggregate-read credential."""
+
+    return os.environ.get("AUTOSTOP_STORE_READ_TOKEN", "").strip()

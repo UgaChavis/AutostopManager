@@ -94,6 +94,33 @@ BOARD_CLEANUP_VERIFICATION = [
     "record unresolved blockers and skipped writes instead of guessing",
 ]
 
+STORE_ANALYTICS_READ_ORDER = [
+    "open docs/agent/store_analytics_playbook.md",
+    "discover get_store_analytics_report through Gateway v2 raw discovery",
+    "call get_store_analytics_report with the original natural query and requested period",
+    "answer from aggregate summary, rankings, funnel, and previous-period comparison only",
+]
+
+STORE_ANALYTICS_ALLOWED_ACTIONS = [
+    "read the protected aggregate-only storefront report",
+    "compare the selected period with the previous equal-duration period in Asia/Krasnoyarsk",
+    "report visitors, sessions, page views, engaged time, top pages/products, search quality, interactions, and funnel rates",
+]
+
+STORE_ANALYTICS_FORBIDDEN_ACTIONS = [
+    "request, expose, or persist raw analytics events or visitor/session identifiers",
+    "request or infer IP, User-Agent, exact search text, form contents, customer identity, contacts, VIN, or click coordinates",
+    "write analytics results to CRM or durable Manager memory",
+    "claim legal compliance from the technical implementation alone",
+]
+
+STORE_ANALYTICS_VERIFICATION = [
+    "verify store_analytics_report_v1 and Asia/Krasnoyarsk",
+    "verify meta.aggregatedOnly=true and rawEventsIncluded=false",
+    "verify the output contains no raw/private identifier keys",
+    "state the selected period and previous-period comparison",
+]
+
 LONG_RUN_CONTEXT_SAFETY = {
     "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
     "rules": [
@@ -319,6 +346,12 @@ def build_agent_brief(
             "refresh and verify board_summary",
             "report counts, skipped writes, blockers, and risks",
         ]
+    elif domain == "store_analytics_reporting":
+        read_order = STORE_ANALYTICS_READ_ORDER
+        allowed_actions = STORE_ANALYTICS_ALLOWED_ACTIONS
+        forbidden_actions = STORE_ANALYTICS_FORBIDDEN_ACTIONS
+        verification = STORE_ANALYTICS_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
     else:
         read_order = DEFAULT_READ_ORDER
         allowed_actions = DEFAULT_ALLOWED_ACTIONS
@@ -357,6 +390,7 @@ def build_agent_brief(
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
             "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
+            "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },
         "hot_rules": _compact_hot_rules(domain, limit),
         "read_order": read_order,

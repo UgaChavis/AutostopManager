@@ -62,11 +62,23 @@ def test_runtime_getters_normalize_configured_values(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_HOST", "0.0.0.0")
     monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_PORT", "42000")
     monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_PATH", "manager-mcp")
+    monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "https://autostop24.shop/")
+    monkeypatch.setenv("AUTOSTOP_STORE_READ_TOKEN", "runtime-only-token")
 
     assert config.get_db_path() == db_path.resolve()
     assert config.get_mcp_host() == "0.0.0.0"
     assert config.get_mcp_port() == 42000
     assert config.get_mcp_path() == "/manager-mcp"
+    assert config.get_store_api_url() == "https://autostop24.shop/internal/agent/v1"
+    assert config.get_store_read_token() == "runtime-only-token"
+
+
+def test_store_api_url_rejects_external_http_and_unapproved_hosts(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "http://autostop24.shop")
+    assert config.get_store_api_url() == ""
+
+    monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "https://attacker.example")
+    assert config.get_store_api_url() == ""
 
 
 def test_runtime_getters_use_project_defaults(monkeypatch):
@@ -75,6 +87,8 @@ def test_runtime_getters_use_project_defaults(monkeypatch):
         "AUTOSTOP_MANAGER_MCP_HOST",
         "AUTOSTOP_MANAGER_MCP_PORT",
         "AUTOSTOP_MANAGER_MCP_PATH",
+        "AUTOSTOP_STORE_API_URL",
+        "AUTOSTOP_STORE_READ_TOKEN",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -82,3 +96,5 @@ def test_runtime_getters_use_project_defaults(monkeypatch):
     assert config.get_mcp_host() == "127.0.0.1"
     assert config.get_mcp_port() == 41931
     assert config.get_mcp_path() == "/mcp"
+    assert config.get_store_api_url() == ""
+    assert config.get_store_read_token() == ""

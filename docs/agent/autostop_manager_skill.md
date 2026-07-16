@@ -53,6 +53,7 @@ covers the task may you use `discover_raw_capabilities`,
 | Task | Open first / tool | Notes |
 | --- | --- | --- |
 | CRM manager summaries | `docs/agent/crm_manager_data_playbook.md` | Return safe summaries and quality signals only. |
+| Store analytics | `docs/agent/store_analytics_playbook.md`, `get_store_analytics_report` | Aggregate-only storefront report in Asia/Krasnoyarsk; no raw events, identifiers, search text, or customer data. |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup; no movement/archive/order/payment/cashbox writes without separate explicit command. |
 | CRM card descriptions | `docs/agent/crm_card_description_standard.md` | Use for public description create/update/cleanup/writeback; keep text laconic, formatted, and free of sources/provenance, risk blocks, selection method, and supplier-check reminders. |
 | Ready unpaid / daily control | `agent_board_workflow` with `list_ready_unpaid_cards` / `apply_ready_unpaid_followups` | Use service-management playbook; dry-run before writes. |

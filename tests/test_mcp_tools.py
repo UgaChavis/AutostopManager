@@ -585,6 +585,41 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
         assert retired_tool not in server.tools
 
 
+def test_store_analytics_tool_is_registered_and_forwards_only_runtime_configuration(
+    tmp_path,
+    monkeypatch,
+):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    captured = {}
+
+    monkeypatch.setattr(mcp_tools_module, "get_store_api_url", lambda: "https://shop.example/internal/agent/v1")
+    monkeypatch.setattr(mcp_tools_module, "get_store_read_token", lambda: "runtime-secret")
+
+    def fake_report(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "format": "store_analytics_report_v1"}
+
+    monkeypatch.setattr(mcp_tools_module, "get_store_analytics_report", fake_report)
+    register_manager_memory_tools(server, store)
+
+    result = server.tools["get_store_analytics_report"](
+        query="сколько посетителей сегодня",
+        period="auto",
+        top_limit=5,
+    )
+    assert result["ok"] is True
+    assert captured == {
+        "api_url": "https://shop.example/internal/agent/v1",
+        "read_token": "runtime-secret",
+        "query": "сколько посетителей сегодня",
+        "period": "auto",
+        "date_from": None,
+        "date_to": None,
+        "top_limit": 5,
+    }
+
+
 def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -780,7 +815,8 @@ def test_crm_mcp_catalog_counts_are_current():
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
     assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 92
-    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 63
+    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 64
+    assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"
     assert "call_raw_capability" in catalog["agent_gateway_v2"]["raw_escape"]

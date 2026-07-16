@@ -604,6 +604,62 @@
         "register workflow_wait_for_external and call the separate Gmail connector",
         "complete_external_step with refs only, resume, and verify both systems"
       ]
+    },
+    {
+      "command_id": "store_analytics_reporting",
+      "workflow_id": "store_analytics_reporting",
+      "priority": 110,
+      "intent": "store_analytics_read",
+      "domain": "store_analytics_reporting",
+      "open_first": "docs/agent/store_analytics_playbook.md",
+      "aliases": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ",
+        "конверсия сайта в заказ",
+        "конверсия в заказ",
+        "статистика магазина",
+        "аналитика сайта"
+      ],
+      "keywords": [
+        "посетители сайта",
+        "сессии сайта",
+        "просмотры товаров",
+        "активное время",
+        "нулевая выдача",
+        "конверсия магазина",
+        "воронка магазина",
+        "нажатия на сайте",
+        "аналитик",
+        "сайт",
+        "посетител",
+        "просмотр",
+        "товар",
+        "врем",
+        "конверси",
+        "корзин",
+        "нажима",
+        "клик"
+      ],
+      "memory_queries": [],
+      "required_reads": [
+        "aggregate-only AutoStop App analytics report"
+      ],
+      "write_domains": [],
+      "external_connectors": [],
+      "completion_checks": [
+        "report timezone is Asia/Krasnoyarsk",
+        "current and previous equal periods are present",
+        "response contains aggregates only and no raw event or visitor/session identifiers"
+      ],
+      "next_actions": [
+        "resolve the requested preset or custom period in Asia/Krasnoyarsk",
+        "discover get_store_analytics_report through Gateway v2 raw discovery because no named public workflow is needed for this read",
+        "call get_store_analytics_report with the original natural query",
+        "answer from its aggregate summary, rankings, funnel, and previous-period comparison only"
+      ]
     }
   ]
 }

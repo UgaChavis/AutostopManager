@@ -78,6 +78,9 @@ verification.
   then `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run
   first. This collection action does not require `expected_revision`.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
+- Store analytics questions -> `docs/agent/store_analytics_playbook.md` and the
+  aggregate-only `get_store_analytics_report` capability through Gateway v2 raw
+  discovery. Never request or persist raw events or visitor/session ids.
 - Internet/repair web research -> resolve `search_web_multi`, excerpt, and
   `fetch_page_browser` through `discover_raw_capabilities` ->
   `get_raw_capability_schema` -> `call_raw_capability`. Search first; use the

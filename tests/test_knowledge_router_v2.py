@@ -25,6 +25,18 @@ def test_board_cleanup_route_has_single_canonical_alias():
     assert route["aliases"] == ["Приберись"]
 
 
+def test_store_analytics_natural_query_routes_to_aggregate_playbook(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "какие товары смотрели за неделю", limit=5)
+
+    assert result["ok"] is True
+    assert result["best_domain"] == "store_analytics_reporting"
+    assert result["open_first"] == "docs/agent/store_analytics_playbook.md"
+    assert result["command_route"]["command_id"] == "store_analytics_reporting"
+
+
 def test_noncanonical_cleanup_words_are_not_command_aliases():
     assert find_command_route("оформи карточку") is None
     assert find_command_route("обнови описание CRM") is None

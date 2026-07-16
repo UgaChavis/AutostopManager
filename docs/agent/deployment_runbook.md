@@ -131,6 +131,13 @@ There is no separate systemd service for AutostopManager in this setup. The
 manager MCP tools are loaded by the CRM container when the manager checkout is
 mounted and `autostop_manager.mcp_tools` can be imported.
 
+Store analytics additionally requires a dedicated shared read credential:
+`ANALYTICS_REPORT_TOKEN` in AutoStop App and the same value as
+`AUTOSTOP_STORE_READ_TOKEN` in the CRM runtime. Set
+`AUTOSTOP_STORE_API_URL=https://autostop24.shop` (the Manager appends
+`/internal/agent/v1`). Keep values only in runtime `.env` files and verify
+presence/match without printing them.
+
 Release flow:
 
 ```bash
@@ -182,6 +189,9 @@ After deployment, verify:
   workflows terminal
 - Manager knowledge, annotation, skill, and system audits pass
 - logs do not contain secrets or CRM dumps
+- `get_store_analytics_report` is discoverable as a read-only raw capability,
+  returns aggregate-only `store_analytics_report_v1`, and does not change the
+  public count of 24 tools
 
 Useful production checks:
 

@@ -1889,6 +1889,62 @@
         "city/region and vehicle class",
         "engine/transmission when they affect the operation"
       ]
+    },
+    "store_analytics_reporting": {
+      "title": "Aggregate-only first-party AutoStop storefront analytics",
+      "use_when": [
+        "owner asks how many visitors or sessions the store had",
+        "owner asks which pages or products were viewed",
+        "owner asks about search quality, meaningful clicks, active time, or conversion",
+        "storefront analytics must be compared with the previous equal period"
+      ],
+      "aliases": [
+        "store analytics",
+        "site analytics",
+        "store statistics",
+        "аналитика сайта",
+        "статистика магазина",
+        "посетители сегодня",
+        "товары за неделю",
+        "куда нажимают",
+        "время на сайте",
+        "конверсия в корзину",
+        "конверсия в заказ"
+      ],
+      "keywords": [
+        "get_store_analytics_report",
+        "store_analytics_report_v1",
+        "Asia/Krasnoyarsk",
+        "visitors",
+        "sessions",
+        "page views",
+        "engaged time",
+        "zero result rate",
+        "top products",
+        "funnel",
+        "previous period",
+        "aggregate only"
+      ],
+      "questions": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/store_analytics_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/store_analytics_playbook.md"
+      ],
+      "reference_files": [
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "required_context": []
     }
   },
   "search_patterns": {
@@ -1902,7 +1958,8 @@
     "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
-    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md"
+    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md",
+    "store_analytics": "rg -n \"analytics|аналитик|посетител|сесси|просмотр|конверс|воронк|активное время|нулевая выдача\" docs/agent/store_analytics_playbook.md"
   },
-  "updated_at": "2026-07-14"
+  "updated_at": "2026-07-16"
 }

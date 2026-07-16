@@ -44,6 +44,21 @@ def test_prepare_manager_context_flags_missing_required_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
+def test_agent_brief_for_store_analytics_is_aggregate_only_and_needs_no_clarification(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "сколько посетителей сегодня", limit=8)
+
+    assert result["route"]["domain"] == "store_analytics_reporting"
+    assert result["route"]["open_first"] == "docs/agent/store_analytics_playbook.md"
+    assert result["missing_context"] == []
+    assert any("get_store_analytics_report" in step for step in result["read_order"])
+    assert any("aggregate" in action for action in result["allowed_actions"])
+    assert any("raw analytics events" in action for action in result["forbidden_actions"])
+    assert any("rawEventsIncluded=false" in check for check in result["verification"])
+
+
 def test_agent_brief_routes_compact_project_engineering_query_to_startup(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
