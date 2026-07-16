@@ -632,3 +632,53 @@ def test_card_deadline_matches_live_connector_ranges_and_requires_positive_durat
     assert "invalid_deadline_part" in out_of_range["preflight"]["blocking_reasons"]
     assert "unsupported_deadline_field" in unknown["preflight"]["blocking_reasons"]
     assert "invalid_positive_deadline" in unknown["preflight"]["blocking_reasons"]
+
+
+def test_active_board_timer_floor_contract_routes_to_named_workflow_without_revision():
+    result = prepare_action_contract(
+        domain="crm_board",
+        action="bulk_set_deadline_if_below",
+        target_id="active_cards",
+        planned_changes={
+            "include_archived": False,
+            "min_total_seconds": 172800,
+            "target_total_seconds": 173700,
+        },
+        owner_intent="Сделай всем активным карточкам таймер более двух суток",
+        idempotency_key="active-board-timer-floor-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["domain"] == "board"
+    assert result["concurrency"] == {"expected_revision": None, "required": False}
+    assert result["execution"]["ready"] is True
+    assert result["execution"]["tool"] == "agent_board_workflow"
+    assert result["execution"]["operation"] == "bulk_set_deadline_if_below"
+    assert result["execution"]["gateway_arguments"] == {
+        "operation": "bulk_set_deadline_if_below",
+        "payload": {
+            "include_archived": False,
+            "min_total_seconds": 172800,
+            "target_total_seconds": 173700,
+        },
+        "idempotency_key": "active-board-timer-floor-v1",
+        "mode": "dry_run",
+    }
+
+
+def test_active_board_timer_floor_contract_rejects_archive_scope_and_missing_buffer():
+    result = prepare_action_contract(
+        domain="board",
+        action="bulk_set_deadline_if_below",
+        planned_changes={
+            "include_archived": True,
+            "min_total_seconds": 172800,
+            "target_total_seconds": 172800,
+        },
+        owner_intent="Подними таймеры активных карточек",
+        idempotency_key="unsafe-board-timer-floor-v1",
+    )
+
+    assert result["ok"] is False
+    assert "active_cards_only_required" in result["preflight"]["blocking_reasons"]
+    assert "target_total_seconds_must_exceed_minimum" in result["preflight"]["blocking_reasons"]

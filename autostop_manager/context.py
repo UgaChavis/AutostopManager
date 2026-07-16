@@ -97,7 +97,7 @@ BOARD_CLEANUP_VERIFICATION = [
 LONG_RUN_CONTEXT_SAFETY = {
     "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
     "rules": [
-        "Start start_workflow before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, CRM+Gmail work, or knowledge-intake batches.",
+        "For one named CRM operation, use its automatic Gateway ledger and do not call start_workflow separately. Start a parent workflow only for multi-operation CRM work, procurement sweeps, finance batches, CRM+Gmail work, or knowledge-intake batches.",
         "Use workflow_checkpoint after scope selection, candidate filtering, each write/skip/verification batch, and before any external connector wait.",
         "Keep raw board snapshots, full card dumps, phone lists, VIN/license tables, and repair-order dumps out of chat; save full machine data to local private files only when needed and report compact counts.",
         "Prefer agent_board_digest, agent_search, agent_entity_context, and named domain workflows over full-board Markdown, raw capabilities, or full JSON output.",

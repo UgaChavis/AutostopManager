@@ -105,6 +105,30 @@ For safe bulk writes, use high-level operations first:
   `agent_board_workflow(operation="apply_ready_unpaid_followups")`, dry-run then apply;
 - one-card cleanup: `agent_board_workflow(operation="cleanup_card")`, dry-run then apply.
 
+### Active-card timer floor
+
+For an owner request such as "всем активным карточкам таймер более двух суток":
+
+1. Build `prepare_action_contract` with `domain="board"`,
+   `action="bulk_set_deadline_if_below"`, `target_id="active_cards"`, and
+   `planned_changes={"include_archived": false, "min_total_seconds": 172800,
+   "target_total_seconds": 173700}`. This is a collection-scoped action, so it
+   does not require a synthetic board `expected_revision`.
+2. Call `agent_board_workflow(operation="bulk_set_deadline_if_below",
+   mode="dry_run")` with the same payload and a dry-run idempotency key.
+3. If verification passes, call the same named workflow with `mode="apply"`
+   and a new apply idempotency key.
+4. Confirm the apply workflow reports no active cards below `172800`, then
+   reread the active digest or live state and confirm archived cards were not
+   changed.
+
+`agent_board_workflow` owns and closes its Gateway v2 ledger automatically.
+Do not create a separate manual `start_workflow` for this single named
+operation. Dry-run and apply intentionally receive separate run ids; their
+responses and stored workflow metadata must state `mode`/`dry_run` explicitly.
+Use a parent manual workflow only when one owner request genuinely combines
+several named operations or external systems.
+
 Recent QA/test-card events can pollute board history. Treat them as connector
 health evidence, not as live customer-work priority signals.
 

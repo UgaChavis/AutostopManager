@@ -15,6 +15,7 @@ MUTATING_ACTIONS = {
     "delete",
     "merge",
     "set_deadline",
+    "bulk_set_deadline_if_below",
     "record_payment",
     "cash_transaction",
     "transfer",
@@ -27,7 +28,10 @@ MUTATING_ACTIONS = {
 }
 
 CREATE_ACTIONS = {"create", "record_payment", "cash_transaction", "transfer", "upload", "generate", "send", "forward"}
-COLLECTION_TARGET_ACTIONS = {("gmail", "label")}
+COLLECTION_TARGET_ACTIONS = {
+    ("gmail", "label"),
+    ("board", "bulk_set_deadline_if_below"),
+}
 
 DOMAIN_ALIASES = {
     "cards": "card",
@@ -41,6 +45,7 @@ DOMAIN_ALIASES = {
     "documents": "document",
     "files": "file",
     "email": "gmail",
+    "crm_board": "board",
 }
 
 EXECUTOR_TOOLS = {
@@ -48,6 +53,7 @@ EXECUTOR_TOOLS = {
     ("card", "move"): "move_card",
     ("card", "archive"): "archive_card",
     ("card", "set_deadline"): "set_card_deadline",
+    ("board", "bulk_set_deadline_if_below"): "agent_board_workflow",
     ("client", "create"): "create_client",
     ("client", "update"): "update_client",
     ("vehicle", "create"): "upsert_client_vehicle",
@@ -169,6 +175,28 @@ def prepare_action_contract(
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
 
+    workflow_operation = (
+        normalized_action
+        if normalized_domain == "board"
+        else "record_repair_order_payment"
+        if normalized_domain == "payment" and normalized_action == "record_payment"
+        else None
+    )
+    gateway_arguments = None
+    if normalized_domain == "board" and normalized_action == "bulk_set_deadline_if_below":
+        gateway_arguments = {
+            "operation": normalized_action,
+            "payload": changes,
+            "idempotency_key": key or None,
+            "mode": "dry_run" if dry_run else "apply",
+        }
+    elif normalized_domain == "payment" and normalized_action == "record_payment":
+        gateway_arguments = {
+            "operation": "record_repair_order_payment",
+            "payload": {**changes, "expected_updated_at": revision},
+            "idempotency_key": key or None,
+        }
+
     return {
         "ok": not blockers,
         "format": "action_contract_v2",
@@ -190,20 +218,8 @@ def prepare_action_contract(
         "execution": {
             "ready": not blockers and bool(executor_tool),
             "tool": executor_tool,
-            "operation": (
-                "record_repair_order_payment"
-                if normalized_domain == "payment" and normalized_action == "record_payment"
-                else None
-            ),
-            "gateway_arguments": (
-                {
-                    "operation": "record_repair_order_payment",
-                    "payload": {**changes, "expected_updated_at": revision},
-                    "idempotency_key": key or None,
-                }
-                if normalized_domain == "payment" and normalized_action == "record_payment"
-                else None
-            ),
+            "operation": workflow_operation,
+            "gateway_arguments": gateway_arguments,
             "external_connector": "gmail" if normalized_domain == "gmail" else None,
             "response_mode": "compact",
         },
@@ -240,6 +256,8 @@ def _validate_domain_changes(
         _validate_inventory_changes(changes, blockers)
     if domain == "card":
         _validate_card_changes(action, changes, blockers)
+    if domain == "board":
+        _validate_board_changes(action, changes, blockers)
     if domain == "gmail":
         _validate_gmail_changes(action, changes, blockers)
     if domain == "document" and action == "generate" and not str(changes.get("request_text") or "").strip():
@@ -321,6 +339,29 @@ def _validate_card_changes(action: str, changes: dict[str, Any], blockers: list[
         blockers.append("missing_target_column_id")
     if action == "set_deadline":
         _validate_deadline(changes.get("deadline"), blockers)
+
+
+def _validate_board_changes(action: str, changes: dict[str, Any], blockers: list[str]) -> None:
+    if action != "bulk_set_deadline_if_below":
+        return
+    if changes.get("include_archived") is not False:
+        blockers.append("active_cards_only_required")
+    minimum = changes.get("min_total_seconds")
+    target = changes.get("target_total_seconds")
+    if (
+        isinstance(minimum, bool)
+        or not isinstance(minimum, int)
+        or not 0 < minimum <= DEADLINE_PART_MAXIMUMS["total_seconds"]
+    ):
+        blockers.append("invalid_min_total_seconds")
+    if (
+        isinstance(target, bool)
+        or not isinstance(target, int)
+        or not 0 < target <= DEADLINE_PART_MAXIMUMS["total_seconds"]
+    ):
+        blockers.append("invalid_target_total_seconds")
+    elif isinstance(minimum, int) and not isinstance(minimum, bool) and target <= minimum:
+        blockers.append("target_total_seconds_must_exceed_minimum")
 
 
 def _validate_deadline(deadline: Any, blockers: list[str]) -> None:
@@ -415,6 +456,14 @@ def _nonempty_string_list(value: Any) -> bool:
 
 def _verification_checks(domain: str, action: str) -> list[str]:
     checks = ["write_response_ok", "target_reread", "planned_diff_exact", "no_unplanned_fields"]
+    if domain == "board" and action == "bulk_set_deadline_if_below":
+        return [
+            "write_response_ok",
+            "active_board_reread",
+            "no_active_cards_below_minimum",
+            "archived_cards_unchanged",
+            "no_unplanned_fields",
+        ]
     if (domain, action) in FINANCIAL_TRANSACTION_ACTIONS:
         checks.extend(["cash_journal_entry_exists", "repair_order_balance_reconciled", "amount_exact"])
     if domain == "gmail":

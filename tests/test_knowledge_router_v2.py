@@ -72,6 +72,35 @@ def test_probe_routes_timer_floor_to_manager_data_playbook(tmp_path):
     assert result["open_first"].endswith("crm_manager_data_playbook.md")
 
 
+def test_probe_routes_timer_floor_wording_with_more_than_two_days(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "проанализируй все активные карточки CRM и сделай всем карточкам таймер более двух суток",
+        limit=5,
+    )
+
+    assert result["best_domain"] == "service_management"
+    assert result["command_route"]["command_id"] == "timer_floor_control"
+    assert result["open_first"].endswith("crm_manager_data_playbook.md")
+
+
+def test_gateway_routing_fix_query_stays_in_project_engineering(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "исправить маршрутизацию Gateway v2 для bulk_set_deadline_if_below, Action Contract и dry_run metadata",
+        limit=5,
+    )
+
+    assert result["best_domain"] == "startup_and_identity"
+    assert result["open_first"] == "AGENTS.md"
+
+
 def test_probe_routes_gmail_connector_work_to_gmail_operations(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)

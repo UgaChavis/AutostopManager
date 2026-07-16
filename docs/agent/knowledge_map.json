@@ -1414,6 +1414,8 @@
       "title": "Krasnoyarsk workshop service management route",
       "use_when": [
         "daily CRM control",
+        "active-card timer floor above two days",
+        "bulk_set_deadline_if_below dry-run and apply",
         "Krasnoyarsk workshop decisions",
         "procurement blockers",
         "staff load",
@@ -1443,6 +1445,12 @@
         "наличие Красноярск"
       ],
       "keywords": [
+        "timer floor",
+        "deadline floor",
+        "bulk_set_deadline_if_below",
+        "таймер более двух суток",
+        "таймеры более двух суток",
+        "активные карточки",
         "procurement",
         "staff load",
         "customer flow",

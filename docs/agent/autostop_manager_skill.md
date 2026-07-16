@@ -56,7 +56,7 @@ covers the task may you use `discover_raw_capabilities`,
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup; no movement/archive/order/payment/cashbox writes without separate explicit command. |
 | CRM card descriptions | `docs/agent/crm_card_description_standard.md` | Use for public description create/update/cleanup/writeback; keep text laconic, formatted, and free of sources/provenance, risk blocks, selection method, and supplier-check reminders. |
 | Ready unpaid / daily control | `agent_board_workflow` with `list_ready_unpaid_cards` / `apply_ready_unpaid_followups` | Use service-management playbook; dry-run before writes. |
-| Timer floor | `agent_board_workflow(operation="bulk_set_deadline_if_below")` dry-run | Active cards only unless owner expands scope. |
+| Timer floor | `prepare_action_contract(domain="board", action="bulk_set_deadline_if_below")`, then named workflow dry-run/apply | Active cards only; use 172800/173700, no synthetic `expected_revision`, and no duplicate manual ledger for this single named operation. |
 | CRM VIN/OEM parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md`, `plan_crm_vin_oem_parts_lookup` | Never invent OEM, applicability, stock, or prices. |
 | Vehicle identity / VIN/frame | `docs/agent/vehicle_identity_playbook.md`, `decode_vehicle_identity` | Classify identifier and market before OEM or parts work. |
 | Oils/fluids/capacities | `docs/agent/fluid_maintenance_playbook.md`, `recommend_fluid_maintenance_sources` | Do not confirm specs/capacities without source route. |

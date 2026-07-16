@@ -74,7 +74,9 @@ verification.
 - CRM card descriptions -> `docs/agent/crm_card_description_standard.md`.
 - `ready unpaid` / daily control -> `docs/agent/krasnoyarsk_service_management_playbook.md`.
 - Timer floor -> `docs/agent/crm_manager_data_playbook.md` and
-  `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run first.
+  `prepare_action_contract(domain="board", action="bulk_set_deadline_if_below")`,
+  then `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run
+  first. This collection action does not require `expected_revision`.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
 - Internet/repair web research -> resolve `search_web_multi`, excerpt, and
   `fetch_page_browser` through `discover_raw_capabilities` ->

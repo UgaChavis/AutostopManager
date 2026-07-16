@@ -1648,6 +1648,27 @@ def _domain_hints(query: str) -> dict[str, int]:
         term in lowered for term in PROJECT_ENGINEERING_ACTION_TERMS
     ):
         hints["startup_and_identity"] = 55
+    gateway_engineering_terms = (
+        "gateway v2",
+        "action contract",
+        "prepare_action_contract",
+        "agent-brief",
+        "knowledge-probe",
+        "workflow metadata",
+        "dry_run metadata",
+    )
+    gateway_engineering_actions = (
+        "исправ",
+        "почин",
+        "маршрутизац",
+        "рефактор",
+        "документац",
+        "тест",
+    )
+    if any(term in lowered for term in gateway_engineering_terms) and any(
+        term in lowered for term in gateway_engineering_actions
+    ):
+        hints["startup_and_identity"] = max(hints.get("startup_and_identity", 0), 70)
     knowledge_intake_terms = [
         "база знаний",
         "базу знаний",
@@ -1740,6 +1761,17 @@ def _domain_hints(query: str) -> dict[str, int]:
         hints["toyota_gr_yaris"] = max(hints.get("toyota_gr_yaris", 0), 18)
     if any(word in lowered for word in ["приберись", "board_cleanup_autopilot", "cleanup"]):
         hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)
+    if any(
+        term in lowered
+        for term in [
+            "таймер более двух суток",
+            "таймеры более двух суток",
+            "не менее двух суток",
+            "bulk_set_deadline_if_below",
+            "timer floor",
+        ]
+    ) and not any(term in lowered for term in gateway_engineering_actions):
+        hints["service_management"] = max(hints.get("service_management", 0), 60)
     return hints
 
 

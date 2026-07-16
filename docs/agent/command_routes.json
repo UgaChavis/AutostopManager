@@ -157,13 +157,18 @@
         "поставь таймеры",
         "поставь таймеры на 2 суток",
         "сделай таймеры не менее двух суток",
-        "таймер на активных карточках не менее двух суток"
+        "таймер на активных карточках не менее двух суток",
+        "таймер более двух суток",
+        "таймеры более двух суток",
+        "сделай всем карточкам таймер более двух суток"
       ],
       "keywords": [
         "таймер",
         "дедлайн",
         "deadline",
         "двое суток",
+        "двух суток",
+        "более двух суток",
         "не менее двух суток",
         "172800"
       ],
@@ -188,7 +193,7 @@
       "next_actions": [
         "read agent_bootstrap and agent_board_digest",
         "run bulk_set_deadline_if_below through agent_board_workflow in dry_run with min_total_seconds=172800 and target_total_seconds=173700 so every changed timer is strictly above two days",
-        "apply with actor_name only after dry_run shows eligible cards and no unexpected errors",
+        "apply with a new unique idempotency key only after dry_run shows eligible cards and no unexpected errors; do not start a duplicate manual workflow because agent_board_workflow owns its ledger",
         "verify changed cards with response verification and a compact reread"
       ]
     },
