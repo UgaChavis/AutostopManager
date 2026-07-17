@@ -114,6 +114,23 @@ def test_tmp_writable_reports_os_errors(monkeypatch):
     assert control_center_module._tmp_writable() is False
 
 
+def test_codex_skill_inventory_tolerates_inaccessible_root(monkeypatch):
+    class _InaccessibleRoot:
+        def exists(self):
+            raise PermissionError("blocked by runner sandbox")
+
+        def __str__(self):
+            return "/root/.codex/skills/.system"
+
+    monkeypatch.setattr(control_center_module, "CODEX_SYSTEM_SKILLS_ROOT", _InaccessibleRoot())
+
+    inventory = control_center_module._codex_skill_inventory()
+
+    assert inventory["system_skills_readable"] is False
+    assert inventory["system_skill_count"] == 0
+    assert inventory["system_skills"] == []
+
+
 def test_read_catalog_counts_handles_invalid_structure(tmp_path, monkeypatch):
     catalog_path = tmp_path / "manager_mcp_catalog.json"
     catalog_path.write_text("[]", encoding="utf-8")

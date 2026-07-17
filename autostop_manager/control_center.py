@@ -938,19 +938,35 @@ def _mcp_import_status(python_path: Path, *, cwd: Path) -> dict[str, Any]:
     }
 
 
+def _safe_path_inventory(
+    root: Path,
+    pattern: str | None = None,
+    *,
+    directories_only: bool = False,
+) -> tuple[list[Path], bool]:
+    try:
+        if not root.exists():
+            return [], False
+        candidates = root.glob(pattern) if pattern else root.iterdir()
+        paths = [path for path in candidates if not directories_only or path.is_dir()]
+    except OSError:
+        return [], False
+    return sorted(paths), True
+
+
 def _codex_skill_inventory() -> dict[str, Any]:
-    system_skills = sorted(CODEX_SYSTEM_SKILLS_ROOT.glob("*/SKILL.md")) if CODEX_SYSTEM_SKILLS_ROOT.exists() else []
-    plugin_skills = (
-        sorted(CODEX_PLUGIN_CACHE_ROOT.glob("*/**/skills/*/SKILL.md")) if CODEX_PLUGIN_CACHE_ROOT.exists() else []
+    system_skills, system_skills_readable = _safe_path_inventory(CODEX_SYSTEM_SKILLS_ROOT, "*/SKILL.md")
+    plugin_skills, plugin_skills_readable = _safe_path_inventory(
+        CODEX_PLUGIN_CACHE_ROOT,
+        "*/**/skills/*/SKILL.md",
     )
-    plugins = (
-        sorted(path.name for path in CODEX_PLUGIN_CACHE_ROOT.iterdir() if path.is_dir())
-        if CODEX_PLUGIN_CACHE_ROOT.exists()
-        else []
-    )
+    plugin_dirs, plugin_dirs_readable = _safe_path_inventory(CODEX_PLUGIN_CACHE_ROOT, directories_only=True)
+    plugins = [path.name for path in plugin_dirs]
     return {
         "system_skills_root": str(CODEX_SYSTEM_SKILLS_ROOT),
         "plugin_cache_root": str(CODEX_PLUGIN_CACHE_ROOT),
+        "system_skills_readable": system_skills_readable,
+        "plugin_cache_readable": plugin_skills_readable and plugin_dirs_readable,
         "system_skill_count": len(system_skills),
         "plugin_skill_count": len(plugin_skills),
         "plugin_count": len(plugins),
