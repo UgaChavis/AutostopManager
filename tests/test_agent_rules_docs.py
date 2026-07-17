@@ -172,6 +172,69 @@ def test_every_command_route_has_gateway_v2_execution_contract():
         assert route["completion_checks"]
 
 
+def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text())
+    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text())
+    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text())
+    required_docs = [
+        ROOT / "AGENTS.md",
+        ROOT / "README.md",
+        ROOT / "docs" / "agent" / "autostop_manager_skill.md",
+        ROOT / "docs" / "agent" / "store_management_playbook.md",
+        ROOT / "docs" / "agent" / "deployment_runbook.md",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in required_docs)
+
+    for expected in [
+        "AutoStop App is the source of truth",
+        "store_bootstrap",
+        "store_digest",
+        "physical",
+        "reserved",
+        "available",
+        "expected_updated_at",
+        "agent_inventory_workflow",
+        "AUTOSTOP_STORE_API_URL",
+        "AUTOSTOP_STORE_READ_TOKEN",
+        "AUTOSTOP_STORE_MANAGE_TOKEN",
+        "raw store",
+    ]:
+        assert expected in combined
+
+    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 69
+    assert set(manager_catalog["store_tools"]) == {
+        "store_runtime_status",
+        "store_digest",
+        "store_search",
+        "store_entity_context",
+        "store_management_action",
+    }
+    assert crm_catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
+    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 69
+    assert crm_catalog["agent_gateway_v2"]["store_extensions"]["public_tool_count_unchanged"] == 24
+    assert "store_management" in knowledge_map["domains"]
+
+    workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
+    for expected in [
+        'python-version: "3.11"',
+        'pip install -e ".[dev]"',
+        "knowledge-sync",
+        "knowledge-audit",
+        "annotations-audit",
+        "skills-audit",
+        "cleanup-audit",
+        "ruff check .",
+        "ruff format --check autostop_manager tests",
+        "mypy autostop_manager",
+        "pytest -q",
+        "coverage report --fail-under=82",
+        "node --check frontend/control-center/app.js",
+        "workflow_dispatch",
+        "pull_request",
+    ]:
+        assert expected in workflow
+
+
 def test_gmail_playbook_lists_current_documented_surface():
     playbook = (ROOT / "docs" / "agent" / "gmail_workflow_playbook.md").read_text(encoding="utf-8")
     tools = [

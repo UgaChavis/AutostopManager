@@ -604,6 +604,181 @@
         "register workflow_wait_for_external and call the separate Gmail connector",
         "complete_external_step with refs only, resume, and verify both systems"
       ]
+    },
+    {
+      "command_id": "store_read_workflow",
+      "workflow_id": "store_read_workflow",
+      "priority": 96,
+      "intent": "store_read",
+      "domain": "store_management",
+      "open_first": "docs/agent/store_management_playbook.md",
+      "aliases": [
+        "Что нового появилось в магазине",
+        "Что нового сегодня в магазине",
+        "Есть ли новые заказы",
+        "Покажи активные заказы магазина",
+        "Что заказали в заказе №",
+        "Покажи новые заявки на подбор",
+        "Найди запчасть W 914/2 в нашем каталоге",
+        "Сколько этой детали на складе",
+        "Где она лежит",
+        "Сколько физически, зарезервировано и доступно",
+        "Покажи последние приходы и отгрузки",
+        "Какие позиции заканчиваются",
+        "Покажи состояние склада",
+        "Покажи ошибки выгрузки Avito/Drom"
+      ],
+      "keywords": [
+        "заказы магазина",
+        "в заказе №",
+        "заявки на подбор",
+        "нашем каталоге",
+        "детали на складе",
+        "место хранения",
+        "физически, зарезервировано и доступно",
+        "приходы и отгрузки",
+        "низкий остаток",
+        "состояние склада",
+        "ошибки выгрузки"
+      ],
+      "memory_queries": [
+        "store_management",
+        "AutoStop App store",
+        "store digest cursor"
+      ],
+      "required_reads": [
+        "agent_bootstrap for degraded-safe store readiness",
+        "agent_board_digest scope=store or focused agent_search",
+        "agent_entity_context for one exact store object"
+      ],
+      "write_domains": [],
+      "external_connectors": [
+        "AutoStop App internal agent API"
+      ],
+      "completion_checks": [
+        "all lists are bounded and paginated",
+        "general output contains no contacts or raw customer data",
+        "business today uses Asia/Krasnoyarsk while checkpoint timestamps remain technical UTC and cursors opaque",
+        "owner-visible digest cursor advances only after the final page"
+      ],
+      "next_actions": [
+        "open the store playbook and read compact store runtime state",
+        "use agent_board_digest(scope=store) for summary or agent_search for a focused entity",
+        "continue every digest page with its opaque next_cursor until has_more=false",
+        "use agent_entity_context only for an exact requested object",
+        "report store outage as degraded without blocking CRM"
+      ]
+    },
+    {
+      "command_id": "store_management_workflow",
+      "workflow_id": "store_management_workflow",
+      "priority": 98,
+      "intent": "store_management",
+      "domain": "store_management",
+      "open_first": "docs/agent/store_management_playbook.md",
+      "aliases": [
+        "назначь заявку на подбор сотруднику",
+        "переведи заявку на подбор в работу",
+        "верни заявку на подбор в NEW",
+        "обнови внутренний комментарий заявки",
+        "измени место хранения партии",
+        "переведи заказ магазина в READY"
+      ],
+      "keywords": [
+        "назначь заявку на подбор",
+        "статус заявки на подбор",
+        "внутренний комментарий заявки",
+        "место хранения партии",
+        "заказ магазина в READY"
+      ],
+      "memory_queries": [
+        "store management allowlist",
+        "ActionContractV2 store",
+        "store optimistic concurrency"
+      ],
+      "required_reads": [
+        "exact store entity and current updated_at",
+        "prepare_action_contract for the exact allowlisted domain/action",
+        "agent_inventory_workflow dry_run result including external effects"
+      ],
+      "write_domains": [
+        "store_quote_request",
+        "store_batch",
+        "store_order"
+      ],
+      "external_connectors": [
+        "AutoStop App internal agent API"
+      ],
+      "completion_checks": [
+        "exact target and expected_updated_at match",
+        "unique idempotency key and correlation id are recorded",
+        "dry_run precedes apply and READY notification effect is disclosed",
+        "exact reread matches only the planned fields",
+        "Manager ledger contains compact refs only"
+      ],
+      "next_actions": [
+        "reread the exact store target",
+        "build ActionContractV2 with exact target, owner intent, planned changes, expected_updated_at, and unique idempotency key",
+        "run agent_inventory_workflow in dry_run and inspect effects",
+        "apply only the five-operation allowlist after a clean dry-run",
+        "reread the exact target and reconcile the compact audit correlation"
+      ]
+    },
+    {
+      "command_id": "store_analytics_reporting",
+      "workflow_id": "store_analytics_reporting",
+      "priority": 110,
+      "intent": "store_analytics_read",
+      "domain": "store_analytics_reporting",
+      "open_first": "docs/agent/store_analytics_playbook.md",
+      "aliases": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ",
+        "конверсия сайта в заказ",
+        "конверсия в заказ",
+        "статистика магазина",
+        "аналитика сайта"
+      ],
+      "keywords": [
+        "посетители сайта",
+        "сессии сайта",
+        "просмотры товаров",
+        "активное время",
+        "нулевая выдача",
+        "конверсия магазина",
+        "воронка магазина",
+        "нажатия на сайте",
+        "аналитик",
+        "сайт",
+        "посетител",
+        "просмотр",
+        "товар",
+        "врем",
+        "конверси",
+        "корзин",
+        "нажима",
+        "клик"
+      ],
+      "memory_queries": [],
+      "required_reads": [
+        "aggregate-only AutoStop App analytics report"
+      ],
+      "write_domains": [],
+      "external_connectors": [],
+      "completion_checks": [
+        "report timezone is Asia/Krasnoyarsk",
+        "current and previous equal periods are present",
+        "response contains aggregates only and no raw event or visitor/session identifiers"
+      ],
+      "next_actions": [
+        "resolve the requested preset or custom period in Asia/Krasnoyarsk",
+        "discover get_store_analytics_report through Gateway v2 raw discovery because no named public workflow is needed for this read",
+        "call get_store_analytics_report with the original natural query",
+        "answer from its aggregate summary, rankings, funnel, and previous-period comparison only"
+      ]
     }
   ]
 }

@@ -629,6 +629,42 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="Initialize SQLite storage")
     sub.add_parser("seed-rules", help="Seed default manager rules from docs")
 
+    store_checkpoint_status = sub.add_parser(
+        "store-checkpoint-status",
+        help="Show one scoped Store digest/bootstrap delivery checkpoint",
+    )
+    store_checkpoint_status.add_argument(
+        "--stream",
+        required=True,
+        choices=["store_digest", "store_bootstrap"],
+    )
+
+    store_checkpoint_reset = sub.add_parser(
+        "store-checkpoint-reset",
+        help="Reset one verified-broken Store cursor so its next read creates a fresh baseline",
+    )
+    store_checkpoint_reset.add_argument(
+        "--stream",
+        required=True,
+        choices=["store_digest", "store_bootstrap"],
+    )
+    store_checkpoint_reset.add_argument("--expected-state-version", required=True, type=int)
+    store_checkpoint_reset.add_argument(
+        "--reason",
+        required=True,
+        choices=[
+            "cursor_generation_mismatch",
+            "cursor_ahead_after_store_restore",
+            "operator_verified_rebaseline",
+        ],
+    )
+    store_checkpoint_reset.add_argument(
+        "--confirm-rebaseline",
+        required=True,
+        action="store_true",
+        help="Acknowledge that only this Store stream will discard its cursor and baseline again",
+    )
+
     sub.add_parser("knowledge-sync", help="Index the local knowledge map into SQLite")
 
     knowledge_intake = sub.add_parser(
@@ -707,6 +743,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         store.initialize()
         seed_result = store.seed_default_rules()
         _print_json({"ok": True, "db_path": str(store.path), "seed_rules": seed_result})
+    elif args.command == "store-checkpoint-status":
+        return _print_checked_json(store.get_store_checkpoint(args.stream))
+    elif args.command == "store-checkpoint-reset":
+        return _print_checked_json(
+            store.reset_store_checkpoint_for_rebaseline(
+                stream=args.stream,
+                expected_state_version=args.expected_state_version,
+                reason=args.reason,
+            )
+        )
     elif args.command == "seed-rules":
         _print_json(store.seed_default_rules())
     elif args.command == "knowledge-sync":

@@ -25,6 +25,11 @@ MUTATING_ACTIONS = {
     "send",
     "forward",
     "label",
+    "assign_quote_request",
+    "set_quote_request_status",
+    "update_quote_request_comment",
+    "set_batch_storage_location",
+    "mark_order_ready",
 }
 
 CREATE_ACTIONS = {"create", "record_payment", "cash_transaction", "transfer", "upload", "generate", "send", "forward"}
@@ -46,6 +51,9 @@ DOMAIN_ALIASES = {
     "files": "file",
     "email": "gmail",
     "crm_board": "board",
+    "store_quote_requests": "store_quote_request",
+    "store_batches": "store_batch",
+    "store_orders": "store_order",
 }
 
 EXECUTOR_TOOLS = {
@@ -68,6 +76,11 @@ EXECUTOR_TOOLS = {
     ("gmail", "send"): "gmail:_send_email",
     ("gmail", "forward"): "gmail:_forward_emails",
     ("gmail", "label"): "gmail:_apply_labels_to_emails",
+    ("store_quote_request", "assign_quote_request"): "agent_inventory_workflow",
+    ("store_quote_request", "set_quote_request_status"): "agent_inventory_workflow",
+    ("store_quote_request", "update_quote_request_comment"): "agent_inventory_workflow",
+    ("store_batch", "set_batch_storage_location"): "agent_inventory_workflow",
+    ("store_order", "mark_order_ready"): "agent_inventory_workflow",
 }
 
 INVENTORY_EXECUTOR_TOOLS = {
@@ -85,6 +98,15 @@ FINANCIAL_TRANSACTION_ACTIONS = {
 DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive"}
 TARGET_ONLY_ACTIONS = {"delete", "archive"}
 EXTERNAL_DOMAINS = {"gmail"}
+STORE_DOMAINS = {"store_quote_request", "store_batch", "store_order"}
+STORE_ACTIONS = {
+    ("store_quote_request", "assign_quote_request"),
+    ("store_quote_request", "set_quote_request_status"),
+    ("store_quote_request", "update_quote_request_comment"),
+    ("store_batch", "set_batch_storage_location"),
+    ("store_order", "mark_order_ready"),
+}
+STORE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
 MAX_MONEY_MINOR = 100_000_000_000_000
 MAX_MONEY_AMOUNT = MAX_MONEY_MINOR / 100
 DEADLINE_PART_MAXIMUMS = {
@@ -105,6 +127,7 @@ def prepare_action_contract(
     owner_intent: str = "",
     expected_revision: str | None = None,
     idempotency_key: str = "",
+    correlation_id: str = "",
     run_id: int | None = None,
     actor: str = "codex-owner-agent",
     dry_run: bool = True,
@@ -115,8 +138,10 @@ def prepare_action_contract(
     normalized_action = str(action or "").strip().casefold()
     normalized_target = str(target_id or "").strip()
     changes = dict(planned_changes) if isinstance(planned_changes, dict) else {}
+    changes = _normalize_store_planned_changes(normalized_action, changes)
     intent = str(owner_intent or "").strip()
     key = str(idempotency_key or "").strip()
+    requested_correlation_id = str(correlation_id or "").strip()
     revision = str(expected_revision or "").strip() or None
     exact_target_id_required = (
         normalized_action not in CREATE_ACTIONS
@@ -142,6 +167,7 @@ def prepare_action_contract(
         blockers.append("missing_expected_revision")
     if not changes and normalized_action not in TARGET_ONLY_ACTIONS:
         blockers.append("missing_planned_changes")
+    blockers.extend(_store_correlation_blockers(normalized_domain, requested_correlation_id))
 
     _validate_domain_changes(normalized_domain, normalized_action, changes, blockers, warnings)
     if normalized_action in DESTRUCTIVE_ACTIONS:
@@ -161,7 +187,16 @@ def prepare_action_contract(
         key,
         revision,
     )
-    verification_checks = _verification_checks(normalized_domain, normalized_action)
+    stable_correlation_id = _action_correlation_id(
+        domain=normalized_domain,
+        action=normalized_action,
+        target_id=normalized_target,
+        changes=changes,
+        revision=revision,
+        requested=requested_correlation_id,
+        contract_id=contract_id,
+    )
+    verification_checks = _verification_checks(normalized_domain, normalized_action, dry_run=dry_run)
     preflight_checks = [
         "exact_target_resolved",
         "task_specific_owner_intent_present",
@@ -174,6 +209,10 @@ def prepare_action_contract(
         preflight_checks.extend(["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"])
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
+    if normalized_domain in STORE_DOMAINS:
+        preflight_checks.extend(["store_target_reread", "store_expected_updated_at_matches", "store_scope_allowed"])
+        if normalized_action == "mark_order_ready":
+            preflight_checks.extend(["store_order_current_status_is_in_progress", "notification_effect_disclosed"])
 
     workflow_operation = (
         normalized_action
@@ -196,11 +235,28 @@ def prepare_action_contract(
             "payload": {**changes, "expected_updated_at": revision},
             "idempotency_key": key or None,
         }
+    elif (normalized_domain, normalized_action) in STORE_ACTIONS:
+        gateway_arguments = {
+            "operation": normalized_action,
+            "payload": {
+                "domain": normalized_domain,
+                "target_id": normalized_target,
+                "expected_updated_at": revision,
+                "owner_intent": intent,
+                "planned_changes": changes,
+                "correlation_id": stable_correlation_id,
+                **changes,
+            },
+            "idempotency_key": key or None,
+            "mode": "dry_run" if dry_run else "apply",
+        }
+        workflow_operation = normalized_action
 
     return {
         "ok": not blockers,
         "format": "action_contract_v2",
         "contract_id": contract_id,
+        "correlation_id": stable_correlation_id,
         "run_id": run_id,
         "domain": normalized_domain,
         "action": normalized_action,
@@ -229,13 +285,17 @@ def prepare_action_contract(
             "record_correlation_id": True,
         },
         "compensation": {
-            "required": normalized_domain in FINANCIAL_DOMAINS or normalized_action in DESTRUCTIVE_ACTIONS,
+            "required": (
+                normalized_domain in FINANCIAL_DOMAINS
+                or normalized_action in DESTRUCTIVE_ACTIONS
+                or normalized_domain in STORE_DOMAINS
+            ),
             "strategy": _compensation_strategy(normalized_domain, normalized_action),
         },
         "ledger": {
             "events": ["planned_action", "preflight", "write", "verification"],
             "store_payload": False,
-            "store_refs_only": normalized_domain in EXTERNAL_DOMAINS,
+            "store_refs_only": normalized_domain in EXTERNAL_DOMAINS or normalized_domain in STORE_DOMAINS,
         },
         "warnings": list(dict.fromkeys(warnings)),
     }
@@ -267,6 +327,65 @@ def _validate_domain_changes(
             blockers.append("missing_file_name")
         if not str(changes.get("content_base64") or "").strip():
             blockers.append("missing_content_base64")
+    if domain in STORE_DOMAINS:
+        _validate_store_changes(domain, action, changes, blockers, warnings)
+
+
+def _validate_store_changes(
+    domain: str,
+    action: str,
+    changes: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> None:
+    if (domain, action) not in STORE_ACTIONS:
+        blockers.append("unsupported_store_management_operation")
+        return
+    allowed_fields: dict[tuple[str, str], set[str]] = {
+        ("store_quote_request", "assign_quote_request"): {"assignee_id"},
+        ("store_quote_request", "set_quote_request_status"): {"status"},
+        ("store_quote_request", "update_quote_request_comment"): {"internal_comment"},
+        ("store_batch", "set_batch_storage_location"): {"storage_location"},
+        ("store_order", "mark_order_ready"): {"status"},
+    }
+    allowed = allowed_fields[(domain, action)]
+    unexpected = sorted(set(changes).difference(allowed))
+    if unexpected:
+        blockers.append("unsupported_store_change_fields")
+    if action == "assign_quote_request" and not _nonempty_string(changes.get("assignee_id")):
+        blockers.append("missing_store_assignee_id")
+    elif action == "set_quote_request_status":
+        status = str(changes.get("status") or "").strip().upper()
+        if status not in {"NEW", "IN_PROGRESS"}:
+            blockers.append("unsupported_store_quote_status")
+    elif action == "update_quote_request_comment":
+        comment = changes.get("internal_comment")
+        if comment is not None and (not isinstance(comment, str) or len(comment) > 2000):
+            blockers.append("invalid_store_internal_comment")
+    elif action == "set_batch_storage_location":
+        location = changes.get("storage_location")
+        if not isinstance(location, str) or not location.strip() or len(location) > 200:
+            blockers.append("invalid_store_storage_location")
+    elif action == "mark_order_ready":
+        if str(changes.get("status") or "").strip().upper() != "READY":
+            blockers.append("store_order_ready_status_required")
+        warnings.append("store_order_ready_may_notify_customer")
+
+
+def _normalize_store_planned_changes(action: str, changes: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(changes)
+    if action == "assign_quote_request" and isinstance(normalized.get("assignee_id"), str):
+        normalized["assignee_id"] = normalized["assignee_id"].strip()
+    elif action == "set_quote_request_status" and isinstance(normalized.get("status"), str):
+        normalized["status"] = normalized["status"].strip().upper()
+    elif action == "update_quote_request_comment" and isinstance(normalized.get("internal_comment"), str):
+        comment = normalized["internal_comment"].strip()
+        normalized["internal_comment"] = comment or None
+    elif action == "set_batch_storage_location" and isinstance(normalized.get("storage_location"), str):
+        normalized["storage_location"] = normalized["storage_location"].strip()
+    elif action == "mark_order_ready" and isinstance(normalized.get("status"), str):
+        normalized["status"] = normalized["status"].strip().upper()
+    return normalized
 
 
 def _validate_financial_changes(
@@ -454,7 +573,7 @@ def _nonempty_string_list(value: Any) -> bool:
     )
 
 
-def _verification_checks(domain: str, action: str) -> list[str]:
+def _verification_checks(domain: str, action: str, *, dry_run: bool) -> list[str]:
     checks = ["write_response_ok", "target_reread", "planned_diff_exact", "no_unplanned_fields"]
     if domain == "board" and action == "bulk_set_deadline_if_below":
         return [
@@ -470,6 +589,33 @@ def _verification_checks(domain: str, action: str) -> list[str]:
         checks = ["connector_result_ref_present", "message_or_thread_id_present", "external_step_completed_once"]
     if domain == "document":
         checks.extend(["file_exists", "render_gate_passed", "totals_match"])
+    if domain in STORE_DOMAINS:
+        if dry_run:
+            checks = [
+                "dry_run_response_ok",
+                "store_target_reread",
+                "store_revision_unchanged",
+                "store_dry_run_receipt_recorded",
+                "store_business_state_unchanged",
+                "store_planned_diff_exact",
+                "no_unplanned_fields",
+            ]
+        else:
+            checks.extend(
+                [
+                    "store_target_reread",
+                    "store_updated_at_advanced_or_idempotent_replay",
+                    "store_planned_state_exact_or_idempotent_replay",
+                    "store_audit_correlation_present",
+                ]
+            )
+        if action == "mark_order_ready":
+            checks.extend(
+                [
+                    "store_order_status_ready" if not dry_run else "store_order_status_unchanged",
+                    "notification_effect_matches_dry_run" if not dry_run else "notification_effect_disclosed",
+                ]
+            )
     if action in DESTRUCTIVE_ACTIONS:
         checks.append("backup_or_compensation_ref_present")
     return checks
@@ -483,6 +629,8 @@ def _executor_tool(domain: str, action: str, changes: dict[str, Any]) -> str | N
 
 
 def _compensation_strategy(domain: str, action: str) -> str | None:
+    if domain in STORE_DOMAINS:
+        return "store_exact_target_reconciliation_preserve_audit_history"
     if domain == "cashbox" and action == "create":
         return "delete_empty_created_cashbox"
     if domain == "cashbox" and action == "delete":
@@ -521,3 +669,51 @@ def _contract_id(
         default=str,
     )
     return f"ac_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _store_correlation_id(
+    domain: str,
+    action: str,
+    target_id: str,
+    changes: dict[str, Any],
+    revision: str | None,
+) -> str:
+    """Return one phase-independent correlation for preview/apply reconciliation."""
+
+    canonical = json.dumps(
+        {
+            "domain": domain,
+            "action": action,
+            "target_id": target_id,
+            "changes": changes,
+            "revision": revision,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"store_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _store_correlation_blockers(domain: str, requested: str) -> list[str]:
+    if domain not in STORE_DOMAINS or not requested or STORE_CORRELATION_ID_RE.fullmatch(requested) is not None:
+        return []
+    return ["invalid_store_correlation_id"]
+
+
+def _action_correlation_id(
+    *,
+    domain: str,
+    action: str,
+    target_id: str,
+    changes: dict[str, Any],
+    revision: str | None,
+    requested: str,
+    contract_id: str,
+) -> str:
+    if domain not in STORE_DOMAINS:
+        return requested or contract_id
+    if requested and STORE_CORRELATION_ID_RE.fullmatch(requested) is not None:
+        return requested
+    return _store_correlation_id(domain, action, target_id, changes, revision)

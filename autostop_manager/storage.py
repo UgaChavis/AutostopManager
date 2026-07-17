@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import uuid
@@ -87,6 +88,170 @@ EXTERNAL_BODY_KEYS = {
     "thread_body",
     "snippet",
 }
+
+ACTIVE_WORKFLOW_STATES = {"planned", "executing", "external_wait", "verifying", "compensating", "running"}
+STORE_CHECKPOINT_STREAMS = frozenset({"store_digest", "store_bootstrap"})
+STORE_CHECKPOINT_REF_KEYS = {"entity", "id", "version", "updated_at"}
+STORE_LEDGER_REF_ENTITIES = frozenset(
+    {
+        "store_batch",
+        "store_marketplace_listing",
+        "store_order",
+        "store_part",
+        "store_quote_request",
+        "store_state",
+        "store_supplier",
+        "store_warehouse_operation",
+    }
+)
+STORE_WORKFLOW_OPERATIONS = frozenset(
+    {
+        "assign_quote_request",
+        "set_quote_request_status",
+        "update_quote_request_comment",
+        "set_batch_storage_location",
+        "mark_order_ready",
+    }
+)
+STORE_LEDGER_SAFE_CHECKPOINT_KEYS = {
+    "baseline",
+    "compact_refs",
+    "counts",
+    "cursor",
+    "entity",
+    "error_code",
+    "last_success_at",
+    "mode",
+    "next_action",
+    "operation",
+    "page_count",
+    "pages_complete",
+    "phase",
+    "snapshot_at",
+    "state_version",
+    "status",
+    "target_id",
+    "target_version",
+    "verification",
+}
+STORE_LEDGER_SAFE_START_KEYS = {
+    "compact_refs",
+    "contract_id",
+    "correlation_id",
+    "counts",
+    "domain",
+    "dry_run_proof_expires_at",
+    "dry_run_proof_ttl_seconds",
+    "error_code",
+    "idempotency_key",
+    "mode",
+    "operation",
+    "request_fingerprint",
+    "request_id",
+    "source",
+    "state_version",
+    "status",
+    "target_id",
+    "target_version",
+    "updated_at",
+    "verification",
+    "workflow_id",
+}
+STORE_LEDGER_SAFE_EVENT_TYPES = frozenset(
+    {
+        "checkpoint",
+        "compensation",
+        "planned_action",
+        "preflight",
+        "reconciliation",
+        "risk",
+        "skip",
+        "state_transition",
+        "verification",
+        "workflow_started",
+        "write",
+    }
+)
+_STORE_LEDGER_FORBIDDEN_KEYS = {
+    "address",
+    "client",
+    "clients",
+    "comment",
+    "content",
+    "changes",
+    "customer",
+    "customers",
+    "description",
+    "email",
+    "emails",
+    "item",
+    "items",
+    "line",
+    "line_items",
+    "lines",
+    "order",
+    "order_items",
+    "orders",
+    "payload",
+    "planned_changes",
+    "phone",
+    "phones",
+    "product",
+    "products",
+    "raw",
+    "raw_payload",
+    "refresh_token",
+    "response",
+    "result",
+    "rows",
+    "stock",
+    "stock_rows",
+    "secret",
+    "token",
+    "password",
+    "authorization",
+    "access_token",
+    "api_key",
+    "warehouse_rows",
+}
+_STORE_SENSITIVE_KEY_TOKENS = {
+    "address",
+    "client",
+    "comment",
+    "customer",
+    "description",
+    "email",
+    "item",
+    "line",
+    "location",
+    "order",
+    "phone",
+    "product",
+    "stock",
+    "secret",
+    "token",
+    "password",
+    "authorization",
+    "vin",
+    "license",
+}
+_STORE_VERIFICATION_STRING_KEYS = {
+    "entity",
+    "error_code",
+    "mode",
+    "operation",
+    "phase",
+    "status",
+    "target_id",
+    "target_version",
+}
+_STORE_MACHINE_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\-=]{0,4095}$")
+_STORE_SECRET_VALUE_RE = re.compile(
+    r"^(?:sk[-_]|gh[opusr]_|github_pat_|xox[a-z]-|aiza|akia[0-9a-z]{8,}|ya29\.)",
+    re.IGNORECASE,
+)
+_STORE_JWT_VALUE_RE = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+_STORE_VIN_VALUE_RE = re.compile(r"^(?=.*[A-HJ-NPR-Z])(?=.*[0-9])[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 
 
 def _now() -> str:
@@ -228,6 +393,275 @@ def _find_forbidden_body_keys(value: Any, *, prefix: str = "") -> list[str]:
         for index, nested in enumerate(value):
             found.extend(_find_forbidden_body_keys(nested, prefix=f"{prefix}[{index}]"))
     return list(dict.fromkeys(found))
+
+
+def _store_workflow_operation(
+    *,
+    workflow_id: str = "",
+    intent: str = "",
+    scope: dict[str, Any] | None = None,
+) -> str:
+    scope_payload = scope if isinstance(scope, dict) else {}
+    candidates = [str(scope_payload.get("operation") or "").strip().casefold()]
+    normalized_workflow_id = str(workflow_id or "").strip().casefold()
+    normalized_intent = str(intent or "").strip().casefold()
+    if normalized_workflow_id.startswith("inventory:"):
+        candidates.append(normalized_workflow_id.partition(":")[2])
+    if normalized_intent.startswith("inventory_"):
+        candidates.append(normalized_intent.removeprefix("inventory_"))
+    for candidate in candidates:
+        if candidate in STORE_WORKFLOW_OPERATIONS:
+            return candidate
+    return ""
+
+
+def _is_store_workflow(*, workflow_id: str = "", intent: str = "", scope: dict[str, Any] | None = None) -> bool:
+    if _store_workflow_operation(workflow_id=workflow_id, intent=intent, scope=scope):
+        return True
+    identifiers = {str(workflow_id or "").casefold(), str(intent or "").casefold()}
+    if any(value.startswith(("store_", "store-", "store:")) for value in identifiers):
+        return True
+    scope_payload = scope if isinstance(scope, dict) else {}
+    return any("store" in str(scope_payload.get(key) or "").casefold() for key in ("domain", "source", "workflow_id"))
+
+
+def _store_machine_value_is_safe(value: Any) -> bool:
+    if not isinstance(value, str):
+        return isinstance(value, (bool, int)) or value is None or (isinstance(value, float) and math.isfinite(value))
+    normalized = value.strip()
+    if not normalized or len(normalized) > 4096 or _STORE_MACHINE_VALUE_RE.fullmatch(normalized) is None:
+        return False
+    if re.fullmatch(r"\d{10,15}", normalized) is not None:
+        return False
+    if _STORE_SECRET_VALUE_RE.match(normalized) is not None or _STORE_JWT_VALUE_RE.fullmatch(normalized) is not None:
+        return False
+    return _STORE_VIN_VALUE_RE.fullmatch(normalized) is None
+
+
+def _find_unsafe_store_machine_values(value: Any, *, prefix: str = "") -> list[str]:
+    found: list[str] = []
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = str(raw_key or "").strip().casefold().replace("-", "_")
+            path = f"{prefix}.{key}" if prefix else key
+            found.extend(_find_unsafe_store_machine_values(nested, prefix=path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            found.extend(_find_unsafe_store_machine_values(nested, prefix=f"{prefix}[{index}]"))
+    elif not _store_machine_value_is_safe(value):
+        found.append(prefix or "value")
+    return list(dict.fromkeys(found))
+
+
+def _store_start_channel_forbidden(
+    *,
+    workflow_id: str,
+    intent: str,
+    query: str,
+    request_id: str,
+    idempotency_key: str,
+    correlation_id: str,
+    actor: str,
+    source: str,
+    scope: dict[str, Any],
+    metadata: dict[str, Any],
+    selected_ids: list[str],
+) -> list[str]:
+    operation = _store_workflow_operation(workflow_id=workflow_id, intent=intent, scope=scope)
+    allowed_workflow_ids = {"store_management", "store_management_workflow"}
+    allowed_intents = {"store_management", "store_management_workflow"}
+    if operation:
+        allowed_workflow_ids.update({f"inventory:{operation}", f"store:{operation}", f"store_{operation}"})
+        allowed_intents.update({f"inventory_{operation}", f"store_{operation}"})
+
+    forbidden: list[str] = []
+    if str(query or "").strip():
+        forbidden.append("query")
+    if str(workflow_id or "").strip().casefold() not in allowed_workflow_ids:
+        forbidden.append("workflow_id")
+    if str(intent or "").strip().casefold() not in allowed_intents:
+        forbidden.append("intent")
+    for container_name, payload in (("scope", scope), ("metadata", metadata)):
+        forbidden.extend(
+            f"{container_name}.{key}" for key in sorted(set(payload).difference(STORE_LEDGER_SAFE_START_KEYS))
+        )
+    forbidden.extend(_find_unsafe_store_machine_values({"scope": scope, "metadata": metadata}))
+    forbidden.extend(_find_unsafe_store_machine_values(selected_ids, prefix="selected_ids"))
+    forbidden.extend(
+        _find_unsafe_store_machine_values(
+            {
+                "request_id": request_id,
+                "idempotency_key": idempotency_key,
+                "correlation_id": correlation_id,
+                "actor": actor,
+                "source": source,
+            }
+        )
+    )
+    return list(dict.fromkeys(forbidden))
+
+
+def _store_message_is_allowed(message: str, *, operation: str) -> bool:
+    normalized = str(message or "").strip()
+    if not normalized:
+        return True
+    if normalized in {
+        "workflow resumed",
+        "workflow cancelled",
+        "workflow finished through compatibility API",
+    }:
+        return True
+    if not operation:
+        return False
+    return normalized in {
+        f"execute {operation}",
+        f"verify {operation}",
+        f"completed {operation}",
+        f"failed {operation}",
+        f"verification failed after executor applied {operation}",
+        f"ledger close reconciliation required for {operation}",
+    }
+
+
+def _store_summary_is_allowed(summary: str, *, operation: str) -> bool:
+    normalized = str(summary or "").strip().casefold()
+    if not normalized:
+        return True
+    allowed = {"store_management", "store_management_workflow"}
+    if operation:
+        allowed.update({f"inventory:{operation}", f"store:{operation}"})
+    return normalized in allowed
+
+
+def _find_forbidden_store_payload_keys(value: Any, *, prefix: str = "") -> list[str]:
+    """Reject raw store business payload while permitting compact technical refs."""
+
+    found: list[str] = []
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = str(raw_key or "").strip().casefold().replace("-", "_")
+            path = f"{prefix}.{key}" if prefix else key
+            if key == "compact_refs":
+                if not isinstance(nested, list):
+                    found.append(path)
+                    continue
+                for index, item in enumerate(nested):
+                    if (
+                        not isinstance(item, dict)
+                        or not set(item).issubset(STORE_CHECKPOINT_REF_KEYS)
+                        or str(item.get("entity") or "").strip().casefold() not in STORE_LEDGER_REF_ENTITIES
+                    ):
+                        found.append(f"{path}[{index}]")
+                    elif _find_unsafe_store_machine_values(item):
+                        found.append(f"{path}[{index}]")
+                continue
+            if key in {"counts", "verification"}:
+                if _safe_store_scalar_map(nested, kind=key) is None:
+                    found.append(path)
+                continue
+            safe_technical = key.endswith(
+                ("_id", "_ids", "_version", "_versions", "_count", "_counts", "_hash", "_at", "_cursor")
+            ) or key in {"id", "version", "updated_at", "cursor", "counts"}
+            if (
+                key in _STORE_LEDGER_FORBIDDEN_KEYS or set(key.split("_")) & _STORE_SENSITIVE_KEY_TOKENS
+            ) and not safe_technical:
+                found.append(path)
+            if key.startswith("raw_") or key.endswith(("_payload", "_body", "_content", "_description")):
+                found.append(path)
+            found.extend(_find_forbidden_store_payload_keys(nested, prefix=path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            if isinstance(nested, (dict, list)):
+                found.extend(_find_forbidden_store_payload_keys(nested, prefix=f"{prefix}[{index}]"))
+    return list(dict.fromkeys(found))
+
+
+def _safe_store_scalar_map(value: Any, *, kind: str) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or len(value) > 100:
+        return None
+    safe: dict[str, Any] = {}
+    for raw_key, nested in value.items():
+        key = str(raw_key or "").strip().casefold().replace("-", "_")
+        if not key or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) is None:
+            return None
+        if kind != "counts" and (
+            key in _STORE_LEDGER_FORBIDDEN_KEYS or set(key.split("_")) & _STORE_SENSITIVE_KEY_TOKENS
+        ):
+            return None
+        if kind == "counts":
+            if isinstance(nested, bool) or not isinstance(nested, (int, float)):
+                return None
+            if isinstance(nested, float) and not math.isfinite(nested):
+                return None
+        elif isinstance(nested, str):
+            string_key_allowed = key in _STORE_VERIFICATION_STRING_KEYS or key.endswith(("_status", "_error_code"))
+            if (
+                not string_key_allowed
+                or len(nested) > 120
+                or re.fullmatch(r"[A-Za-z0-9_.:-]+", nested) is None
+                or not _store_machine_value_is_safe(nested)
+            ):
+                return None
+        elif not isinstance(nested, (bool, int, float)) and nested is not None:
+            return None
+        elif isinstance(nested, float) and not math.isfinite(nested):
+            return None
+        safe[key] = nested
+    return safe
+
+
+def _normalize_store_checkpoint_refs(value: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in value or []:
+        if not isinstance(raw, dict) or not set(raw).issubset(STORE_CHECKPOINT_REF_KEYS):
+            raise ValueError("store checkpoint refs must contain technical id/version fields only")
+        entity = str(raw.get("entity") or "").strip().casefold()
+        entity_id = str(raw.get("id") or "").strip()
+        version = str(raw.get("version") or "").strip()
+        updated_at = str(raw.get("updated_at") or "").strip()
+        if entity not in STORE_LEDGER_REF_ENTITIES or not entity_id:
+            raise ValueError("store checkpoint ref requires store entity and id")
+        if any(not _store_machine_value_is_safe(value) for value in (entity, entity_id, version, updated_at) if value):
+            raise ValueError("store checkpoint ref contains an unsafe identifier")
+        key = (entity, entity_id, version)
+        if key in seen:
+            continue
+        seen.add(key)
+        item = {"entity": entity, "id": entity_id}
+        if version:
+            item["version"] = version
+        if updated_at:
+            item["updated_at"] = updated_at
+        refs.append(item)
+        if len(refs) >= 500:
+            break
+    encoded = json.dumps(refs, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 16_384:
+        raise ValueError("store checkpoint refs are too large")
+    return refs
+
+
+def _safe_bootstrap_checkpoint(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key in STORE_LEDGER_SAFE_CHECKPOINT_KEYS:
+        nested = value.get(key)
+        if nested is None:
+            continue
+        if key == "compact_refs":
+            try:
+                safe[key] = _normalize_store_checkpoint_refs(nested if isinstance(nested, list) else [])[:20]
+            except ValueError:
+                continue
+        elif key in {"counts", "verification"}:
+            sanitized = _safe_store_scalar_map(nested, kind=key)
+            if sanitized is not None:
+                safe[key] = sanitized
+        elif isinstance(nested, (str, int, float, bool)):
+            safe[key] = nested
+    return safe
 
 
 def _sanitize_external_refs(value: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
@@ -784,6 +1218,35 @@ class ManagerMemoryStore:
                     FOREIGN KEY(run_id) REFERENCES manager_runs(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS store_checkpoints (
+                    stream TEXT PRIMARY KEY,
+                    cursor TEXT,
+                    last_success_at TEXT,
+                    compact_refs_json TEXT NOT NULL DEFAULT '[]',
+                    traversal_cursor TEXT,
+                    traversal_refs_json TEXT NOT NULL DEFAULT '[]',
+                    traversal_baseline INTEGER NOT NULL DEFAULT 0,
+                    traversal_snapshot_at TEXT,
+                    pending_cursor TEXT,
+                    pending_request_cursor TEXT,
+                    pending_request_since TEXT,
+                    pending_refs_json TEXT NOT NULL DEFAULT '[]',
+                    pending_page_refs_json TEXT NOT NULL DEFAULT '[]',
+                    pending_baseline INTEGER NOT NULL DEFAULT 0,
+                    pending_page_has_more INTEGER NOT NULL DEFAULT 0,
+                    pending_page_limit INTEGER NOT NULL DEFAULT 25,
+                    pending_snapshot_at TEXT,
+                    pending_delivery_token TEXT,
+                    last_ack_cursor TEXT,
+                    last_ack_delivery_token TEXT,
+                    last_ack_snapshot_at TEXT,
+                    last_ack_was_final INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_status TEXT NOT NULL DEFAULT 'never',
+                    last_error_code TEXT NOT NULL DEFAULT '',
+                    state_version INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS memory_review_items (
                     id TEXT PRIMARY KEY,
                     kind TEXT NOT NULL,
@@ -804,6 +1267,9 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_manager_run_external_steps_run_id
                     ON manager_run_external_steps(run_id, status, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_store_checkpoints_status
+                    ON store_checkpoints(last_attempt_status, updated_at);
 
                 CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
                     ON memory_review_items(status, created_at);
@@ -855,6 +1321,26 @@ class ManagerMemoryStore:
                 "checkpoint_json": "TEXT NOT NULL DEFAULT '{}'",
                 "compensation_json": "TEXT NOT NULL DEFAULT '[]'",
                 "state_version": "INTEGER NOT NULL DEFAULT 1",
+            },
+            "store_checkpoints": {
+                "traversal_cursor": "TEXT",
+                "traversal_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+                "traversal_baseline": "INTEGER NOT NULL DEFAULT 0",
+                "traversal_snapshot_at": "TEXT",
+                "pending_cursor": "TEXT",
+                "pending_request_cursor": "TEXT",
+                "pending_request_since": "TEXT",
+                "pending_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+                "pending_page_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+                "pending_baseline": "INTEGER NOT NULL DEFAULT 0",
+                "pending_page_has_more": "INTEGER NOT NULL DEFAULT 0",
+                "pending_page_limit": "INTEGER NOT NULL DEFAULT 25",
+                "pending_snapshot_at": "TEXT",
+                "pending_delivery_token": "TEXT",
+                "last_ack_cursor": "TEXT",
+                "last_ack_delivery_token": "TEXT",
+                "last_ack_snapshot_at": "TEXT",
+                "last_ack_was_final": "INTEGER NOT NULL DEFAULT 0",
             },
         }
         for table, columns in desired.items():
@@ -1597,6 +2083,7 @@ class ManagerMemoryStore:
                 "agent_board_digest",
                 "agent_search",
                 "agent_entity_context",
+                "for AutoStop App use store scope/entities; bootstrap uses store_bootstrap and owner digest uses store_digest",
                 "named domain workflow in dry_run before apply",
                 "discover_raw_capabilities only when no named workflow covers the task",
             ],
@@ -1611,6 +2098,662 @@ class ManagerMemoryStore:
             ],
             "warnings": warnings,
         }
+
+    def get_store_checkpoint(self, stream: str = "store_digest") -> dict[str, Any]:
+        self.initialize()
+        normalized_stream = str(stream or "").strip().casefold()
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1", (normalized_stream,)
+            ).fetchone()
+        if not row:
+            return {
+                "ok": True,
+                "exists": False,
+                "stream": normalized_stream,
+                "cursor": None,
+                "last_success_at": None,
+                "compact_refs": [],
+                "traversal_cursor": None,
+                "traversal_refs": [],
+                "traversal_baseline": False,
+                "traversal_snapshot_at": None,
+                "pending_cursor": None,
+                "pending_request_cursor": None,
+                "pending_request_since": None,
+                "pending_refs": [],
+                "pending_page_refs": [],
+                "pending_baseline": False,
+                "pending_page_has_more": False,
+                "pending_page_limit": 25,
+                "pending_snapshot_at": None,
+                "pending_delivery_token": None,
+                "last_ack_cursor": None,
+                "last_ack_delivery_token": None,
+                "last_ack_snapshot_at": None,
+                "last_ack_was_final": False,
+                "last_attempt_status": "never",
+                "last_error_code": "",
+                "state_version": 0,
+            }
+        item = dict(row)
+        item["compact_refs"] = _decode_json(item.pop("compact_refs_json"), [])
+        item["traversal_refs"] = _decode_json(item.pop("traversal_refs_json"), [])
+        item["traversal_baseline"] = bool(item.get("traversal_baseline"))
+        item["pending_refs"] = _decode_json(item.pop("pending_refs_json"), [])
+        item["pending_page_refs"] = _decode_json(item.pop("pending_page_refs_json"), [])
+        item["pending_baseline"] = bool(item.get("pending_baseline"))
+        item["pending_page_has_more"] = bool(item.get("pending_page_has_more"))
+        item["last_ack_was_final"] = bool(item.get("last_ack_was_final"))
+        return {"ok": True, "exists": True, **item}
+
+    def record_store_checkpoint_pending(
+        self,
+        *,
+        stream: str,
+        next_cursor: str,
+        compact_refs: list[dict[str, Any]] | None,
+        baseline: bool,
+        expected_state_version: int,
+        request_cursor: str | None = None,
+        request_since: str | None = None,
+        page_has_more: bool = True,
+        page_limit: int = 25,
+        page_refs: list[dict[str, Any]] | None = None,
+        snapshot_at: str | None = None,
+        delivery_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one unacknowledged page without advancing its delivered cursor."""
+
+        self.initialize()
+        normalized_stream = str(stream or "").strip().casefold()
+        normalized_cursor = str(next_cursor or "").strip()
+        normalized_request_cursor = str(request_cursor or "").strip() or None
+        normalized_request_since = str(request_since or "").strip() or None
+        normalized_snapshot_at = str(snapshot_at or "").strip() or None
+        normalized_delivery_token = str(delivery_token or "").strip()
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+        if not normalized_cursor or not normalized_delivery_token:
+            return {"ok": False, "error": "store_checkpoint_pending_fields_required"}
+        if len(normalized_cursor) > 4096 or (
+            normalized_request_cursor is not None and len(normalized_request_cursor) > 4096
+        ):
+            return {"ok": False, "error": "store_checkpoint_cursor_too_large"}
+        if normalized_request_since is not None and len(normalized_request_since) > 160:
+            return {"ok": False, "error": "store_checkpoint_since_too_large"}
+        if normalized_snapshot_at is not None and len(normalized_snapshot_at) > 160:
+            return {"ok": False, "error": "store_checkpoint_snapshot_too_large"}
+        if re.fullmatch(r"[0-9a-f]{64}", normalized_delivery_token) is None:
+            return {"ok": False, "error": "store_checkpoint_delivery_token_invalid"}
+        try:
+            normalized_refs = _normalize_store_checkpoint_refs(compact_refs)
+            normalized_page_refs = _normalize_store_checkpoint_refs(page_refs)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        normalized_page_limit = int(page_limit)
+        if normalized_page_limit < 1 or normalized_page_limit > 100:
+            return {"ok": False, "error": "store_checkpoint_page_limit_invalid"}
+        refs_json = json.dumps(normalized_refs, ensure_ascii=False, separators=(",", ":"))
+        page_refs_json = json.dumps(normalized_page_refs, ensure_ascii=False, separators=(",", ":"))
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1",
+                (normalized_stream,),
+            ).fetchone()
+            current_version = int(row["state_version"] or 0) if row else 0
+            if int(expected_state_version) != current_version:
+                return {
+                    "ok": False,
+                    "error": "store_checkpoint_state_conflict",
+                    "stream": normalized_stream,
+                    "expected_state_version": int(expected_state_version),
+                    "current_state_version": current_version,
+                }
+            if row:
+                same_pending = (
+                    str(row["pending_cursor"] or "") == normalized_cursor
+                    and (str(row["pending_request_cursor"] or "") or None) == normalized_request_cursor
+                    and (str(row["pending_request_since"] or "") or None) == normalized_request_since
+                    and _decode_json(row["pending_refs_json"], []) == normalized_refs
+                    and _decode_json(row["pending_page_refs_json"], []) == normalized_page_refs
+                    and bool(row["pending_baseline"]) == bool(baseline)
+                    and bool(row["pending_page_has_more"]) == bool(page_has_more)
+                    and int(row["pending_page_limit"] or 0) == normalized_page_limit
+                    and (str(row["pending_snapshot_at"] or "") or None) == normalized_snapshot_at
+                    and str(row["pending_delivery_token"] or "") == normalized_delivery_token
+                    and str(row["last_attempt_status"] or "") == "pending"
+                )
+                if same_pending:
+                    return {
+                        "ok": True,
+                        "stream": normalized_stream,
+                        "cursor": row["cursor"],
+                        "pending_cursor": normalized_cursor,
+                        "pending_request_cursor": normalized_request_cursor,
+                        "pending_request_since": normalized_request_since,
+                        "pending_refs": normalized_refs,
+                        "pending_page_refs": normalized_page_refs,
+                        "pending_baseline": bool(baseline),
+                        "pending_page_has_more": bool(page_has_more),
+                        "pending_page_limit": normalized_page_limit,
+                        "pending_snapshot_at": normalized_snapshot_at,
+                        "pending_delivery_token": normalized_delivery_token,
+                        "last_attempt_status": "pending",
+                        "state_version": current_version,
+                        "deduplicated": True,
+                    }
+            next_version = current_version + 1
+            if row:
+                conn.execute(
+                    """
+                    UPDATE store_checkpoints
+                    SET pending_cursor = ?, pending_request_cursor = ?, pending_request_since = ?,
+                        pending_refs_json = ?, pending_page_refs_json = ?, pending_baseline = ?,
+                        pending_page_has_more = ?, pending_page_limit = ?,
+                        pending_snapshot_at = ?, pending_delivery_token = ?,
+                        last_attempt_status = 'pending', last_error_code = '',
+                        state_version = ?, updated_at = ?
+                    WHERE stream = ? AND state_version = ?
+                    """,
+                    (
+                        normalized_cursor,
+                        normalized_request_cursor,
+                        normalized_request_since,
+                        refs_json,
+                        page_refs_json,
+                        1 if baseline else 0,
+                        1 if page_has_more else 0,
+                        normalized_page_limit,
+                        normalized_snapshot_at,
+                        normalized_delivery_token,
+                        next_version,
+                        now,
+                        normalized_stream,
+                        current_version,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO store_checkpoints (
+                        stream, cursor, last_success_at, compact_refs_json,
+                        pending_cursor, pending_request_cursor, pending_request_since,
+                        pending_refs_json, pending_page_refs_json, pending_baseline,
+                        pending_page_has_more, pending_page_limit,
+                        pending_snapshot_at, pending_delivery_token,
+                        last_attempt_status, last_error_code, state_version, updated_at
+                    ) VALUES (
+                        ?, NULL, NULL, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        'pending', '', ?, ?
+                    )
+                    """,
+                    (
+                        normalized_stream,
+                        normalized_cursor,
+                        normalized_request_cursor,
+                        normalized_request_since,
+                        refs_json,
+                        page_refs_json,
+                        1 if baseline else 0,
+                        1 if page_has_more else 0,
+                        normalized_page_limit,
+                        normalized_snapshot_at,
+                        normalized_delivery_token,
+                        next_version,
+                        now,
+                    ),
+                )
+        return {
+            "ok": True,
+            "stream": normalized_stream,
+            "cursor": row["cursor"] if row else None,
+            "pending_cursor": normalized_cursor,
+            "pending_request_cursor": normalized_request_cursor,
+            "pending_request_since": normalized_request_since,
+            "pending_refs": normalized_refs,
+            "pending_page_refs": normalized_page_refs,
+            "pending_baseline": bool(baseline),
+            "pending_page_has_more": bool(page_has_more),
+            "pending_page_limit": normalized_page_limit,
+            "pending_snapshot_at": normalized_snapshot_at,
+            "pending_delivery_token": normalized_delivery_token,
+            "last_attempt_status": "pending",
+            "state_version": next_version,
+            "deduplicated": False,
+        }
+
+    def acknowledge_store_checkpoint_page(
+        self,
+        *,
+        stream: str,
+        cursor: str,
+        delivery_token: str,
+        expected_state_version: int,
+    ) -> dict[str, Any]:
+        """Advance only the acknowledged in-flight traversal, never final high-water."""
+
+        self.initialize()
+        normalized_stream = str(stream or "").strip().casefold()
+        normalized_cursor = str(cursor or "").strip()
+        normalized_token = str(delivery_token or "").strip()
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+        if not normalized_cursor or re.fullmatch(r"[0-9a-f]{64}", normalized_token) is None:
+            return {"ok": False, "error": "store_checkpoint_ack_fields_invalid"}
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1",
+                (normalized_stream,),
+            ).fetchone()
+            current_version = int(row["state_version"] or 0) if row else 0
+            if int(expected_state_version) != current_version:
+                return {
+                    "ok": False,
+                    "error": "store_checkpoint_state_conflict",
+                    "stream": normalized_stream,
+                    "expected_state_version": int(expected_state_version),
+                    "current_state_version": current_version,
+                }
+            if (
+                row is None
+                or str(row["pending_cursor"] or "") != normalized_cursor
+                or str(row["pending_delivery_token"] or "") != normalized_token
+                or not bool(row["pending_page_has_more"])
+            ):
+                return {"ok": False, "error": "store_checkpoint_ack_stale_or_final"}
+            next_version = current_version + 1
+            conn.execute(
+                """
+                UPDATE store_checkpoints
+                SET traversal_cursor = pending_cursor,
+                    traversal_refs_json = pending_refs_json,
+                    traversal_baseline = pending_baseline,
+                    traversal_snapshot_at = pending_snapshot_at,
+                    pending_cursor = NULL, pending_request_cursor = NULL,
+                    pending_request_since = NULL, pending_refs_json = '[]',
+                    pending_page_refs_json = '[]', pending_baseline = 0,
+                    pending_page_has_more = 0, pending_page_limit = 25,
+                    pending_snapshot_at = NULL, pending_delivery_token = NULL,
+                    last_ack_cursor = ?, last_ack_delivery_token = ?,
+                    last_ack_snapshot_at = ?, last_ack_was_final = 0,
+                    last_attempt_status = 'traversing', last_error_code = '',
+                    state_version = ?, updated_at = ?
+                WHERE stream = ? AND state_version = ?
+                """,
+                (
+                    normalized_cursor,
+                    normalized_token,
+                    str(row["pending_snapshot_at"] or "") or None,
+                    next_version,
+                    now,
+                    normalized_stream,
+                    current_version,
+                ),
+            )
+        return {
+            "ok": True,
+            "stream": normalized_stream,
+            "cursor": row["cursor"],
+            "traversal_cursor": normalized_cursor,
+            "traversal_refs": _decode_json(row["pending_refs_json"], []),
+            "traversal_baseline": bool(row["pending_baseline"]),
+            "traversal_snapshot_at": str(row["pending_snapshot_at"] or "") or None,
+            "last_ack_cursor": normalized_cursor,
+            "last_ack_delivery_token": normalized_token,
+            "last_ack_was_final": False,
+            "last_attempt_status": "traversing",
+            "state_version": next_version,
+        }
+
+    def commit_store_checkpoint(
+        self,
+        *,
+        stream: str,
+        cursor: str,
+        last_success_at: str,
+        compact_refs: list[dict[str, Any]] | None,
+        expected_state_version: int,
+        acknowledged_delivery_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically commit a fully consumed store cursor using compare-and-swap."""
+
+        self.initialize()
+        normalized_stream = str(stream or "").strip().casefold()
+        normalized_cursor = str(cursor or "").strip()
+        normalized_success_at = str(last_success_at or "").strip()
+        normalized_ack_token = str(acknowledged_delivery_token or "").strip() or None
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+        if not normalized_cursor or not normalized_success_at:
+            return {"ok": False, "error": "store_checkpoint_fields_required"}
+        if len(normalized_cursor) > 4096:
+            return {"ok": False, "error": "store_checkpoint_cursor_too_large"}
+        if normalized_ack_token is not None and re.fullmatch(r"[0-9a-f]{64}", normalized_ack_token) is None:
+            return {"ok": False, "error": "store_checkpoint_delivery_token_invalid"}
+        try:
+            normalized_refs = _normalize_store_checkpoint_refs(compact_refs)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        refs_json = json.dumps(normalized_refs, ensure_ascii=False, separators=(",", ":"))
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1", (normalized_stream,)
+            ).fetchone()
+            current_version = int(row["state_version"] or 0) if row else 0
+            if row:
+                same_candidate = (
+                    str(row["cursor"] or "") == normalized_cursor
+                    and str(row["last_success_at"] or "") == normalized_success_at
+                    and _decode_json(row["compact_refs_json"], []) == normalized_refs
+                    and str(row["last_attempt_status"] or "") == "success"
+                    and not str(row["pending_cursor"] or "")
+                    and not str(row["traversal_cursor"] or "")
+                )
+                if same_candidate:
+                    return {
+                        "ok": True,
+                        "stream": normalized_stream,
+                        "cursor": normalized_cursor,
+                        "last_success_at": normalized_success_at,
+                        "compact_refs": normalized_refs,
+                        "last_attempt_status": "success",
+                        "state_version": current_version,
+                        "deduplicated": True,
+                    }
+            if int(expected_state_version) != current_version:
+                return {
+                    "ok": False,
+                    "error": "store_checkpoint_state_conflict",
+                    "stream": normalized_stream,
+                    "expected_state_version": int(expected_state_version),
+                    "current_state_version": current_version,
+                }
+            next_version = current_version + 1
+            if row:
+                conn.execute(
+                    """
+                    UPDATE store_checkpoints
+                    SET cursor = ?, last_success_at = ?, compact_refs_json = ?,
+                        traversal_cursor = NULL, traversal_refs_json = '[]',
+                        traversal_baseline = 0, traversal_snapshot_at = NULL,
+                        pending_cursor = NULL, pending_request_cursor = NULL,
+                        pending_request_since = NULL, pending_refs_json = '[]',
+                        pending_page_refs_json = '[]', pending_baseline = 0,
+                        pending_page_has_more = 0, pending_page_limit = 25,
+                        pending_snapshot_at = NULL, pending_delivery_token = NULL,
+                        last_ack_cursor = ?, last_ack_delivery_token = ?,
+                        last_ack_snapshot_at = ?, last_ack_was_final = ?,
+                        last_attempt_status = 'success', last_error_code = '',
+                        state_version = ?, updated_at = ?
+                    WHERE stream = ? AND state_version = ?
+                    """,
+                    (
+                        normalized_cursor,
+                        normalized_success_at,
+                        refs_json,
+                        normalized_cursor if normalized_ack_token else None,
+                        normalized_ack_token,
+                        normalized_success_at if normalized_ack_token else None,
+                        1 if normalized_ack_token else 0,
+                        next_version,
+                        now,
+                        normalized_stream,
+                        current_version,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO store_checkpoints (
+                        stream, cursor, last_success_at, compact_refs_json,
+                        traversal_cursor, traversal_refs_json, traversal_baseline,
+                        traversal_snapshot_at,
+                        pending_cursor, pending_request_cursor, pending_request_since,
+                        pending_refs_json, pending_baseline, pending_page_has_more,
+                        pending_snapshot_at, pending_delivery_token,
+                        last_ack_cursor, last_ack_delivery_token,
+                        last_ack_snapshot_at, last_ack_was_final,
+                        last_attempt_status, last_error_code, state_version, updated_at
+                    ) VALUES (
+                        ?, ?, ?, ?, NULL, '[]', 0, NULL,
+                        NULL, NULL, NULL, '[]', 0, 0, NULL, NULL,
+                        ?, ?, ?, ?,
+                        'success', '', ?, ?
+                    )
+                    """,
+                    (
+                        normalized_stream,
+                        normalized_cursor,
+                        normalized_success_at,
+                        refs_json,
+                        normalized_cursor if normalized_ack_token else None,
+                        normalized_ack_token,
+                        normalized_success_at if normalized_ack_token else None,
+                        1 if normalized_ack_token else 0,
+                        next_version,
+                        now,
+                    ),
+                )
+        return {
+            "ok": True,
+            "stream": normalized_stream,
+            "cursor": normalized_cursor,
+            "last_success_at": normalized_success_at,
+            "compact_refs": normalized_refs,
+            "last_ack_cursor": normalized_cursor if normalized_ack_token else None,
+            "last_ack_delivery_token": normalized_ack_token,
+            "last_ack_was_final": bool(normalized_ack_token),
+            "last_attempt_status": "success",
+            "state_version": next_version,
+            "deduplicated": False,
+        }
+
+    def record_store_checkpoint_failure(
+        self,
+        *,
+        stream: str,
+        error_code: str,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        """Record degraded read state while preserving the last successful cursor."""
+
+        self.initialize()
+        normalized_stream = str(stream or "").strip().casefold()
+        normalized_error = re.sub(r"[^a-z0-9_]+", "_", str(error_code or "store_read_failed").casefold()).strip("_")[
+            :120
+        ]
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1", (normalized_stream,)
+            ).fetchone()
+            current_version = int(row["state_version"] or 0) if row else 0
+            if expected_state_version is not None and int(expected_state_version) != current_version:
+                return {
+                    "ok": False,
+                    "error": "store_checkpoint_state_conflict",
+                    "stream": normalized_stream,
+                    "expected_state_version": int(expected_state_version),
+                    "current_state_version": current_version,
+                }
+            if row and row["last_attempt_status"] == "degraded" and row["last_error_code"] == normalized_error:
+                return {
+                    "ok": True,
+                    "stream": normalized_stream,
+                    "cursor": row["cursor"],
+                    "last_success_at": row["last_success_at"],
+                    "last_attempt_status": "degraded",
+                    "last_error_code": normalized_error,
+                    "state_version": current_version,
+                    "deduplicated": True,
+                }
+            next_version = current_version + 1
+            if row:
+                conn.execute(
+                    """
+                    UPDATE store_checkpoints
+                    SET last_attempt_status = 'degraded', last_error_code = ?,
+                        state_version = ?, updated_at = ?
+                    WHERE stream = ? AND state_version = ?
+                    """,
+                    (normalized_error, next_version, now, normalized_stream, current_version),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO store_checkpoints (
+                        stream, cursor, last_success_at, compact_refs_json,
+                        last_attempt_status, last_error_code, state_version, updated_at
+                    ) VALUES (?, NULL, NULL, '[]', 'degraded', ?, ?, ?)
+                    """,
+                    (normalized_stream, normalized_error, next_version, now),
+                )
+        return {
+            "ok": True,
+            "stream": normalized_stream,
+            "cursor": row["cursor"] if row else None,
+            "last_success_at": row["last_success_at"] if row else None,
+            "last_attempt_status": "degraded",
+            "last_error_code": normalized_error,
+            "state_version": next_version,
+            "deduplicated": False,
+        }
+
+    def reset_store_checkpoint_for_rebaseline(
+        self,
+        *,
+        stream: str,
+        expected_state_version: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Reset exactly one Store stream after a verified cursor epoch/restore failure."""
+
+        self.initialize()
+        normalized_stream = str(stream or "").strip().casefold()
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+        normalized_reason = re.sub(
+            r"[^a-z0-9_]+",
+            "_",
+            str(reason or "").strip().casefold(),
+        ).strip("_")[:120]
+        if normalized_reason not in {
+            "cursor_generation_mismatch",
+            "cursor_ahead_after_store_restore",
+            "operator_verified_rebaseline",
+        }:
+            return {"ok": False, "error": "store_checkpoint_reset_reason_invalid"}
+
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1",
+                (normalized_stream,),
+            ).fetchone()
+            current_version = int(row["state_version"] or 0) if row else 0
+            if int(expected_state_version) != current_version:
+                return {
+                    "ok": False,
+                    "error": "store_checkpoint_state_conflict",
+                    "stream": normalized_stream,
+                    "expected_state_version": int(expected_state_version),
+                    "current_state_version": current_version,
+                }
+            next_version = current_version + 1
+            if row:
+                conn.execute(
+                    """
+                    UPDATE store_checkpoints
+                    SET cursor = NULL, last_success_at = NULL, compact_refs_json = '[]',
+                        traversal_cursor = NULL, traversal_refs_json = '[]',
+                        traversal_baseline = 0, traversal_snapshot_at = NULL,
+                        pending_cursor = NULL, pending_request_cursor = NULL,
+                        pending_request_since = NULL, pending_refs_json = '[]',
+                        pending_page_refs_json = '[]', pending_baseline = 0,
+                        pending_page_has_more = 0, pending_page_limit = 25,
+                        pending_snapshot_at = NULL, pending_delivery_token = NULL,
+                        last_ack_cursor = NULL, last_ack_delivery_token = NULL,
+                        last_ack_snapshot_at = NULL, last_ack_was_final = 0,
+                        last_attempt_status = 'reset', last_error_code = ?,
+                        state_version = ?, updated_at = ?
+                    WHERE stream = ? AND state_version = ?
+                    """,
+                    (
+                        normalized_reason,
+                        next_version,
+                        now,
+                        normalized_stream,
+                        current_version,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO store_checkpoints (
+                        stream, cursor, last_success_at, compact_refs_json,
+                        traversal_cursor, traversal_refs_json, traversal_baseline,
+                        traversal_snapshot_at,
+                        pending_cursor, pending_request_cursor, pending_request_since,
+                        pending_refs_json, pending_baseline, pending_page_has_more,
+                        pending_snapshot_at, pending_delivery_token,
+                        last_ack_cursor, last_ack_delivery_token,
+                        last_ack_snapshot_at, last_ack_was_final,
+                        last_attempt_status, last_error_code, state_version, updated_at
+                    ) VALUES (
+                        ?, NULL, NULL, '[]', NULL, '[]', 0, NULL,
+                        NULL, NULL, NULL, '[]', 0, 0, NULL, NULL,
+                        NULL, NULL, NULL, 0, 'reset', ?, ?, ?
+                    )
+                    """,
+                    (normalized_stream, normalized_reason, next_version, now),
+                )
+        return {
+            "ok": True,
+            "stream": normalized_stream,
+            "cursor": None,
+            "pending_cursor": None,
+            "last_attempt_status": "reset",
+            "last_error_code": normalized_reason,
+            "state_version": next_version,
+            "rebaseline_required": True,
+        }
+
+    def list_active_manager_runs(self, *, limit: int = 100) -> dict[str, Any]:
+        """Read every active run directly instead of sampling recent history."""
+
+        self.initialize()
+        limit = max(1, min(int(limit), 500))
+        placeholders = ",".join("?" for _ in ACTIVE_WORKFLOW_STATES)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, workflow_id, intent, status, checkpoint_json, state_version, updated_at
+                FROM manager_runs
+                WHERE status IN ({placeholders})
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                [*sorted(ACTIVE_WORKFLOW_STATES), limit],
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["checkpoint"] = _safe_bootstrap_checkpoint(_decode_json(item.pop("checkpoint_json"), {}))
+            items.append(item)
+        return {"ok": True, "items": items, "total_returned": len(items)}
 
     def start_manager_run(
         self,
@@ -1669,7 +2812,7 @@ class ManagerMemoryStore:
         normalized_ids = _unique_string_values(selected_ids, limit=1000)
         scope_provided = isinstance(scope, dict)
         selected_ids_provided = selected_ids is not None
-        scope_payload = scope if scope_provided else {}
+        scope_payload = dict(scope) if isinstance(scope, dict) else {}
         metadata_payload = metadata if isinstance(metadata, dict) else {}
         forbidden = _find_forbidden_body_keys({"scope": scope_payload, "metadata": metadata_payload})
         if forbidden:
@@ -1678,6 +2821,29 @@ class ManagerMemoryStore:
                 "error": "raw_external_body_not_allowed_in_manager_ledger",
                 "forbidden_keys": forbidden,
             }
+        if _is_store_workflow(workflow_id=workflow_id, intent=intent, scope=scope_payload):
+            store_forbidden = _find_forbidden_store_payload_keys({"scope": scope_payload, "metadata": metadata_payload})
+            store_forbidden.extend(
+                _store_start_channel_forbidden(
+                    workflow_id=workflow_id,
+                    intent=intent,
+                    query=query,
+                    request_id=effective_request_id,
+                    idempotency_key=idempotency_key,
+                    correlation_id=effective_correlation_id,
+                    actor=str(actor or "codex-owner-agent"),
+                    source=str(source or "codex"),
+                    scope=scope_payload,
+                    metadata=metadata_payload,
+                    selected_ids=normalized_ids,
+                )
+            )
+            if store_forbidden:
+                return {
+                    "ok": False,
+                    "error": "raw_store_payload_not_allowed_in_manager_ledger",
+                    "forbidden_keys": list(dict.fromkeys(store_forbidden)),
+                }
         with self.connect() as conn:
             # Serialize the idempotency lookup and insert so concurrent stateless
             # MCP requests deduplicate instead of racing into the unique index.
@@ -1785,6 +2951,31 @@ class ManagerMemoryStore:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
             current = str(row["status"] or "")
             current_version = int(row["state_version"] or 1)
+            if _is_store_workflow(
+                workflow_id=row["workflow_id"], intent=row["intent"], scope=_decode_json(row["scope_json"], {})
+            ):
+                if len(str(summary or "").encode("utf-8")) > 4096:
+                    return {"ok": False, "error": "store_workflow_summary_too_large", "run_id": run_id}
+                scope_payload = _decode_json(row["scope_json"], {})
+                operation = _store_workflow_operation(
+                    workflow_id=row["workflow_id"],
+                    intent=row["intent"],
+                    scope=scope_payload,
+                )
+                store_forbidden = _find_forbidden_store_payload_keys(verification or {})
+                if verification and _safe_store_scalar_map(verification, kind="verification") is None:
+                    store_forbidden.append("verification")
+                if not _store_message_is_allowed(message, operation=operation):
+                    store_forbidden.append("message")
+                if not _store_summary_is_allowed(summary, operation=operation):
+                    store_forbidden.append("summary")
+                if store_forbidden:
+                    return {
+                        "ok": False,
+                        "error": "raw_store_payload_not_allowed_in_manager_ledger",
+                        "run_id": run_id,
+                        "forbidden_keys": list(dict.fromkeys(store_forbidden)),
+                    }
             conflict = _workflow_state_conflict(
                 run_id,
                 expected_state_version=expected_state_version,
@@ -1921,6 +3112,33 @@ class ManagerMemoryStore:
             row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not row:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if _is_store_workflow(
+                workflow_id=row["workflow_id"], intent=row["intent"], scope=_decode_json(row["scope_json"], {})
+            ):
+                store_forbidden = _find_forbidden_store_payload_keys(checkpoint_payload)
+                store_forbidden.extend(_find_unsafe_store_machine_values(checkpoint_payload))
+                unknown_keys = sorted(set(checkpoint_payload).difference(STORE_LEDGER_SAFE_CHECKPOINT_KEYS))
+                operation = _store_workflow_operation(
+                    workflow_id=row["workflow_id"],
+                    intent=row["intent"],
+                    scope=_decode_json(row["scope_json"], {}),
+                )
+                if not _store_message_is_allowed(message, operation=operation):
+                    store_forbidden.append("message")
+                if selected_ids is not None:
+                    store_forbidden.extend(
+                        _find_unsafe_store_machine_values(
+                            _unique_string_values(selected_ids, limit=1000),
+                            prefix="selected_ids",
+                        )
+                    )
+                if store_forbidden or unknown_keys:
+                    return {
+                        "ok": False,
+                        "error": "raw_store_payload_not_allowed_in_manager_ledger",
+                        "run_id": run_id,
+                        "forbidden_keys": list(dict.fromkeys([*store_forbidden, *unknown_keys])),
+                    }
             current_version = int(row["state_version"] or 1)
             conflict = _workflow_state_conflict(
                 run_id,
@@ -2280,9 +3498,41 @@ class ManagerMemoryStore:
             }
         now = _now()
         with self.connect() as conn:
-            run = conn.execute("SELECT id FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
+            run = conn.execute(
+                "SELECT id, workflow_id, intent, scope_json FROM manager_runs WHERE id = ? LIMIT 1",
+                (run_id,),
+            ).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if _is_store_workflow(
+                workflow_id=run["workflow_id"],
+                intent=run["intent"],
+                scope=_decode_json(run["scope_json"], {}),
+            ):
+                store_forbidden = _find_forbidden_store_payload_keys(event_payload)
+                if event_payload and _safe_store_scalar_map(event_payload, kind="verification") is None:
+                    store_forbidden.append("payload")
+                operation = _store_workflow_operation(
+                    workflow_id=run["workflow_id"],
+                    intent=run["intent"],
+                    scope=_decode_json(run["scope_json"], {}),
+                )
+                if str(event_type or "").strip().casefold() not in STORE_LEDGER_SAFE_EVENT_TYPES:
+                    store_forbidden.append("event_type")
+                if not _store_message_is_allowed(message, operation=operation):
+                    store_forbidden.append("message")
+                normalized_target_type = str(target_type or "").strip().casefold()
+                if normalized_target_type and normalized_target_type not in STORE_LEDGER_REF_ENTITIES:
+                    store_forbidden.append("target_type")
+                if str(target_id or "").strip() and not _store_machine_value_is_safe(str(target_id).strip()):
+                    store_forbidden.append("target_id")
+                if store_forbidden:
+                    return {
+                        "ok": False,
+                        "error": "raw_store_payload_not_allowed_in_manager_ledger",
+                        "forbidden_keys": list(dict.fromkeys(store_forbidden)),
+                        "run_id": run_id,
+                    }
             cursor = conn.execute(
                 """
                 INSERT INTO manager_run_events

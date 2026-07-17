@@ -44,6 +44,21 @@ def test_prepare_manager_context_flags_missing_required_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
+def test_agent_brief_for_store_analytics_is_aggregate_only_and_needs_no_clarification(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "сколько посетителей сегодня", limit=8)
+
+    assert result["route"]["domain"] == "store_analytics_reporting"
+    assert result["route"]["open_first"] == "docs/agent/store_analytics_playbook.md"
+    assert result["missing_context"] == []
+    assert any("get_store_analytics_report" in step for step in result["read_order"])
+    assert any("aggregate" in action for action in result["allowed_actions"])
+    assert any("raw analytics events" in action for action in result["forbidden_actions"])
+    assert any("rawEventsIncluded=false" in check for check in result["verification"])
+
+
 def test_agent_brief_routes_compact_project_engineering_query_to_startup(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
@@ -71,7 +86,8 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert result["memory_sources"] == {
         "local_sqlite": "knowledge_index_and_local_rules",
         "crm_mcp": "operational_memory_and_live_board_context",
-        "rule": "before CRM work, read live MCP context; before broad docs, use local knowledge routes",
+        "store_api": "live_store_catalog_stock_orders_quotes_and_marketplace_context",
+        "rule": "before CRM or store work, read live focused context; before broad docs, use local knowledge routes",
     }
     assert result["route"]["domain"] == "board_cleanup_autopilot"
     assert result["route"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
@@ -108,6 +124,24 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     ]
     assert any("workflow_status" in step for step in result["context_safety"]["recovery"])
     assert any("raw board snapshots" in rule for rule in result["context_safety"]["rules"])
+
+
+def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "Покажи состояние склада", limit=8)
+
+    assert result["route"]["domain"] == "store_management"
+    assert result["route"]["open_first"] == "docs/agent/store_management_playbook.md"
+    assert "catalog" in result["source_boundaries"]["store"]
+    assert "repair orders" in result["source_boundaries"]["crm"]
+    assert any("store_bootstrap" in item for item in result["read_order"])
+    assert any("agent_search" in item for item in result["read_order"])
+    assert any("five-operation allowlist" in item for item in result["forbidden_actions"])
+    assert any("final page" in item for item in result["verification"])
+    assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
 
 
 def test_agent_brief_exposes_optional_runtime_catalog_cache_and_part_context(tmp_path):

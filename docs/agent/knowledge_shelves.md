@@ -24,10 +24,12 @@ Human entrypoint for routing, file placement, deletion, and source-pack policy.
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
+| Store analytics | `store_analytics_reporting` | `docs/agent/store_analytics_playbook.md` |
 | Gmail | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` |
 | Business identity | `business_identity` | `docs/agent/business_identity_playbook.md` |
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` |
 | CRM VIN/OEM parts | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
+| AutoStop App store | `store_management` | `docs/agent/store_management_playbook.md` |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` |
 | Parts sourcing | `parts_sourcing` | `docs/agent/parts_search_playbook.md` |
 | Labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` |
@@ -119,8 +121,8 @@ Do not keep a growing archive of obsolete plans. Prefer deletion after migration
 ## Safety Boundaries
 
 - Do not store full manuals, copied licensed databases, full spreadsheets, CRM
-  snapshots, raw Gmail threads, or temporary marketplace search results in
-  manager memory.
+  snapshots, raw store orders/contacts/line items/stock rows/API payloads, raw
+  Gmail threads, or temporary marketplace search results in manager memory.
 - Do not move private business requisites from `data/private_knowledge/` into
   tracked docs.
 - For repair, programming, immobilizer, SRS, HV, pinout, torque, or fluid facts,

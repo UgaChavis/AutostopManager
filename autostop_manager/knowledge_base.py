@@ -1644,6 +1644,49 @@ def _knowledge_fts_query(tokens: list[str]) -> str:
 def _domain_hints(query: str) -> dict[str, int]:
     lowered = query.lower()
     hints: dict[str, int] = {}
+    store_context_terms = (
+        "магазин",
+        "нашем каталоге",
+        "нашего каталога",
+        "на складе",
+        "состояние склада",
+        "место хранения",
+        "где она лежит",
+        "где лежит",
+        "физически, зарезервировано",
+        "физический остаток",
+        "зарезервирован",
+        "доступный остаток",
+        "заявк на подбор",
+        "приходы и отгрузки",
+        "низкий остаток",
+        "заканчиваются",
+        "ошибки выгрузки",
+        "marketplace errors",
+        "store_",
+        "autostop app",
+    )
+    store_subject_terms = (
+        "заказ",
+        "заявк",
+        "запчаст",
+        "детал",
+        "каталог",
+        "склад",
+        "парт",
+        "поставщик",
+        "приход",
+        "отгруз",
+        "остат",
+        "хранен",
+        "avito",
+        "авито",
+        "drom",
+        "дром",
+        "marketplace",
+    )
+    if any(term in lowered for term in store_context_terms) and any(term in lowered for term in store_subject_terms):
+        hints["store_management"] = 80
     if any(term in lowered for term in PROJECT_ENGINEERING_CONTEXT_TERMS) and any(
         term in lowered for term in PROJECT_ENGINEERING_ACTION_TERMS
     ):
@@ -1735,7 +1778,7 @@ def _domain_hints(query: str) -> dict[str, int]:
         word in lowered for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
     ):
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 40)
-    if any(
+    if "store_management" not in hints and any(
         word in lowered
         for word in [
             "красноярск",

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "autostop_manager.sqlite3"
+STORE_AGENT_API_PREFIX = "/internal/agent/v1"
 _ENV_LOADED = False
 
 
@@ -68,3 +71,60 @@ def get_mcp_port() -> int:
 def get_mcp_path() -> str:
     path = os.environ.get("AUTOSTOP_MANAGER_MCP_PATH", "/mcp")
     return path if path.startswith("/") else f"/{path}"
+
+
+def get_store_api_url() -> str:
+    """Return only an allowlisted internal Store Agent root."""
+
+    return normalize_store_api_url(os.environ.get("AUTOSTOP_STORE_API_URL", ""))
+
+
+def normalize_store_api_url(value: str) -> str:
+    """Normalize one internal/loopback Store Agent URL or fail closed."""
+
+    configured = str(value or "").strip()
+    if not configured:
+        return ""
+    try:
+        parsed = urlsplit(configured)
+        host = (parsed.hostname or "").casefold()
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme != "http"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/", STORE_AGENT_API_PREFIX, f"{STORE_AGENT_API_PREFIX}/"}
+    ):
+        return ""
+
+    production_target = host == "autostop-app" and port == 8000
+    loopback_target = port is not None and _is_loopback_store_host(host)
+    if not production_target and not loopback_target:
+        return ""
+    return f"http://{parsed.netloc}{STORE_AGENT_API_PREFIX}"
+
+
+def _is_loopback_store_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def get_store_read_token() -> str:
+    """Return the runtime-only store read token."""
+
+    return os.environ.get("AUTOSTOP_STORE_READ_TOKEN", "").strip()
+
+
+def get_store_manage_token() -> str:
+    """Return the runtime-only store management token."""
+
+    return os.environ.get("AUTOSTOP_STORE_MANAGE_TOKEN", "").strip()

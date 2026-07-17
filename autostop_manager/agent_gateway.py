@@ -10,7 +10,6 @@ from .storage import ManagerMemoryStore
 
 
 COMMAND_ROUTES_PATH = PROJECT_ROOT / "docs" / "agent" / "command_routes.json"
-ACTIVE_WORKFLOW_STATES = {"planned", "executing", "external_wait", "verifying", "compensating", "running"}
 
 
 def agent_envelope(
@@ -71,8 +70,8 @@ def build_agent_bootstrap(
     memory = store or ManagerMemoryStore()
     brief = build_agent_brief(memory, query, intent=intent, limit=limit)
     route = find_command_route(query, intent=intent)
-    recent = memory.list_manager_runs(limit=20, include_events=False).get("items", [])
-    unfinished = [_compact_run(item) for item in recent if str(item.get("status") or "") in ACTIVE_WORKFLOW_STATES]
+    active = memory.list_active_manager_runs(limit=500).get("items", [])
+    unfinished = [_compact_run(item) for item in active]
     selected = _compact_workflow(route) if route else None
     warnings: list[str] = []
     if not selected:

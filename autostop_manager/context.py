@@ -17,13 +17,14 @@ DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
     ],
     "vehicle_identity_and_oem": ["VIN or chassis"],
     "fluids": ["VIN or chassis", "market", "engine code", "transmission code", "exact unit"],
+    "store_management": [],
 }
 
 
 GENERAL_HOT_RULES = [
     "AutoStop CRM is the source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and live board state.",
     "AutostopManager memory stores only durable non-CRM context: owner preferences, rules, lessons, tasks, reminders, and short conclusions.",
-    "Do not store raw client databases, cash journals, full repair orders, full board dumps, secrets, or raw email threads in manager memory or docs.",
+    "Do not store raw client databases, store orders or stock rows, cash journals, full repair orders, full board dumps, secrets, or raw email threads in manager memory or docs.",
     "Before CRM writes, identify the exact target id, write patch-only confirmed fields, then reread the target and verify the result.",
 ]
 
@@ -39,6 +40,15 @@ DOMAIN_BRIEF_RULES = {
         "Update a live repair order, works, materials, prices, payments, cashboxes, or cash records only when the owner explicitly asks for that exact target.",
         "After saving CRM description, inspect the visible text/preview and remove formatting artifacts immediately.",
         "Keep source lists, long explanations, phone, VIN, full client name, raw diagnostic dumps, rich formatting, emoji decoration, and long issue lists out of board_summary.",
+    ],
+    "store_management": [
+        "AutoStop App is the source of truth for store facts; read them only through its pure-read agent API, never the store database or mutating legacy GET endpoints.",
+        "Use the separate store_bootstrap cursor for startup health and store_digest for owner 'what is new' reads so startup never consumes owner-visible changes.",
+        "Interpret store business dates such as today in Asia/Krasnoyarsk; keep Manager checkpoint timestamps technical UTC and cursors opaque.",
+        "Store contacts stay redacted: the current service identity exposes only summary/full detail and has no contact scope. Never persist contact data in Manager memory.",
+        "Store writes are limited to quote assignment/status/internal comment, exact batch storage location, and exact IN_PROGRESS to READY order transition.",
+        "Every store write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, dry_run, apply, correlation id, exact readback, and compact refs-only ledger data.",
+        "Never change store prices, quantities, products, customers, finance, ROSSKO orders, marketplace publication, or arbitrary settings through this route.",
     ],
 }
 
@@ -94,6 +104,62 @@ BOARD_CLEANUP_VERIFICATION = [
     "record unresolved blockers and skipped writes instead of guessing",
 ]
 
+STORE_ANALYTICS_READ_ORDER = [
+    "open docs/agent/store_analytics_playbook.md",
+    "discover get_store_analytics_report through Gateway v2 raw discovery",
+    "call get_store_analytics_report with the original natural query and requested period",
+    "answer from aggregate summary, rankings, funnel, and previous-period comparison only",
+]
+
+STORE_ANALYTICS_ALLOWED_ACTIONS = [
+    "read the protected aggregate-only storefront report",
+    "compare the selected period with the previous equal-duration period in Asia/Krasnoyarsk",
+    "report visitors, sessions, page views, engaged time, top pages/products, search quality, interactions, and funnel rates",
+]
+
+STORE_ANALYTICS_FORBIDDEN_ACTIONS = [
+    "request, expose, or persist raw analytics events or visitor/session identifiers",
+    "request or infer IP, User-Agent, exact search text, form contents, customer identity, contacts, VIN, or click coordinates",
+    "write analytics results to CRM or durable Manager memory",
+    "claim legal compliance from the technical implementation alone",
+]
+
+STORE_ANALYTICS_VERIFICATION = [
+    "verify store_analytics_report_v1 and Asia/Krasnoyarsk",
+    "verify meta.aggregatedOnly=true and rawEventsIncluded=false",
+    "verify the output contains no raw/private identifier keys",
+    "state the selected period and previous-period comparison",
+]
+
+STORE_READ_ORDER = [
+    "agent_bootstrap for compact CRM plus store readiness using the isolated store_bootstrap stream",
+    "agent_board_digest(scope=store) for store digest and owner-visible store_digest cursor",
+    "agent_search with an exact store entity for bounded lists and catalog/stock lookup",
+    "agent_entity_context with an exact store entity/id and summary/full detail; contacts remain redacted because no contact scope is exposed",
+    "agent_inventory_workflow only for an allowlisted store write after prepare_action_contract",
+]
+
+STORE_ALLOWED_ACTIONS = [
+    "read compact store digest, order and quote-request lists, catalog parts, stock totals, batches and storage locations, warehouse operations, suppliers, and marketplace errors",
+    "paginate every store list and resume an unfinished digest with its opaque next_cursor",
+    "assign an exact quote request, toggle NEW and IN_PROGRESS, update its internal comment, change an exact batch storage location, or mark an exact IN_PROGRESS order READY",
+    "use dry_run then apply with expected_updated_at, idempotency key, correlation id, and exact reread for every allowlisted write",
+]
+
+STORE_FORBIDDEN_ACTIONS = [
+    "read the AutoStop App database directly or call legacy store GET routes with side effects",
+    "persist raw store orders, customer contacts, order lines, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, or workflow ledger",
+    "change prices, products, quantities, customers, finance, COMPLETE/ANNULLED/RETURNED state, ROSSKO orders, marketplace publication, or arbitrary settings",
+    "perform any store write outside agent_inventory_workflow and the explicit five-operation allowlist",
+]
+
+STORE_VERIFICATION = [
+    "store outage degrades only store status and does not break CRM",
+    "digest checkpoint advances only after the final page; failed or abandoned paging preserves the committed cursor",
+    "exact store writes match planned fields after reread and include the audit correlation id",
+    "Manager workflow state contains compact technical refs only and no raw store payload",
+]
+
 LONG_RUN_CONTEXT_SAFETY = {
     "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
     "rules": [
@@ -125,8 +191,8 @@ DEFAULT_ALLOWED_ACTIONS = [
 ]
 
 DEFAULT_FORBIDDEN_ACTIONS = [
-    "write to CRM, Gmail, or files without task-specific owner intent",
-    "copy raw CRM records, cashbox ledgers, full repair orders, raw email threads, or secrets into memory or docs",
+    "write to CRM, AutoStop App, Gmail, or files without task-specific owner intent",
+    "copy raw CRM records, store orders or stock rows, cashbox ledgers, full repair orders, raw email threads, or secrets into memory or docs",
 ]
 
 DEFAULT_VERIFICATION = [
@@ -137,7 +203,8 @@ DEFAULT_VERIFICATION = [
 MEMORY_SOURCES = {
     "local_sqlite": "knowledge_index_and_local_rules",
     "crm_mcp": "operational_memory_and_live_board_context",
-    "rule": "before CRM work, read live MCP context; before broad docs, use local knowledge routes",
+    "store_api": "live_store_catalog_stock_orders_quotes_and_marketplace_context",
+    "rule": "before CRM or store work, read live focused context; before broad docs, use local knowledge routes",
 }
 
 
@@ -319,6 +386,18 @@ def build_agent_brief(
             "refresh and verify board_summary",
             "report counts, skipped writes, blockers, and risks",
         ]
+    elif domain == "store_management":
+        read_order = STORE_READ_ORDER
+        allowed_actions = STORE_ALLOWED_ACTIONS
+        forbidden_actions = STORE_FORBIDDEN_ACTIONS
+        verification = STORE_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "store_analytics_reporting":
+        read_order = STORE_ANALYTICS_READ_ORDER
+        allowed_actions = STORE_ANALYTICS_ALLOWED_ACTIONS
+        forbidden_actions = STORE_ANALYTICS_FORBIDDEN_ACTIONS
+        verification = STORE_ANALYTICS_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
     else:
         read_order = DEFAULT_READ_ORDER
         allowed_actions = DEFAULT_ALLOWED_ACTIONS
@@ -355,8 +434,10 @@ def build_agent_brief(
         },
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
+            "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state",
             "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
+            "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },
         "hot_rules": _compact_hot_rules(domain, limit),
         "read_order": read_order,

@@ -14,6 +14,7 @@ from .catalog_clients import (
     vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
+from .config import get_store_api_url, get_store_manage_token, get_store_read_token
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_card_action import prepare_crm_card_action
@@ -40,6 +41,9 @@ from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
+from .store_api import StoreApiClient
+from .store_analytics import get_store_analytics_report
+from .store_integration import StoreIntegration
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
@@ -71,8 +75,21 @@ def _workflow_envelope(result: dict[str, Any], *, next_actions: list[str] | None
 
 
 # Registration is intentionally declarative; each nested tool delegates to tested domain functions or storage methods.
-def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:  # noqa: C901
+def register_manager_memory_tools(  # noqa: C901
+    server: Any,
+    store: ManagerMemoryStore | None = None,
+    store_client: StoreApiClient | None = None,
+) -> None:
     memory = store or ManagerMemoryStore()
+    store_adapter = StoreIntegration(
+        client=store_client
+        or StoreApiClient(
+            api_url=get_store_api_url(),
+            read_token=get_store_read_token(),
+            manage_token=get_store_manage_token(),
+        ),
+        store=memory,
+    )
 
     @server.tool(
         name="remember",
@@ -276,9 +293,136 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return list_agent_workflows(query=query, intent=intent, limit=limit)
 
     @server.tool(
+        name="get_store_analytics_report",
+        description=(
+            "READ_ONLY RAW_CAPABILITY: Read one compact aggregate-only first-party AutoStop storefront report "
+            "for today, yesterday, the last 7/30 days, or a custom Krasnoyarsk date range. Accepts a natural "
+            "Russian query and never returns raw events, visitor/session identifiers, search text, or customer data. "
+            "It remains outside the 24-tool public Gateway surface and is called only through guarded raw discovery."
+        ),
+    )
+    def get_store_analytics_report_tool(
+        query: str = "",
+        period: str = "auto",
+        date_from: str | None = None,
+        date_to: str | None = None,
+        top_limit: int = 10,
+    ) -> dict[str, Any]:
+        return get_store_analytics_report(
+            api_url=get_store_api_url(),
+            read_token=get_store_read_token(),
+            query=query,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            top_limit=top_limit,
+        )
+
+    @server.tool(
+        name="store_runtime_status",
+        description=(
+            "INTERNAL_ONLY: Return secrets-redacted AutoStop App adapter readiness and optional live health in "
+            "store_agent_v1. Production Gateway must exclude this generic capability from public raw discovery "
+            "and expose store health only through existing Gateway v2 bootstrap/runtime tools."
+        ),
+    )
+    def store_runtime_status_tool(live: bool = False) -> dict[str, Any]:
+        return store_adapter.runtime_status(live=live)
+
+    @server.tool(
+        name="store_digest",
+        description=(
+            "INTERNAL_ONLY: Read one bounded pure-read store digest page with at-least-once delivery. A non-empty page "
+            "returns a cursor-bound ack_token; pass both on the next call before Manager advances. First use creates a "
+            "baseline; no raw payload is persisted. Production "
+            "Gateway must expose this through existing Gateway v2 tools, not raw discovery."
+        ),
+    )
+    def store_digest_tool(
+        baseline: bool = False,
+        since: str | None = None,
+        cursor: str | None = None,
+        ack_token: str | None = None,
+        limit: int = 25,
+        stream: str = "store_digest",
+    ) -> dict[str, Any]:
+        return store_adapter.digest(
+            baseline=baseline,
+            since=since,
+            cursor=cursor,
+            ack_token=ack_token,
+            limit=limit,
+            stream=stream,
+        )
+
+    @server.tool(
+        name="store_search",
+        description=(
+            "INTERNAL_ONLY: Search an allowlisted AutoStop App entity through the pure-read agent API with bounded "
+            "pagination, compact DTO validation, and contact redaction. Production Gateway must expose it through "
+            "agent_search and exclude this generic capability from public raw discovery."
+        ),
+    )
+    def store_search_tool(
+        entity: str,
+        query: str = "",
+        filters: dict[str, Any] | None = None,
+        cursor: str | None = None,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        return store_adapter.search(entity=entity, query=query, filters=filters, cursor=cursor, limit=limit)
+
+    @server.tool(
+        name="store_entity_context",
+        description=(
+            "INTERNAL_ONLY: Read one exact allowlisted AutoStop App entity by id with summary or full detail. "
+            "Contacts always remain redacted because the service identity has no contact scope. Production Gateway must expose it through "
+            "agent_entity_context and exclude this generic capability from public raw discovery."
+        ),
+    )
+    def store_entity_context_tool(
+        entity: str,
+        entity_id: str,
+        detail: str = "summary",
+    ) -> dict[str, Any]:
+        return store_adapter.entity_context(entity=entity, entity_id=entity_id, detail=detail)
+
+    @server.tool(
+        name="store_management_action",
+        description=(
+            "INTERNAL_ONLY: Execute only the five allowlisted AutoStop App management operations through "
+            "ActionContractV2, exact pre-read, dry_run/apply, idempotency, optimistic concurrency, and apply reread. "
+            "Production Gateway must exclude this generic tool from raw discovery and expose it only through "
+            "agent_inventory_workflow policy."
+        ),
+    )
+    def store_management_action_tool(
+        domain: str,
+        action: str,
+        target_id: str,
+        planned_changes: dict[str, Any],
+        owner_intent: str,
+        expected_updated_at: str,
+        idempotency_key: str,
+        correlation_id: str,
+        mode: str = "dry_run",
+    ) -> dict[str, Any]:
+        return store_adapter.management_action(
+            domain=domain,
+            action=action,
+            target_id=target_id,
+            planned_changes=planned_changes,
+            owner_intent=owner_intent,
+            expected_updated_at=expected_updated_at,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            mode=mode,
+        )
+
+    @server.tool(
         name="prepare_action_contract",
         description=(
-            "Build a connector-neutral ActionContractV2 for CRM, finance, inventory, documents, files, or Gmail writes. "
+            "Build a connector-neutral ActionContractV2 for CRM, AutoStop App store, finance, inventory, documents, files, or Gmail writes. "
             "Requires task intent, exact target where applicable, idempotency, concurrency, automatic preflight, compensation, "
             "and readback verification; never performs the write."
         ),
@@ -291,6 +435,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         owner_intent: str = "",
         expected_revision: str | None = None,
         idempotency_key: str = "",
+        correlation_id: str = "",
         run_id: int | None = None,
         actor: str = "codex-owner-agent",
         dry_run: bool = True,
@@ -303,6 +448,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             owner_intent=owner_intent,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
             run_id=run_id,
             actor=actor,
             dry_run=dry_run,

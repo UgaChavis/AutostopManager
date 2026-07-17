@@ -1813,6 +1813,128 @@
         "print orientation and hardware used"
       ]
     },
+    "store_management": {
+      "title": "AutoStop App store read, digest, stock, orders, quotes, and minimal management",
+      "use_when": [
+        "owner asks what is new in the store",
+        "store internet orders or quote requests",
+        "searching the internal store catalog",
+        "physical reserved available stock or storage locations",
+        "warehouse receipts shipments or low stock",
+        "Avito or Drom marketplace export errors",
+        "one of the five allowlisted store management actions"
+      ],
+      "aliases": [
+        "AutoStop App",
+        "магазин AutoStop",
+        "магазин автозапчастей",
+        "store digest",
+        "store orders",
+        "заявки на подбор",
+        "наш каталог",
+        "состояние склада",
+        "место хранения",
+        "остатки магазина",
+        "приходы и отгрузки",
+        "ошибки выгрузки Avito Drom"
+      ],
+      "keywords": [
+        "store_agent_v1",
+        "store_part",
+        "store_order",
+        "store_quote_request",
+        "store_supplier",
+        "store_batch",
+        "store_warehouse_operation",
+        "store_marketplace_listing",
+        "store_state",
+        "store_digest",
+        "store_bootstrap",
+        "physical reserved available",
+        "opaque cursor",
+        "expected_updated_at",
+        "agent_inventory_workflow"
+      ],
+      "questions": [
+        "что нового появилось в магазине",
+        "есть ли новые или активные заказы магазина",
+        "что заказали в точном интернет-заказе",
+        "какие новые заявки на подбор",
+        "есть ли деталь в нашем каталоге",
+        "сколько физически зарезервировано и доступно",
+        "в каких ячейках лежит деталь",
+        "какие позиции заканчиваются",
+        "какие ошибки выгрузки Avito или Drom",
+        "какие изменения магазина разрешены через dry_run и apply"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/store_management_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/store_management_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "required_context": []
+    },
+    "store_analytics_reporting": {
+      "title": "Aggregate-only first-party AutoStop storefront analytics",
+      "use_when": [
+        "owner asks how many visitors or sessions the store had",
+        "owner asks which pages or products were viewed",
+        "owner asks about search quality, meaningful clicks, active time, or conversion",
+        "storefront analytics must be compared with the previous equal period"
+      ],
+      "aliases": [
+        "store analytics",
+        "site analytics",
+        "store statistics",
+        "аналитика сайта",
+        "статистика магазина",
+        "посетители сегодня",
+        "товары за неделю",
+        "куда нажимают",
+        "время на сайте",
+        "конверсия в корзину",
+        "конверсия в заказ"
+      ],
+      "keywords": [
+        "get_store_analytics_report",
+        "store_analytics_report_v1",
+        "Asia/Krasnoyarsk",
+        "visitors",
+        "sessions",
+        "page views",
+        "engaged time",
+        "zero result rate",
+        "top products",
+        "funnel",
+        "previous period",
+        "aggregate only"
+      ],
+      "questions": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/store_analytics_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/store_analytics_playbook.md"
+      ],
+      "reference_files": [
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "required_context": []
+    },
     "work_labor_pricing": {
       "title": "Read-only labor work pricing from public Russia STO prices plus public labor-time plausibility",
       "use_when": [
@@ -1902,7 +2024,8 @@
     "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
-    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md"
+    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md",
+    "store_management": "rg -n \"store_|магазин|заявк на подбор|состояние склада|место хранения|physical|reserved|available|marketplace|Avito|Drom\" docs/agent/store_management_playbook.md docs/agent/manager_mcp_catalog.json docs/agent/crm_mcp_catalog.json"
   },
-  "updated_at": "2026-07-14"
+  "updated_at": "2026-07-16"
 }

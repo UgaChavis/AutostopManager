@@ -1,7 +1,8 @@
 # AutostopManager
 
-Manager memory, routing, knowledge, CRM/Gmail workflow, server-check, and
-verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
+Manager memory, routing, knowledge, CRM/AutoStop App/Gmail workflow,
+server-check, and verification layer for AutoStop. It does not replace the CRM,
+store, or Gmail sources of truth.
 
 ## Start Here
 
@@ -16,6 +17,8 @@ verification layer for AutoStop. It does not replace AutoStop CRM or Gmail.
 - `docs/agent/manager_rules.json` - durable prioritized rules.
 - `docs/agent/manager_mcp_catalog.json` - local manager MCP surface.
 - `docs/agent/crm_mcp_catalog.json` - AutoStop CRM MCP surface.
+- `docs/agent/store_management_playbook.md` - AutoStop App pure-read, cursor,
+  stock/location, and minimal management contract.
 
 ## Daily Commands
 
@@ -34,6 +37,15 @@ tools over owner-approved OAuth 2.1; use `agent_bootstrap` ->
 `prepare_action_contract` -> named workflow `dry_run`/`apply` -> exact-target
 reread. Raw discovery is allowed only when no named workflow exists; never call
 a hidden legacy name directly. For local docs: `knowledge-probe` first.
+
+For AutoStop App, the same 24 public Gateway tools gain backward-compatible
+store scopes/entities: `agent_bootstrap`, `agent_board_digest(scope="store")`,
+`agent_search`, `agent_entity_context`, `get_runtime_status`, and
+`agent_inventory_workflow`. The Manager adapter calls only the pure-read
+`/internal/agent/v1` API, never the store database or legacy GET routes with
+side effects. Bootstrap uses its own `store_bootstrap` stream; owner “what is
+new” reads use `store_digest`. Every non-empty page has a Manager-owned opaque
+cursor/ACK pair, and the durable high-water commits only after the final ACK.
 
 ## Core Audits
 
@@ -64,13 +76,18 @@ declarative exceptions.
 
 - AutoStop CRM remains the source of truth for cards, clients, vehicles, repair
   orders, payments, cashboxes, files, and board state.
+- AutoStop App remains the source of truth for store catalog, physical/reserved/
+  available stock, batches, storage locations, suppliers, quote requests,
+  internet orders, warehouse operations, and marketplace state.
 - Gmail remains the source of truth for mail, threads, labels, drafts,
   attachments, and sent history.
 - AutostopManager stores only durable manager memory, routing rules, playbooks,
-  compact catalogs, and local knowledge indexes.
-- Never commit raw CRM exports, Gmail bodies, private business requisites,
-  SQLite databases, OAuth state, supplier credentials, or generated PDFs unless
-  the owner explicitly promotes a safe artifact.
+  technical store cursors, compact entity/version refs, compact catalogs, and
+  local knowledge indexes.
+- Never commit raw CRM/store exports, store orders/customer contacts/line items/
+  stock rows, Gmail bodies, private business requisites, SQLite databases,
+  OAuth state, supplier credentials, or generated PDFs unless the owner
+  explicitly promotes a safe artifact.
 
 ## Main Routes
 
@@ -79,6 +96,8 @@ declarative exceptions.
 | Startup / identity | `AGENTS.md` |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` |
 | CRM manager data summaries | `docs/agent/crm_manager_data_playbook.md` |
+| Store analytics | `docs/agent/store_analytics_playbook.md` |
+| AutoStop App store | `docs/agent/store_management_playbook.md` |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Gmail | `docs/agent/gmail_workflow_playbook.md` |
 | Business documents | `docs/agent/business_document_quality_playbook.md` |

@@ -7,15 +7,19 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 ## Role
 
 - Answer the owner in Russian by default: short, operational, direct.
-- AutostopManager stores only durable non-CRM memory, routes, playbooks,
-  compact catalogs, server checks, and verification.
+- AutostopManager stores only durable non-CRM memory and no raw store data:
+  routes, playbooks, technical cursors, compact refs/catalogs, server checks,
+  and verification.
 - AutoStop CRM is the source of truth for cards, clients, vehicles, repair
   orders, payments, cashboxes, files, and live board state.
+- AutoStop App is the source of truth for the store catalog, stock, batches,
+  storage locations, suppliers, quote requests, internet orders, warehouse
+  operations, and marketplace state.
 - Gmail is the source of truth for messages, threads, labels, drafts,
   attachments, and sent/archive history.
-- Do not store raw CRM exports, full Gmail threads, phone/VIN/license tables,
-  cashbox ledgers, credentials, OAuth state, or secrets in docs, Git, memory, or
-  chat summaries.
+- Do not store raw CRM/store exports, full store orders/stock rows, full Gmail
+  threads, phone/VIN/license tables, cashbox ledgers, credentials, OAuth state,
+  or secrets in docs, Git, memory, workflow state, or chat summaries.
 - Never dump `.env`, Docker `.Config.Env`, or a process environment. Inspect
   only an explicit allowlist of non-secret names and print secret presence or
   validation booleans, never values.
@@ -31,9 +35,13 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    `agent_bootstrap`, then `agent_board_digest`; use `agent_search` and
    `agent_entity_context` for focused detail. Run broad control through
    `agent_board_workflow`, not the hidden legacy surface.
-4. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
+4. For store work, open `docs/agent/store_management_playbook.md`; use existing
+   Gateway tools with store scope/entities. Bootstrap uses `store_bootstrap`;
+   owner “what is new” reads use `store_digest`. Never call the store DB or
+   legacy GET routes with side effects.
+5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
-5. For broad CRM, procurement, finance, knowledge-intake, or other multi-step
+6. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->
    `get_raw_capability_schema` -> `call_raw_capability` only when no named
@@ -50,6 +58,11 @@ verification.
 
 - Before CRM writes: exact target id, dry-run/preflight where available, then
   reread and verify.
+- Store writes are limited to quote assignment/status/internal comment, exact
+  batch storage location, and exact IN_PROGRESS -> READY order transition.
+  Require current `expected_updated_at`, owner intent, idempotency and
+  correlation IDs, dry-run/apply, and exact reread through
+  `agent_inventory_workflow`; READY dry-run must disclose notification effects.
 - For finance, inventory, documents, files, Gmail, or destructive writes, build
   the action contract, use a unique idempotency key, and keep any applied but
   unverified result in `compensating` until exact-target reconciliation.
@@ -78,6 +91,12 @@ verification.
   then `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run
   first. This collection action does not require `expected_revision`.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
+- Store analytics questions -> `docs/agent/store_analytics_playbook.md` and the
+  aggregate-only `get_store_analytics_report` capability through Gateway v2 raw
+  discovery. Never request or persist raw events or visitor/session ids.
+- Store state/catalog/stock/orders/quotes/marketplace/minimal writes ->
+  `docs/agent/store_management_playbook.md`. General Drom/Avito sourcing stays
+  in the parts route; service `заказ-наряд` stays in CRM.
 - Internet/repair web research -> resolve `search_web_multi`, excerpt, and
   `fetch_page_browser` through `discover_raw_capabilities` ->
   `get_raw_capability_schema` -> `call_raw_capability`. Search first; use the

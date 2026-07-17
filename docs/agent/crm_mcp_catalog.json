@@ -6,10 +6,10 @@
   "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-07-15",
+  "last_verified": "2026-07-16",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 92,
-    "autostop_manager_tools_in_raw_registry": 63,
+    "autostop_manager_tools_in_raw_registry": 69,
     "production_visible_agent_gateway_v2": 24,
     "guarded_internal_api_write_routes_are_virtual_and_not_counted_as_tools": true
   },
@@ -49,6 +49,17 @@
       "call_raw_capability"
     ],
     "required_protocol": "agent_bootstrap -> agent_board_digest -> agent_search/agent_entity_context -> prepare_action_contract -> named workflow dry_run/apply -> exact-target reread and verification",
+    "store_extensions": {
+      "public_tool_count_unchanged": 24,
+      "agent_bootstrap": "Returns CRM startup plus compact store adapter/runtime state. Store failure is degraded and never makes CRM startup fail; bootstrap uses the isolated store_bootstrap stream and optional store_cursor/store_ack_token continuation fields.",
+      "agent_board_digest": "Backward-compatible scope=crm|store with default crm. Store scope returns one bounded store_agent_v1 page with a Manager-owned opaque cursor/ack_token pair; every non-empty page including the final source page must be ACKed before durable high-water commit.",
+      "agent_search": "Accepts store_part, store_order, store_quote_request, store_supplier, store_batch, store_warehouse_operation, store_marketplace_listing, and store_state in addition to existing CRM entities.",
+      "agent_entity_context": "Accepts one exact allowlisted store entity/id with summary or full detail. Store contacts remain redacted because no contact scope is exposed.",
+      "get_runtime_status": "Includes secrets-redacted store adapter configuration, circuit state, and live/degraded store health without breaking CRM health.",
+      "agent_inventory_workflow": "Preserves existing CRM inventory operations and adds the exact five-operation store allowlist in dry_run/apply mode.",
+      "prepare_action_contract": "Adds store_quote_request, store_batch, and store_order domains with exact target, expected_updated_at, owner intent, strict planned changes, idempotency, correlation, and readback verification.",
+      "raw_discovery": "The five generic Manager store CRUD tools are INTERNAL_ONLY and excluded from discover_raw_capabilities, schema lookup, and call_raw_capability. The aggregate-only get_store_analytics_report read remains a guarded hidden raw capability and does not expand the 24-tool public Gateway surface."
+    },
     "finance_payment_operation": "record_repair_order_payment",
     "finance_payment_requirements": [
       "exact card and cashbox ids",
@@ -105,7 +116,10 @@
       "AUTOSTOP_AGENT_GATEWAY_MAIL_ENABLED",
       "AUTOSTOP_AGENT_GATEWAY_DESTRUCTIVE_ENABLED",
       "AUTOSTOP_AGENT_GATEWAY_RAW_ENABLED",
-      "AUTOSTOP_MANAGER_PATH"
+      "AUTOSTOP_MANAGER_PATH",
+      "AUTOSTOP_STORE_API_URL",
+      "AUTOSTOP_STORE_READ_TOKEN",
+      "AUTOSTOP_STORE_MANAGE_TOKEN"
     ],
     "board_api": [
       "MINIMAL_KANBAN_BOARD_API_URL",
@@ -250,6 +264,7 @@
       "decode_vehicle_identity",
       "estimate_repair_work_cost",
       "exist_price_lookup",
+      "get_store_analytics_report",
       "explain_partsapi_category_for_intent",
       "knowledge_intake_plan",
       "learn_from_feedback",
@@ -279,12 +294,24 @@
       "resolve_vin_oem_parts",
       "search_knowledge_base",
       "search_partsapi_category_index",
+      "store_digest",
+      "store_entity_context",
+      "store_management_action",
+      "store_runtime_status",
+      "store_search",
       "sync_knowledge_base",
       "system_audit",
       "today_context",
       "validate_partsapi_category_index",
       "vin17_decode_vehicle",
       "vin17_search_part_number_by_vin"
+    ],
+    "internal_store_adapter_excluded_from_public_raw_discovery": [
+      "store_runtime_status",
+      "store_digest",
+      "store_search",
+      "store_entity_context",
+      "store_management_action"
     ]
   },
   "production_tools_verified": [
@@ -321,6 +348,11 @@
   ],
   "operation_notes": [
     "In production follow one protocol: agent_bootstrap, agent_board_digest, agent_search/agent_entity_context, prepare_action_contract, named workflow dry_run/apply, then exact-target reread and verification; use lazy raw discovery only when no named workflow fits.",
+    "For AutoStop App use docs/agent/store_management_playbook.md: agent_bootstrap reports degraded-safe store readiness through store_bootstrap; agent_board_digest(scope=store) uses the owner-visible store_digest cursor; agent_search and agent_entity_context provide bounded pure reads; no Manager component reads the store database.",
+    "Store digest is one-page-per-call. Continue page.next_cursor until has_more=false; only the final page commits the high-water cursor. Calling again without a cursor after an abandoned read restarts from the committed checkpoint, and failures never advance it.",
+    "Store writes use prepare_action_contract plus agent_inventory_workflow and are limited to quote assignment, quote NEW/IN_PROGRESS, quote internal comment, exact batch storage location, and exact IN_PROGRESS order READY. Every write requires expected_updated_at, unique idempotency key, correlation id, dry_run/apply, and exact reread; READY dry-run discloses notification effects.",
+    "General Drom/Avito sourcing remains parts_sourcing and service заказ-наряд remains CRM. Store marketplace routing applies only to AutoStop App export state/errors.",
+    "The five generic Manager store capabilities are INTERNAL_ONLY: discover_raw_capabilities, get_raw_capability_schema, and call_raw_capability must never reveal or invoke them.",
     "For repair-order payments use agent_finance_workflow operation record_repair_order_payment with exact target ids, amount, payment method, current expected_updated_at, and an idempotency key. It verifies the repair-order payment row, linked cash transaction, and cash-journal entry.",
     "If no named Gateway v2 workflow covers a required CRM capability, use discover_raw_capabilities, get_raw_capability_schema, and call_raw_capability. Guarded api:/api/<route> fallbacks never enlarge tools/list and still enforce the durable ledger, payload fingerprint, schema hash, and finance/destructive switches.",
     "Use ping_connector/get_connector_identity/get_runtime_status only when connector availability or auth behavior is uncertain.",
@@ -353,6 +385,10 @@
     "write_response_mode": "High-traffic CRM write tools accept response_mode=full|compact; manager operations always return compact run metadata with scanned/eligible/changed/skipped/errors/verification.",
     "repair_order_privacy": "list_repair_orders accepts compact=true and redact_private=true for low-payload diagnostics without client phone/VIN fields.",
     "manager_operation_modes": "Invoke bulk_set_deadline_if_below, bulk_refresh_board_summaries, cleanup_card, and apply_ready_unpaid_followups through agent_board_workflow. Start with mode=dry_run; mode=apply requires a new unique idempotency key and returns compact verification. The named workflow owns its ledger, records mode/dry_run, and does not need a duplicate manual start_workflow for a single operation.",
+    "agent_board_digest_store_scope": "scope defaults to crm for backward compatibility. scope=store accepts since, cursor, optional matching ack_token, and bounded limit; every non-empty page requires ACK and raw App cursors are not exposed. agent_bootstrap has independent store_cursor/store_ack_token fields and never consumes store_digest.",
+    "agent_search_store_entities": "Existing CRM entity schemas remain unchanged. Store entities use compact snake_case DTOs, opaque cursors, strict limits, and general contact redaction.",
+    "agent_inventory_workflow_store_mode": "Store mode accepts one allowlisted operation, payload with domain/target_id/expected_updated_at/owner_intent/planned_changes/correlation_id, idempotency_key, and mode=dry_run|apply. Non-allowlisted store mutations are blocked before transport.",
+    "store_outage": "Store transport, auth, or schema failure appears only as a store degraded warning/status; CRM reads and writes keep their existing behavior.",
     "write_scope": "All CRM tools operate only on the current AutoStop CRM board served by this MCP/API endpoint.",
     "autostop_document_printing": "create_document_without_card_pdf accepts request_text, optional document_type, manual_document, selected_template_ids, and print_settings; manual_document may include tax_label such as НДС (5%) or Без НДС, and request_text may include a line like НДС: Без НДС. When document_type is omitted or auto, the CRM MCP client infers invoice, invoice_factura, completion_act, vehicle_acceptance_act, repair_order, inspection_sheet, or parts_sale from Russian request_text phrases. It renders application/pdf via the same CRM print module, PrintServiceProfile, standard AutoStop templates, template engine, and PDF render as card-based printing."
   }

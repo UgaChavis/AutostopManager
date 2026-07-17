@@ -1,6 +1,11 @@
 {
   "rules": [
     {
+      "id": "store-analytics-aggregate-only",
+      "priority": 40,
+      "rule": "For storefront analytics, use docs/agent/store_analytics_playbook.md and get_store_analytics_report. Return only aggregate metrics in Asia/Krasnoyarsk; never request, expose, persist, or place in prompts raw analytics events, visitor_id, session_id, IP, exact User-Agent, exact search text, form values, customer links, contacts, VIN, or click coordinates. Do not claim legal compliance; preserve the public notice, opt-out, and approximately 60-day raw retention boundary."
+    },
+    {
       "id": "codex-window-is-control-room",
       "priority": 5,
       "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."
@@ -274,6 +279,31 @@
       "id": "parts-search-workflow",
       "priority": 33,
       "rule": "When the owner asks to source parts, first normalize the vehicle identity through the vehicle-identity playbook if the input is a VIN, chassis number, or market-specific code; then use the dedicated parts-search playbook: normalize OEM and fitment fields, search Drom first with exact number plus Krasnoyarsk context, then ZZap and Avito, then broaden to model/platform and descriptive terms if exact hits are sparse."
+    },
+    {
+      "id": "store-source-boundary",
+      "priority": 34,
+      "rule": "AutoStop App is the source of truth for the store catalog, physical/reserved/available stock, batches and storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state. Read it only through the pure-read internal agent API; never use direct store database access or legacy GET routes with side effects."
+    },
+    {
+      "id": "store-read-order-and-cursors",
+      "priority": 34,
+      "rule": "For store work open docs/agent/store_management_playbook.md. Use agent_bootstrap for degraded-safe readiness, agent_board_digest(scope=store) for the owner digest, agent_search for bounded lists, and agent_entity_context for an exact object. Bootstrap uses the isolated store_bootstrap stream. The owner store_digest checkpoint advances only after the final page; failed or abandoned paging must preserve the committed cursor."
+    },
+    {
+      "id": "store-memory-privacy",
+      "priority": 35,
+      "rule": "Do not persist raw store orders, customers, contacts, line items, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, workflow events, or checkpoints. Store only technical cursors, timestamps, success state, compact entity/id/version refs, counts, and verification booleans."
+    },
+    {
+      "id": "store-write-allowlist",
+      "priority": 38,
+      "rule": "Store writes are limited to assigning an exact quote request, toggling its NEW/IN_PROGRESS status, updating its internal comment, changing one exact batch storage location, and marking one exact IN_PROGRESS order READY. Every write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, correlation id, dry_run, apply, and exact readback through agent_inventory_workflow. READY dry-run must disclose customer notification effects."
+    },
+    {
+      "id": "store-write-denylist",
+      "priority": 39,
+      "rule": "Never use the store integration to delete entities, change prices, products, customers, quantities, finance, COMPLETE/ANNULLED/RETURNED states, ROSSKO orders, marketplace publication, messages, bulk data, secrets, or arbitrary settings. Hidden generic Manager store tools remain INTERNAL_ONLY and must be excluded from Gateway raw discovery."
     },
     {
       "id": "gmail-read-order",

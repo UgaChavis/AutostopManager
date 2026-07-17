@@ -311,6 +311,208 @@ def test_existing_entity_update_requires_target_revision_and_idempotency():
     ]
 
 
+@pytest.mark.parametrize(
+    ("domain", "action", "changes"),
+    [
+        ("store_quote_request", "assign_quote_request", {"assignee_id": "employee-7"}),
+        ("store_quote_request", "set_quote_request_status", {"status": "IN_PROGRESS"}),
+        ("store_quote_request", "update_quote_request_comment", {"internal_comment": "Проверить VIN"}),
+        ("store_batch", "set_batch_storage_location", {"storage_location": "A-17"}),
+        ("store_order", "mark_order_ready", {"status": "READY"}),
+    ],
+)
+def test_store_action_contract_allowlist_uses_inventory_workflow_and_safe_transport(domain, action, changes):
+    result = prepare_action_contract(
+        domain=domain,
+        action=action,
+        target_id="exact-store-id",
+        planned_changes=changes,
+        owner_intent="Выполни точное разрешенное изменение объекта exact-store-id",
+        expected_revision="2026-07-16T10:00:00+07:00",
+        idempotency_key=f"{action}-exact-store-id-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == "agent_inventory_workflow"
+    assert result["execution"]["operation"] == action
+    payload = result["execution"]["gateway_arguments"]["payload"]
+    assert payload["domain"] == domain
+    assert payload["target_id"] == "exact-store-id"
+    assert payload["expected_updated_at"] == "2026-07-16T10:00:00+07:00"
+    assert payload["owner_intent"] == result["owner_intent"]
+    assert payload["planned_changes"] == changes
+    assert payload["correlation_id"] == result["correlation_id"]
+    assert result["correlation_id"] != result["contract_id"]
+    assert result["compensation"]["required"] is True
+    assert result["ledger"]["store_refs_only"] is True
+    assert "store_target_reread" in result["preflight"]["checks"]
+    assert "store_revision_unchanged" in result["verification"]["checks"]
+    assert "store_dry_run_receipt_recorded" in result["verification"]["checks"]
+    assert "store_business_state_unchanged" in result["verification"]["checks"]
+
+
+def test_store_contract_uses_stable_correlation_across_dry_run_and_apply_phases():
+    common = {
+        "domain": "store_quote_request",
+        "action": "set_quote_request_status",
+        "target_id": "quote-1",
+        "planned_changes": {"status": "IN_PROGRESS"},
+        "expected_revision": "version-1",
+    }
+    preview = prepare_action_contract(
+        **common,
+        owner_intent="Проверь перевод quote-1 в работу",
+        idempotency_key="quote-1-progress-preview-v1",
+        dry_run=True,
+    )
+    apply = prepare_action_contract(
+        **common,
+        owner_intent="Выполни перевод точной заявки quote-1 в работу",
+        idempotency_key="quote-1-progress-apply-v1",
+        dry_run=False,
+    )
+
+    assert preview["ok"] is True
+    assert apply["ok"] is True
+    assert preview["contract_id"] != apply["contract_id"]
+    assert preview["correlation_id"] == apply["correlation_id"]
+    assert 8 <= len(preview["correlation_id"]) <= 160
+    assert preview["correlation_id"][0].isalnum()
+    assert preview["execution"]["gateway_arguments"]["payload"]["correlation_id"] == preview["correlation_id"]
+    assert apply["execution"]["gateway_arguments"]["payload"]["correlation_id"] == apply["correlation_id"]
+
+
+def test_store_contract_accepts_only_alnum_first_correlation_between_8_and_160_chars():
+    common = {
+        "domain": "store_batch",
+        "action": "set_batch_storage_location",
+        "target_id": "batch-1",
+        "planned_changes": {"storage_location": "A-17"},
+        "owner_intent": "Поставь точную партию batch-1 на A-17",
+        "expected_revision": "version-1",
+        "idempotency_key": "batch-1-location-v1",
+    }
+    explicit = "S" + "a" * 159
+    allowed = prepare_action_contract(**common, correlation_id=explicit)
+    too_short = prepare_action_contract(**common, correlation_id="Store-1")
+    bad_prefix = prepare_action_contract(**common, correlation_id=":store-123")
+    too_long = prepare_action_contract(**common, correlation_id="S" + "a" * 160)
+
+    assert allowed["ok"] is True
+    assert allowed["correlation_id"] == explicit
+    assert allowed["execution"]["gateway_arguments"]["payload"]["correlation_id"] == explicit
+    assert "invalid_store_correlation_id" in too_short["preflight"]["blocking_reasons"]
+    assert "invalid_store_correlation_id" in bad_prefix["preflight"]["blocking_reasons"]
+    assert "invalid_store_correlation_id" in too_long["preflight"]["blocking_reasons"]
+
+
+def test_store_ready_contract_discloses_notification_and_requires_explicit_ready_status():
+    blocked = prepare_action_contract(
+        domain="store_order",
+        action="mark_order_ready",
+        target_id="order-1",
+        planned_changes={"status": "IN_PROGRESS"},
+        owner_intent="Переведи заказ order-1 в READY",
+        expected_revision="version-1",
+        idempotency_key="order-1-ready-v1",
+    )
+    allowed = prepare_action_contract(
+        domain="store_order",
+        action="mark_order_ready",
+        target_id="order-1",
+        planned_changes={"status": "READY"},
+        owner_intent="Переведи точный заказ order-1 в READY",
+        expected_revision="version-1",
+        idempotency_key="order-1-ready-v2",
+    )
+
+    assert "store_order_ready_status_required" in blocked["preflight"]["blocking_reasons"]
+    assert "notification_effect_disclosed" in allowed["preflight"]["checks"]
+    assert "notification_effect_disclosed" in allowed["verification"]["checks"]
+    assert "store_order_ready_may_notify_customer" in allowed["warnings"]
+
+    apply_contract = prepare_action_contract(
+        domain="store_order",
+        action="mark_order_ready",
+        target_id="order-1",
+        planned_changes={"status": "READY"},
+        owner_intent="Переведи точный заказ order-1 в READY",
+        expected_revision="version-1",
+        idempotency_key="order-1-ready-v3",
+        dry_run=False,
+    )
+    assert "store_updated_at_advanced_or_idempotent_replay" in apply_contract["verification"]["checks"]
+    assert "store_audit_correlation_present" in apply_contract["verification"]["checks"]
+
+
+@pytest.mark.parametrize(
+    ("domain", "action", "raw_changes", "canonical_changes"),
+    [
+        ("store_quote_request", "assign_quote_request", {"assignee_id": " employee-7 "}, {"assignee_id": "employee-7"}),
+        ("store_quote_request", "set_quote_request_status", {"status": " in_progress "}, {"status": "IN_PROGRESS"}),
+        (
+            "store_quote_request",
+            "update_quote_request_comment",
+            {"internal_comment": "  Проверить VIN  "},
+            {"internal_comment": "Проверить VIN"},
+        ),
+        (
+            "store_quote_request",
+            "update_quote_request_comment",
+            {"internal_comment": "   "},
+            {"internal_comment": None},
+        ),
+        ("store_batch", "set_batch_storage_location", {"storage_location": " A-17 "}, {"storage_location": "A-17"}),
+        ("store_order", "mark_order_ready", {"status": " ready "}, {"status": "READY"}),
+    ],
+)
+def test_store_contract_normalizes_planned_changes_once_for_transport_and_readback(
+    domain,
+    action,
+    raw_changes,
+    canonical_changes,
+):
+    result = prepare_action_contract(
+        domain=domain,
+        action=action,
+        target_id="store-id",
+        planned_changes=raw_changes,
+        owner_intent="Выполни точное изменение store-id",
+        expected_revision="version-1",
+        idempotency_key=f"canonical-{action}-{raw_changes!s}",
+    )
+
+    assert result["ok"] is True
+    assert result["planned_changes"] == canonical_changes
+    assert result["execution"]["gateway_arguments"]["payload"]["planned_changes"] == canonical_changes
+    for field, value in canonical_changes.items():
+        assert result["execution"]["gateway_arguments"]["payload"][field] == value
+
+
+@pytest.mark.parametrize(
+    ("domain", "action", "changes", "blocker"),
+    [
+        ("store_order", "delete", {"status": "READY"}, "unsupported_store_management_operation"),
+        ("store_order", "mark_order_ready", {"price": 1}, "unsupported_store_change_fields"),
+        ("store_quote_request", "set_quote_request_status", {"status": "COMPLETE"}, "unsupported_store_quote_status"),
+        ("store_batch", "set_batch_storage_location", {"storage_location": ""}, "invalid_store_storage_location"),
+    ],
+)
+def test_store_action_contract_blocks_non_allowlisted_or_malformed_changes(domain, action, changes, blocker):
+    result = prepare_action_contract(
+        domain=domain,
+        action=action,
+        target_id="store-id",
+        planned_changes=changes,
+        owner_intent="Измени объект store-id",
+        expected_revision="version-1",
+        idempotency_key=f"blocked-{domain}-{action}",
+    )
+
+    assert result["ok"] is False
+    assert blocker in result["preflight"]["blocking_reasons"]
+
+
 def test_action_contract_executor_tools_exist_in_the_tracked_crm_catalog():
     catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
