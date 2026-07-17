@@ -1,0 +1,56 @@
+name: quality
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project and development checks
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Audit knowledge and documentation contracts
+        run: |
+          python -m autostop_manager.cli knowledge-sync
+          python -m autostop_manager.cli knowledge-audit
+          python -m autostop_manager.cli annotations-audit
+          python -m autostop_manager.cli skills-audit
+          python -m autostop_manager.cli cleanup-audit
+
+      - name: Lint, format, and type check
+        run: |
+          python -m ruff check .
+          python -m ruff format --check autostop_manager tests
+          python -m mypy autostop_manager
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Enforce branch coverage gate
+        run: |
+          python -m coverage run -m pytest -q
+          python -m coverage report --fail-under=82
+
+      - name: Check control-center JavaScript when Node is available
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            node --check frontend/control-center/app.js
+          fi
