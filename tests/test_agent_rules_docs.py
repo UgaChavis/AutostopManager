@@ -213,6 +213,9 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
     assert crm_catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 69
     assert crm_catalog["agent_gateway_v2"]["store_extensions"]["public_tool_count_unchanged"] == 24
+    assert "dedicated quote credential" in crm_catalog["agent_gateway_v2"]["store_extensions"]["agent_entity_context"]
+    assert "dedicated quote credential" in manager_catalog["tool_contracts"]["store_entity_context"]
+    assert "no contact scope" not in json.dumps({"manager": manager_catalog, "crm": crm_catalog}, ensure_ascii=False)
     assert "store_management" in knowledge_map["domains"]
 
     workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")

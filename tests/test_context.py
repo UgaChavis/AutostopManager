@@ -139,9 +139,31 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert "repair orders" in result["source_boundaries"]["crm"]
     assert any("store_bootstrap" in item for item in result["read_order"])
     assert any("agent_search" in item for item in result["read_order"])
+    assert any("dedicated quote credential" in item for item in result["read_order"])
+    assert any("contacts, VIN" in item for item in result["hot_rules"])
+    assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
+    assert not any("no contact scope" in item for item in result["hot_rules"])
     assert any("seven-operation allowlist" in item for item in result["forbidden_actions"])
     assert any("final page" in item for item in result["verification"])
     assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
+
+
+def test_quote_pricing_request_routes_to_store_and_exposes_full_quote_workflow(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(
+        store,
+        "Прочитай новый запрос на проценку, найди запчасти и подготовь комментарий",
+        limit=8,
+    )
+
+    assert result["route"]["domain"] == "store_management"
+    assert any("dedicated quote credential" in item for item in result["read_order"])
+    assert any("contacts, VIN" in item for item in result["hot_rules"])
+    assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
+    assert any("append a note" in item for item in result["allowed_actions"])
 
 
 def test_agent_brief_exposes_optional_runtime_catalog_cache_and_part_context(tmp_path):

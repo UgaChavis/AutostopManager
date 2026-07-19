@@ -6,7 +6,7 @@ from .knowledge_base import find_command_route, probe_knowledge_base
 from .storage import ManagerMemoryStore
 
 
-DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
+DOMAIN_REQUIRED_CONTEXT_DEFAULTS: dict[str, list[str]] = {
     "bmw_f15_n63": ["VIN or chassis", "production date", "market", "BMW fault memory with module names"],
     "service_management": ["live CRM board state"],
     "crm_vin_oem_parts_lookup": [
@@ -45,8 +45,8 @@ DOMAIN_BRIEF_RULES = {
         "AutoStop App is the source of truth for store facts; read them only through its pure-read agent API, never the store database or mutating legacy GET endpoints.",
         "Use the separate store_bootstrap cursor for startup health and store_digest for owner 'what is new' reads so startup never consumes owner-visible changes.",
         "Interpret store business dates such as today in Asia/Krasnoyarsk; keep Manager checkpoint timestamps technical UTC and cursors opaque.",
-        "Store contacts stay redacted: the current service identity exposes only summary/full detail and has no contact scope. Never persist contact data in Manager memory.",
-        "Store writes are limited to quote assignment/status/internal comment, exact batch storage location, and exact IN_PROGRESS to READY order transition.",
+        "General Store reads stay redacted. An exact store_quote_request detail=full read uses the dedicated quote credential and may expose contacts, VIN, request items, offers, notes, and drafts transiently; never persist that payload in Manager memory.",
+        "Store writes are limited to quote assignment/status/internal comment/append-only note/private drafts, exact batch storage location, and exact IN_PROGRESS to READY order transition.",
         "Every store write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, dry_run, apply, correlation id, exact readback, and compact refs-only ledger data.",
         "Never change store prices, quantities, products, customers, finance, ROSSKO orders, marketplace publication, or arbitrary settings through this route.",
     ],
@@ -135,14 +135,15 @@ STORE_READ_ORDER = [
     "agent_bootstrap for compact CRM plus store readiness using the isolated store_bootstrap stream",
     "agent_board_digest(scope=store) for store digest and owner-visible store_digest cursor",
     "agent_search with an exact store entity for bounded lists and catalog/stock lookup",
-    "agent_entity_context with an exact store entity/id and summary/full detail; contacts remain redacted because no contact scope is exposed",
+    "agent_entity_context with an exact store entity/id; general reads stay redacted, while store_quote_request detail=full uses the dedicated quote credential for transient contacts, VIN, items, offers, notes, and drafts",
     "agent_inventory_workflow only for an allowlisted store write after prepare_action_contract",
 ]
 
 STORE_ALLOWED_ACTIONS = [
-    "read compact store digest, order and quote-request lists, catalog parts, stock totals, batches and storage locations, warehouse operations, suppliers, and marketplace errors",
+    "read compact store digest, order and quote-request lists, catalog parts, stock totals, batches and storage locations, warehouse operations, suppliers, marketplace errors, and one exact full quote transiently",
+    "search store_sourcing_offer for bounded local and ROSSKO candidates without persisting raw quote or supplier payloads",
     "paginate every store list and resume an unfinished digest with its opaque next_cursor",
-    "assign an exact quote request, toggle NEW and IN_PROGRESS, update its internal comment, change an exact batch storage location, or mark an exact IN_PROGRESS order READY",
+    "assign an exact quote request, toggle NEW and IN_PROGRESS, update its internal comment, append a note, replace private structured drafts, change an exact batch storage location, or mark an exact IN_PROGRESS order READY",
     "use dry_run then apply with expected_updated_at, idempotency key, correlation id, and exact reread for every allowlisted write",
 ]
 

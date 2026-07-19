@@ -150,7 +150,58 @@ def test_gateway_timeout_fails_closed_without_subprocess_details(tmp_path):
 
     assert result["ok"] is False
     assert result["checks"]["gateway_local"]["error"] == "crm_gateway_checker_failed_to_run"
+    assert result["checks"]["gateway_local"]["attempts"] == 2
     assert "sensitive-output" not in json.dumps(result)
+
+
+def test_gateway_check_retries_once_and_reports_safe_recovery(tmp_path):
+    manager_root = tmp_path / "manager"
+    crm_root = tmp_path / "crm"
+    plugin_root = tmp_path / "gmail"
+    proof_path = tmp_path / "gmail-proof.json"
+    _write_catalog(manager_root)
+    _write_gmail_runtime(plugin_root, proof_path)
+    python = crm_root / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    script = crm_root / "scripts" / "check_agent_gateway_v2.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    (crm_root / ".env").write_text("MINIMAL_KANBAN_MCP_BEARER_TOKEN=retry-secret\n", encoding="utf-8")
+    calls = 0
+
+    def runner(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            payload = {
+                "ok": False,
+                "error": "token environment variable is missing: PRIVATE_NAME",
+            }
+            return subprocess.CompletedProcess(command, 2, stdout=json.dumps(payload), stderr="")
+        payload = {
+            "ok": True,
+            "checks": {"tool_count_exactly_24": True},
+            "metrics": {"tool_count": 24},
+            "failed_invocations": [],
+        }
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    result = build_integration_audit(
+        crm_root=crm_root,
+        manager_root=manager_root,
+        gmail_plugin_root=plugin_root,
+        gmail_proof_path=proof_path,
+        command_runner=runner,
+    )
+
+    gateway = result["checks"]["gateway_local"]
+    assert result["ok"] is True
+    assert calls == 2
+    assert gateway["attempts"] == 2
+    assert gateway["recovered_after_retry"] is True
+    assert gateway["warnings"] == ["crm_gateway_check_recovered_after_retry"]
+    assert "retry-secret" not in json.dumps(result)
 
 
 def test_systemd_monitor_is_hardened_and_hourly():
