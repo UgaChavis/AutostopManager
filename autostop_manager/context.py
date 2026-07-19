@@ -426,6 +426,27 @@ def _compact_hot_rules(domain: str | None, limit: int) -> list[str]:
     return rules[: max(1, min(limit, 8))]
 
 
+def _select_store_operation(query: str, selection: object) -> dict[str, object] | None:
+    if not isinstance(selection, dict):
+        return None
+    lowered = str(query or "").casefold()
+    matches: list[tuple[int, str, dict[str, object]]] = []
+    for operation, raw_contract in selection.items():
+        if not isinstance(operation, str) or not isinstance(raw_contract, dict):
+            continue
+        aliases = raw_contract.get("aliases")
+        if not isinstance(aliases, list):
+            continue
+        for alias in aliases:
+            normalized = str(alias or "").casefold()
+            if normalized and normalized in lowered:
+                matches.append((len(normalized), operation, raw_contract))
+    if not matches:
+        return None
+    _, operation, contract = max(matches, key=lambda item: (item[0], item[1]))
+    return {"operation": operation, **contract}
+
+
 def build_agent_brief(
     store: ManagerMemoryStore | None,
     query: str,
@@ -507,6 +528,12 @@ def build_agent_brief(
             "write_domains": command_route.get("write_domains", []),
             "external_connectors": command_route.get("external_connectors", []),
             "completion_checks": command_route.get("completion_checks", []),
+            "read_entity_selection": command_route.get("read_entity_selection", {}),
+            "operation_selection": command_route.get("operation_selection", {}),
+            "selected_operation": _select_store_operation(
+                str(context.get("query") or ""),
+                command_route.get("operation_selection", {}),
+            ),
         },
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",

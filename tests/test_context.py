@@ -148,6 +148,57 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
 
 
+def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    read_brief = context.build_agent_brief(store, "Покажи заявки без исполнителя", limit=8)
+    write_brief = context.build_agent_brief(store, "очисти внутренний комментарий заявки", limit=8)
+
+    assert set(read_brief["route"]["read_entity_selection"]) == {
+        "store_part",
+        "store_order",
+        "store_quote_request",
+        "store_supplier",
+        "store_batch",
+        "store_warehouse_operation",
+        "store_marketplace_listing",
+        "store_state",
+        "store_sourcing_offer",
+    }
+    assert set(write_brief["route"]["operation_selection"]) == {
+        "assign_quote_request",
+        "set_quote_request_status",
+        "update_quote_request_comment",
+        "add_quote_request_note",
+        "replace_quote_offer_drafts",
+        "set_batch_storage_location",
+        "mark_order_ready",
+    }
+    comment = write_brief["route"]["operation_selection"]["update_quote_request_comment"]
+    note = write_brief["route"]["operation_selection"]["add_quote_request_note"]
+    assert "replace or clear" in comment["use_when"]
+    assert "append" in note["use_when"]
+
+
+def test_store_agent_brief_deterministically_selects_each_write_operation(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+    phrases = {
+        "назначь заявку на подбор сотруднику": "assign_quote_request",
+        "переведи заявку на подбор в работу": "set_quote_request_status",
+        "очисти внутренний комментарий заявки": "update_quote_request_comment",
+        "добавь заметку в заявку на проценку": "add_quote_request_note",
+        "очисти приватные черновики предложений": "replace_quote_offer_drafts",
+        "переложи партию в ячейку": "set_batch_storage_location",
+        "отметь собранный заказ готовым": "mark_order_ready",
+    }
+
+    for phrase, operation in phrases.items():
+        result = context.build_agent_brief(store, phrase, limit=8)
+        assert result["route"]["selected_operation"]["operation"] == operation, phrase
+
+
 def test_agent_brief_documentation_hygiene_has_safe_cleanup_contract(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)

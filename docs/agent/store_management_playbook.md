@@ -43,6 +43,40 @@ limit. General search remains redacted; an exact `store_quote_request` with
 VIN, request/item comments, delivery details, offers, private drafts, and
 internal notes. Never persist that full payload in Manager state.
 
+### Public command map
+
+Select the existing Gateway command from the owner's intent; do not discover or
+call a hidden Store tool directly:
+
+| Owner intent | Public Gateway v2 call | Required arguments |
+| --- | --- | --- |
+| readiness, counts, stock summary, marketplace state/errors | `agent_bootstrap` | no Store cursor or ACK |
+| “что нового” and change-feed traversal | `agent_board_digest` | `scope="store"`; continue with the returned opaque `cursor` and `ack_token` |
+| list, filter, search, stock or sourcing candidates | `agent_search` | exact `entity`, bounded `limit`, only the filters below |
+| one exact object | `agent_entity_context` | exact `entity`, `entity_id`; `detail="full"` only for an exact quote request |
+| adapter/API health | `get_runtime_status` | read-only |
+| one of the seven writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
+
+`agent_search` entity selection and accepted filters:
+
+| Entity | Use for | Accepted filters |
+| --- | --- | --- |
+| `store_part` | id, SKU, name, manufacturer; stock summary | `is_active` boolean; `low_stock` boolean |
+| `store_order` | id, order number, item SKU/name | `status`: `IN_PROGRESS`, `READY`, `COMPLETED`, `ANNULLED`, or `RETURNED` |
+| `store_quote_request` | id or request number | `status`: `NEW`, `IN_PROGRESS`, `PRICED`, `APPROVED`, `CONVERTED`, or `CANCELLED`; `assigned_user_id`: exact string or `null` for unassigned |
+| `store_supplier` | id or supplier name | `is_active` boolean |
+| `store_batch` | id, cell, part SKU/name | `status`: `IN_PROGRESS` or `COMPLETED`; exact non-empty `storage_location` up to 200 chars |
+| `store_warehouse_operation` | id, receipt/shipment state | `kind`: `RECEIPT` or `SHIPMENT`; `status`: `IN_PROGRESS`, `COMPLETED`, or `ANNULLED` |
+| `store_marketplace_listing` | id, external listing id, part SKU/name | `status`: `DRAFT`, `PUBLISHED`, `FAILED`, or `ARCHIVED` |
+| `store_state` | aggregate Store and marketplace state | no filters; query empty or `store`, `state`, `store_state` |
+| `store_sourcing_offer` | local and ROSSKO-like candidates | no filters or cursor; query is required and has at least two characters |
+
+For marketplace export problems, use bootstrap/state aggregates for 24 hours,
+7 days, all time, and the latest five safe errors. Use
+`store_marketplace_listing` with `status="FAILED"` only when exact failed
+listings are needed. Never request raw job messages; retry and publication are
+not supported Store management commands.
+
 For stock location, use active batches and aggregate `qty_remaining`, reserved,
 and available quantities by part and storage location. Return every location;
 distinguish missing location, zero physical stock, reserve-only stock, multiple
@@ -105,6 +139,47 @@ Only these domain/action pairs are allowed:
 - `store_batch/set_batch_storage_location` with `storage_location`;
 - `store_order/mark_order_ready` with explicit `status=READY`, only from
   `IN_PROGRESS` and only on an exact owner command.
+
+### Write command selector
+
+Every public write is
+`agent_inventory_workflow(operation=<action>, payload=<payload>,
+idempotency_key=<unique phase key>, mode="dry_run"|"apply")`. The payload
+always contains `target_id`, current timezone-aware `expected_updated_at`, the
+task-specific `owner_intent`, strict `planned_changes`, and normally one stable
+`correlation_id` shared by dry-run and apply.
+
+| Owner command | Domain / operation | Exact `planned_changes` | Exact reread check |
+| --- | --- | --- | --- |
+| assign the quote request | `store_quote_request/assign_quote_request` | `{"assignee_id":"<non-empty id, max 36>"}` | assigned user only |
+| move the quote request to work or back to new | `store_quote_request/set_quote_request_status` | `{"status":"IN_PROGRESS"}` or `{"status":"NEW"}` | status only |
+| replace or clear the current internal comment | `store_quote_request/update_quote_request_comment` | `{"internal_comment":"<max 2000>"}` or `{"internal_comment":null}` | replaceable comment only |
+| append a note/history entry without replacing prior text | `store_quote_request/add_quote_request_note` | `{"text":"<non-empty, max 2000>"}` | one new append-only note |
+| replace the complete private offer-draft set for one exact quote | `store_quote_request/replace_quote_offer_drafts` | `{"items":[...]}` using the draft rules below | complete Manager-owned draft post-state for that quote |
+| change one batch cell/location | `store_batch/set_batch_storage_location` | `{"storage_location":"<non-empty, max 200>"}` | storage location only |
+| mark one assembled order ready | `store_order/mark_order_ready` | `{"status":"READY"}` | status and disclosed notification result |
+
+Choose `update_quote_request_comment` for “обнови/замени/очисти внутренний
+комментарий”. Choose append-only `add_quote_request_note` for “добавь заметку”
+or “добавь запись в историю”. Do not guess when the owner wording does not say
+whether existing text must be replaced or preserved.
+
+For `replace_quote_offer_drafts`, first read the full exact quote and send the
+complete desired post-state of Manager-owned drafts for that quote. Existing
+Manager drafts for the same agent that are omitted from `items` are superseded,
+not preserved. `items` has 1..20 unique exact quote item ids and each item has
+0..3 drafts with unique `candidate_key`; at most one draft per item is
+recommended. Each draft requires non-empty `candidate_key` and
+`part_name`, positive `sale_price`, `source_kind` from
+`LOCAL|ROSSKO|CATALOG|WEB|MANUAL_REFERENCE`, and `price_basis` from
+`STORE_RETAIL|CONFIRMED_PURCHASE|PUBLIC_RETAIL|ESTIMATE`. Optional fields are
+`part_sku`, `brand`, `supplier`, positive `purchase_price`, `delivery_days`
+0..3650, `comment` up to 1000, `source_ref` up to 500, `source_url` up to 1000,
+`availability` up to 300, `fitment_confidence` from
+`HIGH|MEDIUM|LOW|UNVERIFIED`, `oem_reference` up to 120, and
+`is_recommended`. To clear the complete Manager-owned draft set, send at least
+one valid exact quote item with an empty `drafts` list. The operation never
+changes a published offer or another principal's drafts.
 
 For every write: reread the exact target, build `prepare_action_contract`, pass
 `expected_updated_at`, and call `agent_inventory_workflow` in `dry_run`. The

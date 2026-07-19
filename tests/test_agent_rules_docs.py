@@ -8,6 +8,8 @@ import subprocess
 import tomllib
 
 from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
+from autostop_manager.action_contract import STORE_ACTIONS
+from autostop_manager.store_api import STORE_ENTITIES, STORE_MANAGEMENT_OPERATIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,6 +224,51 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
     assert "store_management" in knowledge_map["domains"]
     for expected in ["append-only quote note", "private structured quote-offer draft"]:
         assert expected in combined
+
+
+def test_store_command_reference_covers_live_entities_operations_and_strict_fields():
+    routes_payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text())
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text())
+    playbook = (ROOT / "docs" / "agent" / "store_management_playbook.md").read_text(encoding="utf-8")
+    routes = {route["command_id"]: route for route in routes_payload["routes"]}
+
+    read_selection = routes["store_read_workflow"]["read_entity_selection"]
+    operation_selection = routes["store_management_workflow"]["operation_selection"]
+    catalog_search = manager_catalog["store_tool_schemas"]["store_search"]
+    catalog_actions = manager_catalog["store_tool_schemas"]["store_management_action"]
+
+    assert set(read_selection) == set(STORE_ENTITIES)
+    assert set(catalog_search["filters_by_entity"]) == set(STORE_ENTITIES)
+    assert set(operation_selection) == set(STORE_MANAGEMENT_OPERATIONS)
+    assert set(catalog_actions["planned_changes_by_action"]) == set(STORE_MANAGEMENT_OPERATIONS)
+    assert {(value["domain"], operation) for operation, value in operation_selection.items()} == STORE_ACTIONS
+    assert all(value["aliases"] for value in operation_selection.values())
+
+    strict_fields = {
+        "assign_quote_request": "assignee_id",
+        "set_quote_request_status": "status",
+        "update_quote_request_comment": "internal_comment",
+        "add_quote_request_note": "text",
+        "replace_quote_offer_drafts": "items",
+        "set_batch_storage_location": "storage_location",
+        "mark_order_ready": "status",
+    }
+    for operation, field in strict_fields.items():
+        assert operation in playbook
+        assert field in operation_selection[operation]["planned_changes"]
+        assert field in catalog_actions["planned_changes_by_action"][operation]
+
+    for required in [
+        'agent_board_digest(scope="store")',
+        'status="FAILED"',
+        "no filters or cursor",
+        "update_quote_request_comment",
+        "append-only `add_quote_request_note`",
+        "raw job messages",
+        "retry and publication",
+        "not supported Store management commands",
+    ]:
+        assert required in playbook
 
     workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
     for expected in [

@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-07-16",
+  "last_verified": "2026-07-19",
   "tool_count": 69,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
@@ -272,7 +272,18 @@
       "query": "string=''",
       "filters": "object|null=null",
       "cursor": "opaque string|null=null",
-      "limit": "integer=25, clamped 1..100"
+      "limit": "integer=25, clamped 1..100",
+      "filters_by_entity": {
+        "store_part": "is_active: bool; low_stock: bool",
+        "store_order": "status: IN_PROGRESS|READY|COMPLETED|ANNULLED|RETURNED",
+        "store_quote_request": "status: NEW|IN_PROGRESS|PRICED|APPROVED|CONVERTED|CANCELLED; assigned_user_id: non-empty string up to 36|null",
+        "store_supplier": "is_active: bool",
+        "store_batch": "status: IN_PROGRESS|COMPLETED; storage_location: non-empty string up to 200",
+        "store_warehouse_operation": "kind: RECEIPT|SHIPMENT; status: IN_PROGRESS|COMPLETED|ANNULLED",
+        "store_marketplace_listing": "status: DRAFT|PUBLISHED|FAILED|ARCHIVED",
+        "store_state": "no filters",
+        "store_sourcing_offer": "no filters or cursor; query length at least 2"
+      }
     },
     "store_entity_context": {
       "entity": "allowlisted store entity",
@@ -288,7 +299,16 @@
       "expected_updated_at": "current exact string",
       "idempotency_key": "unique string",
       "correlation_id": "alphanumeric-first 8..160 safe identifier from ActionContractV2, stable across dry_run/apply; explicit override is optional when building the contract",
-      "mode": "dry_run|apply, default dry_run"
+      "mode": "dry_run|apply, default dry_run",
+      "planned_changes_by_action": {
+        "assign_quote_request": "store_quote_request; assignee_id: non-empty string up to 36",
+        "set_quote_request_status": "store_quote_request; status: NEW|IN_PROGRESS",
+        "update_quote_request_comment": "store_quote_request; internal_comment: string up to 2000|null",
+        "add_quote_request_note": "store_quote_request; text: non-empty string up to 2000",
+        "replace_quote_offer_drafts": "store_quote_request; complete Manager-owned draft post-state for one exact quote: 1..20 exact items, 0..3 strict private drafts per item; omitted prior drafts are superseded",
+        "set_batch_storage_location": "store_batch; storage_location: non-empty string up to 200",
+        "mark_order_ready": "store_order; status: READY from IN_PROGRESS only"
+      }
     }
   },
   "natural_language_commands": {

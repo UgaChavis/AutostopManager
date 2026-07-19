@@ -691,7 +691,19 @@
         "Покажи последние приходы и отгрузки",
         "Какие позиции заканчиваются",
         "Покажи состояние склада",
-        "Покажи ошибки выгрузки Avito/Drom"
+        "Покажи ошибки выгрузки Avito/Drom",
+        "Покажи ошибки выгрузки за 24 часа",
+        "Покажи ошибки выгрузки за 7 дней",
+        "Покажи товар по артикулу",
+        "Найди заказ магазина по номеру",
+        "Покажи заявки без исполнителя",
+        "Покажи активных поставщиков",
+        "Покажи партии в ячейке",
+        "Покажи незавершенные приходы",
+        "Покажи незавершенные отгрузки",
+        "Покажи проблемные объявления маркетплейса",
+        "Покажи состояние маркетплейсов",
+        "Найди варианты поставки ROSSKO"
       ],
       "keywords": [
         "заказы магазина",
@@ -707,7 +719,16 @@
         "приходы и отгрузки",
         "низкий остаток",
         "состояние склада",
-        "ошибки выгрузки"
+        "ошибки выгрузки",
+        "товар по артикулу",
+        "заявки без исполнителя",
+        "активные поставщики",
+        "партии в ячейке",
+        "незавершенные приходы",
+        "незавершенные отгрузки",
+        "объявления маркетплейса",
+        "состояние маркетплейсов",
+        "варианты поставки ROSSKO"
       ],
       "memory_queries": [
         "store_management",
@@ -735,7 +756,18 @@
         "continue every digest page with its opaque next_cursor until has_more=false",
         "use agent_entity_context only for an exact requested object",
         "report store outage as degraded without blocking CRM"
-      ]
+      ],
+      "read_entity_selection": {
+        "store_part": "part id/SKU/name/manufacturer; filters is_active and low_stock",
+        "store_order": "order id/number/item SKU/name; filter status",
+        "store_quote_request": "quote id/number; filters status and assigned_user_id, including null for unassigned",
+        "store_supplier": "supplier id/name; filter is_active",
+        "store_batch": "batch id/location/part SKU/name; filters status and storage_location",
+        "store_warehouse_operation": "warehouse operation id/kind/status; filters kind and status",
+        "store_marketplace_listing": "listing id/external id/part SKU/name; filter status",
+        "store_state": "aggregate Store/marketplace state; no filters",
+        "store_sourcing_offer": "lookup-only local and ROSSKO candidates; query length at least 2, no filters or cursor"
+      }
     },
     {
       "command_id": "store_management_workflow",
@@ -749,11 +781,18 @@
         "переведи заявку на подбор в работу",
         "верни заявку на подбор в NEW",
         "обнови внутренний комментарий заявки",
+        "замени внутренний комментарий заявки",
+        "очисти внутренний комментарий заявки",
         "добавь комментарий в заявку на проценку",
         "добавь заметку в заявку на проценку",
+        "добавь запись в историю заявки на проценку",
         "подготовь черновики для заявки на проценку",
+        "замени приватные черновики предложений",
+        "очисти приватные черновики предложений",
         "измени место хранения партии",
-        "переведи заказ магазина в READY"
+        "переложи партию в ячейку",
+        "переведи заказ магазина в READY",
+        "отметь собранный заказ готовым"
       ],
       "keywords": [
         "назначь заявку на подбор",
@@ -761,9 +800,11 @@
         "внутренний комментарий заявки",
         "комментарий в заявку на проценку",
         "заметку в заявку на проценку",
+        "запись в историю заявки",
         "черновики для заявки на проценку",
         "место хранения партии",
-        "заказ магазина в READY"
+        "заказ магазина в READY",
+        "собранный заказ готовым"
       ],
       "memory_queries": [
         "store management allowlist",
@@ -796,7 +837,74 @@
         "run agent_inventory_workflow in dry_run and inspect effects",
         "apply only the seven-operation allowlist after a clean dry-run",
         "reread the exact target and reconcile the compact audit correlation"
-      ]
+      ],
+      "operation_selection": {
+        "assign_quote_request": {
+          "domain": "store_quote_request",
+          "use_when": "assign one exact quote request",
+          "planned_changes": "assignee_id: non-empty string up to 36",
+          "aliases": [
+            "назначь заявку на подбор сотруднику"
+          ]
+        },
+        "set_quote_request_status": {
+          "domain": "store_quote_request",
+          "use_when": "move one exact quote request to IN_PROGRESS or back to NEW",
+          "planned_changes": "status: NEW|IN_PROGRESS",
+          "aliases": [
+            "переведи заявку на подбор в работу",
+            "верни заявку на подбор в NEW"
+          ]
+        },
+        "update_quote_request_comment": {
+          "domain": "store_quote_request",
+          "use_when": "replace or clear the current internal comment",
+          "planned_changes": "internal_comment: string up to 2000 or null",
+          "aliases": [
+            "обнови внутренний комментарий заявки",
+            "замени внутренний комментарий заявки",
+            "очисти внутренний комментарий заявки"
+          ]
+        },
+        "add_quote_request_note": {
+          "domain": "store_quote_request",
+          "use_when": "append one note/history entry without replacing prior text",
+          "planned_changes": "text: non-empty string up to 2000",
+          "aliases": [
+            "добавь комментарий в заявку на проценку",
+            "добавь заметку в заявку на проценку",
+            "добавь запись в историю заявки на проценку"
+          ]
+        },
+        "replace_quote_offer_drafts": {
+          "domain": "store_quote_request",
+          "use_when": "replace the complete Manager-owned private draft set for one exact quote; omitted prior drafts are superseded",
+          "planned_changes": "items: 1..20 exact item ids describing the complete desired post-state, with 0..3 strict private drafts each",
+          "aliases": [
+            "подготовь черновики для заявки на проценку",
+            "замени приватные черновики предложений",
+            "очисти приватные черновики предложений"
+          ]
+        },
+        "set_batch_storage_location": {
+          "domain": "store_batch",
+          "use_when": "change the storage location of one exact batch",
+          "planned_changes": "storage_location: non-empty string up to 200",
+          "aliases": [
+            "измени место хранения партии",
+            "переложи партию в ячейку"
+          ]
+        },
+        "mark_order_ready": {
+          "domain": "store_order",
+          "use_when": "mark one exact IN_PROGRESS assembled order READY after explicit owner instruction",
+          "planned_changes": "status: READY",
+          "aliases": [
+            "переведи заказ магазина в READY",
+            "отметь собранный заказ готовым"
+          ]
+        }
+      }
     },
     {
       "command_id": "store_analytics_reporting",
