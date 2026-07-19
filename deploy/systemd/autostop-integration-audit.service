@@ -1,0 +1,20 @@
+[Unit]
+Description=AutoStop CRM Store Gmail and web integration audit
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/AutostopManager
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.cli integration-audit --output /var/lib/autostop-manager/integration/latest.json
+TimeoutStartSec=4min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/autostop-manager
+

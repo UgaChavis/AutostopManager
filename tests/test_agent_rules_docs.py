@@ -263,7 +263,7 @@ def test_gmail_playbook_lists_current_documented_surface():
 
     assert len(tools) == len(set(tools)) == 21
     assert all(tool in playbook for tool in tools)
-    for expected in ["attachment_files", "body_file", "html_body", "content_type", "2026-07-14"]:
+    for expected in ["attachment_files", "body_file", "html_body", "content_type", "2026-07-19"]:
         assert expected in playbook
 
 

@@ -133,7 +133,11 @@ Gmail.
 
 ## Verification Record
 
-This playbook was refreshed on 2026-07-14 from the currently exposed Gmail
-connector metadata without mailbox mutation. Read-only commands are safe for
-task-relevant inspection. Mutating and sending commands remain gated by exact
-task-specific owner intent and target preflight.
+This playbook was refreshed on 2026-07-19 from the current connector schemas.
+The Manager ActionContract covers send, forward, label, archive, Trash,
+batch-modify, bulk-label, label creation, and draft create/update/send,
+including connector-style action aliases. A self-addressed live smoke verified
+profile/labels/search, draft create/update/send, message readback, label
+add/remove, archive, and Trash cleanup. Only booleans and freshness are retained
+in the root-only Gmail proof; no subject, body, address, or message/thread ID is
+stored in project files or Manager memory.

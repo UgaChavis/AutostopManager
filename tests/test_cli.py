@@ -10,6 +10,21 @@ from autostop_manager import cli
 def test_cli_parser_has_core_commands():
     parser = cli.build_parser()
 
+    args = parser.parse_args(
+        [
+            "integration-audit",
+            "--full",
+            "--gmail-proof",
+            "/tmp/proof.json",
+            "--output",
+            "/tmp/report.json",
+        ]
+    )
+    assert args.command == "integration-audit"
+    assert args.full is True
+    assert args.gmail_proof == "/tmp/proof.json"
+    assert args.output == "/tmp/report.json"
+
     args = parser.parse_args(["remember", "test note", "--kind", "fact", "--confidence", "0.7"])
     assert args.command == "remember"
     assert args.kind == "fact"

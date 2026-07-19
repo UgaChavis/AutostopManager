@@ -255,6 +255,81 @@ def test_gmail_label_rejects_legacy_ambiguous_or_malformed_targets():
     assert "invalid_create_missing_labels_flag" in invalid_flag["preflight"]["blocking_reasons"]
 
 
+@pytest.mark.parametrize(
+    ("action", "planned_changes", "tool"),
+    [
+        ("archive_emails", {"message_ids": ["message-1"]}, "gmail:_archive_emails"),
+        ("delete_emails", {"message_ids": ["message-1"]}, "gmail:_delete_emails"),
+        (
+            "batch_modify_email",
+            {"message_ids": ["message-1"], "add_labels": ["Label_1"]},
+            "gmail:_batch_modify_email",
+        ),
+        (
+            "bulk_label_matching_emails",
+            {
+                "query": "from:supplier@example.com older_than:1y",
+                "label_name": "Архив поставщика",
+                "archive": True,
+                "create_label_if_missing": False,
+            },
+            "gmail:_bulk_label_matching_emails",
+        ),
+        ("create_label", {"name": "Заказ-наряды"}, "gmail:_create_label"),
+        (
+            "create_draft",
+            {"to": "me", "subject": "Проверка", "body": "Тестовый черновик"},
+            "gmail:_create_draft",
+        ),
+        (
+            "update_draft",
+            {"draft_id": "draft-1", "subject": "Уточнённая тема"},
+            "gmail:_update_draft",
+        ),
+        ("send_draft", {"draft_id": "draft-1"}, "gmail:_send_draft"),
+    ],
+)
+def test_gmail_current_mutation_surface_and_aliases(action, planned_changes, tool):
+    result = prepare_action_contract(
+        domain="gmail",
+        action=action,
+        planned_changes=planned_changes,
+        owner_intent=f"Выполни точное тестовое действие {action}",
+        idempotency_key=f"gmail-{action}-contract-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == tool
+    assert result["execution"]["ready"] is True
+    assert result["ledger"]["store_refs_only"] is True
+
+
+@pytest.mark.parametrize(
+    ("action", "planned_changes", "blocker"),
+    [
+        ("archive", {"message_ids": []}, "missing_exact_message_ids"),
+        ("delete", {"message_ids": "message-1"}, "missing_exact_message_ids"),
+        ("batch_modify", {"message_ids": ["message-1"]}, "missing_label_ids"),
+        ("bulk_label", {"query": "in:inbox"}, "missing_label_name"),
+        ("create_label", {"name": ""}, "missing_label_name"),
+        ("create_draft", {"to": "me", "subject": "x"}, "missing_body_intent"),
+        ("update_draft", {"draft_id": "draft-1"}, "missing_draft_changes"),
+        ("send_draft", {"draft_id": ""}, "missing_exact_draft_id"),
+    ],
+)
+def test_gmail_expanded_mutations_fail_closed_on_ambiguous_inputs(action, planned_changes, blocker):
+    result = prepare_action_contract(
+        domain="gmail",
+        action=action,
+        planned_changes=planned_changes,
+        owner_intent=f"Выполни тестовое действие {action}",
+        idempotency_key=f"gmail-{action}-invalid-v1",
+    )
+
+    assert result["ok"] is False
+    assert blocker in result["preflight"]["blocking_reasons"]
+
+
 def test_document_contract_accepts_request_text_for_crm_type_inference():
     result = prepare_action_contract(
         domain="document",

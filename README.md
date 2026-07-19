@@ -28,6 +28,8 @@ python -m autostop_manager.cli prepare-context "почисти документ�
 python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения"
 python -m autostop_manager.cli knowledge-search "счет НДС PDF render" --domain business_documents
 python -m autostop_manager.cli control-report --format markdown
+python -m autostop_manager.cli integration-audit
+python -m autostop_manager.cli integration-audit --full
 ```
 
 For a new non-trivial task: `agent-brief` or `prepare-context` first. For CRM:
