@@ -32,7 +32,8 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 2. For local knowledge/docs work, run `knowledge-probe "<query>"` and open the
    returned `open_first` / source-of-truth files before broad reads.
 3. For live CRM work, use the AutoStop CRM MCP connector. Start with
-   `agent_bootstrap`, then `agent_board_digest`; use `agent_search` and
+   `agent_bootstrap`, then `agent_board_digest`; Store bootstrap is one
+   stateless snapshot request with no cursor/ACK. Use `agent_search` and
    `agent_entity_context` for focused detail. Run broad control through
    `agent_board_workflow`, not the hidden legacy surface.
 4. For store work, open `docs/agent/store_management_playbook.md`; use existing

@@ -44,6 +44,16 @@ class _DigestClient:
         return deepcopy(self.pages.pop(0))
 
 
+class _BootstrapSnapshotClient:
+    def __init__(self, result: dict):
+        self.result = deepcopy(result)
+        self.calls = 0
+
+    def bootstrap_snapshot(self):
+        self.calls += 1
+        return deepcopy(self.result)
+
+
 class _ActionClient:
     def __init__(self, *, before: dict, after: dict | None = None, action_result: dict | None = None):
         self.before = deepcopy(before)
@@ -91,6 +101,34 @@ def _seed_checkpoint(store: ManagerMemoryStore, *, stream: str = "store_digest",
         expected_state_version=0,
     )
     assert result["ok"] is True
+
+
+def test_bootstrap_snapshot_is_stateless_and_does_not_touch_digest_checkpoints(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    _seed_checkpoint(store, stream="store_digest", cursor="owner-digest")
+    _seed_checkpoint(store, stream="store_bootstrap", cursor="legacy-bootstrap")
+    expected = {
+        "ok": True,
+        "format": "store_agent_v1",
+        "status": "ok",
+        "summary": {"store_api_ready": True, "contract_version": "store_agent_v1"},
+        "items": [],
+        "changes": [],
+        "page": {"has_more": False, "next_cursor": None},
+        "warnings": [],
+        "meta": {},
+    }
+    client = _BootstrapSnapshotClient(expected)
+
+    result = StoreIntegration(client=client, store=store).runtime_status(
+        live=True,
+        bootstrap_snapshot=True,
+    )
+
+    assert result == expected
+    assert client.calls == 1
+    assert store.get_store_checkpoint("store_digest")["cursor"] == "owner-digest"
+    assert store.get_store_checkpoint("store_bootstrap")["cursor"] == "legacy-bootstrap"
 
 
 def test_first_read_creates_baseline_without_returning_historical_items(tmp_path):

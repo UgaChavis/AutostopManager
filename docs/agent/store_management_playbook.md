@@ -24,8 +24,9 @@ or change business state.
 
 Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 
-- `agent_bootstrap` for CRM readiness plus a compact degraded-safe store
-  status; its store read uses the isolated `store_bootstrap` stream;
+- `agent_bootstrap` for CRM readiness plus one compact degraded-safe Store
+  snapshot; it performs one Store GET, has no cursor/ACK, and does not read the
+  change feed;
 - `agent_board_digest(scope="store")` for the store digest and the
   owner-visible `store_digest` stream;
 - `agent_search` for bounded store lists and catalog/stock lookup;
@@ -81,10 +82,15 @@ Manager digest reads one page per call:
    `store-checkpoint-reset --stream ... --confirm-rebaseline` only after an
    explicit reset decision; never silently discard a generation mismatch.
 
-Bootstrap uses `store_bootstrap`, never `store_digest`, so startup cannot hide
-changes from “Что нового появилось в магазине?”. Gateway exposes independent
-continuation fields `store_cursor` and `store_ack_token` on `agent_bootstrap`;
-`agent_board_digest(scope="store")` uses `cursor` and `ack_token`.
+Bootstrap uses stateless `/bootstrap-snapshot`, never `store_digest` or the
+legacy `store_bootstrap` checkpoint, so startup cannot hide changes from “Что
+нового появилось в магазине?”. One response contains Store API readiness,
+product/active-order/open-request counts, aggregate stock, marketplace state,
+safe marketplace export-error counts for 24 hours/7 days/all time, the latest
+five generic errors, and Store contract version. Error entries contain only
+date, fixed `error_code`, part/account refs, and attempt count; raw messages,
+payloads, tokens, and contacts are forbidden. `agent_board_digest(scope="store")`
+alone uses `cursor` and `ack_token`.
 
 ## Minimal write allowlist
 
@@ -166,8 +172,9 @@ service payments stay in CRM workflows.
 - Manager raw registry contains the Store INTERNAL_ONLY tools, while public
   Gateway v2 remains exactly 24 tools.
 - Read API calls never mutate store state; read-only credentials cannot write.
-- Digest pagination, abort/resume, CAS conflict, failure preservation, and
-  isolated bootstrap cursor tests pass.
+- Bootstrap is one stateless Store request with no ACK/change-feed query;
+  digest pagination, ACK/replay, abort/resume, CAS conflict, and failure
+  preservation tests pass unchanged.
 - Seven writes pass DTO-shaped dry-run/apply/idempotency/concurrency/readback
   tests, including two-change comment/READY responses, stale receipt replay,
   and uncertain-outcome reconciliation; production smoke is read-only plus safe

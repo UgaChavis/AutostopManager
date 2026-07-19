@@ -46,7 +46,14 @@ class StoreIntegration:
         self.client = client
         self.store = store
 
-    def runtime_status(self, *, live: bool = False) -> dict[str, Any]:
+    def runtime_status(
+        self,
+        *,
+        live: bool = False,
+        bootstrap_snapshot: bool = False,
+    ) -> dict[str, Any]:
+        if bootstrap_snapshot:
+            return self.client.bootstrap_snapshot()
         return self.client.runtime_status(live=live)
 
     def digest(

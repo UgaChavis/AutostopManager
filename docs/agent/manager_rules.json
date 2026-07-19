@@ -288,7 +288,7 @@
     {
       "id": "store-read-order-and-cursors",
       "priority": 34,
-      "rule": "For store work open docs/agent/store_management_playbook.md. Use agent_bootstrap for degraded-safe readiness, agent_board_digest(scope=store) for the owner digest, agent_search for bounded lists, and agent_entity_context for an exact object. Bootstrap uses the isolated store_bootstrap stream. The owner store_digest checkpoint advances only after the final page; failed or abandoned paging must preserve the committed cursor."
+      "rule": "For store work open docs/agent/store_management_playbook.md. Use agent_bootstrap for a one-request stateless degraded-safe snapshot, agent_board_digest(scope=store) for the owner digest, agent_search for bounded lists, and agent_entity_context for an exact object. Bootstrap has no cursor or ACK and never reads or advances store_digest. The owner store_digest checkpoint advances only after the final page; failed or abandoned paging must preserve the committed cursor."
     },
     {
       "id": "store-memory-privacy",

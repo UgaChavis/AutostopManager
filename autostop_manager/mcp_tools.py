@@ -327,8 +327,14 @@ def register_manager_memory_tools(  # noqa: C901
             "and expose store health only through existing Gateway v2 bootstrap/runtime tools."
         ),
     )
-    def store_runtime_status_tool(live: bool = False) -> dict[str, Any]:
-        return store_adapter.runtime_status(live=live)
+    def store_runtime_status_tool(
+        live: bool = False,
+        bootstrap_snapshot: bool = False,
+    ) -> dict[str, Any]:
+        return store_adapter.runtime_status(
+            live=live,
+            bootstrap_snapshot=bootstrap_snapshot,
+        )
 
     @server.tool(
         name="store_digest",

@@ -234,8 +234,9 @@ After deployment, verify:
 - logs do not contain secrets or CRM dumps
 - store agent GETs are mutation-free; store digest/search/entity reads work;
   physical/reserved/available and multiple storage locations are represented
-- bootstrap uses `store_bootstrap`; `agent_board_digest(scope=store)` uses the
-  separate owner `store_digest` cursor and commits only after its final page
+- bootstrap performs one Store snapshot request with no cursor/ACK and leaves
+  digest checkpoints untouched; `agent_board_digest(scope=store)` uses the
+  owner `store_digest` cursor and commits only after its final page
 - store outage degrades only store state while a representative CRM read still
   succeeds
 - production store management smoke is dry-run only unless a safe synthetic,

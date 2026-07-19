@@ -26,8 +26,8 @@ Default owner-facing style: Russian, short, practical, direct.
 5. For store work, open `docs/agent/store_management_playbook.md`; use
    `agent_board_digest(scope="store")`, store entities in `agent_search` and
    `agent_entity_context`, and `agent_inventory_workflow` only for the seven
-   allowlisted writes. Bootstrap uses `store_bootstrap`, not the owner-visible
-   `store_digest` cursor.
+   allowlisted writes. Bootstrap is one stateless snapshot request and never
+   reads or advances the owner-visible `store_digest` cursor.
 6. For Gmail work, open `docs/agent/gmail_workflow_playbook.md` and read/search
    before any mailbox mutation.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or multi-step work,

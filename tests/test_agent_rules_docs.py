@@ -187,7 +187,7 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
 
     for expected in [
         "AutoStop App is the source of truth",
-        "store_bootstrap",
+        "stateless",
         "store_digest",
         "physical",
         "reserved",

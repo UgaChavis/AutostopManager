@@ -115,6 +115,97 @@ def test_digest_retries_safe_get_and_sends_bounded_query(monkeypatch):
     assert calls[-1][0].get_header("Authorization") == "Bearer read-secret"
 
 
+def test_bootstrap_snapshot_is_one_get_without_cursor_ack_or_private_error_text(monkeypatch):
+    calls = []
+    payload = _envelope(
+        next_cursor=None,
+        summary={
+            "store_api_ready": True,
+            "product_count": 42,
+            "active_order_count": 3,
+            "open_quote_request_count": 2,
+            "inventory": {
+                "position_count": 40,
+                "physical_qty": 100,
+                "reserved_qty": 7,
+                "available_qty": 93,
+                "purchase_stock_value": "1000.00",
+                "retail_stock_value": "1500.00",
+                "low_stock_threshold": 1,
+                "low_stock_count": 4,
+            },
+            "marketplaces": {
+                "accounts_total": 2,
+                "active_accounts": 2,
+                "listing_status": {"published": 10, "failed": 1},
+                "export_job_status": {"sent": 20, "failed": 2},
+                "export_errors": {
+                    "counts": {"last_24_hours": 1, "last_7_days": 2, "all_time": 2},
+                    "latest": [
+                        {
+                            "error_at": "2026-07-19T10:00:00+00:00",
+                            "error_code": "MARKETPLACE_EXPORT_FAILED",
+                            "part_id": "part-1",
+                            "account_id": "account-1",
+                            "attempt_count": 3,
+                        }
+                    ],
+                },
+            },
+            "contract_version": "store_agent_v1",
+            "bootstrap_snapshot_version": 1,
+        },
+    )
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return _Response(payload)
+
+    monkeypatch.setattr(store_api_module, "urlopen", fake_urlopen)
+
+    result = _client(max_read_attempts=1).bootstrap_snapshot()
+
+    assert result["ok"] is True
+    assert result["summary"]["product_count"] == 42
+    assert len(calls) == 1
+    parsed = urlparse(calls[0][0].full_url)
+    assert parsed.path == "/internal/agent/v1/bootstrap-snapshot"
+    assert parsed.query == ""
+    assert result["page"]["next_cursor"] is None
+    assert "ack" not in json.dumps(result)
+
+
+def test_bootstrap_snapshot_rejects_raw_marketplace_error_fields(monkeypatch):
+    payload = _envelope(
+        next_cursor=None,
+        summary={
+            "store_api_ready": True,
+            "marketplaces": {
+                "export_errors": {
+                    "counts": {"last_24_hours": 1, "last_7_days": 1, "all_time": 1},
+                    "latest": [
+                        {
+                            "error_at": "2026-07-19T10:00:00+00:00",
+                            "error_code": "MARKETPLACE_EXPORT_FAILED",
+                            "part_id": "part-1",
+                            "account_id": "account-1",
+                            "attempt_count": 1,
+                            "message": "Bearer must-not-pass",
+                        }
+                    ],
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+
+    result = _client(max_read_attempts=1).bootstrap_snapshot()
+
+    assert result["ok"] is False
+    assert result["summary"]["error_code"] == "store_response_schema_invalid"
+    assert "must-not-pass" not in json.dumps(result)
+
+
 def test_management_post_has_exact_body_uses_manage_identity_and_is_not_retried(monkeypatch):
     calls = []
 

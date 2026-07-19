@@ -45,9 +45,11 @@ store scopes/entities: `agent_bootstrap`, `agent_board_digest(scope="store")`,
 `agent_search`, `agent_entity_context`, `get_runtime_status`, and
 `agent_inventory_workflow`. The Manager adapter calls only the pure-read
 `/internal/agent/v1` API, never the store database or legacy GET routes with
-side effects. Bootstrap uses its own `store_bootstrap` stream; owner “what is
-new” reads use `store_digest`. Every non-empty page has a Manager-owned opaque
-cursor/ACK pair, and the durable high-water commits only after the final ACK.
+side effects. Owner “what is new” reads use `store_digest`; `agent_bootstrap`
+reads one stateless `/bootstrap-snapshot` response, so it has no cursor or ACK
+and never touches any digest checkpoint. `agent_board_digest(scope="store")` keeps the
+Manager-owned opaque cursor/ACK protocol and commits high-water only after the
+final ACK.
 
 ## Core Audits
 

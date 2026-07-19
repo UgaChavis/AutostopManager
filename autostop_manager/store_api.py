@@ -356,6 +356,32 @@ _MARKETPLACE_ERROR_ITEM_FIELDS = frozenset(
         "created_at",
     }
 )
+_BOOTSTRAP_SUMMARY_FIELDS = frozenset(
+    {
+        "store_api_ready",
+        "product_count",
+        "active_order_count",
+        "open_quote_request_count",
+        "inventory",
+        "marketplaces",
+        "contract_version",
+        "bootstrap_snapshot_version",
+    }
+)
+_BOOTSTRAP_MARKETPLACES_FIELDS = frozenset(
+    {
+        "accounts_total",
+        "active_accounts",
+        "listing_status",
+        "export_job_status",
+        "export_errors",
+    }
+)
+_BOOTSTRAP_LISTING_STATUS_FIELDS = frozenset({"draft", "published", "failed", "archived"})
+_BOOTSTRAP_EXPORT_STATUS_FIELDS = frozenset({"pending", "sent", "failed"})
+_BOOTSTRAP_ERROR_REPORT_FIELDS = frozenset({"counts", "latest"})
+_BOOTSTRAP_ERROR_COUNT_FIELDS = frozenset({"last_24_hours", "last_7_days", "all_time"})
+_BOOTSTRAP_ERROR_ITEM_FIELDS = frozenset({"error_at", "error_code", "part_id", "account_id", "attempt_count"})
 _CHANGED_ORDER_FIELDS = frozenset({"entity_id", "order_number", "status", "items"})
 _CHANGED_ORDER_ITEM_FIELDS = frozenset({"item_id", "source", "part_id", "sku", "name", "qty"})
 _SEARCH_SUMMARY_FIELDS = frozenset({"entity", "matches"})
@@ -624,6 +650,15 @@ class StoreApiClient:
         if isinstance(meta, dict):
             meta["live_check"] = True
         return result
+
+    def bootstrap_snapshot(self) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/bootstrap-snapshot",
+            expected_item_limit=0,
+            expected_change_limit=0,
+            response_contract="bootstrap_snapshot",
+        )
 
     def local_status(self) -> dict[str, Any]:
         circuit_open = self._circuit_is_open()
@@ -1259,6 +1294,45 @@ def _validate_runtime_summary(summary: dict[str, Any]) -> None:
         )
 
 
+def _validate_bootstrap_snapshot(summary: dict[str, Any]) -> None:
+    _require_allowed_keys(summary, _BOOTSTRAP_SUMMARY_FIELDS, path="summary")
+    if "inventory" in summary:
+        inventory_fields = _INVENTORY_FIELDS - {"low_stock_items"}
+        _require_allowed_keys(summary["inventory"], inventory_fields, path="summary.inventory")
+    marketplaces = summary.get("marketplaces")
+    if marketplaces is not None:
+        _require_allowed_keys(marketplaces, _BOOTSTRAP_MARKETPLACES_FIELDS, path="summary.marketplaces")
+        if "listing_status" in marketplaces:
+            _require_allowed_keys(
+                marketplaces["listing_status"],
+                _BOOTSTRAP_LISTING_STATUS_FIELDS,
+                path="summary.marketplaces.listing_status",
+            )
+        if "export_job_status" in marketplaces:
+            _require_allowed_keys(
+                marketplaces["export_job_status"],
+                _BOOTSTRAP_EXPORT_STATUS_FIELDS,
+                path="summary.marketplaces.export_job_status",
+            )
+        if "export_errors" in marketplaces:
+            report = marketplaces["export_errors"]
+            _require_allowed_keys(report, _BOOTSTRAP_ERROR_REPORT_FIELDS, path="summary.marketplaces.export_errors")
+            if "counts" in report:
+                _require_allowed_keys(
+                    report["counts"],
+                    _BOOTSTRAP_ERROR_COUNT_FIELDS,
+                    path="summary.marketplaces.export_errors.counts",
+                )
+            for index, item in enumerate(
+                _require_object_list(report.get("latest", []), path="summary.marketplaces.export_errors.latest")
+            ):
+                _require_allowed_keys(
+                    item,
+                    _BOOTSTRAP_ERROR_ITEM_FIELDS,
+                    path=f"summary.marketplaces.export_errors.latest[{index}]",
+                )
+
+
 def _validate_error_payload(payload: dict[str, Any]) -> None:
     _require_allowed_keys(payload["summary"], _ERROR_SUMMARY_FIELDS, path="summary")
     if "details" in payload["summary"]:
@@ -1323,6 +1397,13 @@ def _validate_contract_payload(
         _validate_runtime_summary(payload["summary"])
         if payload.get("items") or payload.get("changes"):
             raise ValueError("runtime-status cannot contain entity payloads")
+        return
+    if response_contract == "bootstrap_snapshot":
+        _validate_bootstrap_snapshot(payload["summary"])
+        if payload.get("items") or payload.get("changes"):
+            raise ValueError("bootstrap snapshot cannot contain entity payloads")
+        if payload["page"].get("has_more") or payload["page"].get("next_cursor"):
+            raise ValueError("bootstrap snapshot cannot require pagination")
         return
     if response_contract == "digest":
         _validate_digest_summary(payload["summary"])

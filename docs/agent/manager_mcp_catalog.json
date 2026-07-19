@@ -198,7 +198,7 @@
     "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, context_safety, next actions, and verification.",
     "agent_bootstrap": "Return AgentEnvelopeV2 with the deterministic selected workflow, source boundaries, safety policy, missing context, and resumable unfinished runs without reading or writing live CRM/Gmail.",
     "list_agent_workflows": "List the compact named Agent Gateway v2 workflow registry and resolve a query or explicit intent deterministically.",
-    "store_runtime_status": "INTERNAL_ONLY. Return store_agent_v1 adapter configuration booleans, circuit state, and optional live AutoStop App health without exposing token values. Gateway raw discovery must exclude it and map health through existing bootstrap/runtime tools.",
+    "store_runtime_status": "INTERNAL_ONLY. Return store_agent_v1 adapter configuration booleans, circuit state, optional live AutoStop App health, or the one-request stateless bootstrap snapshot without exposing token values. The snapshot never reads or advances digest checkpoints. Gateway raw discovery must exclude it and map health through existing bootstrap/runtime tools.",
     "store_digest": "INTERNAL_ONLY. Read one bounded pure-read store digest page with at-least-once delivery. Uses isolated store_digest/store_bootstrap streams, persists only technical cursor/timestamp/success state/compact refs, returns a Manager-owned cursor-bound ACK for every non-empty page, replays unacknowledged pages from the fixed App window, and commits high-water only after final ACK. Gateway raw discovery must exclude it.",
     "store_search": "INTERNAL_ONLY. Search one allowlisted store entity through the pure-read AutoStop App agent API with compact store_agent_v1 DTOs, bounded limit, opaque pagination, schema validation, and contact redaction. Gateway maps it through agent_search.",
     "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary or full detail. General reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, and drafts. Gateway maps it through agent_entity_context and never persists the payload.",
@@ -256,7 +256,8 @@
   },
   "store_tool_schemas": {
     "store_runtime_status": {
-      "live": "bool=false"
+      "live": "bool=false",
+      "bootstrap_snapshot": "bool=false; when true performs one stateless Store bootstrap GET and ignores digest checkpoints"
     },
     "store_digest": {
       "baseline": "bool=false",

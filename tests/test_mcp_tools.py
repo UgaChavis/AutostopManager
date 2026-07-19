@@ -593,7 +593,7 @@ def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_pat
     register_manager_memory_tools(server, store)
 
     expected_parameters = {
-        "store_runtime_status": ["live"],
+        "store_runtime_status": ["live", "bootstrap_snapshot"],
         "store_digest": ["baseline", "since", "cursor", "ack_token", "limit", "stream"],
         "store_search": ["entity", "query", "filters", "cursor", "limit"],
         "store_entity_context": ["entity", "entity_id", "detail"],

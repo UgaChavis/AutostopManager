@@ -43,7 +43,7 @@ DOMAIN_BRIEF_RULES = {
     ],
     "store_management": [
         "AutoStop App is the source of truth for store facts; read them only through its pure-read agent API, never the store database or mutating legacy GET endpoints.",
-        "Use the separate store_bootstrap cursor for startup health and store_digest for owner 'what is new' reads so startup never consumes owner-visible changes.",
+        "Use the stateless one-request Store bootstrap snapshot for startup health and store_digest for owner 'what is new' reads so startup never consumes owner-visible changes.",
         "Interpret store business dates such as today in Asia/Krasnoyarsk; keep Manager checkpoint timestamps technical UTC and cursors opaque.",
         "General Store reads stay redacted. An exact store_quote_request detail=full read uses the dedicated quote credential and may expose contacts, VIN, request items, offers, notes, and drafts transiently; never persist that payload in Manager memory.",
         "Store writes are limited to quote assignment/status/internal comment/append-only note/private drafts, exact batch storage location, and exact IN_PROGRESS to READY order transition.",
@@ -132,7 +132,7 @@ STORE_ANALYTICS_VERIFICATION = [
 ]
 
 STORE_READ_ORDER = [
-    "agent_bootstrap for compact CRM plus store readiness using the isolated store_bootstrap stream",
+    "agent_bootstrap for compact CRM plus a one-request stateless Store readiness snapshot",
     "agent_board_digest(scope=store) for store digest and owner-visible store_digest cursor",
     "agent_search with an exact store entity for bounded lists and catalog/stock lookup",
     "agent_entity_context with an exact store entity/id; general reads stay redacted, while store_quote_request detail=full uses the dedicated quote credential for transient contacts, VIN, items, offers, notes, and drafts",

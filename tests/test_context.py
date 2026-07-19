@@ -137,7 +137,7 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert result["route"]["open_first"] == "docs/agent/store_management_playbook.md"
     assert "catalog" in result["source_boundaries"]["store"]
     assert "repair orders" in result["source_boundaries"]["crm"]
-    assert any("store_bootstrap" in item for item in result["read_order"])
+    assert any("stateless Store readiness snapshot" in item for item in result["read_order"])
     assert any("agent_search" in item for item in result["read_order"])
     assert any("dedicated quote credential" in item for item in result["read_order"])
     assert any("contacts, VIN" in item for item in result["hot_rules"])
