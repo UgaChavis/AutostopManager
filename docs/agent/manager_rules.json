@@ -13,7 +13,7 @@
     {
       "id": "home-pc-remote-codex-access",
       "priority": 6,
-      "rule": "This server has working reverse-SSH access to the owner's home Windows PC through alias home-pc. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with it. ssh home-pc, sftp/scp, pwsh, Python, and CodexRemote helper scripts are available for filesystem, process, and visible-desktop work. Do not rotate or overwrite home-pc key material unless the Windows side is updated in the same operation."
+      "rule": "This server has two independent Windows reverse-SSH routes: the legacy owner's home PC through alias home-pc, and the multi-device managed-pc fleet enrolled from SECRET_KEY\\AUTOSTOP_REMOTE. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with either. For the fleet, run managed-pc status on the exact alias first and use managed-pc shell/run/powershell/copy-to/copy-from/revoke. Never print runtime private keys or the USB enrollment credential. Do not rotate or overwrite legacy home-pc key material while operating on the managed fleet."
     },
     {
       "id": "crm-source-of-truth",

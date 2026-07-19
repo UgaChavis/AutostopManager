@@ -3,6 +3,60 @@
 Server-side Codex has working command and filesystem access to the owner's home
 Windows PC.
 
+This file also routes the separate multi-device `managed-pc` fleet. Keep the
+legacy `home-pc` route and managed fleet independent: do not reuse or rotate one
+route's keys while operating on the other.
+
+## Managed Windows PC Fleet
+
+The server-side control plane is deployed from the separate version-controlled
+project `/opt/autostop-managed-pc`.
+
+- Primary transport: outbound reverse SSH; Windows opens no public or LAN SSH.
+- Enrollment: owner-controlled `SECRET_KEY\AUTOSTOP_REMOTE` USB bundle.
+- Server CLI: `managed-pc`.
+- Per device: unique tunnel key, loopback listener, server-to-device key and
+  pinned Windows host key.
+- Runtime state: `/var/lib/autostop-managed-pc`; never print or copy its private
+  keys or the USB enrollment credential.
+- Server health: `managed-pc doctor` and
+  `autostop-managed-pc-health.timer`.
+
+Normal workflow:
+
+```bash
+managed-pc list
+managed-pc newest
+managed-pc status <alias>
+managed-pc inspect <alias>
+managed-pc shell <alias>
+managed-pc run <alias> -- <program> <args...>
+managed-pc powershell <alias> <local-script.ps1>
+managed-pc copy-to <alias> <source> <destination>
+managed-pc copy-from <alias> <source> <destination>
+managed-pc revoke <alias>
+managed-pc audit <alias>
+```
+
+Run `managed-pc status <alias>` before a normal operation. Resolve the alias to
+the exact device and report which machine was affected. The owner has authorized
+full administrative work on enrolled machines, but formatting, bootloader
+changes, mass deletion, disabling protection, reboot/shutdown, and stopping
+critical business services still require a separate exact instruction.
+
+USB preparation and rotation:
+
+```bash
+managed-pc prepare-usb --output /safe/staging/path
+managed-pc verify-usb /safe/staging/path/AUTOSTOP_REMOTE
+managed-pc rotate-usb-credential
+```
+
+The USB credential can enroll a new machine but cannot access existing machines
+or obtain a server shell. If the USB is lost, rotate it; existing devices remain
+connected. The complete implementation, rollback commands and Windows file list
+are documented in `/opt/autostop-managed-pc/README.md`.
+
 ## Current Route
 
 - Connect from this server with `ssh home-pc`.

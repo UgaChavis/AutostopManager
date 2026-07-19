@@ -1530,9 +1530,11 @@
       ]
     },
     "remote_codex_access": {
-      "title": "Home Windows PC reverse SSH access for Codex",
+      "title": "Windows reverse SSH access for Codex: home-pc and managed fleet",
       "use_when": [
         "server-side Codex needs command or filesystem access to the owner's Windows home PC",
+        "enroll, inspect, operate, repair, copy files to, or revoke an owner-authorized managed Windows PC",
+        "prepare or verify the SECRET_KEY AUTOSTOP_REMOTE USB bundle",
         "connect a home computer to the Autostop server without public SSH",
         "prepare, verify, or repair the home-pc SSH alias and reverse tunnel",
         "interact with the home PC through ssh, sftp/scp, pwsh, Python, or visible-desktop helper scripts"
@@ -1546,6 +1548,12 @@
         "Windows OpenSSH",
         "codexadmin",
         "codex-home-tunnel",
+        "managed-pc",
+        "managed-pc-enroll",
+        "managed-pc-tunnel",
+        "SECRET_KEY",
+        "AUTOSTOP_REMOTE",
+        "CodexMaintenance",
         "PowerShell 7",
         "pwsh",
         "Python 3.14.6",
@@ -1564,6 +1572,11 @@
         "OpenSSH Server",
         "Scheduled Task",
         "127.0.0.1:22220",
+        "127.0.0.1:22300",
+        "managed-pc list",
+        "managed-pc status",
+        "managed-pc shell",
+        "managed-pc revoke",
         "PowerShell 7.6.3",
         "Python 3.14.6",
         "scp",
@@ -1583,7 +1596,9 @@
         "как использовать scp или sftp с home-pc",
         "как открыть файл на домашнем ПК через Codex",
         "есть ли доступ к домашнему ПК с сервера",
-        "как откатить codex-home-tunnel"
+        "как откатить codex-home-tunnel",
+        "как подключить новый Windows компьютер с флешки SECRET_KEY",
+        "как проверить или отозвать managed-pc"
       ],
       "source_of_truth_files": [
         "docs/agent/codex_home_pc_reverse_ssh.md",
