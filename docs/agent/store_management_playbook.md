@@ -31,15 +31,16 @@ Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 - `agent_search` for bounded store lists and catalog/stock lookup;
 - `agent_entity_context` for one exact store object;
 - `get_runtime_status` for adapter and store health;
-- `agent_inventory_workflow` for the five allowlisted writes.
+- `agent_inventory_workflow` for the seven allowlisted writes.
 
 Supported entities are `store_part`, `store_order`, `store_quote_request`,
 `store_supplier`, `store_batch`, `store_warehouse_operation`,
-`store_marketplace_listing`, and `store_state`. Lists use opaque cursors and a
-strict maximum limit. Contacts always remain redacted: this integration exposes
-only `detail="summary"` and `detail="full"` and has no contact scope. A future
-dedicated contact scope would require a separate exact owner request and must
-never persist its result in Manager state.
+`store_marketplace_listing`, and `store_state`. `store_sourcing_offer` is a
+lookup-only `agent_search` entity. Lists use opaque cursors and a strict maximum
+limit. General search remains redacted; an exact `store_quote_request` with
+`detail="full"` uses the dedicated quote credential and may return contacts,
+VIN, request/item comments, delivery details, offers, private drafts, and
+internal notes. Never persist that full payload in Manager state.
 
 For stock location, use active batches and aggregate `qty_remaining`, reserved,
 and available quantities by part and storage location. Return every location;
@@ -92,6 +93,9 @@ Only these domain/action pairs are allowed:
 - `store_quote_request/assign_quote_request` with `assignee_id`;
 - `store_quote_request/set_quote_request_status` with `NEW` or `IN_PROGRESS`;
 - `store_quote_request/update_quote_request_comment` with `internal_comment`;
+- `store_quote_request/add_quote_request_note` with append-only `text`;
+- `store_quote_request/replace_quote_offer_drafts` with at most three private
+  structured drafts per exact quote item;
 - `store_batch/set_batch_storage_location` with `storage_location`;
 - `store_order/mark_order_ready` with explicit `status=READY`, only from
   `IN_PROGRESS` and only on an exact owner command.
@@ -135,13 +139,14 @@ changes, messages, or arbitrary settings.
 ## Runtime configuration and degraded behavior
 
 The composition root injects only `AUTOSTOP_STORE_API_URL`,
-`AUTOSTOP_STORE_READ_TOKEN`, and `AUTOSTOP_STORE_MANAGE_TOKEN`. Tokens are
+`AUTOSTOP_STORE_READ_TOKEN`, `AUTOSTOP_STORE_QUOTE_TOKEN`, and
+`AUTOSTOP_STORE_MANAGE_TOKEN`. Tokens are
 runtime secrets; do not print their values or use a human ADMIN password. The
 URL is fail-closed: production accepts only
 `http://autostop-app:8000/internal/agent/v1` and local tests may use an explicit
 loopback port; userinfo, query, fragment, other paths, and external hosts are
 rejected. The
-adapter uses separate read/manage identities, bounded responses, schema
+adapter uses separate read/quote/manage identities, bounded responses, schema
 validation, redaction, timeout, GET-only retries, and a circuit breaker.
 Authentication and request conflicts do not trip the outage circuit.
 
@@ -158,12 +163,12 @@ service payments stay in CRM workflows.
 
 ## Verification
 
-- Manager raw registry contains the five INTERNAL_ONLY tools, while public
+- Manager raw registry contains the Store INTERNAL_ONLY tools, while public
   Gateway v2 remains exactly 24 tools.
 - Read API calls never mutate store state; read-only credentials cannot write.
 - Digest pagination, abort/resume, CAS conflict, failure preservation, and
   isolated bootstrap cursor tests pass.
-- Five writes pass DTO-shaped dry-run/apply/idempotency/concurrency/readback
+- Seven writes pass DTO-shaped dry-run/apply/idempotency/concurrency/readback
   tests, including two-change comment/READY responses, stale receipt replay,
   and uncertain-outcome reconciliation; production smoke is read-only plus safe
   dry-run.

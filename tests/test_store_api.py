@@ -51,10 +51,12 @@ def _envelope(
 
 
 def _client(**kwargs) -> StoreApiClient:
+    quote_token = kwargs.pop("quote_token", "")
     return StoreApiClient(
         api_url="http://store.internal/internal/agent/v1",
         read_token="read-secret",
         manage_token="manage-secret",
+        quote_token=quote_token,
         circuit_cooldown_seconds=600,
         **kwargs,
     )
@@ -82,6 +84,7 @@ def test_live_runtime_status_keeps_redacted_adapter_readiness(monkeypatch):
     assert result["summary"]["adapter"] == {
         "read_configured": True,
         "manage_configured": True,
+        "quote_configured": False,
         "circuit_open": False,
         "consecutive_failures": 0,
     }
@@ -369,6 +372,78 @@ def test_store_contacts_fail_closed_and_contacts_detail_is_not_exposed(monkeypat
     assert summary["items"] == []
     with pytest.raises(ValueError, match="detail"):
         client.entity_context(entity="store_order", entity_id="1", detail="contacts")
+
+
+def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeypatch):
+    captured = {}
+    payload = _envelope(
+        summary={"entity": "store_quote_request", "entity_id": "quote-1", "detail": "full"},
+        items=[
+            {
+                "entity": "store_quote_request",
+                "id": "quote-1",
+                "entity_type": "store_quote_request",
+                "entity_id": "quote-1",
+                "updated_at": "2026-07-19T10:00:00+00:00",
+                "request_number": 2,
+                "status": "NEW",
+                "assigned_user_id": None,
+                "assigned_user_name": None,
+                "items_count": 1,
+                "has_internal_comment": False,
+                "internal_comment_sha256": "a" * 64,
+                "created_at": "2026-07-19T09:00:00+00:00",
+                "notes_count": 0,
+                "agent_draft_count": 0,
+                "published_offer_count": 0,
+                "content_trust": "untrusted_customer_input",
+                "customer_name": "Иван Петров",
+                "phone": "+79990000000",
+                "email": "client@example.test",
+                "telegram_username": "client",
+                "vin": "WDD00000000000001",
+                "customer_comment": "Нужен фильтр",
+                "delivery_method": "PICKUP",
+                "delivery_address": None,
+                "internal_comment": None,
+                "agreement_comment": None,
+                "converted_order_id": None,
+                "approved_at": None,
+                "closed_at": None,
+                "items": [
+                    {
+                        "item_id": "item-1",
+                        "part_description": "Фильтр",
+                        "quantity": 1,
+                        "comment": None,
+                        "sort_order": 1,
+                        "offers": [],
+                    }
+                ],
+                "notes": [],
+                "items_has_more": False,
+                "nested_limit": 100,
+            }
+        ],
+    )
+
+    def fake_urlopen(request, **_kwargs):
+        captured["authorization"] = request.headers["Authorization"]
+        return _Response(payload)
+
+    monkeypatch.setattr(store_api_module, "urlopen", fake_urlopen)
+    result = _client(quote_token="quote-secret").entity_context(
+        entity="store_quote_request", entity_id="quote-1", detail="full"
+    )
+    assert result["items"][0]["phone"] == "+79990000000"
+    assert result["items"][0]["vin"] == "WDD00000000000001"
+    assert captured["authorization"] == "Bearer quote-secret"
+
+
+def test_exact_quote_full_read_fails_closed_without_quote_token():
+    result = _client().entity_context(entity="store_quote_request", entity_id="quote-1", detail="full")
+    assert result["summary"]["error_code"] == "store_quote_token_missing"
+    assert result["meta"]["request_dispatched"] is False
 
 
 @pytest.mark.parametrize(

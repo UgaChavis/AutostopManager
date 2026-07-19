@@ -139,7 +139,7 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert "repair orders" in result["source_boundaries"]["crm"]
     assert any("store_bootstrap" in item for item in result["read_order"])
     assert any("agent_search" in item for item in result["read_order"])
-    assert any("five-operation allowlist" in item for item in result["forbidden_actions"])
+    assert any("seven-operation allowlist" in item for item in result["forbidden_actions"])
     assert any("final page" in item for item in result["verification"])
     assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
 

@@ -58,11 +58,14 @@ verification.
 
 - Before CRM writes: exact target id, dry-run/preflight where available, then
   reread and verify.
-- Store writes are limited to quote assignment/status/internal comment, exact
-  batch storage location, and exact IN_PROGRESS -> READY order transition.
+- Store writes are limited to quote assignment/status/internal comment,
+  append-only quote notes, private quote-offer drafts, exact batch storage
+  location, and exact IN_PROGRESS -> READY order transition.
   Require current `expected_updated_at`, owner intent, idempotency and
   correlation IDs, dry-run/apply, and exact reread through
   `agent_inventory_workflow`; READY dry-run must disclose notification effects.
+  Quote drafts never publish, notify, approve, cancel, convert, or order from a
+  supplier; exact full quote reads use the dedicated quote-scoped credential.
 - For finance, inventory, documents, files, Gmail, or destructive writes, build
   the action contract, use a unique idempotency key, and keep any applied but
   unverified result in `compensating` until exact-target reconciliation.

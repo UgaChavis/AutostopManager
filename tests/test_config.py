@@ -87,11 +87,13 @@ def test_runtime_getters_use_project_defaults(monkeypatch):
 def test_store_runtime_getters_use_only_explicit_injected_environment_names(monkeypatch):
     monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "http://autostop-app:8000/")
     monkeypatch.setenv("AUTOSTOP_STORE_READ_TOKEN", "read-runtime-token")
+    monkeypatch.setenv("AUTOSTOP_STORE_QUOTE_TOKEN", "quote-runtime-token")
     monkeypatch.setenv("AUTOSTOP_STORE_MANAGE_TOKEN", "manage-runtime-token")
     monkeypatch.setenv("STORE_ADMIN_PASSWORD", "must-not-be-used")
 
     assert config.get_store_api_url() == "http://autostop-app:8000/internal/agent/v1"
     assert config.get_store_read_token() == "read-runtime-token"
+    assert config.get_store_quote_token() == "quote-runtime-token"
     assert config.get_store_manage_token() == "manage-runtime-token"
 
 

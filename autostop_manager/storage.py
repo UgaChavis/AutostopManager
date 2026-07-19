@@ -111,6 +111,8 @@ STORE_WORKFLOW_OPERATIONS = frozenset(
         "update_quote_request_comment",
         "set_batch_storage_location",
         "mark_order_ready",
+        "add_quote_request_note",
+        "replace_quote_offer_drafts",
     }
 )
 STORE_LEDGER_SAFE_CHECKPOINT_KEYS = {

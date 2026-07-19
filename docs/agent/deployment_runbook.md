@@ -118,13 +118,15 @@ Store adapter configuration is runtime-only:
 ```powershell
 $env:AUTOSTOP_STORE_API_URL = "http://autostop-app:8000"
 $env:AUTOSTOP_STORE_READ_TOKEN = "<runtime-secret>"
+$env:AUTOSTOP_STORE_QUOTE_TOKEN = "<runtime-secret>"
 $env:AUTOSTOP_STORE_MANAGE_TOKEN = "<runtime-secret>"
 ```
 
 Never print these token values, bake them into an image, commit them, or reuse a
 human ADMIN password. AutoStop App stores only service-principal hash/metadata.
-The Manager client appends `/internal/agent/v1`, uses the read token for GET and
-the manage token only for the five allowlisted actions, and has no database or
+The Manager client appends `/internal/agent/v1`, uses the read token for general
+GET, the quote token for exact full quote/sourcing reads, and the manage token
+only for the seven allowlisted actions; it has no database or
 `.env` access.
 
 The hidden read-only `get_store_analytics_report` capability uses that same
@@ -220,7 +222,7 @@ After deployment, verify:
 - service process is running
 - MCP endpoint answers on configured host/port/path
 - exactly 24 Gateway v2 tools are visible and legacy tools are absent
-- Manager raw registry contains 69 tools, including five INTERNAL_ONLY store
+- Manager raw registry contains 69 tools, including Store INTERNAL_ONLY
   adapter tools that are absent from public raw discovery
 - OAuth protected-resource/server metadata, PKCE S256, owner approval, refresh
   rotation, audience/scopes, and a clear 401 challenge are verified

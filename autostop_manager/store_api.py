@@ -22,6 +22,7 @@ STORE_ENTITIES = frozenset(
         "store_warehouse_operation",
         "store_marketplace_listing",
         "store_state",
+        "store_sourcing_offer",
     }
 )
 STORE_MANAGEMENT_OPERATIONS = frozenset(
@@ -31,6 +32,8 @@ STORE_MANAGEMENT_OPERATIONS = frozenset(
         "update_quote_request_comment",
         "set_batch_storage_location",
         "mark_order_ready",
+        "add_quote_request_note",
+        "replace_quote_offer_drafts",
     }
 )
 STORE_DETAIL_LEVELS = frozenset({"summary", "full"})
@@ -52,6 +55,8 @@ _ACTION_CHANGE_LIMITS = {
     "update_quote_request_comment": 2,
     "set_batch_storage_location": 1,
     "mark_order_ready": 2,
+    "add_quote_request_note": 1,
+    "replace_quote_offer_drafts": 1,
 }
 _ENVELOPE_FIELDS = frozenset(
     {
@@ -110,6 +115,26 @@ _ENTITY_SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "has_internal_comment",
             "internal_comment_sha256",
             "created_at",
+            "notes_count",
+            "agent_draft_count",
+            "published_offer_count",
+        }
+    ),
+    "store_sourcing_offer": frozenset(
+        {
+            "provider",
+            "source_ref",
+            "brand",
+            "article",
+            "name",
+            "purchase_price",
+            "proposed_sale_price",
+            "available_qty",
+            "availability",
+            "lead_time_days",
+            "price_basis",
+            "fitment_confidence",
+            "public_url",
         }
     ),
     "store_supplier": frozenset({"name", "is_active"}),
@@ -156,7 +181,29 @@ _ENTITY_FULL_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "store_order": frozenset({"items", "items_has_more", "nested_limit"}),
-    "store_quote_request": frozenset({"items", "items_has_more", "nested_limit"}),
+    "store_quote_request": frozenset(
+        {
+            "content_trust",
+            "customer_name",
+            "phone",
+            "telegram_username",
+            "email",
+            "vin",
+            "customer_comment",
+            "delivery_method",
+            "delivery_address",
+            "internal_comment",
+            "agreement_comment",
+            "converted_order_id",
+            "approved_at",
+            "closed_at",
+            "items",
+            "notes",
+            "items_has_more",
+            "nested_limit",
+        }
+    ),
+    "store_sourcing_offer": frozenset(),
     "store_supplier": frozenset(),
     "store_batch": frozenset({"supplier_id", "supplier_name"}),
     "store_warehouse_operation": frozenset({"items", "items_has_more", "nested_limit"}),
@@ -187,7 +234,35 @@ _PART_LOCATION_FIELDS = frozenset(
 )
 _ORDER_ITEM_FIELDS = frozenset({"item_id", "source", "part_id", "sku", "name", "qty", "local_stock"})
 _LOCAL_STOCK_FIELDS = frozenset({"physical_qty", "reserved_qty", "available_qty"})
-_QUOTE_ITEM_FIELDS = frozenset({"item_id", "has_part_description", "part_description_sha256", "quantity"})
+_QUOTE_ITEM_FIELDS = frozenset({"item_id", "part_description", "quantity", "comment", "sort_order", "offers"})
+_QUOTE_OFFER_FIELDS = frozenset(
+    {
+        "offer_id",
+        "publication_status",
+        "origin",
+        "candidate_key",
+        "part_name",
+        "part_sku",
+        "brand",
+        "supplier",
+        "purchase_price",
+        "sale_price",
+        "delivery_days",
+        "comment",
+        "is_selected",
+        "source_kind",
+        "source_ref",
+        "source_url",
+        "availability",
+        "price_basis",
+        "fitment_confidence",
+        "oem_reference",
+        "is_recommended",
+        "created_at",
+        "updated_at",
+    }
+)
+_QUOTE_NOTE_FIELDS = frozenset({"note_id", "text", "origin", "author_display_name", "created_at"})
 _WAREHOUSE_ITEM_FIELDS = frozenset({"item_id", "part_id", "part_sku", "part_name", "qty", "storage_location"})
 _RUNTIME_SUMMARY_FIELDS = frozenset(
     {
@@ -201,6 +276,7 @@ _RUNTIME_SUMMARY_FIELDS = frozenset(
         "max_page_limit",
         "change_feed",
         "state",
+        "features",
     }
 )
 _CURSOR_VERSION_FIELDS = frozenset({"digest", "search", "legacy_timestamp"})
@@ -213,6 +289,14 @@ _CHANGE_FEED_FIELDS = frozenset(
         "oldest_changed_at",
         "newest_changed_at",
         "retention_mode",
+    }
+)
+_RUNTIME_FEATURE_FIELDS = frozenset(
+    {
+        "quote_full_read_enabled",
+        "quote_draft_write_enabled",
+        "supplier_lookup_enabled",
+        "rossko_configured",
     }
 )
 _DIGEST_SUMMARY_FIELDS = frozenset(
@@ -282,6 +366,8 @@ _ACTION_ALLOWED_CHANGE_NAMES = {
     "assign_quote_request": frozenset({"assigned_user_id"}),
     "set_quote_request_status": frozenset({"status"}),
     "update_quote_request_comment": frozenset({"has_internal_comment", "internal_comment_sha256"}),
+    "add_quote_request_note": frozenset({"notes_count"}),
+    "replace_quote_offer_drafts": frozenset({"agent_draft_count"}),
     "set_batch_storage_location": frozenset({"storage_location"}),
     "mark_order_ready": frozenset({"status", "ready_at"}),
 }
@@ -310,6 +396,9 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
             "assigned_user_id",
             "has_internal_comment",
             "internal_comment_sha256",
+            "notes_count",
+            "agent_draft_count",
+            "published_offer_count",
             "updated_at",
         }
     ),
@@ -322,6 +411,9 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
             "assigned_user_id",
             "has_internal_comment",
             "internal_comment_sha256",
+            "notes_count",
+            "agent_draft_count",
+            "published_offer_count",
             "updated_at",
         }
     ),
@@ -334,6 +426,39 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
             "assigned_user_id",
             "has_internal_comment",
             "internal_comment_sha256",
+            "notes_count",
+            "agent_draft_count",
+            "published_offer_count",
+            "updated_at",
+        }
+    ),
+    "add_quote_request_note": frozenset(
+        {
+            "entity_type",
+            "entity_id",
+            "request_number",
+            "status",
+            "assigned_user_id",
+            "has_internal_comment",
+            "internal_comment_sha256",
+            "notes_count",
+            "agent_draft_count",
+            "published_offer_count",
+            "updated_at",
+        }
+    ),
+    "replace_quote_offer_drafts": frozenset(
+        {
+            "entity_type",
+            "entity_id",
+            "request_number",
+            "status",
+            "assigned_user_id",
+            "has_internal_comment",
+            "internal_comment_sha256",
+            "notes_count",
+            "agent_draft_count",
+            "published_offer_count",
             "updated_at",
         }
     ),
@@ -341,6 +466,11 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
     "mark_order_ready": frozenset({"entity_type", "entity_id", "order_number", "status", "ready_at", "updated_at"}),
 }
 _ACTION_EFFECT_FIELDS: dict[str, frozenset[str]] = {
+    "append_internal_note": frozenset({"effect", "text_sha256"}),
+    "supersede_agent_drafts": frozenset({"effect", "count"}),
+    "create_private_drafts": frozenset({"effect", "count"}),
+    "customer_notification": frozenset({"effect", "applies"}),
+    "quote_status_change": frozenset({"effect", "applies"}),
     "set_order_status": frozenset({"effect", "status"}),
     "set_ready_at": frozenset({"effect"}),
     "sync_shipment_draft": frozenset({"effect", "applies", "local_items"}),
@@ -438,6 +568,7 @@ class StoreApiClient:
         api_url: str,
         read_token: str,
         manage_token: str,
+        quote_token: str = "",
         timeout: float = 8.0,
         max_read_attempts: int = 2,
         max_response_bytes: int = DEFAULT_RESPONSE_BUDGET_BYTES,
@@ -447,6 +578,7 @@ class StoreApiClient:
         self.api_url = str(api_url or "").strip().rstrip("/")
         self._read_token = str(read_token or "").strip()
         self._manage_token = str(manage_token or "").strip()
+        self._quote_token = str(quote_token or "").strip()
         self.timeout = max(0.1, float(timeout))
         self.max_read_attempts = max(1, min(int(max_read_attempts), 3))
         self.max_response_bytes = max(1024, int(max_response_bytes))
@@ -461,6 +593,7 @@ class StoreApiClient:
             "StoreApiClient("
             f"configured={bool(self.api_url and self._read_token)}, "
             f"manage_configured={bool(self.api_url and self._manage_token)}, "
+            f"quote_configured={bool(self.api_url and self._quote_token)}, "
             f"timeout={self.timeout!r})"
         )
 
@@ -499,6 +632,7 @@ class StoreApiClient:
         return {
             "read_configured": bool(self.api_url and self._read_token),
             "manage_configured": bool(self.api_url and self._manage_token),
+            "quote_configured": bool(self.api_url and self._quote_token),
             "circuit_open": circuit_open,
             "consecutive_failures": failure_count,
         }
@@ -563,6 +697,7 @@ class StoreApiClient:
             expected_change_limit=0,
             response_contract="search",
             expected_entity=normalized_entity,
+            quote_access=normalized_entity == "store_sourcing_offer",
         )
 
     def entity_context(
@@ -573,6 +708,8 @@ class StoreApiClient:
         detail: str = "summary",
     ) -> dict[str, Any]:
         normalized_entity = self._validate_entity(entity)
+        if normalized_entity == "store_sourcing_offer":
+            raise ValueError("store_sourcing_offer is lookup-only")
         normalized_id = str(entity_id or "").strip()
         if not normalized_id:
             raise ValueError("entity_id is required")
@@ -591,6 +728,7 @@ class StoreApiClient:
             response_contract="entity",
             expected_entity=normalized_entity,
             expected_detail=normalized_detail,
+            quote_access=normalized_entity == "store_quote_request" and normalized_detail == "full",
         )
 
     def management_action(
@@ -648,12 +786,18 @@ class StoreApiClient:
         expected_entity: str | None = None,
         expected_detail: str | None = None,
         expected_operation: str | None = None,
+        quote_access: bool = False,
     ) -> dict[str, Any]:
         if not self.api_url:
             return self._error("store_api_url_missing", attempt_count=0)
-        token = self._manage_token if manage else self._read_token
+        token = self._manage_token if manage else (self._quote_token if quote_access else self._read_token)
         if not token:
-            return self._error("store_manage_token_missing" if manage else "store_read_token_missing", attempt_count=0)
+            error_code = (
+                "store_manage_token_missing"
+                if manage
+                else ("store_quote_token_missing" if quote_access else "store_read_token_missing")
+            )
+            return self._error(error_code, attempt_count=0)
         if self._circuit_is_open():
             return self._error("store_circuit_open", attempt_count=0)
 
@@ -702,7 +846,7 @@ class StoreApiClient:
                     expected_operation=expected_operation,
                 )
                 self._record_success()
-                redacted = _redact_payload(payload)
+                redacted = _redact_payload(payload, allow_quote_pii=quote_access)
                 meta = redacted.setdefault("meta", {})
                 if isinstance(meta, dict):
                     meta.update(
@@ -952,6 +1096,32 @@ def _require_object_list(value: Any, *, path: str) -> list[dict[str, Any]]:
     return value
 
 
+def _validate_entity_items(item: dict[str, Any], *, entity: str, path: str) -> None:
+    nested_fields = {
+        "store_order": _ORDER_ITEM_FIELDS,
+        "store_quote_request": _QUOTE_ITEM_FIELDS,
+        "store_warehouse_operation": _WAREHOUSE_ITEM_FIELDS,
+    }.get(entity)
+    if nested_fields is None:
+        raise ValueError(f"{path}.items is not allowed for {entity}")
+    for index, nested in enumerate(_require_object_list(item["items"], path=f"{path}.items")):
+        nested_path = f"{path}.items[{index}]"
+        _require_allowed_keys(nested, nested_fields, path=nested_path)
+        if entity == "store_order" and "local_stock" in nested:
+            _require_allowed_keys(
+                nested["local_stock"],
+                _LOCAL_STOCK_FIELDS,
+                path=f"{nested_path}.local_stock",
+            )
+        if entity == "store_quote_request" and "offers" in nested:
+            for offer_index, offer in enumerate(_require_object_list(nested["offers"], path=f"{nested_path}.offers")):
+                _require_allowed_keys(
+                    offer,
+                    _QUOTE_OFFER_FIELDS,
+                    path=f"{nested_path}.offers[{offer_index}]",
+                )
+
+
 def _validate_entity_projection(
     item: dict[str, Any],
     *,
@@ -982,21 +1152,12 @@ def _validate_entity_projection(
                 path=f"{path}.locations[{index}]",
             )
     if "items" in item:
-        nested_fields = {
-            "store_order": _ORDER_ITEM_FIELDS,
-            "store_quote_request": _QUOTE_ITEM_FIELDS,
-            "store_warehouse_operation": _WAREHOUSE_ITEM_FIELDS,
-        }.get(entity)
-        if nested_fields is None:
-            raise ValueError(f"{path}.items is not allowed for {entity}")
-        for index, nested in enumerate(_require_object_list(item["items"], path=f"{path}.items")):
-            _require_allowed_keys(nested, nested_fields, path=f"{path}.items[{index}]")
-            if entity == "store_order" and "local_stock" in nested:
-                _require_allowed_keys(
-                    nested["local_stock"],
-                    _LOCAL_STOCK_FIELDS,
-                    path=f"{path}.items[{index}].local_stock",
-                )
+        _validate_entity_items(item, entity=entity, path=path)
+    if "notes" in item:
+        if entity != "store_quote_request":
+            raise ValueError(f"{path}.notes is not allowed for {entity}")
+        for index, note in enumerate(_require_object_list(item["notes"], path=f"{path}.notes")):
+            _require_allowed_keys(note, _QUOTE_NOTE_FIELDS, path=f"{path}.notes[{index}]")
     if "data_quality_warnings" in item:
         warnings = item["data_quality_warnings"]
         if not isinstance(warnings, list) or any(
@@ -1087,6 +1248,8 @@ def _validate_runtime_summary(summary: dict[str, Any]) -> None:
         _require_allowed_keys(summary["cursor_versions"], _CURSOR_VERSION_FIELDS, path="summary.cursor_versions")
     if "change_feed" in summary:
         _require_allowed_keys(summary["change_feed"], _CHANGE_FEED_FIELDS, path="summary.change_feed")
+    if "features" in summary:
+        _require_allowed_keys(summary["features"], _RUNTIME_FEATURE_FIELDS, path="summary.features")
     if "state" in summary:
         _validate_entity_projection(
             summary["state"],
@@ -1219,11 +1382,17 @@ def _validate_snake_case_keys(value: Any, *, path: str = "", depth: int = 0) -> 
         raise ValueError("store response contains a non-finite number")
 
 
-def _redact_payload(value: Any, *, key: str = "", depth: int = 0) -> Any:
+def _redact_payload(
+    value: Any,
+    *,
+    key: str = "",
+    depth: int = 0,
+    allow_quote_pii: bool = False,
+) -> Any:
     if depth > MAX_JSON_DEPTH:
         raise ValueError("store response exceeds maximum nesting depth")
     normalized_key = str(key or "").casefold()
-    if _key_requires_redaction(normalized_key):
+    if _key_requires_redaction(normalized_key, allow_quote_pii=allow_quote_pii):
         return "[redacted]"
     if isinstance(value, dict):
         if len(value) > MAX_JSON_CONTAINER_ITEMS:
@@ -1233,25 +1402,36 @@ def _redact_payload(value: Any, *, key: str = "", depth: int = 0) -> Any:
                 nested_value,
                 key=str(nested_key),
                 depth=depth + 1,
+                allow_quote_pii=allow_quote_pii,
             )
             for nested_key, nested_value in value.items()
         }
     if isinstance(value, list):
         if len(value) > MAX_JSON_CONTAINER_ITEMS:
             raise ValueError("store response list is too wide")
-        return [_redact_payload(item, key=key, depth=depth + 1) for item in value]
+        return [
+            _redact_payload(
+                item,
+                key=key,
+                depth=depth + 1,
+                allow_quote_pii=allow_quote_pii,
+            )
+            for item in value
+        ]
     return value
 
 
-def _key_requires_redaction(key: str) -> bool:
+def _key_requires_redaction(key: str, *, allow_quote_pii: bool = False) -> bool:
     normalized = str(key or "").strip().casefold()
-    if normalized in _ALWAYS_REDACT_KEYS or normalized in _IDENTIFIER_REDACT_KEYS:
+    if normalized in _ALWAYS_REDACT_KEYS:
         return True
-    if normalized in _CONTACT_REDACT_KEYS:
+    if not allow_quote_pii and normalized in (_IDENTIFIER_REDACT_KEYS | _CONTACT_REDACT_KEYS):
         return True
     key_tokens = set(normalized.split("_"))
     if key_tokens & {"password", "secret", "token"}:
         return True
+    if allow_quote_pii:
+        return normalized.endswith(("_api_key", "_secret", "_token"))
     return normalized.endswith(
         (
             "_address",

@@ -1822,7 +1822,7 @@
         "physical reserved available stock or storage locations",
         "warehouse receipts shipments or low stock",
         "Avito or Drom marketplace export errors",
-        "one of the five allowlisted store management actions"
+        "one of the seven allowlisted store management actions"
       ],
       "aliases": [
         "AutoStop App",

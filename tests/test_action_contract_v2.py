@@ -392,6 +392,27 @@ def test_existing_entity_update_requires_target_revision_and_idempotency():
         ("store_quote_request", "assign_quote_request", {"assignee_id": "employee-7"}),
         ("store_quote_request", "set_quote_request_status", {"status": "IN_PROGRESS"}),
         ("store_quote_request", "update_quote_request_comment", {"internal_comment": "Проверить VIN"}),
+        ("store_quote_request", "add_quote_request_note", {"text": "Нужно уточнить сторону"}),
+        (
+            "store_quote_request",
+            "replace_quote_offer_drafts",
+            {
+                "items": [
+                    {
+                        "item_id": "item-1",
+                        "drafts": [
+                            {
+                                "candidate_key": "rossko:abc",
+                                "part_name": "Фильтр",
+                                "sale_price": 1300,
+                                "source_kind": "ROSSKO",
+                                "price_basis": "CONFIRMED_PURCHASE",
+                            }
+                        ],
+                    }
+                ]
+            },
+        ),
         ("store_batch", "set_batch_storage_location", {"storage_location": "A-17"}),
         ("store_order", "mark_order_ready", {"status": "READY"}),
     ],

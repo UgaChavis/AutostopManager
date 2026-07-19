@@ -867,6 +867,84 @@ def test_management_readback_verifies_internal_comment_by_canonical_hash_only(tm
     assert result["meta"]["readback_verified"] is True
 
 
+def test_management_readback_verifies_quote_note_by_exact_manager_origin(tmp_path):
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "notes": [],
+        "updated_at": "version-1",
+    }
+    after = {
+        **before,
+        "notes": [{"origin": "AUTOSTOP_MANAGER", "text": "Уточнить сторону установки"}],
+        "updated_at": "version-2",
+    }
+    client = _ActionClient(before=before, after=after)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="add_quote_request_note",
+        target_id="quote-1",
+        planned_changes={"text": "Уточнить сторону установки"},
+        owner_intent="Добавь внутреннюю заметку к точной заявке quote-1",
+        expected_updated_at="version-1",
+        idempotency_key="quote-1-note-v1",
+        correlation_id="contract:quote-1-note-v1",
+        mode="apply",
+    )
+
+    assert result["ok"] is True
+    assert result["meta"]["readback_verified"] is True
+
+
+def test_management_readback_handles_missing_offer_lists_as_failed_verification(tmp_path):
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "items": [{"item_id": "item-1", "offers": []}],
+        "updated_at": "version-1",
+    }
+    after = {
+        **before,
+        "items": [{"item_id": "item-1", "offers": None}],
+        "updated_at": "version-2",
+    }
+    client = _ActionClient(before=before, after=after)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="replace_quote_offer_drafts",
+        target_id="quote-1",
+        planned_changes={
+            "items": [
+                {
+                    "item_id": "item-1",
+                    "drafts": [
+                        {
+                            "candidate_key": "rossko:abc",
+                            "part_name": "Фильтр",
+                            "sale_price": 1300,
+                            "source_kind": "ROSSKO",
+                            "price_basis": "CONFIRMED_PURCHASE",
+                        }
+                    ],
+                }
+            ]
+        },
+        owner_intent="Замени черновики предложений точной заявки quote-1",
+        expected_updated_at="version-1",
+        idempotency_key="quote-1-drafts-v1",
+        correlation_id="contract:quote-1-drafts-v1",
+        mode="apply",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "compensating"
+    assert result["summary"]["failed_fields"] == ["items"]
+
+
 def test_management_apply_unknown_outcome_always_rereads_and_enters_compensating(tmp_path):
     before = {
         "entity": "store_quote_request",

@@ -18,6 +18,8 @@ STORE_DOMAIN_ACTIONS = {
     ("store_quote_request", "assign_quote_request"),
     ("store_quote_request", "set_quote_request_status"),
     ("store_quote_request", "update_quote_request_comment"),
+    ("store_quote_request", "add_quote_request_note"),
+    ("store_quote_request", "replace_quote_offer_drafts"),
     ("store_batch", "set_batch_storage_location"),
     ("store_order", "mark_order_ready"),
 }
@@ -605,7 +607,11 @@ class StoreIntegration:
                 reconcile_state = self.entity_context(
                     entity=normalized_domain,
                     entity_id=canonical_target_id,
-                    detail="summary",
+                    detail=(
+                        "full"
+                        if normalized_action in {"add_quote_request_note", "replace_quote_offer_drafts"}
+                        else "summary"
+                    ),
                 )
                 post_state_read = reconcile_state.get("ok") is True
                 target_matches = post_state_read and _entity_matches(
@@ -658,7 +664,11 @@ class StoreIntegration:
             post_state = self.entity_context(
                 entity=normalized_domain,
                 entity_id=canonical_target_id,
-                detail="summary",
+                detail=(
+                    "full"
+                    if normalized_action in {"add_quote_request_note", "replace_quote_offer_drafts"}
+                    else "summary"
+                ),
             )
             if not post_state.get("ok"):
                 return _error_envelope(
@@ -1013,6 +1023,51 @@ def _failed_readback_fields(
     operation: str,
 ) -> list[str]:
     entity = _entity_payload(payload)
+    if operation == "add_quote_request_note":
+        expected_text = str(planned_changes.get("text") or "").strip()
+        notes_value = entity.get("notes")
+        notes: list[Any] = notes_value if isinstance(notes_value, list) else []
+        return (
+            []
+            if any(
+                isinstance(note, dict)
+                and note.get("origin") == "AUTOSTOP_MANAGER"
+                and str(note.get("text") or "").strip() == expected_text
+                for note in notes
+            )
+            else ["text"]
+        )
+    if operation == "replace_quote_offer_drafts":
+        expected_items = planned_changes.get("items")
+        observed_items_value = entity.get("items")
+        observed_items: list[Any] = observed_items_value if isinstance(observed_items_value, list) else []
+        if not isinstance(expected_items, list):
+            return ["items"]
+        observed_keys: dict[str, set[str]] = {}
+        for item in observed_items:
+            if not isinstance(item, dict):
+                continue
+            offers = item.get("offers")
+            if not isinstance(offers, list):
+                offers = []
+            keys = {
+                str(offer.get("candidate_key") or "")
+                for offer in offers
+                if isinstance(offer, dict)
+                and offer.get("origin") == "AUTOSTOP_MANAGER"
+                and offer.get("publication_status") == "DRAFT"
+            }
+            observed_keys[str(item.get("item_id") or "")] = keys
+        for item in expected_items:
+            if not isinstance(item, dict):
+                return ["items"]
+            drafts = item.get("drafts")
+            if not isinstance(drafts, list):
+                return ["items"]
+            expected_keys = {str(draft.get("candidate_key") or "") for draft in drafts if isinstance(draft, dict)}
+            if observed_keys.get(str(item.get("item_id") or ""), set()) != expected_keys:
+                return ["items"]
+        return []
     failed: list[str] = []
     for field, expected in planned_changes.items():
         readback_field = "assigned_user_id" if operation == "assign_quote_request" and field == "assignee_id" else field
