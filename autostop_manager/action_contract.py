@@ -25,6 +25,12 @@ MUTATING_ACTIONS = {
     "send",
     "forward",
     "label",
+    "batch_modify",
+    "bulk_label",
+    "create_label",
+    "create_draft",
+    "update_draft",
+    "send_draft",
     "assign_quote_request",
     "set_quote_request_status",
     "update_quote_request_comment",
@@ -32,10 +38,37 @@ MUTATING_ACTIONS = {
     "mark_order_ready",
 }
 
-CREATE_ACTIONS = {"create", "record_payment", "cash_transaction", "transfer", "upload", "generate", "send", "forward"}
+CREATE_ACTIONS = {
+    "create",
+    "record_payment",
+    "cash_transaction",
+    "transfer",
+    "upload",
+    "generate",
+    "send",
+    "forward",
+    "create_label",
+    "create_draft",
+}
 COLLECTION_TARGET_ACTIONS = {
     ("gmail", "label"),
+    ("gmail", "archive"),
+    ("gmail", "delete"),
+    ("gmail", "batch_modify"),
+    ("gmail", "bulk_label"),
+    ("gmail", "update_draft"),
+    ("gmail", "send_draft"),
     ("board", "bulk_set_deadline_if_below"),
+}
+
+GMAIL_ACTION_ALIASES = {
+    "send_email": "send",
+    "forward_emails": "forward",
+    "apply_labels_to_emails": "label",
+    "archive_emails": "archive",
+    "delete_emails": "delete",
+    "batch_modify_email": "batch_modify",
+    "bulk_label_matching_emails": "bulk_label",
 }
 
 DOMAIN_ALIASES = {
@@ -76,6 +109,14 @@ EXECUTOR_TOOLS = {
     ("gmail", "send"): "gmail:_send_email",
     ("gmail", "forward"): "gmail:_forward_emails",
     ("gmail", "label"): "gmail:_apply_labels_to_emails",
+    ("gmail", "archive"): "gmail:_archive_emails",
+    ("gmail", "delete"): "gmail:_delete_emails",
+    ("gmail", "batch_modify"): "gmail:_batch_modify_email",
+    ("gmail", "bulk_label"): "gmail:_bulk_label_matching_emails",
+    ("gmail", "create_label"): "gmail:_create_label",
+    ("gmail", "create_draft"): "gmail:_create_draft",
+    ("gmail", "update_draft"): "gmail:_update_draft",
+    ("gmail", "send_draft"): "gmail:_send_draft",
     ("store_quote_request", "assign_quote_request"): "agent_inventory_workflow",
     ("store_quote_request", "set_quote_request_status"): "agent_inventory_workflow",
     ("store_quote_request", "update_quote_request_comment"): "agent_inventory_workflow",
@@ -135,7 +176,7 @@ def prepare_action_contract(
     """Build a write-safe, connector-neutral action contract without executing it."""
 
     normalized_domain = DOMAIN_ALIASES.get(str(domain or "").strip().casefold(), str(domain or "").strip().casefold())
-    normalized_action = str(action or "").strip().casefold()
+    normalized_action = _normalize_action(normalized_domain, action)
     normalized_target = str(target_id or "").strip()
     changes = dict(planned_changes) if isinstance(planned_changes, dict) else {}
     changes = _normalize_store_planned_changes(normalized_action, changes)
@@ -532,31 +573,87 @@ def _finite_number(value: Any) -> float | None:
 
 
 def _validate_gmail_changes(action: str, changes: dict[str, Any], blockers: list[str]) -> None:
-    if action == "send":
-        if not _gmail_recipients_are_exact(changes):
-            blockers.append("missing_exact_recipients")
-        if not _nonempty_string(changes.get("subject")):
-            blockers.append("missing_subject")
-        if not _nonempty_string(changes.get("body_intent")):
-            blockers.append("missing_body_intent")
+    if action in {"send", "create_draft"}:
+        _validate_gmail_compose(changes, blockers)
     elif action == "forward":
-        if not (
-            _nonempty_string_list(changes.get("message_ids"))
-            or _nonempty_string(changes.get("message_id"))
-            or _nonempty_string(changes.get("thread_id"))
-        ):
-            blockers.append("missing_message_or_thread_id")
-        if not _gmail_recipients_are_exact(changes):
-            blockers.append("missing_exact_recipients")
+        _validate_gmail_forward(changes, blockers)
     elif action == "label":
-        message_ids_valid = _nonempty_string_list(changes.get("message_ids"))
-        label_names_valid = _nonempty_string_list(changes.get("add_label_names")) or _nonempty_string_list(
-            changes.get("remove_label_names")
-        )
-        if not message_ids_valid or not label_names_valid:
-            blockers.append("missing_message_or_label_ids")
-        if "create_missing_labels" in changes and not isinstance(changes["create_missing_labels"], bool):
-            blockers.append("invalid_create_missing_labels_flag")
+        _validate_gmail_label(changes, blockers)
+    elif action in {"archive", "delete"}:
+        if not _nonempty_string_list(changes.get("message_ids")):
+            blockers.append("missing_exact_message_ids")
+    elif action == "batch_modify":
+        _validate_gmail_batch_modify(changes, blockers)
+    elif action == "bulk_label":
+        _validate_gmail_bulk_label(changes, blockers)
+    elif action == "create_label":
+        if not _nonempty_string(changes.get("name")):
+            blockers.append("missing_label_name")
+    elif action == "update_draft":
+        _validate_gmail_update_draft(changes, blockers)
+    elif action == "send_draft" and not _nonempty_string(changes.get("draft_id")):
+        blockers.append("missing_exact_draft_id")
+
+
+def _normalize_action(domain: str, action: str) -> str:
+    normalized = str(action or "").strip().casefold()
+    return GMAIL_ACTION_ALIASES.get(normalized, normalized) if domain == "gmail" else normalized
+
+
+def _validate_gmail_compose(changes: dict[str, Any], blockers: list[str]) -> None:
+    if not _gmail_recipients_are_exact(changes):
+        blockers.append("missing_exact_recipients")
+    if not _nonempty_string(changes.get("subject")):
+        blockers.append("missing_subject")
+    if not any(_nonempty_string(changes.get(field)) for field in ("body_intent", "body", "body_file", "html_body")):
+        blockers.append("missing_body_intent")
+
+
+def _validate_gmail_forward(changes: dict[str, Any], blockers: list[str]) -> None:
+    if not (
+        _nonempty_string_list(changes.get("message_ids"))
+        or _nonempty_string(changes.get("message_id"))
+        or _nonempty_string(changes.get("thread_id"))
+    ):
+        blockers.append("missing_message_or_thread_id")
+    if not _gmail_recipients_are_exact(changes):
+        blockers.append("missing_exact_recipients")
+
+
+def _validate_gmail_label(changes: dict[str, Any], blockers: list[str]) -> None:
+    message_ids_valid = _nonempty_string_list(changes.get("message_ids"))
+    label_names_valid = _nonempty_string_list(changes.get("add_label_names")) or _nonempty_string_list(
+        changes.get("remove_label_names")
+    )
+    if not message_ids_valid or not label_names_valid:
+        blockers.append("missing_message_or_label_ids")
+    if "create_missing_labels" in changes and not isinstance(changes["create_missing_labels"], bool):
+        blockers.append("invalid_create_missing_labels_flag")
+
+
+def _validate_gmail_batch_modify(changes: dict[str, Any], blockers: list[str]) -> None:
+    if not _nonempty_string_list(changes.get("message_ids")):
+        blockers.append("missing_exact_message_ids")
+    if not (_nonempty_string_list(changes.get("add_labels")) or _nonempty_string_list(changes.get("remove_labels"))):
+        blockers.append("missing_label_ids")
+
+
+def _validate_gmail_bulk_label(changes: dict[str, Any], blockers: list[str]) -> None:
+    if not _nonempty_string(changes.get("query")):
+        blockers.append("missing_exact_gmail_query")
+    if not _nonempty_string(changes.get("label_name")):
+        blockers.append("missing_label_name")
+    for field in ("archive", "create_label_if_missing"):
+        if field in changes and not isinstance(changes[field], bool):
+            blockers.append(f"invalid_{field}_flag")
+
+
+def _validate_gmail_update_draft(changes: dict[str, Any], blockers: list[str]) -> None:
+    if not _nonempty_string(changes.get("draft_id")):
+        blockers.append("missing_exact_draft_id")
+    mutable_fields = {"to", "cc", "bcc", "subject", "body", "body_file", "html_body", "content_type"}
+    if not any(field in changes and changes.get(field) is not None for field in mutable_fields):
+        blockers.append("missing_draft_changes")
 
 
 def _gmail_recipients_are_exact(changes: dict[str, Any]) -> bool:
@@ -629,6 +726,10 @@ def _executor_tool(domain: str, action: str, changes: dict[str, Any]) -> str | N
 
 
 def _compensation_strategy(domain: str, action: str) -> str | None:
+    if domain == "gmail" and action == "archive":
+        return "restore_inbox_label_on_exact_messages"
+    if domain == "gmail" and action == "delete":
+        return "restore_exact_messages_from_trash"
     if domain in STORE_DOMAINS:
         return "store_exact_target_reconciliation_preserve_audit_history"
     if domain == "cashbox" and action == "create":

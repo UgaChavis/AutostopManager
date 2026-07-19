@@ -23,6 +23,7 @@ from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
+from .integration_audit import build_integration_audit
 from .knowledge_base import (
     audit_knowledge_annotations,
     audit_knowledge_base,
@@ -695,6 +696,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("system-audit", help="Run the read-only AutoStop Manager health audit")
     sub.add_parser("doctor", help="Alias for system-audit")
 
+    integration_audit = sub.add_parser(
+        "integration-audit",
+        help="Verify live CRM, Store, web research, Gmail readiness, and docs/runtime contracts",
+    )
+    integration_audit.add_argument("--full", action="store_true")
+    integration_audit.add_argument(
+        "--gmail-proof",
+        default="/var/lib/autostop-manager/integration/gmail-proof.json",
+    )
+    integration_audit.add_argument("--output", default=None)
+
     control_report = sub.add_parser(
         "control-report",
         help="Generate the Control Center V1 report as safe JSON or Markdown",
@@ -769,6 +781,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return _print_checked_json(build_cleanup_audit(store=store))
     elif args.command in {"system-audit", "doctor"}:
         return _print_checked_json(build_system_audit(store=store))
+    elif args.command == "integration-audit":
+        report = build_integration_audit(full=args.full, gmail_proof_path=args.gmail_proof)
+        _write_output(args.output, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return _print_checked_json(report)
     elif args.command in {"control-report", "environment-report"}:
         report = build_control_report(store=store)
         if args.format == "markdown":

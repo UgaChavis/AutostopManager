@@ -48,6 +48,11 @@
       "get_raw_capability_schema",
       "call_raw_capability"
     ],
+    "web_research_capabilities": [
+      "search_web_multi",
+      "fetch_page_excerpt",
+      "fetch_page_browser"
+    ],
     "required_protocol": "agent_bootstrap -> agent_board_digest -> agent_search/agent_entity_context -> prepare_action_contract -> named workflow dry_run/apply -> exact-target reread and verification",
     "store_extensions": {
       "public_tool_count_unchanged": 24,

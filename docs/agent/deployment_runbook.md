@@ -157,9 +157,12 @@ release read-only and overlays only the Manager SQLite data directory.
 AUTOSTOP_MANAGER_PATH: /opt/AutostopManager
 ```
 
-There is no separate systemd service for AutostopManager in this setup. The
-manager MCP tools are loaded by the CRM container when the manager checkout is
-mounted and `autostop_manager.mcp_tools` can be imported.
+Manager MCP tools are loaded by the CRM container when the manager checkout is
+mounted and `autostop_manager.mcp_tools` can be imported. The only standalone
+Manager unit is the hardened hourly `autostop-integration-audit.timer`; it runs
+read-only CRM/Store/web checks and validates the current root-only Gmail proof.
+Install or refresh it with `scripts/install-integration-audit-timer.sh` after
+the corresponding CRM release is live.
 
 CRM/Gateway and AutoStop App must share only the dedicated Docker integration
 network needed for the internal agent API. Keep the store database private to
@@ -247,7 +250,7 @@ Useful production checks:
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 cd /opt/autostopcrm
 docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
-  --mcp-url http://127.0.0.1:41831/mcp --exhaustive
+  --mcp-url http://127.0.0.1:41831/mcp --exhaustive --require-store --require-web
 docker compose exec -T autostopcrm python scripts/check_live_connector.py \
   --strict --site-url https://crm.autostopcrm.ru --expect-https \
   --local-api-url http://127.0.0.1:41731 --expect-admin
@@ -258,6 +261,7 @@ cd /opt/AutostopManager
 .venv/bin/python -m autostop_manager.cli annotations-audit
 .venv/bin/python -m autostop_manager.cli skills-audit
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
+.venv/bin/python -m autostop_manager.cli integration-audit --full
 ./scripts/doctor.sh --full
 ```
 
