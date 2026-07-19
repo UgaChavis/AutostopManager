@@ -29,6 +29,10 @@ managed-pc list
 managed-pc newest
 managed-pc status <alias>
 managed-pc inspect <alias>
+managed-pc codex-status <alias>
+managed-pc codex-login <alias>
+managed-pc codex-run <alias> --prompt-file /path/task.md --mode read-only
+managed-pc codex-result <alias> <job-id>
 managed-pc shell <alias>
 managed-pc run <alias> -- <program> <args...>
 managed-pc powershell <alias> <local-script.ps1>
@@ -71,6 +75,12 @@ Refreshing, revoking, or re-enrolling closes any existing control session before
 keys or authorization change. The Windows maintenance account may create only a
 local forward to `127.0.0.1:9223`, reserved for the dedicated AutoStop CRM Chrome
 diagnostics profile; it cannot forward to arbitrary LAN or internet targets.
+
+The optional Windows Codex CLI worker is on-demand only. Run `codex-status`
+first, send each prompt as a file with `codex-run`, keep `read-only` as the
+default, and select `workspace-write` or `full` explicitly per job. Full setup,
+log, authentication and rollback details live in
+`/opt/autostop-managed-pc/README.md`.
 
 ## Current Route
 
