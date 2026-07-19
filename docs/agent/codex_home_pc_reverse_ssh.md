@@ -82,6 +82,15 @@ default, and select `workspace-write` or `full` explicitly per job. Full setup,
 log, authentication and rollback details live in
 `/opt/autostop-managed-pc/README.md`.
 
+The fleet control-plane source is the private repository
+`https://github.com/UgaChavis/autostop-managed-pc`. Before deploying a change,
+commit and push the verified working tree; then run
+`/opt/autostop-managed-pc/deploy/install.sh`, `managed-pc doctor`, and an
+exact-device `managed-pc status`/`managed-pc codex-status` check. The health
+timer `autostop-managed-pc-health.timer` is the server-side daily readiness
+gate; it must stay enabled and active. Do not put enrollment credentials,
+private keys, prompt files, job results, or Windows logs into this repository.
+
 ## Current Route
 
 - Connect from this server with `ssh home-pc`.
