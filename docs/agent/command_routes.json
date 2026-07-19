@@ -720,7 +720,7 @@
         "reread the exact store target",
         "build ActionContractV2 with exact target, owner intent, planned changes, expected_updated_at, and unique idempotency key",
         "run agent_inventory_workflow in dry_run and inspect effects",
-        "apply only the five-operation allowlist after a clean dry-run",
+        "apply only the seven-operation allowlist after a clean dry-run",
         "reread the exact target and reconcile the compact audit correlation"
       ]
     },

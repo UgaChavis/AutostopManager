@@ -150,7 +150,7 @@ STORE_FORBIDDEN_ACTIONS = [
     "read the AutoStop App database directly or call legacy store GET routes with side effects",
     "persist raw store orders, customer contacts, order lines, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, or workflow ledger",
     "change prices, products, quantities, customers, finance, COMPLETE/ANNULLED/RETURNED state, ROSSKO orders, marketplace publication, or arbitrary settings",
-    "perform any store write outside agent_inventory_workflow and the explicit five-operation allowlist",
+    "perform any store write outside agent_inventory_workflow and the explicit seven-operation allowlist",
 ]
 
 STORE_VERIFICATION = [

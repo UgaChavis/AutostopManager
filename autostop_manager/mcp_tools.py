@@ -14,7 +14,7 @@ from .catalog_clients import (
     vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
-from .config import get_store_api_url, get_store_manage_token, get_store_read_token
+from .config import get_store_api_url, get_store_manage_token, get_store_quote_token, get_store_read_token
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_card_action import prepare_crm_card_action
@@ -87,6 +87,7 @@ def register_manager_memory_tools(  # noqa: C901
             api_url=get_store_api_url(),
             read_token=get_store_read_token(),
             manage_token=get_store_manage_token(),
+            quote_token=get_store_quote_token(),
         ),
         store=memory,
     )
@@ -376,7 +377,7 @@ def register_manager_memory_tools(  # noqa: C901
         name="store_entity_context",
         description=(
             "INTERNAL_ONLY: Read one exact allowlisted AutoStop App entity by id with summary or full detail. "
-            "Contacts always remain redacted because the service identity has no contact scope. Production Gateway must expose it through "
+            "General reads remain redacted; exact full quote reads use a dedicated scoped credential and remain transient. Production Gateway must expose it through "
             "agent_entity_context and exclude this generic capability from public raw discovery."
         ),
     )
@@ -390,7 +391,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_management_action",
         description=(
-            "INTERNAL_ONLY: Execute only the five allowlisted AutoStop App management operations through "
+            "INTERNAL_ONLY: Execute only the seven allowlisted AutoStop App management operations through "
             "ActionContractV2, exact pre-read, dry_run/apply, idempotency, optimistic concurrency, and apply reread. "
             "Production Gateway must exclude this generic tool from raw discovery and expose it only through "
             "agent_inventory_workflow policy."

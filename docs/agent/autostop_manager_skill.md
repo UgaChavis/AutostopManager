@@ -25,7 +25,7 @@ Default owner-facing style: Russian, short, practical, direct.
    modes, then reread the exact target and verify it.
 5. For store work, open `docs/agent/store_management_playbook.md`; use
    `agent_board_digest(scope="store")`, store entities in `agent_search` and
-   `agent_entity_context`, and `agent_inventory_workflow` only for the five
+   `agent_entity_context`, and `agent_inventory_workflow` only for the seven
    allowlisted writes. Bootstrap uses `store_bootstrap`, not the owner-visible
    `store_digest` cursor.
 6. For Gmail work, open `docs/agent/gmail_workflow_playbook.md` and read/search
@@ -62,7 +62,7 @@ covers the task may you use `discover_raw_capabilities`,
 | --- | --- | --- |
 | CRM manager summaries | `docs/agent/crm_manager_data_playbook.md` | Return safe summaries and quality signals only. |
 | Store analytics | `docs/agent/store_analytics_playbook.md`, `get_store_analytics_report` | Aggregate-only storefront report in Asia/Krasnoyarsk; no raw events, identifiers, search text, or customer data. |
-| AutoStop App store | `docs/agent/store_management_playbook.md` | Pure-read store API, isolated cursors, bounded search/context, stock locations, and five-operation ActionContract allowlist. General Drom/Avito sourcing and service заказ-наряд remain outside this route. |
+| AutoStop App store | `docs/agent/store_management_playbook.md` | Scoped store API, isolated cursors, exact quote context, sourcing lookup, stock locations, and seven-operation ActionContract allowlist. General Drom/Avito sourcing and service заказ-наряд remain outside this route. |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup; no movement/archive/order/payment/cashbox writes without separate explicit command. |
 | CRM card descriptions | `docs/agent/crm_card_description_standard.md` | Use for public description create/update/cleanup/writeback; keep text laconic, formatted, and free of sources/provenance, risk blocks, selection method, and supplier-check reminders. |
 | Ready unpaid / daily control | `agent_board_workflow` with `list_ready_unpaid_cards` / `apply_ready_unpaid_followups` | Use service-management playbook; dry-run before writes. |

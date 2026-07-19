@@ -196,6 +196,7 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
         "agent_inventory_workflow",
         "AUTOSTOP_STORE_API_URL",
         "AUTOSTOP_STORE_READ_TOKEN",
+        "AUTOSTOP_STORE_QUOTE_TOKEN",
         "AUTOSTOP_STORE_MANAGE_TOKEN",
         "raw store",
     ]:
