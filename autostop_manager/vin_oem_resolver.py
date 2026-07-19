@@ -29,7 +29,7 @@ def _redact_identifier(identifier: str) -> dict[str, Any]:
 
 def _hash_candidate(*parts: Any) -> str:
     raw = "|".join(str(part or "") for part in parts)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
 
 
 def _call_digest(call: dict[str, Any]) -> dict[str, Any]:

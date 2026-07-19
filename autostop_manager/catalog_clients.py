@@ -10,9 +10,10 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request, urlopen
-from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, ParseError
 from xml.sax.saxutils import escape as xml_escape
+
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
@@ -232,7 +233,7 @@ _OEM_QUANTITY_KEYS = ("quantity", "qty", "Qty", "amount")
 
 
 def _md5(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8")).hexdigest()
+    return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _redact_identifier(identifier: str) -> str:
@@ -839,7 +840,7 @@ def _safe_emex_xml_root(raw_xml: str) -> Element:
         raise ValueError("xml_response_too_large")
     if re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", raw_xml, flags=re.IGNORECASE):
         raise ValueError("EntitiesForbidden: DTD and entity declarations are not allowed")
-    return ElementTree.fromstring(raw_xml)
+    return safe_xml_fromstring(raw_xml)
 
 
 def emex_price_lookup(
