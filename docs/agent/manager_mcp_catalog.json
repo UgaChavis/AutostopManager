@@ -201,7 +201,7 @@
     "store_runtime_status": "INTERNAL_ONLY. Return store_agent_v1 adapter configuration booleans, circuit state, and optional live AutoStop App health without exposing token values. Gateway raw discovery must exclude it and map health through existing bootstrap/runtime tools.",
     "store_digest": "INTERNAL_ONLY. Read one bounded pure-read store digest page with at-least-once delivery. Uses isolated store_digest/store_bootstrap streams, persists only technical cursor/timestamp/success state/compact refs, returns a Manager-owned cursor-bound ACK for every non-empty page, replays unacknowledged pages from the fixed App window, and commits high-water only after final ACK. Gateway raw discovery must exclude it.",
     "store_search": "INTERNAL_ONLY. Search one allowlisted store entity through the pure-read AutoStop App agent API with compact store_agent_v1 DTOs, bounded limit, opaque pagination, schema validation, and contact redaction. Gateway maps it through agent_search.",
-    "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary or full detail. Contacts always remain redacted because no contact scope is exposed. Gateway maps it through agent_entity_context.",
+    "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary or full detail. General reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, and drafts. Gateway maps it through agent_entity_context and never persists the payload.",
     "store_management_action": "INTERNAL_ONLY. Execute only assign_quote_request, set_quote_request_status, update_quote_request_comment, add_quote_request_note, replace_quote_offer_drafts, set_batch_storage_location, or mark_order_ready after ActionContractV2, exact preread, expected_updated_at, idempotency, correlation, dry_run/apply, and exact readback. Quote drafts remain private. Gateway raw discovery excludes it and agent_inventory_workflow enforces policy.",
     "prepare_action_contract": "Build ActionContractV2 for CRM, store, finance, inventory, documents, files, or Gmail writes with task intent, exact target, idempotency, concurrency, automatic preflight, compensation, and readback verification; store dry-run/apply phase keys remain distinct while their validated or derived correlation stays stable; never performs the write.",
     "prepare_crm_card_action": "Build a dry-run CRM card edit contract with exact description patch, vehicle_profile metadata preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, risk flags, and strict reread verification; never writes CRM.",
@@ -276,7 +276,7 @@
     "store_entity_context": {
       "entity": "allowlisted store entity",
       "entity_id": "non-empty exact string",
-      "detail": "summary|full, default summary; contacts are always redacted"
+      "detail": "summary|full, default summary; general reads are redacted, while exact full quote reads use the dedicated quote credential and stay transient"
     },
     "store_management_action": {
       "domain": "store_quote_request|store_batch|store_order",

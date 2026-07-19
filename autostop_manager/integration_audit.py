@@ -220,45 +220,81 @@ def _run_gateway_check(
         command.append("--exhaustive")
     environment = os.environ.copy()
     environment["MINIMAL_KANBAN_MCP_BEARER_TOKEN"] = token
-    started = time.monotonic()
-    try:
-        completed = command_runner(
-            command,
-            cwd=crm_path,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=180 if exhaustive else 90,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return _failed_check("crm_gateway_checker_failed_to_run")
-    duration_ms = round((time.monotonic() - started) * 1000)
-    try:
-        payload = json.loads(completed.stdout)
-    except (TypeError, json.JSONDecodeError):
-        return {
-            **_failed_check("crm_gateway_checker_invalid_output"),
-            "duration_ms": duration_ms,
-            "exit_code": completed.returncode,
-        }
-    safe_checks = payload.get("checks") if isinstance(payload.get("checks"), dict) else {}
-    safe_metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
-    ok = completed.returncode == 0 and payload.get("ok") is True
-    return {
-        "ok": ok,
-        "status": "healthy" if ok else "failed",
-        "duration_ms": duration_ms,
-        "exit_code": completed.returncode,
-        "checks": {str(name): bool(value) for name, value in safe_checks.items()},
-        "metrics": {
-            str(name): value
-            for name, value in safe_metrics.items()
-            if isinstance(value, (int, float, bool)) and not isinstance(value, str)
-        },
-        "failed_invocations": [str(item) for item in payload.get("failed_invocations") or []],
-        "data_included": False,
-    }
+    audit_started = time.monotonic()
+    last_result = _failed_check("crm_gateway_check_failed")
+    for attempt in (1, 2):
+        try:
+            completed = command_runner(
+                command,
+                cwd=crm_path,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=180 if exhaustive else 90,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            last_result = _failed_check("crm_gateway_checker_failed_to_run")
+        else:
+            try:
+                payload = json.loads(completed.stdout)
+            except (TypeError, json.JSONDecodeError):
+                last_result = {
+                    **_failed_check("crm_gateway_checker_invalid_output"),
+                    "exit_code": completed.returncode,
+                }
+            else:
+                safe_checks = payload.get("checks") if isinstance(payload.get("checks"), dict) else {}
+                safe_metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+                failed_invocations = [str(item) for item in payload.get("failed_invocations") or []]
+                ok = completed.returncode == 0 and payload.get("ok") is True
+                last_result = {
+                    "ok": ok,
+                    "status": "healthy" if ok else "failed",
+                    "exit_code": completed.returncode,
+                    "checks": {str(name): bool(value) for name, value in safe_checks.items()},
+                    "metrics": {
+                        str(name): value
+                        for name, value in safe_metrics.items()
+                        if isinstance(value, (int, float, bool)) and not isinstance(value, str)
+                    },
+                    "failed_invocations": failed_invocations,
+                    "data_included": False,
+                }
+                if not ok:
+                    error_code = _gateway_checker_error_code(
+                        payload,
+                        returncode=completed.returncode,
+                        failed_invocations=failed_invocations,
+                    )
+                    last_result["error"] = error_code
+                    last_result["warnings"] = [error_code]
+        if last_result.get("ok"):
+            last_result["attempts"] = attempt
+            last_result["recovered_after_retry"] = attempt > 1
+            if attempt > 1:
+                last_result["warnings"] = ["crm_gateway_check_recovered_after_retry"]
+            break
+    last_result["duration_ms"] = round((time.monotonic() - audit_started) * 1000)
+    last_result.setdefault("attempts", 2)
+    last_result.setdefault("recovered_after_retry", False)
+    return last_result
+
+
+def _gateway_checker_error_code(
+    payload: dict[str, Any],
+    *,
+    returncode: int,
+    failed_invocations: list[str],
+) -> str:
+    error = str(payload.get("error") or "").strip().casefold()
+    if error.startswith("token environment variable is missing"):
+        return "crm_gateway_checker_token_environment_missing"
+    if failed_invocations:
+        return "crm_gateway_tool_invocation_failed"
+    if returncode != 0 and not payload.get("checks"):
+        return "crm_gateway_checker_reported_failure"
+    return "crm_gateway_check_failed"
 
 
 def _read_env_value(path: Path, key: str) -> str:
