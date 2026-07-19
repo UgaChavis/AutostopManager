@@ -13,7 +13,7 @@
     {
       "id": "home-pc-remote-codex-access",
       "priority": 6,
-      "rule": "This server has two independent Windows reverse-SSH routes: the legacy owner's home PC through alias home-pc, and the multi-device managed-pc fleet enrolled from SECRET_KEY\\AUTOSTOP_REMOTE. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with either. For the fleet, run managed-pc status on the exact alias first and use managed-pc shell/run/powershell/copy-to/copy-from/revoke. Never print runtime private keys or the USB enrollment credential. Do not rotate or overwrite legacy home-pc key material while operating on the managed fleet."
+      "rule": "This server has two independent Windows reverse-SSH routes: the legacy owner's home PC through alias home-pc, and the multi-device managed-pc fleet enrolled from SECRET_KEY\\AUTOSTOP_REMOTE. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with either. For the fleet, run managed-pc doctor and status on the exact alias first; shell/run/powershell/copy/repair/rename/revoke remain exact-target operations. After a control-plane upgrade, refresh active generated SSH configs with managed-pc refresh-device-files; persistent control sockets are root-only and revocation or reenrollment must close them. Never print runtime private keys or the USB enrollment credential. Do not rotate or overwrite legacy home-pc key material while operating on the managed fleet."
     },
     {
       "id": "crm-source-of-truth",
@@ -298,7 +298,7 @@
     {
       "id": "store-write-allowlist",
       "priority": 38,
-      "rule": "Store writes are limited to assigning an exact quote request, toggling its NEW/IN_PROGRESS status, updating its internal comment, changing one exact batch storage location, and marking one exact IN_PROGRESS order READY. Every write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, correlation id, dry_run, apply, and exact readback through agent_inventory_workflow. READY dry-run must disclose customer notification effects."
+      "rule": "Store writes are limited to assigning an exact quote request, toggling its NEW/IN_PROGRESS status, updating its internal comment, appending one quote note, replacing private structured quote-offer drafts, changing one exact batch storage location, and marking one exact IN_PROGRESS order READY. Every write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, correlation id, dry_run, apply, and exact readback through agent_inventory_workflow. Drafts never publish or notify; READY dry-run must disclose customer notification effects."
     },
     {
       "id": "store-write-denylist",

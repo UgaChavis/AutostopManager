@@ -1644,6 +1644,64 @@ def _knowledge_fts_query(tokens: list[str]) -> str:
 def _domain_hints(query: str) -> dict[str, int]:
     lowered = query.lower()
     hints: dict[str, int] = {}
+    documentation_terms = (
+        "документац",
+        "инструкц",
+        "база знаний",
+        "базу знаний",
+        "базе знаний",
+        "knowledge base",
+        "knowledge",
+        "documentation",
+        "индексац",
+        "аннотац",
+        "разметк",
+        "полк",
+        "source pack",
+    )
+    documentation_actions = (
+        "обнов",
+        "актуализ",
+        "привести в актуаль",
+        "приведи в актуаль",
+        "почист",
+        "cleanup",
+        "очист",
+        "удал",
+        "убер",
+        "мусор",
+        "стар",
+        "неактуаль",
+        "добав",
+        "сохран",
+        "внес",
+        "усил",
+        "структур",
+        "систематиз",
+        "проиндекс",
+        "разберись",
+    )
+    if any(term in lowered for term in documentation_terms) and any(
+        action in lowered for action in documentation_actions
+    ):
+        hints["knowledge_intake"] = 90
+
+    remote_access_terms = (
+        "home-pc",
+        "managed-pc",
+        "autostop_remote",
+        "reverse ssh",
+        "удаленный компьютер",
+        "удалённый компьютер",
+        "удаленного компьютера",
+        "удалённого компьютера",
+        "домашний компьютер",
+        "домашний пк",
+        "windows компьютер",
+        "windows пк",
+    )
+    if any(term in lowered for term in remote_access_terms):
+        hints["remote_codex_access"] = 82
     store_context_terms = (
         "магазин",
         "нашем каталоге",
@@ -1716,36 +1774,6 @@ def _domain_hints(query: str) -> dict[str, int]:
         term in lowered for term in gateway_engineering_actions
     ):
         hints["startup_and_identity"] = max(hints.get("startup_and_identity", 0), 70)
-    knowledge_intake_terms = [
-        "база знаний",
-        "базу знаний",
-        "базе знаний",
-        "knowledge base",
-        "knowledge",
-        "индексац",
-        "аннотац",
-        "разметк",
-        "полк",
-        "source pack",
-    ]
-    knowledge_intake_actions = [
-        "обнови",
-        "добавь",
-        "добавить",
-        "сохрани",
-        "сохранить",
-        "внеси",
-        "внести",
-        "усиль",
-        "усилить",
-        "структур",
-        "систематиз",
-        "проиндекс",
-    ]
-    if any(term in lowered for term in knowledge_intake_terms) and any(
-        action in lowered for action in knowledge_intake_actions
-    ):
-        hints["knowledge_intake"] = max(hints.get("knowledge_intake", 0), 55)
     if any(word in lowered for word in ["масло", "моторное", "жидк", "заправ", " то "]):
         hints["fluids"] = 20
     if any(word in lowered for word in ["диагност", "ошиб", "dtc", "скан"]):
@@ -1806,7 +1834,9 @@ def _domain_hints(query: str) -> dict[str, int]:
         hints["bmw_f15_n63"] = max(hints.get("bmw_f15_n63", 0), 18)
     if any(word in lowered for word in ["toyota", "тойота", "yaris gr", "gr yaris", "ярис", "gxpa16", "g16e"]):
         hints["toyota_gr_yaris"] = max(hints.get("toyota_gr_yaris", 0), 18)
-    if any(word in lowered for word in ["приберись", "board_cleanup_autopilot", "cleanup"]):
+    if any(word in lowered for word in ["приберись", "board_cleanup_autopilot"]):
+        hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)
+    elif "cleanup" in lowered and any(term in lowered for term in ("crm", "board", "карточк", "клиент", "автомобил")):
         hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)
     if any(
         term in lowered

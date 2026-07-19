@@ -34,6 +34,8 @@ managed-pc run <alias> -- <program> <args...>
 managed-pc powershell <alias> <local-script.ps1>
 managed-pc copy-to <alias> <source> <destination>
 managed-pc copy-from <alias> <source> <destination>
+managed-pc repair <alias>
+managed-pc rename <alias> <new-alias>
 managed-pc revoke <alias>
 managed-pc audit <alias>
 ```
@@ -57,13 +59,26 @@ or obtain a server shell. If the USB is lost, rotate it; existing devices remain
 connected. The complete implementation, rollback commands and Windows file list
 are documented in `/opt/autostop-managed-pc/README.md`.
 
+Server-side SSH and SCP calls reuse a root-only control socket for up to ten
+minutes. This avoids a new SSH handshake for each command or transfer. After a
+control-plane upgrade, regenerate active device SSH configs with:
+
+```bash
+managed-pc refresh-device-files
+```
+
+Refreshing, revoking, or re-enrolling closes any existing control session before
+keys or authorization change. The Windows maintenance account may create only a
+local forward to `127.0.0.1:9223`, reserved for the dedicated AutoStop CRM Chrome
+diagnostics profile; it cannot forward to arbitrary LAN or internet targets.
+
 ## Current Route
 
 - Connect from this server with `ssh home-pc`.
 - Home PC: `DESKTOP-BUSO4I8`, Windows OpenSSH, user `codexadmin`.
 - Reverse listener on server: `127.0.0.1:22220`.
 - Home SSH listens only on `127.0.0.1:22`; no router port-forward or public
-  home SSH.
+  home SSH (`no public home SSH`).
 - Home PC keeps an outbound SSH tunnel as server user `codex-home-tunnel`.
 - `ssh`, `sftp`, and `scp` work from this server through alias `home-pc`.
 - Verified tools available to `codexadmin`: PowerShell 7.6.3 (`pwsh`),

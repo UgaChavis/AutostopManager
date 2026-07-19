@@ -9,8 +9,8 @@ store, or Gmail sources of truth.
 - `AGENTS.md` - canonical compact startup instruction for Codex.
 - `docs/agent/knowledge_shelves.md` - human navigation, file placement, and
   deletion policy.
-- `docs/agent/codex_home_pc_reverse_ssh.md` - `home-pc` reverse SSH access,
-  toolset, and helper workflow.
+- `docs/agent/codex_home_pc_reverse_ssh.md` - managed Windows fleet plus the
+  independent legacy `home-pc` reverse SSH route.
 - `docs/agent/knowledge_map.json` - machine route cards for `knowledge-probe`.
 - `docs/agent/knowledge_annotations.jsonl` - compact file annotations.
 - `docs/agent/command_routes.json` - standing owner-command routes.
@@ -110,7 +110,7 @@ declarative exceptions.
 | Parts sourcing | `docs/agent/parts_search_playbook.md` |
 | Internet / repair web research | `docs/agent/automotive_repair_source_playbook.md` |
 | Service management | `docs/agent/krasnoyarsk_service_management_playbook.md` |
-| Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
+| Remote Codex access / `managed-pc` / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
 | Deployment | `docs/agent/deployment_runbook.md` |
 
 ## Documentation Hygiene

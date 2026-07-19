@@ -148,6 +148,33 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
 
 
+def test_agent_brief_documentation_hygiene_has_safe_cleanup_contract(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(
+        store,
+        "Обнови документацию, удали мусорные инструкции и закоммить изменения",
+    )
+
+    assert result["route"]["domain"] == "knowledge_intake"
+    assert result["route"]["command_id"] == "manager_documentation_hygiene"
+    assert any("cleanup-audit" in item for item in result["read_order"])
+    assert any("unique instruction" in item for item in result["forbidden_actions"])
+
+
+def test_agent_brief_remote_route_requires_exact_device_and_secret_safety(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "Проверь managed-pc и удалённый Windows компьютер")
+
+    assert result["route"]["domain"] == "remote_codex_access"
+    assert result["route"]["open_first"] == "docs/agent/codex_home_pc_reverse_ssh.md"
+    assert any("exact alias" in item for item in result["read_order"])
+    assert any("private keys" in item for item in result["forbidden_actions"])
+
+
 def test_quote_pricing_request_routes_to_store_and_exposes_full_quote_workflow(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()

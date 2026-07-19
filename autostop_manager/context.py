@@ -50,6 +50,16 @@ DOMAIN_BRIEF_RULES = {
         "Every store write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, dry_run, apply, correlation id, exact readback, and compact refs-only ledger data.",
         "Never change store prices, quantities, products, customers, finance, ROSSKO orders, marketplace publication, or arbitrary settings through this route.",
     ],
+    "knowledge_intake": [
+        "For documentation hygiene, inventory tracked docs and their reference graph before editing or deleting anything.",
+        "Prefer the smallest existing canonical file; migrate unique active rules before deleting an obsolete document.",
+        "Run cleanup-audit before deletion, then knowledge-sync, knowledge-audit, annotations-audit, and skills-audit after durable documentation changes.",
+    ],
+    "remote_codex_access": [
+        "Keep the managed-pc fleet and legacy home-pc route independent; never reuse or rotate one route's keys while operating on the other.",
+        "For managed-pc, resolve the exact alias and run status before shell, run, PowerShell, copy, repair, rename, or revoke operations.",
+        "Never print private keys, passwords, tokens, USB enrollment credentials, or protected runtime state.",
+    ],
 }
 
 DEFAULT_READ_ORDER = [
@@ -159,6 +169,59 @@ STORE_VERIFICATION = [
     "digest checkpoint advances only after the final page; failed or abandoned paging preserves the committed cursor",
     "exact store writes match planned fields after reread and include the audit correlation id",
     "Manager workflow state contains compact technical refs only and no raw store payload",
+]
+
+KNOWLEDGE_HYGIENE_READ_ORDER = [
+    "open docs/agent/knowledge_shelves.md and the knowledge-probe results",
+    "inventory tracked docs, route references, recent feature changes, and current audit baselines",
+    "update the smallest canonical docs plus knowledge_map, annotations, rules, and command routes when routing changed",
+    "run cleanup-audit before removing confirmed obsolete or generated artifacts",
+]
+
+KNOWLEDGE_HYGIENE_ALLOWED_ACTIONS = [
+    "update canonical Manager documentation, routes, annotations, and rules",
+    "remove generated caches and fully migrated obsolete documentation after reference checks",
+    "run knowledge-sync, documentation audits, tests, lint, and health checks",
+    "commit verified repository changes when the owner explicitly requests it",
+]
+
+KNOWLEDGE_HYGIENE_FORBIDDEN_ACTIONS = [
+    "delete an active source-of-truth file or unique instruction before migrating its rules",
+    "commit raw CRM or Store exports, runtime databases, secrets, tokens, private keys, or temporary remote-control scripts",
+    "change CRM, Store, Gmail, or remote-PC business state as part of documentation cleanup",
+]
+
+KNOWLEDGE_HYGIENE_VERIFICATION = [
+    "knowledge-probe routes documentation maintenance to knowledge_intake",
+    "knowledge-sync, knowledge-audit, annotations-audit, skills-audit, and cleanup-audit pass",
+    "focused and full available Manager quality gates pass",
+    "git status contains only intentional verified changes before commit",
+]
+
+REMOTE_ACCESS_READ_ORDER = [
+    "open docs/agent/codex_home_pc_reverse_ssh.md",
+    "choose managed-pc or legacy home-pc without mixing their credentials or commands",
+    "for managed-pc run doctor, resolve the exact alias, then run status before an operation",
+    "for legacy home-pc run the documented loopback listener and BatchMode quick checks",
+]
+
+REMOTE_ACCESS_ALLOWED_ACTIONS = [
+    "read compact server-side health and exact-device status",
+    "use shell, run, PowerShell, scp/sftp, copy, repair, or rename on the exact owner-authorized machine when the task requires it",
+    "refresh generated managed-pc SSH configs after a control-plane upgrade",
+    "revoke or rotate credentials only when the owner explicitly requests that exact security action",
+]
+
+REMOTE_ACCESS_FORBIDDEN_ACTIONS = [
+    "print, copy, commit, or expose private keys, passwords, tokens, USB enrollment credentials, or protected runtime state",
+    "mix managed-pc and legacy home-pc credentials or rotate one route while operating on the other",
+    "format disks, change bootloaders, mass-delete data, disable protection, reboot or shut down, or stop critical business services without a separate exact instruction",
+]
+
+REMOTE_ACCESS_VERIFICATION = [
+    "report the exact alias or legacy route that was used",
+    "reread status or run the documented health check after a change",
+    "confirm secrets were neither printed nor committed",
 ]
 
 LONG_RUN_CONTEXT_SAFETY = {
@@ -398,6 +461,18 @@ def build_agent_brief(
         allowed_actions = STORE_ANALYTICS_ALLOWED_ACTIONS
         forbidden_actions = STORE_ANALYTICS_FORBIDDEN_ACTIONS
         verification = STORE_ANALYTICS_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "knowledge_intake":
+        read_order = KNOWLEDGE_HYGIENE_READ_ORDER
+        allowed_actions = KNOWLEDGE_HYGIENE_ALLOWED_ACTIONS
+        forbidden_actions = KNOWLEDGE_HYGIENE_FORBIDDEN_ACTIONS
+        verification = KNOWLEDGE_HYGIENE_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "remote_codex_access":
+        read_order = REMOTE_ACCESS_READ_ORDER
+        allowed_actions = REMOTE_ACCESS_ALLOWED_ACTIONS
+        forbidden_actions = REMOTE_ACCESS_FORBIDDEN_ACTIONS
+        verification = REMOTE_ACCESS_VERIFICATION
         next_actions = list(context.get("next_actions") or [])
     else:
         read_order = DEFAULT_READ_ORDER

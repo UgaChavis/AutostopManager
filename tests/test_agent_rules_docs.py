@@ -106,6 +106,9 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "Python 3.14.6",
         "write-public-desktop-note.ps1",
         "open-in-user-session.ps1",
+        "managed-pc refresh-device-files",
+        "ControlPersist 600",
+        "127.0.0.1:9223",
     ]:
         assert expected in combined
 
@@ -217,6 +220,8 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
     assert "dedicated quote credential" in manager_catalog["tool_contracts"]["store_entity_context"]
     assert "no contact scope" not in json.dumps({"manager": manager_catalog, "crm": crm_catalog}, ensure_ascii=False)
     assert "store_management" in knowledge_map["domains"]
+    for expected in ["append-only quote note", "private structured quote-offer draft"]:
+        assert expected in combined
 
     workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
     for expected in [

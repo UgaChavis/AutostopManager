@@ -77,7 +77,7 @@ covers the task may you use `discover_raw_capabilities`,
 | Parts sourcing | `docs/agent/parts_search_playbook.md`, `docs/agent/procurement_pricing_playbook.md` | Use contracted supplier routes first for new/procurement checks; for public used/contract scans use Drom, then ZZap and Avito. Availability still needs confirmation. |
 | Labor estimate | `docs/agent/work_labor_pricing_playbook.md`, `estimate_repair_work_cost` | Read-only estimate; no repair-order writes without exact approval. |
 | Business documents | `docs/agent/business_document_quality_playbook.md` | Use CRM print module for AutoStop service documents. |
-| Remote Codex access / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Current server-to-home Windows reverse SSH with `ssh`, `sftp`/`scp`, `pwsh`, Python, and helper scripts; do not rotate keys without Windows-side update. |
+| Remote Codex access / `managed-pc` / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Managed multi-device fleet and independent legacy home route. Resolve the exact device, check status first, and never mix credentials. |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` | Keep docs compact; prefer existing canonical files; delete only after `cleanup-audit`, migration, and green audits. |
 
 ## CRM Write Boundary
@@ -102,7 +102,10 @@ covers the task may you use `discover_raw_capabilities`,
 - Read store state only through the internal pure-read AutoStop App agent API;
   do not access its database or legacy mutating GET routes.
 - Allowed writes are quote assignment, quote NEW/IN_PROGRESS, quote internal
-  comment, exact batch storage location, and exact IN_PROGRESS order READY.
+  comment, append-only quote note, private structured quote-offer draft
+  replacement, exact batch storage location, and exact IN_PROGRESS order READY.
+- Quote drafts never publish, notify, approve, cancel, convert, or order from a
+  supplier.
 - Require exact target reread, `expected_updated_at`, ActionContractV2, unique
   idempotency key, correlation ID, `dry_run`, `apply`, and exact reread through
   `agent_inventory_workflow`. READY dry-run must disclose notification effects.

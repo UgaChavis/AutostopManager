@@ -1562,7 +1562,10 @@
         "CodexRemote helper scripts",
         "подключить домашний ПК",
         "доступ Codex к Windows",
-        "удаленный компьютер Codex"
+        "удаленный компьютер Codex",
+        "удалённый компьютер Codex",
+        "управление удаленным Windows компьютером",
+        "управление удалённым Windows компьютером"
       ],
       "keywords": [
         "Codex",
@@ -1576,7 +1579,12 @@
         "managed-pc list",
         "managed-pc status",
         "managed-pc shell",
+        "managed-pc repair",
+        "managed-pc rename",
         "managed-pc revoke",
+        "managed-pc refresh-device-files",
+        "ControlPersist 600",
+        "127.0.0.1:9223",
         "PowerShell 7.6.3",
         "Python 3.14.6",
         "scp",
@@ -1598,7 +1606,9 @@
         "есть ли доступ к домашнему ПК с сервера",
         "как откатить codex-home-tunnel",
         "как подключить новый Windows компьютер с флешки SECRET_KEY",
-        "как проверить или отозвать managed-pc"
+        "как проверить или отозвать managed-pc",
+        "как обновить SSH конфиги managed-pc после обновления сервера",
+        "как безопасно управлять удаленным Windows компьютером"
       ],
       "source_of_truth_files": [
         "docs/agent/codex_home_pc_reverse_ssh.md",

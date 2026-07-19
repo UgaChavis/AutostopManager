@@ -42,6 +42,44 @@ def test_noncanonical_cleanup_words_are_not_command_aliases():
     assert find_command_route("обнови описание CRM") is None
 
 
+def test_documentation_cleanup_does_not_route_to_crm_board_cleanup(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "Обнови документацию Автостоп-менеджера, удали мусорную документацию "
+        "и приведи инструкции в актуальное состояние",
+        limit=5,
+    )
+
+    assert result["best_domain"] == "knowledge_intake"
+    assert result["open_first"] == "docs/agent/knowledge_shelves.md"
+    assert result["command_route"]["command_id"] == "manager_documentation_hygiene"
+
+
+def test_remote_windows_management_routes_to_managed_pc_playbook(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "Проверь managed-pc и подключись к удалённому Windows компьютеру",
+        limit=5,
+    )
+
+    assert result["best_domain"] == "remote_codex_access"
+    assert result["open_first"] == "docs/agent/codex_home_pc_reverse_ssh.md"
+    assert result["command_route"]["command_id"] == "remote_codex_access"
+
+
+def test_generic_documentation_cleanup_word_is_not_board_cleanup_hint():
+    hints = knowledge_base._domain_hints("documentation cleanup for AutostopManager")
+
+    assert "board_cleanup_autopilot" not in hints
+    assert hints["knowledge_intake"] == 90
+
+
 def test_probe_routes_ready_unpaid_daily_control_to_service_management(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)

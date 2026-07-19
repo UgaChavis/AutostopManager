@@ -208,6 +208,10 @@
         "почисти документацию",
         "архивируй старые документы",
         "приведи документацию в порядок",
+        "обнови документацию",
+        "актуализируй документацию",
+        "удали мусорную документацию",
+        "приведи инструкции в актуальное состояние",
         "оптимизируй базу знаний",
         "обнови базу знаний",
         "добавь в базу знаний",
@@ -260,6 +264,60 @@
         "remove stale absolute paths and duplicate active instructions",
         "update knowledge_map, knowledge_annotations, and navigation docs",
         "run knowledge-sync, knowledge-audit, annotations-audit, and focused tests"
+      ]
+    },
+    {
+      "command_id": "remote_codex_access",
+      "workflow_id": "remote_codex_access",
+      "priority": 94,
+      "intent": "remote_codex_access",
+      "domain": "remote_codex_access",
+      "open_first": "docs/agent/codex_home_pc_reverse_ssh.md",
+      "aliases": [
+        "подключись к удаленному компьютеру",
+        "подключись к удалённому компьютеру",
+        "управляй удаленным Windows компьютером",
+        "управляй удалённым Windows компьютером",
+        "проверь home-pc",
+        "проверь managed-pc",
+        "подключи новый компьютер с флешки AUTOSTOP_REMOTE"
+      ],
+      "keywords": [
+        "home-pc",
+        "managed-pc",
+        "AUTOSTOP_REMOTE",
+        "удаленный компьютер",
+        "удалённый компьютер",
+        "reverse SSH",
+        "Windows OpenSSH"
+      ],
+      "memory_queries": [
+        "remote_codex_access",
+        "managed-pc fleet",
+        "home-pc reverse SSH"
+      ],
+      "required_reads": [
+        "docs/agent/codex_home_pc_reverse_ssh.md",
+        "managed-pc doctor and exact alias status for fleet operations",
+        "legacy home-pc BatchMode quick check for the independent home route"
+      ],
+      "write_domains": [
+        "owner_authorized_remote_pc"
+      ],
+      "external_connectors": [
+        "managed-pc reverse SSH",
+        "legacy home-pc reverse SSH"
+      ],
+      "completion_checks": [
+        "the exact device alias or legacy route is reported",
+        "post-operation status or health check passes",
+        "no private key, password, token, or USB enrollment credential is printed or committed"
+      ],
+      "next_actions": [
+        "open the remote access playbook and choose managed-pc or legacy home-pc",
+        "run the route-specific health check and resolve the exact device",
+        "perform only the owner-requested remote operation",
+        "reread status and report the exact affected machine"
       ]
     },
     {

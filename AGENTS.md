@@ -107,8 +107,9 @@ verification.
   browser only for public JS-heavy pages. Do not bypass CAPTCHA, login, paywall,
   or IP blocks; report manual access needed.
 - Business documents -> `docs/agent/business_document_quality_playbook.md`.
-- Remote `home-pc` access -> `docs/agent/codex_home_pc_reverse_ssh.md`; use
-  `ssh home-pc`, `sftp`/`scp`, `pwsh`, and Python only after opening that file.
+- Remote Windows access -> `docs/agent/codex_home_pc_reverse_ssh.md`; keep the
+  `managed-pc` fleet and legacy `home-pc` route independent, resolve the exact
+  device, and run the documented status check before an operation.
 
 ## Documentation Hygiene
 
