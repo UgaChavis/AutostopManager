@@ -30,7 +30,8 @@ Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 - `agent_board_digest(scope="store")` for the store digest and the
   owner-visible `store_digest` stream;
 - `agent_search` for bounded store lists and catalog/stock lookup;
-- `agent_entity_context` for one exact store object;
+- `agent_entity_context` for one exact store object; an exact quote may use
+  `detail="full_with_vin_photo"` to read only safe VIN-photo metadata;
 - `get_runtime_status` for adapter and store health;
 - `agent_inventory_workflow` for the seven allowlisted writes.
 
@@ -53,7 +54,8 @@ call a hidden Store tool directly:
 | readiness, counts, stock summary, marketplace state/errors | `agent_bootstrap` | no Store cursor or ACK |
 | “что нового” and change-feed traversal | `agent_board_digest` | `scope="store"`; continue with the returned opaque `cursor` and `ack_token` |
 | list, filter, search, stock or sourcing candidates | `agent_search` | exact `entity`, bounded `limit`, only the filters below |
-| one exact object | `agent_entity_context` | exact `entity`, `entity_id`; `detail="full"` only for an exact quote request |
+| one exact object | `agent_entity_context` | exact `entity`, `entity_id`; `detail="full"` or `"full_with_vin_photo"` only for an exact quote request |
+| one exact VIN-photo preview | `agent_document_workflow` | `operation="download_store_quote_vin_photo"`, exact quote id, current photo SHA-256, idempotency key, and `allow_large_output=true` |
 | adapter/API health | `get_runtime_status` | read-only |
 | one of the seven writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
 
@@ -211,6 +213,19 @@ Store workflow ledger rows are refs-only. Gateway workflow IDs such as
 Keep `query` empty and use only allowlisted machine intent, summary, message,
 event, compact-ref, count, status, hash, cursor, and version values; never put
 owner prose, customer/contact data, raw payloads, or secrets in those channels.
+
+### VIN-photo preview
+
+`full_with_vin_photo` is available only for one exact `store_quote_request` and
+uses the dedicated quote credential. It returns `vin_photo=null` or metadata
+(`sha256`, JPEG MIME type, byte size, width, height), never the filename, URL,
+or bytes. For a present photo, call `agent_document_workflow` with
+`download_store_quote_vin_photo`, the exact id and SHA-256, a unique idempotency
+key, and `allow_large_output=true`. Gateway returns an in-memory bounded JPEG
+preview as ImageContent; bytes must never be copied to Manager state, logs,
+docs, Git, or workflow ledger. A stale hash, absent photo, non-JPEG response,
+or oversized preview fails closed. This is read-only: it does not perform OCR,
+write a VIN, or change the quote.
 
 Never expose generic hidden Manager store tools through raw discovery. Never
 allow deletion, price/product/customer/quantity/finance changes,

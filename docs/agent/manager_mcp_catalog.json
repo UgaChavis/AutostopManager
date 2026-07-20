@@ -2,7 +2,7 @@
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
   "last_verified": "2026-07-19",
-  "tool_count": 69,
+  "tool_count": 70,
   "exposed_directly_by": "python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
   "memory_is_source_of_truth_for": [
@@ -94,6 +94,7 @@
     "store_digest",
     "store_search",
     "store_entity_context",
+    "download_store_quote_vin_photo",
     "store_management_action"
   ],
   "memory_quality_tools": [
@@ -131,6 +132,7 @@
     "store_digest",
     "store_search",
     "store_entity_context",
+    "download_store_quote_vin_photo",
     "store_management_action",
     "get_store_analytics_report",
     "prepare_action_contract",
@@ -201,7 +203,8 @@
     "store_runtime_status": "INTERNAL_ONLY. Return store_agent_v1 adapter configuration booleans, circuit state, optional live AutoStop App health, or the one-request stateless bootstrap snapshot without exposing token values. The snapshot never reads or advances digest checkpoints. Gateway raw discovery must exclude it and map health through existing bootstrap/runtime tools.",
     "store_digest": "INTERNAL_ONLY. Read one bounded pure-read store digest page with at-least-once delivery. Uses isolated store_digest/store_bootstrap streams, persists only technical cursor/timestamp/success state/compact refs, returns a Manager-owned cursor-bound ACK for every non-empty page, replays unacknowledged pages from the fixed App window, and commits high-water only after final ACK. Gateway raw discovery must exclude it.",
     "store_search": "INTERNAL_ONLY. Search one allowlisted store entity through the pure-read AutoStop App agent API with compact store_agent_v1 DTOs, bounded limit, opaque pagination, schema validation, and contact redaction. Gateway maps it through agent_search.",
-    "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary or full detail. General reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, and drafts. Gateway maps it through agent_entity_context and never persists the payload.",
+    "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary, full, or full_with_vin_photo detail. General reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, drafts, and bounded VIN-photo metadata. Gateway maps it through agent_entity_context and never persists the payload.",
+    "download_store_quote_vin_photo": "INTERNAL_ONLY. Read one exact quote VIN-photo JPEG preview through the dedicated quote credential and expected photo SHA-256. Bytes are transient only; Gateway maps it through agent_document_workflow with explicit allow_large_output and never exposes it through raw discovery.",
     "store_management_action": "INTERNAL_ONLY. Execute only assign_quote_request, set_quote_request_status, update_quote_request_comment, add_quote_request_note, replace_quote_offer_drafts, set_batch_storage_location, or mark_order_ready after ActionContractV2, exact preread, expected_updated_at, idempotency, correlation, dry_run/apply, and exact readback. Quote drafts remain private. Gateway raw discovery excludes it and agent_inventory_workflow enforces policy.",
     "prepare_action_contract": "Build ActionContractV2 for CRM, store, finance, inventory, documents, files, or Gmail writes with task intent, exact target, idempotency, concurrency, automatic preflight, compensation, and readback verification; store dry-run/apply phase keys remain distinct while their validated or derived correlation stays stable; never performs the write.",
     "prepare_crm_card_action": "Build a dry-run CRM card edit contract with exact description patch, vehicle_profile metadata preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, risk flags, and strict reread verification; never writes CRM.",
@@ -288,7 +291,11 @@
     "store_entity_context": {
       "entity": "allowlisted store entity",
       "entity_id": "non-empty exact string",
-      "detail": "summary|full, default summary; general reads are redacted, while exact full quote reads use the dedicated quote credential and stay transient"
+      "detail": "summary|full|full_with_vin_photo, default summary; general reads are redacted, while exact full quote reads use the dedicated quote credential and stay transient"
+    },
+    "download_store_quote_vin_photo": {
+      "quote_request_id": "non-empty exact string",
+      "expected_photo_sha256": "lowercase SHA-256 from full_with_vin_photo metadata"
     },
     "store_management_action": {
       "domain": "store_quote_request|store_batch|store_order",
@@ -473,5 +480,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 69
+  "all_tools_count": 70
 }

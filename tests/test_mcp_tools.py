@@ -43,7 +43,7 @@ class _FakeServer:
         self.tools = {}
         self.descriptions = {}
 
-    def tool(self, name: str, description: str = ""):
+    def tool(self, name: str, description: str = "", **_kwargs):
         def decorator(func):
             self.tools[name] = func
             self.descriptions[name] = description
@@ -597,6 +597,7 @@ def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_pat
         "store_digest": ["baseline", "since", "cursor", "ack_token", "limit", "stream"],
         "store_search": ["entity", "query", "filters", "cursor", "limit"],
         "store_entity_context": ["entity", "entity_id", "detail"],
+        "download_store_quote_vin_photo": ["quote_request_id", "expected_photo_sha256"],
         "store_management_action": [
             "domain",
             "action",
@@ -856,7 +857,7 @@ def test_crm_mcp_catalog_counts_are_current():
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
     assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 92
-    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 69
+    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 70
     assert "get_store_analytics_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"

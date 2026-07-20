@@ -222,7 +222,7 @@ After deployment, verify:
 - service process is running
 - MCP endpoint answers on configured host/port/path
 - exactly 24 Gateway v2 tools are visible and legacy tools are absent
-- Manager raw registry contains 69 tools, including Store INTERNAL_ONLY
+- Manager raw registry contains 70 tools, including Store INTERNAL_ONLY
   adapter tools that are absent from public raw discovery
 - OAuth protected-resource/server metadata, PKCE S256, owner approval, refresh
   rotation, audience/scopes, and a clear 401 challenge are verified

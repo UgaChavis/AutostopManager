@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import math
 import re
@@ -36,7 +38,7 @@ STORE_MANAGEMENT_OPERATIONS = frozenset(
         "replace_quote_offer_drafts",
     }
 )
-STORE_DETAIL_LEVELS = frozenset({"summary", "full"})
+STORE_DETAIL_LEVELS = frozenset({"summary", "full", "full_with_vin_photo"})
 DEFAULT_STORE_LIMIT = 25
 MAX_STORE_LIMIT = 100
 MAX_CURSOR_CHARS = 4096
@@ -46,6 +48,7 @@ MAX_ENTITY_ID_CHARS = 120
 DEFAULT_RESPONSE_BUDGET_BYTES = 1_000_000
 MAX_JSON_DEPTH = 12
 MAX_JSON_CONTAINER_ITEMS = 500
+MAX_QUOTE_VIN_PHOTO_PREVIEW_BYTES = 2 * 1024 * 1024
 
 _SNAKE_CASE_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
 _CORRELATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
@@ -212,6 +215,7 @@ _ENTITY_FULL_FIELDS: dict[str, frozenset[str]] = {
     ),
     "store_state": frozenset({"allowed_entities"}),
 }
+_QUOTE_VIN_PHOTO_FIELDS = frozenset({"sha256", "content_type", "byte_size", "width", "height"})
 _STORE_STATE_COUNT_FIELDS = frozenset(
     {
         "parts",
@@ -753,6 +757,8 @@ class StoreApiClient:
         normalized_detail = str(detail or "summary").strip().casefold()
         if normalized_detail not in STORE_DETAIL_LEVELS:
             raise ValueError("unsupported store detail level")
+        if normalized_detail == "full_with_vin_photo" and normalized_entity != "store_quote_request":
+            raise ValueError("full_with_vin_photo is available only for store_quote_request")
         path = f"/entities/{quote(normalized_entity, safe='')}/{quote(normalized_id, safe='')}"
         return self._request(
             "GET",
@@ -763,7 +769,115 @@ class StoreApiClient:
             response_contract="entity",
             expected_entity=normalized_entity,
             expected_detail=normalized_detail,
-            quote_access=normalized_entity == "store_quote_request" and normalized_detail == "full",
+            quote_access=normalized_entity == "store_quote_request"
+            and normalized_detail in {"full", "full_with_vin_photo"},
+        )
+
+    def quote_vin_photo_preview(
+        self,
+        *,
+        quote_request_id: str,
+        expected_photo_sha256: str,
+    ) -> dict[str, Any]:
+        normalized_id = str(quote_request_id or "").strip()
+        if not normalized_id:
+            raise ValueError("quote_request_id is required")
+        if len(normalized_id) > MAX_ENTITY_ID_CHARS:
+            raise ValueError("quote_request_id is too large")
+        normalized_sha256 = str(expected_photo_sha256 or "").strip().casefold()
+        if re.fullmatch(r"[a-f0-9]{64}", normalized_sha256) is None:
+            raise ValueError("expected_photo_sha256 must be a lowercase SHA-256 value")
+        if not self.api_url:
+            return self._error("store_api_url_missing", attempt_count=0)
+        if not self._quote_token:
+            return self._error("store_quote_token_missing", attempt_count=0)
+        if self._circuit_is_open():
+            return self._error("store_circuit_open", attempt_count=0)
+
+        path = (
+            f"/entities/store_quote_request/{quote(normalized_id, safe='')}/vin-photo-preview"
+            f"?{urlencode({'expected_sha256': normalized_sha256})}"
+        )
+        url = f"{self.api_url}{path}"
+        headers = {
+            "Accept": "image/jpeg",
+            "Authorization": f"Bearer {self._quote_token}",
+            "User-Agent": "AutostopManager/0.1",
+        }
+        attempt_count = 0
+        for attempt in range(1, self.max_read_attempts + 1):
+            attempt_count = attempt
+            try:
+                request = Request(url, headers=headers, method="GET")
+                with urlopen(request, timeout=self.timeout) as response:
+                    content_type = (
+                        str(getattr(response, "headers", {}).get("Content-Type", ""))
+                        .split(";", 1)[0]
+                        .strip()
+                        .casefold()
+                    )
+                    content = response.read(MAX_QUOTE_VIN_PHOTO_PREVIEW_BYTES + 1)
+                if content_type != "image/jpeg":
+                    raise ValueError("store_attachment_content_type_invalid")
+                if not content or len(content) > MAX_QUOTE_VIN_PHOTO_PREVIEW_BYTES:
+                    raise ValueError("store_attachment_response_too_large")
+                actual_sha256 = hashlib.sha256(content).hexdigest()
+                self._record_success()
+                return {
+                    "ok": True,
+                    "format": STORE_AGENT_FORMAT,
+                    "status": "completed",
+                    "summary": {
+                        "entity": "store_quote_request",
+                        "entity_id": normalized_id,
+                        "attachment": {
+                            "sha256": normalized_sha256,
+                            "content_type": content_type,
+                            "byte_size": len(content),
+                            "preview_sha256": actual_sha256,
+                        },
+                    },
+                    "data": {
+                        "content_base64": base64.b64encode(content).decode("ascii"),
+                        "content_type": content_type,
+                    },
+                    "warnings": [],
+                    "meta": {
+                        "source": "autostop_store_api",
+                        "attempt_count": attempt,
+                        "request_dispatched": True,
+                        "outcome_uncertain": False,
+                    },
+                }
+            except HTTPError as exc:
+                code = "store_attachment_not_found" if int(exc.code) == 404 else "store_attachment_request_rejected"
+                if int(exc.code) == 409:
+                    code = "store_attachment_stale"
+                self._record_success()
+                return self._error(
+                    code,
+                    attempt_count=attempt,
+                    status="conflict" if int(exc.code) == 409 else "blocked",
+                    request_dispatched=True,
+                    outcome_uncertain=False,
+                    http_status=int(exc.code),
+                )
+            except (TimeoutError, URLError):
+                continue
+            except (OSError, TypeError, ValueError):
+                self._record_failure()
+                return self._error(
+                    "store_attachment_response_invalid",
+                    attempt_count=attempt,
+                    request_dispatched=True,
+                    outcome_uncertain=False,
+                )
+        self._record_failure()
+        return self._error(
+            "store_attachment_timeout_or_network_error",
+            attempt_count=attempt_count,
+            request_dispatched=bool(attempt_count),
+            outcome_uncertain=False,
         )
 
     def management_action(
@@ -1157,6 +1271,26 @@ def _validate_entity_items(item: dict[str, Any], *, entity: str, path: str) -> N
                 )
 
 
+def _validate_quote_vin_photo(photo: Any, *, path: str) -> None:
+    if photo is None:
+        return
+    _require_allowed_keys(photo, _QUOTE_VIN_PHOTO_FIELDS, path=path)
+    sha256 = photo.get("sha256")
+    content_type = photo.get("content_type")
+    byte_size = photo.get("byte_size")
+    width = photo.get("width")
+    height = photo.get("height")
+    if not isinstance(sha256, str) or re.fullmatch(r"[a-f0-9]{64}", sha256) is None:
+        raise ValueError(f"{path}.sha256 is invalid")
+    if content_type != "image/jpeg":
+        raise ValueError(f"{path}.content_type is invalid")
+    dimensions = (byte_size, width, height)
+    if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in dimensions):
+        raise ValueError(f"{path} dimensions are invalid")
+    if byte_size > 10 * 1024 * 1024 or width * height > 24_000_000:
+        raise ValueError(f"{path} exceeds the allowed limits")
+
+
 def _validate_entity_projection(
     item: dict[str, Any],
     *,
@@ -1173,8 +1307,10 @@ def _validate_entity_projection(
     if expected_entity is not None and entity != expected_entity:
         raise ValueError(f"{path} does not match the requested Store entity")
     allowed = _ENTITY_BASE_FIELDS | _ENTITY_SUMMARY_FIELDS[entity]
-    if detail == "full":
+    if detail in {"full", "full_with_vin_photo"}:
         allowed |= _ENTITY_FULL_FIELDS[entity]
+    if detail == "full_with_vin_photo" and entity == "store_quote_request":
+        allowed |= {"vin_photo"}
     _require_allowed_keys(item, allowed, path=path)
 
     if "counts" in item:
@@ -1193,6 +1329,10 @@ def _validate_entity_projection(
             raise ValueError(f"{path}.notes is not allowed for {entity}")
         for index, note in enumerate(_require_object_list(item["notes"], path=f"{path}.notes")):
             _require_allowed_keys(note, _QUOTE_NOTE_FIELDS, path=f"{path}.notes[{index}]")
+    if "vin_photo" in item:
+        if entity != "store_quote_request" or detail != "full_with_vin_photo":
+            raise ValueError(f"{path}.vin_photo is not allowed for this detail level")
+        _validate_quote_vin_photo(item["vin_photo"], path=f"{path}.vin_photo")
     if "data_quality_warnings" in item:
         warnings = item["data_quality_warnings"]
         if not isinstance(warnings, list) or any(

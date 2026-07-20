@@ -9,7 +9,7 @@
   "last_verified": "2026-07-19",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 92,
-    "autostop_manager_tools_in_raw_registry": 69,
+    "autostop_manager_tools_in_raw_registry": 70,
     "production_visible_agent_gateway_v2": 24,
     "guarded_internal_api_write_routes_are_virtual_and_not_counted_as_tools": true
   },
@@ -59,7 +59,8 @@
       "agent_bootstrap": "Returns CRM startup plus one compact stateless Store snapshot. Store failure is degraded and never makes CRM startup fail; bootstrap performs one Store request, has no cursor or ACK, and never reads or advances store_digest.",
       "agent_board_digest": "Backward-compatible scope=crm|store with default crm. Store scope returns one bounded store_agent_v1 page with a Manager-owned opaque cursor/ack_token pair; every non-empty page including the final source page must be ACKed before durable high-water commit.",
       "agent_search": "Accepts store_part, store_order, store_quote_request, store_supplier, store_batch, store_warehouse_operation, store_marketplace_listing, store_state, and lookup-only store_sourcing_offer in addition to existing CRM entities.",
-      "agent_entity_context": "Accepts one exact allowlisted store entity/id with summary or full detail. General Store reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, and drafts without persisting them in Gateway state.",
+      "agent_entity_context": "Accepts one exact allowlisted store entity/id with summary, full, or full_with_vin_photo detail. General Store reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, drafts, and bounded VIN-photo metadata without persisting them in Gateway state.",
+      "agent_document_workflow": "download_store_quote_vin_photo retrieves only one exact JPEG VIN-photo preview when allow_large_output=true and the expected photo SHA-256 is current. The image is returned as ImageContent, while structured output and the workflow ledger contain metadata only.",
       "get_runtime_status": "Includes secrets-redacted store adapter configuration, circuit state, and live/degraded store health without breaking CRM health.",
       "agent_inventory_workflow": "Preserves existing CRM inventory operations and adds the exact seven-operation store allowlist in dry_run/apply mode.",
       "prepare_action_contract": "Adds store_quote_request, store_batch, and store_order domains with exact target, expected_updated_at, owner intent, strict planned changes, idempotency, correlation, and readback verification.",
@@ -302,6 +303,7 @@
       "search_partsapi_category_index",
       "store_digest",
       "store_entity_context",
+      "download_store_quote_vin_photo",
       "store_management_action",
       "store_runtime_status",
       "store_search",
@@ -317,6 +319,7 @@
       "store_digest",
       "store_search",
       "store_entity_context",
+      "download_store_quote_vin_photo",
       "store_management_action"
     ]
   },

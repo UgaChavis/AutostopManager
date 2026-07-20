@@ -207,16 +207,17 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
     ]:
         assert expected in combined
 
-    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 69
+    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 70
     assert set(manager_catalog["store_tools"]) == {
         "store_runtime_status",
         "store_digest",
         "store_search",
         "store_entity_context",
+        "download_store_quote_vin_photo",
         "store_management_action",
     }
     assert crm_catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
-    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 69
+    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 70
     assert crm_catalog["agent_gateway_v2"]["store_extensions"]["public_tool_count_unchanged"] == 24
     assert "dedicated quote credential" in crm_catalog["agent_gateway_v2"]["store_extensions"]["agent_entity_context"]
     assert "dedicated quote credential" in manager_catalog["tool_contracts"]["store_entity_context"]

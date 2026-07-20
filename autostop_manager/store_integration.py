@@ -516,6 +516,20 @@ class StoreIntegration:
         except ValueError as exc:
             return _error_envelope(_validation_error_code(exc))
 
+    def quote_vin_photo_preview(
+        self,
+        *,
+        quote_request_id: str,
+        expected_photo_sha256: str,
+    ) -> dict[str, Any]:
+        try:
+            return self.client.quote_vin_photo_preview(
+                quote_request_id=quote_request_id,
+                expected_photo_sha256=expected_photo_sha256,
+            )
+        except ValueError as exc:
+            return _error_envelope(_validation_error_code(exc))
+
     def management_action(
         self,
         *,

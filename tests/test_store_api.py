@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import threading
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
@@ -14,8 +15,9 @@ from autostop_manager.store_api import MAX_STORE_LIMIT, StoreApiClient
 
 
 class _Response:
-    def __init__(self, payload: dict | bytes):
+    def __init__(self, payload: dict | bytes, *, headers: dict[str, str] | None = None):
         self.body = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+        self.headers = headers or {"Content-Type": "application/json"}
 
     def __enter__(self):
         return self
@@ -535,6 +537,118 @@ def test_exact_quote_full_read_fails_closed_without_quote_token():
     result = _client().entity_context(entity="store_quote_request", entity_id="quote-1", detail="full")
     assert result["summary"]["error_code"] == "store_quote_token_missing"
     assert result["meta"]["request_dispatched"] is False
+
+
+def test_exact_quote_vin_photo_detail_is_scoped_and_rejects_unknown_photo_fields(monkeypatch):
+    captured = {}
+    payload = _envelope(
+        summary={
+            "entity": "store_quote_request",
+            "entity_id": "quote-1",
+            "detail": "full_with_vin_photo",
+        },
+        items=[
+            {
+                "entity": "store_quote_request",
+                "id": "quote-1",
+                "entity_type": "store_quote_request",
+                "entity_id": "quote-1",
+                "updated_at": "2026-07-19T10:00:00+00:00",
+                "request_number": 2,
+                "status": "NEW",
+                "assigned_user_id": None,
+                "assigned_user_name": None,
+                "items_count": 1,
+                "has_internal_comment": False,
+                "internal_comment_sha256": "a" * 64,
+                "created_at": "2026-07-19T09:00:00+00:00",
+                "notes_count": 0,
+                "agent_draft_count": 0,
+                "published_offer_count": 0,
+                "content_trust": "untrusted_customer_input",
+                "customer_name": "Иван Петров",
+                "phone": "+79990000000",
+                "email": "client@example.test",
+                "telegram_username": "client",
+                "vin": None,
+                "customer_comment": "Нужен фильтр",
+                "delivery_method": "PICKUP",
+                "delivery_address": None,
+                "internal_comment": None,
+                "agreement_comment": None,
+                "converted_order_id": None,
+                "approved_at": None,
+                "closed_at": None,
+                "items": [],
+                "notes": [],
+                "items_has_more": False,
+                "nested_limit": 100,
+                "vin_photo": {
+                    "sha256": "b" * 64,
+                    "content_type": "image/jpeg",
+                    "byte_size": 12345,
+                    "width": 1600,
+                    "height": 900,
+                },
+            }
+        ],
+    )
+
+    def fake_urlopen(request, **_kwargs):
+        captured["authorization"] = request.headers["Authorization"]
+        return _Response(payload)
+
+    monkeypatch.setattr(store_api_module, "urlopen", fake_urlopen)
+    result = _client(quote_token="quote-secret").entity_context(
+        entity="store_quote_request", entity_id="quote-1", detail="full_with_vin_photo"
+    )
+
+    assert result["items"][0]["vin_photo"]["sha256"] == "b" * 64
+    assert captured["authorization"] == "Bearer quote-secret"
+
+    payload["items"][0]["vin_photo"]["file_name"] = "private.jpg"
+    invalid = _client(quote_token="quote-secret").entity_context(
+        entity="store_quote_request", entity_id="quote-1", detail="full_with_vin_photo"
+    )
+    assert invalid["summary"]["error_code"] == "store_response_schema_invalid"
+
+
+def test_quote_vin_photo_preview_uses_quote_token_and_returns_only_bounded_jpeg(monkeypatch):
+    captured = {}
+    preview = b"jpeg-preview-bytes"
+
+    def fake_urlopen(request, **_kwargs):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.headers["Authorization"]
+        return _Response(preview, headers={"Content-Type": "image/jpeg"})
+
+    monkeypatch.setattr(store_api_module, "urlopen", fake_urlopen)
+    result = _client(quote_token="quote-secret").quote_vin_photo_preview(
+        quote_request_id="quote-1", expected_photo_sha256="c" * 64
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["attachment"]["sha256"] == "c" * 64
+    assert base64.b64decode(result["data"]["content_base64"]) == preview
+    assert captured["authorization"] == "Bearer quote-secret"
+    parsed = urlparse(captured["url"])
+    assert parsed.path.endswith("/entities/store_quote_request/quote-1/vin-photo-preview")
+    assert parse_qs(parsed.query)["expected_sha256"] == ["c" * 64]
+
+
+def test_quote_vin_photo_preview_fails_closed_for_wrong_media_or_missing_quote_token(monkeypatch):
+    monkeypatch.setattr(
+        store_api_module,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(b"not-a-jpeg", headers={"Content-Type": "image/png"}),
+    )
+    invalid = _client(quote_token="quote-secret").quote_vin_photo_preview(
+        quote_request_id="quote-1", expected_photo_sha256="d" * 64
+    )
+    assert invalid["summary"]["error_code"] == "store_attachment_response_invalid"
+
+    missing = _client().quote_vin_photo_preview(quote_request_id="quote-1", expected_photo_sha256="d" * 64)
+    assert missing["summary"]["error_code"] == "store_quote_token_missing"
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp.types import ToolAnnotations
+
 from .action_contract import prepare_action_contract
 from .agent_gateway import agent_envelope, build_agent_bootstrap, list_agent_workflows
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
@@ -393,6 +395,30 @@ def register_manager_memory_tools(  # noqa: C901
         detail: str = "summary",
     ) -> dict[str, Any]:
         return store_adapter.entity_context(entity=entity, entity_id=entity_id, detail=detail)
+
+    @server.tool(
+        name="download_store_quote_vin_photo",
+        description=(
+            "INTERNAL_ONLY: Read the bounded JPEG preview for one exact Store quote VIN photo. "
+            "The response remains transient, requires the quote-scoped credential, and production Gateway "
+            "must expose it only through agent_document_workflow."
+        ),
+        annotations=ToolAnnotations(
+            title="Store Quote VIN Photo Preview",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def download_store_quote_vin_photo_tool(
+        quote_request_id: str,
+        expected_photo_sha256: str,
+    ) -> dict[str, Any]:
+        return store_adapter.quote_vin_photo_preview(
+            quote_request_id=quote_request_id,
+            expected_photo_sha256=expected_photo_sha256,
+        )
 
     @server.tool(
         name="store_management_action",
