@@ -203,10 +203,13 @@ The transport itself requires `Expected-Revision` for every non-GET operation
 except the five reviewed collection creates. Direct Python use cannot bypass
 that rule. Successful writes always return `compensating` with one of four
 verification classes: exact entity, created collection membership,
-operation-specific state, or delete absence plus audit. HTTP 408/5xx,
-oversized/invalid success bodies, response-schema mismatches, and other
-post-dispatch ambiguity set `outcome_uncertain=true`; validation 4xx responses
-remain blocked without echoing their body.
+operation-specific state, or delete absence plus audit. Every HTTP error after
+a dispatched `apply`, including validation/conflict 4xx responses, plus
+oversized/invalid success bodies and response-schema mismatches sets
+`outcome_uncertain=true` and remains `compensating` until exact reread. A Store
+handler may persist diagnostic or failure state before returning an error, so
+HTTP status alone never proves that no mutation occurred; response bodies are
+hashed for diagnostics but never echoed.
 
 Manager bounds JSON/form input to 2 MiB, query serialization to 16 KiB, each
 file to 10 MiB, aggregate files to 20 MiB, and the complete multipart envelope
