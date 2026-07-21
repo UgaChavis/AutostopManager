@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from .config import PROJECT_ROOT
 INTEGRATION_AUDIT_FORMAT = "autostop_integration_audit_v1"
 GMAIL_PROOF_FORMAT = "autostop_gmail_integration_proof_v1"
 DEFAULT_CRM_ROOT = Path("/opt/autostopcrm")
+DEFAULT_STORE_ROOT = Path("/opt/autostop-app-source")
 DEFAULT_GMAIL_PLUGIN_ROOT = Path("/root/.codex/plugins/cache/openai-curated-remote/gmail")
 DEFAULT_GMAIL_PROOF_PATH = Path("/var/lib/autostop-manager/integration/gmail-proof.json")
 EXPECTED_GATEWAY_TOOLS = frozenset(
@@ -55,6 +57,7 @@ def build_integration_audit(
     *,
     full: bool = False,
     crm_root: Path | str = DEFAULT_CRM_ROOT,
+    store_root: Path | str = DEFAULT_STORE_ROOT,
     manager_root: Path | str = PROJECT_ROOT,
     local_mcp_url: str = "http://127.0.0.1:8001/mcp",
     public_mcp_url: str = "https://crm.autostopcrm.ru/mcp",
@@ -65,6 +68,7 @@ def build_integration_audit(
 ) -> dict[str, Any]:
     started = time.monotonic()
     crm_path = Path(crm_root)
+    store_path = Path(store_root)
     manager_path = Path(manager_root)
     checks: dict[str, dict[str, Any]] = {}
 
@@ -74,6 +78,16 @@ def build_integration_audit(
         proof_path=Path(gmail_proof_path),
         require_live_proof=full,
         max_age=timedelta(days=max(1, int(gmail_proof_max_age_days))),
+    )
+    checks["crm_capability_parity"] = _run_capability_parity_check(
+        repo_path=crm_path,
+        script_name="crm_capability_parity.py",
+        command_runner=command_runner,
+    )
+    checks["store_capability_parity"] = _run_capability_parity_check(
+        repo_path=store_path,
+        script_name="store_capability_parity.py",
+        command_runner=command_runner,
     )
 
     token = _read_env_value(crm_path / ".env", "MINIMAL_KANBAN_MCP_BEARER_TOKEN")
@@ -114,6 +128,73 @@ def build_integration_audit(
     }
 
 
+def _run_capability_parity_check(
+    *,
+    repo_path: Path,
+    script_name: str,
+    command_runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> dict[str, Any]:
+    script = repo_path / "scripts" / script_name
+    if not script.is_file():
+        return _failed_check("capability_parity_checker_missing")
+    repo_python = repo_path / ".venv" / "bin" / "python"
+    python = repo_python if repo_python.is_file() else Path(sys.executable)
+    command = [
+        str(python),
+        str(script),
+        "--format",
+        "json",
+        "--require-complete",
+    ]
+    started = time.monotonic()
+    try:
+        completed = command_runner(
+            command,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        result = _failed_check("capability_parity_checker_failed_to_run")
+    else:
+        try:
+            payload = json.loads(completed.stdout)
+        except (TypeError, json.JSONDecodeError):
+            result = {
+                **_failed_check("capability_parity_checker_invalid_output"),
+                "exit_code": completed.returncode,
+            }
+        else:
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            safe_summary = {
+                str(name): value
+                for name, value in summary.items()
+                if isinstance(value, (int, float, bool)) and not isinstance(value, str)
+            }
+            complete = (
+                safe_summary.get("parity_complete") is True
+                and safe_summary.get("gaps") == 0
+                and safe_summary.get("inventory_valid") is True
+            )
+            ok = completed.returncode == 0 and payload.get("ok") is True and complete
+            result = {
+                "ok": ok,
+                "status": "healthy" if ok else "failed",
+                "exit_code": completed.returncode,
+                "format": str(payload.get("format") or "")[:80],
+                "summary": safe_summary,
+                "data_included": False,
+            }
+            if not ok:
+                error = "capability_parity_incomplete" if payload.get("ok") is True else "capability_parity_invalid"
+                result["error"] = error
+                result["warnings"] = [error]
+    result["duration_ms"] = round((time.monotonic() - started) * 1000)
+    return result
+
+
 def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
     catalog_path = manager_root / "docs" / "agent" / "crm_mcp_catalog.json"
     try:
@@ -123,12 +204,21 @@ def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
     tools = payload.get("production_tools_verified")
     gateway = payload.get("agent_gateway_v2")
     documented_web = gateway.get("web_research_capabilities") if isinstance(gateway, dict) else None
+    tool_counts = payload.get("tool_counts") if isinstance(payload.get("tool_counts"), dict) else {}
+    families = payload.get("tool_families") if isinstance(payload.get("tool_families"), dict) else {}
+    raw_tools = families.get("optional_manager_memory_and_routing")
     tool_set = {str(item) for item in tools} if isinstance(tools, list) else set()
     web_set = {str(item) for item in documented_web} if isinstance(documented_web, list) else set()
+    raw_tool_set = {str(item) for item in raw_tools} if isinstance(raw_tools, list) else set()
     validations = {
         "visible_tool_count_exactly_24": len(tool_set) == 24,
         "visible_tool_names_exact": tool_set == EXPECTED_GATEWAY_TOOLS,
         "web_capabilities_documented": web_set == EXPECTED_WEB_CAPABILITIES,
+        "manager_raw_tool_count_exactly_72": tool_counts.get("autostop_manager_tools_in_raw_registry") == 72,
+        "store_owner_raw_capabilities_documented": {
+            "store_owner_capabilities",
+            "store_owner_api",
+        }.issubset(raw_tool_set),
     }
     return {
         "ok": all(validations.values()),

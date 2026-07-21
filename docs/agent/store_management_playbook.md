@@ -33,7 +33,9 @@ Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 - `agent_entity_context` for one exact store object; an exact quote may use
   `detail="full_with_vin_photo"` to read only safe VIN-photo metadata;
 - `get_runtime_status` for adapter and store health;
-- `agent_inventory_workflow` for the seven allowlisted writes.
+- `agent_inventory_workflow` for seven optimized named writes;
+- guarded raw `store_owner_capabilities` and `store_owner_api` for every other
+  operation exposed to an authorized employee by the live Store OpenAPI.
 
 Supported entities are `store_part`, `store_order`, `store_quote_request`,
 `store_supplier`, `store_batch`, `store_warehouse_operation`,
@@ -57,7 +59,8 @@ call a hidden Store tool directly:
 | one exact object | `agent_entity_context` | exact `entity`, `entity_id`; `detail="full"` or `"full_with_vin_photo"` only for an exact quote request |
 | one exact VIN-photo preview | `agent_document_workflow` | `operation="download_store_quote_vin_photo"`, exact quote id, current photo SHA-256, idempotency key, and `allow_large_output=true` |
 | adapter/API health | `get_runtime_status` | read-only |
-| one of the seven writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
+| one of the seven optimized writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
+| any other authorized employee operation | guarded raw discovery -> `store_owner_capabilities` / `store_owner_api` | exact `operation_id`, live `schema_hash`, target/revision, ActionContractV2, unique idempotency/correlation ids, `dry_run` proof, `apply`, exact reread |
 
 `agent_search` entity selection and accepted filters:
 
@@ -76,8 +79,9 @@ call a hidden Store tool directly:
 For marketplace export problems, use bootstrap/state aggregates for 24 hours,
 7 days, all time, and the latest five safe errors. Use
 `store_marketplace_listing` with `status="FAILED"` only when exact failed
-listings are needed. Never request raw job messages; retry and publication are
-not supported Store management commands.
+listings are needed. Never request raw job messages. Retry and publication are
+not supported by the optimized named workflow; an explicit owner command may
+use their exact live employee operation through `store_owner_api`.
 
 For stock location, use active batches and aggregate `qty_remaining`, reserved,
 and available quantities by part and storage location. Return every location;
@@ -128,9 +132,13 @@ date, fixed `error_code`, part/account refs, and attempt count; raw messages,
 payloads, tokens, and contacts are forbidden. `agent_board_digest(scope="store")`
 alone uses `cursor` and `ack_token`.
 
-## Minimal write allowlist
+## Optimized named writes
 
-Only these domain/action pairs are allowed:
+These common domain/action pairs keep their compact named workflow:
+
+They include the existing append-only quote note and private structured quote-offer draft
+contracts; the broader owner route does not weaken those
+named DTO guarantees.
 
 - `store_quote_request/assign_quote_request` with `assignee_id`;
 - `store_quote_request/set_quote_request_status` with `NEW` or `IN_PROGRESS`;
@@ -141,6 +149,72 @@ Only these domain/action pairs are allowed:
 - `store_batch/set_batch_storage_location` with `storage_location`;
 - `store_order/mark_order_ready` with explicit `status=READY`, only from
   `IN_PROGRESS` and only on an exact owner command.
+
+## Full owner parity
+
+The named list above is an optimized path, not a permission ceiling. When the
+owner asks for another action available in the employee/admin UI, resolve
+`store_owner_capabilities` through guarded raw discovery, select the exact live
+`operation_id`, and call `store_owner_api`. That transport authenticates only
+as the reserved non-interactive `autostop-manager-owner` principal with the
+single `store:owner` scope and calls the same `/api/v1` handler as Flutter; it
+never writes the Store database directly or creates a human admin session.
+
+Reads use `mode="read"`, exact path/query parameters, and bounded output. A
+single discovery call can return all current employee operations with their
+method, path, risk, parameters, and schema hash. Binary output remains omitted
+unless the owner explicitly requested the exact document/photo, the operation
+is a GET whose live OpenAPI declares a non-JSON success response, and
+`allow_binary_response=true` is set. JSON fields that embed base64/file bytes
+are also blocked without that opt-in.
+
+For a write:
+
+1. Reread the exact entity or reviewed collection and capture its current
+   revision. A normal collection create does not invent a fake entity revision;
+   destructive, financial, warehouse, bulk, publication, state-transition,
+   and existing-target operations require current concurrency evidence.
+2. Let Manager validate the concrete path, typed query, JSON or multipart body,
+   and declared response contract against the protected live OpenAPI. Build
+   ActionContractV2 from the exact operation, live schema hash, target,
+   concrete path, query/request SHA-256, field names, task-specific owner
+   intent, unique idempotency key, and correlation ID. Keep bodies/files
+   transient and refs-only in the ledger.
+3. Call the identical inputs in `dry_run`; its deterministic request proof is
+   bound to the operation schema, method, concrete path, sorted query, exact
+   request bytes, and revision. Apply refreshes live OpenAPI before dispatch.
+4. Call `apply` with that proof. The Store independently requires owner safety
+   headers, compares the revision with current entity or aggregate state, and
+   accepts only a matching unexpired server-issued dry-run receipt. It audits
+   the service principal, correlation, idempotency, proof, and only a hash of
+   owner intent. A Store deployment that merely checks revision/proof format is
+   not production-acceptable; Manager request hashing is defense in depth, not
+   a replacement for this backend check.
+5. Reread according to the operation's matrix class: exact entity, exact
+   collection membership/count, or absence plus audit for delete. Until this
+   succeeds, the applied result stays `compensating`, never `completed`.
+
+An ordinary reversible create/update follows this single contract without a
+second human confirmation. A high-risk operation receives stricter revision,
+preflight, effect disclosure, and reconciliation, but is not functionally
+hidden from an owner-approved principal.
+
+The transport itself requires `Expected-Revision` for every non-GET operation
+except the five reviewed collection creates. Direct Python use cannot bypass
+that rule. Successful writes always return `compensating` with one of four
+verification classes: exact entity, created collection membership,
+operation-specific state, or delete absence plus audit. HTTP 408/5xx,
+oversized/invalid success bodies, response-schema mismatches, and other
+post-dispatch ambiguity set `outcome_uncertain=true`; validation 4xx responses
+remain blocked without echoing their body.
+
+Manager bounds JSON/form input to 2 MiB, query serialization to 16 KiB, each
+file to 10 MiB, aggregate files to 20 MiB, and the complete multipart envelope
+to 22 MiB. JSON keys, form JSON, query order, and multipart boundaries are
+deterministic for replay. Normal JSON responses are limited to 2 MiB and an
+explicitly allowed binary GET to 10 MiB. Unicode owner intent is sent as a
+bounded ASCII-safe `utf8-b64:` header value; neither raw intent nor response
+error bodies are echoed by the transport.
 
 ### Write command selector
 
@@ -227,17 +301,23 @@ docs, Git, or workflow ledger. A stale hash, absent photo, non-JPEG response,
 or oversized preview fails closed. This is read-only: it does not perform OCR,
 write a VIN, or change the quote.
 
-Never expose generic hidden Manager store tools through raw discovery. Never
-allow deletion, price/product/customer/quantity/finance changes,
+Never expose generic legacy Manager Store adapters through raw discovery. The
+guarded owner capability/API pair is the only full-parity raw route. Deletion,
+price/product/customer/quantity/finance changes,
 COMPLETE/ANNULLED/RETURNED, ROSSKO ordering, marketplace publication, mass
-changes, messages, or arbitrary settings.
+changes, messages, and settings are high-risk when classified by the matrix:
+they require an exact explicit owner command and the full proof/readback path;
+they are not silently denied merely because the named workflow lacks them.
 
 ## Runtime configuration and degraded behavior
 
-The composition root injects only `AUTOSTOP_STORE_API_URL`,
-`AUTOSTOP_STORE_READ_TOKEN`, `AUTOSTOP_STORE_QUOTE_TOKEN`, and
-`AUTOSTOP_STORE_MANAGE_TOKEN`. Tokens are
-runtime secrets; do not print their values or use a human ADMIN password. The
+The composition root injects `AUTOSTOP_STORE_API_URL`,
+`AUTOSTOP_STORE_READ_TOKEN`, `AUTOSTOP_STORE_QUOTE_TOKEN`,
+`AUTOSTOP_STORE_MANAGE_TOKEN`, and the independent
+`AUTOSTOP_STORE_OWNER_TOKEN`. Tokens are runtime secrets; do not print their
+values or use a human ADMIN password. The owner token identifies the reserved
+`store:owner` service principal and is accepted only by guarded human-parity
+operations discovered from the live OpenAPI schema. The
 URL is fail-closed: production accepts only
 `http://autostop-app:8000/internal/agent/v1` and local tests may use an explicit
 loopback port; userinfo, query, fragment, other paths, and external hosts are
@@ -259,15 +339,19 @@ service payments stay in CRM workflows.
 
 ## Verification
 
-- Manager raw registry contains the Store INTERNAL_ONLY tools, while public
-  Gateway v2 remains exactly 24 tools.
+- Manager raw registry contains 72 tools, including guarded
+  `store_owner_capabilities` and `store_owner_api`; public Gateway v2 remains
+  exactly 24 tools.
 - Read API calls never mutate store state; read-only credentials cannot write.
 - Bootstrap is one stateless Store request with no ACK/change-feed query;
   digest pagination, ACK/replay, abort/resume, CAS conflict, and failure
   preservation tests pass unchanged.
-- Seven writes pass DTO-shaped dry-run/apply/idempotency/concurrency/readback
-  tests, including two-change comment/READY responses, stale receipt replay,
-  and uncertain-outcome reconciliation; production smoke is read-only plus safe
-  dry-run.
+- Seven optimized named writes pass DTO-shaped
+  dry-run/apply/idempotency/concurrency/readback tests. The owner capability
+  matrix additionally proves every non-session employee route is reachable by
+  only `store:owner`; generic applies require schema-bound request/response
+  validation, backend revision/receipt enforcement, and remain compensating
+  until operation-specific reread. Production smoke is read-only plus safe
+  server-side dry-run.
 - No raw store payload or secret appears in Manager SQLite, logs, docs, or Git.
 - CRM, store, public site, Gateway, and VPN health remain green after deploy.

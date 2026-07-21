@@ -3,6 +3,63 @@
   "format": "agent_workflow_registry_v2",
   "routes": [
     {
+      "command_id": "ecosystem_capability_parity",
+      "workflow_id": "ecosystem_capability_parity",
+      "priority": 200,
+      "intent": "ecosystem_capability_parity",
+      "domain": "ecosystem_capability_parity",
+      "open_first": "AGENTS.md",
+      "aliases": [
+        "полный функциональный паритет CRM и магазина",
+        "полностью отрефакторировать экосистему AutostopManager",
+        "production-ready AutostopManager"
+      ],
+      "keywords": [
+        "functional parity",
+        "функциональный паритет",
+        "production-ready",
+        "полный UI и backend",
+        "все бизнес-операции",
+        "change feed",
+        "CRM и AutoStop App",
+        "матрица покрытия"
+      ],
+      "memory_queries": [
+        "Gateway v2 capability parity",
+        "CRM Store event feed",
+        "production deploy rollback"
+      ],
+      "required_reads": [
+        "all AGENTS, README, architecture, MCP, API, test, and deployment sources in Manager, CRM, and Store",
+        "current Git state and live read-only runtime contracts",
+        "current UI to backend to Gateway coverage evidence"
+      ],
+      "write_domains": [
+        "manager_code_and_routes",
+        "crm_authorized_capabilities",
+        "store_authorized_capabilities",
+        "event_and_audit_contracts"
+      ],
+      "external_connectors": [
+        "AutoStop CRM Gateway v2",
+        "AutoStop App internal agent API",
+        "GitHub Actions"
+      ],
+      "completion_checks": [
+        "every discovered human CRM and Store action has a tested Manager route or an explicit owner-unavailable exemption",
+        "significant CRM and Store events support ordered replay, cursor, ACK, idempotency, and tombstones",
+        "unit, integration, contract, end-to-end, coverage, live dry-run, CI, deploy, and rollback checks pass",
+        "documentation and catalogs match deployed code and no raw business data is persisted in Manager"
+      ],
+      "next_actions": [
+        "create one durable multi-repository workflow ledger",
+        "record baseline and preserve every dirty worktree",
+        "build machine-verifiable CRM, Store, and event coverage matrices",
+        "repair confirmed foundations before expanding owner-authorized operations",
+        "iterate through implementation, tests, publication, rollback-safe deploy, and live readback"
+      ]
+    },
+    {
       "command_id": "board_cleanup_autopilot",
       "workflow_id": "board_cleanup_autopilot",
       "priority": 80,
@@ -792,7 +849,17 @@
         "измени место хранения партии",
         "переложи партию в ячейку",
         "переведи заказ магазина в READY",
-        "отметь собранный заказ готовым"
+        "отметь собранный заказ готовым",
+        "создай товар в магазине",
+        "измени цену товара",
+        "добавь кросс или применимость",
+        "прими товар на склад",
+        "перемести или спиши товар",
+        "оформи возврат магазина",
+        "создай или измени поставщика",
+        "создай или измени клиента магазина",
+        "опубликуй предложение магазина",
+        "измени настройки магазина"
       ],
       "keywords": [
         "назначь заявку на подбор",
@@ -804,39 +871,52 @@
         "черновики для заявки на проценку",
         "место хранения партии",
         "заказ магазина в READY",
-        "собранный заказ готовым"
+        "собранный заказ готовым",
+        "создай товар",
+        "измени цену товара",
+        "кросс применимость",
+        "прими перемести спиши товар",
+        "возврат магазина",
+        "поставщик магазина",
+        "клиент магазина",
+        "публикация магазина",
+        "настройки магазина"
       ],
       "memory_queries": [
-        "store management allowlist",
+        "store owner parity",
         "ActionContractV2 store",
-        "store optimistic concurrency"
+        "store optimistic concurrency",
+        "store_owner_capabilities store_owner_api"
       ],
       "required_reads": [
-        "exact store entity and current updated_at",
-        "prepare_action_contract for the exact allowlisted domain/action",
-        "agent_inventory_workflow dry_run result including external effects"
+        "exact store entity or reviewed collection and current revision",
+        "live employee operation and schema hash from store_owner_capabilities when no named workflow exists",
+        "prepare_action_contract for the exact operation",
+        "named workflow or store_owner_api dry_run result including external effects"
       ],
       "write_domains": [
         "store_quote_request",
         "store_batch",
-        "store_order"
+        "store_order",
+        "store_owner_api"
       ],
       "external_connectors": [
-        "AutoStop App internal agent API"
+        "AutoStop App internal agent API",
+        "AutoStop App employee API through reserved store:owner principal"
       ],
       "completion_checks": [
-        "exact target and expected_updated_at match",
+        "exact target/current revision and live operation schema match",
         "unique idempotency key and correlation id are recorded",
-        "dry_run precedes apply and READY notification effect is disclosed",
-        "exact reread matches only the planned fields",
+        "schema-bound dry_run precedes apply and all external effects are disclosed",
+        "exact operation-specific reread or absence plus audit matches the plan",
         "Manager ledger contains compact refs only"
       ],
       "next_actions": [
-        "reread the exact store target",
-        "build ActionContractV2 with exact target, owner intent, planned changes, expected_updated_at, and unique idempotency key",
-        "run agent_inventory_workflow in dry_run and inspect effects",
-        "apply only the seven-operation allowlist after a clean dry-run",
-        "reread the exact target and reconcile the compact audit correlation"
+        "reread the exact store target or reviewed collection",
+        "prefer the optimized named workflow; otherwise resolve the exact live employee operation through store_owner_capabilities",
+        "build ActionContractV2 with exact target, owner intent, planned fields, current revision when required, schema hash, and unique idempotency/correlation ids",
+        "run dry_run and inspect effects, then apply the identical schema-bound plan",
+        "reread according to the operation matrix and reconcile the compact audit correlation; keep unverified applies compensating"
       ],
       "operation_selection": {
         "assign_quote_request": {
@@ -902,6 +982,14 @@
           "aliases": [
             "переведи заказ магазина в READY",
             "отметь собранный заказ готовым"
+          ]
+        },
+        "owner_api_fallback": {
+          "domain": "store_owner_api",
+          "use_when": "any other operation exposed by the current employee/admin OpenAPI after owner-approved intent",
+          "planned_changes": "operation_id, method, path_template, risk, schema_hash, body_fields and file_fields only; payload remains transient",
+          "aliases": [
+            "full employee Store operation"
           ]
         }
       }

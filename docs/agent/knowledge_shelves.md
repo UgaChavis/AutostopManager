@@ -20,6 +20,7 @@ Human entrypoint for routing, file placement, deletion, and source-pack policy.
 
 | Shelf | Domain | Open first |
 | --- | --- | --- |
+| Ecosystem capability parity | `ecosystem_capability_parity` | `AGENTS.md` |
 | Manager startup | `startup_and_identity` | `AGENTS.md` |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |

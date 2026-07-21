@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -8,7 +9,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,7 @@ EXTERNAL_REF_KEYS = {
     "recipient_count",
     "subject_hash",
     "error_code",
+    "expected_revision_sha256",
 }
 EXTERNAL_BODY_KEYS = {
     "body",
@@ -115,48 +117,82 @@ STORE_WORKFLOW_OPERATIONS = frozenset(
         "replace_quote_offer_drafts",
     }
 )
+STORE_OWNER_LEDGER_OPERATION = "store_owner_api"
+STORE_OWNER_LEDGER_WORKFLOW_ID = "raw:store_owner_api"
+STORE_OWNER_LEDGER_INTENT = "raw_store_owner_api"
+STORE_OWNER_LEDGER_RETENTION = timedelta(days=180)
+STORE_OWNER_LEDGER_CLEANUP_BATCH = 500
+STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS = frozenset(
+    {
+        "raw:api:/api/change_feed/ack",
+        "raw:api:/api/change_feed/bootstrap",
+    }
+)
+STORE_OWNER_READBACK_CLASSES = frozenset(
+    {
+        "absence_plus_audit",
+        "collection_membership",
+        "exact_entity",
+        "operation_specific_state",
+    }
+)
 STORE_LEDGER_SAFE_CHECKPOINT_KEYS = {
     "baseline",
     "compact_refs",
+    "contract_id",
+    "contract_fingerprint",
     "counts",
     "cursor",
     "entity",
     "error_code",
+    "expected_revision_sha256",
     "last_success_at",
     "mode",
     "next_action",
     "operation",
+    "operation_id",
     "page_count",
     "pages_complete",
     "phase",
+    "request_fingerprint",
+    "request_sha256",
+    "schema_hash",
     "snapshot_at",
     "state_version",
     "status",
     "target_id",
+    "target_ref_sha256",
     "target_version",
     "verification",
+    "verification_class",
 }
 STORE_LEDGER_SAFE_START_KEYS = {
     "compact_refs",
     "contract_id",
+    "contract_fingerprint",
     "correlation_id",
     "counts",
     "domain",
     "dry_run_proof_expires_at",
     "dry_run_proof_ttl_seconds",
     "error_code",
+    "expected_revision_sha256",
     "idempotency_key",
     "mode",
     "operation",
     "request_fingerprint",
+    "request_sha256",
     "request_id",
     "source",
     "state_version",
     "status",
     "target_id",
+    "target_entity",
+    "target_ref_sha256",
     "target_version",
     "updated_at",
     "verification",
+    "verification_class",
     "workflow_id",
 }
 STORE_LEDGER_SAFE_EVENT_TYPES = frozenset(
@@ -407,6 +443,14 @@ def _store_workflow_operation(
     candidates = [str(scope_payload.get("operation") or "").strip().casefold()]
     normalized_workflow_id = str(workflow_id or "").strip().casefold()
     normalized_intent = str(intent or "").strip().casefold()
+    if (
+        normalized_workflow_id == STORE_OWNER_LEDGER_WORKFLOW_ID
+        and normalized_intent == STORE_OWNER_LEDGER_INTENT
+        and candidates[0] == STORE_OWNER_LEDGER_OPERATION
+        and str(scope_payload.get("domain") or "").strip().casefold() == "store"
+        and str(scope_payload.get("source") or "").strip().casefold() == "store"
+    ):
+        return STORE_OWNER_LEDGER_OPERATION
     if normalized_workflow_id.startswith("inventory:"):
         candidates.append(normalized_workflow_id.partition(":")[2])
     if normalized_intent.startswith("inventory_"):
@@ -470,9 +514,13 @@ def _store_start_channel_forbidden(
     selected_ids: list[str],
 ) -> list[str]:
     operation = _store_workflow_operation(workflow_id=workflow_id, intent=intent, scope=scope)
-    allowed_workflow_ids = {"store_management", "store_management_workflow"}
-    allowed_intents = {"store_management", "store_management_workflow"}
-    if operation:
+    if operation == STORE_OWNER_LEDGER_OPERATION:
+        allowed_workflow_ids = {STORE_OWNER_LEDGER_WORKFLOW_ID}
+        allowed_intents = {STORE_OWNER_LEDGER_INTENT}
+    else:
+        allowed_workflow_ids = {"store_management", "store_management_workflow"}
+        allowed_intents = {"store_management", "store_management_workflow"}
+    if operation and operation != STORE_OWNER_LEDGER_OPERATION:
         allowed_workflow_ids.update({f"inventory:{operation}", f"store:{operation}", f"store_{operation}"})
         allowed_intents.update({f"inventory_{operation}", f"store_{operation}"})
 
@@ -483,6 +531,29 @@ def _store_start_channel_forbidden(
         forbidden.append("workflow_id")
     if str(intent or "").strip().casefold() not in allowed_intents:
         forbidden.append("intent")
+    if operation == STORE_OWNER_LEDGER_OPERATION:
+        owner_required = {
+            "correlation_id": str(scope.get("correlation_id") or "").strip(),
+            "expected_revision_sha256": str(scope.get("expected_revision_sha256") or "").strip(),
+            "mode": str(scope.get("mode") or "").strip().casefold(),
+            "request_fingerprint": str(scope.get("request_fingerprint") or "").strip(),
+            "target_ref_sha256": str(scope.get("target_ref_sha256") or "").strip(),
+            "verification_class": str(scope.get("verification_class") or "").strip(),
+        }
+        if owner_required["correlation_id"] != str(correlation_id or "").strip():
+            forbidden.append("scope.correlation_id")
+        if owner_required["mode"] not in {"dry_run", "apply"}:
+            forbidden.append("scope.mode")
+        for key in ("request_fingerprint", "target_ref_sha256"):
+            if re.fullmatch(r"[0-9a-f]{64}", owner_required[key]) is None:
+                forbidden.append(f"scope.{key}")
+        if owner_required["verification_class"] not in STORE_OWNER_READBACK_CLASSES:
+            forbidden.append("scope.verification_class")
+        if owner_required["verification_class"] == "collection_membership":
+            if owner_required["expected_revision_sha256"]:
+                forbidden.append("scope.expected_revision_sha256")
+        elif re.fullmatch(r"[0-9a-f]{64}", owner_required["expected_revision_sha256"]) is None:
+            forbidden.append("scope.expected_revision_sha256")
     for container_name, payload in (("scope", scope), ("metadata", metadata)):
         forbidden.extend(
             f"{container_name}.{key}" for key in sorted(set(payload).difference(STORE_LEDGER_SAFE_START_KEYS))
@@ -515,7 +586,7 @@ def _store_message_is_allowed(message: str, *, operation: str) -> bool:
         return True
     if not operation:
         return False
-    return normalized in {
+    allowed = {
         f"execute {operation}",
         f"verify {operation}",
         f"completed {operation}",
@@ -523,6 +594,18 @@ def _store_message_is_allowed(message: str, *, operation: str) -> bool:
         f"verification failed after executor applied {operation}",
         f"ledger close reconciliation required for {operation}",
     }
+    if operation == STORE_OWNER_LEDGER_OPERATION:
+        allowed.update(
+            {
+                f"raw execute {operation}",
+                f"raw verify {operation}",
+                f"raw completed {operation}",
+                f"raw failed {operation}",
+                f"raw verification failed after executor applied {operation}",
+                f"raw ledger close reconciliation required for {operation}",
+            }
+        )
+    return normalized in allowed
 
 
 def _store_summary_is_allowed(summary: str, *, operation: str) -> bool:
@@ -530,9 +613,353 @@ def _store_summary_is_allowed(summary: str, *, operation: str) -> bool:
     if not normalized:
         return True
     allowed = {"store_management", "store_management_workflow"}
-    if operation:
+    if operation == STORE_OWNER_LEDGER_OPERATION:
+        allowed.add(STORE_OWNER_LEDGER_WORKFLOW_ID)
+    elif operation:
         allowed.update({f"inventory:{operation}", f"store:{operation}"})
     return normalized in allowed
+
+
+def _store_owner_verification_is_refs_only(value: Any) -> bool:
+    if not isinstance(value, dict) or len(value) > 24:
+        return False
+    allowed_keys = {
+        "audit_correlation_present",
+        "check",
+        "collection_membership_verified",
+        "collection_ref_sha256",
+        "compact_ref",
+        "contract_id",
+        "evidence",
+        "exact_readback_verified",
+        "executor_ok",
+        "expected_revision_sha256",
+        "operation_id",
+        "operation_state_ref_sha256",
+        "passed",
+        "readback_class",
+        "readback_ref_sha256",
+        "request_fingerprint",
+        "request_sha256",
+        "required",
+        "schema_hash",
+        "schema_hash_verified",
+        "target_absent",
+        "target_ref_sha256",
+        "verification_class",
+    }
+    if not set(value).issubset(allowed_keys):
+        return False
+    if _find_forbidden_store_payload_keys(value) or _find_unsafe_store_machine_values(value):
+        return False
+    evidence = value.get("evidence")
+    if evidence is not None:
+        if not isinstance(evidence, dict) or not set(evidence).issubset(
+            {
+                "domain_handler_executed",
+                "outcome_uncertain",
+                "readback_required",
+                "transport_status",
+                "write_applied",
+            }
+        ):
+            return False
+        if any(isinstance(item, (dict, list)) for item in evidence.values()):
+            return False
+    compact_ref = value.get("compact_ref")
+    if compact_ref is not None:
+        if not isinstance(compact_ref, dict) or not set(compact_ref).issubset(STORE_CHECKPOINT_REF_KEYS):
+            return False
+        if str(compact_ref.get("entity") or "").strip().casefold() not in STORE_LEDGER_REF_ENTITIES:
+            return False
+        if not str(compact_ref.get("id") or "").strip():
+            return False
+        if not str(compact_ref.get("version") or "").strip():
+            return False
+        if _find_unsafe_store_machine_values(compact_ref):
+            return False
+    return True
+
+
+def _store_owner_target_ref_sha256(target_id: str) -> str:
+    return hashlib.sha256(f"target:{target_id}".encode()).hexdigest()
+
+
+def _cleanup_store_owner_runs(
+    conn: sqlite3.Connection,
+    *,
+    now: datetime,
+) -> int:
+    cutoff = (now - STORE_OWNER_LEDGER_RETENTION).isoformat()
+    workflow_placeholders = ",".join("?" for _ in STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS)
+    rows = conn.execute(
+        """
+        SELECT id, status, dry_run, checkpoint_json
+        FROM manager_runs
+        WHERE (
+          (workflow_id = ? AND intent = ?)
+          OR workflow_id IN ("""
+        + workflow_placeholders
+        + """
+        )
+        ) AND updated_at < ?
+          AND status IN ('completed', 'planned', 'failed', 'cancelled')
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+        """,
+        (
+            STORE_OWNER_LEDGER_WORKFLOW_ID,
+            STORE_OWNER_LEDGER_INTENT,
+            *sorted(STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS),
+            cutoff,
+            STORE_OWNER_LEDGER_CLEANUP_BATCH,
+        ),
+    ).fetchall()
+    ids = []
+    for row in rows:
+        checkpoint = _decode_json(row["checkpoint_json"], {})
+        post_dispatch = checkpoint.get("phase") == "transport_result"
+        if row["status"] in {"completed", "planned"} or bool(row["dry_run"]) or not post_dispatch:
+            ids.append(int(row["id"]))
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(f"DELETE FROM manager_runs WHERE id IN ({placeholders})", ids)
+    return len(ids)
+
+
+def _store_owner_transition_error(
+    run_id: int,
+    *,
+    current_status: str,
+    target_status: str,
+    expected_state_version: int | None,
+    scope: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> dict[str, Any] | None:
+    if expected_state_version is None:
+        return {
+            "ok": False,
+            "error": "workflow_state_version_required",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    if target_status == "external_wait":
+        return {
+            "ok": False,
+            "error": "store_owner_external_wait_not_allowed",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    if (
+        str(scope.get("mode") or "").strip().casefold() == "apply"
+        and target_status in {"failed", "cancelled"}
+        and (current_status == "compensating" or checkpoint.get("phase") == "transport_result")
+    ):
+        return {
+            "ok": False,
+            "error": "store_owner_reconciliation_required_before_terminal_transition",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    return None
+
+
+def _store_owner_readback_ref_sha256(
+    *,
+    target_ref_sha256: str,
+    compact_ref: dict[str, Any],
+) -> str:
+    payload = {
+        "entity": str(compact_ref.get("entity") or "").strip().casefold(),
+        "id": str(compact_ref.get("id") or "").strip(),
+        "target_ref_sha256": target_ref_sha256,
+        "version": str(compact_ref.get("version") or "").strip(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(b"store-owner-readback-ref-v1\0" + encoded).hexdigest()
+
+
+def _store_owner_completion_error(
+    run_id: int,
+    *,
+    current_status: str,
+    dry_run: bool,
+    scope: dict[str, Any],
+    checkpoint: dict[str, Any],
+    verification: dict[str, Any],
+) -> dict[str, Any] | None:
+    mode = str(scope.get("mode") or "").strip().casefold()
+    if not _store_owner_verification_is_refs_only(verification):
+        return {
+            "ok": False,
+            "error": "store_owner_exact_readback_required_before_completion",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    required_checkpoint = {
+        "contract_id": str(checkpoint.get("contract_id") or "").strip(),
+        "expected_revision_sha256": str(checkpoint.get("expected_revision_sha256") or "").strip(),
+        "operation_id": str(checkpoint.get("operation_id") or "").strip(),
+        "request_fingerprint": str(checkpoint.get("request_fingerprint") or "").strip(),
+        "request_sha256": str(checkpoint.get("request_sha256") or "").strip(),
+        "schema_hash": str(checkpoint.get("schema_hash") or "").strip(),
+        "target_ref_sha256": str(checkpoint.get("target_ref_sha256") or "").strip(),
+        "verification_class": str(checkpoint.get("verification_class") or "").strip(),
+    }
+    scope_request_fingerprint = str(scope.get("request_fingerprint") or "").strip()
+    scope_target_hash = str(scope.get("target_ref_sha256") or "").strip()
+    checkpoint_valid = (
+        checkpoint.get("phase") == "transport_result"
+        and re.fullmatch(r"ac_[0-9a-f]{20}", required_checkpoint["contract_id"]) is not None
+        and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:-]{0,199}", required_checkpoint["operation_id"]))
+        and all(
+            re.fullmatch(r"[0-9a-f]{64}", required_checkpoint[key]) is not None
+            for key in ("request_fingerprint", "request_sha256", "schema_hash", "target_ref_sha256")
+        )
+        and required_checkpoint["request_fingerprint"] == scope_request_fingerprint
+        and required_checkpoint["target_ref_sha256"] == scope_target_hash
+        and required_checkpoint["expected_revision_sha256"] == str(scope.get("expected_revision_sha256") or "").strip()
+        and required_checkpoint["verification_class"] == str(scope.get("verification_class") or "").strip()
+        and (
+            (
+                required_checkpoint["verification_class"] == "collection_membership"
+                and not required_checkpoint["expected_revision_sha256"]
+            )
+            or re.fullmatch(r"[0-9a-f]{64}", required_checkpoint["expected_revision_sha256"]) is not None
+        )
+    )
+    binding_matches = all(
+        str(verification.get(key) or "").strip() == required_checkpoint[key]
+        for key in (
+            "contract_id",
+            "expected_revision_sha256",
+            "operation_id",
+            "request_fingerprint",
+            "request_sha256",
+            "schema_hash",
+            "target_ref_sha256",
+            "verification_class",
+        )
+    )
+    if not checkpoint_valid or not binding_matches:
+        return {
+            "ok": False,
+            "error": "store_owner_exact_readback_required_before_completion",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    if mode in {"dry_run", "revision"} or dry_run:
+        if (
+            verification.get("executor_ok") is True
+            and verification.get("passed") is True
+            and str(verification.get("check") or "")
+            in {"store_owner_server_dry_run_receipt", "store_owner_read_response_contract"}
+        ):
+            return None
+        return {
+            "ok": False,
+            "error": "store_owner_exact_readback_required_before_completion",
+            "run_id": run_id,
+            "status": current_status,
+        }
+    compact_ref = verification.get("compact_ref")
+    readback_ref_matches = isinstance(compact_ref, dict) and str(
+        verification.get("readback_ref_sha256") or ""
+    ).strip() == _store_owner_readback_ref_sha256(
+        target_ref_sha256=required_checkpoint["target_ref_sha256"],
+        compact_ref=compact_ref,
+    )
+    close_valid = (
+        mode == "apply"
+        and current_status == "compensating"
+        and verification.get("executor_ok") is True
+        and verification.get("exact_readback_verified") is True
+        and required_checkpoint["verification_class"] in STORE_OWNER_READBACK_CLASSES
+        and str(verification.get("readback_class") or "").strip() == required_checkpoint["verification_class"]
+        and isinstance(compact_ref, dict)
+        and bool(str(compact_ref.get("id") or "").strip())
+        and bool(str(compact_ref.get("version") or "").strip())
+        and readback_ref_matches
+    )
+    readback_class = required_checkpoint["verification_class"]
+    compact_id = str(compact_ref.get("id") or "").strip() if isinstance(compact_ref, dict) else ""
+    if readback_class in {"exact_entity", "absence_plus_audit"}:
+        close_valid = close_valid and (
+            _store_owner_target_ref_sha256(compact_id) == required_checkpoint["target_ref_sha256"]
+        )
+    if readback_class == "collection_membership":
+        close_valid = (
+            close_valid
+            and verification.get("collection_membership_verified") is True
+            and str(verification.get("collection_ref_sha256") or "").strip() == required_checkpoint["target_ref_sha256"]
+        )
+    if readback_class == "operation_specific_state":
+        close_valid = (
+            close_valid
+            and str(verification.get("operation_state_ref_sha256") or "").strip()
+            == required_checkpoint["target_ref_sha256"]
+        )
+    if readback_class == "absence_plus_audit":
+        close_valid = (
+            close_valid
+            and verification.get("target_absent") is True
+            and verification.get("audit_correlation_present") is True
+        )
+    if close_valid:
+        return None
+    return {
+        "ok": False,
+        "error": "store_owner_exact_readback_required_before_completion",
+        "run_id": run_id,
+        "status": current_status,
+    }
+
+
+def _store_owner_checkpoint_forbidden(
+    *,
+    current_status: str,
+    scope: dict[str, Any],
+    existing: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> list[str]:
+    forbidden: list[str] = []
+    required_hashes = (
+        "expected_revision_sha256",
+        "request_fingerprint",
+        "request_sha256",
+        "schema_hash",
+        "target_ref_sha256",
+    )
+    if checkpoint.get("phase") != "transport_result":
+        forbidden.append("phase")
+    if current_status != "executing":
+        forbidden.append("status")
+    if existing.get("phase") == "transport_result" and existing != checkpoint:
+        forbidden.append("checkpoint_immutable")
+    if re.fullmatch(r"ac_[0-9a-f]{20}", str(checkpoint.get("contract_id") or "")) is None:
+        forbidden.append("contract_id")
+    if not str(checkpoint.get("operation_id") or "").strip():
+        forbidden.append("operation_id")
+    verification_class = str(checkpoint.get("verification_class") or "")
+    for key in required_hashes:
+        if key == "expected_revision_sha256" and verification_class == "collection_membership":
+            if checkpoint.get(key) not in {None, ""}:
+                forbidden.append(key)
+            continue
+        if re.fullmatch(r"[0-9a-f]{64}", str(checkpoint.get(key) or "")) is None:
+            forbidden.append(key)
+    if checkpoint.get("request_fingerprint") != scope.get("request_fingerprint"):
+        forbidden.append("request_fingerprint")
+    if checkpoint.get("target_ref_sha256") != scope.get("target_ref_sha256"):
+        forbidden.append("target_ref_sha256")
+    if checkpoint.get("expected_revision_sha256") != scope.get("expected_revision_sha256"):
+        forbidden.append("expected_revision_sha256")
+    if verification_class not in STORE_OWNER_READBACK_CLASSES:
+        forbidden.append("verification_class")
+    if verification_class != scope.get("verification_class"):
+        forbidden.append("verification_class")
+    return forbidden
 
 
 def _find_forbidden_store_payload_keys(value: Any, *, prefix: str = "") -> list[str]:
@@ -2815,6 +3242,14 @@ class ManagerMemoryStore:
         scope_provided = isinstance(scope, dict)
         selected_ids_provided = selected_ids is not None
         scope_payload = dict(scope) if isinstance(scope, dict) else {}
+        owner_workflow = (
+            _store_workflow_operation(
+                workflow_id=workflow_id,
+                intent=intent,
+                scope=scope_payload,
+            )
+            == STORE_OWNER_LEDGER_OPERATION
+        )
         metadata_payload = metadata if isinstance(metadata, dict) else {}
         forbidden = _find_forbidden_body_keys({"scope": scope_payload, "metadata": metadata_payload})
         if forbidden:
@@ -2850,6 +3285,8 @@ class ManagerMemoryStore:
             # Serialize the idempotency lookup and insert so concurrent stateless
             # MCP requests deduplicate instead of racing into the unique index.
             conn.execute("BEGIN IMMEDIATE")
+            if owner_workflow or workflow_id in STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS:
+                _cleanup_store_owner_runs(conn, now=datetime.now(UTC))
             existing = conn.execute(
                 "SELECT * FROM manager_runs WHERE idempotency_key = ? LIMIT 1",
                 (idempotency_key,),
@@ -2956,16 +3393,38 @@ class ManagerMemoryStore:
             if _is_store_workflow(
                 workflow_id=row["workflow_id"], intent=row["intent"], scope=_decode_json(row["scope_json"], {})
             ):
-                if len(str(summary or "").encode("utf-8")) > 4096:
-                    return {"ok": False, "error": "store_workflow_summary_too_large", "run_id": run_id}
                 scope_payload = _decode_json(row["scope_json"], {})
                 operation = _store_workflow_operation(
                     workflow_id=row["workflow_id"],
                     intent=row["intent"],
                     scope=scope_payload,
                 )
+                owner_transition_error = (
+                    _store_owner_transition_error(
+                        run_id,
+                        current_status=current,
+                        target_status=target_status,
+                        expected_state_version=expected_state_version,
+                        scope=scope_payload,
+                        checkpoint=_decode_json(row["checkpoint_json"], {}),
+                    )
+                    if operation == STORE_OWNER_LEDGER_OPERATION
+                    else None
+                )
+                if owner_transition_error is not None or len(str(summary or "").encode("utf-8")) > 4096:
+                    return owner_transition_error or {
+                        "ok": False,
+                        "error": "store_workflow_summary_too_large",
+                        "run_id": run_id,
+                    }
                 store_forbidden = _find_forbidden_store_payload_keys(verification or {})
-                if verification and _safe_store_scalar_map(verification, kind="verification") is None:
+                if verification and (
+                    not (
+                        operation == STORE_OWNER_LEDGER_OPERATION
+                        and _store_owner_verification_is_refs_only(verification)
+                    )
+                    and _safe_store_scalar_map(verification, kind="verification") is None
+                ):
                     store_forbidden.append("verification")
                 if not _store_message_is_allowed(message, operation=operation):
                     store_forbidden.append("message")
@@ -3043,6 +3502,23 @@ class ManagerMemoryStore:
                 )
                 if completion_error:
                     return completion_error
+                scope_payload = _decode_json(row["scope_json"], {})
+                operation = _store_workflow_operation(
+                    workflow_id=row["workflow_id"],
+                    intent=row["intent"],
+                    scope=scope_payload,
+                )
+                if operation == STORE_OWNER_LEDGER_OPERATION:
+                    owner_completion_error = _store_owner_completion_error(
+                        run_id,
+                        current_status=current,
+                        dry_run=bool(row["dry_run"]),
+                        scope=scope_payload,
+                        checkpoint=_decode_json(row["checkpoint_json"], {}),
+                        verification=verification_payload,
+                    )
+                    if owner_completion_error:
+                        return owner_completion_error
             effective_summary = str(summary) if summary else str(row["summary"] or "")
             cursor = conn.execute(
                 """
@@ -3117,14 +3593,31 @@ class ManagerMemoryStore:
             if _is_store_workflow(
                 workflow_id=row["workflow_id"], intent=row["intent"], scope=_decode_json(row["scope_json"], {})
             ):
+                scope_payload = _decode_json(row["scope_json"], {})
                 store_forbidden = _find_forbidden_store_payload_keys(checkpoint_payload)
                 store_forbidden.extend(_find_unsafe_store_machine_values(checkpoint_payload))
                 unknown_keys = sorted(set(checkpoint_payload).difference(STORE_LEDGER_SAFE_CHECKPOINT_KEYS))
                 operation = _store_workflow_operation(
                     workflow_id=row["workflow_id"],
                     intent=row["intent"],
-                    scope=_decode_json(row["scope_json"], {}),
+                    scope=scope_payload,
                 )
+                if operation == STORE_OWNER_LEDGER_OPERATION and expected_state_version is None:
+                    return {
+                        "ok": False,
+                        "error": "workflow_state_version_required",
+                        "run_id": run_id,
+                        "status": row["status"],
+                    }
+                if operation == STORE_OWNER_LEDGER_OPERATION:
+                    store_forbidden.extend(
+                        _store_owner_checkpoint_forbidden(
+                            current_status=str(row["status"] or ""),
+                            scope=scope_payload,
+                            existing=_decode_json(row["checkpoint_json"], {}),
+                            checkpoint=checkpoint_payload,
+                        )
+                    )
                 if not _store_message_is_allowed(message, operation=operation):
                     store_forbidden.append("message")
                 if selected_ids is not None:
@@ -3214,6 +3707,19 @@ class ManagerMemoryStore:
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if (
+                _store_workflow_operation(
+                    workflow_id=run["workflow_id"],
+                    intent=run["intent"],
+                    scope=_decode_json(run["scope_json"], {}),
+                )
+                == STORE_OWNER_LEDGER_OPERATION
+            ):
+                return {
+                    "ok": False,
+                    "error": "store_owner_external_steps_not_allowed",
+                    "run_id": run_id,
+                }
             status = str(run["status"] or "")
             current_version = int(run["state_version"] or 1)
             conflict = _workflow_state_conflict(
@@ -3319,6 +3825,19 @@ class ManagerMemoryStore:
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if (
+                _store_workflow_operation(
+                    workflow_id=run["workflow_id"],
+                    intent=run["intent"],
+                    scope=_decode_json(run["scope_json"], {}),
+                )
+                == STORE_OWNER_LEDGER_OPERATION
+            ):
+                return {
+                    "ok": False,
+                    "error": "store_owner_external_steps_not_allowed",
+                    "run_id": run_id,
+                }
             current_version = int(run["state_version"] or 1)
             conflict = _workflow_state_conflict(
                 run_id,
@@ -3422,6 +3941,19 @@ class ManagerMemoryStore:
         if not run.get("ok"):
             return run
         item = run["item"]
+        if (
+            _store_workflow_operation(
+                workflow_id=str(item.get("workflow_id") or ""),
+                intent=str(item.get("intent") or ""),
+                scope=item.get("scope") if isinstance(item.get("scope"), dict) else {},
+            )
+            == STORE_OWNER_LEDGER_OPERATION
+        ):
+            return {
+                "ok": False,
+                "error": "store_owner_resume_not_allowed",
+                "run_id": run_id,
+            }
         status = str(item.get("status") or "")
         current_version = int(item.get("state_version") or 1)
         conflict = _workflow_state_conflict(
@@ -3565,11 +4097,24 @@ class ManagerMemoryStore:
         self.initialize()
         with self.connect() as conn:
             existing = conn.execute(
-                "SELECT workflow_id FROM manager_runs WHERE id = ? LIMIT 1",
+                "SELECT workflow_id, intent, scope_json FROM manager_runs WHERE id = ? LIMIT 1",
                 (run_id,),
             ).fetchone()
         if not existing:
             return {"ok": False, "error": "manager run not found", "run_id": run_id}
+        if (
+            _store_workflow_operation(
+                workflow_id=existing["workflow_id"],
+                intent=existing["intent"],
+                scope=_decode_json(existing["scope_json"], {}),
+            )
+            == STORE_OWNER_LEDGER_OPERATION
+        ):
+            return {
+                "ok": False,
+                "error": "store_owner_compatibility_finish_not_allowed",
+                "run_id": run_id,
+            }
         if str(existing["workflow_id"] or "").strip():
             return self.transition_workflow_run(
                 run_id,

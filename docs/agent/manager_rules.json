@@ -296,14 +296,14 @@
       "rule": "Do not persist raw store orders, customers, contacts, line items, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, workflow events, or checkpoints. Store only technical cursors, timestamps, success state, compact entity/id/version refs, counts, and verification booleans."
     },
     {
-      "id": "store-write-allowlist",
+      "id": "store-write-parity",
       "priority": 38,
-      "rule": "Store writes are limited to assigning an exact quote request, toggling its NEW/IN_PROGRESS status, updating its internal comment, appending one quote note, replacing private structured quote-offer drafts, changing one exact batch storage location, and marking one exact IN_PROGRESS order READY. Every write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, correlation id, dry_run, apply, and exact readback through agent_inventory_workflow. Drafts never publish or notify; READY dry-run must disclose customer notification effects."
+      "rule": "Keep the seven strict quote/batch/READY actions as optimized named agent_inventory_workflow operations. For every other owner-approved action present in the live employee OpenAPI, use guarded store_owner_capabilities then store_owner_api with the reserved store:owner principal. Every write requires exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, operation-specific reread, and refs-only workflow state; an applied but unverified result remains compensating."
     },
     {
-      "id": "store-write-denylist",
+      "id": "store-write-security-boundary",
       "priority": 39,
-      "rule": "Never use the store integration to delete entities, change prices, products, customers, quantities, finance, COMPLETE/ANNULLED/RETURNED states, ROSSKO orders, marketplace publication, messages, bulk data, secrets, or arbitrary settings. Hidden generic Manager store tools remain INTERNAL_ONLY and must be excluded from Gateway raw discovery."
+      "rule": "Full Store parity never authorizes anonymous access, direct database writes, human-session reuse, undocumented routes, secret disclosure, or unverified outcomes. High-risk financial, warehouse, bulk, publication, return, delete, and settings operations require exact current state, explicit owner intent, dry-run proof, idempotency, correlation, apply, and exact readback or absence plus audit. Hidden generic legacy Store adapters remain INTERNAL_ONLY; only the guarded owner capability/API pair may be raw-discovered."
     },
     {
       "id": "gmail-read-order",

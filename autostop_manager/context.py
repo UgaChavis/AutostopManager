@@ -46,9 +46,9 @@ DOMAIN_BRIEF_RULES = {
         "Use the stateless one-request Store bootstrap snapshot for startup health and store_digest for owner 'what is new' reads so startup never consumes owner-visible changes.",
         "Interpret store business dates such as today in Asia/Krasnoyarsk; keep Manager checkpoint timestamps technical UTC and cursors opaque.",
         "General Store reads stay redacted. An exact store_quote_request detail=full read uses the dedicated quote credential and may expose contacts, VIN, request items, offers, notes, and drafts transiently; never persist that payload in Manager memory.",
-        "Store writes are limited to quote assignment/status/internal comment/append-only note/private drafts, exact batch storage location, and exact IN_PROGRESS to READY order transition.",
-        "Every store write requires exact reread, ActionContractV2, expected_updated_at, unique idempotency key, dry_run, apply, correlation id, exact readback, and compact refs-only ledger data.",
-        "Never change store prices, quantities, products, customers, finance, ROSSKO orders, marketplace publication, or arbitrary settings through this route.",
+        "Use agent_inventory_workflow for its seven optimized named writes; discover every other employee operation through guarded store_owner_capabilities and execute it through store_owner_api with the reserved store:owner principal.",
+        "Every store write requires task-specific owner intent, exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, exact readback, and compact refs-only ledger data.",
+        "Never bypass the Store API, invent an operation outside the live OpenAPI schema, reuse a human ADMIN session, or treat an applied but unverified owner operation as completed.",
     ],
     "knowledge_intake": [
         "For documentation hygiene, inventory tracked docs and their reference graph before editing or deleting anything.",
@@ -146,28 +146,31 @@ STORE_READ_ORDER = [
     "agent_board_digest(scope=store) for store digest and owner-visible store_digest cursor",
     "agent_search with an exact store entity for bounded lists and catalog/stock lookup",
     "agent_entity_context with an exact store entity/id; general reads stay redacted, while store_quote_request detail=full uses the dedicated quote credential for transient contacts, VIN, items, offers, notes, and drafts",
-    "agent_inventory_workflow only for an allowlisted store write after prepare_action_contract",
+    "agent_inventory_workflow for an optimized named Store write, otherwise guarded raw store_owner_capabilities then store_owner_api after prepare_action_contract",
 ]
 
 STORE_ALLOWED_ACTIONS = [
     "read compact store digest, order and quote-request lists, catalog parts, stock totals, batches and storage locations, warehouse operations, suppliers, marketplace errors, and one exact full quote transiently",
     "search store_sourcing_offer for bounded local and ROSSKO candidates without persisting raw quote or supplier payloads",
     "paginate every store list and resume an unfinished digest with its opaque next_cursor",
-    "assign an exact quote request, toggle NEW and IN_PROGRESS, update its internal comment, append a note, replace private structured drafts, change an exact batch storage location, or mark an exact IN_PROGRESS order READY",
-    "use dry_run then apply with expected_updated_at, idempotency key, correlation id, and exact reread for every allowlisted write",
+    "use the seven optimized named operations for common quote, batch-location, and READY changes",
+    "assign a quote, update its status/comment, append a note, replace private drafts, change a batch location, or mark READY through the optimized named workflow",
+    "use owner-approved store_owner_api for every other operation actually exposed to an authorized employee by the live Store OpenAPI, including catalog, stock, customer, order, supplier, warehouse, price, publication, return, and settings actions",
+    "use dry_run then apply with current revision, idempotency key, correlation id, schema-bound proof, and exact reread for every write",
 ]
 
 STORE_FORBIDDEN_ACTIONS = [
     "read the AutoStop App database directly or call legacy store GET routes with side effects",
     "persist raw store orders, customer contacts, order lines, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, or workflow ledger",
-    "change prices, products, quantities, customers, finance, COMPLETE/ANNULLED/RETURNED state, ROSSKO orders, marketplace publication, or arbitrary settings",
-    "perform any store write outside agent_inventory_workflow and the explicit seven-operation allowlist",
+    "call an operation not present in the current employee OpenAPI or use a human login/session for service automation",
+    "perform a Store write outside agent_inventory_workflow or guarded store_owner_api, without task-specific owner intent, or without the required contract and verification",
 ]
 
 STORE_VERIFICATION = [
     "store outage degrades only store status and does not break CRM",
     "digest checkpoint advances only after the final page; failed or abandoned paging preserves the committed cursor",
     "exact store writes match planned fields after reread and include the audit correlation id",
+    "owner API applies remain compensating until the exact operation-specific reread or absence/audit proof succeeds",
     "Manager workflow state contains compact technical refs only and no raw store payload",
 ]
 

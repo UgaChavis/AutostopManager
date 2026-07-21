@@ -130,6 +130,12 @@ def get_store_manage_token() -> str:
     return os.environ.get("AUTOSTOP_STORE_MANAGE_TOKEN", "").strip()
 
 
+def get_store_owner_token() -> str:
+    """Return the runtime-only owner service-principal token."""
+
+    return os.environ.get("AUTOSTOP_STORE_OWNER_TOKEN", "").strip()
+
+
 def get_store_quote_token() -> str:
     """Return the runtime-only exact-quote and sourcing token."""
 
