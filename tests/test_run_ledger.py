@@ -433,7 +433,9 @@ def test_raw_store_owner_ledger_accepts_refs_only_dry_run_and_requires_bound_app
         return {
             "operation": operation,
             "mode": mode,
+            "operation_id": operation_id,
             "request_fingerprint": request_fingerprint,
+            "schema_hash": schema_hash,
             "target_ref_sha256": target_ref_hash,
             "correlation_id": correlation_id,
             "domain": "store",
