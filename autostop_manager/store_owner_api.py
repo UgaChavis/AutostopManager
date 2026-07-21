@@ -643,7 +643,11 @@ class StoreOwnerApiClient:
                 return _uncertain_after_dispatch("store_owner_response_too_large")
             return _error("store_owner_response_too_large")
         if not 200 <= status_code < 300:
-            return _http_error(status_code, raw, is_write=capability.method != "GET")
+            return _http_error(
+                status_code,
+                raw,
+                is_write=capability.method != "GET" and action_mode == "apply",
+            )
         decoded = _decode_response(raw, content_type, allow_binary=allow_binary_response)
         if decoded.get("ok") is False:
             if action_mode == "dry_run":
@@ -1689,7 +1693,6 @@ def _uncertain_after_dispatch(code: str, **metadata: Any) -> dict[str, Any]:
 
 def _http_error(status_code: int, raw: bytes, *, is_write: bool) -> dict[str, Any]:
     safe_error_code = _safe_http_error_code(raw)
-    uncertain = is_write and (status_code == 408 or status_code >= 500 or "uncertain" in safe_error_code.casefold())
     metadata = {
         "http_status": int(status_code),
         "http_error_code": safe_error_code or None,
@@ -1697,7 +1700,11 @@ def _http_error(status_code: int, raw: bytes, *, is_write: bool) -> dict[str, An
         "error_body_sha256": hashlib.sha256(raw[:MAX_RESPONSE_BYTES]).hexdigest(),
         "error_body_truncated": len(raw) > MAX_RESPONSE_BYTES,
     }
-    if uncertain:
+    # A Store handler may persist a failure/diagnostic state and then return a
+    # 4xx response.  Once an apply request has been dispatched, HTTP status
+    # alone cannot prove that no mutation happened, so every write rejection
+    # must stay in reconciliation until an exact readback closes the outcome.
+    if is_write:
         return _uncertain_after_dispatch("store_owner_outcome_uncertain", **metadata)
     return _error(
         "store_owner_http_rejected",

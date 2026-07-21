@@ -797,12 +797,23 @@ def test_path_traversal_and_oversized_query_are_rejected_before_dispatch():
     assert oversized["error"]["code"] == "store_owner_query_too_large"
 
 
-@pytest.mark.parametrize("failure_kind", ["server_503", "oversized_json", "invalid_json"])
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["client_400_after_commit", "server_503", "oversized_json", "invalid_json"],
+)
 def test_write_post_dispatch_failures_are_always_uncertain(monkeypatch, failure_kind):
     capability = _json_write_capability()
     client = _client_with_capability(capability)
     path_parameters, planned = _planned_json_write(client, capability, monkeypatch)
-    if failure_kind == "server_503":
+    if failure_kind == "client_400_after_commit":
+        response = HTTPError(
+            "http://127.0.0.1/api/v1/parts/part-1",
+            400,
+            "external order was not confirmed",
+            {},
+            io.BytesIO(json.dumps({"detail": "external_order_not_confirmed"}).encode()),
+        )
+    elif failure_kind == "server_503":
         response = HTTPError(
             "http://127.0.0.1/api/v1/parts/part-1",
             503,
@@ -835,7 +846,7 @@ def test_write_post_dispatch_failures_are_always_uncertain(monkeypatch, failure_
     assert "secret" not in json.dumps(result)
 
 
-def test_http_validation_error_is_blocked_and_error_body_is_never_returned(monkeypatch):
+def test_http_validation_error_after_apply_is_uncertain_and_error_body_is_never_returned(monkeypatch):
     capability = _json_write_capability()
     client = _client_with_capability(capability)
     path_parameters, planned = _planned_json_write(client, capability, monkeypatch)
@@ -860,26 +871,19 @@ def test_http_validation_error_is_blocked_and_error_body_is_never_returned(monke
         dry_run_proof=planned["summary"]["dry_run_proof"],
     )
 
-    assert result["status"] == "blocked"
-    assert result["meta"]["outcome_uncertain"] is False
+    assert result["status"] == "compensating"
+    assert result["meta"]["outcome_uncertain"] is True
+    assert result["meta"]["readback_required"] is True
     assert result["meta"].get("http_error_code") is None
     assert "Private" not in json.dumps(result)
     assert "WBA12345678901234" not in json.dumps(result)
 
 
 @pytest.mark.parametrize(
-    ("detail", "expected_status", "expected_uncertain"),
-    [
-        ("owner_idempotency_uncertain", "compensating", True),
-        ("expected_revision_conflict", "conflict", False),
-    ],
+    "detail",
+    ["owner_idempotency_uncertain", "expected_revision_conflict"],
 )
-def test_conflict_distinguishes_uncertain_receipt_from_known_revision_rejection(
-    monkeypatch,
-    detail,
-    expected_status,
-    expected_uncertain,
-):
+def test_apply_conflict_errors_remain_uncertain_after_dispatch(monkeypatch, detail):
     capability = _json_write_capability()
     client = _client_with_capability(capability)
     path_parameters, planned = _planned_json_write(client, capability, monkeypatch)
@@ -904,8 +908,9 @@ def test_conflict_distinguishes_uncertain_receipt_from_known_revision_rejection(
         dry_run_proof=planned["summary"]["dry_run_proof"],
     )
 
-    assert result["status"] == expected_status
-    assert result["meta"]["outcome_uncertain"] is expected_uncertain
+    assert result["status"] == "compensating"
+    assert result["meta"]["outcome_uncertain"] is True
+    assert result["meta"]["readback_required"] is True
 
 
 def test_idempotency_replay_is_reported_only_from_transport_header(monkeypatch):
