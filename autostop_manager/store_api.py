@@ -293,6 +293,10 @@ _CHANGE_FEED_FIELDS = frozenset(
         "oldest_changed_at",
         "newest_changed_at",
         "retention_mode",
+        "payload_contract",
+        "tracked_table_count",
+        "privacy_or_infrastructure_exempt_table_count",
+        "entity_type_count",
     }
 )
 _RUNTIME_FEATURE_FIELDS = frozenset(

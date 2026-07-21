@@ -95,6 +95,42 @@ def test_live_runtime_status_keeps_redacted_adapter_readiness(monkeypatch):
     assert "manage-secret" not in str(result)
 
 
+def test_live_runtime_status_accepts_complete_change_feed_contract(monkeypatch):
+    payload = _envelope(
+        summary={
+            "features": {
+                "quote_full_read_enabled": True,
+                "quote_draft_write_enabled": True,
+                "supplier_lookup_enabled": True,
+                "rossko_configured": True,
+            },
+            "change_feed": {
+                "generation": "generation-1",
+                "current_sequence": 42,
+                "min_available_position": 0,
+                "event_count": 42,
+                "oldest_changed_at": "2026-07-21T00:00:00+00:00",
+                "newest_changed_at": "2026-07-21T01:00:00+00:00",
+                "retention_mode": "append_only_no_gc",
+                "payload_contract": "pii_free_entity_refs",
+                "tracked_table_count": 32,
+                "privacy_or_infrastructure_exempt_table_count": 11,
+                "entity_type_count": 33,
+            },
+        }
+    )
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+
+    result = _client().runtime_status(live=True)
+
+    assert result["ok"] is True
+    assert result["summary"]["features"]["quote_full_read_enabled"] is True
+    assert result["summary"]["features"]["quote_draft_write_enabled"] is True
+    assert result["summary"]["features"]["supplier_lookup_enabled"] is True
+    assert result["summary"]["change_feed"]["payload_contract"] == "pii_free_entity_refs"
+    assert result["summary"]["change_feed"]["tracked_table_count"] == 32
+
+
 def test_digest_retries_safe_get_and_sends_bounded_query(monkeypatch):
     calls = []
 
