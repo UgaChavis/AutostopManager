@@ -27,8 +27,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 ## Startup
 
 1. For non-trivial owner requests, run one compact context command first:
-   `python -m autostop_manager.cli agent-brief "<query>"` or
-   `python -m autostop_manager.cli prepare-context "<query>"`.
+   `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"` or
+   `.venv/bin/python -m autostop_manager.cli prepare-context "<query>"` on the
+   production Linux checkout. Use the active project venv equivalent on other
+   platforms; do not fall back to the host system Python.
 2. For local knowledge/docs work, run `knowledge-probe "<query>"` and open the
    returned `open_first` / source-of-truth files before broad reads.
 3. For live CRM work, use the AutoStop CRM MCP connector. Start with
@@ -39,7 +41,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 4. For store work, open `docs/agent/store_management_playbook.md`; use existing
    Gateway tools with store scope/entities. Bootstrap uses `store_bootstrap`;
    owner “what is new” reads use `store_digest`. Never call the store DB or
-   legacy GET routes with side effects.
+   legacy GET routes with side effects. Human-UI parity operations without a
+   named workflow may use guarded raw `store_owner_capabilities` and
+   `store_owner_api`; they require the reserved `store:owner` service principal
+   through `AUTOSTOP_STORE_OWNER_TOKEN` and the live OpenAPI operation schema.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
 6. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
@@ -59,14 +64,17 @@ verification.
 
 - Before CRM writes: exact target id, dry-run/preflight where available, then
   reread and verify.
-- Store writes are limited to quote assignment/status/internal comment,
-  append-only quote notes, private quote-offer drafts, exact batch storage
-  location, and exact IN_PROGRESS -> READY order transition.
-  Require current `expected_updated_at`, owner intent, idempotency and
-  correlation IDs, dry-run/apply, and exact reread through
-  `agent_inventory_workflow`; READY dry-run must disclose notification effects.
-  Quote drafts never publish, notify, approve, cancel, convert, or order from a
-  supplier; exact full quote reads use the dedicated quote-scoped credential.
+- Seven common quote/batch/READY writes remain optimized named operations in
+  `agent_inventory_workflow`; their existing strict DTO and notification rules
+  remain in force. Every other employee/admin Store action exposed by the live
+  OpenAPI is available only through guarded `store_owner_api` and the reserved
+  `store:owner` principal. Exact full quote reads still use the dedicated
+  quote-scoped credential when the named read path is sufficient.
+- Broader Store owner operations are never implicit: require a task-specific
+  owner command, exact OpenAPI operation and target refs, ActionContractV2,
+  dry-run/preflight, unique idempotency and correlation IDs, then exact reread.
+  High-risk apply also requires the matching dry-run proof; unresolved outcomes
+  remain `compensating`.
 - For finance, inventory, documents, files, Gmail, or destructive writes, build
   the action contract, use a unique idempotency key, and keep any applied but
   unverified result in `compensating` until exact-target reconciliation.
@@ -98,7 +106,7 @@ verification.
 - Store analytics questions -> `docs/agent/store_analytics_playbook.md` and the
   aggregate-only `get_store_analytics_report` capability through Gateway v2 raw
   discovery. Never request or persist raw events or visitor/session ids.
-- Store state/catalog/stock/orders/quotes/marketplace/minimal writes ->
+- Store state/catalog/stock/orders/quotes/marketplace/full owner operations ->
   `docs/agent/store_management_playbook.md`. General Drom/Avito sourcing stays
   in the parts route; service `заказ-наряд` stays in CRM.
 - Internet/repair web research -> resolve `search_web_multi`, excerpt, and

@@ -17,28 +17,39 @@ store, or Gmail sources of truth.
 - `docs/agent/manager_rules.json` - durable prioritized rules.
 - `docs/agent/manager_mcp_catalog.json` - local manager MCP surface.
 - `docs/agent/crm_mcp_catalog.json` - AutoStop CRM MCP surface.
-- `docs/agent/store_management_playbook.md` - AutoStop App pure-read, cursor,
-  stock/location, and minimal management contract.
+- `docs/agent/store_management_playbook.md` - AutoStop App reads, reliable
+  change feed, optimized named workflows, and full guarded owner parity.
 
 ## Daily Commands
 
-```powershell
-python -m autostop_manager.cli agent-brief "Приберись" --intent board_cleanup
-python -m autostop_manager.cli prepare-context "почисти документацию" --intent documentation_hygiene
-python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения"
-python -m autostop_manager.cli knowledge-search "счет НДС PDF render" --domain business_documents
-python -m autostop_manager.cli control-report --format markdown
-python -m autostop_manager.cli integration-audit
-python -m autostop_manager.cli integration-audit --full
+```bash
+.venv/bin/python -m autostop_manager.cli agent-brief "Приберись" --intent board_cleanup
+.venv/bin/python -m autostop_manager.cli prepare-context "почисти документацию" --intent documentation_hygiene
+.venv/bin/python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения"
+.venv/bin/python -m autostop_manager.cli knowledge-search "счет НДС PDF render" --domain business_documents
+.venv/bin/python -m autostop_manager.cli control-report --format markdown
+.venv/bin/python -m autostop_manager.cli integration-audit
+.venv/bin/python -m autostop_manager.cli integration-audit --full
 ```
 
 For a new non-trivial task: `agent-brief` or `prepare-context` first. For CRM:
 live MCP context first. The public CRM connector exposes exactly 24 Gateway v2
 tools over owner-approved OAuth 2.1; use `agent_bootstrap` ->
 `agent_board_digest` -> `agent_search`/`agent_entity_context` ->
-`prepare_action_contract` -> named workflow `dry_run`/`apply` -> exact-target
+	`prepare_action_contract` -> named workflow `dry_run`/`apply` -> exact-target
 reread. Raw discovery is allowed only when no named workflow exists; never call
 a hidden legacy name directly. For local docs: `knowledge-probe` first.
+The integration audit runs both machine-verifiable capability matrices in
+strict mode, so UI/API actions cannot silently lose Gateway coverage.
+
+Employee/admin Store parity that has no named workflow is available only
+through guarded raw `store_owner_capabilities` and `store_owner_api`. They load
+the live OpenAPI operation schema and authenticate as the reserved
+`store:owner` service principal via `AUTOSTOP_STORE_OWNER_TOKEN`; writes still
+require schema-validated ActionContractV2 request fingerprints, exact refs,
+backend-verified revision and dry-run receipt, idempotency, correlation, and an
+operation-specific reread. Applied results cannot report completed before that
+verification. This does not expand the public 24-tool surface.
 
 For AutoStop App, the same 24 public Gateway tools gain backward-compatible
 store scopes/entities: `agent_bootstrap`, `agent_board_digest(scope="store")`,
@@ -53,19 +64,19 @@ final ACK.
 
 ## Core Audits
 
-```powershell
-python -m autostop_manager.cli knowledge-sync
-python -m autostop_manager.cli knowledge-audit
-python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli skills-audit
-python -m autostop_manager.cli cleanup-audit
-python -m autostop_manager.cli system-audit
-python -m ruff check .
-python -m ruff format --check autostop_manager tests
-python -m mypy autostop_manager
-python -m pytest -q
-python -m coverage run -m pytest -q
-python -m coverage report
+```bash
+.venv/bin/python -m autostop_manager.cli knowledge-sync
+.venv/bin/python -m autostop_manager.cli knowledge-audit
+.venv/bin/python -m autostop_manager.cli annotations-audit
+.venv/bin/python -m autostop_manager.cli skills-audit
+.venv/bin/python -m autostop_manager.cli cleanup-audit
+.venv/bin/python -m autostop_manager.cli system-audit
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check autostop_manager tests
+.venv/bin/python -m mypy autostop_manager
+.venv/bin/python -m pytest -q
+.venv/bin/python -m coverage run -m pytest -q
+.venv/bin/python -m coverage report
 node --check frontend/control-center/app.js
 ```
 
@@ -125,10 +136,10 @@ audits.
 
 When reorganizing docs, update the smallest canonical file, then run:
 
-```powershell
-python -m autostop_manager.cli knowledge-sync
-python -m autostop_manager.cli knowledge-audit
-python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli skills-audit
-python -m autostop_manager.cli cleanup-audit
+```bash
+.venv/bin/python -m autostop_manager.cli knowledge-sync
+.venv/bin/python -m autostop_manager.cli knowledge-audit
+.venv/bin/python -m autostop_manager.cli annotations-audit
+.venv/bin/python -m autostop_manager.cli skills-audit
+.venv/bin/python -m autostop_manager.cli cleanup-audit
 ```

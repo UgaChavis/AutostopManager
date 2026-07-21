@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
 from autostop_manager.storage import ManagerMemoryStore
@@ -395,6 +398,7 @@ def test_crm_store_workflow_envelope_is_accepted_across_verified_and_compensatin
         expected_state_version=compensating_executing["state_version"],
     )
     assert compensating["ok"] is True
+
     replay_completed = store.transition_workflow_run(
         compensating_start["id"],
         status="completed",
@@ -410,6 +414,529 @@ def test_crm_store_workflow_envelope_is_accepted_across_verified_and_compensatin
         expected_state_version=compensating["state_version"],
     )
     assert replay_completed["ok"] is True
+
+
+def test_raw_store_owner_ledger_accepts_refs_only_dry_run_and_requires_bound_apply_readback(
+    tmp_path,
+):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    operation = "store_owner_api"
+    request_fingerprint = "a" * 64
+    target_ref_hash = hashlib.sha256(b"target:part-1").hexdigest()
+    request_sha = "c" * 64
+    schema_hash = "d" * 64
+    expected_revision_hash = "f" * 64
+    contract_id = "ac_" + "e" * 20
+    operation_id = "update_category"
+
+    def scope(mode: str, correlation_id: str) -> dict[str, object]:
+        return {
+            "operation": operation,
+            "mode": mode,
+            "request_fingerprint": request_fingerprint,
+            "target_ref_sha256": target_ref_hash,
+            "correlation_id": correlation_id,
+            "domain": "store",
+            "expected_revision_sha256": expected_revision_hash,
+            "source": "store",
+            "verification_class": "exact_entity",
+        }
+
+    def checkpoint() -> dict[str, object]:
+        return {
+            "phase": "transport_result",
+            "operation": operation,
+            "operation_id": operation_id,
+            "contract_id": contract_id,
+            "expected_revision_sha256": expected_revision_hash,
+            "request_fingerprint": request_fingerprint,
+            "request_sha256": request_sha,
+            "schema_hash": schema_hash,
+            "target_ref_sha256": target_ref_hash,
+            "verification_class": "exact_entity",
+            "status": "planned",
+        }
+
+    dry_correlation = "StoreOwnerDryCorrelation123"
+    dry_started = store.start_workflow_run(
+        workflow_id="raw:store_owner_api",
+        intent="raw_store_owner_api",
+        idempotency_key="raw-owner-dry-ledger-v1",
+        correlation_id=dry_correlation,
+        scope=scope("dry_run", dry_correlation),
+        dry_run=True,
+    )
+    assert dry_started["ok"] is True
+    dry_executing = store.transition_workflow_run(
+        dry_started["id"],
+        status="executing",
+        message="raw execute store_owner_api",
+        expected_state_version=dry_started["state_version"],
+    )
+    dry_checkpoint = store.checkpoint_workflow_run(
+        dry_started["id"],
+        checkpoint=checkpoint(),
+        message="raw verify store_owner_api",
+        expected_state_version=dry_executing["state_version"],
+    )
+    dry_verifying = store.transition_workflow_run(
+        dry_started["id"],
+        status="verifying",
+        message="raw verify store_owner_api",
+        expected_state_version=dry_checkpoint["state_version"],
+    )
+    dry_completed = store.transition_workflow_run(
+        dry_started["id"],
+        status="completed",
+        message="raw completed store_owner_api",
+        summary="raw:store_owner_api",
+        verification={
+            "executor_ok": True,
+            "passed": True,
+            "check": "store_owner_server_dry_run_receipt",
+            "contract_id": contract_id,
+            "expected_revision_sha256": expected_revision_hash,
+            "operation_id": operation_id,
+            "request_fingerprint": request_fingerprint,
+            "request_sha256": request_sha,
+            "schema_hash": schema_hash,
+            "target_ref_sha256": target_ref_hash,
+            "verification_class": "exact_entity",
+        },
+        expected_state_version=dry_verifying["state_version"],
+    )
+    assert dry_completed["ok"] is True
+
+    apply_correlation = "StoreOwnerApplyCorrelation123"
+    apply_started = store.start_workflow_run(
+        workflow_id="raw:store_owner_api",
+        intent="raw_store_owner_api",
+        idempotency_key="raw-owner-apply-ledger-v1",
+        correlation_id=apply_correlation,
+        scope=scope("apply", apply_correlation),
+    )
+    assert apply_started["ok"] is True
+    apply_executing = store.transition_workflow_run(
+        apply_started["id"],
+        status="executing",
+        message="raw execute store_owner_api",
+        expected_state_version=apply_started["state_version"],
+    )
+    apply_checkpoint = store.checkpoint_workflow_run(
+        apply_started["id"],
+        checkpoint={**checkpoint(), "status": "compensating"},
+        message="raw verify store_owner_api",
+        expected_state_version=apply_executing["state_version"],
+    )
+    compensating = store.transition_workflow_run(
+        apply_started["id"],
+        status="compensating",
+        message="raw verification failed after executor applied store_owner_api",
+        verification={
+            "executor_ok": True,
+            "schema_hash_verified": True,
+            "required": True,
+            "passed": False,
+            "check": "store_owner_operation_specific_exact_readback",
+            "evidence": {
+                "transport_status": "compensating",
+                "write_applied": True,
+                "readback_required": True,
+                "outcome_uncertain": False,
+            },
+        },
+        expected_state_version=apply_checkpoint["state_version"],
+    )
+    assert compensating["ok"] is True
+
+    for terminal_status in ("failed", "cancelled"):
+        blocked_terminal = store.transition_workflow_run(
+            apply_started["id"],
+            status=terminal_status,
+            expected_state_version=compensating["state_version"],
+        )
+        assert blocked_terminal["error"] == ("store_owner_reconciliation_required_before_terminal_transition")
+
+    false_close = store.transition_workflow_run(
+        apply_started["id"],
+        status="completed",
+        verification={"verified": True},
+        expected_state_version=compensating["state_version"],
+    )
+    assert false_close["error"] == "store_owner_exact_readback_required_before_completion"
+
+    compact_ref = {
+        "entity": "store_part",
+        "id": "part-1",
+        "version": "revision-v2",
+    }
+    readback_ref_hash = hashlib.sha256(
+        b"store-owner-readback-ref-v1\0"
+        + json.dumps(
+            {
+                "entity": "store_part",
+                "id": "part-1",
+                "target_ref_sha256": target_ref_hash,
+                "version": "revision-v2",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    wrong_target_close = store.transition_workflow_run(
+        apply_started["id"],
+        status="completed",
+        verification={
+            "executor_ok": True,
+            "exact_readback_verified": True,
+            "contract_id": contract_id,
+            "expected_revision_sha256": expected_revision_hash,
+            "operation_id": operation_id,
+            "request_fingerprint": request_fingerprint,
+            "request_sha256": request_sha,
+            "schema_hash": schema_hash,
+            "target_ref_sha256": target_ref_hash,
+            "verification_class": "exact_entity",
+            "readback_class": "exact_entity",
+            "readback_ref_sha256": readback_ref_hash,
+            "compact_ref": {**compact_ref, "id": "part-other"},
+        },
+        expected_state_version=compensating["state_version"],
+    )
+    assert wrong_target_close["error"] == "store_owner_exact_readback_required_before_completion"
+
+    wrong_version_close = store.transition_workflow_run(
+        apply_started["id"],
+        status="completed",
+        verification={
+            "executor_ok": True,
+            "exact_readback_verified": True,
+            "contract_id": contract_id,
+            "expected_revision_sha256": expected_revision_hash,
+            "operation_id": operation_id,
+            "request_fingerprint": request_fingerprint,
+            "request_sha256": request_sha,
+            "schema_hash": schema_hash,
+            "target_ref_sha256": target_ref_hash,
+            "verification_class": "exact_entity",
+            "readback_class": "exact_entity",
+            "readback_ref_sha256": readback_ref_hash,
+            "compact_ref": {**compact_ref, "version": "revision-other"},
+        },
+        expected_state_version=compensating["state_version"],
+    )
+    assert wrong_version_close["error"] == "store_owner_exact_readback_required_before_completion"
+
+    wrong_revision_close = store.transition_workflow_run(
+        apply_started["id"],
+        status="completed",
+        verification={
+            "executor_ok": True,
+            "exact_readback_verified": True,
+            "contract_id": contract_id,
+            "expected_revision_sha256": "0" * 64,
+            "operation_id": operation_id,
+            "request_fingerprint": request_fingerprint,
+            "request_sha256": request_sha,
+            "schema_hash": schema_hash,
+            "target_ref_sha256": target_ref_hash,
+            "verification_class": "exact_entity",
+            "readback_class": "exact_entity",
+            "readback_ref_sha256": readback_ref_hash,
+            "compact_ref": compact_ref,
+        },
+        expected_state_version=compensating["state_version"],
+    )
+    assert wrong_revision_close["error"] == "store_owner_exact_readback_required_before_completion"
+
+    valid_close = store.transition_workflow_run(
+        apply_started["id"],
+        status="completed",
+        message="raw completed store_owner_api",
+        summary="raw:store_owner_api",
+        verification={
+            "executor_ok": True,
+            "exact_readback_verified": True,
+            "contract_id": contract_id,
+            "expected_revision_sha256": expected_revision_hash,
+            "operation_id": operation_id,
+            "request_fingerprint": request_fingerprint,
+            "request_sha256": request_sha,
+            "schema_hash": schema_hash,
+            "target_ref_sha256": target_ref_hash,
+            "verification_class": "exact_entity",
+            "readback_class": "exact_entity",
+            "readback_ref_sha256": readback_ref_hash,
+            "compact_ref": compact_ref,
+        },
+        expected_state_version=compensating["state_version"],
+    )
+    assert valid_close["ok"] is True
+    assert store.get_manager_run(apply_started["id"])["item"]["status"] == "completed"
+
+
+def test_raw_store_owner_ledger_rejects_missing_binding_and_private_payload(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    rejected = store.start_workflow_run(
+        workflow_id="raw:store_owner_api",
+        intent="raw_store_owner_api",
+        idempotency_key="raw-owner-invalid-ledger-v1",
+        correlation_id="StoreOwnerInvalidCorrelation123",
+        scope={
+            "operation": "store_owner_api",
+            "mode": "apply",
+            "request_fingerprint": "a" * 64,
+            "target_ref_sha256": "b" * 64,
+            "correlation_id": "StoreOwnerInvalidCorrelation123",
+            "domain": "store",
+            "source": "store",
+            "customer_phone": "+79990000000",
+        },
+    )
+    missing_binding = store.start_workflow_run(
+        workflow_id="raw:store_owner_api",
+        intent="raw_store_owner_api",
+        idempotency_key="raw-owner-missing-binding-v1",
+        correlation_id="StoreOwnerMissingCorrelation123",
+        scope={
+            "operation": "store_owner_api",
+            "mode": "apply",
+            "domain": "store",
+            "source": "store",
+        },
+    )
+
+    assert rejected["error"] == "raw_store_payload_not_allowed_in_manager_ledger"
+    assert "scope.customer_phone" in rejected["forbidden_keys"]
+    assert missing_binding["error"] == "raw_store_payload_not_allowed_in_manager_ledger"
+    assert "scope.request_fingerprint" in missing_binding["forbidden_keys"]
+
+
+def test_raw_store_owner_ledger_requires_state_version_on_every_mutation(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    started = store.start_workflow_run(
+        workflow_id="raw:store_owner_api",
+        intent="raw_store_owner_api",
+        idempotency_key="raw-owner-version-required-v1",
+        correlation_id="StoreOwnerVersionRequired123",
+        scope={
+            "operation": "store_owner_api",
+            "mode": "apply",
+            "request_fingerprint": "a" * 64,
+            "target_ref_sha256": hashlib.sha256(b"target:part-1").hexdigest(),
+            "correlation_id": "StoreOwnerVersionRequired123",
+            "domain": "store",
+            "expected_revision_sha256": "b" * 64,
+            "source": "store",
+            "verification_class": "exact_entity",
+        },
+    )
+    assert started["ok"] is True
+
+    transition = store.transition_workflow_run(started["id"], status="executing", message="raw execute store_owner_api")
+    checkpoint = store.checkpoint_workflow_run(
+        started["id"],
+        checkpoint={},
+        message="raw verify store_owner_api",
+    )
+
+    assert transition["error"] == "workflow_state_version_required"
+    assert checkpoint["error"] == "workflow_state_version_required"
+    executing = store.transition_workflow_run(
+        started["id"],
+        status="executing",
+        message="raw execute store_owner_api",
+        expected_state_version=started["state_version"],
+    )
+    external_wait = store.transition_workflow_run(
+        started["id"],
+        status="external_wait",
+        expected_state_version=executing["state_version"],
+    )
+    external_step = store.register_external_step(
+        started["id"],
+        step_id="owner-external-step",
+        connector="store",
+        action="write",
+        expected_state_version=executing["state_version"],
+    )
+    external_complete = store.complete_external_step(
+        started["id"],
+        step_id="owner-external-step",
+        result_refs={"external_ref": "owner-ref"},
+        expected_state_version=executing["state_version"],
+    )
+    resumed = store.resume_workflow_run(started["id"], expected_state_version=executing["state_version"])
+    compatibility_finish = store.finish_manager_run(started["id"])
+
+    assert external_wait["error"] == "store_owner_external_wait_not_allowed"
+    assert external_step["error"] == "store_owner_external_steps_not_allowed"
+    assert external_complete["error"] == "store_owner_external_steps_not_allowed"
+    assert resumed["error"] == "store_owner_resume_not_allowed"
+    assert compatibility_finish["error"] == "store_owner_compatibility_finish_not_allowed"
+    assert store.get_manager_run(started["id"])["item"]["state_version"] == 2
+
+
+def test_rossko_owner_apply_closes_after_secret_safe_operation_state_readback(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    target_id = "path:/api/v1/warehouse/rossko-settings"
+    target_hash = hashlib.sha256(f"target:{target_id}".encode()).hexdigest()
+    expected_revision_hash = "b" * 64
+    correlation_id = "StoreOwnerRosskoClosure123"
+    common = {
+        "contract_id": "ac_" + "c" * 20,
+        "expected_revision_sha256": expected_revision_hash,
+        "operation_id": "update_rossko_settings",
+        "request_fingerprint": "d" * 64,
+        "request_sha256": "e" * 64,
+        "schema_hash": "f" * 64,
+        "target_ref_sha256": target_hash,
+        "verification_class": "operation_specific_state",
+    }
+    started = store.start_workflow_run(
+        workflow_id="raw:store_owner_api",
+        intent="raw_store_owner_api",
+        idempotency_key="raw-owner-rossko-closure-v1",
+        correlation_id=correlation_id,
+        scope={
+            "operation": "store_owner_api",
+            "mode": "apply",
+            "request_fingerprint": common["request_fingerprint"],
+            "target_ref_sha256": target_hash,
+            "correlation_id": correlation_id,
+            "domain": "store",
+            "expected_revision_sha256": expected_revision_hash,
+            "source": "store",
+            "verification_class": "operation_specific_state",
+        },
+    )
+    executing = store.transition_workflow_run(
+        started["id"],
+        status="executing",
+        message="raw execute store_owner_api",
+        expected_state_version=started["state_version"],
+    )
+    checkpoint = store.checkpoint_workflow_run(
+        started["id"],
+        checkpoint={
+            "phase": "transport_result",
+            "operation": "store_owner_api",
+            "status": "compensating",
+            **common,
+        },
+        message="raw verify store_owner_api",
+        expected_state_version=executing["state_version"],
+    )
+    compensating = store.transition_workflow_run(
+        started["id"],
+        status="compensating",
+        message="raw verification failed after executor applied store_owner_api",
+        verification={"executor_ok": True, "passed": False},
+        expected_state_version=checkpoint["state_version"],
+    )
+    compact_ref = {
+        "entity": "store_state",
+        "id": "rossko-settings",
+        "version": "9" * 64,
+    }
+    readback_hash = hashlib.sha256(
+        b"store-owner-readback-ref-v1\0"
+        + json.dumps(
+            {
+                **compact_ref,
+                "target_ref_sha256": target_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    completed = store.transition_workflow_run(
+        started["id"],
+        status="completed",
+        message="raw completed store_owner_api",
+        summary="raw:store_owner_api",
+        verification={
+            "executor_ok": True,
+            "exact_readback_verified": True,
+            **common,
+            "readback_class": "operation_specific_state",
+            "operation_state_ref_sha256": target_hash,
+            "readback_ref_sha256": readback_hash,
+            "compact_ref": compact_ref,
+        },
+        expected_state_version=compensating["state_version"],
+    )
+
+    assert completed["ok"] is True
+    assert store.get_manager_run(started["id"])["item"]["status"] == "completed"
+
+
+def test_raw_store_owner_ledger_retention_is_bounded_and_cascades_events(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    def start(key: str, correlation: str):
+        return store.start_workflow_run(
+            workflow_id="raw:store_owner_api",
+            intent="raw_store_owner_api",
+            idempotency_key=key,
+            correlation_id=correlation,
+            scope={
+                "operation": "store_owner_api",
+                "mode": "apply",
+                "request_fingerprint": "a" * 64,
+                "target_ref_sha256": hashlib.sha256(b"target:part-1").hexdigest(),
+                "correlation_id": correlation,
+                "domain": "store",
+                "expected_revision_sha256": "b" * 64,
+                "source": "store",
+                "verification_class": "exact_entity",
+            },
+        )
+
+    stale = start("raw-owner-retention-stale-v1", "StoreOwnerRetentionStale123")
+    unresolved = start("raw-owner-retention-unresolved-v1", "StoreOwnerRetentionUnresolved123")
+    assert stale["ok"] is True
+    assert unresolved["ok"] is True
+    cutoff = (datetime.now(UTC) - timedelta(days=181)).isoformat()
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE manager_runs SET updated_at = ? WHERE id = ?",
+            (cutoff, stale["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE manager_runs
+            SET status = 'compensating', updated_at = ?,
+                checkpoint_json = '{"phase":"transport_result"}'
+            WHERE id = ?
+            """,
+            (cutoff, unresolved["id"]),
+        )
+        smoke_cursor = conn.execute(
+            """
+            INSERT INTO manager_runs
+              (intent, workflow_id, status, dry_run, source, started_at, updated_at)
+            VALUES ('release_smoke', 'raw:api:/api/change_feed/bootstrap',
+                    'completed', 1, 'release-smoke', ?, ?)
+            """,
+            (cutoff, cutoff),
+        )
+        smoke_id = smoke_cursor.lastrowid
+        assert (
+            conn.execute("SELECT COUNT(*) FROM manager_run_events WHERE run_id = ?", (stale["id"],)).fetchone()[0] == 1
+        )
+
+    fresh = start("raw-owner-retention-fresh-v1", "StoreOwnerRetentionFresh123")
+
+    assert fresh["ok"] is True
+    assert store.get_manager_run(stale["id"])["ok"] is False
+    assert store.get_manager_run(unresolved["id"])["ok"] is True
+    assert smoke_id is not None
+    assert store.get_manager_run(smoke_id)["ok"] is False
+    with store.connect() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM manager_run_events WHERE run_id = ?", (stale["id"],)).fetchone()[0] == 0
+        )
 
 
 def test_store_workflow_rejects_pii_or_secret_values_in_structured_refs(tmp_path):

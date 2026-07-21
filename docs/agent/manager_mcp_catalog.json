@@ -1,9 +1,9 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-07-19",
-  "tool_count": 70,
-  "exposed_directly_by": "python -m autostop_manager.mcp_server",
+  "last_verified": "2026-07-21",
+  "tool_count": 72,
+  "exposed_directly_by": ".venv/bin/python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
   "memory_is_source_of_truth_for": [
     "owner preferences",
@@ -95,7 +95,9 @@
     "store_search",
     "store_entity_context",
     "download_store_quote_vin_photo",
-    "store_management_action"
+    "store_management_action",
+    "store_owner_capabilities",
+    "store_owner_api"
   ],
   "memory_quality_tools": [
     "audit_memory",
@@ -134,6 +136,8 @@
     "store_entity_context",
     "download_store_quote_vin_photo",
     "store_management_action",
+    "store_owner_capabilities",
+    "store_owner_api",
     "get_store_analytics_report",
     "prepare_action_contract",
     "prepare_crm_card_action",
@@ -206,6 +210,8 @@
     "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary, full, or full_with_vin_photo detail. General reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, drafts, and bounded VIN-photo metadata. Gateway maps it through agent_entity_context and never persists the payload.",
     "download_store_quote_vin_photo": "INTERNAL_ONLY. Read one exact quote VIN-photo JPEG preview through the dedicated quote credential and expected photo SHA-256. Bytes are transient only; Gateway maps it through agent_document_workflow with explicit allow_large_output and never exposes it through raw discovery.",
     "store_management_action": "INTERNAL_ONLY. Execute only assign_quote_request, set_quote_request_status, update_quote_request_comment, add_quote_request_note, replace_quote_offer_drafts, set_batch_storage_location, or mark_order_ready after ActionContractV2, exact preread, expected_updated_at, idempotency, correlation, dry_run/apply, and exact readback. Quote drafts remain private. Gateway raw discovery excludes it and agent_inventory_workflow enforces policy.",
+    "store_owner_capabilities": "READ_ONLY RAW_CAPABILITY. Discover the current typed employee API inventory from live Store OpenAPI through the dedicated owner principal; excludes public/customer and human login/logout routes and returns no business data.",
+    "store_owner_api": "OWNER_SCOPED RAW_CAPABILITY. Read or execute one typed employee API operation through the same AutoStop App route used by Flutter. Writes require ActionContractV2 metadata, exact target/revision, idempotency, correlation and a matching schema-bound dry-run proof; applied results stay compensating until exact reread. Responses remain transient.",
     "prepare_action_contract": "Build ActionContractV2 for CRM, store, finance, inventory, documents, files, or Gmail writes with task intent, exact target, idempotency, concurrency, automatic preflight, compensation, and readback verification; store dry-run/apply phase keys remain distinct while their validated or derived correlation stays stable; never performs the write.",
     "prepare_crm_card_action": "Build a dry-run CRM card edit contract with exact description patch, vehicle_profile metadata preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, risk flags, and strict reread verification; never writes CRM.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
@@ -299,7 +305,7 @@
     },
     "store_management_action": {
       "domain": "store_quote_request|store_batch|store_order",
-      "action": "seven-operation allowlist",
+      "action": "one of seven optimized named operations",
       "target_id": "non-empty exact string",
       "planned_changes": "strict operation-specific object",
       "owner_intent": "task-specific string",
@@ -316,6 +322,29 @@
         "set_batch_storage_location": "store_batch; storage_location: non-empty string up to 200",
         "mark_order_ready": "store_order; status: READY from IN_PROGRESS only"
       }
+    },
+    "store_owner_capabilities": {
+      "query": "optional operation/method/path search string",
+      "limit": "integer=200, clamped 1..250 so one call can inventory every current employee operation",
+      "source": "live AutoStop App OpenAPI filtered to employee routes; no business data"
+    },
+    "store_owner_api": {
+      "operation_id": "exact operationId from store_owner_capabilities",
+      "risk": "live read|write|high_risk_write classification; high-risk and existing-target writes require current revision",
+      "schema_hash": "exact SHA-256 operation schema hash returned by live capability discovery and bound into dry-run proof",
+      "mode": "read for GET; dry_run|apply for writes",
+      "target_id": "exact entity or reviewed collection ref for writes",
+      "path_parameters": "exact typed path parameter object",
+      "query": "bounded query object",
+      "body": "bounded JSON request body, transient only",
+      "form": "bounded multipart form fields",
+      "files": "bounded transient base64 files with field, filename, content_type and content_base64",
+      "owner_intent": "task-specific string for writes",
+      "idempotency_key": "unique 8..160 safe identifier for writes",
+      "correlation_id": "8..160 safe identifier for writes",
+      "expected_revision": "current exact revision for writes",
+      "dry_run_proof": "required matching schema-bound plan hash for every apply",
+      "allow_binary_response": "false by default; true only for an explicit bounded document request"
     }
   },
   "natural_language_commands": {
@@ -480,5 +509,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 70
+  "all_tools_count": 72
 }

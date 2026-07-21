@@ -14,7 +14,8 @@ application or admin panel.
   read with no named public workflow.
 - Timezone: `Asia/Krasnoyarsk` for day boundaries and owner-facing periods.
 - Public Gateway v2 surface remains exactly 24 tools; the hidden Manager raw
-  registry has 69 tools after Store management and analytics integration.
+  registry has 72 tools after Store management, analytics, and guarded owner
+  API integration.
 
 The runtime reuses the AutoStop App `store:read` service identity through
 `AUTOSTOP_STORE_READ_TOKEN`; the report is DB-backed and does not call the

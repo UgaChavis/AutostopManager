@@ -143,7 +143,8 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert any("contacts, VIN" in item for item in result["hot_rules"])
     assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
     assert not any("no contact scope" in item for item in result["hot_rules"])
-    assert any("seven-operation allowlist" in item for item in result["forbidden_actions"])
+    assert any("guarded store_owner_api" in item for item in result["forbidden_actions"])
+    assert any("store_owner_capabilities" in item for item in result["read_order"])
     assert any("final page" in item for item in result["verification"])
     assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
 
@@ -174,11 +175,13 @@ def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp
         "replace_quote_offer_drafts",
         "set_batch_storage_location",
         "mark_order_ready",
+        "owner_api_fallback",
     }
     comment = write_brief["route"]["operation_selection"]["update_quote_request_comment"]
     note = write_brief["route"]["operation_selection"]["add_quote_request_note"]
     assert "replace or clear" in comment["use_when"]
     assert "append" in note["use_when"]
+    assert "employee/admin OpenAPI" in write_brief["route"]["operation_selection"]["owner_api_fallback"]["use_when"]
 
 
 def test_store_agent_brief_deterministically_selects_each_write_operation(tmp_path):

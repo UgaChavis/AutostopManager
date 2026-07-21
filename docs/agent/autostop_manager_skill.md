@@ -25,9 +25,11 @@ Default owner-facing style: Russian, short, practical, direct.
    modes, then reread the exact target and verify it.
 5. For store work, open `docs/agent/store_management_playbook.md`; use
    `agent_board_digest(scope="store")`, store entities in `agent_search` and
-   `agent_entity_context`, and `agent_inventory_workflow` only for the seven
-   allowlisted writes. Bootstrap is one stateless snapshot request and never
-   reads or advances the owner-visible `store_digest` cursor.
+   `agent_entity_context`. Prefer `agent_inventory_workflow` for its seven
+   optimized named writes; resolve every other employee action through guarded
+   `store_owner_capabilities` and `store_owner_api` with the reserved
+   `store:owner` principal. Bootstrap is one stateless snapshot request and
+   never reads or advances the owner-visible `store_digest` cursor.
 6. For Gmail work, open `docs/agent/gmail_workflow_playbook.md` and read/search
    before any mailbox mutation.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or multi-step work,
@@ -62,7 +64,7 @@ covers the task may you use `discover_raw_capabilities`,
 | --- | --- | --- |
 | CRM manager summaries | `docs/agent/crm_manager_data_playbook.md` | Return safe summaries and quality signals only. |
 | Store analytics | `docs/agent/store_analytics_playbook.md`, `get_store_analytics_report` | Aggregate-only storefront report in Asia/Krasnoyarsk; no raw events, identifiers, search text, or customer data. |
-| AutoStop App store | `docs/agent/store_management_playbook.md` | Scoped store API, isolated cursors, exact quote context, sourcing lookup, stock locations, and seven-operation ActionContract allowlist. General Drom/Avito sourcing and service заказ-наряд remain outside this route. |
+| AutoStop App store | `docs/agent/store_management_playbook.md` | Reliable Store feed, scoped named workflows, and full employee API parity through schema-bound `store:owner`; general Drom/Avito sourcing and service заказ-наряд remain outside this route. |
 | `Приберись` | `docs/agent/board_cleanup_autopilot_playbook.md` | Non-destructive card cleanup; no movement/archive/order/payment/cashbox writes without separate explicit command. |
 | CRM card descriptions | `docs/agent/crm_card_description_standard.md` | Use for public description create/update/cleanup/writeback; keep text laconic, formatted, and free of sources/provenance, risk blocks, selection method, and supplier-check reminders. |
 | Ready unpaid / daily control | `agent_board_workflow` with `list_ready_unpaid_cards` / `apply_ready_unpaid_followups` | Use service-management playbook; dry-run before writes. |
@@ -101,20 +103,22 @@ covers the task may you use `discover_raw_capabilities`,
 
 - Read store state only through the internal pure-read AutoStop App agent API;
   do not access its database or legacy mutating GET routes.
-- Allowed writes are quote assignment, quote NEW/IN_PROGRESS, quote internal
-  comment, append-only quote note, private structured quote-offer draft
-  replacement, exact batch storage location, and exact IN_PROGRESS order READY.
-- Quote drafts never publish, notify, approve, cancel, convert, or order from a
-  supplier.
-- Require exact target reread, `expected_updated_at`, ActionContractV2, unique
-  idempotency key, correlation ID, `dry_run`, `apply`, and exact reread through
-  `agent_inventory_workflow`. READY dry-run must disclose notification effects.
+- Seven common quote/batch/READY actions use strict named
+  `agent_inventory_workflow`; their quote-draft and notification constraints
+  remain operation-specific.
+- Every other action available to an authorized employee uses the live
+  operation/schema from guarded `store_owner_capabilities`, then
+  `store_owner_api` with `store:owner`; never a human ADMIN session.
+- Require task-specific owner intent, exact target/current revision where
+  applicable, ActionContractV2, unique idempotency key, correlation ID,
+  schema-bound `dry_run`, `apply`, and operation-specific exact reread.
 - Keep applied but unverified results in `compensating` until exact
   reconciliation. An idempotent replay may already match without advancing the
   revision again.
-- Never change store prices, products, customers, quantities, finance,
-  COMPLETE/ANNULLED/RETURNED, ROSSKO orders, marketplace publication, bulk
-  state, messages, secrets, or arbitrary settings.
+- High-risk prices, stock, finance, returns, destructive, bulk, publication,
+  messaging, and settings actions require stricter preflight/readback but are
+  not hidden from an explicitly authorized owner principal. Never bypass the
+  Store API or expose secrets.
 
 ## Memory Use
 

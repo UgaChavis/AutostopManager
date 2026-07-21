@@ -89,12 +89,14 @@ def test_store_runtime_getters_use_only_explicit_injected_environment_names(monk
     monkeypatch.setenv("AUTOSTOP_STORE_READ_TOKEN", "read-runtime-token")
     monkeypatch.setenv("AUTOSTOP_STORE_QUOTE_TOKEN", "quote-runtime-token")
     monkeypatch.setenv("AUTOSTOP_STORE_MANAGE_TOKEN", "manage-runtime-token")
+    monkeypatch.setenv("AUTOSTOP_STORE_OWNER_TOKEN", "owner-runtime-token")
     monkeypatch.setenv("STORE_ADMIN_PASSWORD", "must-not-be-used")
 
     assert config.get_store_api_url() == "http://autostop-app:8000/internal/agent/v1"
     assert config.get_store_read_token() == "read-runtime-token"
     assert config.get_store_quote_token() == "quote-runtime-token"
     assert config.get_store_manage_token() == "manage-runtime-token"
+    assert config.get_store_owner_token() == "owner-runtime-token"
 
 
 def test_store_api_url_does_not_duplicate_agent_prefix(monkeypatch):

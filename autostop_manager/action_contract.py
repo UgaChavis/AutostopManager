@@ -6,6 +6,8 @@ import math
 import re
 from typing import Any
 
+from .store_owner_api import is_safe_reversible_collection_create
+
 
 MUTATING_ACTIONS = {
     "create",
@@ -38,6 +40,7 @@ MUTATING_ACTIONS = {
     "mark_order_ready",
     "add_quote_request_note",
     "replace_quote_offer_drafts",
+    "execute_owner_api",
 }
 
 CREATE_ACTIONS = {
@@ -126,6 +129,7 @@ EXECUTOR_TOOLS = {
     ("store_quote_request", "replace_quote_offer_drafts"): "agent_inventory_workflow",
     ("store_batch", "set_batch_storage_location"): "agent_inventory_workflow",
     ("store_order", "mark_order_ready"): "agent_inventory_workflow",
+    ("store_owner_api", "execute_owner_api"): "store_owner_api",
 }
 
 INVENTORY_EXECUTOR_TOOLS = {
@@ -143,7 +147,7 @@ FINANCIAL_TRANSACTION_ACTIONS = {
 DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive"}
 TARGET_ONLY_ACTIONS = {"delete", "archive"}
 EXTERNAL_DOMAINS = {"gmail"}
-STORE_DOMAINS = {"store_quote_request", "store_batch", "store_order"}
+STORE_DOMAINS = {"store_quote_request", "store_batch", "store_order", "store_owner_api"}
 STORE_ACTIONS = {
     ("store_quote_request", "assign_quote_request"),
     ("store_quote_request", "set_quote_request_status"),
@@ -153,6 +157,7 @@ STORE_ACTIONS = {
     ("store_batch", "set_batch_storage_location"),
     ("store_order", "mark_order_ready"),
 }
+STORE_OWNER_ACTIONS = {("store_owner_api", "execute_owner_api")}
 STORE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
 MAX_MONEY_MINOR = 100_000_000_000_000
 MAX_MONEY_AMOUNT = MAX_MONEY_MINOR / 100
@@ -190,11 +195,14 @@ def prepare_action_contract(
     key = str(idempotency_key or "").strip()
     requested_correlation_id = str(correlation_id or "").strip()
     revision = str(expected_revision or "").strip() or None
+    owner_collection_create = _is_store_owner_collection_create(normalized_domain, changes)
     exact_target_id_required = (
         normalized_action not in CREATE_ACTIONS
         and (normalized_domain, normalized_action) not in COLLECTION_TARGET_ACTIONS
     )
-    concurrency_required = exact_target_id_required or normalized_domain in FINANCIAL_DOMAINS
+    concurrency_required = (
+        exact_target_id_required and not owner_collection_create
+    ) or normalized_domain in FINANCIAL_DOMAINS
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -243,7 +251,12 @@ def prepare_action_contract(
         requested=requested_correlation_id,
         contract_id=contract_id,
     )
-    verification_checks = _verification_checks(normalized_domain, normalized_action, dry_run=dry_run)
+    verification_checks = _verification_checks(
+        normalized_domain,
+        normalized_action,
+        dry_run=dry_run,
+        changes=changes,
+    )
     preflight_checks = [
         "exact_target_resolved",
         "task_specific_owner_intent_present",
@@ -256,10 +269,14 @@ def prepare_action_contract(
         preflight_checks.extend(["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"])
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
-    if normalized_domain in STORE_DOMAINS:
-        preflight_checks.extend(["store_target_reread", "store_expected_updated_at_matches", "store_scope_allowed"])
-        if normalized_action == "mark_order_ready":
-            preflight_checks.extend(["store_order_current_status_is_in_progress", "notification_effect_disclosed"])
+    preflight_checks.extend(
+        _store_preflight_checks(
+            domain=normalized_domain,
+            action=normalized_action,
+            revision=revision,
+            owner_collection_create=owner_collection_create,
+        )
+    )
 
     workflow_operation = (
         normalized_action
@@ -385,8 +402,11 @@ def _validate_store_changes(
     blockers: list[str],
     warnings: list[str],
 ) -> None:
-    if (domain, action) not in STORE_ACTIONS:
+    if (domain, action) not in STORE_ACTIONS | STORE_OWNER_ACTIONS:
         blockers.append("unsupported_store_management_operation")
+        return
+    if domain == "store_owner_api":
+        _validate_store_owner_api_changes(changes, blockers)
         return
     allowed_fields: dict[tuple[str, str], set[str]] = {
         ("store_quote_request", "assign_quote_request"): {"assignee_id"},
@@ -429,6 +449,120 @@ def _validate_store_changes(
         if str(changes.get("status") or "").strip().upper() != "READY":
             blockers.append("store_order_ready_status_required")
         warnings.append("store_order_ready_may_notify_customer")
+
+
+def _validate_store_owner_api_changes(changes: dict[str, Any], blockers: list[str]) -> None:
+    allowed = {
+        "operation_id",
+        "method",
+        "path_template",
+        "plan_hash",
+        "risk",
+        "schema_hash",
+        "concrete_path",
+        "query_fields",
+        "query_sha256",
+        "request_sha256",
+        "verification_class",
+        "body_fields",
+        "form_fields",
+        "file_fields",
+    }
+    if set(changes).difference(allowed):
+        blockers.append("unsupported_store_change_fields")
+    if not _nonempty_string(changes.get("operation_id")):
+        blockers.append("missing_store_owner_operation_id")
+    if str(changes.get("method") or "").strip().upper() not in {
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+    }:
+        blockers.append("invalid_store_owner_method")
+    if not _nonempty_string(changes.get("path_template")):
+        blockers.append("missing_store_owner_path_template")
+    concrete_path = str(changes.get("concrete_path") or "").strip()
+    if not _store_owner_concrete_path_matches(
+        str(changes.get("path_template") or "").strip(),
+        concrete_path,
+    ):
+        blockers.append("invalid_store_owner_concrete_path")
+    if str(changes.get("risk") or "").strip() not in {"write", "high_risk_write"}:
+        blockers.append("invalid_store_owner_risk")
+    if re.fullmatch(r"[0-9a-f]{64}", str(changes.get("plan_hash") or "")) is None:
+        blockers.append("invalid_store_owner_plan_hash")
+    schema_hash = str(changes.get("schema_hash") or "").strip()
+    if re.fullmatch(r"[0-9a-f]{64}", schema_hash) is None:
+        blockers.append("invalid_store_owner_schema_hash")
+    for hash_field in ("query_sha256", "request_sha256"):
+        if re.fullmatch(r"[0-9a-f]{64}", str(changes.get(hash_field) or "").strip()) is None:
+            blockers.append(f"invalid_store_owner_{hash_field}")
+    if str(changes.get("verification_class") or "").strip() not in {
+        "absence_plus_audit",
+        "collection_membership",
+        "exact_entity",
+        "operation_specific_state",
+    }:
+        blockers.append("invalid_store_owner_verification_class")
+    for field in ("body_fields", "form_fields", "file_fields", "query_fields"):
+        if field in changes and not (
+            isinstance(changes[field], list) and all(isinstance(item, str) and item for item in changes[field])
+        ):
+            blockers.append(f"invalid_store_owner_{field}")
+
+
+def _store_preflight_checks(
+    *,
+    domain: str,
+    action: str,
+    revision: str | None,
+    owner_collection_create: bool,
+) -> list[str]:
+    if domain not in STORE_DOMAINS:
+        return []
+    checks = ["store_target_reread", "store_scope_allowed"]
+    if revision:
+        checks.append("store_expected_updated_at_matches")
+    elif owner_collection_create:
+        checks.append("store_reviewed_collection_create_confirmed")
+    if action == "mark_order_ready":
+        checks.extend(["store_order_current_status_is_in_progress", "notification_effect_disclosed"])
+    return checks
+
+
+def _store_owner_concrete_path_matches(path_template: str, concrete_path: str) -> bool:
+    if (
+        not path_template.startswith("/api/v1/")
+        or not concrete_path.startswith("/api/v1/")
+        or len(path_template) > 500
+        or len(concrete_path) > 1000
+        or any(character in concrete_path for character in ("?", "#", "\\"))
+    ):
+        return False
+    template_segments = path_template.split("/")
+    concrete_segments = concrete_path.split("/")
+    if len(template_segments) != len(concrete_segments):
+        return False
+    for template_segment, concrete_segment in zip(template_segments, concrete_segments, strict=True):
+        if template_segment.startswith("{") and template_segment.endswith("}"):
+            if not concrete_segment or concrete_segment in {".", ".."}:
+                return False
+        elif template_segment != concrete_segment:
+            return False
+    return True
+
+
+def _is_store_owner_collection_create(domain: str, changes: dict[str, Any]) -> bool:
+    if domain != "store_owner_api":
+        return False
+    path = str(changes.get("path_template") or "").strip()
+    return (
+        is_safe_reversible_collection_create(
+            str(changes.get("method") or "").strip(),
+            path,
+        )
+        and str(changes.get("risk") or "").strip() == "write"
+    )
 
 
 def _normalize_store_planned_changes(action: str, changes: dict[str, Any]) -> dict[str, Any]:
@@ -760,8 +894,46 @@ def _nonempty_string_list(value: Any) -> bool:
     )
 
 
-def _verification_checks(domain: str, action: str, *, dry_run: bool) -> list[str]:
+def _verification_checks(
+    domain: str,
+    action: str,
+    *,
+    dry_run: bool,
+    changes: dict[str, Any] | None = None,
+) -> list[str]:
     checks = ["write_response_ok", "target_reread", "planned_diff_exact", "no_unplanned_fields"]
+    if domain == "store_owner_api":
+        owner_changes = changes or {}
+        verification_class = str(owner_changes.get("verification_class") or "")
+        class_checks = {
+            "absence_plus_audit": ["store_exact_absence_confirmed", "store_audit_correlation_present"],
+            "collection_membership": ["store_created_entity_or_collection_membership_reread"],
+            "exact_entity": ["store_exact_entity_reread"],
+            "operation_specific_state": ["store_operation_specific_state_reread"],
+        }.get(verification_class, ["store_operation_specific_state_reread"])
+        if dry_run:
+            checks = [
+                "dry_run_response_ok",
+                "store_openapi_schema_validated",
+                "store_server_revision_matched",
+                "store_request_fingerprint_bound",
+                "store_server_dry_run_receipt_recorded",
+                "store_business_state_unchanged",
+                *class_checks,
+                "no_unplanned_fields",
+            ]
+        else:
+            checks = [
+                "write_response_ok",
+                "store_response_schema_validated",
+                "store_server_revision_matched",
+                "store_idempotency_receipt_replayed_or_recorded",
+                *class_checks,
+                "store_audit_correlation_present",
+                "store_result_compensating_until_verified",
+                "no_unplanned_fields",
+            ]
+        return list(dict.fromkeys(checks))
     if domain == "board" and action == "bulk_set_deadline_if_below":
         return [
             "write_response_ok",

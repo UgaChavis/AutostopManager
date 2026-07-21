@@ -179,6 +179,23 @@ def test_probe_routes_project_refactoring_to_startup_sources(tmp_path):
     assert result["open_first"] == "AGENTS.md"
 
 
+def test_probe_routes_full_ecosystem_parity_to_dedicated_program(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "Полностью отрефакторировать экосистему AutostopManager, получить "
+        "функциональный паритет CRM и AutoStop App и production-ready change feed",
+        limit=5,
+    )
+
+    assert result["ok"] is True
+    assert result["best_domain"] == "ecosystem_capability_parity"
+    assert result["open_first"] == "AGENTS.md"
+    assert result["command_route"]["command_id"] == "ecosystem_capability_parity"
+
+
 def test_project_engineering_hint_does_not_capture_automotive_fault_code_tests():
     hints = knowledge_base._domain_hints("код ошибки P0171 тест датчика кислорода")
 
@@ -255,6 +272,21 @@ def test_store_write_phrases_route_to_allowlisted_management_workflow():
         route = find_command_route(phrase)
         assert route is not None, phrase
         assert route["workflow_id"] == "store_management_workflow", phrase
+
+
+def test_full_store_owner_parity_phrases_route_to_management_workflow():
+    for phrase in [
+        "создай товар в магазине",
+        "измени цену товара",
+        "прими товар на склад",
+        "оформи возврат магазина",
+        "опубликуй предложение магазина",
+        "измени настройки магазина",
+    ]:
+        route = find_command_route(phrase)
+        assert route is not None, phrase
+        assert route["workflow_id"] == "store_management_workflow", phrase
+        assert "store_owner_api" in route["write_domains"], phrase
 
 
 def test_general_drom_sourcing_and_crm_repair_order_stay_outside_store_route(tmp_path):

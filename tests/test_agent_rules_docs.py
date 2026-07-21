@@ -203,11 +203,12 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
         "AUTOSTOP_STORE_READ_TOKEN",
         "AUTOSTOP_STORE_QUOTE_TOKEN",
         "AUTOSTOP_STORE_MANAGE_TOKEN",
+        "AUTOSTOP_STORE_OWNER_TOKEN",
         "raw store",
     ]:
         assert expected in combined
 
-    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 70
+    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 72
     assert set(manager_catalog["store_tools"]) == {
         "store_runtime_status",
         "store_digest",
@@ -215,9 +216,11 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
         "store_entity_context",
         "download_store_quote_vin_photo",
         "store_management_action",
+        "store_owner_capabilities",
+        "store_owner_api",
     }
     assert crm_catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
-    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 70
+    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 72
     assert crm_catalog["agent_gateway_v2"]["store_extensions"]["public_tool_count_unchanged"] == 24
     assert "dedicated quote credential" in crm_catalog["agent_gateway_v2"]["store_extensions"]["agent_entity_context"]
     assert "dedicated quote credential" in manager_catalog["tool_contracts"]["store_entity_context"]
@@ -240,9 +243,14 @@ def test_store_command_reference_covers_live_entities_operations_and_strict_fiel
 
     assert set(read_selection) == set(STORE_ENTITIES)
     assert set(catalog_search["filters_by_entity"]) == set(STORE_ENTITIES)
-    assert set(operation_selection) == set(STORE_MANAGEMENT_OPERATIONS)
+    assert set(operation_selection) == set(STORE_MANAGEMENT_OPERATIONS) | {"owner_api_fallback"}
     assert set(catalog_actions["planned_changes_by_action"]) == set(STORE_MANAGEMENT_OPERATIONS)
-    assert {(value["domain"], operation) for operation, value in operation_selection.items()} == STORE_ACTIONS
+    assert {
+        (value["domain"], operation)
+        for operation, value in operation_selection.items()
+        if operation != "owner_api_fallback"
+    } == STORE_ACTIONS
+    assert operation_selection["owner_api_fallback"]["domain"] == "store_owner_api"
     assert all(value["aliases"] for value in operation_selection.values())
 
     strict_fields = {
@@ -266,8 +274,9 @@ def test_store_command_reference_covers_live_entities_operations_and_strict_fiel
         "update_quote_request_comment",
         "append-only `add_quote_request_note`",
         "raw job messages",
-        "retry and publication",
-        "not supported Store management commands",
+        "Retry and publication",
+        "not supported by the optimized named workflow",
+        "store_owner_api",
     ]:
         assert required in playbook
 

@@ -3,6 +3,51 @@
   "entrypoint": "docs/agent/knowledge_shelves.md",
   "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_shelves.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
   "domains": {
+    "ecosystem_capability_parity": {
+      "title": "AutostopManager, CRM, and Store production capability parity",
+      "use_when": [
+        "owner requests a full ecosystem refactor or production-readiness program",
+        "CRM or Store human UI actions must become available through Manager",
+        "building capability coverage, change-feed, audit, performance, migration, or deploy evidence"
+      ],
+      "aliases": [
+        "functional parity",
+        "функциональный паритет",
+        "production-ready AutostopManager",
+        "полный рефакторинг CRM и магазина",
+        "все действия пользователя",
+        "матрица покрытия"
+      ],
+      "keywords": [
+        "Gateway capability parity",
+        "CRM UI backend coverage",
+        "Store UI backend coverage",
+        "capability matrix",
+        "CRM Store change feed",
+        "cursor ACK replay tombstone",
+        "multi-repository rollback deploy"
+      ],
+      "questions": [
+        "как добиться полного паритета Manager с CRM и Store",
+        "какие человеческие действия ещё недоступны через Gateway",
+        "как проверить полноту событий и безопасно развернуть изменения"
+      ],
+      "source_of_truth_files": [
+        "AGENTS.md",
+        "README.md",
+        "docs/agent/autostop_manager_skill.md",
+        "docs/agent/deployment_runbook.md",
+        "docs/agent/command_routes.json",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "AGENTS.md",
+        "docs/agent/autostop_manager_skill.md",
+        "docs/agent/deployment_runbook.md",
+        "docs/agent/command_routes.json"
+      ]
+    },
     "startup_and_identity": {
       "title": "Manager startup, identity, and operating rules",
       "use_when": [
@@ -1839,7 +1884,7 @@
       ]
     },
     "store_management": {
-      "title": "AutoStop App store read, digest, stock, orders, quotes, and minimal management",
+      "title": "AutoStop App full owner parity, reliable digest, stock, orders, quotes, warehouse, and marketplace",
       "use_when": [
         "owner asks what is new in the store",
         "store internet orders or quote requests",
@@ -1847,7 +1892,8 @@
         "physical reserved available stock or storage locations",
         "warehouse receipts shipments or low stock",
         "Avito or Drom marketplace export errors",
-        "one of the seven allowlisted store management actions"
+        "one of the optimized named store actions",
+        "any owner-approved employee Store operation exposed by the live OpenAPI"
       ],
       "aliases": [
         "AutoStop App",
@@ -1865,7 +1911,9 @@
         "место хранения",
         "остатки магазина",
         "приходы и отгрузки",
-        "ошибки выгрузки Avito Drom"
+        "ошибки выгрузки Avito Drom",
+        "полное управление магазином",
+        "товары цены клиенты поставщики склад возвраты публикации"
       ],
       "keywords": [
         "store_agent_v1",
@@ -1882,7 +1930,11 @@
         "physical reserved available",
         "opaque cursor",
         "expected_updated_at",
-        "agent_inventory_workflow"
+        "agent_inventory_workflow",
+        "store_owner_capabilities",
+        "store_owner_api",
+        "store:owner",
+        "schema-bound dry-run proof"
       ],
       "questions": [
         "что нового появилось в магазине",
@@ -1897,7 +1949,8 @@
         "в каких ячейках лежит деталь",
         "какие позиции заканчиваются",
         "какие ошибки выгрузки Avito или Drom",
-        "какие изменения магазина разрешены через dry_run и apply"
+        "какие изменения магазина разрешены через dry_run и apply",
+        "как выполнить любое действие сотрудника магазина через owner principal"
       ],
       "source_of_truth_files": [
         "docs/agent/store_management_playbook.md",
@@ -2057,7 +2110,8 @@
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
     "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md",
-    "store_management": "rg -n \"store_|магазин|заявк на подбор|состояние склада|место хранения|physical|reserved|available|marketplace|Avito|Drom\" docs/agent/store_management_playbook.md docs/agent/manager_mcp_catalog.json docs/agent/crm_mcp_catalog.json"
+    "store_management": "rg -n \"store_|магазин|заявк на подбор|состояние склада|место хранения|physical|reserved|available|marketplace|Avito|Drom\" docs/agent/store_management_playbook.md docs/agent/manager_mcp_catalog.json docs/agent/crm_mcp_catalog.json",
+    "ecosystem_capability_parity": "rg -n \"functional parity|функциональн.*паритет|production-ready|change feed|Gateway v2|матриц.*покрыт\" AGENTS.md README.md docs/agent"
   },
-  "updated_at": "2026-07-16"
+  "updated_at": "2026-07-21"
 }

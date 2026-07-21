@@ -27,30 +27,30 @@ Do not commit or push:
 
 Run before publishing:
 
-```powershell
-python -m autostop_manager.cli knowledge-sync
-python -m autostop_manager.cli knowledge-audit
-python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli skills-audit
-python -m autostop_manager.cli cleanup-audit
-python -m ruff check .
-python -m ruff format --check autostop_manager tests
-python -m mypy autostop_manager
-python -m pytest -q
-python -m coverage run -m pytest -q
-python -m coverage report
+```bash
+.venv/bin/python -m autostop_manager.cli knowledge-sync
+.venv/bin/python -m autostop_manager.cli knowledge-audit
+.venv/bin/python -m autostop_manager.cli annotations-audit
+.venv/bin/python -m autostop_manager.cli skills-audit
+.venv/bin/python -m autostop_manager.cli cleanup-audit
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check autostop_manager tests
+.venv/bin/python -m mypy autostop_manager
+.venv/bin/python -m pytest -q
+.venv/bin/python -m coverage run -m pytest -q
+.venv/bin/python -m coverage report
 node --check frontend/control-center/app.js
 ```
 
 Optional manual checks:
 
-```powershell
-python -m autostop_manager.cli today
-python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
-python -m autostop_manager.cli knowledge-probe "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM"
-python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
-python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
-python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
+```bash
+.venv/bin/python -m autostop_manager.cli today
+.venv/bin/python -m autostop_manager.cli service-plan --area parts --city Красноярск --vehicle "Lexus RX200T" --part-number 90311-89014 --urgency today
+.venv/bin/python -m autostop_manager.cli knowledge-probe "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM"
+.venv/bin/python -m autostop_manager.cli knowledge-probe "стрелковка KOMBI BMW приборка coding"
+.venv/bin/python -m autostop_manager.cli knowledge-probe "найти рулевую рейку в Красноярске цена наличие контрактная"
+.venv/bin/python -m autostop_manager.cli knowledge-search "route card aliases source_of_truth_files" --domain knowledge_intake
 ```
 
 ## GitHub Publish Checklist
@@ -100,8 +100,8 @@ and logs.
 
 Default local command:
 
-```powershell
-python -m autostop_manager.mcp_server
+```bash
+.venv/bin/python -m autostop_manager.mcp_server
 ```
 
 Optional environment:
@@ -120,14 +120,16 @@ $env:AUTOSTOP_STORE_API_URL = "http://autostop-app:8000"
 $env:AUTOSTOP_STORE_READ_TOKEN = "<runtime-secret>"
 $env:AUTOSTOP_STORE_QUOTE_TOKEN = "<runtime-secret>"
 $env:AUTOSTOP_STORE_MANAGE_TOKEN = "<runtime-secret>"
+$env:AUTOSTOP_STORE_OWNER_TOKEN = "<runtime-secret>"
 ```
 
 Never print these token values, bake them into an image, commit them, or reuse a
 human ADMIN password. AutoStop App stores only service-principal hash/metadata.
 The Manager client appends `/internal/agent/v1`, uses the read token for general
 GET, the quote token for exact full quote/sourcing reads, and the manage token
-only for the seven allowlisted actions; it has no database or
-`.env` access.
+for the seven optimized named actions; the independent owner principal covers
+the full employee OpenAPI through the guarded transport. Manager has no Store
+database access and never reads the Store application's `.env`.
 
 The hidden read-only `get_store_analytics_report` capability uses that same
 internal URL and `store:read` token for the DB-backed aggregate report. Never
@@ -162,9 +164,15 @@ AUTOSTOP_MANAGER_PATH: /opt/AutostopManager
 Manager MCP tools are loaded by the CRM container when the manager checkout is
 mounted and `autostop_manager.mcp_tools` can be imported. The only standalone
 Manager unit is the hardened hourly `autostop-integration-audit.timer`; it runs
-read-only CRM/Store/web checks and validates the current root-only Gmail proof.
+the same immutable Manager release exposed through
+`/opt/autostop-manager-releases/current`, performs read-only CRM/Store/web
+checks, and validates the current root-only Gmail proof. The checkout venv is
+only the Python runtime; imports resolve from the release working directory.
 Install or refresh it with `scripts/install-integration-audit-timer.sh` after
 the corresponding CRM release is live.
+The audit also executes the CRM and Store machine-verifiable capability
+matrices with `--require-complete`; a new human UI/API action without an
+explicit Gateway path or reviewed human-session exemption fails closed.
 
 CRM/Gateway and AutoStop App must share only the dedicated Docker integration
 network needed for the internal agent API. Keep the store database private to
@@ -222,8 +230,11 @@ After deployment, verify:
 - service process is running
 - MCP endpoint answers on configured host/port/path
 - exactly 24 Gateway v2 tools are visible and legacy tools are absent
-- Manager raw registry contains 70 tools, including Store INTERNAL_ONLY
-  adapter tools that are absent from public raw discovery
+- CRM and Store capability matrices report zero unreviewed gaps and valid
+  UI/API/Gateway evidence
+- Manager raw registry contains 72 tools, including Store INTERNAL_ONLY
+  adapters and the guarded owner capability/API pair; none expands the public
+  24-tool Gateway surface
 - OAuth protected-resource/server metadata, PKCE S256, owner approval, refresh
   rotation, audience/scopes, and a clear 401 challenge are verified
 - a saved refresh session still works after a second deploy

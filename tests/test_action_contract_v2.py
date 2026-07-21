@@ -980,3 +980,193 @@ def test_active_board_timer_floor_contract_rejects_archive_scope_and_missing_buf
     assert result["ok"] is False
     assert "active_cards_only_required" in result["preflight"]["blocking_reasons"]
     assert "target_total_seconds_must_exceed_minimum" in result["preflight"]["blocking_reasons"]
+
+
+def test_store_owner_api_contract_is_refs_only_and_routes_to_guarded_transport():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="part-1",
+        planned_changes={
+            "operation_id": "update_part",
+            "method": "PATCH",
+            "path_template": "/api/v1/parts/{id}",
+            "plan_hash": "f" * 64,
+            "risk": "write",
+            "schema_hash": "a" * 64,
+            "concrete_path": "/api/v1/parts/part-1",
+            "query_fields": [],
+            "query_sha256": "b" * 64,
+            "request_sha256": "c" * 64,
+            "verification_class": "exact_entity",
+            "body_fields": ["name", "salePrice"],
+            "file_fields": [],
+        },
+        owner_intent="Обновить точную карточку товара part-1",
+        expected_revision="2026-07-21T00:00:00Z",
+        idempotency_key="store-owner-update-part-001",
+        correlation_id="store-owner-update-part-001",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["ready"] is True
+    assert result["execution"]["tool"] == "store_owner_api"
+    assert "store_server_revision_matched" in result["verification"]["checks"]
+    assert result["ledger"]["store_payload"] is False
+    assert result["ledger"]["store_refs_only"] is True
+    assert "store_exact_entity_reread" in result["verification"]["checks"]
+
+
+def test_store_owner_contract_rejects_request_fingerprint_or_concrete_path_mismatch():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="part-1",
+        planned_changes={
+            "operation_id": "update_part",
+            "method": "PATCH",
+            "path_template": "/api/v1/parts/{id}",
+            "concrete_path": "/api/v1/customers/customer-1",
+            "risk": "write",
+            "schema_hash": "a" * 64,
+            "query_fields": [],
+            "query_sha256": "not-a-hash",
+            "request_sha256": "b" * 64,
+            "verification_class": "exact_entity",
+            "body_fields": ["name"],
+            "form_fields": [],
+            "file_fields": [],
+        },
+        owner_intent="Обновить точный товар",
+        expected_revision="2026-07-21T00:00:00Z",
+        idempotency_key="store-owner-invalid-binding-001",
+    )
+
+    assert result["ok"] is False
+    assert "invalid_store_owner_concrete_path" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_query_sha256" in result["preflight"]["blocking_reasons"]
+
+
+def test_store_owner_api_contract_rejects_untyped_or_unversioned_request():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="part-1",
+        planned_changes={
+            "operation_id": "update_part",
+            "method": "TRACE",
+            "path_template": "/api/v1/parts/{id}",
+            "risk": "unknown",
+            "schema_hash": "invalid",
+            "raw_body": {"name": "forbidden"},
+        },
+        owner_intent="Обновить товар",
+        idempotency_key="store-owner-invalid-001",
+        correlation_id="store-owner-invalid-001",
+    )
+
+    assert result["ok"] is False
+    assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]
+    assert "unsupported_store_change_fields" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_method" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_risk" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_schema_hash" in result["preflight"]["blocking_reasons"]
+
+
+def test_reversible_store_owner_collection_create_does_not_require_fake_revision():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="collection:/api/v1/warehouse/suppliers",
+        planned_changes={
+            "operation_id": "create_supplier",
+            "method": "POST",
+            "path_template": "/api/v1/warehouse/suppliers",
+            "plan_hash": "e" * 64,
+            "risk": "write",
+            "schema_hash": "b" * 64,
+            "concrete_path": "/api/v1/warehouse/suppliers",
+            "query_fields": [],
+            "query_sha256": "c" * 64,
+            "request_sha256": "d" * 64,
+            "verification_class": "collection_membership",
+            "body_fields": ["name"],
+            "file_fields": [],
+        },
+        owner_intent="Создать поставщика по точной команде владельца",
+        idempotency_key="store-owner-create-supplier-001",
+        correlation_id="store-owner-create-supplier-001",
+    )
+
+    assert result["ok"] is True
+    assert result["concurrency"] == {"expected_revision": None, "required": False}
+
+
+def test_high_risk_store_owner_post_still_requires_current_revision():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="warehouse-stock",
+        planned_changes={
+            "operation_id": "receive_batch",
+            "method": "POST",
+            "path_template": "/api/v1/warehouse/receipts/batch",
+            "risk": "high_risk_write",
+            "schema_hash": "c" * 64,
+            "concrete_path": "/api/v1/warehouse/receipts/batch",
+            "query_fields": [],
+            "query_sha256": "d" * 64,
+            "request_sha256": "e" * 64,
+            "verification_class": "operation_specific_state",
+            "body_fields": ["items"],
+            "file_fields": [],
+        },
+        owner_intent="Принять точно проверенную партию",
+        idempotency_key="store-owner-receive-batch-001",
+        correlation_id="store-owner-receive-batch-001",
+    )
+
+    assert result["ok"] is False
+    assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("operation_id", "path_template"),
+    [
+        ("receive_batch", "/api/v1/warehouse/receipts/batch"),
+        ("create_blocked_buyer", "/api/v1/customers/blocked-buyers"),
+        ("export_marketplace_items", "/api/v1/marketplaces/exports"),
+        ("future_unreviewed_create", "/api/v1/future-unreviewed-collection"),
+    ],
+)
+def test_unreviewed_collection_post_cannot_bypass_revision_with_write_risk(
+    operation_id: str,
+    path_template: str,
+):
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id=f"collection:{path_template}",
+        planned_changes={
+            "operation_id": operation_id,
+            "method": "POST",
+            "path_template": path_template,
+            # A stale or compromised classifier must not relax concurrency.
+            "risk": "write",
+            "schema_hash": "d" * 64,
+            "concrete_path": path_template,
+            "query_fields": [],
+            "query_sha256": "e" * 64,
+            "request_sha256": "f" * 64,
+            "verification_class": "operation_specific_state",
+            "body_fields": ["items"],
+            "file_fields": [],
+        },
+        owner_intent="Выполнить проверенную операцию с точным состоянием",
+        idempotency_key=f"store-owner-{operation_id}-001",
+        correlation_id=f"store-owner-{operation_id}-001",
+    )
+
+    assert result["ok"] is False
+    assert result["concurrency"] == {"expected_revision": None, "required": True}
+    assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]

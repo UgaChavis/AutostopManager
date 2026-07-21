@@ -7,7 +7,7 @@ After=network-online.target docker.service
 Type=oneshot
 User=root
 Group=root
-WorkingDirectory=/opt/AutostopManager
+WorkingDirectory=/opt/autostop-manager-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 UMask=0077
 ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.cli integration-audit --output /var/lib/autostop-manager/integration/latest.json
@@ -17,4 +17,3 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/autostop-manager
-
