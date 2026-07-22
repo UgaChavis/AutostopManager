@@ -60,6 +60,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    checkpoints. Use `discover_raw_capabilities` ->
    `get_raw_capability_schema` -> `call_raw_capability` only when no named
    workflow covers the task; never invoke a hidden capability directly.
+8. Resolve the effective `work`/`learning` mode before a non-trivial task. In
+   `learning`, use the project `autostop-learning-loop` skill and close the
+   post-run review before the final answer. Open
+   `docs/agent/intelligent_agent_learning_playbook.md` for the policy.
 
 The production connector must expose exactly 24 Gateway v2 tools. Codex/Apps
 authenticate through owner-approved OAuth 2.1 with PKCE and rotating refresh
@@ -70,6 +74,12 @@ verification.
 
 ## Write Safety
 
+- The owner's active task authorizes the non-financial exact-target changes
+  needed to complete it. Choose scope intelligently, but never expand into
+  unrelated cleanup; retain preflight, idempotency, concurrency, and readback.
+- Payments, cashboxes, refunds, payroll payouts, supplier orders, and any
+  change to a financial total require a direct owner instruction for that
+  exact operation, even in `learning` mode.
 - Before CRM writes: exact target id, dry-run/preflight where available, then
   reread and verify.
 - Seven common quote/batch/READY writes remain optimized named operations in
@@ -78,8 +88,8 @@ verification.
   OpenAPI is available only through guarded `store_owner_api` and the reserved
   `store:owner` principal. Exact full quote reads still use the dedicated
   quote-scoped credential when the named read path is sufficient.
-- Broader Store owner operations are never implicit: require a task-specific
-  owner command, exact OpenAPI operation and target refs, ActionContractV2,
+- Broader Store owner operations must be necessary to the active owner task and
+  use an exact OpenAPI operation and target refs, ActionContractV2,
   dry-run/preflight, unique idempotency and correlation IDs, then exact reread.
   High-risk apply also requires the matching dry-run proof; unresolved outcomes
   remain `compensating`.
@@ -93,13 +103,14 @@ verification.
   `docs/agent/crm_card_description_standard.md`: laconic working facts only;
   no risks, provenance, selection method, supplier-check reminders, or long AI
   explanations.
-- Do not move, archive, delete, change deadlines/indicators, edit repair-order
-  rows/totals, payments, or cashboxes unless the owner gives a separate explicit
-  command for that exact target.
-- Gmail send/archive/delete/label/draft mutations require task-specific owner
-  intent and an exact mailbox target. Agent Gateway v2 does not add a second
-  confirmation state: after exact targets pass preflight, execute once with
-  idempotency and record only message/thread/file refs in the run ledger.
+- Move, archive, delete, change deadlines/indicators, or edit a repair order
+  only when it is necessary to the active task and the exact target passes the
+  normal safeguards. Financial repair-order changes still need direct owner
+  instruction.
+- Gmail send/archive/delete/label/draft mutations may be performed when needed
+  to complete the active owner task and an exact mailbox target is resolved.
+  After preflight, execute once with idempotency and record only
+  message/thread/file refs in the run ledger.
 
 ## Standing Routes
 

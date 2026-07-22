@@ -298,12 +298,12 @@
     {
       "id": "store-write-parity",
       "priority": 38,
-      "rule": "Keep the seven strict quote/batch/READY actions as optimized named agent_inventory_workflow operations. For every other owner-approved action present in the live employee OpenAPI, use guarded store_owner_capabilities then store_owner_api with the reserved store:owner principal. Every write requires exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, operation-specific reread, and refs-only workflow state; an applied but unverified result remains compensating."
+      "rule": "Keep the seven strict quote/batch/READY actions as optimized named agent_inventory_workflow operations. For every other non-financial action necessary to the active owner task and present in the live employee OpenAPI, use guarded store_owner_capabilities then store_owner_api with the reserved store:owner principal. Every write requires exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, operation-specific reread, and refs-only workflow state; an applied but unverified result remains compensating. Supplier orders, refunds, payouts, and financial-total changes need a direct owner instruction."
     },
     {
       "id": "store-write-security-boundary",
       "priority": 39,
-      "rule": "Full Store parity never authorizes anonymous access, direct database writes, human-session reuse, undocumented routes, secret disclosure, or unverified outcomes. High-risk financial, warehouse, bulk, publication, return, delete, and settings operations require exact current state, explicit owner intent, dry-run proof, idempotency, correlation, apply, and exact readback or absence plus audit. Hidden generic legacy Store adapters remain INTERNAL_ONLY; only the guarded owner capability/API pair may be raw-discovered."
+      "rule": "Full Store parity never authorizes anonymous access, direct database writes, human-session reuse, undocumented routes, secret disclosure, or unverified outcomes. High-risk warehouse, bulk, publication, return, delete, and settings operations require exact current state, active-task scope, dry-run proof, idempotency, correlation, apply, and exact readback or absence plus audit. Financial operations additionally require a direct owner instruction. Hidden generic legacy Store adapters remain INTERNAL_ONLY; only the guarded owner capability/API pair may be raw-discovered."
     },
     {
       "id": "gmail-read-order",
@@ -318,12 +318,17 @@
     {
       "id": "gmail-write-safety",
       "priority": 36,
-      "rule": "Do not send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail unless the active workflow contains task-specific owner intent and the exact mailbox targets. Agent Gateway v2 adds no second confirmation state: preview targets, apply automatic preflight and idempotency, inspect the active connector schema, execute once, verify result refs, and never store raw bodies in manager SQLite."
+      "rule": "Send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail only when necessary to complete the active owner task and exact mailbox targets are resolved. Agent Gateway v2 adds no second confirmation state: preview targets, apply automatic preflight and idempotency, inspect the active connector schema, execute once, verify result refs, and never store raw bodies in manager SQLite."
     },
     {
       "id": "write-safety",
       "priority": 40,
-      "rule": "Before CRM writes, identify the exact target by id. Do not overwrite manual card/client fields unless the owner explicitly asks or the board_cleanup_autopilot playbook allows a safe preserving edit."
+      "rule": "Before CRM writes, identify the exact target by id. The active owner task authorizes non-financial exact-target changes needed for completion after preflight and reread; never make unrelated cleanup changes. Do not overwrite manual card/client fields unless the task needs it or the board_cleanup_autopilot playbook allows a safe preserving edit. Payments, cashboxes, refunds, payroll payouts, supplier orders, and changes to financial totals require a direct owner instruction."
+    },
+    {
+      "id": "adaptive-evidence-and-learning-loop",
+      "priority": 41,
+      "rule": "Treat each owner request as an adaptive evidence problem, not a fixed script: split the work into claims, choose CRM, Store, Gmail, VIN/OEM, licensed, official, supplier, public-web, or forum evidence according to ownership and risk, reconcile conflicts, and return one practical conclusion. Resolve the effective work or learning mode at startup. In learning mode, close a privacy-safe post-run review before the final answer, persist only compact technical experience, promote lessons only after verified success, and repair only one reproducible local low-risk issue within the configured budget and with a regression check. Never automatically repair external systems, change credentials, bypass access controls, or make financial changes."
     },
     {
       "id": "journal-important-work",

@@ -36,6 +36,22 @@ Default owner-facing style: Russian, short, practical, direct.
    start a Gateway v2 workflow, checkpoint compact events with
    `expected_state_version`, and finish only with positive readback evidence.
 
+## Intelligent Execution and Learning
+
+Treat routing as adaptive evidence selection, not as a rigid script. Break a
+mixed request into claims, use the source that owns each claim, and consolidate
+the result into one practical recommendation. CRM owns live service facts,
+Store owns internal catalog/stock/price, Gmail owns mail, VIN/EPC owns exact
+applicability, and public or forum evidence supports research rather than
+unverified fitment facts.
+
+Resolve the effective `work`/`learning` mode at startup. `work` uses ordinary
+verification. `learning` additionally requires the project
+`autostop-learning-loop` skill, `post_run_review`, and a closed learning cycle
+before the final response. Read
+`docs/agent/intelligent_agent_learning_playbook.md` for promotion, privacy,
+repair, and budget rules.
+
 ## Source Boundaries
 
 - Local SQLite memory: non-CRM rules, owner preferences, lessons, tasks,
@@ -100,11 +116,11 @@ context, internal availability, VIN/OEM applicability, and external research.
   `docs/agent/crm_card_description_standard.md`.
 - Reread after saving and record verification.
 - Preserve user-entered CRM data.
-- Do not write repair-order rows, payments, cashbox records, deadlines,
-  indicators, moves, archives, or deletes without task-specific owner intent
-  and an exact target. Agent Gateway v2 does not require a second confirmation
-  after automatic preflight, idempotency, concurrency checks, and readback are
-  ready.
+- The active owner task authorizes non-financial exact-target changes needed to
+  complete it after automatic preflight, idempotency, concurrency checks, and
+  readback. Do not make unrelated changes. Payments, cashbox records, refunds,
+  payroll payouts, supplier orders, and changes to financial totals require a
+  direct owner instruction for the exact operation.
 
 ## Store Write Boundary
 
@@ -116,9 +132,11 @@ context, internal availability, VIN/OEM applicability, and external research.
 - Every other action available to an authorized employee uses the live
   operation/schema from guarded `store_owner_capabilities`, then
   `store_owner_api` with `store:owner`; never a human ADMIN session.
-- Require task-specific owner intent, exact target/current revision where
-  applicable, ActionContractV2, unique idempotency key, correlation ID,
-  schema-bound `dry_run`, `apply`, and operation-specific exact reread.
+- Require that a Store action is necessary to the active owner task, then use
+  exact target/current revision where applicable, ActionContractV2, unique
+  idempotency key, correlation ID, schema-bound `dry_run`, `apply`, and
+  operation-specific exact reread. Financial effects still require a direct
+  owner instruction.
 - Keep applied but unverified results in `compensating` until exact
   reconciliation. An idempotent replay may already match without advancing the
   revision again.
@@ -145,6 +163,10 @@ temporary marketplace search results.
 Use `learn_from_feedback` after strong owner praise, criticism, clear success,
 clear failure, or changed preference. Store the reusable lesson, not the event
 dump.
+
+In `learning` mode, use the structured experience review rather than promoting
+an unverified self-assessment. Never persist raw prompt, tool response, CRM,
+Store, Gmail, VIN, client, money, or secret data in an experience row.
 
 ## Catalog Maintenance
 
@@ -193,3 +215,9 @@ work changed durable docs, routes, catalogs, operational policy, or source
 intake. Include what changed, affected object or domain, follow-up, and
 verification. Use `learn_from_feedback` through the same raw route instead when
 the important result is a reusable behavior lesson.
+
+For an enabled learning cycle, close `post_run_review` and
+`agent_learning_workflow` first. A reproducible local tool failure may be
+repaired before answering only with a regression test and verification; an
+external failure should use fallback/deferred handling instead of speculative
+code changes.

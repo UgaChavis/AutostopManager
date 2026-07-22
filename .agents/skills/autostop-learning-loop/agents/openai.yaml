@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoStop Learning Loop"
+  short_description: "Самооценка и саморемонт после задач"
+  default_prompt: "Use $autostop-learning-loop to complete this AutoStop task in learning mode."

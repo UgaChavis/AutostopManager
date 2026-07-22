@@ -233,7 +233,7 @@ After deployment, verify:
 - exactly 24 Gateway v2 tools are visible and legacy tools are absent
 - CRM and Store capability matrices report zero unreviewed gaps and valid
   UI/API/Gateway evidence
-- Manager raw registry contains 73 tools, including Store INTERNAL_ONLY
+- Manager raw registry contains 77 tools, including Store INTERNAL_ONLY
   adapters and the guarded owner capability/API pair; none expands the public
   24-tool Gateway surface
 - a Russian automotive technical query discovers only the relevant read-only

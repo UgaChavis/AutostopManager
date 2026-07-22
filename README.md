@@ -28,6 +28,25 @@ bound to a fixed script: vehicle identity and the requested fact determine
 whether to use an official repair source, public campaign/TSB evidence, a
 catalog, forum evidence, or several of them together.
 
+## Adaptive Manager and Learning Mode
+
+The manager now treats a practical request as a set of claims rather than a
+fixed command sequence. It can plan focused parallel reads, prioritize the
+system that owns each fact, and reconcile compact evidence from CRM, AutoStop
+App, Gmail, VIN/OEM catalogs, licensed sources, supplier data, official public
+sources, and forums. CRM, Store, and Gmail records remain transient source
+data; the Manager stores only safe technical experience and durable rules.
+
+`work` is the default fast operational mode. `learning` adds an obligatory
+post-run review: completion checks, tool/result assessment, a safe reusable
+lesson or a bounded improvement candidate. A reproducible low-risk local
+failure may be repaired only with a regression check and verification before
+the answer; external failures, credentials, access controls, and financial
+operations are never self-repaired. The canonical policy is
+[`docs/agent/intelligent_agent_learning_playbook.md`](docs/agent/intelligent_agent_learning_playbook.md),
+and the project-local execution skill is
+[`autostop-learning-loop`](.agents/skills/autostop-learning-loop/SKILL.md).
+
 ## Daily Commands
 
 ```bash
@@ -35,6 +54,9 @@ catalog, forum evidence, or several of them together.
 .venv/bin/python -m autostop_manager.cli prepare-context "почисти документацию" --intent documentation_hygiene
 .venv/bin/python -m autostop_manager.cli knowledge-probe "проверить Gmail коннектор почта ярлыки вложения"
 .venv/bin/python -m autostop_manager.cli knowledge-search "счет НДС PDF render" --domain business_documents
+.venv/bin/python -m autostop_manager.cli agent-mode status
+.venv/bin/python -m autostop_manager.cli agent-mode set learning
+.venv/bin/python -m autostop_manager.cli learning-summary
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
 .venv/bin/python -m autostop_manager.cli integration-audit
 .venv/bin/python -m autostop_manager.cli integration-audit --full
@@ -49,6 +71,13 @@ reread. Raw discovery is allowed only when no named workflow exists; never call
 a hidden legacy name directly. For local docs: `knowledge-probe` first.
 The integration audit runs both machine-verifiable capability matrices in
 strict mode, so UI/API actions cannot silently lose Gateway coverage.
+
+`agent-mode set work` switches the global default back to the fast operational
+path; a per-turn override takes precedence. The hidden read-only
+`agent_case_resolver` capability accepts only opaque case references and
+compact scalar evidence, then returns a source-read plan or a reconciled,
+redacted display conclusion. After publishing this checkout, trust the project
+hooks once in Codex with `/hooks` so learning-mode Stop enforcement is active.
 
 Employee/admin Store parity that has no named workflow is available only
 through guarded raw `store_owner_capabilities` and `store_owner_api`. They load
@@ -117,6 +146,7 @@ declarative exceptions.
 | Task | Open first |
 | --- | --- |
 | Startup / identity | `AGENTS.md` |
+| Adaptive execution / learning mode | `docs/agent/intelligent_agent_learning_playbook.md` |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` |
 | CRM manager data summaries | `docs/agent/crm_manager_data_playbook.md` |
 | Store analytics | `docs/agent/store_analytics_playbook.md` |

@@ -60,6 +60,62 @@
       ]
     },
     {
+      "command_id": "agent_learning_control",
+      "workflow_id": "agent_learning_control",
+      "priority": 96,
+      "intent": "agent_learning",
+      "domain": "intelligent_agent_learning",
+      "open_first": "docs/agent/intelligent_agent_learning_playbook.md",
+      "aliases": [
+        "включи режим обучения",
+        "режим обучения",
+        "переключи менеджера в обучение",
+        "переключи менеджера в рабочий режим",
+        "выключи режим обучения",
+        "самообучение менеджера",
+        "самоисправление менеджера"
+      ],
+      "keywords": [
+        "learning mode",
+        "work mode",
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "самообучение",
+        "самоисправление",
+        "разбор результата"
+      ],
+      "memory_queries": [
+        "intelligent agent learning",
+        "work learning mode",
+        "experience review",
+        "tool repair"
+      ],
+      "required_reads": [
+        "agent_bootstrap and the effective execution mode",
+        "docs/agent/intelligent_agent_learning_playbook.md",
+        "the project autostop-learning-loop skill when effective mode is learning"
+      ],
+      "write_domains": [
+        "manager_learning_state",
+        "manager_safe_experience",
+        "manager_code_or_docs_only_for_verified_local_repair"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "global and per-turn effective mode are explicit",
+        "learning turns have a completed review and every improvement candidate is promoted, deferred, or rolled back before final response",
+        "experience rows contain only allowed technical metadata and compact refs",
+        "any local repair has a regression check and verification; financial and external repair did not run"
+      ],
+      "next_actions": [
+        "read the current mode and choose work or learning for the exact task",
+        "in learning mode execute the task, record safe tool outcomes, then submit post_run_review",
+        "promote only verified reusable lessons; record a bounded candidate for unresolved issues",
+        "repair one reproducible local low-risk defect only after a failing regression test and exact verification"
+      ]
+    },
+    {
       "command_id": "board_cleanup_autopilot",
       "workflow_id": "board_cleanup_autopilot",
       "priority": 80,

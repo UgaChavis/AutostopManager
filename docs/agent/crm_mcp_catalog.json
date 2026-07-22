@@ -9,7 +9,7 @@
   "last_verified": "2026-07-22",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 94,
-    "autostop_manager_tools_in_raw_registry": 73,
+    "autostop_manager_tools_in_raw_registry": 77,
     "production_visible_agent_gateway_v2": 24,
     "guarded_internal_api_write_routes_are_virtual_and_not_counted_as_tools": true
   },
@@ -38,6 +38,15 @@
       "workflow_resume",
       "workflow_cancel"
     ],
+    "manager_learning": {
+      "raw_only_tools": [
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "agent_case_resolver"
+      ],
+      "contract": "These Manager tools remain outside the 24-tool public Gateway facade. agent_mode controls work versus learning; learning records only hash-only/allowlisted technical experience. agent_case_resolver is read-only and connector-neutral; it plans or reconciles transient compact evidence but never writes business systems."
+    },
     "diagnostics": [
       "ping_connector",
       "get_connector_identity",
@@ -257,7 +266,10 @@
     ],
     "optional_manager_memory_and_routing": [
       "add_manager_task",
+      "agent_case_resolver",
       "agent_brief",
+      "agent_learning_workflow",
+      "agent_mode",
       "audit_knowledge_annotations",
       "audit_knowledge_base",
       "audit_memory",
@@ -290,6 +302,7 @@
       "partsapi_catalog_lookup",
       "plan_crm_vin_oem_parts_lookup",
       "plan_oem_parts_providers",
+      "post_run_review",
       "prepare_crm_card_action",
       "prepare_manager_context",
       "probe_knowledge_base",
@@ -363,6 +376,7 @@
   "operation_notes": [
     "In production follow one protocol: agent_bootstrap, agent_board_digest, agent_search/agent_entity_context, prepare_action_contract, named workflow dry_run/apply, then exact-target reread and verification; use lazy raw discovery only when no named workflow fits.",
     "For AutoStop App use docs/agent/store_management_playbook.md: agent_bootstrap reports a one-request stateless degraded-safe Store snapshot; agent_board_digest(scope=store) uses the owner-visible store_digest cursor and unchanged ACK/replay/CAS; agent_search and agent_entity_context provide bounded pure reads; no Manager component reads the store database.",
+    "Manager work/learning mode is local and does not expand the 24-tool Gateway facade: resolve agent_mode at startup, use post_run_review plus agent_learning_workflow only for a learning turn, and use agent_case_resolver only as a read-only planner/reconciler before the owning CRM/Store/Gmail/OEM/web reads.",
     "discover_raw_capabilities preserves exact-name raw escape behavior and conservatively matches natural-language technical intent only to read-only capabilities; inspect the current schema before every raw call.",
     "Store digest is one-page-per-call. Continue page.next_cursor until has_more=false; only the final page commits the high-water cursor. Calling again without a cursor after an abandoned read restarts from the committed checkpoint, and failures never advance it.",
     "Seven common Store writes use prepare_action_contract plus agent_inventory_workflow as optimized named operations. All remaining owner-approved employee actions use guarded raw store_owner_capabilities/store_owner_api with the dedicated store:owner principal, live schema hash, exact refs, idempotency, correlation, schema-bound dry-run proof and operation-specific reread. Applied but unverified owner operations remain compensating.",

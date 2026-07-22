@@ -342,7 +342,7 @@ service payments stay in CRM workflows.
 
 ## Verification
 
-- Manager raw registry contains 73 tools, including guarded
+- Manager raw registry contains 77 tools, including guarded
   `store_owner_capabilities` and `store_owner_api`; public Gateway v2 remains
   exactly 24 tools.
 - Read API calls never mutate store state; read-only credentials cannot write.

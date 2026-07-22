@@ -189,6 +189,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("memory-gaps", help="Show sparse or empty memory areas")
 
+    agent_mode = sub.add_parser("agent-mode", help="Read or change the durable AgentExecutionMode")
+    agent_mode_sub = agent_mode.add_subparsers(dest="agent_mode_action", required=True)
+    agent_mode_sub.add_parser("status", help="Show global work/learning mode")
+    agent_mode_set = agent_mode_sub.add_parser("set", help="Set global work/learning mode")
+    agent_mode_set.add_argument("mode", choices=["work", "learning"])
+    agent_mode_set.add_argument("--expected-state-version", type=int, default=None)
+    agent_mode_resolve = agent_mode_sub.add_parser("resolve", help="Resolve a one-turn mode override")
+    agent_mode_resolve.add_argument("--mode-override", choices=["work", "learning"], default=None)
+
+    learning_summary = sub.add_parser(
+        "learning-summary", help="Show privacy-safe learning turn and improvement summary"
+    )
+    learning_summary.add_argument("--limit", type=int, default=20)
+
     task = sub.add_parser("task", help="Add a manager task")
     task.add_argument("title")
     task.add_argument("--details", default="")
@@ -889,6 +903,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _print_json(store.memory_context_for(args.task, limit=args.limit))
     elif args.command == "memory-gaps":
         _print_json(store.memory_gaps())
+    elif args.command == "agent-mode":
+        if args.agent_mode_action == "status":
+            _print_json(store.get_agent_mode())
+        elif args.agent_mode_action == "set":
+            _print_json(store.set_agent_mode(args.mode, expected_state_version=args.expected_state_version))
+        else:
+            _print_json(store.resolve_agent_mode(args.mode_override))
+    elif args.command == "learning-summary":
+        _print_json(store.get_agent_learning_summary(limit=args.limit))
     elif args.command == "task":
         _print_json(
             store.add_task(

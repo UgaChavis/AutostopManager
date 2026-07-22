@@ -2,7 +2,7 @@
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
   "last_verified": "2026-07-22",
-  "tool_count": 73,
+  "tool_count": 77,
   "exposed_directly_by": ".venv/bin/python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
   "memory_is_source_of_truth_for": [
@@ -36,6 +36,7 @@
     "prepare_manager_context",
     "agent_brief",
     "agent_bootstrap",
+    "agent_mode",
     "list_agent_workflows",
     "prepare_action_contract",
     "prepare_crm_card_action",
@@ -51,6 +52,7 @@
     "manager_journal"
   ],
   "routing_tools": [
+    "agent_case_resolver",
     "lookup_original_parts",
     "estimate_repair_work_cost",
     "decode_vehicle_identity",
@@ -106,6 +108,11 @@
     "memory_review",
     "memory_review_apply"
   ],
+  "learning_tools": [
+    "agent_mode",
+    "post_run_review",
+    "agent_learning_workflow"
+  ],
   "operation_tools": [
     "start_workflow",
     "workflow_status",
@@ -130,6 +137,10 @@
     "prepare_manager_context",
     "agent_brief",
     "agent_bootstrap",
+    "agent_mode",
+    "post_run_review",
+    "agent_learning_workflow",
+    "agent_case_resolver",
     "list_agent_workflows",
     "store_runtime_status",
     "store_digest",
@@ -205,6 +216,10 @@
     "prepare_manager_context": "Combine owner command routes, relevant memory/rules, knowledge routing, missing required context, and next actions for a specific request.",
     "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, context_safety, next actions, and verification.",
     "agent_bootstrap": "Return AgentEnvelopeV2 with the deterministic selected workflow, source boundaries, safety policy, missing context, and resumable unfinished runs without reading or writing live CRM/Gmail.",
+    "agent_mode": "Read, set, or resolve the durable work/learning execution mode. Work is fast ordinary verification; learning requires a privacy-safe post-run review. Per-turn overrides never persist prompt text.",
+    "post_run_review": "Close one learning turn with compact completion codes, tool-health assessment, and safe technical metadata. It rejects prompts, raw CRM/Store/Gmail payloads, VINs, contacts, and financial values; an optional candidate keeps the cycle open until promoted, deferred, or rolled back.",
+    "agent_learning_workflow": "Advance a reviewed improvement candidate through repair, verify, promote, defer, rollback, or summary. It records lifecycle evidence only; actual code/docs/deploy changes remain governed by the active task, test, and readback rules.",
+    "agent_case_resolver": "READ_ONLY RAW_CAPABILITY. Build a connector-neutral source-read DAG or reconcile compact scalar evidence for one opaque case. It never calls connectors or writes CRM, Store, Gmail, memory, workflow state, or files; raw prompt/payload/identifier fields are rejected and resolved values are display-redacted.",
     "list_agent_workflows": "List the compact named Agent Gateway v2 workflow registry and resolve a query or explicit intent deterministically.",
     "store_runtime_status": "INTERNAL_ONLY. Return store_agent_v1 adapter configuration booleans, circuit state, optional live AutoStop App health, or the one-request stateless bootstrap snapshot without exposing token values. The snapshot never reads or advances digest checkpoints. Gateway raw discovery must exclude it and map health through existing bootstrap/runtime tools.",
     "store_digest": "INTERNAL_ONLY. Read one bounded pure-read store digest page with at-least-once delivery. Uses isolated store_digest/store_bootstrap streams, persists only technical cursor/timestamp/success state/compact refs, returns a Manager-owned cursor-bound ACK for every non-empty page, replays unacknowledged pages from the fixed App window, and commits high-water only after final ACK. Gateway raw discovery must exclude it.",
@@ -370,6 +385,29 @@
         "exact search queries, form values, customer contacts, or VIN"
       ]
     },
+    "Learning mode": {
+      "aliases": [
+        "включи режим обучения",
+        "переключи в рабочий режим",
+        "самообучение менеджера",
+        "самоисправление менеджера"
+      ],
+      "playbook": "docs/agent/intelligent_agent_learning_playbook.md",
+      "tools": [
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "agent_case_resolver"
+      ],
+      "authority": "The active owner task authorizes non-financial exact-target work after contracts and readback. Learning data is technical and hash-only; financial changes and external repairs remain outside automatic learning.",
+      "forbidden_data": [
+        "raw prompt",
+        "CRM/Store/Gmail payload",
+        "VIN or client contact",
+        "money value",
+        "secret or credential"
+      ]
+    },
     "Приберись": {
       "aliases": [
         "Приберись"
@@ -494,6 +532,8 @@
     "use memory_context_for before context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated workflow decisions",
     "recall owner preferences, style rules, and operating lessons before context-sensitive CRM or email work",
     "use learn_from_feedback after strong praise, criticism, success, failure, or owner instruction to do something differently",
+    "resolve agent_mode at startup; in learning mode close post_run_review before the final response and use agent_learning_workflow only for verified lifecycle transitions",
+    "use agent_case_resolver for a read-only multi-source claim plan or evidence conflict reconciliation; execute the selected reads through their owning systems",
     "store lessons as short reusable guidance, not full event copies or rigid output templates",
     "store source routes, not copied databases",
     "use importance, confidence, expires_at, supersedes_id, sensitivity, and tags when storing durable memory",
@@ -512,5 +552,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 73
+  "all_tools_count": 77
 }

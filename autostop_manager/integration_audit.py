@@ -48,6 +48,7 @@ EXPECTED_GATEWAY_TOOLS = frozenset(
     }
 )
 EXPECTED_WEB_CAPABILITIES = frozenset({"search_web_multi", "fetch_page_excerpt", "fetch_page_browser"})
+EXPECTED_MANAGER_RAW_TOOL_COUNT = 77
 _GMAIL_REQUIRED_PROOF_CHECKS = frozenset(
     {"profile_read", "labels_read", "search_read", "self_delivery_readback", "self_delivery_cleanup"}
 )
@@ -214,7 +215,9 @@ def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
         "visible_tool_count_exactly_24": len(tool_set) == 24,
         "visible_tool_names_exact": tool_set == EXPECTED_GATEWAY_TOOLS,
         "web_capabilities_documented": web_set == EXPECTED_WEB_CAPABILITIES,
-        "manager_raw_tool_count_exactly_73": tool_counts.get("autostop_manager_tools_in_raw_registry") == 73,
+        f"manager_raw_tool_count_exactly_{EXPECTED_MANAGER_RAW_TOOL_COUNT}": (
+            tool_counts.get("autostop_manager_tools_in_raw_registry") == EXPECTED_MANAGER_RAW_TOOL_COUNT
+        ),
         "store_owner_raw_capabilities_documented": {
             "store_owner_capabilities",
             "store_owner_api",

@@ -6,6 +6,7 @@ from typing import Any
 from mcp.types import ToolAnnotations
 
 from .action_contract import prepare_action_contract
+from .agent_case_resolver import agent_case_resolver
 from .agent_gateway import agent_envelope, build_agent_bootstrap, list_agent_workflows
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
@@ -292,8 +293,137 @@ def register_manager_memory_tools(  # noqa: C901
         query: str = "",
         intent: str | None = None,
         limit: int = 8,
+        mode_override: str | None = None,
+        external_turn_id: str = "",
     ) -> dict[str, Any]:
-        return build_agent_bootstrap(memory, query=query, intent=intent, limit=limit)
+        return build_agent_bootstrap(
+            memory,
+            query=query,
+            intent=intent,
+            limit=limit,
+            mode_override=mode_override,
+            external_turn_id=external_turn_id,
+        )
+
+    @server.tool(
+        name="agent_mode",
+        description=(
+            "Read, set, or resolve the durable AgentExecutionMode. `work` keeps the normal fast workflow; "
+            "`learning` requires a technical post-run review. Per-turn overrides are resolved without storing prompt text."
+        ),
+    )
+    def agent_mode_tool(
+        action: str = "get",
+        mode: str = "",
+        mode_override: str | None = None,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_action = str(action or "get").strip().casefold()
+        if normalized_action == "get":
+            return memory.get_agent_mode()
+        if normalized_action == "set":
+            return memory.set_agent_mode(mode, expected_state_version=expected_state_version)
+        if normalized_action == "resolve":
+            return memory.resolve_agent_mode(mode_override)
+        return {"ok": False, "error": "invalid_agent_mode_action", "supported_actions": ["get", "set", "resolve"]}
+
+    @server.tool(
+        name="post_run_review",
+        description=(
+            "Close one learning-mode turn with an ExperienceReviewV1. Accept only completion codes, tool health, "
+            "safe technical metadata, and an optional improvement category; raw prompts, CRM/Store/Gmail payloads, "
+            "VINs, contacts, and financial values are rejected."
+        ),
+    )
+    def post_run_review_tool(
+        turn_id: str,
+        outcome: str = "confirmed",
+        completion_checks: list[str] | None = None,
+        tool_assessment: list[dict[str, Any]] | None = None,
+        failure_class: str = "",
+        improvement_kind: str = "",
+        risk: str = "low",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return memory.post_run_review(
+            turn_id,
+            outcome=outcome,
+            completion_checks=completion_checks,
+            tool_assessment=tool_assessment,
+            failure_class=failure_class,
+            improvement_kind=improvement_kind,
+            risk=risk,
+            metadata=metadata,
+        )
+
+    @server.tool(
+        name="agent_learning_workflow",
+        description=(
+            "Advance a reviewed learning improvement candidate through repair, verify, promote, defer, rollback, or summary. "
+            "This records lifecycle evidence only; actual code/docs/deploy work remains subject to the normal task and verification flow."
+        ),
+    )
+    def agent_learning_workflow_tool(
+        operation: str,
+        candidate_id: str = "",
+        turn_id: str = "",
+        verification: dict[str, Any] | None = None,
+        reason_code: str = "",
+        lesson_content: str = "",
+        lesson_title: str = "",
+        applies_to: str = "general",
+    ) -> dict[str, Any]:
+        return memory.agent_learning_workflow(
+            operation,
+            candidate_id=candidate_id,
+            turn_id=turn_id,
+            verification=verification,
+            reason_code=reason_code,
+            lesson_content=lesson_content,
+            lesson_title=lesson_title,
+            applies_to=applies_to,
+        )
+
+    @server.tool(
+        name="agent_case_resolver",
+        description=(
+            "READ_ONLY RAW_CAPABILITY: Build a connector-neutral Case Resolver read plan or reconcile compact scalar "
+            "evidence for one opaque case. It never calls connectors or writes CRM, Store, Gmail, memory, a workflow "
+            "ledger, or files. Prompt text, raw connector payloads, and personal identifiers are rejected; resolution "
+            "returns redacted display values only."
+        ),
+        annotations=ToolAnnotations(
+            title="Agent Case Resolver",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def agent_case_resolver_tool(
+        operation: str,
+        case_id: str,
+        claims: list[dict[str, Any]],
+        sources: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        brand: str | None = None,
+        data_type: str | None = None,
+        include_licensed: bool = True,
+        include_forums: bool = False,
+        max_sources_per_claim: int = 3,
+    ) -> dict[str, Any]:
+        return agent_case_resolver(
+            operation,
+            case_id=case_id,
+            claims=claims,
+            sources=sources,
+            evidence=evidence,
+            brand=brand,
+            data_type=data_type,
+            include_licensed=include_licensed,
+            include_forums=include_forums,
+            max_sources_per_claim=max_sources_per_claim,
+        )
 
     @server.tool(
         name="list_agent_workflows",

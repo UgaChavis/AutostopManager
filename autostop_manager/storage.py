@@ -92,6 +92,74 @@ EXTERNAL_BODY_KEYS = {
 }
 
 ACTIVE_WORKFLOW_STATES = {"planned", "executing", "external_wait", "verifying", "compensating", "running"}
+AGENT_EXECUTION_MODES = frozenset({"work", "learning"})
+AGENT_TURN_STATUSES = frozenset({"active", "reviewed", "deferred"})
+AGENT_REVIEW_OUTCOMES = frozenset({"confirmed", "partial", "failed", "deferred"})
+AGENT_IMPROVEMENT_KINDS = frozenset(
+    {
+        "runtime_lesson",
+        "instruction",
+        "route",
+        "tool_bug",
+        "provider",
+        "code",
+        "integration",
+    }
+)
+AGENT_IMPROVEMENT_RISKS = frozenset({"low", "medium", "high"})
+AGENT_IMPROVEMENT_STATUSES = frozenset({"pending", "repairing", "verified", "promoted", "deferred", "rolled_back"})
+AGENT_IMPROVEMENT_TERMINAL_STATUSES = frozenset({"promoted", "deferred", "rolled_back"})
+AGENT_TOOL_EVENT_STATUSES = frozenset({"started", "succeeded", "failed", "skipped"})
+AGENT_LEARNING_METADATA_KEYS = frozenset(
+    {
+        "action_kind",
+        "assertions",
+        "cache_hit",
+        "candidate_id",
+        "checks",
+        "commit_ref",
+        "contract_fingerprint",
+        "contract_id",
+        "counts",
+        "deploy_ref",
+        "error_code",
+        "failure_class",
+        "fallback_used",
+        "latency_ms",
+        "mode",
+        "phase",
+        "provider",
+        "quality_score",
+        "request_fingerprint",
+        "response_schema",
+        "response_shape",
+        "review_status",
+        "rollback_ref",
+        "route_id",
+        "safe_ref",
+        "schema_hash",
+        "source_kind",
+        "status",
+        "test_ref",
+        "tool_class",
+        "tool_use_id_hash",
+        "tool_version",
+        "verification_state",
+        "workflow_id",
+    }
+)
+# These fields are references to technical artifacts.  Allowing an arbitrary
+# compact identifier here would turn a misleadingly named fingerprint into a
+# covert channel for business data, so they must be one-way hashes.
+AGENT_LEARNING_HASH_METADATA_KEYS = frozenset(
+    {
+        "contract_fingerprint",
+        "request_fingerprint",
+        "safe_ref",
+        "schema_hash",
+        "tool_use_id_hash",
+    }
+)
 STORE_CHECKPOINT_STREAMS = frozenset({"store_digest", "store_bootstrap"})
 STORE_CHECKPOINT_REF_KEYS = {"entity", "id", "version", "updated_at"}
 STORE_LEDGER_REF_ENTITIES = frozenset(
@@ -292,6 +360,35 @@ _STORE_SECRET_VALUE_RE = re.compile(
 )
 _STORE_JWT_VALUE_RE = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
 _STORE_VIN_VALUE_RE = re.compile(r"^(?=.*[A-HJ-NPR-Z])(?=.*[0-9])[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
+_LEARNING_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\-=]{0,255}$")
+_LEARNING_TASK_SIGNATURE_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
+_LEARNING_TECHNICAL_HASH_RE = re.compile(r"^(?:sha256:)?[a-f0-9]{32,64}$", re.IGNORECASE)
+_LEARNING_UUID_RE = re.compile(
+    r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+    re.IGNORECASE,
+)
+_LEARNING_EMAIL_RE = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b")
+_LEARNING_PHONE_RE = re.compile(r"(?<!\d)\+?\d[\d\s().-]{7,}\d(?!\d)")
+_LEARNING_VIN_TOKEN_RE = re.compile(
+    r"(?<![A-HJ-NPR-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-HJ-NPR-Z0-9])",
+    re.IGNORECASE,
+)
+_LEARNING_LICENSE_PLATE_RE = re.compile(
+    r"(?<![A-ZА-Я0-9])[АВЕКМНОРСТУХABEKMHOPCTYX]\d{3}[АВЕКМНОРСТУХABEKMHOPCTYX]{2}\d{2,3}(?![A-ZА-Я0-9])",
+    re.IGNORECASE,
+)
+_LEARNING_PERSON_NAME_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё])(?:[A-Z][a-z]{1,30}(?:[ -][A-Z][a-z]{1,30}){1,2}|[А-ЯЁ][а-яё]{1,30}(?:[ -][А-ЯЁ][а-яё]{1,30}){1,2})(?![A-Za-zА-Яа-яЁё])"
+)
+_LEARNING_MONEY_RE = re.compile(
+    r"(?:\b(?:price|cost|amount|sum|rub|rur)\b|цена|стоимость|сумма|руб(?:\.|\b|лей\b|ля\b|ль\b)|₽)\s*[:=]?\s*\d{1,3}(?:[ _.,]\d{3})*(?:[.,]\d+)?"
+    r"|\b\d{1,3}(?:[ _.,]\d{3})*(?:[.,]\d+)?\s*(?:₽|руб(?:\.|\b|лей\b|ля\b|ль\b)|rub\b|rur\b)",
+    re.IGNORECASE,
+)
+_LEARNING_SECRET_VALUE_RE = re.compile(
+    r"(?:sk[-_]|gh[opusr]_|github_pat_|xox[a-z]-|aiza|akia[0-9a-z]{8,}|ya29\.)",
+    re.IGNORECASE,
+)
 
 
 def _now() -> str:
@@ -1112,6 +1209,224 @@ def _sanitize_external_refs(value: dict[str, Any] | None) -> tuple[dict[str, Any
     return sanitized, []
 
 
+def _normalize_agent_execution_mode(value: str | None) -> str | None:
+    normalized = str(value or "").strip().casefold()
+    return normalized if normalized in AGENT_EXECUTION_MODES else None
+
+
+def _normalize_learning_identifier(value: Any, *, field: str, allow_empty: bool) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return "" if allow_empty else None
+    if not _LEARNING_IDENTIFIER_RE.fullmatch(text):
+        return None
+    if _looks_like_sensitive_learning_value(text):
+        return None
+    return text
+
+
+def _task_signature_hash(value: Any) -> str:
+    text = str(value or "").strip()
+    if _LEARNING_TASK_SIGNATURE_RE.fullmatch(text):
+        return text
+    # Do not persist task text: the hash is intentionally one-way and scoped
+    # only to route-quality statistics, not owner/business memory.
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _looks_like_sensitive_learning_value(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    # Opaque UUIDs and hashes are the technical references used by the
+    # learning ledger. Their digit/hyphen shape must not be mistaken for a
+    # phone number by the conservative detector below.
+    if _LEARNING_UUID_RE.fullmatch(text) or _LEARNING_TECHNICAL_HASH_RE.fullmatch(text):
+        return False
+    return bool(
+        _STORE_VIN_VALUE_RE.fullmatch(text)
+        or _LEARNING_VIN_TOKEN_RE.search(text)
+        or _LEARNING_LICENSE_PLATE_RE.search(text)
+        or _LEARNING_PERSON_NAME_RE.search(text)
+        or _LEARNING_EMAIL_RE.search(text)
+        or _LEARNING_PHONE_RE.search(text)
+        or _LEARNING_MONEY_RE.search(text)
+        or _STORE_SECRET_VALUE_RE.search(text)
+        or _STORE_JWT_VALUE_RE.fullmatch(text)
+        or _LEARNING_SECRET_VALUE_RE.search(text)
+    )
+
+
+def _sanitize_agent_learning_metadata(value: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    """Keep only compact technical status evidence for the learning ledger."""
+
+    if value is None:
+        return {}, []
+    if not isinstance(value, dict):
+        return {}, ["metadata"]
+    sanitized: dict[str, Any] = {}
+    forbidden: list[str] = []
+    for raw_key, raw_value in value.items():
+        key = str(raw_key or "").strip().casefold()
+        if not key:
+            continue
+        if key not in AGENT_LEARNING_METADATA_KEYS:
+            forbidden.append(key)
+            continue
+        normalized = _sanitize_agent_learning_metadata_value(key, raw_value)
+        if normalized is None:
+            forbidden.append(key)
+            continue
+        sanitized[key] = normalized
+    return sanitized, list(dict.fromkeys(forbidden))
+
+
+def _sanitize_agent_learning_metadata_value(key: str, value: Any) -> Any | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if -1_000_000_000 <= value <= 1_000_000_000 else None
+    if isinstance(value, float):
+        return value if math.isfinite(value) and -1_000_000_000 <= value <= 1_000_000_000 else None
+    if isinstance(value, str):
+        normalized = _normalize_learning_identifier(value, field=key, allow_empty=False)
+        if not normalized:
+            return None
+        if key in AGENT_LEARNING_HASH_METADATA_KEYS and not _LEARNING_TECHNICAL_HASH_RE.fullmatch(normalized):
+            return None
+        return normalized
+    if key in {"checks", "assertions"} and isinstance(value, list):
+        result: list[str] = []
+        for item in value[:30]:
+            normalized = _normalize_learning_identifier(item, field=key, allow_empty=False)
+            if not normalized:
+                return None
+            result.append(normalized)
+        return list(dict.fromkeys(result))
+    if key == "counts" and isinstance(value, dict):
+        result_counts: dict[str, int | float] = {}
+        for raw_count_key, raw_count in list(value.items())[:30]:
+            count_key = _normalize_learning_identifier(raw_count_key, field="counts", allow_empty=False)
+            if not count_key or not isinstance(raw_count, (int, float)) or isinstance(raw_count, bool):
+                return None
+            if not math.isfinite(float(raw_count)) or abs(float(raw_count)) > 1_000_000_000:
+                return None
+            result_counts[count_key] = raw_count
+        return result_counts
+    return None
+
+
+def _sanitize_learning_checks(values: list[str] | None) -> tuple[list[str], list[str]]:
+    if values is None:
+        return [], []
+    if not isinstance(values, list):
+        return [], ["completion_checks"]
+    result: list[str] = []
+    invalid: list[str] = []
+    for raw_value in values[:50]:
+        normalized = _normalize_learning_identifier(raw_value, field="completion_checks", allow_empty=False)
+        if not normalized:
+            invalid.append("completion_checks")
+            continue
+        result.append(normalized)
+    return list(dict.fromkeys(result)), invalid
+
+
+def _sanitize_agent_tool_assessment(value: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]], list[str]]:
+    if value is None:
+        return [], []
+    if not isinstance(value, list):
+        return [], ["tool_assessment"]
+    allowed_keys = {
+        "tool_name",
+        "status",
+        "calls",
+        "successes",
+        "failures",
+        "fallback_used",
+        "latency_ms",
+        "error_code",
+    }
+    result: list[dict[str, Any]] = []
+    invalid: list[str] = []
+    for entry in value[:50]:
+        if not isinstance(entry, dict):
+            invalid.append("tool_assessment")
+            continue
+        unknown = [str(key) for key in entry if str(key) not in allowed_keys]
+        if unknown:
+            invalid.extend(f"tool_assessment.{key}" for key in unknown)
+            continue
+        tool_name = _normalize_learning_identifier(entry.get("tool_name"), field="tool_name", allow_empty=False)
+        status = str(entry.get("status") or "").strip().casefold()
+        if not tool_name or status not in AGENT_TOOL_EVENT_STATUSES:
+            invalid.append("tool_assessment")
+            continue
+        item: dict[str, Any] = {"tool_name": tool_name, "status": status}
+        valid = True
+        for key in ("calls", "successes", "failures", "latency_ms"):
+            if key not in entry:
+                continue
+            raw_value = entry[key]
+            if not isinstance(raw_value, int) or isinstance(raw_value, bool) or not 0 <= raw_value <= 1_000_000_000:
+                valid = False
+                break
+            item[key] = raw_value
+        if "fallback_used" in entry:
+            if not isinstance(entry["fallback_used"], bool):
+                valid = False
+            else:
+                item["fallback_used"] = entry["fallback_used"]
+        if "error_code" in entry:
+            error_code = _normalize_learning_identifier(entry["error_code"], field="error_code", allow_empty=True)
+            if error_code is None:
+                valid = False
+            elif error_code:
+                item["error_code"] = error_code
+        if not valid:
+            invalid.append("tool_assessment")
+            continue
+        result.append(item)
+    return result, invalid
+
+
+def _normalize_learning_duration(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if 0 <= normalized <= 86_400_000 else None
+
+
+def _normalize_learning_improvement_kind(value: str | None) -> str | None:
+    text = str(value or "").strip().casefold()
+    if not text:
+        return ""
+    return text if text in AGENT_IMPROVEMENT_KINDS else None
+
+
+def _validate_agent_learning_lesson(value: str, *, allow_empty: bool = False) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return "" if allow_empty else None
+    if len(text) > 768 or _looks_like_sensitive_learning_value(text):
+        return None
+    # A lesson is generic operating guidance, never a copied body or an entity
+    # record. Detect direct secret/body-like labels even when no value pattern
+    # happens to match.
+    normalized_tokens = {token.casefold() for token in re.findall(r"[A-Za-zА-Яа-яЁё]+", text)}
+    if {"vin", "вин", "телефон", "почта", "email", "паспорт"} & normalized_tokens:
+        return None
+    return text
+
+
 def _tokens(value: str) -> list[str]:
     aliases = {
         "вин": ["vin"],
@@ -1690,6 +2005,74 @@ class ManagerMemoryStore:
                     decided_at TEXT
                 );
 
+                -- Learning telemetry deliberately contains only technical hashes,
+                -- status codes, and compact references. It never stores prompts,
+                -- tool arguments/results, CRM/Store rows, or Gmail content.
+                CREATE TABLE IF NOT EXISTS agent_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    state_version INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_turns (
+                    id TEXT PRIMARY KEY,
+                    external_turn_id TEXT NOT NULL DEFAULT '',
+                    task_signature TEXT NOT NULL,
+                    workflow_id TEXT NOT NULL DEFAULT '',
+                    mode_override TEXT NOT NULL DEFAULT '',
+                    effective_mode TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'codex',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    started_at TEXT NOT NULL,
+                    reviewed_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_tool_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    turn_id TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    duration_ms INTEGER,
+                    error_code TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(turn_id) REFERENCES agent_turns(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_experience_reviews (
+                    id TEXT PRIMARY KEY,
+                    turn_id TEXT NOT NULL UNIQUE,
+                    outcome TEXT NOT NULL,
+                    completion_checks_json TEXT NOT NULL DEFAULT '[]',
+                    tool_assessment_json TEXT NOT NULL DEFAULT '[]',
+                    failure_class TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    FOREIGN KEY(turn_id) REFERENCES agent_turns(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_improvements (
+                    id TEXT PRIMARY KEY,
+                    turn_id TEXT NOT NULL,
+                    review_id TEXT,
+                    kind TEXT NOT NULL,
+                    risk TEXT NOT NULL DEFAULT 'low',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    resolution_json TEXT NOT NULL DEFAULT '{}',
+                    promoted_lesson_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(turn_id) REFERENCES agent_turns(id) ON DELETE CASCADE,
+                    FOREIGN KEY(review_id) REFERENCES agent_experience_reviews(id) ON DELETE SET NULL,
+                    FOREIGN KEY(promoted_lesson_id) REFERENCES lessons(id) ON DELETE SET NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_manager_runs_status
                     ON manager_runs(status, started_at);
 
@@ -1704,12 +2087,31 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
                     ON memory_review_items(status, created_at);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_external_turn_id
+                    ON agent_turns(external_turn_id) WHERE external_turn_id <> '';
+
+                CREATE INDEX IF NOT EXISTS idx_agent_turns_mode_status
+                    ON agent_turns(effective_mode, status, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_tool_events_turn_id
+                    ON agent_tool_events(turn_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_improvements_status
+                    ON agent_improvements(status, risk, updated_at);
                 """
             )
             self._ensure_columns(conn)
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_runs_idempotency "
                 "ON manager_runs(idempotency_key) WHERE idempotency_key <> ''"
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_settings (key, value, state_version, updated_at)
+                VALUES ('global_execution_mode', 'work', 1, ?)
+                """,
+                (_now(),),
             )
             self._ensure_memory_fts(conn)
 
@@ -2422,6 +2824,834 @@ class ManagerMemoryStore:
                 "Keep CRM facts in CRM; store only reusable operating conclusions in memory.",
                 "Review sparse topics before relying on memory for style-sensitive work.",
             ],
+        }
+
+    # Agent learning is intentionally a separate technical ledger.  It is not
+    # a second CRM, Store, or Gmail cache: turns use a one-way task hash and
+    # events/reviews accept only allowlisted status metadata.
+    def get_agent_mode(self) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT value, state_version, updated_at FROM agent_settings WHERE key = 'global_execution_mode'"
+            ).fetchone()
+        mode = _normalize_agent_execution_mode(row["value"] if row else "work") or "work"
+        return {
+            "ok": True,
+            "schema": "AgentModeV1",
+            "global_mode": mode,
+            "supported_modes": sorted(AGENT_EXECUTION_MODES),
+            "state_version": int(row["state_version"] or 1) if row else 1,
+            "updated_at": row["updated_at"] if row else None,
+        }
+
+    def set_agent_mode(
+        self,
+        mode: str,
+        *,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_mode = _normalize_agent_execution_mode(mode)
+        if not normalized_mode:
+            return {
+                "ok": False,
+                "error": "invalid_agent_execution_mode",
+                "supported_modes": sorted(AGENT_EXECUTION_MODES),
+            }
+        self.initialize()
+        now = _now()
+        with self.connect() as conn:
+            # The read and compare-and-swap must share a write reservation.
+            # Otherwise two callers can both read the old version and one of
+            # them may report success after its conditional UPDATE matched no
+            # row.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT value, state_version FROM agent_settings WHERE key = 'global_execution_mode'"
+            ).fetchone()
+            current_mode = _normalize_agent_execution_mode(row["value"] if row else "work") or "work"
+            current_version = int(row["state_version"] or 1) if row else 1
+            if expected_state_version is not None and int(expected_state_version) != current_version:
+                return {
+                    "ok": False,
+                    "error": "agent_mode_state_conflict",
+                    "expected_state_version": int(expected_state_version),
+                    "current_state_version": current_version,
+                }
+            if current_mode == normalized_mode:
+                return {
+                    "ok": True,
+                    "schema": "AgentModeV1",
+                    "global_mode": current_mode,
+                    "state_version": current_version,
+                    "updated_at": None,
+                    "deduplicated": True,
+                }
+            next_version = current_version + 1
+            cursor = conn.execute(
+                """
+                UPDATE agent_settings
+                SET value = ?, state_version = ?, updated_at = ?
+                WHERE key = 'global_execution_mode' AND state_version = ?
+                """,
+                (normalized_mode, next_version, now, current_version),
+            )
+            if cursor.rowcount != 1:
+                latest = conn.execute(
+                    "SELECT state_version FROM agent_settings WHERE key = 'global_execution_mode'"
+                ).fetchone()
+                return {
+                    "ok": False,
+                    "error": "agent_mode_state_conflict",
+                    "expected_state_version": current_version,
+                    "current_state_version": int(latest["state_version"] or 1) if latest else None,
+                }
+        return {
+            "ok": True,
+            "schema": "AgentModeV1",
+            "global_mode": normalized_mode,
+            "state_version": next_version,
+            "updated_at": now,
+            "deduplicated": False,
+        }
+
+    def resolve_agent_mode(self, mode_override: str | None = None) -> dict[str, Any]:
+        override = _normalize_agent_execution_mode(mode_override)
+        if mode_override not in (None, "") and not override:
+            return {
+                "ok": False,
+                "error": "invalid_agent_execution_mode",
+                "supported_modes": sorted(AGENT_EXECUTION_MODES),
+            }
+        current = self.get_agent_mode()
+        if not current.get("ok"):
+            return current
+        return {
+            "ok": True,
+            "schema": "AgentModeResolutionV1",
+            "global_mode": current["global_mode"],
+            "mode_override": override,
+            "effective_mode": override or current["global_mode"],
+            "state_version": current["state_version"],
+        }
+
+    def start_agent_turn(
+        self,
+        task_signature: str = "",
+        *,
+        mode_override: str | None = None,
+        workflow_id: str = "",
+        source: str = "codex",
+        external_turn_id: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create an idempotent technical learning turn without persisting task text."""
+
+        resolved = self.resolve_agent_mode(mode_override)
+        if not resolved.get("ok"):
+            return resolved
+        # Work mode deliberately has no learning ledger.  Returning a compact
+        # skipped result prevents mode transitions from leaving reusable work
+        # turns that could later be mistaken for a learning turn.
+        if resolved["effective_mode"] != "learning":
+            return {
+                "ok": True,
+                "turn_id": None,
+                "external_turn_id": None,
+                "task_signature": _task_signature_hash(task_signature),
+                "effective_mode": "work",
+                "mode_override": resolved["mode_override"],
+                "status": "skipped",
+                "learning_enabled": False,
+                "deduplicated": True,
+                "skipped": True,
+            }
+        normalized_workflow = _normalize_learning_identifier(workflow_id, field="workflow_id", allow_empty=True)
+        normalized_external = _normalize_learning_identifier(
+            external_turn_id,
+            field="external_turn_id",
+            allow_empty=True,
+        )
+        normalized_source = _normalize_learning_identifier(source, field="source", allow_empty=False)
+        if normalized_workflow is None or normalized_external is None or not normalized_source:
+            return {"ok": False, "error": "unsafe_agent_learning_identifier"}
+        sanitized_metadata, forbidden = _sanitize_agent_learning_metadata(metadata)
+        if forbidden:
+            return {
+                "ok": False,
+                "error": "raw_agent_learning_payload_not_allowed",
+                "forbidden_keys": forbidden,
+            }
+        signature = _task_signature_hash(task_signature)
+        now = _now()
+        turn_id = str(uuid.uuid4())
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if normalized_external:
+                existing = conn.execute(
+                    "SELECT * FROM agent_turns WHERE external_turn_id = ? LIMIT 1",
+                    (normalized_external,),
+                ).fetchone()
+                if existing:
+                    item = self._row_to_dict(existing)
+                    if item["effective_mode"] == resolved["effective_mode"]:
+                        return {
+                            "ok": True,
+                            "turn_id": item["id"],
+                            "external_turn_id": item["external_turn_id"],
+                            "task_signature": item["task_signature"],
+                            "effective_mode": item["effective_mode"],
+                            "mode_override": item["mode_override"] or None,
+                            "status": item["status"],
+                            "deduplicated": True,
+                        }
+                    # A legacy work-mode turn may have the same external Codex
+                    # turn id.  Retire that technical row before creating the
+                    # learning turn; never reuse a row across execution modes.
+                    conn.execute(
+                        """
+                        UPDATE agent_turns
+                        SET external_turn_id = '', status = 'deferred', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, item["id"]),
+                    )
+            else:
+                existing = conn.execute(
+                    """
+                    SELECT * FROM agent_turns
+                    WHERE task_signature = ? AND effective_mode = ? AND status = 'active'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (signature, resolved["effective_mode"]),
+                ).fetchone()
+                if existing:
+                    item = self._row_to_dict(existing)
+                    return {
+                        "ok": True,
+                        "turn_id": item["id"],
+                        "external_turn_id": item["external_turn_id"] or None,
+                        "task_signature": item["task_signature"],
+                        "effective_mode": item["effective_mode"],
+                        "mode_override": item["mode_override"] or None,
+                        "status": item["status"],
+                        "deduplicated": True,
+                    }
+            conn.execute(
+                """
+                INSERT INTO agent_turns (
+                    id, external_turn_id, task_signature, workflow_id, mode_override,
+                    effective_mode, source, status, metadata_json, started_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                """,
+                (
+                    turn_id,
+                    normalized_external or "",
+                    signature,
+                    normalized_workflow or "",
+                    resolved["mode_override"] or "",
+                    resolved["effective_mode"],
+                    normalized_source,
+                    json.dumps(sanitized_metadata, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+        return {
+            "ok": True,
+            "turn_id": turn_id,
+            "external_turn_id": normalized_external or None,
+            "task_signature": signature,
+            "effective_mode": resolved["effective_mode"],
+            "mode_override": resolved["mode_override"],
+            "status": "active",
+            "started_at": now,
+            "deduplicated": False,
+        }
+
+    def record_agent_tool_event(
+        self,
+        turn_id: str,
+        *,
+        tool_name: str,
+        status: str,
+        duration_ms: int | None = None,
+        error_code: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record one refs-only tool event for a learning turn."""
+
+        normalized_tool = _normalize_learning_identifier(tool_name, field="tool_name", allow_empty=False)
+        normalized_status = str(status or "").strip().casefold()
+        normalized_error = _normalize_learning_identifier(error_code, field="error_code", allow_empty=True)
+        if not normalized_tool or normalized_status not in AGENT_TOOL_EVENT_STATUSES or normalized_error is None:
+            return {"ok": False, "error": "invalid_agent_tool_event"}
+        sanitized_metadata, forbidden = _sanitize_agent_learning_metadata(metadata)
+        if forbidden:
+            return {
+                "ok": False,
+                "error": "raw_agent_learning_payload_not_allowed",
+                "forbidden_keys": forbidden,
+            }
+        normalized_duration = _normalize_learning_duration(duration_ms)
+        if duration_ms is not None and normalized_duration is None:
+            return {"ok": False, "error": "invalid_agent_tool_duration"}
+        self.initialize()
+        now = _now()
+        with self.connect() as conn:
+            turn = self._find_agent_turn_row(conn, turn_id)
+            if not turn:
+                return {"ok": False, "error": "agent_turn_not_found", "turn_id": turn_id}
+            if str(turn["effective_mode"] or "") != "learning":
+                return {"ok": False, "error": "agent_tool_events_require_learning_mode", "turn_id": turn["id"]}
+            if normalized_duration is None and normalized_status in {"succeeded", "failed", "skipped"}:
+                normalized_duration = self._derived_tool_event_duration(
+                    conn,
+                    turn_id=str(turn["id"]),
+                    tool_name=normalized_tool,
+                    tool_use_id_hash=str(sanitized_metadata.get("tool_use_id_hash") or ""),
+                    now=now,
+                )
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_tool_events
+                    (turn_id, tool_name, status, duration_ms, error_code, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(turn["id"]),
+                    normalized_tool,
+                    normalized_status,
+                    normalized_duration,
+                    normalized_error or "",
+                    json.dumps(sanitized_metadata, ensure_ascii=False),
+                    now,
+                ),
+            )
+            conn.execute("UPDATE agent_turns SET updated_at = ? WHERE id = ?", (now, turn["id"]))
+        return {
+            "ok": True,
+            "id": _required_lastrowid(cursor),
+            "turn_id": str(turn["id"]),
+            "tool_name": normalized_tool,
+            "status": normalized_status,
+            "duration_ms": normalized_duration,
+            "created_at": now,
+        }
+
+    def get_active_agent_turn(
+        self,
+        task_signature: str = "",
+        *,
+        external_turn_id: str = "",
+        effective_mode: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a compact active learning turn without exposing task text."""
+
+        normalized_external = _normalize_learning_identifier(
+            external_turn_id,
+            field="external_turn_id",
+            allow_empty=True,
+        )
+        if normalized_external is None:
+            return {"ok": False, "error": "unsafe_agent_learning_identifier"}
+        normalized_mode = _normalize_agent_execution_mode(effective_mode)
+        if effective_mode not in (None, "") and not normalized_mode:
+            return {"ok": False, "error": "invalid_agent_execution_mode"}
+        signature = _task_signature_hash(task_signature)
+        self.initialize()
+        with self.connect() as conn:
+            if normalized_external:
+                query = """
+                    SELECT id, external_turn_id, task_signature, workflow_id, mode_override,
+                           effective_mode, status, started_at, updated_at
+                    FROM agent_turns
+                    WHERE external_turn_id = ? AND status = 'active'
+                """
+                params: list[Any] = [normalized_external]
+                if normalized_mode:
+                    query += " AND effective_mode = ?"
+                    params.append(normalized_mode)
+                row = conn.execute(f"{query} LIMIT 1", params).fetchone()
+            else:
+                query = """
+                    SELECT id, external_turn_id, task_signature, workflow_id, mode_override,
+                           effective_mode, status, started_at, updated_at
+                    FROM agent_turns
+                    WHERE task_signature = ? AND status = 'active'
+                """
+                params = [signature]
+                if normalized_mode:
+                    query += " AND effective_mode = ?"
+                    params.append(normalized_mode)
+                row = conn.execute(f"{query} ORDER BY updated_at DESC LIMIT 1", params).fetchone()
+        if not row:
+            return {"ok": True, "active_turn": None}
+        item = dict(row)
+        item["turn_id"] = item.pop("id")
+        item["mode_override"] = item["mode_override"] or None
+        item["external_turn_id"] = item["external_turn_id"] or None
+        return {"ok": True, "active_turn": item}
+
+    def post_run_review(
+        self,
+        turn_id: str,
+        *,
+        outcome: str = "confirmed",
+        completion_checks: list[str] | None = None,
+        tool_assessment: list[dict[str, Any]] | None = None,
+        failure_class: str = "",
+        improvement_kind: str = "",
+        risk: str = "low",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Close a learning turn with a compact objective experience review."""
+
+        normalized_outcome = str(outcome or "").strip().casefold()
+        normalized_failure = _normalize_learning_identifier(failure_class, field="failure_class", allow_empty=True)
+        normalized_kind = _normalize_learning_improvement_kind(improvement_kind)
+        normalized_risk = str(risk or "low").strip().casefold()
+        checks, invalid_checks = _sanitize_learning_checks(completion_checks)
+        assessment, invalid_assessment = _sanitize_agent_tool_assessment(tool_assessment)
+        sanitized_metadata, forbidden = _sanitize_agent_learning_metadata(metadata)
+        if (
+            normalized_outcome not in AGENT_REVIEW_OUTCOMES
+            or normalized_failure is None
+            or normalized_kind is None
+            or normalized_risk not in AGENT_IMPROVEMENT_RISKS
+            or invalid_checks
+            or invalid_assessment
+            or forbidden
+        ):
+            return {
+                "ok": False,
+                "error": "invalid_agent_experience_review",
+                "forbidden_keys": list(dict.fromkeys(forbidden + invalid_checks + invalid_assessment)),
+            }
+        self.initialize()
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            turn = self._find_agent_turn_row(conn, turn_id)
+            if not turn:
+                return {"ok": False, "error": "agent_turn_not_found", "turn_id": turn_id}
+            if str(turn["effective_mode"] or "") != "learning":
+                return {"ok": False, "error": "experience_review_requires_learning_mode", "turn_id": turn["id"]}
+            existing = conn.execute(
+                "SELECT * FROM agent_experience_reviews WHERE turn_id = ? LIMIT 1",
+                (turn["id"],),
+            ).fetchone()
+            if existing:
+                candidate = conn.execute(
+                    "SELECT * FROM agent_improvements WHERE review_id = ? ORDER BY created_at ASC LIMIT 1",
+                    (existing["id"],),
+                ).fetchone()
+                return self._experience_review_result(existing, candidate, deduplicated=True)
+            review_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO agent_experience_reviews (
+                    id, turn_id, outcome, completion_checks_json, tool_assessment_json,
+                    failure_class, metadata_json, status, created_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)
+                """,
+                (
+                    review_id,
+                    turn["id"],
+                    normalized_outcome,
+                    json.dumps(checks, ensure_ascii=False),
+                    json.dumps(assessment, ensure_ascii=False),
+                    normalized_failure or "",
+                    json.dumps(sanitized_metadata, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            candidate = None
+            if normalized_kind:
+                candidate_id = str(uuid.uuid4())
+                evidence = {
+                    "outcome": normalized_outcome,
+                    "failure_class": normalized_failure or "",
+                    "completion_checks": checks,
+                    "tool_assessment": assessment,
+                }
+                conn.execute(
+                    """
+                    INSERT INTO agent_improvements (
+                        id, turn_id, review_id, kind, risk, status, evidence_json, resolution_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'pending', ?, '{}', ?, ?)
+                    """,
+                    (
+                        candidate_id,
+                        turn["id"],
+                        review_id,
+                        normalized_kind,
+                        normalized_risk,
+                        json.dumps(evidence, ensure_ascii=False),
+                        now,
+                        now,
+                    ),
+                )
+                candidate = conn.execute("SELECT * FROM agent_improvements WHERE id = ?", (candidate_id,)).fetchone()
+            conn.execute(
+                "UPDATE agent_turns SET status = 'reviewed', reviewed_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, turn["id"]),
+            )
+            review = conn.execute("SELECT * FROM agent_experience_reviews WHERE id = ?", (review_id,)).fetchone()
+        return self._experience_review_result(review, candidate, deduplicated=False)
+
+    def has_completed_experience_review(self, turn_id: str) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as conn:
+            turn = self._find_agent_turn_row(conn, turn_id)
+            if not turn:
+                return {"ok": False, "error": "agent_turn_not_found", "turn_id": turn_id}
+            review = conn.execute(
+                "SELECT id, outcome, status, completed_at FROM agent_experience_reviews WHERE turn_id = ? LIMIT 1",
+                (turn["id"],),
+            ).fetchone()
+            improvement_rows = conn.execute(
+                "SELECT id, status FROM agent_improvements WHERE turn_id = ? ORDER BY created_at ASC",
+                (turn["id"],),
+            ).fetchall()
+        review_completed = bool(review and review["status"] == "completed")
+        unresolved_improvements = [
+            str(row["id"])
+            for row in improvement_rows
+            if str(row["status"] or "") not in AGENT_IMPROVEMENT_TERMINAL_STATUSES
+        ]
+        return {
+            "ok": True,
+            "turn_id": str(turn["id"]),
+            "external_turn_id": str(turn["external_turn_id"] or "") or None,
+            "effective_mode": str(turn["effective_mode"]),
+            "review_completed": review_completed,
+            # A completed reflection alone is not enough in learning mode: an
+            # improvement candidate must be promoted, deferred, or rolled
+            # back before the answer can be released.
+            "learning_cycle_closed": review_completed and not unresolved_improvements,
+            "unresolved_improvement_ids": unresolved_improvements,
+            "review_id": review["id"] if review else None,
+            "outcome": review["outcome"] if review else None,
+            "completed_at": review["completed_at"] if review else None,
+        }
+
+    def has_completed_experience_review_by_external_id(self, external_turn_id: str) -> dict[str, Any]:
+        return self.has_completed_experience_review(external_turn_id)
+
+    def defer_experience_review(self, turn_id: str, *, reason_code: str) -> dict[str, Any]:
+        normalized_reason = _normalize_learning_identifier(reason_code, field="reason_code", allow_empty=False)
+        if not normalized_reason:
+            return {"ok": False, "error": "invalid_agent_review_reason"}
+        return self.post_run_review(
+            turn_id,
+            outcome="deferred",
+            failure_class=normalized_reason,
+            metadata={"review_status": "deferred"},
+        )
+
+    def get_agent_turn(self, turn_id: str, *, include_events: bool = True) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as conn:
+            turn = self._find_agent_turn_row(conn, turn_id)
+            if not turn:
+                return {"ok": False, "error": "agent_turn_not_found", "turn_id": turn_id}
+            item = self._row_to_dict(turn)
+            review = conn.execute(
+                "SELECT * FROM agent_experience_reviews WHERE turn_id = ? LIMIT 1",
+                (turn["id"],),
+            ).fetchone()
+            if review:
+                item["experience_review"] = self._row_to_dict(review)
+            if include_events:
+                rows = conn.execute(
+                    "SELECT * FROM agent_tool_events WHERE turn_id = ? ORDER BY created_at ASC",
+                    (turn["id"],),
+                ).fetchall()
+                item["tool_events"] = [self._row_to_dict(row) for row in rows]
+            improvements = conn.execute(
+                "SELECT * FROM agent_improvements WHERE turn_id = ? ORDER BY created_at ASC",
+                (turn["id"],),
+            ).fetchall()
+            item["improvements"] = [self._row_to_dict(row) for row in improvements]
+        return {"ok": True, "item": item}
+
+    def get_agent_turn_by_external_id(self, external_turn_id: str, *, include_events: bool = True) -> dict[str, Any]:
+        return self.get_agent_turn(external_turn_id, include_events=include_events)
+
+    def get_agent_learning_turn_by_external_id_fast(self, external_turn_id: str) -> dict[str, Any]:
+        """Read one learning turn without schema initialization or telemetry writes.
+
+        Codex starts a separate hook process for each tool event.  In normal
+        work mode there is no turn, so this small read-only path avoids running
+        the full migration/DDL initializer for every tool invocation.  A
+        missing or pre-migration database simply means no learning turn.
+        """
+
+        normalized_external = _normalize_learning_identifier(
+            external_turn_id,
+            field="external_turn_id",
+            allow_empty=False,
+        )
+        if not normalized_external:
+            return {"ok": False, "error": "unsafe_agent_learning_identifier"}
+        if not self.path.exists():
+            return {"ok": True, "item": None}
+        try:
+            with self.connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT id, external_turn_id, effective_mode, status
+                    FROM agent_turns
+                    WHERE external_turn_id = ? AND effective_mode = 'learning'
+                    LIMIT 1
+                    """,
+                    (normalized_external,),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return {"ok": True, "item": None}
+        if not row:
+            return {"ok": True, "item": None}
+        return {
+            "ok": True,
+            "item": {
+                "turn_id": str(row["id"]),
+                "external_turn_id": str(row["external_turn_id"]),
+                "effective_mode": str(row["effective_mode"]),
+                "status": str(row["status"]),
+            },
+        }
+
+    def agent_learning_workflow(  # noqa: C901
+        self,
+        operation: str,
+        *,
+        candidate_id: str = "",
+        turn_id: str = "",
+        verification: dict[str, Any] | None = None,
+        reason_code: str = "",
+        lesson_content: str = "",
+        lesson_title: str = "",
+        applies_to: str = "general",
+    ) -> dict[str, Any]:
+        """Advance a reviewed improvement candidate; actual repairs remain external actions."""
+
+        normalized_operation = str(operation or "").strip().casefold()
+        if normalized_operation == "summary":
+            return self.get_agent_learning_summary()
+        if normalized_operation not in {"repair", "verify", "promote", "defer", "rollback"}:
+            return {"ok": False, "error": "invalid_agent_learning_operation"}
+        normalized_candidate = _normalize_learning_identifier(candidate_id, field="candidate_id", allow_empty=False)
+        if not normalized_candidate:
+            return {"ok": False, "error": "candidate_id is required"}
+        sanitized_verification, forbidden = _sanitize_agent_learning_metadata(verification)
+        normalized_reason = _normalize_learning_identifier(reason_code, field="reason_code", allow_empty=True)
+        if forbidden or normalized_reason is None:
+            return {
+                "ok": False,
+                "error": "raw_agent_learning_payload_not_allowed",
+                "forbidden_keys": forbidden,
+            }
+        self.initialize()
+        now = _now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = conn.execute(
+                "SELECT * FROM agent_improvements WHERE id = ? LIMIT 1", (normalized_candidate,)
+            ).fetchone()
+            if not candidate:
+                return {"ok": False, "error": "agent_improvement_not_found", "candidate_id": normalized_candidate}
+            if turn_id:
+                turn = self._find_agent_turn_row(conn, turn_id)
+                if not turn or str(turn["id"]) != str(candidate["turn_id"]):
+                    return {
+                        "ok": False,
+                        "error": "agent_improvement_turn_mismatch",
+                        "candidate_id": normalized_candidate,
+                    }
+            current_status = str(candidate["status"] or "")
+            next_status = current_status
+            resolution = _decode_json(candidate["resolution_json"], {})
+            if normalized_operation == "repair":
+                if current_status in {"promoted", "rolled_back"}:
+                    return {"ok": False, "error": "agent_improvement_is_terminal", "status": current_status}
+                if str(candidate["risk"] or "low") != "low":
+                    return {
+                        "ok": False,
+                        "error": "agent_improvement_repair_requires_low_risk",
+                        "risk": candidate["risk"],
+                    }
+                if str(candidate["kind"] or "") == "provider":
+                    return {
+                        "ok": False,
+                        "error": "agent_provider_improvement_must_be_deferred",
+                        "kind": candidate["kind"],
+                    }
+                next_status = "repairing"
+                resolution["repair_started"] = True
+            elif normalized_operation == "verify":
+                if current_status not in {"pending", "repairing", "deferred", "verified"}:
+                    return {"ok": False, "error": "agent_improvement_not_verifiable", "status": current_status}
+                if sanitized_verification.get("verification_state") not in {"passed", "verified"}:
+                    return {"ok": False, "error": "verification_state_passed_required"}
+                next_status = "verified"
+                resolution["verification"] = sanitized_verification
+            elif normalized_operation == "defer":
+                if current_status in {"promoted", "rolled_back"}:
+                    return {"ok": False, "error": "agent_improvement_is_terminal", "status": current_status}
+                if not normalized_reason:
+                    return {"ok": False, "error": "reason_code is required"}
+                next_status = "deferred"
+                resolution["defer_reason_code"] = normalized_reason
+            elif normalized_operation == "rollback":
+                if current_status not in {"repairing", "verified", "deferred", "rolled_back"}:
+                    return {"ok": False, "error": "agent_improvement_not_rollbackable", "status": current_status}
+                next_status = "rolled_back"
+                if sanitized_verification:
+                    resolution["rollback"] = sanitized_verification
+            elif normalized_operation == "promote":
+                if current_status == "promoted":
+                    return self._agent_improvement_result(candidate, deduplicated=True)
+                if current_status != "verified":
+                    return {
+                        "ok": False,
+                        "error": "agent_improvement_must_be_verified_before_promotion",
+                        "status": current_status,
+                    }
+                content = _validate_agent_learning_lesson(lesson_content)
+                title = _validate_agent_learning_lesson(lesson_title, allow_empty=True)
+                normalized_applies_to = _normalize_learning_identifier(
+                    applies_to, field="applies_to", allow_empty=False
+                )
+                if content is None or title is None or not normalized_applies_to:
+                    return {"ok": False, "error": "unsafe_agent_learning_lesson"}
+                cursor = conn.execute(
+                    """
+                    INSERT INTO lessons (
+                        title, content, applies_to, signal, recommendation, avoid,
+                        importance, confidence, source, tags_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'verified_learning_candidate', '', '', 0.7, 0.8, 'agent_learning', '[]', ?, ?)
+                    """,
+                    (title or "", content, normalized_applies_to, now, now),
+                )
+                lesson_id = _required_lastrowid(cursor)
+                next_status = "promoted"
+                resolution["promoted_lesson_id"] = lesson_id
+                conn.execute(
+                    """
+                    UPDATE agent_improvements
+                    SET status = ?, resolution_json = ?, promoted_lesson_id = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_status, json.dumps(resolution, ensure_ascii=False), lesson_id, now, normalized_candidate),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM agent_improvements WHERE id = ?", (normalized_candidate,)
+                ).fetchone()
+                return self._agent_improvement_result(updated, deduplicated=False)
+            if next_status not in AGENT_IMPROVEMENT_STATUSES:
+                return {"ok": False, "error": "invalid_agent_improvement_status"}
+            conn.execute(
+                "UPDATE agent_improvements SET status = ?, resolution_json = ?, updated_at = ? WHERE id = ?",
+                (next_status, json.dumps(resolution, ensure_ascii=False), now, normalized_candidate),
+            )
+            updated = conn.execute("SELECT * FROM agent_improvements WHERE id = ?", (normalized_candidate,)).fetchone()
+        return self._agent_improvement_result(updated, deduplicated=current_status == next_status)
+
+    def get_agent_learning_summary(self, *, limit: int = 20) -> dict[str, Any]:
+        self.initialize()
+        limit = max(1, min(int(limit), 100))
+        mode = self.get_agent_mode()
+        with self.connect() as conn:
+            turn_rows = conn.execute(
+                "SELECT effective_mode, status, COUNT(*) AS count FROM agent_turns GROUP BY effective_mode, status"
+            ).fetchall()
+            improvement_rows = conn.execute(
+                "SELECT status, risk, COUNT(*) AS count FROM agent_improvements GROUP BY status, risk"
+            ).fetchall()
+            recent_rows = conn.execute(
+                "SELECT * FROM agent_improvements ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return {
+            "ok": True,
+            "schema": "AgentLearningSummaryV1",
+            "mode": mode,
+            "turn_counts": [dict(row) for row in turn_rows],
+            "improvement_counts": [dict(row) for row in improvement_rows],
+            "recent_improvements": [self._row_to_dict(row) for row in recent_rows],
+        }
+
+    def _find_agent_turn_row(self, conn: sqlite3.Connection, turn_ref: str) -> sqlite3.Row | None:
+        normalized = _normalize_learning_identifier(turn_ref, field="turn_id", allow_empty=False)
+        if not normalized:
+            return None
+        return conn.execute(
+            """
+            SELECT * FROM agent_turns
+            WHERE id = ? OR external_turn_id = ?
+            ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (normalized, normalized, normalized),
+        ).fetchone()
+
+    def _derived_tool_event_duration(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        turn_id: str,
+        tool_name: str,
+        tool_use_id_hash: str,
+        now: str,
+    ) -> int | None:
+        if not tool_use_id_hash:
+            return None
+        rows = conn.execute(
+            """
+            SELECT metadata_json, created_at FROM agent_tool_events
+            WHERE turn_id = ? AND tool_name = ? AND status = 'started'
+            ORDER BY id DESC LIMIT 20
+            """,
+            (turn_id, tool_name),
+        ).fetchall()
+        for row in rows:
+            metadata = _decode_json(row["metadata_json"], {})
+            if str(metadata.get("tool_use_id_hash") or "") != tool_use_id_hash:
+                continue
+            try:
+                elapsed = datetime.fromisoformat(now) - datetime.fromisoformat(str(row["created_at"]))
+            except ValueError:
+                return None
+            return _normalize_learning_duration(int(max(elapsed.total_seconds(), 0) * 1000))
+        return None
+
+    def _experience_review_result(
+        self,
+        review: sqlite3.Row,
+        candidate: sqlite3.Row | None,
+        *,
+        deduplicated: bool,
+    ) -> dict[str, Any]:
+        item = self._row_to_dict(review)
+        result = {
+            "ok": True,
+            "schema": "ExperienceReviewV1",
+            "review": item,
+            "deduplicated": deduplicated,
+        }
+        if candidate:
+            result["improvement"] = self._row_to_dict(candidate)
+        return result
+
+    def _agent_improvement_result(self, row: sqlite3.Row, *, deduplicated: bool) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "schema": "AgentLearningImprovementV1",
+            "improvement": self._row_to_dict(row),
+            "deduplicated": deduplicated,
         }
 
     def _upsert_memory_fts(self, conn: sqlite3.Connection, table: str, row_id: int) -> None:
@@ -4213,6 +5443,14 @@ class ManagerMemoryStore:
             item["request_refs"] = _decode_json(item.pop("request_refs_json"), {})
         if "result_refs_json" in item:
             item["result_refs"] = _decode_json(item.pop("result_refs_json"), {})
+        if "completion_checks_json" in item:
+            item["completion_checks"] = _decode_json(item.pop("completion_checks_json"), [])
+        if "tool_assessment_json" in item:
+            item["tool_assessment"] = _decode_json(item.pop("tool_assessment_json"), [])
+        if "evidence_json" in item:
+            item["evidence"] = _decode_json(item.pop("evidence_json"), {})
+        if "resolution_json" in item:
+            item["resolution"] = _decode_json(item.pop("resolution_json"), {})
         if "dry_run" in item:
             item["dry_run"] = bool(item["dry_run"])
         return item

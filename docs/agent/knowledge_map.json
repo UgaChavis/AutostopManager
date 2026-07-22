@@ -119,6 +119,64 @@
         "docs/agent/manager_mcp_catalog.json"
       ]
     },
+    "intelligent_agent_learning": {
+      "title": "Adaptive execution, evidence reconciliation, and learning mode",
+      "use_when": [
+        "the owner asks the manager to work adaptively across CRM, Store, Gmail, OEM sources, or public research",
+        "switching between ordinary work mode and learning mode",
+        "reviewing a completed agent turn, promoting a reusable lesson, or repairing a reproducible local tool issue",
+        "planning a multi-source automotive answer that needs source conflict resolution"
+      ],
+      "aliases": [
+        "learning mode",
+        "work mode",
+        "self improvement",
+        "self repair",
+        "case resolver",
+        "evidence bundle",
+        "режим обучения",
+        "рабочий режим",
+        "самообучение",
+        "самоисправление",
+        "разбор результата",
+        "проверка качества ответа",
+        "интеллектуальный поиск"
+      ],
+      "keywords": [
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "experience review",
+        "improvement candidate",
+        "EvidenceBundle",
+        "CaseResolver",
+        "tool event",
+        "learning budget",
+        "repair budget",
+        "safe metadata"
+      ],
+      "questions": [
+        "как включить режим обучения менеджера",
+        "как менеджер анализирует выполненную задачу",
+        "когда можно автоматически исправить инструмент",
+        "как не хранить данные CRM или почты в опыте",
+        "как объединить CRM каталог VIN и веб-исследование в один ответ",
+        "как посмотреть накопленный опыт и кандидаты улучшений"
+      ],
+      "source_of_truth_files": [
+        "AGENTS.md",
+        "docs/agent/intelligent_agent_learning_playbook.md",
+        "docs/agent/autostop_manager_skill.md",
+        ".agents/skills/autostop-learning-loop/SKILL.md",
+        "docs/agent/manager_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/intelligent_agent_learning_playbook.md",
+        ".agents/skills/autostop-learning-loop/SKILL.md",
+        "AGENTS.md"
+      ],
+      "skill_path": ".agents/skills/autostop-learning-loop/SKILL.md"
+    },
     "knowledge_intake": {
       "title": "Knowledge intake, indexing, and source organization",
       "use_when": [

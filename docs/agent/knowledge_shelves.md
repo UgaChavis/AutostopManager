@@ -30,6 +30,7 @@ Store merely because those connectors are available.
 | --- | --- | --- |
 | Ecosystem capability parity | `ecosystem_capability_parity` | `AGENTS.md` |
 | Manager startup | `startup_and_identity` | `AGENTS.md` |
+| Intelligent execution and learning | `intelligent_agent_learning` | `docs/agent/intelligent_agent_learning_playbook.md` |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
