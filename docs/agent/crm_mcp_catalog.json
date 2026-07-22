@@ -6,10 +6,10 @@
   "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-07-21",
+  "last_verified": "2026-07-22",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 94,
-    "autostop_manager_tools_in_raw_registry": 72,
+    "autostop_manager_tools_in_raw_registry": 73,
     "production_visible_agent_gateway_v2": 24,
     "guarded_internal_api_write_routes_are_virtual_and_not_counted_as_tools": true
   },
@@ -279,6 +279,7 @@
       "learn_from_feedback",
       "lookup_oem_catalog_candidates",
       "lookup_original_parts",
+      "lookup_public_automotive_evidence",
       "manager_journal",
       "memory_context_for",
       "memory_gaps",
@@ -362,6 +363,7 @@
   "operation_notes": [
     "In production follow one protocol: agent_bootstrap, agent_board_digest, agent_search/agent_entity_context, prepare_action_contract, named workflow dry_run/apply, then exact-target reread and verification; use lazy raw discovery only when no named workflow fits.",
     "For AutoStop App use docs/agent/store_management_playbook.md: agent_bootstrap reports a one-request stateless degraded-safe Store snapshot; agent_board_digest(scope=store) uses the owner-visible store_digest cursor and unchanged ACK/replay/CAS; agent_search and agent_entity_context provide bounded pure reads; no Manager component reads the store database.",
+    "discover_raw_capabilities preserves exact-name raw escape behavior and conservatively matches natural-language technical intent only to read-only capabilities; inspect the current schema before every raw call.",
     "Store digest is one-page-per-call. Continue page.next_cursor until has_more=false; only the final page commits the high-water cursor. Calling again without a cursor after an abandoned read restarts from the committed checkpoint, and failures never advance it.",
     "Seven common Store writes use prepare_action_contract plus agent_inventory_workflow as optimized named operations. All remaining owner-approved employee actions use guarded raw store_owner_capabilities/store_owner_api with the dedicated store:owner principal, live schema hash, exact refs, idempotency, correlation, schema-bound dry-run proof and operation-specific reread. Applied but unverified owner operations remain compensating.",
     "General Drom/Avito sourcing remains parts_sourcing and service заказ-наряд remains CRM. Store marketplace routing applies only to AutoStop App export state/errors.",

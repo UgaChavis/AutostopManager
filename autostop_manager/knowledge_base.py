@@ -30,6 +30,9 @@ STOPWORDS = {
     "и",
     "или",
     "как",
+    "какой",
+    "какая",
+    "какие",
     "к",
     "ко",
     "на",
@@ -44,6 +47,12 @@ STOPWORDS = {
     "со",
     "у",
     "что",
+    "сколько",
+    "есть",
+    "ли",
+    "нужно",
+    "надо",
+    "можно",
     "the",
     "and",
     "or",
@@ -1570,6 +1579,40 @@ def _tokens(query: str) -> list[str]:
         "пинки": ["shudder", "jerk", "driveline"],
         "акпп": ["transmission", "automatic", "zf"],
         "коробка": ["transmission", "gearbox"],
+        "грм": [
+            "timing",
+            "timing_belt",
+            "timing_chain",
+            "camshaft_timing",
+            "repair_procedures",
+            "torque_specs",
+            "special_tools",
+        ],
+        "метка": ["timing", "camshaft_timing", "repair_procedures"],
+        "метки": ["timing", "camshaft_timing", "repair_procedures"],
+        "фаза": ["timing", "camshaft_timing", "repair_procedures"],
+        "фазы": ["timing", "camshaft_timing", "repair_procedures"],
+        "цепь": ["timing_chain", "timing", "repair_procedures"],
+        "цепи": ["timing_chain", "timing", "repair_procedures"],
+        "ремень": ["timing_belt", "timing", "repair_procedures"],
+        "ремня": ["timing_belt", "timing", "repair_procedures"],
+        "распредвал": ["camshaft", "camshaft_timing", "timing"],
+        "распредвалы": ["camshaft", "camshaft_timing", "timing"],
+        "коленвал": ["crankshaft", "timing", "repair_procedures"],
+        "коленвала": ["crankshaft", "timing", "repair_procedures"],
+        "момент": ["torque", "torque_specs"],
+        "моменты": ["torque", "torque_specs"],
+        "затяжка": ["torque", "torque_specs"],
+        "затяжки": ["torque", "torque_specs"],
+        "доворот": ["angle_torque", "torque_specs"],
+        "гбц": ["cylinder_head", "torque_specs", "repair_procedures"],
+        "регламент": ["maintenance", "maintenance_intervals", "service_information"],
+        "интервал": ["maintenance", "maintenance_intervals", "service_information"],
+        "устройство": ["system_operation", "repair", "service_information"],
+        "агрегат": ["component", "assembly", "repair"],
+        "агрегата": ["component", "assembly", "repair"],
+        "форум": ["forum", "forum_research", "web_research"],
+        "форумы": ["forum", "forum_research", "web_research"],
         "масло": ["oil", "fluid", "fluids", "engine_oil"],
         "масла": ["oil", "fluid", "fluids", "engine_oil"],
         "моторное": ["engine", "engine_oil", "oil"],
@@ -1776,11 +1819,43 @@ def _domain_hints(query: str) -> dict[str, int]:
         hints["startup_and_identity"] = max(hints.get("startup_and_identity", 0), 70)
     if any(word in lowered for word in ["масло", "моторное", "жидк", "заправ", " то "]):
         hints["fluids"] = 20
-    if any(word in lowered for word in ["диагност", "ошиб", "dtc", "скан"]):
-        hints["automotive_repair"] = 10
+    technical_repair_terms = (
+        "грм",
+        "метк",
+        "фаз",
+        "цеп",
+        "ремн",
+        "распредвал",
+        "коленвал",
+        "момент затяж",
+        "доворот",
+        "гбц",
+        "регламент то",
+        "регламент технического",
+        "интервал то",
+        "интервал обслуж",
+        "устройство агрегат",
+        "как устроен",
+    )
+    if (
+        any(word in lowered for word in ["диагност", "ошиб", "dtc", "скан"])
+        or any(term in lowered for term in technical_repair_terms)
+        or bool(re.search(r"\bp[0-3]\d{4}\b", lowered))
+    ):
+        hints["automotive_repair"] = 44
     if any(word in lowered for word in ["вин", "vin", "oem", "каталог", "кузов"]):
         hints["vehicle_identity_and_oem"] = 10
-    crm_vin_terms = ["crm", "карточк", "заказ-наряд", "зн", "writeback", "запиши", "записать"]
+    crm_vin_terms = [
+        "crm",
+        "карточк",
+        "заказ-наряд",
+        "заказ наряд",
+        "writeback",
+        "запиши",
+        "записать",
+        "внеси",
+        "внести",
+    ]
     part_terms = [
         "запчаст",
         "детал",
@@ -1799,10 +1874,7 @@ def _domain_hints(query: str) -> dict[str, int]:
     if (
         any(word in lowered for word in identifier_terms)
         and any(word in lowered for word in part_terms)
-        and (
-            any(word in lowered for word in crm_vin_terms)
-            or any(word in lowered for word in ["закуп", "цена", "аналог", "кросс"])
-        )
+        and any(word in lowered for word in crm_vin_terms)
     ):
         hints["crm_vin_oem_parts_lookup"] = max(hints.get("crm_vin_oem_parts_lookup", 0), 34)
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 12)
@@ -1810,6 +1882,18 @@ def _domain_hints(query: str) -> dict[str, int]:
         word in lowered for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
     ):
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 40)
+    internal_store_reference = any(
+        phrase in lowered
+        for phrase in (
+            "у нас в магазине",
+            "в нашем магазине",
+            "в нашем каталоге",
+            "наш каталог",
+            "на нашем складе",
+        )
+    )
+    if internal_store_reference:
+        hints["store_management"] = max(hints.get("store_management", 0), 80)
     if "store_management" not in hints and any(
         word in lowered
         for word in [
@@ -1828,11 +1912,11 @@ def _domain_hints(query: str) -> dict[str, int]:
         ]
     ):
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 36)
-    if any(word in lowered for word in ["bmw", "бмв", "n63", "f15", "e15", "x5"]):
-        hints["bmw_repair"] = max(hints.get("bmw_repair", 0), 10)
-    if any(word in lowered for word in ["f15", "e15", "n63", "x5"]):
-        hints["bmw_f15_n63"] = max(hints.get("bmw_f15_n63", 0), 18)
-    if any(word in lowered for word in ["toyota", "тойота", "yaris gr", "gr yaris", "ярис", "gxpa16", "g16e"]):
+    if any(word in lowered for word in ["bmw", "бмв", "n63", "n63tu", "f15", "e15", "g05"]):
+        hints["bmw_repair"] = max(hints.get("bmw_repair", 0), 60)
+    if any(word in lowered for word in ["f15", "e15"]):
+        hints["bmw_f15_n63"] = max(hints.get("bmw_f15_n63", 0), 68)
+    if any(word in lowered for word in ["toyota", "тойота", "yaris gr", "gr yaris", "gxpa16", "g16e"]):
         hints["toyota_gr_yaris"] = max(hints.get("toyota_gr_yaris", 0), 18)
     if any(word in lowered for word in ["приберись", "board_cleanup_autopilot"]):
         hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)

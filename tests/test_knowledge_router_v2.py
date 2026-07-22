@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import autostop_manager.knowledge_base as knowledge_base
+from autostop_manager.context import build_agent_brief
 from autostop_manager.knowledge_base import find_command_route, probe_knowledge_base, sync_knowledge_base
 from autostop_manager.storage import ManagerMemoryStore
 
@@ -200,6 +201,65 @@ def test_project_engineering_hint_does_not_capture_automotive_fault_code_tests()
     hints = knowledge_base._domain_hints("код ошибки P0171 тест датчика кислорода")
 
     assert "startup_and_identity" not in hints
+
+
+def test_general_automotive_technical_queries_route_to_adaptive_repair_sources(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    for query in (
+        "Как выставить ГРМ на Mercedes M274?",
+        "Какие метки ГРМ и моменты затяжки?",
+        "Ошибка P0171",
+        "Сколько стоит замена цепи ГРМ на Mercedes?",
+    ):
+        result = probe_knowledge_base(store, query, limit=5)
+        assert result["best_domain"] == "automotive_repair", query
+        assert result["open_first"] == "docs/agent/automotive_repair_source_playbook.md", query
+        assert result["command_route"] is None, query
+
+
+def test_automotive_vehicle_and_store_context_are_selected_only_when_present(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    generic_vin = probe_knowledge_base(store, "Подбери фильтр по VIN и аналоги", limit=5)
+    internal_store = probe_knowledge_base(store, "Есть ли W 914/2 у нас в магазине?", limit=5)
+    crm_writeback = probe_knowledge_base(
+        store,
+        "В карточке CRM по VIN найди OEM фильтра и запиши в карточку",
+        limit=5,
+    )
+
+    assert generic_vin["best_domain"] == "vehicle_identity_and_oem"
+    assert generic_vin["command_route"] is None
+    assert internal_store["best_domain"] == "store_management"
+    assert crm_writeback["best_domain"] == "crm_vin_oem_parts_lookup"
+
+
+def test_model_specific_automotive_routes_need_explicit_vehicle_markers(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    generic_fault = probe_knowledge_base(store, "Ошибка P0171", limit=5)
+    bmw = probe_knowledge_base(store, "BMW N63 момент затяжки", limit=5)
+    toyota = probe_knowledge_base(store, "Toyota GR Yaris обслуживание", limit=5)
+
+    assert generic_fault["best_domain"] == "automotive_repair"
+    assert bmw["best_domain"] == "bmw_repair"
+    assert toyota["best_domain"] == "toyota_gr_yaris"
+
+
+def test_low_confidence_generic_interrogative_does_not_activate_store_analytics_policy(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(store, "Сколько?", limit=5)
+    brief = build_agent_brief(store, "Сколько?", limit=5)
+
+    assert result["has_knowledge"] is False
+    assert brief["route"]["domain"] is None
+    assert brief["route"]["open_first"] is None
 
 
 def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misrouting(tmp_path):

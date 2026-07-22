@@ -60,6 +60,11 @@ DOMAIN_BRIEF_RULES = {
         "For managed-pc, resolve the exact alias and run status before shell, run, PowerShell, copy, repair, rename, or revoke operations.",
         "Never print private keys, passwords, tokens, USB enrollment credentials, or protected runtime state.",
     ],
+    "automotive_repair": [
+        "Choose sources from the actual request: CRM only for an identified live card or its vehicle context, AutoStop App only for internal catalog, stock, or price facts, and public web or forums only for research evidence.",
+        "Treat forums and owner communities as symptom hypotheses; verify final procedure, torque, fluid, safety, programming, ADAS, SRS, or HV facts through the appropriate OEM or licensed source for the exact vehicle and unit.",
+        "Do not turn a source recommendation into a fixed workflow: combine only the capabilities that answer the current question and state the missing vehicle context instead of guessing.",
+    ],
 }
 
 DEFAULT_READ_ORDER = [
@@ -67,6 +72,33 @@ DEFAULT_READ_ORDER = [
     "probe_knowledge_base",
     "open returned open_first/source_of_truth",
     "use focused reads before broad exports",
+]
+
+AUTOMOTIVE_REPAIR_READ_ORDER = [
+    "open docs/agent/automotive_repair_source_playbook.md and identify the vehicle, unit, and requested fact",
+    "choose only relevant live context: CRM card/vehicle, AutoStop App catalog/stock/price, VIN/OEM source, public official evidence, or public web research",
+    "route final technical facts by brand and data type; use forum evidence as a hypothesis or cross-check, not as the sole authority",
+    "collect missing engine, gearbox, market, production, scan, or service-operation context before confirming safety-critical or exact procedure facts",
+]
+
+AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS = [
+    "read relevant local playbooks, source catalog, official public evidence, and public web/forum material within access rules",
+    "read focused CRM vehicle/card context only when the request names or implies an exact live CRM target",
+    "read focused AutoStop App catalog, stock, or price context only when the request asks about internal store facts",
+    "combine corroborating source evidence and report confidence, applicability, and missing context without inventing facts",
+]
+
+AUTOMOTIVE_REPAIR_FORBIDDEN_ACTIONS = [
+    "treat a public recall or TSB metadata result as VIN-specific campaign status or a repair authorization",
+    "copy licensed manuals, bypass access controls, CAPTCHA, login walls, paywalls, private cabinets, or IP blocks",
+    "state torque, procedure, capacity, approval, programming, ADAS, SRS, HV, or exact fitment facts without an appropriate source and vehicle/unit context",
+    "write CRM, Store, Gmail, or repair-order data unless the owner separately requests that exact action",
+]
+
+AUTOMOTIVE_REPAIR_VERIFICATION = [
+    "distinguish official, licensed, public-web, and forum evidence in the conclusion",
+    "verify exact vehicle, engine, transmission, market, and service operation when the fact depends on them",
+    "state the source limit or missing context when a definitive technical answer cannot be supported",
 ]
 
 BOARD_CLEANUP_READ_ORDER = [
@@ -460,7 +492,10 @@ def build_agent_brief(
     context = prepare_manager_context(store, query, intent=intent, limit=limit)
     knowledge = context.get("knowledge", {})
     command_route = context.get("command_route") or {}
-    domain = str(knowledge.get("best_domain") or command_route.get("domain") or "")
+    has_actionable_knowledge = bool(knowledge.get("has_knowledge")) or bool(command_route)
+    domain = str(
+        (knowledge.get("best_domain") if has_actionable_knowledge else None) or command_route.get("domain") or ""
+    )
 
     if domain == "board_cleanup_autopilot":
         read_order = BOARD_CLEANUP_READ_ORDER
@@ -498,6 +533,12 @@ def build_agent_brief(
         forbidden_actions = REMOTE_ACCESS_FORBIDDEN_ACTIONS
         verification = REMOTE_ACCESS_VERIFICATION
         next_actions = list(context.get("next_actions") or [])
+    elif domain == "automotive_repair":
+        read_order = AUTOMOTIVE_REPAIR_READ_ORDER
+        allowed_actions = AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS
+        forbidden_actions = AUTOMOTIVE_REPAIR_FORBIDDEN_ACTIONS
+        verification = AUTOMOTIVE_REPAIR_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
     else:
         read_order = DEFAULT_READ_ORDER
         allowed_actions = DEFAULT_ALLOWED_ACTIONS
@@ -518,14 +559,18 @@ def build_agent_brief(
             "command_id": command_route.get("command_id"),
             "workflow_id": command_route.get("workflow_id") or command_route.get("command_id"),
             "domain": domain or None,
-            "open_first": knowledge.get("open_first"),
-            "source_of_truth": knowledge.get("source_of_truth", []),
-            "reference_files": knowledge.get("reference_files", []),
-            "optional_runtime_files": knowledge.get("optional_runtime_files", []),
-            "optional_available_files": knowledge.get("optional_available_files", []),
-            "optional_missing_files": knowledge.get("optional_missing_files", []),
-            "optional_runtime_available": knowledge.get("optional_runtime_available", False),
-            "optional_runtime_note": knowledge.get("optional_runtime_note", ""),
+            "open_first": knowledge.get("open_first") if has_actionable_knowledge else None,
+            "source_of_truth": knowledge.get("source_of_truth", []) if has_actionable_knowledge else [],
+            "reference_files": knowledge.get("reference_files", []) if has_actionable_knowledge else [],
+            "optional_runtime_files": knowledge.get("optional_runtime_files", []) if has_actionable_knowledge else [],
+            "optional_available_files": knowledge.get("optional_available_files", [])
+            if has_actionable_knowledge
+            else [],
+            "optional_missing_files": knowledge.get("optional_missing_files", []) if has_actionable_knowledge else [],
+            "optional_runtime_available": knowledge.get("optional_runtime_available", False)
+            if has_actionable_knowledge
+            else False,
+            "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
             "confidence": knowledge.get("confidence"),
             "required_reads": command_route.get("required_reads", []),
             "write_domains": command_route.get("write_domains", []),

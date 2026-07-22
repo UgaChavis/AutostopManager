@@ -431,6 +431,29 @@ def test_recommend_fluid_maintenance_sources_tool_is_registered(tmp_path):
     assert result["lubricant_product_selectors"]
 
 
+def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypatch):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    monkeypatch.setattr(
+        mcp_tools_module,
+        "lookup_public_automotive_evidence",
+        lambda **kwargs: {"ok": True, "input_context": kwargs, "evidence": []},
+    )
+
+    register_manager_memory_tools(server, store)
+
+    assert "lookup_public_automotive_evidence" in server.tools
+    result = server.tools["lookup_public_automotive_evidence"](
+        make="Mercedes-Benz",
+        model="C-Class",
+        model_year=2020,
+        topics=["recalls"],
+    )
+    assert result["ok"] is True
+    assert result["input_context"]["make"] == "Mercedes-Benz"
+    assert result["input_context"]["topics"] == ["recalls"]
+
+
 def test_recommend_service_management_actions_tool_is_registered(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -1035,7 +1058,7 @@ def test_crm_mcp_catalog_counts_are_current():
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
     assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 94
-    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 72
+    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 73
     assert "get_store_analytics_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"

@@ -47,6 +47,7 @@ from .partsapi_category_index import (
 )
 from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
+from .public_automotive_evidence import lookup_public_automotive_evidence
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -1736,6 +1737,44 @@ def register_manager_memory_tools(  # noqa: C901
             level_check_procedure=level_check_procedure,
             include_licensed=include_licensed,
             limit=limit,
+        )
+
+    @server.tool(
+        name="lookup_public_automotive_evidence",
+        description=(
+            "Read compact official public automotive evidence: NHTSA model-level recalls, optional manufacturer-"
+            "communications/TSB metadata, and applicable Mercedes/ZF fluid-reference routes. Does not use a VIN "
+            "for campaign status, copy manuals, write CRM, or replace OEM service documentation."
+        ),
+        annotations=ToolAnnotations(
+            title="Public Automotive Evidence",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    def lookup_public_automotive_evidence_tool(
+        vin: str | None = None,
+        make: str | None = None,
+        model: str | None = None,
+        model_year: int | None = None,
+        topics: str | list[str] | None = None,
+        system: str | None = None,
+        include_tsb: bool = False,
+        limit: int = 10,
+        timeout: float = 12.0,
+    ) -> dict[str, Any]:
+        return lookup_public_automotive_evidence(
+            vin=vin,
+            make=make,
+            model=model,
+            model_year=model_year,
+            topics=topics,
+            system=system,
+            include_tsb=include_tsb,
+            limit=limit,
+            timeout=timeout,
         )
 
     @server.tool(

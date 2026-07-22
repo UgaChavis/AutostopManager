@@ -23,7 +23,7 @@ def _write_catalog(root) -> None:
             {
                 "production_tools_verified": sorted(EXPECTED_GATEWAY_TOOLS),
                 "agent_gateway_v2": {"web_research_capabilities": sorted(EXPECTED_WEB_CAPABILITIES)},
-                "tool_counts": {"autostop_manager_tools_in_raw_registry": 72},
+                "tool_counts": {"autostop_manager_tools_in_raw_registry": 73},
                 "tool_families": {
                     "optional_manager_memory_and_routing": [
                         "store_owner_capabilities",

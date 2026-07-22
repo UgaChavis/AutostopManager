@@ -118,7 +118,7 @@
     {
       "id": "knowledge-route-card-maintenance",
       "priority": 22,
-      "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize BMW, Toyota GR Yaris, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
+      "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize general automotive technical questions, explicit BMW or Toyota GR Yaris cases, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
     },
     {
       "id": "model-specific-knowledge-route",
@@ -203,7 +203,7 @@
     {
       "id": "automotive-repair-source-routing",
       "priority": 31,
-      "rule": "For repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, consult docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts."
+      "rule": "For repair diagnostics, ГРМ/timing marks or phases, repair procedures, maintenance schedules, aggregate design, TSBs, recalls, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, start with docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts. Select evidence adaptively: CRM only for an identified live card/vehicle, AutoStop App only for internal catalog/stock/price, VIN/OEM for applicability, official public evidence for recalls/communications, and public web/forums for research. Generic technical questions stay on this route; BMW or Toyota GR Yaris playbooks require explicit brand/model/engine/chassis markers."
     },
     {
       "id": "browser-web-research-boundary",

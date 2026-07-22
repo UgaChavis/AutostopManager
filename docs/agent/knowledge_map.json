@@ -477,6 +477,7 @@
         "TSBs and recalls",
         "wiring and electrical",
         "repair procedures",
+        "timing/ГРМ, marks, phases, chains, belts, torque, maintenance schedules, and aggregate design",
         "torque, fluids, labor, ADAS, SRS, HV, immobilizer, programming"
       ],
       "aliases": [
@@ -495,7 +496,21 @@
         "поиск по форумам",
         "браузерный поиск",
         "TSB",
-        "recall"
+        "recall",
+        "ГРМ",
+        "метки ГРМ",
+        "фазы",
+        "цепь ГРМ",
+        "ремень ГРМ",
+        "распредвал",
+        "коленвал",
+        "момент затяжки",
+        "доворот",
+        "ГБЦ",
+        "регламент ТО",
+        "интервал ТО",
+        "код ошибки",
+        "устройство агрегата"
       ],
       "keywords": [
         "DTC",
@@ -510,14 +525,22 @@
         "ADAS",
         "SRS",
         "HV",
-        "programming"
+        "programming",
+        "timing",
+        "timing marks",
+        "torque specs",
+        "maintenance intervals",
+        "forum evidence"
       ],
       "questions": [
         "где искать техническую информацию по ремонту",
         "какой источник использовать для ошибки или схемы",
         "как искать профильные форумы по ремонту",
         "когда использовать браузерный fetch для сайта",
-        "как проверить TSB recall wiring torque fluids"
+        "как проверить TSB recall wiring torque fluids",
+        "как выставить ГРМ и где проверить метки и фазы",
+        "какие моменты затяжки и довороты нужны для конкретного двигателя",
+        "как проверить регламент ТО, код ошибки или устройство агрегата"
       ],
       "source_of_truth_files": [
         "docs/agent/automotive_repair_source_playbook.md",
@@ -526,9 +549,7 @@
       "primary_files": [
         "docs/agent/automotive_repair_source_playbook.md",
         "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
-        "docs/agent/automotive_sources/open_dataset_endpoints.json",
-        "docs/agent/bmw_repair_playbook.md",
-        "docs/agent/toyota_gr_yaris_playbook.md"
+        "docs/agent/automotive_sources/open_dataset_endpoints.json"
       ],
       "required_context": [
         "VIN or chassis",
@@ -540,7 +561,9 @@
         "complaint",
         "scan results"
       ],
-      "reference_files": []
+      "reference_files": [
+        "docs/agent/manager_mcp_catalog.json"
+      ]
     },
     "ecu_calibration_programming": {
       "title": "ECU calibration, programming, coding, and instrument-cluster route",
@@ -939,6 +962,10 @@
       "primary_files": [
         "docs/agent/fluid_maintenance_playbook.md",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
+        "docs/agent/manager_mcp_catalog.json"
       ]
     },
     "transmission": {
@@ -1667,90 +1694,30 @@
     "crm_vin_oem_parts_lookup": {
       "title": "CRM VIN/frame OEM parts lookup and compact CRM writeback",
       "use_when": [
-        "CRM card contains VIN/frame/body number and requested part",
-        "find OEM catalog number for plugs, pads, filters, or other parts from VIN/frame",
-        "find replacements, crosses, analogs, procurement price, RF market price, and write result back to CRM"
+        "an identified CRM card contains VIN/frame/body number and requested part",
+        "owner explicitly asks to prepare a CRM writeback or edit CRM card/repair-order material data",
+        "find OEM/cross/price evidence for an identified CRM target before a separately authorized CRM write"
       ],
       "aliases": [
         "CRM VIN OEM parts lookup",
         "VIN parts writeback",
         "VIN OEM card result",
-        "frame parts lookup",
-        "body number parts lookup",
-        "KDM VIN parts lookup",
-        "JDM frame OEM",
         "OEM writeback",
-        "каталожный номер по VIN",
-        "оригинальный номер по VIN",
-        "номер кузова запчасти",
         "записать в карточку CRM",
-        "подбор запчастей по VIN",
-        "свечи по VIN",
-        "колодки по VIN",
-        "фильтр по VIN",
-        "закупка по VIN",
-        "аналоги по VIN",
-        "кроссы по VIN",
-        "MAN webMANTIS",
-        "MAN partslink24",
-        "MAHLE catalog",
-        "Bosch eCat",
-        "MANN-FILTER",
-        "Hengst",
-        "Donaldson",
-        "Fleetguard",
-        "NGK Part Finder",
-        "offline PDF catalog",
-        "local catalog cache",
-        "fetch_page_browser",
-        "офлайн каталог запчастей"
+        "подбор запчасти по VIN в CRM",
+        "найди по VIN и запиши в карточку"
       ],
       "keywords": [
         "CRM",
         "card_id",
-        "VIN",
-        "frame number",
-        "body number",
-        "KDM VIN",
-        "JDM frame",
-        "OEM",
-        "catalog number",
-        "original number",
-        "spark plugs",
-        "brake pads",
-        "filters",
-        "supersession",
-        "replacement",
-        "cross",
-        "analog",
-        "applicability",
-        "side",
-        "axle",
-        "production date",
-        "procurement price",
-        "public retail price",
-        "client sale price",
         "compact public result",
         "writeback",
         "replace_repair_order_materials",
         "update_card",
         "set_card_board_summary",
-        "каталожный номер",
-        "оригинальный номер",
-        "свечи",
-        "колодки",
-        "фильтры",
-        "закупка",
-        "рыночная цена РФ",
-        "кроссы",
-        "аналоги",
-        "применяемость",
         "запись в CRM",
-        "offline_parts_catalogs",
-        "catalog_index.json",
-        "PDF catalog",
-        "XLSX interchange",
-        "browser public catalog"
+        "карточка CRM",
+        "ремонтный заказ CRM"
       ],
       "questions": [
         "как найти оригинальный номер детали по VIN из карточки CRM",

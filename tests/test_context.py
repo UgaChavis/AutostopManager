@@ -59,6 +59,20 @@ def test_agent_brief_for_store_analytics_is_aggregate_only_and_needs_no_clarific
     assert any("rawEventsIncluded=false" in check for check in result["verification"])
 
 
+def test_agent_brief_for_general_automotive_repair_selects_sources_adaptively(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "Как выставить ГРМ на Mercedes M274?", limit=8)
+
+    assert result["route"]["domain"] == "automotive_repair"
+    assert result["route"]["open_first"] == "docs/agent/automotive_repair_source_playbook.md"
+    assert any("AutoStop App" in item for item in result["allowed_actions"])
+    assert any("forum" in item.casefold() for item in result["read_order"])
+    assert any("fixed workflow" in item for item in result["hot_rules"])
+    assert any("write CRM" in item for item in result["forbidden_actions"])
+
+
 def test_agent_brief_routes_compact_project_engineering_query_to_startup(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)

@@ -73,7 +73,7 @@ covers the task may you use `discover_raw_capabilities`,
 | Vehicle identity / VIN/frame | `docs/agent/vehicle_identity_playbook.md`, `decode_vehicle_identity` | Classify identifier and market before OEM or parts work. |
 | Oils/fluids/capacities | `docs/agent/fluid_maintenance_playbook.md`, `recommend_fluid_maintenance_sources` | Do not confirm specs/capacities without source route. |
 | Transmission/gearbox | `docs/agent/transmission_playbook.md`; DSG route opens `dsg_transmission_playbook.md` | Require exact gearbox/context before final repair facts. |
-| Repair diagnostics/source facts | `docs/agent/automotive_repair_source_playbook.md`, `recommend_automotive_sources` | Resolve public web tools through the Gateway v2 raw-capability route; search, then excerpt, then browser only for JS-heavy pages. Do not invent torque, pinout, labor time, ADAS/SRS/HV, or programming facts. |
+| Repair diagnostics/source facts | `docs/agent/automotive_repair_source_playbook.md`, `recommend_automotive_sources`, `lookup_public_automotive_evidence` | Covers ГРМ, timing marks/phases, torque, maintenance schedules, DTCs, aggregate design, repairs, recalls, TSB metadata, and technical research. Select CRM only for a live card/vehicle, Store only for internal catalog/stock/price, and web/forums only as research evidence. Resolve public web tools through Gateway v2 raw discovery; search, then excerpt, then browser only for JS-heavy pages. Do not invent torque, pinout, labor time, ADAS/SRS/HV, or programming facts. |
 | BMW | `docs/agent/bmw_repair_playbook.md` | Use BMW pack as route/index; verify final VIN-specific facts through official/licensed sources. |
 | Toyota GR Yaris | `docs/agent/toyota_gr_yaris_playbook.md` | Verify frame/VIN, market, grade, transmission, diff package before final facts. |
 | Parts sourcing | `docs/agent/parts_search_playbook.md`, `docs/agent/procurement_pricing_playbook.md` | Use contracted supplier routes first for new/procurement checks; for public used/contract scans use Drom, then ZZap and Avito. Availability still needs confirmation. |
@@ -81,6 +81,13 @@ covers the task may you use `discover_raw_capabilities`,
 | Business documents | `docs/agent/business_document_quality_playbook.md` | Use CRM print module for AutoStop service documents. |
 | Remote Codex access / `managed-pc` / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` | Managed multi-device fleet and independent legacy home route. Resolve the exact device, check status first, and never mix credentials. |
 | Knowledge/docs hygiene | `docs/agent/knowledge_shelves.md` | Keep docs compact; prefer existing canonical files; delete only after `cleanup-audit`, migration, and green audits. |
+
+`knowledge-probe` and `agent-brief` are capability navigation, not a script.
+For a technical automotive request, use the selected source route to decide
+which available evidence is relevant to the question; do not call CRM, Store,
+email, remote PC, web search, or a model-specific playbook merely because it
+exists. Combine them when the requested fact genuinely spans live vehicle
+context, internal availability, VIN/OEM applicability, and external research.
 
 ## CRM Write Boundary
 

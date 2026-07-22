@@ -20,6 +20,14 @@ store, or Gmail sources of truth.
 - `docs/agent/store_management_playbook.md` - AutoStop App reads, reliable
   change feed, optimized named workflows, and full guarded owner parity.
 
+For each non-trivial request, the agent refreshes the relevant context first
+and then chooses the smallest combination of live systems and sources that can
+answer it: CRM, AutoStop App, Gmail, managed PC, local knowledge, VIN/OEM
+catalogs, or public technical evidence. Automotive technical questions are not
+bound to a fixed script: vehicle identity and the requested fact determine
+whether to use an official repair source, public campaign/TSB evidence, a
+catalog, forum evidence, or several of them together.
+
 ## Daily Commands
 
 ```bash
@@ -119,7 +127,7 @@ declarative exceptions.
 | VIN/OEM/parts writeback | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle identity / OEM | `docs/agent/vehicle_identity_playbook.md` |
 | Parts sourcing | `docs/agent/parts_search_playbook.md` |
-| Internet / repair web research | `docs/agent/automotive_repair_source_playbook.md` |
+| Automotive repair, fluids, public technical evidence, and web research | `docs/agent/automotive_repair_source_playbook.md` |
 | Service management | `docs/agent/krasnoyarsk_service_management_playbook.md` |
 | Remote Codex access / `managed-pc` / `home-pc` | `docs/agent/codex_home_pc_reverse_ssh.md` |
 | Deployment | `docs/agent/deployment_runbook.md` |

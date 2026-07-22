@@ -211,8 +211,9 @@ prebuilds an immutable image, snapshots Manager, provisions stable production
 OAuth, rotates only the internal compatibility bearer,
 creates and verifies rollback data, replaces only the CRM service inside a
 bounded maintenance window, and runs internal plus public Gateway v2 smoke.
-`AUTOSTOP_SKIP_GIT_SYNC=1` is an exceptional recovery override, not the normal
-release path.
+There is no Git-sync bypass in the normal release path: both pinned branches
+must be fetched, clean, and at the verified remote revision before plain
+`./deploy.sh` is run.
 
 For the store integration, use this release order: backup/rollback -> deploy
 the store agent API/auth/migration -> verify pure reads and service scopes ->
@@ -232,9 +233,12 @@ After deployment, verify:
 - exactly 24 Gateway v2 tools are visible and legacy tools are absent
 - CRM and Store capability matrices report zero unreviewed gaps and valid
   UI/API/Gateway evidence
-- Manager raw registry contains 72 tools, including Store INTERNAL_ONLY
+- Manager raw registry contains 73 tools, including Store INTERNAL_ONLY
   adapters and the guarded owner capability/API pair; none expands the public
   24-tool Gateway surface
+- a Russian automotive technical query discovers only the relevant read-only
+  source capability, while an exact protected/internal capability name remains
+  undiscoverable
 - OAuth protected-resource/server metadata, PKCE S256, owner approval, refresh
   rotation, audience/scopes, and a clear 401 challenge are verified
 - a saved refresh session still works after a second deploy

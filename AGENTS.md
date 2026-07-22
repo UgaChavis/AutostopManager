@@ -47,7 +47,15 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    through `AUTOSTOP_STORE_OWNER_TOKEN` and the live OpenAPI operation schema.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
-6. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
+6. For automotive technical questions, start with the returned knowledge route,
+   then select only the capabilities needed by the actual question: CRM for an
+   identified live card or vehicle, AutoStop App for internal catalog/stock/price,
+   VIN/OEM sources for identity and applicability, official public evidence for
+   recalls/communications, and public web/forums for research. Treat this as
+   adaptive source selection, not a fixed workflow; final safety, procedure,
+   torque, fluid, programming, and exact-fitment facts need an appropriate
+   OEM/licensed source and vehicle/unit context.
+7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->
    `get_raw_capability_schema` -> `call_raw_capability` only when no named

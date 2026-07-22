@@ -42,6 +42,7 @@ from .partsapi_category_index import (
     validate_partsapi_category_index,
 )
 from .provider_smoke import build_provider_smoke_report
+from .public_automotive_evidence import lookup_public_automotive_evidence
 from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
@@ -573,6 +574,20 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_fluids.add_argument("--level-check-procedure", default=None)
     maintenance_fluids.add_argument("--open-only", action="store_true")
     maintenance_fluids.add_argument("--limit", type=int, default=10)
+
+    public_automotive_evidence = sub.add_parser(
+        "public-automotive-evidence",
+        help="Read official public recall, manufacturer-communication, and fluid-reference evidence without writes",
+    )
+    public_automotive_evidence.add_argument("--vin", default=None)
+    public_automotive_evidence.add_argument("--make", default=None)
+    public_automotive_evidence.add_argument("--model", default=None)
+    public_automotive_evidence.add_argument("--year", dest="model_year", type=int, default=None)
+    public_automotive_evidence.add_argument("--topic", dest="topics", action="append", default=[])
+    public_automotive_evidence.add_argument("--system", default=None)
+    public_automotive_evidence.add_argument("--include-tsb", action="store_true")
+    public_automotive_evidence.add_argument("--limit", type=int, default=10)
+    public_automotive_evidence.add_argument("--timeout", type=float, default=12.0)
 
     service_plan = sub.add_parser(
         "service-plan",
@@ -1254,6 +1269,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 level_check_procedure=args.level_check_procedure,
                 include_licensed=not args.open_only,
                 limit=args.limit,
+            )
+        )
+    elif args.command == "public-automotive-evidence":
+        _print_json(
+            lookup_public_automotive_evidence(
+                vin=args.vin,
+                make=args.make,
+                model=args.model,
+                model_year=args.model_year,
+                topics=args.topics,
+                system=args.system,
+                include_tsb=args.include_tsb,
+                limit=args.limit,
+                timeout=args.timeout,
             )
         )
     elif args.command == "service-plan":

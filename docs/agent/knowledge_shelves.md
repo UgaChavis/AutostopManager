@@ -16,6 +16,14 @@ Human entrypoint for routing, file placement, deletion, and source-pack policy.
 7. Before deleting tracked docs or generated artifacts, run `cleanup-audit` and
    remove only items that satisfy the deletion rule below.
 
+For a technical automotive request, the route card is a navigation aid, not a
+mandatory script. Open `automotive_repair` first for general repair, ГРМ,
+torque, maintenance, DTC, or aggregate questions; move to BMW or Toyota GR
+Yaris only on explicit vehicle markers. Then choose the smallest relevant mix
+of CRM vehicle context, AutoStop App internal facts, VIN/OEM applicability,
+official public evidence, and public web/forum research. Do not enter CRM or
+Store merely because those connectors are available.
+
 ## Shelves
 
 | Shelf | Domain | Open first |

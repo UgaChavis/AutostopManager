@@ -15,6 +15,21 @@
       "refresh": "check_weekly"
     },
     {
+      "id": "nhtsa_recalls_by_vehicle_api",
+      "name": "NHTSA Recalls by Vehicle API",
+      "url_template": "https://api.nhtsa.gov/recalls/recallsByVehicle?make={MAKE}&model={MODEL}&modelYear={MODEL_YEAR}",
+      "format": "json_api",
+      "license_or_access": "public_api",
+      "data_types": [
+        "recalls",
+        "campaigns",
+        "remedy",
+        "affected_components"
+      ],
+      "refresh": "on_request",
+      "scope": "US model-level; not a VIN open-campaign status check"
+    },
+    {
       "id": "nhtsa_recalls_post_2010",
       "name": "NHTSA Recalls Flat File POST 2010",
       "url": "https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip",

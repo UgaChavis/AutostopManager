@@ -20,6 +20,32 @@ hygiene unless the external source was actually checked in that pass.
 Treat an old `last_verified` value as a prompt to recheck the source before
 operational use, not as proof that the route is still current.
 
+## Intelligent Source Selection
+
+Start with the technical question and choose evidence adaptively rather than
+following a fixed sequence:
+
+- Use live CRM only when an identified card or its vehicle/repair-order context
+  answers part of the question. It is not a substitute for service literature.
+- Use AutoStop App only for internal catalog, stock, price, supplier, or quote
+  facts. It does not prove vehicle applicability or a repair procedure.
+- Use VIN/frame and OEM/EPC routes when identity, configuration, part
+  applicability, production split, engine, or transmission must be proven.
+- Use `lookup_public_automotive_evidence` for compact official public recall
+  signals and manufacturer-communication/TSB metadata. NHTSA results are
+  U.S. model-level evidence, not confirmation of an open campaign for a VIN.
+- Use public web search and profile forums to discover symptom patterns,
+  terminology, publications, and competing hypotheses. Keep the evidence
+  boundary below: a forum is not final authority for procedures or safety data.
+- Use OEM or legally licensed service information for final torque, timing,
+  repair steps, wiring, fluid approval/capacity, programming, ADAS, SRS, HV,
+  and exact-fitment conclusions.
+
+For timing/ГРМ questions, establish the exact engine and timing drive first,
+then seek the applicable procedure, timing marks/phases, torque-plus-angle
+values, special tools, and any crank/cam locking requirements. Never transfer
+values between engine variants or infer a procedure from a visual forum post.
+
 ## Web Research Tools
 
 For public internet research, use the lightest route that works:
