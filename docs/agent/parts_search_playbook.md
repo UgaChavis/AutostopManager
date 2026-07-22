@@ -77,10 +77,11 @@ If the only input is a free-text card, normalize the part name first. Example:
 
 1. Search Drom first.
 2. Search ZZap second for price comparison, seller coverage, and replacements.
-3. Search Avito third as a manual fallback.
-4. If exact part hits are sparse, widen the query with the vehicle model,
+3. Search EuroAuto third for used, contract, and new-part alternatives.
+4. Search Avito fourth as a manual fallback.
+5. If exact part hits are sparse, widen the query with the vehicle model,
    platform, and description.
-5. If the exact OEM still does not surface, search by fitment clues from the
+6. If the exact OEM still does not surface, search by fitment clues from the
    card and compare cross references.
 
 ## Drom Workflow
@@ -118,7 +119,7 @@ same site.
 
 ## Avito Workflow
 
-Use Avito as the third marketplace and manual fallback after Drom and ZZap.
+Use Avito as the fourth marketplace and manual fallback after Drom, ZZap, and EuroAuto.
 
 Recommended query pattern:
 
@@ -129,6 +130,12 @@ Recommended query pattern:
 
 External search snippets can omit or stale Avito listing details. Treat Avito
 as a direct public-site search when accessible and verify the live listing.
+For AutoStop's own Avito business account, a separate official Business API
+integration can later read and manage only that account's listings, chats,
+orders, and account analytics after owner-approved OAuth/application access.
+It does not provide a legitimate bulk catalogue of other sellers' listings;
+keep competitor and marketplace sourcing on public search and never scrape,
+bypass protection, or automate an unauthorised account.
 
 What to check in each listing:
 
@@ -137,6 +144,24 @@ What to check in each listing:
 - seller activity and response quality
 - compatibility notes
 - whether the listing is a single part or a bundle
+
+## EuroAuto Workflow
+
+Use EuroAuto as a public, read-only catalog after Drom and ZZap when a used,
+contract, or new-part alternative could be useful. Search the public catalog
+by exact OEM/article first; use the VIN search only to narrow the catalog, not
+as proof of an OEM number. It is a market source, not a закупочная API and not
+an authorization to place an order.
+
+Check the live listing for:
+
+- exact OEM/article and the donor vehicle or fitment notes
+- condition, completeness, and photos
+- delivery to Красноярск, warranty, return terms, and current availability
+
+The site may protect automated requests. Do not bypass that protection or use
+private/mobile endpoints; record the result as requiring live confirmation when
+the public page cannot be read.
 
 ## ZZap Workflow
 

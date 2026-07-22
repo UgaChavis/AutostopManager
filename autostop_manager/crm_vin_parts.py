@@ -485,11 +485,12 @@ def build_crm_vin_parts_lookup_pipeline(
                     "Autodoc",
                     "ZZap",
                     "Drom",
+                    "EuroAuto",
                     "Avito",
                 ],
                 "source_roles": {
                     "procurement_first": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter", "Emex"],
-                    "public_retail_reference": ["Exist", "Autodoc", "ZZap", "Drom", "Avito"],
+                    "public_retail_reference": ["Exist", "Autodoc", "ZZap", "Drom", "EuroAuto", "Avito"],
                 },
                 "checks": [
                     "procurement vs retail vs client sale",

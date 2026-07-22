@@ -84,11 +84,14 @@ contacts, money values, credentials, or full tool payloads into learning memory
 or hook output. Store source-system facts in their source system and keep only
 minimal technical references in the Manager ledger.
 
-The project hook file is `.codex/hooks.json`. After a checkout changes it,
-explicitly trust the project hooks in Codex through `/hooks`; until then Codex
-skips command hooks by design. The hook fails open if local storage is not
-available, records only hashes/status shapes, blocks one unreviewed learning
-turn, and defers it on the second Stop continuation to avoid a loop.
+The production server uses the managed hook definition installed from
+`deploy/codex/requirements.toml` into `/etc/codex/requirements.toml`; its
+root-owned runtime files live in `/opt/autostop-managed-hooks`. The managed
+hook is policy-trusted and does not depend on Desktop UI trust state. Exact
+voice or text commands such as `переведи в режим обучения` and `выключи режим
+обучения` persist the global mode before the task starts. The hook fails open
+if local storage is not available, records only hashes/status shapes, blocks one
+unreviewed learning turn, and defers it on the second Stop continuation to avoid a loop.
 
 ## Case Resolver and Evidence
 

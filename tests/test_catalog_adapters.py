@@ -145,6 +145,18 @@ def test_catalog_provider_status_marks_exist_public_route_live(monkeypatch):
     assert "retail_price_benchmark" in exist["capabilities"]
 
 
+def test_catalog_provider_status_marks_euroauto_public_catalog_as_manual():
+    status = catalog_provider_status(stage="market_price")
+    euroauto = next(provider for provider in status["providers"] if provider["source_id"] == "euroauto_catalog")
+
+    assert euroauto["configured"] is True
+    assert euroauto["live_callable_now"] is False
+    assert euroauto["access_mode"] == "public_site_manual"
+    assert euroauto["env_names"] == []
+    assert "part_number_search" in euroauto["capabilities"]
+    assert "AutoEuro" in euroauto["limits"]
+
+
 def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     for name in ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
@@ -173,6 +185,7 @@ def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeyp
     assert any(step["step"] == "find_oem_candidates" for step in plan["pipeline"])
     assert any(step["step"] == "lookup_public_aftermarket_catalogs" for step in plan["pipeline"])
     assert plan["manual_public_search_queries"]
+    assert any(item["source_id"] == "euroauto_catalog_manual" for item in plan["manual_public_search_queries"])
     combined_queries = "\n".join(item["query"] + "\n" + item["url"] for item in plan["manual_public_search_queries"])
     assert "MR41S123456" not in combined_queries
     assert "Suzuki" in combined_queries

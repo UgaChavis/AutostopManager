@@ -209,6 +209,26 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         manual_allowed=True,
     ),
     CatalogProvider(
+        source_id="euroauto_catalog",
+        name="EuroAuto public catalog",
+        stage="market_price",
+        access_mode="public_site_manual",
+        env_names=(),
+        capabilities=(
+            "part_number_search",
+            "vin_search_public_site",
+            "used_parts",
+            "contract_parts",
+            "new_parts",
+            "market_price_reference",
+        ),
+        priority="medium",
+        role="Read-only catalog route for new, used, and contract-part discovery; use as a market reference after OEM/fitment confirmation.",
+        limits="EuroAuto is distinct from AutoEuro. No buyer API has been approved for AutoStop: use only the public catalog, do not automate login, basket, checkout, messages, private/mobile endpoints, or bypass anti-bot protection. Verify listing, condition, delivery, warranty, and return terms live.",
+        docs_url="https://krasnoyarsk.euroauto.ru/",
+        manual_allowed=True,
+    ),
+    CatalogProvider(
         source_id="armtek",
         name="Armtek",
         stage="procurement_price",
@@ -300,6 +320,7 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
             configured = bool(provider.env_any_groups and configured) or provider.access_mode in {
                 "public_api",
                 "public_site_read_only",
+                "public_site_manual",
                 "local_rules",
             }
         providers.append(
@@ -314,7 +335,13 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
                 "missing_env_groups": missing_groups,
                 "live_callable_now": configured
                 and provider.access_mode
-                not in {"manual_subscription", "subscription_or_manual", "partner_or_manual", "local_rules"},
+                not in {
+                    "manual_subscription",
+                    "subscription_or_manual",
+                    "partner_or_manual",
+                    "public_site_manual",
+                    "local_rules",
+                },
             }
         )
     stage_matrix = _provider_stage_matrix(providers)
@@ -416,6 +443,13 @@ def _manual_public_search_queries(
             "query": query,
             "url": f"https://baza.drom.ru/krasnoyarsk/sell_spare_parts/?query={compact_query}",
             "needs": "photo/article/seller confirmation; do not use as OEM proof",
+        },
+        {
+            "source_id": "euroauto_catalog_manual",
+            "role": "Public EuroAuto catalog for used, contract, and new-part market alternatives.",
+            "query": query,
+            "url": "https://krasnoyarsk.euroauto.ru/",
+            "needs": "enter the OEM/article or VIN in the public catalog; verify live listing, condition, delivery, warranty, and return terms",
         },
         {
             "source_id": "avito_parts_manual",

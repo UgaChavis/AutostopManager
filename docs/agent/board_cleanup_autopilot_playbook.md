@@ -117,9 +117,14 @@ For card text or vehicle passport writes orchestrated by AutostopManager:
 3. Build a contract with `prepare_action_contract`.
 4. Preview and apply through
    `agent_board_workflow(operation="cleanup_card")`, carrying
-   `expected_updated_at` and a unique idempotency key.
+   `expected_updated_at` and a unique idempotency key. For a structured
+   vehicle update, the cleanup payload key is exactly `vehicle_profile` (not
+   `vehicle_profile_patch`); send only the source-backed fields that are to be
+   merged with the existing profile.
 5. Reread and verify description, visible text, vehicle_profile metadata,
-   `board_summary_stale=false`, and no unplanned field changes.
+   `board_summary_stale=false`, and no unplanned field changes. A successful
+   workflow envelope is not proof that every requested nested field was
+   applied: compare every planned structured field in the exact-target reread.
 6. Record planned patch, write result, diff, warnings, and verification.
 
 ## Structured Identity First
