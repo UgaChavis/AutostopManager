@@ -1,9 +1,9 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-07-14",
-  "tool_count": 63,
-  "exposed_directly_by": "python -m autostop_manager.mcp_server",
+  "last_verified": "2026-07-22",
+  "tool_count": 77,
+  "exposed_directly_by": ".venv/bin/python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
   "memory_is_source_of_truth_for": [
     "owner preferences",
@@ -23,11 +23,20 @@
     "cashboxes",
     "board state"
   ],
+  "store_is_source_of_truth_for": [
+    "store catalog",
+    "physical, reserved, and available stock",
+    "batches and storage locations",
+    "suppliers and quote requests",
+    "internet orders and warehouse operations",
+    "marketplace state"
+  ],
   "startup_tools": [
     "today_context",
     "prepare_manager_context",
     "agent_brief",
     "agent_bootstrap",
+    "agent_mode",
     "list_agent_workflows",
     "prepare_action_contract",
     "prepare_crm_card_action",
@@ -43,6 +52,7 @@
     "manager_journal"
   ],
   "routing_tools": [
+    "agent_case_resolver",
     "lookup_original_parts",
     "estimate_repair_work_cost",
     "decode_vehicle_identity",
@@ -64,6 +74,7 @@
     "build_vin_parts_work_order",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
+    "lookup_public_automotive_evidence",
     "recommend_service_management_actions",
     "sync_knowledge_base",
     "probe_knowledge_base",
@@ -72,7 +83,8 @@
     "audit_knowledge_annotations",
     "audit_skill_registry",
     "knowledge_intake_plan",
-    "provider_smoke_report"
+    "provider_smoke_report",
+    "get_store_analytics_report"
   ],
   "health_tools": [
     "system_audit",
@@ -80,11 +92,26 @@
     "crm_health_plan",
     "control_report"
   ],
+  "store_tools": [
+    "store_runtime_status",
+    "store_digest",
+    "store_search",
+    "store_entity_context",
+    "download_store_quote_vin_photo",
+    "store_management_action",
+    "store_owner_capabilities",
+    "store_owner_api"
+  ],
   "memory_quality_tools": [
     "audit_memory",
     "curate_memory",
     "memory_review",
     "memory_review_apply"
+  ],
+  "learning_tools": [
+    "agent_mode",
+    "post_run_review",
+    "agent_learning_workflow"
   ],
   "operation_tools": [
     "start_workflow",
@@ -110,7 +137,20 @@
     "prepare_manager_context",
     "agent_brief",
     "agent_bootstrap",
+    "agent_mode",
+    "post_run_review",
+    "agent_learning_workflow",
+    "agent_case_resolver",
     "list_agent_workflows",
+    "store_runtime_status",
+    "store_digest",
+    "store_search",
+    "store_entity_context",
+    "download_store_quote_vin_photo",
+    "store_management_action",
+    "store_owner_capabilities",
+    "store_owner_api",
+    "get_store_analytics_report",
     "prepare_action_contract",
     "prepare_crm_card_action",
     "manager_journal",
@@ -154,6 +194,7 @@
     "build_vin_parts_work_order",
     "recommend_automotive_sources",
     "recommend_fluid_maintenance_sources",
+    "lookup_public_automotive_evidence",
     "recommend_service_management_actions",
     "control_report",
     "memory_review",
@@ -175,8 +216,20 @@
     "prepare_manager_context": "Combine owner command routes, relevant memory/rules, knowledge routing, missing required context, and next actions for a specific request.",
     "agent_brief": "Return the mandatory compact startup package for an agent before broad document reads or CRM work: role, route, memory_sources, source boundaries, hot rules, read order, allowed/forbidden actions, missing context, context_safety, next actions, and verification.",
     "agent_bootstrap": "Return AgentEnvelopeV2 with the deterministic selected workflow, source boundaries, safety policy, missing context, and resumable unfinished runs without reading or writing live CRM/Gmail.",
+    "agent_mode": "Read, set, or resolve the durable work/learning execution mode. Work is fast ordinary verification; learning requires a privacy-safe post-run review. Per-turn overrides never persist prompt text.",
+    "post_run_review": "Close one learning turn with compact completion codes, tool-health assessment, and safe technical metadata. It rejects prompts, raw CRM/Store/Gmail payloads, VINs, contacts, and financial values; an optional candidate keeps the cycle open until promoted, deferred, or rolled back.",
+    "agent_learning_workflow": "Advance a reviewed improvement candidate through repair, verify, promote, defer, rollback, or summary. It records lifecycle evidence only; actual code/docs/deploy changes remain governed by the active task, test, and readback rules.",
+    "agent_case_resolver": "READ_ONLY RAW_CAPABILITY. Build a connector-neutral source-read DAG or reconcile compact scalar evidence for one opaque case. It never calls connectors or writes CRM, Store, Gmail, memory, workflow state, or files; raw prompt/payload/identifier fields are rejected and resolved values are display-redacted.",
     "list_agent_workflows": "List the compact named Agent Gateway v2 workflow registry and resolve a query or explicit intent deterministically.",
-    "prepare_action_contract": "Build ActionContractV2 for CRM, finance, inventory, documents, files, or Gmail writes with task intent, exact target, idempotency, concurrency, automatic preflight, compensation, and readback verification; never performs the write.",
+    "store_runtime_status": "INTERNAL_ONLY. Return store_agent_v1 adapter configuration booleans, circuit state, optional live AutoStop App health, or the one-request stateless bootstrap snapshot without exposing token values. The snapshot never reads or advances digest checkpoints. Gateway raw discovery must exclude it and map health through existing bootstrap/runtime tools.",
+    "store_digest": "INTERNAL_ONLY. Read one bounded pure-read store digest page with at-least-once delivery. Uses isolated store_digest/store_bootstrap streams, persists only technical cursor/timestamp/success state/compact refs, returns a Manager-owned cursor-bound ACK for every non-empty page, replays unacknowledged pages from the fixed App window, and commits high-water only after final ACK. Gateway raw discovery must exclude it.",
+    "store_search": "INTERNAL_ONLY. Search one allowlisted store entity through the pure-read AutoStop App agent API with compact store_agent_v1 DTOs, bounded limit, opaque pagination, schema validation, and contact redaction. Gateway maps it through agent_search.",
+    "store_entity_context": "INTERNAL_ONLY. Read one exact allowlisted store entity with summary, full, or full_with_vin_photo detail. General reads remain redacted; exact full quote reads use the dedicated quote credential and may transiently return contacts, VIN, items, offers, notes, drafts, and bounded VIN-photo metadata. Gateway maps it through agent_entity_context and never persists the payload.",
+    "download_store_quote_vin_photo": "INTERNAL_ONLY. Read one exact quote VIN-photo JPEG preview through the dedicated quote credential and expected photo SHA-256. Bytes are transient only; Gateway maps it through agent_document_workflow with explicit allow_large_output and never exposes it through raw discovery.",
+    "store_management_action": "INTERNAL_ONLY. Execute only assign_quote_request, set_quote_request_status, update_quote_request_comment, add_quote_request_note, replace_quote_offer_drafts, set_batch_storage_location, or mark_order_ready after ActionContractV2, exact preread, expected_updated_at, idempotency, correlation, dry_run/apply, and exact readback. Quote drafts remain private. Gateway raw discovery excludes it and agent_inventory_workflow enforces policy.",
+    "store_owner_capabilities": "READ_ONLY RAW_CAPABILITY. Discover the current typed employee API inventory from live Store OpenAPI through the dedicated owner principal; excludes public/customer and human login/logout routes and returns no business data.",
+    "store_owner_api": "OWNER_SCOPED RAW_CAPABILITY. Read or execute one typed employee API operation through the same AutoStop App route used by Flutter. Writes require ActionContractV2 metadata, exact target/revision, idempotency, correlation and a matching schema-bound dry-run proof; applied results stay compensating until exact reread. Responses remain transient.",
+    "prepare_action_contract": "Build ActionContractV2 for CRM, store, finance, inventory, documents, files, or Gmail writes with task intent, exact target, idempotency, concurrency, automatic preflight, compensation, and readback verification; store dry-run/apply phase keys remain distinct while their validated or derived correlation stays stable; never performs the write.",
     "prepare_crm_card_action": "Build a dry-run CRM card edit contract with exact description patch, vehicle_profile metadata preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, risk flags, and strict reread verification; never writes CRM.",
     "manager_journal": "Append a concise factual note after important work, source changes, or decisions.",
     "sync_knowledge_base": "Refresh the SQLite index of docs/agent/knowledge_map.json routes, playbooks, source catalogs, and model-specific skills.",
@@ -217,6 +270,7 @@
     "build_vin_parts_work_order": "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, cross/applicability steps, supplier routes, read-only candidate lookup vs CRM writeback gates, blockers, and acceptance checklists with raw identifiers redacted from output.",
     "recommend_automotive_sources": "Select authoritative repair or technical source routes by brand and data type.",
     "recommend_fluid_maintenance_sources": "Select source routes for oils, fluids, capacities, and ТО planning.",
+    "lookup_public_automotive_evidence": "Read compact official public evidence: NHTSA model-level recalls, optional manufacturer-communications/TSB metadata, and Mercedes/ZF fluid-reference routes. It redacts identifiers, performs no writes, and does not treat public evidence as VIN-specific repair documentation.",
     "recommend_service_management_actions": "Build a Krasnoyarsk workshop-management action plan for parts procurement, repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake.",
     "plan_crm_vin_oem_parts_lookup": "Build a deterministic CRM VIN/frame/body-number parts lookup workflow: live card intake, vehicle identification, OEM/replacement/cross lookup, internal procurement/RF market quote matrix, selected-part material line policy, compact public CRM writeback steps, and reread verification. This planner does not write CRM or place supplier orders.",
     "estimate_repair_work_cost": "Build a read-only labor estimate from vehicle/work items, public Russia STO labor-only prices, and a public norm-hours/labor-time plausibility layer; returns normalized operations, market sample, labor-time checks, Russia average, AutoStop +50% price, confidence, missing context, and next actions without writing repair orders.",
@@ -224,9 +278,136 @@
     "memory_review": "Generate rule-based MemoryReviewItem proposals for duplicates, expired/superseded items, weak confidence, and run-ledger lesson candidates without copying raw CRM, email, or secret content.",
     "memory_review_apply": "Apply a pending MemoryReviewItem decision: accept, reject, or archive_duplicate. Duplicate archival revalidates active duplicate refs, is non-destructive, and never deletes source memory records.",
     "knowledge_intake_plan": "Classify a source file into KnowledgeIntakeDraft with domain, source type, safety flags, target metadata updates, and required follow-up audits; apply mode is review-gated and does not commit raw private files.",
-    "provider_smoke_report": "Generate ProviderSmokeResult readiness checks for one provider or all providers in dry-run or live-readonly mode without order, basket, supplier write, or CRM writeback endpoints."
+    "provider_smoke_report": "Generate ProviderSmokeResult readiness checks for one provider or all providers in dry-run or live-readonly mode without order, basket, supplier write, or CRM writeback endpoints.",
+    "get_store_analytics_report": "Hidden read-only raw capability for one bounded aggregate-only first-party storefront report in Asia/Krasnoyarsk; uses the internal AutoStop App Store Agent URL and never returns raw events, visitor/session identifiers, exact search text, or customer data."
+  },
+  "store_tool_schemas": {
+    "store_runtime_status": {
+      "live": "bool=false",
+      "bootstrap_snapshot": "bool=false; when true performs one stateless Store bootstrap GET and ignores digest checkpoints"
+    },
+    "store_digest": {
+      "baseline": "bool=false",
+      "since": "string|null=null",
+      "cursor": "string|null=null",
+      "ack_token": "string|null=null; if supplied, requires the matching Manager cursor",
+      "limit": "integer=25, clamped 1..100",
+      "stream": "store_digest|store_bootstrap, default store_digest"
+    },
+    "store_search": {
+      "entity": "store_part|store_order|store_quote_request|store_supplier|store_batch|store_warehouse_operation|store_marketplace_listing|store_state|store_sourcing_offer",
+      "query": "string=''",
+      "filters": "object|null=null",
+      "cursor": "opaque string|null=null",
+      "limit": "integer=25, clamped 1..100",
+      "filters_by_entity": {
+        "store_part": "is_active: bool; low_stock: bool",
+        "store_order": "status: IN_PROGRESS|READY|COMPLETED|ANNULLED|RETURNED",
+        "store_quote_request": "status: NEW|IN_PROGRESS|PRICED|APPROVED|CONVERTED|CANCELLED; assigned_user_id: non-empty string up to 36|null",
+        "store_supplier": "is_active: bool",
+        "store_batch": "status: IN_PROGRESS|COMPLETED; storage_location: non-empty string up to 200",
+        "store_warehouse_operation": "kind: RECEIPT|SHIPMENT; status: IN_PROGRESS|COMPLETED|ANNULLED",
+        "store_marketplace_listing": "status: DRAFT|PUBLISHED|FAILED|ARCHIVED",
+        "store_state": "no filters",
+        "store_sourcing_offer": "no filters or cursor; query length at least 2"
+      }
+    },
+    "store_entity_context": {
+      "entity": "allowlisted store entity",
+      "entity_id": "non-empty exact string",
+      "detail": "summary|full|full_with_vin_photo, default summary; general reads are redacted, while exact full quote reads use the dedicated quote credential and stay transient"
+    },
+    "download_store_quote_vin_photo": {
+      "quote_request_id": "non-empty exact string",
+      "expected_photo_sha256": "lowercase SHA-256 from full_with_vin_photo metadata"
+    },
+    "store_management_action": {
+      "domain": "store_quote_request|store_batch|store_order",
+      "action": "one of seven optimized named operations",
+      "target_id": "non-empty exact string",
+      "planned_changes": "strict operation-specific object",
+      "owner_intent": "task-specific string",
+      "expected_updated_at": "current exact string",
+      "idempotency_key": "unique string",
+      "correlation_id": "alphanumeric-first 8..160 safe identifier from ActionContractV2, stable across dry_run/apply; explicit override is optional when building the contract",
+      "mode": "dry_run|apply, default dry_run",
+      "planned_changes_by_action": {
+        "assign_quote_request": "store_quote_request; assignee_id: non-empty string up to 36",
+        "set_quote_request_status": "store_quote_request; status: NEW|IN_PROGRESS",
+        "update_quote_request_comment": "store_quote_request; internal_comment: string up to 2000|null",
+        "add_quote_request_note": "store_quote_request; text: non-empty string up to 2000",
+        "replace_quote_offer_drafts": "store_quote_request; complete Manager-owned draft post-state for one exact quote: 1..20 exact items, 0..3 strict private drafts per item; omitted prior drafts are superseded",
+        "set_batch_storage_location": "store_batch; storage_location: non-empty string up to 200",
+        "mark_order_ready": "store_order; status: READY from IN_PROGRESS only"
+      }
+    },
+    "store_owner_capabilities": {
+      "query": "optional operation/method/path search string",
+      "limit": "integer=200, clamped 1..250 so one call can inventory every current employee operation",
+      "source": "live AutoStop App OpenAPI filtered to employee routes; no business data"
+    },
+    "store_owner_api": {
+      "operation_id": "exact operationId from store_owner_capabilities",
+      "risk": "live read|write|high_risk_write classification; high-risk and existing-target writes require current revision",
+      "schema_hash": "exact SHA-256 operation schema hash returned by live capability discovery and bound into dry-run proof",
+      "mode": "read for GET; dry_run|apply for writes",
+      "target_id": "exact entity or reviewed collection ref for writes",
+      "path_parameters": "exact typed path parameter object",
+      "query": "bounded query object",
+      "body": "bounded JSON request body, transient only",
+      "form": "bounded multipart form fields",
+      "files": "bounded transient base64 files with field, filename, content_type and content_base64",
+      "owner_intent": "task-specific string for writes",
+      "idempotency_key": "unique 8..160 safe identifier for writes",
+      "correlation_id": "8..160 safe identifier for writes",
+      "expected_revision": "current exact revision for writes",
+      "dry_run_proof": "required matching schema-bound plan hash for every apply",
+      "allow_binary_response": "false by default; true only for an explicit bounded document request"
+    }
   },
   "natural_language_commands": {
+    "Store analytics": {
+      "aliases": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ",
+        "статистика магазина",
+        "аналитика сайта"
+      ],
+      "playbook": "docs/agent/store_analytics_playbook.md",
+      "authority": "aggregate-only first-party storefront statistics from the protected internal AutoStop App report endpoint",
+      "forbidden_data": [
+        "raw analytics events",
+        "visitor_id or session_id",
+        "IP or exact User-Agent",
+        "exact search queries, form values, customer contacts, or VIN"
+      ]
+    },
+    "Learning mode": {
+      "aliases": [
+        "включи режим обучения",
+        "переключи в рабочий режим",
+        "самообучение менеджера",
+        "самоисправление менеджера"
+      ],
+      "playbook": "docs/agent/intelligent_agent_learning_playbook.md",
+      "tools": [
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "agent_case_resolver"
+      ],
+      "authority": "The active owner task authorizes non-financial exact-target work after contracts and readback. Learning data is technical and hash-only; financial changes and external repairs remain outside automatic learning.",
+      "forbidden_data": [
+        "raw prompt",
+        "CRM/Store/Gmail payload",
+        "VIN or client contact",
+        "money value",
+        "secret or credential"
+      ]
+    },
     "Приберись": {
       "aliases": [
         "Приберись"
@@ -310,7 +491,8 @@
       "raw client databases",
       "cashbox ledgers",
       "full repair-order text",
-      "licensed content without permission"
+      "licensed content without permission",
+      "raw store orders, customer contacts, line items, stock rows, warehouse dumps, or API payloads"
     ]
   },
   "command_routes": {
@@ -335,7 +517,8 @@
       "parts procurement",
       "finance control",
       "knowledge intake",
-      "multi-step CRM work"
+      "multi-step CRM work",
+      "multi-step store or CRM plus store work"
     ],
     "minimum_events": [
       "planned_action",
@@ -349,6 +532,8 @@
     "use memory_context_for before context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated workflow decisions",
     "recall owner preferences, style rules, and operating lessons before context-sensitive CRM or email work",
     "use learn_from_feedback after strong praise, criticism, success, failure, or owner instruction to do something differently",
+    "resolve agent_mode at startup; in learning mode close post_run_review before the final response and use agent_learning_workflow only for verified lifecycle transitions",
+    "use agent_case_resolver for a read-only multi-source claim plan or evidence conflict reconciliation; execute the selected reads through their owning systems",
     "store lessons as short reusable guidance, not full event copies or rigid output templates",
     "store source routes, not copied databases",
     "use importance, confidence, expires_at, supersedes_id, sensitivity, and tags when storing durable memory",
@@ -367,5 +552,5 @@
     "use catalog_provider_status and plan_oem_parts_providers before claiming that live VIN/OEM/supplier APIs are available",
     "do not store raw customer VIN/frame values or supplier quote dumps from parts lookup in durable memory"
   ],
-  "all_tools_count": 63
+  "all_tools_count": 77
 }

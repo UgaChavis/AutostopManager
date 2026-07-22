@@ -16,18 +16,30 @@ Human entrypoint for routing, file placement, deletion, and source-pack policy.
 7. Before deleting tracked docs or generated artifacts, run `cleanup-audit` and
    remove only items that satisfy the deletion rule below.
 
+For a technical automotive request, the route card is a navigation aid, not a
+mandatory script. Open `automotive_repair` first for general repair, ГРМ,
+torque, maintenance, DTC, or aggregate questions; move to BMW or Toyota GR
+Yaris only on explicit vehicle markers. Then choose the smallest relevant mix
+of CRM vehicle context, AutoStop App internal facts, VIN/OEM applicability,
+official public evidence, and public web/forum research. Do not enter CRM or
+Store merely because those connectors are available.
+
 ## Shelves
 
 | Shelf | Domain | Open first |
 | --- | --- | --- |
+| Ecosystem capability parity | `ecosystem_capability_parity` | `AGENTS.md` |
 | Manager startup | `startup_and_identity` | `AGENTS.md` |
+| Intelligent execution and learning | `intelligent_agent_learning` | `docs/agent/intelligent_agent_learning_playbook.md` |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
+| Store analytics | `store_analytics_reporting` | `docs/agent/store_analytics_playbook.md` |
 | Gmail | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` |
 | Business identity | `business_identity` | `docs/agent/business_identity_playbook.md` |
 | Business documents | `business_documents` | `docs/agent/business_document_quality_playbook.md` |
 | CRM VIN/OEM parts | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
+| AutoStop App store | `store_management` | `docs/agent/store_management_playbook.md` |
 | Vehicle identity/OEM | `vehicle_identity_and_oem` | `docs/agent/vehicle_identity_playbook.md` |
 | Parts sourcing | `parts_sourcing` | `docs/agent/parts_search_playbook.md` |
 | Labor pricing | `work_labor_pricing` | `docs/agent/work_labor_pricing_playbook.md` |
@@ -119,8 +131,8 @@ Do not keep a growing archive of obsolete plans. Prefer deletion after migration
 ## Safety Boundaries
 
 - Do not store full manuals, copied licensed databases, full spreadsheets, CRM
-  snapshots, raw Gmail threads, or temporary marketplace search results in
-  manager memory.
+  snapshots, raw store orders/contacts/line items/stock rows/API payloads, raw
+  Gmail threads, or temporary marketplace search results in manager memory.
 - Do not move private business requisites from `data/private_knowledge/` into
   tracked docs.
 - For repair, programming, immobilizer, SRS, HV, pinout, torque, or fluid facts,

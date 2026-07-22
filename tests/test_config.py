@@ -82,3 +82,52 @@ def test_runtime_getters_use_project_defaults(monkeypatch):
     assert config.get_mcp_host() == "127.0.0.1"
     assert config.get_mcp_port() == 41931
     assert config.get_mcp_path() == "/mcp"
+
+
+def test_store_runtime_getters_use_only_explicit_injected_environment_names(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "http://autostop-app:8000/")
+    monkeypatch.setenv("AUTOSTOP_STORE_READ_TOKEN", "read-runtime-token")
+    monkeypatch.setenv("AUTOSTOP_STORE_QUOTE_TOKEN", "quote-runtime-token")
+    monkeypatch.setenv("AUTOSTOP_STORE_MANAGE_TOKEN", "manage-runtime-token")
+    monkeypatch.setenv("AUTOSTOP_STORE_OWNER_TOKEN", "owner-runtime-token")
+    monkeypatch.setenv("STORE_ADMIN_PASSWORD", "must-not-be-used")
+
+    assert config.get_store_api_url() == "http://autostop-app:8000/internal/agent/v1"
+    assert config.get_store_read_token() == "read-runtime-token"
+    assert config.get_store_quote_token() == "quote-runtime-token"
+    assert config.get_store_manage_token() == "manage-runtime-token"
+    assert config.get_store_owner_token() == "owner-runtime-token"
+
+
+def test_store_api_url_does_not_duplicate_agent_prefix(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "http://autostop-app:8000/internal/agent/v1/")
+
+    assert config.get_store_api_url() == "http://autostop-app:8000/internal/agent/v1"
+
+
+def test_store_api_url_allows_bounded_loopback_endpoints_for_local_tests(monkeypatch):
+    for value, expected in (
+        ("http://127.0.0.1:18000", "http://127.0.0.1:18000/internal/agent/v1"),
+        ("http://localhost:18001/internal/agent/v1", "http://localhost:18001/internal/agent/v1"),
+        ("http://[::1]:18002/", "http://[::1]:18002/internal/agent/v1"),
+    ):
+        monkeypatch.setenv("AUTOSTOP_STORE_API_URL", value)
+        assert config.get_store_api_url() == expected
+
+
+def test_store_api_url_rejects_external_hosts_credentials_and_url_smuggling(monkeypatch):
+    rejected = (
+        "http://evil.example:8000",
+        "https://autostop-app:8000",
+        "http://autostop-app:80",
+        "http://user:password@autostop-app:8000",
+        "http://autostop-app:8000@evil.example",
+        "http://autostop-app:8000/internal/agent/v1?token=secret",
+        "http://autostop-app:8000/internal/agent/v1#fragment",
+        "http://autostop-app:8000/other-path",
+        "http://127.0.0.1",
+    )
+
+    for value in rejected:
+        monkeypatch.setenv("AUTOSTOP_STORE_API_URL", value)
+        assert config.get_store_api_url() == ""

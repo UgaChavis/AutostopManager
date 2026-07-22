@@ -2,7 +2,7 @@
   "package": "automotive_repair_knowledge_pack",
   "generated_on": "2026-07-14",
   "description": "Legal catalog of authoritative automotive repair knowledge sources for CRM/agent ingestion. Proprietary sources are indexed as acquisition targets, not copied content.",
-  "source_count": 122,
+  "source_count": 123,
   "sources": [
     {
       "id": "bosch_automotive_electrics_electronics",
@@ -409,7 +409,10 @@
         "service_repair_documentation",
         "diagnostic_manuals",
         "special_tools",
-        "maintenance"
+        "maintenance",
+        "repair_procedures",
+        "torque_specs",
+        "timing"
       ],
       "access": "paid_subscription",
       "legal_ingestion_status": "licensed_subscription_required",
@@ -418,6 +421,38 @@
       "notes": "Core Mercedes-Benz source.",
       "evidence_url": "https://www.startekinfo.com/",
       "last_verified": "2026-05-03",
+      "forum_or_unofficial": false
+    },
+    {
+      "id": "mercedes_operating_fluids",
+      "name": "Mercedes-Benz Operating Fluids",
+      "publisher": "Mercedes-Benz AG",
+      "category": "oem_public_reference",
+      "source_type": "official_public_approval_database",
+      "url": "https://operatingfluids.mercedes-benz.com/",
+      "regions": [
+        "Global"
+      ],
+      "brands": [
+        "Mercedes-Benz",
+        "Mercedes-Benz Vans",
+        "Maybach",
+        "smart"
+      ],
+      "data_types": [
+        "fluids",
+        "oil_approvals",
+        "coolant",
+        "brake_fluid",
+        "transmission"
+      ],
+      "access": "free_public",
+      "legal_ingestion_status": "official_free_browse_link_only",
+      "priority_score_1_5": 5,
+      "recommended_ingestion_route": "Use current official sheets to confirm approvals and approved products. Confirm exact VIN, market, engine or unit before claiming vehicle applicability, capacity, or service procedure.",
+      "notes": "Official approval reference; it is not a VIN-specific repair manual.",
+      "evidence_url": "https://operatingfluids.mercedes-benz.com/",
+      "last_verified": "2026-07-22",
       "forum_or_unofficial": false
     },
     {
@@ -2687,7 +2722,9 @@
         "Multi-brand"
       ],
       "data_types": [
-        "transmission"
+        "transmission",
+        "fluids",
+        "maintenance_intervals"
       ],
       "access": "public",
       "legal_ingestion_status": "official_free_browse_link_only",

@@ -86,6 +86,7 @@ def build_control_report(
     git = _git_state(root)
     knowledge = _knowledge_summary(memory)
     memory_summary = _memory_summary(memory)
+    learning = memory.get_agent_learning_summary(limit=5)
     mcp = _mcp_catalog_summary()
     providers = _provider_summary()
     ports = _public_ports()
@@ -138,6 +139,7 @@ def build_control_report(
             "providers_total": providers["provider_count"],
             "open_risk_score": open_risk["score"],
             "open_risk_level": open_risk["level"],
+            "agent_execution_mode": ((learning.get("mode") or {}).get("global_mode") or "work"),
         },
         "system_health": {
             "ok": bool(system_audit.get("ok")),
@@ -150,6 +152,7 @@ def build_control_report(
         "git": git,
         "tests_doctor": tests,
         "memory": memory_summary,
+        "learning": learning,
         "knowledge": knowledge,
         "mcp": mcp,
         "providers": providers,
@@ -215,9 +218,14 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         f"- System audit OK: `{(report.get('system_health') or {}).get('ok', False)}`",
         f"- Knowledge docs: `{summary.get('knowledge_documents', 0)}`",
         f"- Memory total: `{summary.get('memory_total', 0)}`",
+        f"- Agent execution mode: `{summary.get('agent_execution_mode', 'work')}`",
         f"- MCP manager tools: `{summary.get('mcp_manager_tools', 0)}`",
         f"- Providers configured: `{summary.get('providers_configured', 0)}/{summary.get('providers_total', 0)}`",
         f"- Provider external access backlog: `{((report.get('provider_readiness') or {}).get('external_access_backlog_count', 0))}`",
+        "",
+        "## Learning Mode",
+        f"- Global mode: `{(((report.get('learning') or {}).get('mode') or {}).get('global_mode', 'work'))}`",
+        f"- Recent improvement candidates: `{len((report.get('learning') or {}).get('recent_improvements') or [])}`",
         "",
         "## Provider Matrix",
     ]
@@ -938,19 +946,35 @@ def _mcp_import_status(python_path: Path, *, cwd: Path) -> dict[str, Any]:
     }
 
 
+def _safe_path_inventory(
+    root: Path,
+    pattern: str | None = None,
+    *,
+    directories_only: bool = False,
+) -> tuple[list[Path], bool]:
+    try:
+        if not root.exists():
+            return [], False
+        candidates = root.glob(pattern) if pattern else root.iterdir()
+        paths = [path for path in candidates if not directories_only or path.is_dir()]
+    except OSError:
+        return [], False
+    return sorted(paths), True
+
+
 def _codex_skill_inventory() -> dict[str, Any]:
-    system_skills = sorted(CODEX_SYSTEM_SKILLS_ROOT.glob("*/SKILL.md")) if CODEX_SYSTEM_SKILLS_ROOT.exists() else []
-    plugin_skills = (
-        sorted(CODEX_PLUGIN_CACHE_ROOT.glob("*/**/skills/*/SKILL.md")) if CODEX_PLUGIN_CACHE_ROOT.exists() else []
+    system_skills, system_skills_readable = _safe_path_inventory(CODEX_SYSTEM_SKILLS_ROOT, "*/SKILL.md")
+    plugin_skills, plugin_skills_readable = _safe_path_inventory(
+        CODEX_PLUGIN_CACHE_ROOT,
+        "*/**/skills/*/SKILL.md",
     )
-    plugins = (
-        sorted(path.name for path in CODEX_PLUGIN_CACHE_ROOT.iterdir() if path.is_dir())
-        if CODEX_PLUGIN_CACHE_ROOT.exists()
-        else []
-    )
+    plugin_dirs, plugin_dirs_readable = _safe_path_inventory(CODEX_PLUGIN_CACHE_ROOT, directories_only=True)
+    plugins = [path.name for path in plugin_dirs]
     return {
         "system_skills_root": str(CODEX_SYSTEM_SKILLS_ROOT),
         "plugin_cache_root": str(CODEX_PLUGIN_CACHE_ROOT),
+        "system_skills_readable": system_skills_readable,
+        "plugin_cache_readable": plugin_skills_readable and plugin_dirs_readable,
         "system_skill_count": len(system_skills),
         "plugin_skill_count": len(plugin_skills),
         "plugin_count": len(plugins),

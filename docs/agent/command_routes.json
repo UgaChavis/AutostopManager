@@ -3,6 +3,119 @@
   "format": "agent_workflow_registry_v2",
   "routes": [
     {
+      "command_id": "ecosystem_capability_parity",
+      "workflow_id": "ecosystem_capability_parity",
+      "priority": 200,
+      "intent": "ecosystem_capability_parity",
+      "domain": "ecosystem_capability_parity",
+      "open_first": "AGENTS.md",
+      "aliases": [
+        "полный функциональный паритет CRM и магазина",
+        "полностью отрефакторировать экосистему AutostopManager",
+        "production-ready AutostopManager"
+      ],
+      "keywords": [
+        "functional parity",
+        "функциональный паритет",
+        "production-ready",
+        "полный UI и backend",
+        "все бизнес-операции",
+        "change feed",
+        "CRM и AutoStop App",
+        "матрица покрытия"
+      ],
+      "memory_queries": [
+        "Gateway v2 capability parity",
+        "CRM Store event feed",
+        "production deploy rollback"
+      ],
+      "required_reads": [
+        "all AGENTS, README, architecture, MCP, API, test, and deployment sources in Manager, CRM, and Store",
+        "current Git state and live read-only runtime contracts",
+        "current UI to backend to Gateway coverage evidence"
+      ],
+      "write_domains": [
+        "manager_code_and_routes",
+        "crm_authorized_capabilities",
+        "store_authorized_capabilities",
+        "event_and_audit_contracts"
+      ],
+      "external_connectors": [
+        "AutoStop CRM Gateway v2",
+        "AutoStop App internal agent API",
+        "GitHub Actions"
+      ],
+      "completion_checks": [
+        "every discovered human CRM and Store action has a tested Manager route or an explicit owner-unavailable exemption",
+        "significant CRM and Store events support ordered replay, cursor, ACK, idempotency, and tombstones",
+        "unit, integration, contract, end-to-end, coverage, live dry-run, CI, deploy, and rollback checks pass",
+        "documentation and catalogs match deployed code and no raw business data is persisted in Manager"
+      ],
+      "next_actions": [
+        "create one durable multi-repository workflow ledger",
+        "record baseline and preserve every dirty worktree",
+        "build machine-verifiable CRM, Store, and event coverage matrices",
+        "repair confirmed foundations before expanding owner-authorized operations",
+        "iterate through implementation, tests, publication, rollback-safe deploy, and live readback"
+      ]
+    },
+    {
+      "command_id": "agent_learning_control",
+      "workflow_id": "agent_learning_control",
+      "priority": 96,
+      "intent": "agent_learning",
+      "domain": "intelligent_agent_learning",
+      "open_first": "docs/agent/intelligent_agent_learning_playbook.md",
+      "aliases": [
+        "включи режим обучения",
+        "режим обучения",
+        "переключи менеджера в обучение",
+        "переключи менеджера в рабочий режим",
+        "выключи режим обучения",
+        "самообучение менеджера",
+        "самоисправление менеджера"
+      ],
+      "keywords": [
+        "learning mode",
+        "work mode",
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "самообучение",
+        "самоисправление",
+        "разбор результата"
+      ],
+      "memory_queries": [
+        "intelligent agent learning",
+        "work learning mode",
+        "experience review",
+        "tool repair"
+      ],
+      "required_reads": [
+        "agent_bootstrap and the effective execution mode",
+        "docs/agent/intelligent_agent_learning_playbook.md",
+        "the project autostop-learning-loop skill when effective mode is learning"
+      ],
+      "write_domains": [
+        "manager_learning_state",
+        "manager_safe_experience",
+        "manager_code_or_docs_only_for_verified_local_repair"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "global and per-turn effective mode are explicit",
+        "learning turns have a completed review and every improvement candidate is promoted, deferred, or rolled back before final response",
+        "experience rows contain only allowed technical metadata and compact refs",
+        "any local repair has a regression check and verification; financial and external repair did not run"
+      ],
+      "next_actions": [
+        "read the current mode and choose work or learning for the exact task",
+        "in learning mode execute the task, record safe tool outcomes, then submit post_run_review",
+        "promote only verified reusable lessons; record a bounded candidate for unresolved issues",
+        "repair one reproducible local low-risk defect only after a failing regression test and exact verification"
+      ]
+    },
+    {
       "command_id": "board_cleanup_autopilot",
       "workflow_id": "board_cleanup_autopilot",
       "priority": 80,
@@ -157,13 +270,18 @@
         "поставь таймеры",
         "поставь таймеры на 2 суток",
         "сделай таймеры не менее двух суток",
-        "таймер на активных карточках не менее двух суток"
+        "таймер на активных карточках не менее двух суток",
+        "таймер более двух суток",
+        "таймеры более двух суток",
+        "сделай всем карточкам таймер более двух суток"
       ],
       "keywords": [
         "таймер",
         "дедлайн",
         "deadline",
         "двое суток",
+        "двух суток",
+        "более двух суток",
         "не менее двух суток",
         "172800"
       ],
@@ -188,7 +306,7 @@
       "next_actions": [
         "read agent_bootstrap and agent_board_digest",
         "run bulk_set_deadline_if_below through agent_board_workflow in dry_run with min_total_seconds=172800 and target_total_seconds=173700 so every changed timer is strictly above two days",
-        "apply with actor_name only after dry_run shows eligible cards and no unexpected errors",
+        "apply with a new unique idempotency key only after dry_run shows eligible cards and no unexpected errors; do not start a duplicate manual workflow because agent_board_workflow owns its ledger",
         "verify changed cards with response verification and a compact reread"
       ]
     },
@@ -203,6 +321,10 @@
         "почисти документацию",
         "архивируй старые документы",
         "приведи документацию в порядок",
+        "обнови документацию",
+        "актуализируй документацию",
+        "удали мусорную документацию",
+        "приведи инструкции в актуальное состояние",
         "оптимизируй базу знаний",
         "обнови базу знаний",
         "добавь в базу знаний",
@@ -255,6 +377,60 @@
         "remove stale absolute paths and duplicate active instructions",
         "update knowledge_map, knowledge_annotations, and navigation docs",
         "run knowledge-sync, knowledge-audit, annotations-audit, and focused tests"
+      ]
+    },
+    {
+      "command_id": "remote_codex_access",
+      "workflow_id": "remote_codex_access",
+      "priority": 94,
+      "intent": "remote_codex_access",
+      "domain": "remote_codex_access",
+      "open_first": "docs/agent/codex_home_pc_reverse_ssh.md",
+      "aliases": [
+        "подключись к удаленному компьютеру",
+        "подключись к удалённому компьютеру",
+        "управляй удаленным Windows компьютером",
+        "управляй удалённым Windows компьютером",
+        "проверь home-pc",
+        "проверь managed-pc",
+        "подключи новый компьютер с флешки AUTOSTOP_REMOTE"
+      ],
+      "keywords": [
+        "home-pc",
+        "managed-pc",
+        "AUTOSTOP_REMOTE",
+        "удаленный компьютер",
+        "удалённый компьютер",
+        "reverse SSH",
+        "Windows OpenSSH"
+      ],
+      "memory_queries": [
+        "remote_codex_access",
+        "managed-pc fleet",
+        "home-pc reverse SSH"
+      ],
+      "required_reads": [
+        "docs/agent/codex_home_pc_reverse_ssh.md",
+        "managed-pc doctor and exact alias status for fleet operations",
+        "legacy home-pc BatchMode quick check for the independent home route"
+      ],
+      "write_domains": [
+        "owner_authorized_remote_pc"
+      ],
+      "external_connectors": [
+        "managed-pc reverse SSH",
+        "legacy home-pc reverse SSH"
+      ],
+      "completion_checks": [
+        "the exact device alias or legacy route is reported",
+        "post-operation status or health check passes",
+        "no private key, password, token, or USB enrollment credential is printed or committed"
+      ],
+      "next_actions": [
+        "open the remote access playbook and choose managed-pc or legacy home-pc",
+        "run the route-specific health check and resolve the exact device",
+        "perform only the owner-requested remote operation",
+        "reread status and report the exact affected machine"
       ]
     },
     {
@@ -322,10 +498,6 @@
         "найди по VIN и запиши в карточку",
         "подбери запчасть по VIN в CRM",
         "найди OEM по номеру кузова и запиши в CRM",
-        "подбери свечи по VIN",
-        "подбери колодки по VIN",
-        "подбери фильтр по VIN",
-        "найди каталожный номер и аналоги",
         "VIN OEM card result"
       ],
       "keywords": [
@@ -336,12 +508,9 @@
         "карточка CRM",
         "запиши в карточку",
         "writeback",
-        "свечи по VIN",
-        "колодки по VIN",
-        "фильтр по VIN",
-        "OEM по VIN",
-        "каталожный номер по VIN",
-        "номер кузова запчасти"
+        "OEM по VIN в CRM",
+        "каталожный номер по VIN в карточке",
+        "номер кузова запчасти в CRM"
       ],
       "memory_queries": [
         "crm_vin_oem_parts_lookup",
@@ -389,7 +558,9 @@
         "аудит MCP CRM",
         "проверь MCP коннектор CRM",
         "оптимизируй связь с CRM",
-        "CRM Agent Gateway"
+        "CRM Agent Gateway",
+        "устрани проблему подключения Codex к CRM",
+        "исправь OAuth Codex Apps CRM"
       ],
       "keywords": [
         "MCP",
@@ -398,6 +569,9 @@
         "перегруженные ответы",
         "связь Codex",
         "MCP коннектор",
+        "OAuth",
+        "Apps",
+        "24 tools",
         "команды CRM",
         "перегружены ответы",
         "Codex с CRM",
@@ -412,22 +586,28 @@
       ],
       "required_reads": [
         "agent_bootstrap",
-        "list_agent_workflows",
         "manager MCP and CRM MCP catalogs",
-        "read-only connector status and representative compact responses"
+        "OAuth protected-resource and authorization-server metadata",
+        "read-only connector status and representative Gateway v2 responses"
       ],
-      "write_domains": [],
+      "write_domains": [
+        "crm_repository",
+        "manager_documentation",
+        "server_runtime"
+      ],
       "external_connectors": [],
       "completion_checks": [
-        "tool routing is deterministic",
-        "payload budgets are measured",
-        "no live CRM or Gmail mutation occurred"
+        "public connector exposes exactly 24 Gateway v2 tools and no legacy surface",
+        "agent_bootstrap, agent_board_digest, and agent_search pass through the public endpoint",
+        "OAuth refresh survives a repeated deploy and 401 returns a standards-readable challenge",
+        "CRM, site, and VPN remain healthy; live logs and exact reread confirm the result"
       ],
       "next_actions": [
-        "inspect the manager workflow registry and active MCP schemas",
-        "measure representative compact CRM reads without dumping private data",
-        "compare routing, payload size, latency, and verification coverage",
-        "report implementation-ready fixes and preserve live CRM/Gmail state"
+        "take private rollback-safe repository, data, auth-config, and image backups",
+        "implement owner-approved production OAuth 2.1 with PKCE, rotating refresh tokens, exact audience/scopes, encrypted persistent state, and clear 401 discovery",
+        "make Codex URL-only OAuth config and enforce the 24-tool Gateway v2 manifest",
+        "synchronize CRM and Manager instructions to agent_bootstrap -> digest -> focused reads -> action contract -> named dry_run/apply -> reread",
+        "run focused/full tests and CI, publish both repositories, deploy twice, and verify refresh continuity, live CRM reread, site, and VPN"
       ]
     },
     {
@@ -587,6 +767,336 @@
         "build and execute CRM action contracts",
         "register workflow_wait_for_external and call the separate Gmail connector",
         "complete_external_step with refs only, resume, and verify both systems"
+      ]
+    },
+    {
+      "command_id": "store_read_workflow",
+      "workflow_id": "store_read_workflow",
+      "priority": 96,
+      "intent": "store_read",
+      "domain": "store_management",
+      "open_first": "docs/agent/store_management_playbook.md",
+      "aliases": [
+        "Что нового появилось в магазине",
+        "Что нового сегодня в магазине",
+        "Есть ли новые заказы",
+        "Покажи активные заказы магазина",
+        "Что заказали в заказе №",
+        "Покажи новые заявки на подбор",
+        "Пришел новый заказ на проценку",
+        "Покажи запрос на проценку",
+        "Прочитай заявку на проценку",
+        "Что запрашивают в заявке на проценку",
+        "запрос на проценку",
+        "заказ на проценку",
+        "заявка на проценку",
+        "Найди запчасть W 914/2 в нашем каталоге",
+        "Сколько этой детали на складе",
+        "Где она лежит",
+        "Сколько физически, зарезервировано и доступно",
+        "Покажи последние приходы и отгрузки",
+        "Какие позиции заканчиваются",
+        "Покажи состояние склада",
+        "Покажи ошибки выгрузки Avito/Drom",
+        "Покажи ошибки выгрузки за 24 часа",
+        "Покажи ошибки выгрузки за 7 дней",
+        "Покажи товар по артикулу",
+        "Найди заказ магазина по номеру",
+        "Покажи заявки без исполнителя",
+        "Покажи активных поставщиков",
+        "Покажи партии в ячейке",
+        "Покажи незавершенные приходы",
+        "Покажи незавершенные отгрузки",
+        "Покажи проблемные объявления маркетплейса",
+        "Покажи состояние маркетплейсов",
+        "Найди варианты поставки ROSSKO"
+      ],
+      "keywords": [
+        "заказы магазина",
+        "в заказе №",
+        "заявки на подбор",
+        "запрос на проценку",
+        "заказ на проценку",
+        "заявка на проценку",
+        "нашем каталоге",
+        "детали на складе",
+        "место хранения",
+        "физически, зарезервировано и доступно",
+        "приходы и отгрузки",
+        "низкий остаток",
+        "состояние склада",
+        "ошибки выгрузки",
+        "товар по артикулу",
+        "заявки без исполнителя",
+        "активные поставщики",
+        "партии в ячейке",
+        "незавершенные приходы",
+        "незавершенные отгрузки",
+        "объявления маркетплейса",
+        "состояние маркетплейсов",
+        "варианты поставки ROSSKO"
+      ],
+      "memory_queries": [
+        "store_management",
+        "AutoStop App store",
+        "store digest cursor"
+      ],
+      "required_reads": [
+        "agent_bootstrap for degraded-safe store readiness",
+        "agent_board_digest scope=store or focused agent_search",
+        "agent_entity_context for one exact store object"
+      ],
+      "write_domains": [],
+      "external_connectors": [
+        "AutoStop App internal agent API"
+      ],
+      "completion_checks": [
+        "all lists are bounded and paginated",
+        "general output contains no contacts or raw customer data",
+        "business today uses Asia/Krasnoyarsk while checkpoint timestamps remain technical UTC and cursors opaque",
+        "owner-visible digest cursor advances only after the final page"
+      ],
+      "next_actions": [
+        "open the store playbook and read compact store runtime state",
+        "use agent_board_digest(scope=store) for summary or agent_search for a focused entity",
+        "continue every digest page with its opaque next_cursor until has_more=false",
+        "use agent_entity_context only for an exact requested object",
+        "report store outage as degraded without blocking CRM"
+      ],
+      "read_entity_selection": {
+        "store_part": "part id/SKU/name/manufacturer; filters is_active and low_stock",
+        "store_order": "order id/number/item SKU/name; filter status",
+        "store_quote_request": "quote id/number; filters status and assigned_user_id, including null for unassigned",
+        "store_supplier": "supplier id/name; filter is_active",
+        "store_batch": "batch id/location/part SKU/name; filters status and storage_location",
+        "store_warehouse_operation": "warehouse operation id/kind/status; filters kind and status",
+        "store_marketplace_listing": "listing id/external id/part SKU/name; filter status",
+        "store_state": "aggregate Store/marketplace state; no filters",
+        "store_sourcing_offer": "lookup-only local and ROSSKO candidates; query length at least 2, no filters or cursor"
+      }
+    },
+    {
+      "command_id": "store_management_workflow",
+      "workflow_id": "store_management_workflow",
+      "priority": 98,
+      "intent": "store_management",
+      "domain": "store_management",
+      "open_first": "docs/agent/store_management_playbook.md",
+      "aliases": [
+        "назначь заявку на подбор сотруднику",
+        "переведи заявку на подбор в работу",
+        "верни заявку на подбор в NEW",
+        "обнови внутренний комментарий заявки",
+        "замени внутренний комментарий заявки",
+        "очисти внутренний комментарий заявки",
+        "добавь комментарий в заявку на проценку",
+        "добавь заметку в заявку на проценку",
+        "добавь запись в историю заявки на проценку",
+        "подготовь черновики для заявки на проценку",
+        "замени приватные черновики предложений",
+        "очисти приватные черновики предложений",
+        "измени место хранения партии",
+        "переложи партию в ячейку",
+        "переведи заказ магазина в READY",
+        "отметь собранный заказ готовым",
+        "создай товар в магазине",
+        "измени цену товара",
+        "добавь кросс или применимость",
+        "прими товар на склад",
+        "перемести или спиши товар",
+        "оформи возврат магазина",
+        "создай или измени поставщика",
+        "создай или измени клиента магазина",
+        "опубликуй предложение магазина",
+        "измени настройки магазина"
+      ],
+      "keywords": [
+        "назначь заявку на подбор",
+        "статус заявки на подбор",
+        "внутренний комментарий заявки",
+        "комментарий в заявку на проценку",
+        "заметку в заявку на проценку",
+        "запись в историю заявки",
+        "черновики для заявки на проценку",
+        "место хранения партии",
+        "заказ магазина в READY",
+        "собранный заказ готовым",
+        "создай товар",
+        "измени цену товара",
+        "кросс применимость",
+        "прими перемести спиши товар",
+        "возврат магазина",
+        "поставщик магазина",
+        "клиент магазина",
+        "публикация магазина",
+        "настройки магазина"
+      ],
+      "memory_queries": [
+        "store owner parity",
+        "ActionContractV2 store",
+        "store optimistic concurrency",
+        "store_owner_capabilities store_owner_api"
+      ],
+      "required_reads": [
+        "exact store entity or reviewed collection and current revision",
+        "live employee operation and schema hash from store_owner_capabilities when no named workflow exists",
+        "prepare_action_contract for the exact operation",
+        "named workflow or store_owner_api dry_run result including external effects"
+      ],
+      "write_domains": [
+        "store_quote_request",
+        "store_batch",
+        "store_order",
+        "store_owner_api"
+      ],
+      "external_connectors": [
+        "AutoStop App internal agent API",
+        "AutoStop App employee API through reserved store:owner principal"
+      ],
+      "completion_checks": [
+        "exact target/current revision and live operation schema match",
+        "unique idempotency key and correlation id are recorded",
+        "schema-bound dry_run precedes apply and all external effects are disclosed",
+        "exact operation-specific reread or absence plus audit matches the plan",
+        "Manager ledger contains compact refs only"
+      ],
+      "next_actions": [
+        "reread the exact store target or reviewed collection",
+        "prefer the optimized named workflow; otherwise resolve the exact live employee operation through store_owner_capabilities",
+        "build ActionContractV2 with exact target, owner intent, planned fields, current revision when required, schema hash, and unique idempotency/correlation ids",
+        "run dry_run and inspect effects, then apply the identical schema-bound plan",
+        "reread according to the operation matrix and reconcile the compact audit correlation; keep unverified applies compensating"
+      ],
+      "operation_selection": {
+        "assign_quote_request": {
+          "domain": "store_quote_request",
+          "use_when": "assign one exact quote request",
+          "planned_changes": "assignee_id: non-empty string up to 36",
+          "aliases": [
+            "назначь заявку на подбор сотруднику"
+          ]
+        },
+        "set_quote_request_status": {
+          "domain": "store_quote_request",
+          "use_when": "move one exact quote request to IN_PROGRESS or back to NEW",
+          "planned_changes": "status: NEW|IN_PROGRESS",
+          "aliases": [
+            "переведи заявку на подбор в работу",
+            "верни заявку на подбор в NEW"
+          ]
+        },
+        "update_quote_request_comment": {
+          "domain": "store_quote_request",
+          "use_when": "replace or clear the current internal comment",
+          "planned_changes": "internal_comment: string up to 2000 or null",
+          "aliases": [
+            "обнови внутренний комментарий заявки",
+            "замени внутренний комментарий заявки",
+            "очисти внутренний комментарий заявки"
+          ]
+        },
+        "add_quote_request_note": {
+          "domain": "store_quote_request",
+          "use_when": "append one note/history entry without replacing prior text",
+          "planned_changes": "text: non-empty string up to 2000",
+          "aliases": [
+            "добавь комментарий в заявку на проценку",
+            "добавь заметку в заявку на проценку",
+            "добавь запись в историю заявки на проценку"
+          ]
+        },
+        "replace_quote_offer_drafts": {
+          "domain": "store_quote_request",
+          "use_when": "replace the complete Manager-owned private draft set for one exact quote; omitted prior drafts are superseded",
+          "planned_changes": "items: 1..20 exact item ids describing the complete desired post-state, with 0..3 strict private drafts each",
+          "aliases": [
+            "подготовь черновики для заявки на проценку",
+            "замени приватные черновики предложений",
+            "очисти приватные черновики предложений"
+          ]
+        },
+        "set_batch_storage_location": {
+          "domain": "store_batch",
+          "use_when": "change the storage location of one exact batch",
+          "planned_changes": "storage_location: non-empty string up to 200",
+          "aliases": [
+            "измени место хранения партии",
+            "переложи партию в ячейку"
+          ]
+        },
+        "mark_order_ready": {
+          "domain": "store_order",
+          "use_when": "mark one exact IN_PROGRESS assembled order READY after explicit owner instruction",
+          "planned_changes": "status: READY",
+          "aliases": [
+            "переведи заказ магазина в READY",
+            "отметь собранный заказ готовым"
+          ]
+        },
+        "owner_api_fallback": {
+          "domain": "store_owner_api",
+          "use_when": "any other operation exposed by the current employee/admin OpenAPI after owner-approved intent",
+          "planned_changes": "operation_id, method, path_template, risk, schema_hash, body_fields and file_fields only; payload remains transient",
+          "aliases": [
+            "full employee Store operation"
+          ]
+        }
+      }
+    },
+    {
+      "command_id": "store_analytics_reporting",
+      "workflow_id": "store_analytics_reporting",
+      "priority": 110,
+      "intent": "store_analytics_read",
+      "domain": "store_analytics_reporting",
+      "open_first": "docs/agent/store_analytics_playbook.md",
+      "aliases": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ",
+        "конверсия сайта в заказ",
+        "конверсия в заказ",
+        "статистика магазина",
+        "аналитика сайта"
+      ],
+      "keywords": [
+        "посетители сайта",
+        "сессии сайта",
+        "просмотры товаров",
+        "активное время",
+        "нулевая выдача",
+        "конверсия магазина",
+        "воронка магазина",
+        "нажатия на сайте",
+        "аналитик",
+        "сайт",
+        "посетител",
+        "просмотр",
+        "товар",
+        "врем",
+        "конверси",
+        "корзин",
+        "нажима",
+        "клик"
+      ],
+      "memory_queries": [],
+      "required_reads": [
+        "aggregate-only AutoStop App analytics report"
+      ],
+      "write_domains": [],
+      "external_connectors": [],
+      "completion_checks": [
+        "report timezone is Asia/Krasnoyarsk",
+        "current and previous equal periods are present",
+        "response contains aggregates only and no raw event or visitor/session identifiers"
+      ],
+      "next_actions": [
+        "resolve the requested preset or custom period in Asia/Krasnoyarsk",
+        "discover get_store_analytics_report through Gateway v2 raw discovery because no named public workflow is needed for this read",
+        "call get_store_analytics_report with the original natural query",
+        "answer from its aggregate summary, rankings, funnel, and previous-period comparison only"
       ]
     }
   ]

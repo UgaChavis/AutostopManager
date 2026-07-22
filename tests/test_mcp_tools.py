@@ -41,10 +41,12 @@ def _clear_partsapi_env(monkeypatch):
 class _FakeServer:
     def __init__(self):
         self.tools = {}
+        self.descriptions = {}
 
-    def tool(self, name: str, description: str = ""):
+    def tool(self, name: str, description: str = "", **_kwargs):
         def decorator(func):
             self.tools[name] = func
+            self.descriptions[name] = description
             return func
 
         return decorator
@@ -429,6 +431,29 @@ def test_recommend_fluid_maintenance_sources_tool_is_registered(tmp_path):
     assert result["lubricant_product_selectors"]
 
 
+def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypatch):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    monkeypatch.setattr(
+        mcp_tools_module,
+        "lookup_public_automotive_evidence",
+        lambda **kwargs: {"ok": True, "input_context": kwargs, "evidence": []},
+    )
+
+    register_manager_memory_tools(server, store)
+
+    assert "lookup_public_automotive_evidence" in server.tools
+    result = server.tools["lookup_public_automotive_evidence"](
+        make="Mercedes-Benz",
+        model="C-Class",
+        model_year=2020,
+        topics=["recalls"],
+    )
+    assert result["ok"] is True
+    assert result["input_context"]["make"] == "Mercedes-Benz"
+    assert result["input_context"]["topics"] == ["recalls"]
+
+
 def test_recommend_service_management_actions_tool_is_registered(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -583,6 +608,259 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
         "list_manager_runs",
     }:
         assert retired_tool not in server.tools
+
+
+def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_path):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    register_manager_memory_tools(server, store)
+
+    expected_parameters = {
+        "store_runtime_status": ["live", "bootstrap_snapshot"],
+        "store_digest": ["baseline", "since", "cursor", "ack_token", "limit", "stream"],
+        "store_search": ["entity", "query", "filters", "cursor", "limit"],
+        "store_entity_context": ["entity", "entity_id", "detail"],
+        "download_store_quote_vin_photo": ["quote_request_id", "expected_photo_sha256"],
+        "store_management_action": [
+            "domain",
+            "action",
+            "target_id",
+            "planned_changes",
+            "owner_intent",
+            "expected_updated_at",
+            "idempotency_key",
+            "correlation_id",
+            "mode",
+        ],
+    }
+
+    for tool, parameters in expected_parameters.items():
+        assert tool in server.tools
+        assert list(inspect.signature(server.tools[tool]).parameters) == parameters
+        assert "INTERNAL_ONLY" in server.descriptions[tool]
+
+    status = server.tools["store_runtime_status"]()
+    assert status["format"] == "store_agent_v1"
+    assert status["status"] == "degraded"
+
+
+def test_store_analytics_tool_is_registered_as_read_only_raw_and_uses_internal_runtime_config(
+    tmp_path,
+    monkeypatch,
+):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    captured = {}
+
+    monkeypatch.setattr(
+        mcp_tools_module,
+        "get_store_api_url",
+        lambda: "http://autostop-app:8000/internal/agent/v1",
+    )
+    monkeypatch.setattr(mcp_tools_module, "get_store_read_token", lambda: "runtime-secret")
+
+    def fake_report(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "format": "store_analytics_report_v1"}
+
+    monkeypatch.setattr(mcp_tools_module, "get_store_analytics_report", fake_report)
+    register_manager_memory_tools(server, store)
+
+    result = server.tools["get_store_analytics_report"](
+        query="сколько посетителей сегодня",
+        period="auto",
+        top_limit=5,
+    )
+
+    assert result["ok"] is True
+    assert "READ_ONLY RAW_CAPABILITY" in server.descriptions["get_store_analytics_report"]
+    assert captured == {
+        "api_url": "http://autostop-app:8000/internal/agent/v1",
+        "read_token": "runtime-secret",
+        "query": "сколько посетителей сегодня",
+        "period": "auto",
+        "date_from": None,
+        "date_to": None,
+        "top_limit": 5,
+    }
+
+
+def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_path, monkeypatch):
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    captured = {}
+
+    class FakeOwnerClient:
+        def __init__(self, **kwargs):
+            captured["config"] = kwargs
+
+        def list_capabilities(self, **kwargs):
+            captured["list"] = kwargs
+            return {"ok": True, "format": "autostop_store_owner_api_v1", "items": []}
+
+        def prepare_invocation(self, operation_id, **kwargs):
+            if operation_id == "get_part":
+                method, risk = "GET", "read"
+            else:
+                method, risk = "PATCH", "write"
+            return {
+                "ok": True,
+                "summary": {
+                    "operation_id": operation_id,
+                    "method": method,
+                    "path": "/api/v1/parts/{id}",
+                    "concrete_path": f"/api/v1/parts/{kwargs['path_parameters']['id']}",
+                    "risk": risk,
+                    "schema_hash": "a" * 64,
+                    "path_parameters": ["id"],
+                    "query_fields": [],
+                    "query_sha256": "b" * 64,
+                    "request_sha256": "c" * 64,
+                    "plan_hash": "d" * 64,
+                    "verification_class": "exact_entity" if method != "GET" else "operation_specific_state",
+                    "revision_required": method != "GET",
+                },
+            }
+
+        def invoke(self, **kwargs):
+            captured.setdefault("invoke", []).append(kwargs)
+            return {
+                "ok": True,
+                "format": "autostop_store_owner_api_v1",
+                "status": "completed" if kwargs["mode"] == "read" else "compensating",
+                "meta": {"readback_required": kwargs["mode"] != "read"},
+            }
+
+    monkeypatch.setattr(mcp_tools_module, "StoreOwnerApiClient", FakeOwnerClient)
+    monkeypatch.setattr(
+        mcp_tools_module,
+        "get_store_api_url",
+        lambda: "http://autostop-app:8000/internal/agent/v1",
+    )
+    monkeypatch.setattr(mcp_tools_module, "get_store_owner_token", lambda: "owner-runtime-secret")
+    register_manager_memory_tools(server, store)
+
+    assert "READ_ONLY RAW_CAPABILITY" in server.descriptions["store_owner_capabilities"]
+    assert "OWNER_SCOPED RAW_CAPABILITY" in server.descriptions["store_owner_api"]
+    assert "schema-bound dry-run proof" in server.descriptions["store_owner_api"]
+    assert captured["config"] == {
+        "agent_api_url": "http://autostop-app:8000/internal/agent/v1",
+        "owner_token": "owner-runtime-secret",
+    }
+    assert server.tools["store_owner_capabilities"](query="parts", limit=10)["ok"] is True
+
+    read = server.tools["store_owner_api"](
+        operation_id="get_part",
+        mode="read",
+        path_parameters={"id": "part-1"},
+    )
+    assert read["status"] == "completed"
+    assert read["meta"]["contract_id"] is None
+
+    mismatch = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="dry_run",
+        target_id="part-other",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-mismatch-001",
+        expected_revision="2026-07-21T00:00:00Z",
+    )
+    assert mismatch["error"]["code"] == "store_owner_target_binding_mismatch"
+
+    missing_correlation = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="dry_run",
+        target_id="part-1",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-derived-001",
+        expected_revision="2026-07-21T00:00:00Z",
+    )
+    assert missing_correlation["error"]["code"] == "store_owner_correlation_id_required"
+
+    dry_prepare = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="prepare",
+        target_id="part-1",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-planned-001",
+        correlation_id="store-owner-update-flow-001",
+        expected_revision="2026-07-21T00:00:00Z",
+    )
+    assert dry_prepare["status"] == "validated"
+    assert dry_prepare["summary"]["prepared_for_mode"] == "dry_run"
+    assert dry_prepare["meta"]["request_dispatched"] is False
+    dry_contract_id = dry_prepare["meta"]["contract_id"]
+    contract_mismatch = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="dry_run",
+        target_id="part-1",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-planned-001",
+        correlation_id="store-owner-update-flow-001",
+        expected_revision="2026-07-21T00:00:00Z",
+        expected_contract_id="ac_" + "0" * 20,
+    )
+    assert contract_mismatch["error"]["code"] == "store_owner_action_contract_mismatch"
+
+    planned = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="dry_run",
+        target_id="part-1",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-planned-001",
+        correlation_id="store-owner-update-flow-001",
+        expected_revision="2026-07-21T00:00:00Z",
+        expected_contract_id=dry_contract_id,
+    )
+    assert planned["status"] == "compensating"
+    assert captured["invoke"][-1]["correlation_id"] == "store-owner-update-flow-001"
+
+    apply_prepare = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="prepare",
+        target_id="part-1",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-part-001",
+        correlation_id="store-owner-update-part-001",
+        expected_revision="2026-07-21T00:00:00Z",
+        prepare_for_mode="apply",
+    )
+    assert apply_prepare["summary"]["prepared_for_mode"] == "apply"
+    apply_contract_id = apply_prepare["meta"]["contract_id"]
+    write = server.tools["store_owner_api"](
+        operation_id="update_part",
+        mode="apply",
+        target_id="part-1",
+        path_parameters={"id": "part-1"},
+        body={"name": "Updated"},
+        owner_intent="Обновить точную карточку товара",
+        idempotency_key="store-owner-update-part-001",
+        correlation_id="store-owner-update-part-001",
+        expected_revision="2026-07-21T00:00:00Z",
+        expected_contract_id=apply_contract_id,
+        dry_run_proof="b" * 64,
+    )
+
+    assert write["status"] == "compensating"
+    assert write["meta"]["contract_id"]
+    assert write["meta"]["operation_id"] == "update_part"
+    assert len(write["meta"]["target_ref_sha256"]) == 64
+    assert len(write["meta"]["expected_revision_sha256"]) == 64
+    assert write["meta"]["request_sha256"] == "c" * 64
+    assert write["meta"]["schema_hash"] == "a" * 64
+    assert captured["invoke"][-1]["dry_run_proof"] == "b" * 64
 
 
 def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_path):
@@ -779,14 +1057,17 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
-    assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 92
-    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 63
+    assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 94
+    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 77
+    assert "get_store_analytics_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
     assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"
     assert "call_raw_capability" in catalog["agent_gateway_v2"]["raw_escape"]
     assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
+    assert "start_card_timer" in catalog["tool_families"]["card_and_board_write"]
+    assert "stop_card_timer" in catalog["tool_families"]["card_and_board_write"]
     assert len(catalog["production_tools_verified"]) == 24
     assert "create_document_without_card_pdf" in catalog["tool_families"]["repair_order"]
     assert "agent_document_workflow" in catalog["production_tools_verified"]

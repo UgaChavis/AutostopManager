@@ -6,7 +6,7 @@ from .knowledge_base import find_command_route, probe_knowledge_base
 from .storage import ManagerMemoryStore
 
 
-DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
+DOMAIN_REQUIRED_CONTEXT_DEFAULTS: dict[str, list[str]] = {
     "bmw_f15_n63": ["VIN or chassis", "production date", "market", "BMW fault memory with module names"],
     "service_management": ["live CRM board state"],
     "crm_vin_oem_parts_lookup": [
@@ -17,13 +17,14 @@ DOMAIN_REQUIRED_CONTEXT_DEFAULTS = {
     ],
     "vehicle_identity_and_oem": ["VIN or chassis"],
     "fluids": ["VIN or chassis", "market", "engine code", "transmission code", "exact unit"],
+    "store_management": [],
 }
 
 
 GENERAL_HOT_RULES = [
     "AutoStop CRM is the source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and live board state.",
     "AutostopManager memory stores only durable non-CRM context: owner preferences, rules, lessons, tasks, reminders, and short conclusions.",
-    "Do not store raw client databases, cash journals, full repair orders, full board dumps, secrets, or raw email threads in manager memory or docs.",
+    "Do not store raw client databases, store orders or stock rows, cash journals, full repair orders, full board dumps, secrets, or raw email threads in manager memory or docs.",
     "Before CRM writes, identify the exact target id, write patch-only confirmed fields, then reread the target and verify the result.",
 ]
 
@@ -40,6 +41,30 @@ DOMAIN_BRIEF_RULES = {
         "After saving CRM description, inspect the visible text/preview and remove formatting artifacts immediately.",
         "Keep source lists, long explanations, phone, VIN, full client name, raw diagnostic dumps, rich formatting, emoji decoration, and long issue lists out of board_summary.",
     ],
+    "store_management": [
+        "AutoStop App is the source of truth for store facts; read them only through its pure-read agent API, never the store database or mutating legacy GET endpoints.",
+        "Use the stateless one-request Store bootstrap snapshot for startup health and store_digest for owner 'what is new' reads so startup never consumes owner-visible changes.",
+        "Interpret store business dates such as today in Asia/Krasnoyarsk; keep Manager checkpoint timestamps technical UTC and cursors opaque.",
+        "General Store reads stay redacted. An exact store_quote_request detail=full read uses the dedicated quote credential and may expose contacts, VIN, request items, offers, notes, and drafts transiently; never persist that payload in Manager memory.",
+        "Use agent_inventory_workflow for its seven optimized named writes; discover every other employee operation through guarded store_owner_capabilities and execute it through store_owner_api with the reserved store:owner principal.",
+        "Every store write requires task-specific owner intent, exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, exact readback, and compact refs-only ledger data.",
+        "Never bypass the Store API, invent an operation outside the live OpenAPI schema, reuse a human ADMIN session, or treat an applied but unverified owner operation as completed.",
+    ],
+    "knowledge_intake": [
+        "For documentation hygiene, inventory tracked docs and their reference graph before editing or deleting anything.",
+        "Prefer the smallest existing canonical file; migrate unique active rules before deleting an obsolete document.",
+        "Run cleanup-audit before deletion, then knowledge-sync, knowledge-audit, annotations-audit, and skills-audit after durable documentation changes.",
+    ],
+    "remote_codex_access": [
+        "Keep the managed-pc fleet and legacy home-pc route independent; never reuse or rotate one route's keys while operating on the other.",
+        "For managed-pc, resolve the exact alias and run status before shell, run, PowerShell, copy, repair, rename, or revoke operations.",
+        "Never print private keys, passwords, tokens, USB enrollment credentials, or protected runtime state.",
+    ],
+    "automotive_repair": [
+        "Choose sources from the actual request: CRM only for an identified live card or its vehicle context, AutoStop App only for internal catalog, stock, or price facts, and public web or forums only for research evidence.",
+        "Treat forums and owner communities as symptom hypotheses; verify final procedure, torque, fluid, safety, programming, ADAS, SRS, or HV facts through the appropriate OEM or licensed source for the exact vehicle and unit.",
+        "Do not turn a source recommendation into a fixed workflow: combine only the capabilities that answer the current question and state the missing vehicle context instead of guessing.",
+    ],
 }
 
 DEFAULT_READ_ORDER = [
@@ -47,6 +72,33 @@ DEFAULT_READ_ORDER = [
     "probe_knowledge_base",
     "open returned open_first/source_of_truth",
     "use focused reads before broad exports",
+]
+
+AUTOMOTIVE_REPAIR_READ_ORDER = [
+    "open docs/agent/automotive_repair_source_playbook.md and identify the vehicle, unit, and requested fact",
+    "choose only relevant live context: CRM card/vehicle, AutoStop App catalog/stock/price, VIN/OEM source, public official evidence, or public web research",
+    "route final technical facts by brand and data type; use forum evidence as a hypothesis or cross-check, not as the sole authority",
+    "collect missing engine, gearbox, market, production, scan, or service-operation context before confirming safety-critical or exact procedure facts",
+]
+
+AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS = [
+    "read relevant local playbooks, source catalog, official public evidence, and public web/forum material within access rules",
+    "read focused CRM vehicle/card context only when the request names or implies an exact live CRM target",
+    "read focused AutoStop App catalog, stock, or price context only when the request asks about internal store facts",
+    "combine corroborating source evidence and report confidence, applicability, and missing context without inventing facts",
+]
+
+AUTOMOTIVE_REPAIR_FORBIDDEN_ACTIONS = [
+    "treat a public recall or TSB metadata result as VIN-specific campaign status or a repair authorization",
+    "copy licensed manuals, bypass access controls, CAPTCHA, login walls, paywalls, private cabinets, or IP blocks",
+    "state torque, procedure, capacity, approval, programming, ADAS, SRS, HV, or exact fitment facts without an appropriate source and vehicle/unit context",
+    "write CRM, Store, Gmail, or repair-order data unless the owner separately requests that exact action",
+]
+
+AUTOMOTIVE_REPAIR_VERIFICATION = [
+    "distinguish official, licensed, public-web, and forum evidence in the conclusion",
+    "verify exact vehicle, engine, transmission, market, and service operation when the fact depends on them",
+    "state the source limit or missing context when a definitive technical answer cannot be supported",
 ]
 
 BOARD_CLEANUP_READ_ORDER = [
@@ -94,10 +146,123 @@ BOARD_CLEANUP_VERIFICATION = [
     "record unresolved blockers and skipped writes instead of guessing",
 ]
 
+STORE_ANALYTICS_READ_ORDER = [
+    "open docs/agent/store_analytics_playbook.md",
+    "discover get_store_analytics_report through Gateway v2 raw discovery",
+    "call get_store_analytics_report with the original natural query and requested period",
+    "answer from aggregate summary, rankings, funnel, and previous-period comparison only",
+]
+
+STORE_ANALYTICS_ALLOWED_ACTIONS = [
+    "read the protected aggregate-only storefront report",
+    "compare the selected period with the previous equal-duration period in Asia/Krasnoyarsk",
+    "report visitors, sessions, page views, engaged time, top pages/products, search quality, interactions, and funnel rates",
+]
+
+STORE_ANALYTICS_FORBIDDEN_ACTIONS = [
+    "request, expose, or persist raw analytics events or visitor/session identifiers",
+    "request or infer IP, User-Agent, exact search text, form contents, customer identity, contacts, VIN, or click coordinates",
+    "write analytics results to CRM or durable Manager memory",
+    "claim legal compliance from the technical implementation alone",
+]
+
+STORE_ANALYTICS_VERIFICATION = [
+    "verify store_analytics_report_v1 and Asia/Krasnoyarsk",
+    "verify meta.aggregatedOnly=true and rawEventsIncluded=false",
+    "verify the output contains no raw/private identifier keys",
+    "state the selected period and previous-period comparison",
+]
+
+STORE_READ_ORDER = [
+    "agent_bootstrap for compact CRM plus a one-request stateless Store readiness snapshot",
+    "agent_board_digest(scope=store) for store digest and owner-visible store_digest cursor",
+    "agent_search with an exact store entity for bounded lists and catalog/stock lookup",
+    "agent_entity_context with an exact store entity/id; general reads stay redacted, while store_quote_request detail=full uses the dedicated quote credential for transient contacts, VIN, items, offers, notes, and drafts",
+    "agent_inventory_workflow for an optimized named Store write, otherwise guarded raw store_owner_capabilities then store_owner_api after prepare_action_contract",
+]
+
+STORE_ALLOWED_ACTIONS = [
+    "read compact store digest, order and quote-request lists, catalog parts, stock totals, batches and storage locations, warehouse operations, suppliers, marketplace errors, and one exact full quote transiently",
+    "search store_sourcing_offer for bounded local and ROSSKO candidates without persisting raw quote or supplier payloads",
+    "paginate every store list and resume an unfinished digest with its opaque next_cursor",
+    "use the seven optimized named operations for common quote, batch-location, and READY changes",
+    "assign a quote, update its status/comment, append a note, replace private drafts, change a batch location, or mark READY through the optimized named workflow",
+    "use owner-approved store_owner_api for every other operation actually exposed to an authorized employee by the live Store OpenAPI, including catalog, stock, customer, order, supplier, warehouse, price, publication, return, and settings actions",
+    "use dry_run then apply with current revision, idempotency key, correlation id, schema-bound proof, and exact reread for every write",
+]
+
+STORE_FORBIDDEN_ACTIONS = [
+    "read the AutoStop App database directly or call legacy store GET routes with side effects",
+    "persist raw store orders, customer contacts, order lines, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, or workflow ledger",
+    "call an operation not present in the current employee OpenAPI or use a human login/session for service automation",
+    "perform a Store write outside agent_inventory_workflow or guarded store_owner_api, without task-specific owner intent, or without the required contract and verification",
+]
+
+STORE_VERIFICATION = [
+    "store outage degrades only store status and does not break CRM",
+    "digest checkpoint advances only after the final page; failed or abandoned paging preserves the committed cursor",
+    "exact store writes match planned fields after reread and include the audit correlation id",
+    "owner API applies remain compensating until the exact operation-specific reread or absence/audit proof succeeds",
+    "Manager workflow state contains compact technical refs only and no raw store payload",
+]
+
+KNOWLEDGE_HYGIENE_READ_ORDER = [
+    "open docs/agent/knowledge_shelves.md and the knowledge-probe results",
+    "inventory tracked docs, route references, recent feature changes, and current audit baselines",
+    "update the smallest canonical docs plus knowledge_map, annotations, rules, and command routes when routing changed",
+    "run cleanup-audit before removing confirmed obsolete or generated artifacts",
+]
+
+KNOWLEDGE_HYGIENE_ALLOWED_ACTIONS = [
+    "update canonical Manager documentation, routes, annotations, and rules",
+    "remove generated caches and fully migrated obsolete documentation after reference checks",
+    "run knowledge-sync, documentation audits, tests, lint, and health checks",
+    "commit verified repository changes when the owner explicitly requests it",
+]
+
+KNOWLEDGE_HYGIENE_FORBIDDEN_ACTIONS = [
+    "delete an active source-of-truth file or unique instruction before migrating its rules",
+    "commit raw CRM or Store exports, runtime databases, secrets, tokens, private keys, or temporary remote-control scripts",
+    "change CRM, Store, Gmail, or remote-PC business state as part of documentation cleanup",
+]
+
+KNOWLEDGE_HYGIENE_VERIFICATION = [
+    "knowledge-probe routes documentation maintenance to knowledge_intake",
+    "knowledge-sync, knowledge-audit, annotations-audit, skills-audit, and cleanup-audit pass",
+    "focused and full available Manager quality gates pass",
+    "git status contains only intentional verified changes before commit",
+]
+
+REMOTE_ACCESS_READ_ORDER = [
+    "open docs/agent/codex_home_pc_reverse_ssh.md",
+    "choose managed-pc or legacy home-pc without mixing their credentials or commands",
+    "for managed-pc run doctor, resolve the exact alias, then run status before an operation",
+    "for legacy home-pc run the documented loopback listener and BatchMode quick checks",
+]
+
+REMOTE_ACCESS_ALLOWED_ACTIONS = [
+    "read compact server-side health and exact-device status",
+    "use shell, run, PowerShell, scp/sftp, copy, repair, or rename on the exact owner-authorized machine when the task requires it",
+    "refresh generated managed-pc SSH configs after a control-plane upgrade",
+    "revoke or rotate credentials only when the owner explicitly requests that exact security action",
+]
+
+REMOTE_ACCESS_FORBIDDEN_ACTIONS = [
+    "print, copy, commit, or expose private keys, passwords, tokens, USB enrollment credentials, or protected runtime state",
+    "mix managed-pc and legacy home-pc credentials or rotate one route while operating on the other",
+    "format disks, change bootloaders, mass-delete data, disable protection, reboot or shut down, or stop critical business services without a separate exact instruction",
+]
+
+REMOTE_ACCESS_VERIFICATION = [
+    "report the exact alias or legacy route that was used",
+    "reread status or run the documented health check after a change",
+    "confirm secrets were neither printed nor committed",
+]
+
 LONG_RUN_CONTEXT_SAFETY = {
     "why": "Board-wide CRM tasks can outgrow the chat context; durable progress must live outside the model window.",
     "rules": [
-        "Start start_workflow before broad CRM scans, multi-card cleanup, procurement sweeps, finance checks, CRM+Gmail work, or knowledge-intake batches.",
+        "For one named CRM operation, use its automatic Gateway ledger and do not call start_workflow separately. Start a parent workflow only for multi-operation CRM work, procurement sweeps, finance batches, CRM+Gmail work, or knowledge-intake batches.",
         "Use workflow_checkpoint after scope selection, candidate filtering, each write/skip/verification batch, and before any external connector wait.",
         "Keep raw board snapshots, full card dumps, phone lists, VIN/license tables, and repair-order dumps out of chat; save full machine data to local private files only when needed and report compact counts.",
         "Prefer agent_board_digest, agent_search, agent_entity_context, and named domain workflows over full-board Markdown, raw capabilities, or full JSON output.",
@@ -125,8 +290,8 @@ DEFAULT_ALLOWED_ACTIONS = [
 ]
 
 DEFAULT_FORBIDDEN_ACTIONS = [
-    "write to CRM, Gmail, or files without task-specific owner intent",
-    "copy raw CRM records, cashbox ledgers, full repair orders, raw email threads, or secrets into memory or docs",
+    "write to CRM, AutoStop App, Gmail, or files without task-specific owner intent",
+    "copy raw CRM records, store orders or stock rows, cashbox ledgers, full repair orders, raw email threads, or secrets into memory or docs",
 ]
 
 DEFAULT_VERIFICATION = [
@@ -137,7 +302,8 @@ DEFAULT_VERIFICATION = [
 MEMORY_SOURCES = {
     "local_sqlite": "knowledge_index_and_local_rules",
     "crm_mcp": "operational_memory_and_live_board_context",
-    "rule": "before CRM work, read live MCP context; before broad docs, use local knowledge routes",
+    "store_api": "live_store_catalog_stock_orders_quotes_and_marketplace_context",
+    "rule": "before CRM or store work, read live focused context; before broad docs, use local knowledge routes",
 }
 
 
@@ -295,6 +461,27 @@ def _compact_hot_rules(domain: str | None, limit: int) -> list[str]:
     return rules[: max(1, min(limit, 8))]
 
 
+def _select_store_operation(query: str, selection: object) -> dict[str, object] | None:
+    if not isinstance(selection, dict):
+        return None
+    lowered = str(query or "").casefold()
+    matches: list[tuple[int, str, dict[str, object]]] = []
+    for operation, raw_contract in selection.items():
+        if not isinstance(operation, str) or not isinstance(raw_contract, dict):
+            continue
+        aliases = raw_contract.get("aliases")
+        if not isinstance(aliases, list):
+            continue
+        for alias in aliases:
+            normalized = str(alias or "").casefold()
+            if normalized and normalized in lowered:
+                matches.append((len(normalized), operation, raw_contract))
+    if not matches:
+        return None
+    _, operation, contract = max(matches, key=lambda item: (item[0], item[1]))
+    return {"operation": operation, **contract}
+
+
 def build_agent_brief(
     store: ManagerMemoryStore | None,
     query: str,
@@ -305,7 +492,10 @@ def build_agent_brief(
     context = prepare_manager_context(store, query, intent=intent, limit=limit)
     knowledge = context.get("knowledge", {})
     command_route = context.get("command_route") or {}
-    domain = str(knowledge.get("best_domain") or command_route.get("domain") or "")
+    has_actionable_knowledge = bool(knowledge.get("has_knowledge")) or bool(command_route)
+    domain = str(
+        (knowledge.get("best_domain") if has_actionable_knowledge else None) or command_route.get("domain") or ""
+    )
 
     if domain == "board_cleanup_autopilot":
         read_order = BOARD_CLEANUP_READ_ORDER
@@ -319,6 +509,36 @@ def build_agent_brief(
             "refresh and verify board_summary",
             "report counts, skipped writes, blockers, and risks",
         ]
+    elif domain == "store_management":
+        read_order = STORE_READ_ORDER
+        allowed_actions = STORE_ALLOWED_ACTIONS
+        forbidden_actions = STORE_FORBIDDEN_ACTIONS
+        verification = STORE_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "store_analytics_reporting":
+        read_order = STORE_ANALYTICS_READ_ORDER
+        allowed_actions = STORE_ANALYTICS_ALLOWED_ACTIONS
+        forbidden_actions = STORE_ANALYTICS_FORBIDDEN_ACTIONS
+        verification = STORE_ANALYTICS_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "knowledge_intake":
+        read_order = KNOWLEDGE_HYGIENE_READ_ORDER
+        allowed_actions = KNOWLEDGE_HYGIENE_ALLOWED_ACTIONS
+        forbidden_actions = KNOWLEDGE_HYGIENE_FORBIDDEN_ACTIONS
+        verification = KNOWLEDGE_HYGIENE_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "remote_codex_access":
+        read_order = REMOTE_ACCESS_READ_ORDER
+        allowed_actions = REMOTE_ACCESS_ALLOWED_ACTIONS
+        forbidden_actions = REMOTE_ACCESS_FORBIDDEN_ACTIONS
+        verification = REMOTE_ACCESS_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
+    elif domain == "automotive_repair":
+        read_order = AUTOMOTIVE_REPAIR_READ_ORDER
+        allowed_actions = AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS
+        forbidden_actions = AUTOMOTIVE_REPAIR_FORBIDDEN_ACTIONS
+        verification = AUTOMOTIVE_REPAIR_VERIFICATION
+        next_actions = list(context.get("next_actions") or [])
     else:
         read_order = DEFAULT_READ_ORDER
         allowed_actions = DEFAULT_ALLOWED_ACTIONS
@@ -339,24 +559,36 @@ def build_agent_brief(
             "command_id": command_route.get("command_id"),
             "workflow_id": command_route.get("workflow_id") or command_route.get("command_id"),
             "domain": domain or None,
-            "open_first": knowledge.get("open_first"),
-            "source_of_truth": knowledge.get("source_of_truth", []),
-            "reference_files": knowledge.get("reference_files", []),
-            "optional_runtime_files": knowledge.get("optional_runtime_files", []),
-            "optional_available_files": knowledge.get("optional_available_files", []),
-            "optional_missing_files": knowledge.get("optional_missing_files", []),
-            "optional_runtime_available": knowledge.get("optional_runtime_available", False),
-            "optional_runtime_note": knowledge.get("optional_runtime_note", ""),
+            "open_first": knowledge.get("open_first") if has_actionable_knowledge else None,
+            "source_of_truth": knowledge.get("source_of_truth", []) if has_actionable_knowledge else [],
+            "reference_files": knowledge.get("reference_files", []) if has_actionable_knowledge else [],
+            "optional_runtime_files": knowledge.get("optional_runtime_files", []) if has_actionable_knowledge else [],
+            "optional_available_files": knowledge.get("optional_available_files", [])
+            if has_actionable_knowledge
+            else [],
+            "optional_missing_files": knowledge.get("optional_missing_files", []) if has_actionable_knowledge else [],
+            "optional_runtime_available": knowledge.get("optional_runtime_available", False)
+            if has_actionable_knowledge
+            else False,
+            "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
             "confidence": knowledge.get("confidence"),
             "required_reads": command_route.get("required_reads", []),
             "write_domains": command_route.get("write_domains", []),
             "external_connectors": command_route.get("external_connectors", []),
             "completion_checks": command_route.get("completion_checks", []),
+            "read_entity_selection": command_route.get("read_entity_selection", {}),
+            "operation_selection": command_route.get("operation_selection", {}),
+            "selected_operation": _select_store_operation(
+                str(context.get("query") or ""),
+                command_route.get("operation_selection", {}),
+            ),
         },
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
+            "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state",
             "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
+            "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },
         "hot_rules": _compact_hot_rules(domain, limit),
         "read_order": read_order,

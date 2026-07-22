@@ -1,0 +1,55 @@
+{
+  "description": "AutoStopManager learning-mode lifecycle enforcement. Hooks store only allowlisted technical metadata.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/agent_learning_hook.py\"",
+            "timeout": 10,
+            "statusMessage": "Initializing AutoStop learning turn"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/agent_learning_hook.py\"",
+            "timeout": 10,
+            "statusMessage": "Recording safe tool telemetry"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/agent_learning_hook.py\"",
+            "timeout": 10,
+            "statusMessage": "Reviewing safe tool telemetry"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/agent_learning_hook.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking learning review"
+          }
+        ]
+      }
+    ]
+  }
+}

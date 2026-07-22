@@ -255,6 +255,81 @@ def test_gmail_label_rejects_legacy_ambiguous_or_malformed_targets():
     assert "invalid_create_missing_labels_flag" in invalid_flag["preflight"]["blocking_reasons"]
 
 
+@pytest.mark.parametrize(
+    ("action", "planned_changes", "tool"),
+    [
+        ("archive_emails", {"message_ids": ["message-1"]}, "gmail:_archive_emails"),
+        ("delete_emails", {"message_ids": ["message-1"]}, "gmail:_delete_emails"),
+        (
+            "batch_modify_email",
+            {"message_ids": ["message-1"], "add_labels": ["Label_1"]},
+            "gmail:_batch_modify_email",
+        ),
+        (
+            "bulk_label_matching_emails",
+            {
+                "query": "from:supplier@example.com older_than:1y",
+                "label_name": "Архив поставщика",
+                "archive": True,
+                "create_label_if_missing": False,
+            },
+            "gmail:_bulk_label_matching_emails",
+        ),
+        ("create_label", {"name": "Заказ-наряды"}, "gmail:_create_label"),
+        (
+            "create_draft",
+            {"to": "me", "subject": "Проверка", "body": "Тестовый черновик"},
+            "gmail:_create_draft",
+        ),
+        (
+            "update_draft",
+            {"draft_id": "draft-1", "subject": "Уточнённая тема"},
+            "gmail:_update_draft",
+        ),
+        ("send_draft", {"draft_id": "draft-1"}, "gmail:_send_draft"),
+    ],
+)
+def test_gmail_current_mutation_surface_and_aliases(action, planned_changes, tool):
+    result = prepare_action_contract(
+        domain="gmail",
+        action=action,
+        planned_changes=planned_changes,
+        owner_intent=f"Выполни точное тестовое действие {action}",
+        idempotency_key=f"gmail-{action}-contract-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == tool
+    assert result["execution"]["ready"] is True
+    assert result["ledger"]["store_refs_only"] is True
+
+
+@pytest.mark.parametrize(
+    ("action", "planned_changes", "blocker"),
+    [
+        ("archive", {"message_ids": []}, "missing_exact_message_ids"),
+        ("delete", {"message_ids": "message-1"}, "missing_exact_message_ids"),
+        ("batch_modify", {"message_ids": ["message-1"]}, "missing_label_ids"),
+        ("bulk_label", {"query": "in:inbox"}, "missing_label_name"),
+        ("create_label", {"name": ""}, "missing_label_name"),
+        ("create_draft", {"to": "me", "subject": "x"}, "missing_body_intent"),
+        ("update_draft", {"draft_id": "draft-1"}, "missing_draft_changes"),
+        ("send_draft", {"draft_id": ""}, "missing_exact_draft_id"),
+    ],
+)
+def test_gmail_expanded_mutations_fail_closed_on_ambiguous_inputs(action, planned_changes, blocker):
+    result = prepare_action_contract(
+        domain="gmail",
+        action=action,
+        planned_changes=planned_changes,
+        owner_intent=f"Выполни тестовое действие {action}",
+        idempotency_key=f"gmail-{action}-invalid-v1",
+    )
+
+    assert result["ok"] is False
+    assert blocker in result["preflight"]["blocking_reasons"]
+
+
 def test_document_contract_accepts_request_text_for_crm_type_inference():
     result = prepare_action_contract(
         domain="document",
@@ -309,6 +384,229 @@ def test_existing_entity_update_requires_target_revision_and_idempotency():
         "missing_idempotency_key",
         "missing_expected_revision",
     ]
+
+
+@pytest.mark.parametrize(
+    ("domain", "action", "changes"),
+    [
+        ("store_quote_request", "assign_quote_request", {"assignee_id": "employee-7"}),
+        ("store_quote_request", "set_quote_request_status", {"status": "IN_PROGRESS"}),
+        ("store_quote_request", "update_quote_request_comment", {"internal_comment": "Проверить VIN"}),
+        ("store_quote_request", "add_quote_request_note", {"text": "Нужно уточнить сторону"}),
+        (
+            "store_quote_request",
+            "replace_quote_offer_drafts",
+            {
+                "items": [
+                    {
+                        "item_id": "item-1",
+                        "drafts": [
+                            {
+                                "candidate_key": "rossko:abc",
+                                "part_name": "Фильтр",
+                                "sale_price": 1300,
+                                "source_kind": "ROSSKO",
+                                "price_basis": "CONFIRMED_PURCHASE",
+                            }
+                        ],
+                    }
+                ]
+            },
+        ),
+        ("store_batch", "set_batch_storage_location", {"storage_location": "A-17"}),
+        ("store_order", "mark_order_ready", {"status": "READY"}),
+    ],
+)
+def test_store_action_contract_allowlist_uses_inventory_workflow_and_safe_transport(domain, action, changes):
+    result = prepare_action_contract(
+        domain=domain,
+        action=action,
+        target_id="exact-store-id",
+        planned_changes=changes,
+        owner_intent="Выполни точное разрешенное изменение объекта exact-store-id",
+        expected_revision="2026-07-16T10:00:00+07:00",
+        idempotency_key=f"{action}-exact-store-id-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == "agent_inventory_workflow"
+    assert result["execution"]["operation"] == action
+    payload = result["execution"]["gateway_arguments"]["payload"]
+    assert payload["domain"] == domain
+    assert payload["target_id"] == "exact-store-id"
+    assert payload["expected_updated_at"] == "2026-07-16T10:00:00+07:00"
+    assert payload["owner_intent"] == result["owner_intent"]
+    assert payload["planned_changes"] == changes
+    assert payload["correlation_id"] == result["correlation_id"]
+    assert result["correlation_id"] != result["contract_id"]
+    assert result["compensation"]["required"] is True
+    assert result["ledger"]["store_refs_only"] is True
+    assert "store_target_reread" in result["preflight"]["checks"]
+    assert "store_revision_unchanged" in result["verification"]["checks"]
+    assert "store_dry_run_receipt_recorded" in result["verification"]["checks"]
+    assert "store_business_state_unchanged" in result["verification"]["checks"]
+
+
+def test_store_contract_uses_stable_correlation_across_dry_run_and_apply_phases():
+    common = {
+        "domain": "store_quote_request",
+        "action": "set_quote_request_status",
+        "target_id": "quote-1",
+        "planned_changes": {"status": "IN_PROGRESS"},
+        "expected_revision": "version-1",
+    }
+    preview = prepare_action_contract(
+        **common,
+        owner_intent="Проверь перевод quote-1 в работу",
+        idempotency_key="quote-1-progress-preview-v1",
+        dry_run=True,
+    )
+    apply = prepare_action_contract(
+        **common,
+        owner_intent="Выполни перевод точной заявки quote-1 в работу",
+        idempotency_key="quote-1-progress-apply-v1",
+        dry_run=False,
+    )
+
+    assert preview["ok"] is True
+    assert apply["ok"] is True
+    assert preview["contract_id"] != apply["contract_id"]
+    assert preview["correlation_id"] == apply["correlation_id"]
+    assert 8 <= len(preview["correlation_id"]) <= 160
+    assert preview["correlation_id"][0].isalnum()
+    assert preview["execution"]["gateway_arguments"]["payload"]["correlation_id"] == preview["correlation_id"]
+    assert apply["execution"]["gateway_arguments"]["payload"]["correlation_id"] == apply["correlation_id"]
+
+
+def test_store_contract_accepts_only_alnum_first_correlation_between_8_and_160_chars():
+    common = {
+        "domain": "store_batch",
+        "action": "set_batch_storage_location",
+        "target_id": "batch-1",
+        "planned_changes": {"storage_location": "A-17"},
+        "owner_intent": "Поставь точную партию batch-1 на A-17",
+        "expected_revision": "version-1",
+        "idempotency_key": "batch-1-location-v1",
+    }
+    explicit = "S" + "a" * 159
+    allowed = prepare_action_contract(**common, correlation_id=explicit)
+    too_short = prepare_action_contract(**common, correlation_id="Store-1")
+    bad_prefix = prepare_action_contract(**common, correlation_id=":store-123")
+    too_long = prepare_action_contract(**common, correlation_id="S" + "a" * 160)
+
+    assert allowed["ok"] is True
+    assert allowed["correlation_id"] == explicit
+    assert allowed["execution"]["gateway_arguments"]["payload"]["correlation_id"] == explicit
+    assert "invalid_store_correlation_id" in too_short["preflight"]["blocking_reasons"]
+    assert "invalid_store_correlation_id" in bad_prefix["preflight"]["blocking_reasons"]
+    assert "invalid_store_correlation_id" in too_long["preflight"]["blocking_reasons"]
+
+
+def test_store_ready_contract_discloses_notification_and_requires_explicit_ready_status():
+    blocked = prepare_action_contract(
+        domain="store_order",
+        action="mark_order_ready",
+        target_id="order-1",
+        planned_changes={"status": "IN_PROGRESS"},
+        owner_intent="Переведи заказ order-1 в READY",
+        expected_revision="version-1",
+        idempotency_key="order-1-ready-v1",
+    )
+    allowed = prepare_action_contract(
+        domain="store_order",
+        action="mark_order_ready",
+        target_id="order-1",
+        planned_changes={"status": "READY"},
+        owner_intent="Переведи точный заказ order-1 в READY",
+        expected_revision="version-1",
+        idempotency_key="order-1-ready-v2",
+    )
+
+    assert "store_order_ready_status_required" in blocked["preflight"]["blocking_reasons"]
+    assert "notification_effect_disclosed" in allowed["preflight"]["checks"]
+    assert "notification_effect_disclosed" in allowed["verification"]["checks"]
+    assert "store_order_ready_may_notify_customer" in allowed["warnings"]
+
+    apply_contract = prepare_action_contract(
+        domain="store_order",
+        action="mark_order_ready",
+        target_id="order-1",
+        planned_changes={"status": "READY"},
+        owner_intent="Переведи точный заказ order-1 в READY",
+        expected_revision="version-1",
+        idempotency_key="order-1-ready-v3",
+        dry_run=False,
+    )
+    assert "store_updated_at_advanced_or_idempotent_replay" in apply_contract["verification"]["checks"]
+    assert "store_audit_correlation_present" in apply_contract["verification"]["checks"]
+
+
+@pytest.mark.parametrize(
+    ("domain", "action", "raw_changes", "canonical_changes"),
+    [
+        ("store_quote_request", "assign_quote_request", {"assignee_id": " employee-7 "}, {"assignee_id": "employee-7"}),
+        ("store_quote_request", "set_quote_request_status", {"status": " in_progress "}, {"status": "IN_PROGRESS"}),
+        (
+            "store_quote_request",
+            "update_quote_request_comment",
+            {"internal_comment": "  Проверить VIN  "},
+            {"internal_comment": "Проверить VIN"},
+        ),
+        (
+            "store_quote_request",
+            "update_quote_request_comment",
+            {"internal_comment": "   "},
+            {"internal_comment": None},
+        ),
+        ("store_batch", "set_batch_storage_location", {"storage_location": " A-17 "}, {"storage_location": "A-17"}),
+        ("store_order", "mark_order_ready", {"status": " ready "}, {"status": "READY"}),
+    ],
+)
+def test_store_contract_normalizes_planned_changes_once_for_transport_and_readback(
+    domain,
+    action,
+    raw_changes,
+    canonical_changes,
+):
+    result = prepare_action_contract(
+        domain=domain,
+        action=action,
+        target_id="store-id",
+        planned_changes=raw_changes,
+        owner_intent="Выполни точное изменение store-id",
+        expected_revision="version-1",
+        idempotency_key=f"canonical-{action}-{raw_changes!s}",
+    )
+
+    assert result["ok"] is True
+    assert result["planned_changes"] == canonical_changes
+    assert result["execution"]["gateway_arguments"]["payload"]["planned_changes"] == canonical_changes
+    for field, value in canonical_changes.items():
+        assert result["execution"]["gateway_arguments"]["payload"][field] == value
+
+
+@pytest.mark.parametrize(
+    ("domain", "action", "changes", "blocker"),
+    [
+        ("store_order", "delete", {"status": "READY"}, "unsupported_store_management_operation"),
+        ("store_order", "mark_order_ready", {"price": 1}, "unsupported_store_change_fields"),
+        ("store_quote_request", "set_quote_request_status", {"status": "COMPLETE"}, "unsupported_store_quote_status"),
+        ("store_batch", "set_batch_storage_location", {"storage_location": ""}, "invalid_store_storage_location"),
+    ],
+)
+def test_store_action_contract_blocks_non_allowlisted_or_malformed_changes(domain, action, changes, blocker):
+    result = prepare_action_contract(
+        domain=domain,
+        action=action,
+        target_id="store-id",
+        planned_changes=changes,
+        owner_intent="Измени объект store-id",
+        expected_revision="version-1",
+        idempotency_key=f"blocked-{domain}-{action}",
+    )
+
+    assert result["ok"] is False
+    assert blocker in result["preflight"]["blocking_reasons"]
 
 
 def test_action_contract_executor_tools_exist_in_the_tracked_crm_catalog():
@@ -632,3 +930,243 @@ def test_card_deadline_matches_live_connector_ranges_and_requires_positive_durat
     assert "invalid_deadline_part" in out_of_range["preflight"]["blocking_reasons"]
     assert "unsupported_deadline_field" in unknown["preflight"]["blocking_reasons"]
     assert "invalid_positive_deadline" in unknown["preflight"]["blocking_reasons"]
+
+
+def test_active_board_timer_floor_contract_routes_to_named_workflow_without_revision():
+    result = prepare_action_contract(
+        domain="crm_board",
+        action="bulk_set_deadline_if_below",
+        target_id="active_cards",
+        planned_changes={
+            "include_archived": False,
+            "min_total_seconds": 172800,
+            "target_total_seconds": 173700,
+        },
+        owner_intent="Сделай всем активным карточкам таймер более двух суток",
+        idempotency_key="active-board-timer-floor-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["domain"] == "board"
+    assert result["concurrency"] == {"expected_revision": None, "required": False}
+    assert result["execution"]["ready"] is True
+    assert result["execution"]["tool"] == "agent_board_workflow"
+    assert result["execution"]["operation"] == "bulk_set_deadline_if_below"
+    assert result["execution"]["gateway_arguments"] == {
+        "operation": "bulk_set_deadline_if_below",
+        "payload": {
+            "include_archived": False,
+            "min_total_seconds": 172800,
+            "target_total_seconds": 173700,
+        },
+        "idempotency_key": "active-board-timer-floor-v1",
+        "mode": "dry_run",
+    }
+
+
+def test_active_board_timer_floor_contract_rejects_archive_scope_and_missing_buffer():
+    result = prepare_action_contract(
+        domain="board",
+        action="bulk_set_deadline_if_below",
+        planned_changes={
+            "include_archived": True,
+            "min_total_seconds": 172800,
+            "target_total_seconds": 172800,
+        },
+        owner_intent="Подними таймеры активных карточек",
+        idempotency_key="unsafe-board-timer-floor-v1",
+    )
+
+    assert result["ok"] is False
+    assert "active_cards_only_required" in result["preflight"]["blocking_reasons"]
+    assert "target_total_seconds_must_exceed_minimum" in result["preflight"]["blocking_reasons"]
+
+
+def test_store_owner_api_contract_is_refs_only_and_routes_to_guarded_transport():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="part-1",
+        planned_changes={
+            "operation_id": "update_part",
+            "method": "PATCH",
+            "path_template": "/api/v1/parts/{id}",
+            "plan_hash": "f" * 64,
+            "risk": "write",
+            "schema_hash": "a" * 64,
+            "concrete_path": "/api/v1/parts/part-1",
+            "query_fields": [],
+            "query_sha256": "b" * 64,
+            "request_sha256": "c" * 64,
+            "verification_class": "exact_entity",
+            "body_fields": ["name", "salePrice"],
+            "file_fields": [],
+        },
+        owner_intent="Обновить точную карточку товара part-1",
+        expected_revision="2026-07-21T00:00:00Z",
+        idempotency_key="store-owner-update-part-001",
+        correlation_id="store-owner-update-part-001",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["ready"] is True
+    assert result["execution"]["tool"] == "store_owner_api"
+    assert "store_server_revision_matched" in result["verification"]["checks"]
+    assert result["ledger"]["store_payload"] is False
+    assert result["ledger"]["store_refs_only"] is True
+    assert "store_exact_entity_reread" in result["verification"]["checks"]
+
+
+def test_store_owner_contract_rejects_request_fingerprint_or_concrete_path_mismatch():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="part-1",
+        planned_changes={
+            "operation_id": "update_part",
+            "method": "PATCH",
+            "path_template": "/api/v1/parts/{id}",
+            "concrete_path": "/api/v1/customers/customer-1",
+            "risk": "write",
+            "schema_hash": "a" * 64,
+            "query_fields": [],
+            "query_sha256": "not-a-hash",
+            "request_sha256": "b" * 64,
+            "verification_class": "exact_entity",
+            "body_fields": ["name"],
+            "form_fields": [],
+            "file_fields": [],
+        },
+        owner_intent="Обновить точный товар",
+        expected_revision="2026-07-21T00:00:00Z",
+        idempotency_key="store-owner-invalid-binding-001",
+    )
+
+    assert result["ok"] is False
+    assert "invalid_store_owner_concrete_path" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_query_sha256" in result["preflight"]["blocking_reasons"]
+
+
+def test_store_owner_api_contract_rejects_untyped_or_unversioned_request():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="part-1",
+        planned_changes={
+            "operation_id": "update_part",
+            "method": "TRACE",
+            "path_template": "/api/v1/parts/{id}",
+            "risk": "unknown",
+            "schema_hash": "invalid",
+            "raw_body": {"name": "forbidden"},
+        },
+        owner_intent="Обновить товар",
+        idempotency_key="store-owner-invalid-001",
+        correlation_id="store-owner-invalid-001",
+    )
+
+    assert result["ok"] is False
+    assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]
+    assert "unsupported_store_change_fields" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_method" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_risk" in result["preflight"]["blocking_reasons"]
+    assert "invalid_store_owner_schema_hash" in result["preflight"]["blocking_reasons"]
+
+
+def test_reversible_store_owner_collection_create_does_not_require_fake_revision():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="collection:/api/v1/warehouse/suppliers",
+        planned_changes={
+            "operation_id": "create_supplier",
+            "method": "POST",
+            "path_template": "/api/v1/warehouse/suppliers",
+            "plan_hash": "e" * 64,
+            "risk": "write",
+            "schema_hash": "b" * 64,
+            "concrete_path": "/api/v1/warehouse/suppliers",
+            "query_fields": [],
+            "query_sha256": "c" * 64,
+            "request_sha256": "d" * 64,
+            "verification_class": "collection_membership",
+            "body_fields": ["name"],
+            "file_fields": [],
+        },
+        owner_intent="Создать поставщика по точной команде владельца",
+        idempotency_key="store-owner-create-supplier-001",
+        correlation_id="store-owner-create-supplier-001",
+    )
+
+    assert result["ok"] is True
+    assert result["concurrency"] == {"expected_revision": None, "required": False}
+
+
+def test_high_risk_store_owner_post_still_requires_current_revision():
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="warehouse-stock",
+        planned_changes={
+            "operation_id": "receive_batch",
+            "method": "POST",
+            "path_template": "/api/v1/warehouse/receipts/batch",
+            "risk": "high_risk_write",
+            "schema_hash": "c" * 64,
+            "concrete_path": "/api/v1/warehouse/receipts/batch",
+            "query_fields": [],
+            "query_sha256": "d" * 64,
+            "request_sha256": "e" * 64,
+            "verification_class": "operation_specific_state",
+            "body_fields": ["items"],
+            "file_fields": [],
+        },
+        owner_intent="Принять точно проверенную партию",
+        idempotency_key="store-owner-receive-batch-001",
+        correlation_id="store-owner-receive-batch-001",
+    )
+
+    assert result["ok"] is False
+    assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("operation_id", "path_template"),
+    [
+        ("receive_batch", "/api/v1/warehouse/receipts/batch"),
+        ("create_blocked_buyer", "/api/v1/customers/blocked-buyers"),
+        ("export_marketplace_items", "/api/v1/marketplaces/exports"),
+        ("future_unreviewed_create", "/api/v1/future-unreviewed-collection"),
+    ],
+)
+def test_unreviewed_collection_post_cannot_bypass_revision_with_write_risk(
+    operation_id: str,
+    path_template: str,
+):
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id=f"collection:{path_template}",
+        planned_changes={
+            "operation_id": operation_id,
+            "method": "POST",
+            "path_template": path_template,
+            # A stale or compromised classifier must not relax concurrency.
+            "risk": "write",
+            "schema_hash": "d" * 64,
+            "concrete_path": path_template,
+            "query_fields": [],
+            "query_sha256": "e" * 64,
+            "request_sha256": "f" * 64,
+            "verification_class": "operation_specific_state",
+            "body_fields": ["items"],
+            "file_fields": [],
+        },
+        owner_intent="Выполнить проверенную операцию с точным состоянием",
+        idempotency_key=f"store-owner-{operation_id}-001",
+        correlation_id=f"store-owner-{operation_id}-001",
+    )
+
+    assert result["ok"] is False
+    assert result["concurrency"] == {"expected_revision": None, "required": True}
+    assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]

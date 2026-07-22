@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
+from mcp.types import ToolAnnotations
+
 from .action_contract import prepare_action_contract
+from .agent_case_resolver import agent_case_resolver
 from .agent_gateway import agent_envelope, build_agent_bootstrap, list_agent_workflows
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
@@ -14,6 +18,13 @@ from .catalog_clients import (
     vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
+from .config import (
+    get_store_api_url,
+    get_store_manage_token,
+    get_store_owner_token,
+    get_store_quote_token,
+    get_store_read_token,
+)
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_card_action import prepare_crm_card_action
@@ -37,9 +48,14 @@ from .partsapi_category_index import (
 )
 from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
+from .public_automotive_evidence import lookup_public_automotive_evidence
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
+from .store_api import StoreApiClient
+from .store_analytics import get_store_analytics_report
+from .store_integration import StoreIntegration
+from .store_owner_api import StoreOwnerApiClient
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
@@ -71,8 +87,26 @@ def _workflow_envelope(result: dict[str, Any], *, next_actions: list[str] | None
 
 
 # Registration is intentionally declarative; each nested tool delegates to tested domain functions or storage methods.
-def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None = None) -> None:  # noqa: C901
+def register_manager_memory_tools(  # noqa: C901
+    server: Any,
+    store: ManagerMemoryStore | None = None,
+    store_client: StoreApiClient | None = None,
+) -> None:
     memory = store or ManagerMemoryStore()
+    store_adapter = StoreIntegration(
+        client=store_client
+        or StoreApiClient(
+            api_url=get_store_api_url(),
+            read_token=get_store_read_token(),
+            manage_token=get_store_manage_token(),
+            quote_token=get_store_quote_token(),
+        ),
+        store=memory,
+    )
+    store_owner_client = StoreOwnerApiClient(
+        agent_api_url=get_store_api_url(),
+        owner_token=get_store_owner_token(),
+    )
 
     @server.tool(
         name="remember",
@@ -259,8 +293,137 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         query: str = "",
         intent: str | None = None,
         limit: int = 8,
+        mode_override: str | None = None,
+        external_turn_id: str = "",
     ) -> dict[str, Any]:
-        return build_agent_bootstrap(memory, query=query, intent=intent, limit=limit)
+        return build_agent_bootstrap(
+            memory,
+            query=query,
+            intent=intent,
+            limit=limit,
+            mode_override=mode_override,
+            external_turn_id=external_turn_id,
+        )
+
+    @server.tool(
+        name="agent_mode",
+        description=(
+            "Read, set, or resolve the durable AgentExecutionMode. `work` keeps the normal fast workflow; "
+            "`learning` requires a technical post-run review. Per-turn overrides are resolved without storing prompt text."
+        ),
+    )
+    def agent_mode_tool(
+        action: str = "get",
+        mode: str = "",
+        mode_override: str | None = None,
+        expected_state_version: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_action = str(action or "get").strip().casefold()
+        if normalized_action == "get":
+            return memory.get_agent_mode()
+        if normalized_action == "set":
+            return memory.set_agent_mode(mode, expected_state_version=expected_state_version)
+        if normalized_action == "resolve":
+            return memory.resolve_agent_mode(mode_override)
+        return {"ok": False, "error": "invalid_agent_mode_action", "supported_actions": ["get", "set", "resolve"]}
+
+    @server.tool(
+        name="post_run_review",
+        description=(
+            "Close one learning-mode turn with an ExperienceReviewV1. Accept only completion codes, tool health, "
+            "safe technical metadata, and an optional improvement category; raw prompts, CRM/Store/Gmail payloads, "
+            "VINs, contacts, and financial values are rejected."
+        ),
+    )
+    def post_run_review_tool(
+        turn_id: str,
+        outcome: str = "confirmed",
+        completion_checks: list[str] | None = None,
+        tool_assessment: list[dict[str, Any]] | None = None,
+        failure_class: str = "",
+        improvement_kind: str = "",
+        risk: str = "low",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return memory.post_run_review(
+            turn_id,
+            outcome=outcome,
+            completion_checks=completion_checks,
+            tool_assessment=tool_assessment,
+            failure_class=failure_class,
+            improvement_kind=improvement_kind,
+            risk=risk,
+            metadata=metadata,
+        )
+
+    @server.tool(
+        name="agent_learning_workflow",
+        description=(
+            "Advance a reviewed learning improvement candidate through repair, verify, promote, defer, rollback, or summary. "
+            "This records lifecycle evidence only; actual code/docs/deploy work remains subject to the normal task and verification flow."
+        ),
+    )
+    def agent_learning_workflow_tool(
+        operation: str,
+        candidate_id: str = "",
+        turn_id: str = "",
+        verification: dict[str, Any] | None = None,
+        reason_code: str = "",
+        lesson_content: str = "",
+        lesson_title: str = "",
+        applies_to: str = "general",
+    ) -> dict[str, Any]:
+        return memory.agent_learning_workflow(
+            operation,
+            candidate_id=candidate_id,
+            turn_id=turn_id,
+            verification=verification,
+            reason_code=reason_code,
+            lesson_content=lesson_content,
+            lesson_title=lesson_title,
+            applies_to=applies_to,
+        )
+
+    @server.tool(
+        name="agent_case_resolver",
+        description=(
+            "READ_ONLY RAW_CAPABILITY: Build a connector-neutral Case Resolver read plan or reconcile compact scalar "
+            "evidence for one opaque case. It never calls connectors or writes CRM, Store, Gmail, memory, a workflow "
+            "ledger, or files. Prompt text, raw connector payloads, and personal identifiers are rejected; resolution "
+            "returns redacted display values only."
+        ),
+        annotations=ToolAnnotations(
+            title="Agent Case Resolver",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def agent_case_resolver_tool(
+        operation: str,
+        case_id: str,
+        claims: list[dict[str, Any]],
+        sources: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        brand: str | None = None,
+        data_type: str | None = None,
+        include_licensed: bool = True,
+        include_forums: bool = False,
+        max_sources_per_claim: int = 3,
+    ) -> dict[str, Any]:
+        return agent_case_resolver(
+            operation,
+            case_id=case_id,
+            claims=claims,
+            sources=sources,
+            evidence=evidence,
+            brand=brand,
+            data_type=data_type,
+            include_licensed=include_licensed,
+            include_forums=include_forums,
+            max_sources_per_claim=max_sources_per_claim,
+        )
 
     @server.tool(
         name="list_agent_workflows",
@@ -276,9 +439,414 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         return list_agent_workflows(query=query, intent=intent, limit=limit)
 
     @server.tool(
+        name="get_store_analytics_report",
+        description=(
+            "READ_ONLY RAW_CAPABILITY: Read one compact aggregate-only first-party AutoStop storefront report "
+            "for today, yesterday, the last 7/30 days, or a custom Krasnoyarsk date range. Accepts a natural "
+            "Russian query and never returns raw events, visitor/session identifiers, search text, or customer data. "
+            "It remains outside the 24-tool public Gateway surface and is called only through guarded raw discovery."
+        ),
+    )
+    def get_store_analytics_report_tool(
+        query: str = "",
+        period: str = "auto",
+        date_from: str | None = None,
+        date_to: str | None = None,
+        top_limit: int = 10,
+    ) -> dict[str, Any]:
+        return get_store_analytics_report(
+            api_url=get_store_api_url(),
+            read_token=get_store_read_token(),
+            query=query,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            top_limit=top_limit,
+        )
+
+    @server.tool(
+        name="store_owner_capabilities",
+        description=(
+            "READ_ONLY RAW_CAPABILITY: Discover the current typed AutoStop App employee API operations exposed "
+            "to the owner-approved service principal. The inventory is derived from the live Store OpenAPI, "
+            "excludes public/customer and human login/logout routes, and never returns business data."
+        ),
+        annotations=ToolAnnotations(
+            title="Store Owner Capabilities",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def store_owner_capabilities_tool(query: str = "", limit: int = 200) -> dict[str, Any]:
+        return store_owner_client.list_capabilities(query=query, limit=limit)
+
+    @server.tool(
+        name="store_owner_api",
+        description=(
+            "OWNER_SCOPED RAW_CAPABILITY: Read or execute one typed AutoStop App employee API operation through "
+            "the dedicated store:owner service principal and the same backend route used by Flutter. Writes "
+            "require ActionContractV2 metadata, exact target/revision, idempotency, correlation, and a matching "
+            "schema-bound dry-run proof; applied results remain compensating until exact reread. Responses are "
+            "transient and never persisted by Manager."
+        ),
+        annotations=ToolAnnotations(
+            title="Store Owner API",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def store_owner_api_tool(
+        operation_id: str,
+        mode: str = "dry_run",
+        target_id: str = "",
+        path_parameters: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None,
+        body: Any = None,
+        form: dict[str, Any] | None = None,
+        files: list[dict[str, Any]] | None = None,
+        owner_intent: str = "",
+        idempotency_key: str = "",
+        correlation_id: str = "",
+        expected_revision: str | None = None,
+        expected_contract_id: str | None = None,
+        prepare_for_mode: str = "dry_run",
+        dry_run_proof: str | None = None,
+        allow_binary_response: bool = False,
+    ) -> dict[str, Any]:
+        prepared = store_owner_client.prepare_invocation(
+            operation_id=operation_id,
+            path_parameters=path_parameters,
+            query=query,
+            body=body,
+            form=form,
+            files=files,
+            expected_revision=expected_revision,
+        )
+        if not prepared.get("ok"):
+            return prepared
+        raw_capability = prepared.get("summary")
+        capability: dict[str, Any] = raw_capability if isinstance(raw_capability, dict) else {}
+        method = str(capability.get("method") or "").upper()
+        normalized_mode = str(mode or "").strip().casefold()
+        normalized_prepare_for_mode = str(prepare_for_mode or "").strip().casefold()
+        if normalized_mode == "prepare" and normalized_prepare_for_mode not in {
+            "dry_run",
+            "apply",
+        }:
+            return {
+                "ok": False,
+                "format": "autostop_store_owner_api_v1",
+                "status": "blocked",
+                "error": {"code": "store_owner_prepare_mode_invalid"},
+                "summary": {"operation_id": operation_id},
+                "data_included": False,
+            }
+        normalized_target = str(target_id or "").strip()
+        contract_id: str | None = None
+        effective_correlation_id = str(correlation_id or "").strip()
+        if method != "GET":
+            parameter_names = capability.get("path_parameters")
+            names = parameter_names if isinstance(parameter_names, list) else []
+            supplied_path_parameters = path_parameters if isinstance(path_parameters, dict) else {}
+            expected_target = ""
+            if len(names) == 1:
+                expected_target = str(supplied_path_parameters.get(str(names[0])) or "").strip()
+            elif len(names) > 1:
+                expected_target = f"path:{capability.get('concrete_path') or ''!s}"
+            elif capability.get("revision_required") is False:
+                expected_target = f"collection:{capability.get('path') or ''!s}"
+            else:
+                expected_target = f"path:{capability.get('concrete_path') or ''!s}"
+            if expected_target and normalized_target != expected_target:
+                return {
+                    "ok": False,
+                    "format": "autostop_store_owner_api_v1",
+                    "status": "blocked",
+                    "error": {"code": "store_owner_target_binding_mismatch"},
+                    "summary": {"expected_target_ref": expected_target},
+                    "data_included": False,
+                }
+            if normalized_mode != "revision" and not effective_correlation_id:
+                return {
+                    "ok": False,
+                    "format": "autostop_store_owner_api_v1",
+                    "status": "blocked",
+                    "error": {"code": "store_owner_correlation_id_required"},
+                    "summary": {"operation_id": operation_id},
+                    "data_included": False,
+                }
+            if normalized_mode != "revision":
+                contract = prepare_action_contract(
+                    domain="store_owner_api",
+                    action="execute_owner_api",
+                    target_id=target_id,
+                    planned_changes={
+                        "operation_id": operation_id,
+                        "method": method,
+                        "path_template": str(capability.get("path") or ""),
+                        "risk": str(capability.get("risk") or ""),
+                        "schema_hash": str(capability.get("schema_hash") or ""),
+                        "concrete_path": str(capability.get("concrete_path") or ""),
+                        "query_fields": capability.get("query_fields") or [],
+                        "query_sha256": str(capability.get("query_sha256") or ""),
+                        "request_sha256": str(capability.get("request_sha256") or ""),
+                        "plan_hash": str(capability.get("plan_hash") or ""),
+                        "verification_class": str(capability.get("verification_class") or ""),
+                        "body_fields": sorted(body) if isinstance(body, dict) else [],
+                        "form_fields": sorted(form) if isinstance(form, dict) else [],
+                        "file_fields": sorted(
+                            {
+                                str(item.get("field") or "")
+                                for item in files or []
+                                if isinstance(item, dict) and str(item.get("field") or "")
+                            }
+                        ),
+                    },
+                    owner_intent=owner_intent,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                    correlation_id=correlation_id,
+                    dry_run=(
+                        normalized_prepare_for_mode == "dry_run"
+                        if normalized_mode == "prepare"
+                        else normalized_mode != "apply"
+                    ),
+                )
+                if not contract.get("ok") or not (
+                    isinstance(contract.get("execution"), dict) and contract["execution"].get("ready")
+                ):
+                    return {
+                        "ok": False,
+                        "format": "autostop_store_owner_api_v1",
+                        "status": "blocked",
+                        "error": {"code": "store_owner_action_contract_blocked"},
+                        "summary": {
+                            "contract_id": contract.get("contract_id"),
+                            "blocking_reasons": (
+                                contract.get("preflight", {}).get("blocking_reasons", [])
+                                if isinstance(contract.get("preflight"), dict)
+                                else []
+                            ),
+                        },
+                        "data_included": False,
+                    }
+                contract_id = str(contract.get("contract_id") or "") or None
+                effective_correlation_id = str(contract.get("correlation_id") or "")
+                if normalized_mode in {"dry_run", "apply"}:
+                    normalized_expected_contract = str(expected_contract_id or "").strip()
+                    if not normalized_expected_contract:
+                        return {
+                            "ok": False,
+                            "format": "autostop_store_owner_api_v1",
+                            "status": "blocked",
+                            "error": {"code": "store_owner_expected_contract_id_required"},
+                            "summary": {"operation_id": operation_id},
+                            "data_included": False,
+                        }
+                    if normalized_expected_contract != contract_id:
+                        return {
+                            "ok": False,
+                            "format": "autostop_store_owner_api_v1",
+                            "status": "conflict",
+                            "error": {"code": "store_owner_action_contract_mismatch"},
+                            "summary": {"operation_id": operation_id},
+                            "data_included": False,
+                        }
+        technical_meta = {
+            "contract_id": contract_id,
+            "operation_id": operation_id,
+            "request_sha256": str(capability.get("request_sha256") or ""),
+            "schema_hash": str(capability.get("schema_hash") or ""),
+            "verification_class": str(capability.get("verification_class") or ""),
+            "correlation_id": effective_correlation_id or None,
+            "target_ref_sha256": (
+                hashlib.sha256(f"target:{normalized_target}".encode()).hexdigest() if normalized_target else None
+            ),
+            "expected_revision_sha256": (
+                hashlib.sha256(f"expected:{expected_revision}".encode()).hexdigest()
+                if expected_revision is not None
+                else None
+            ),
+        }
+        if normalized_mode == "prepare":
+            return {
+                "ok": True,
+                "format": "autostop_store_owner_api_v1",
+                "status": "validated",
+                "summary": {
+                    "operation_id": operation_id,
+                    "method": method,
+                    "risk": str(capability.get("risk") or ""),
+                    "prepared_for_mode": normalized_prepare_for_mode,
+                    "request_dispatched": False,
+                },
+                "meta": {
+                    **technical_meta,
+                    "request_dispatched": False,
+                    "domain_handler_executed": False,
+                },
+                "data_included": False,
+            }
+        result = store_owner_client.invoke(
+            operation_id=operation_id,
+            mode=mode,
+            path_parameters=path_parameters,
+            query=query,
+            body=body,
+            form=form,
+            files=files,
+            owner_intent=owner_intent,
+            idempotency_key=idempotency_key,
+            correlation_id=effective_correlation_id,
+            expected_revision=expected_revision,
+            dry_run_proof=dry_run_proof,
+            allow_binary_response=allow_binary_response,
+            expected_plan_hash=str(capability.get("plan_hash") or "") or None,
+        )
+        meta = result.setdefault("meta", {})
+        if isinstance(meta, dict):
+            meta.update(technical_meta)
+        return result
+
+    @server.tool(
+        name="store_runtime_status",
+        description=(
+            "INTERNAL_ONLY: Return secrets-redacted AutoStop App adapter readiness and optional live health in "
+            "store_agent_v1. Production Gateway must exclude this generic capability from public raw discovery "
+            "and expose store health only through existing Gateway v2 bootstrap/runtime tools."
+        ),
+    )
+    def store_runtime_status_tool(
+        live: bool = False,
+        bootstrap_snapshot: bool = False,
+    ) -> dict[str, Any]:
+        return store_adapter.runtime_status(
+            live=live,
+            bootstrap_snapshot=bootstrap_snapshot,
+        )
+
+    @server.tool(
+        name="store_digest",
+        description=(
+            "INTERNAL_ONLY: Read one bounded pure-read store digest page with at-least-once delivery. A non-empty page "
+            "returns a cursor-bound ack_token; pass both on the next call before Manager advances. First use creates a "
+            "baseline; no raw payload is persisted. Production "
+            "Gateway must expose this through existing Gateway v2 tools, not raw discovery."
+        ),
+    )
+    def store_digest_tool(
+        baseline: bool = False,
+        since: str | None = None,
+        cursor: str | None = None,
+        ack_token: str | None = None,
+        limit: int = 25,
+        stream: str = "store_digest",
+    ) -> dict[str, Any]:
+        return store_adapter.digest(
+            baseline=baseline,
+            since=since,
+            cursor=cursor,
+            ack_token=ack_token,
+            limit=limit,
+            stream=stream,
+        )
+
+    @server.tool(
+        name="store_search",
+        description=(
+            "INTERNAL_ONLY: Search an allowlisted AutoStop App entity through the pure-read agent API with bounded "
+            "pagination, compact DTO validation, and contact redaction. Production Gateway must expose it through "
+            "agent_search and exclude this generic capability from public raw discovery."
+        ),
+    )
+    def store_search_tool(
+        entity: str,
+        query: str = "",
+        filters: dict[str, Any] | None = None,
+        cursor: str | None = None,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        return store_adapter.search(entity=entity, query=query, filters=filters, cursor=cursor, limit=limit)
+
+    @server.tool(
+        name="store_entity_context",
+        description=(
+            "INTERNAL_ONLY: Read one exact allowlisted AutoStop App entity by id with summary or full detail. "
+            "General reads remain redacted; exact full quote reads use a dedicated scoped credential and remain transient. Production Gateway must expose it through "
+            "agent_entity_context and exclude this generic capability from public raw discovery."
+        ),
+    )
+    def store_entity_context_tool(
+        entity: str,
+        entity_id: str,
+        detail: str = "summary",
+    ) -> dict[str, Any]:
+        return store_adapter.entity_context(entity=entity, entity_id=entity_id, detail=detail)
+
+    @server.tool(
+        name="download_store_quote_vin_photo",
+        description=(
+            "INTERNAL_ONLY: Read the bounded JPEG preview for one exact Store quote VIN photo. "
+            "The response remains transient, requires the quote-scoped credential, and production Gateway "
+            "must expose it only through agent_document_workflow."
+        ),
+        annotations=ToolAnnotations(
+            title="Store Quote VIN Photo Preview",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def download_store_quote_vin_photo_tool(
+        quote_request_id: str,
+        expected_photo_sha256: str,
+    ) -> dict[str, Any]:
+        return store_adapter.quote_vin_photo_preview(
+            quote_request_id=quote_request_id,
+            expected_photo_sha256=expected_photo_sha256,
+        )
+
+    @server.tool(
+        name="store_management_action",
+        description=(
+            "INTERNAL_ONLY: Execute only the seven allowlisted AutoStop App management operations through "
+            "ActionContractV2, exact pre-read, dry_run/apply, idempotency, optimistic concurrency, and apply reread. "
+            "Production Gateway must exclude this generic tool from raw discovery and expose it only through "
+            "agent_inventory_workflow policy."
+        ),
+    )
+    def store_management_action_tool(
+        domain: str,
+        action: str,
+        target_id: str,
+        planned_changes: dict[str, Any],
+        owner_intent: str,
+        expected_updated_at: str,
+        idempotency_key: str,
+        correlation_id: str,
+        mode: str = "dry_run",
+    ) -> dict[str, Any]:
+        return store_adapter.management_action(
+            domain=domain,
+            action=action,
+            target_id=target_id,
+            planned_changes=planned_changes,
+            owner_intent=owner_intent,
+            expected_updated_at=expected_updated_at,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            mode=mode,
+        )
+
+    @server.tool(
         name="prepare_action_contract",
         description=(
-            "Build a connector-neutral ActionContractV2 for CRM, finance, inventory, documents, files, or Gmail writes. "
+            "Build a connector-neutral ActionContractV2 for CRM, AutoStop App store, finance, inventory, documents, files, or Gmail writes. "
             "Requires task intent, exact target where applicable, idempotency, concurrency, automatic preflight, compensation, "
             "and readback verification; never performs the write."
         ),
@@ -291,6 +859,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
         owner_intent: str = "",
         expected_revision: str | None = None,
         idempotency_key: str = "",
+        correlation_id: str = "",
         run_id: int | None = None,
         actor: str = "codex-owner-agent",
         dry_run: bool = True,
@@ -303,6 +872,7 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             owner_intent=owner_intent,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
             run_id=run_id,
             actor=actor,
             dry_run=dry_run,
@@ -1297,6 +1867,44 @@ def register_manager_memory_tools(server: Any, store: ManagerMemoryStore | None 
             level_check_procedure=level_check_procedure,
             include_licensed=include_licensed,
             limit=limit,
+        )
+
+    @server.tool(
+        name="lookup_public_automotive_evidence",
+        description=(
+            "Read compact official public automotive evidence: NHTSA model-level recalls, optional manufacturer-"
+            "communications/TSB metadata, and applicable Mercedes/ZF fluid-reference routes. Does not use a VIN "
+            "for campaign status, copy manuals, write CRM, or replace OEM service documentation."
+        ),
+        annotations=ToolAnnotations(
+            title="Public Automotive Evidence",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    def lookup_public_automotive_evidence_tool(
+        vin: str | None = None,
+        make: str | None = None,
+        model: str | None = None,
+        model_year: int | None = None,
+        topics: str | list[str] | None = None,
+        system: str | None = None,
+        include_tsb: bool = False,
+        limit: int = 10,
+        timeout: float = 12.0,
+    ) -> dict[str, Any]:
+        return lookup_public_automotive_evidence(
+            vin=vin,
+            make=make,
+            model=model,
+            model_year=model_year,
+            topics=topics,
+            system=system,
+            include_tsb=include_tsb,
+            limit=limit,
+            timeout=timeout,
         )
 
     @server.tool(

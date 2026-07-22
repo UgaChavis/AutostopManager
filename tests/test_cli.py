@@ -10,6 +10,21 @@ from autostop_manager import cli
 def test_cli_parser_has_core_commands():
     parser = cli.build_parser()
 
+    args = parser.parse_args(
+        [
+            "integration-audit",
+            "--full",
+            "--gmail-proof",
+            "/tmp/proof.json",
+            "--output",
+            "/tmp/report.json",
+        ]
+    )
+    assert args.command == "integration-audit"
+    assert args.full is True
+    assert args.gmail_proof == "/tmp/proof.json"
+    assert args.output == "/tmp/report.json"
+
     args = parser.parse_args(["remember", "test note", "--kind", "fact", "--confidence", "0.7"])
     assert args.command == "remember"
     assert args.kind == "fact"
@@ -667,3 +682,38 @@ def test_cli_rejects_invalid_json_file_input(tmp_path):
 def test_cli_rejects_invalid_vehicle_identity_json():
     with pytest.raises(SystemExit, match="--vehicle-identity-json"):
         cli.main(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки", "--vehicle-identity-json", "[]"])
+
+
+def test_public_automotive_evidence_cli_parses_and_calls_read_only_lookup(monkeypatch, capsys):
+    received = {}
+    monkeypatch.setattr(
+        cli,
+        "lookup_public_automotive_evidence",
+        lambda **kwargs: received.setdefault("payload", {"ok": True, "input_context": kwargs}),
+    )
+
+    exit_code = cli.main(
+        [
+            "public-automotive-evidence",
+            "--vin",
+            "WDD00000000000000",
+            "--make",
+            "Mercedes-Benz",
+            "--model",
+            "C-Class",
+            "--year",
+            "2020",
+            "--topic",
+            "recalls",
+            "--topic",
+            "fluids",
+            "--system",
+            "automatic transmission",
+            "--include-tsb",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received["payload"]["input_context"]["topics"] == ["recalls", "fluids"]
+    assert received["payload"]["input_context"]["include_tsb"] is True
+    assert json.loads(capsys.readouterr().out)["ok"] is True

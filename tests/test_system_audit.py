@@ -15,7 +15,7 @@ class _FakeServer:
     def __init__(self):
         self.tools = {}
 
-    def tool(self, name: str, description: str = ""):
+    def tool(self, name: str, description: str = "", **_kwargs):
         def decorator(func):
             self.tools[name] = func
             return func

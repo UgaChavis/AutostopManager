@@ -44,6 +44,35 @@ def test_prepare_manager_context_flags_missing_required_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
+def test_agent_brief_for_store_analytics_is_aggregate_only_and_needs_no_clarification(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "сколько посетителей сегодня", limit=8)
+
+    assert result["route"]["domain"] == "store_analytics_reporting"
+    assert result["route"]["open_first"] == "docs/agent/store_analytics_playbook.md"
+    assert result["missing_context"] == []
+    assert any("get_store_analytics_report" in step for step in result["read_order"])
+    assert any("aggregate" in action for action in result["allowed_actions"])
+    assert any("raw analytics events" in action for action in result["forbidden_actions"])
+    assert any("rawEventsIncluded=false" in check for check in result["verification"])
+
+
+def test_agent_brief_for_general_automotive_repair_selects_sources_adaptively(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "Как выставить ГРМ на Mercedes M274?", limit=8)
+
+    assert result["route"]["domain"] == "automotive_repair"
+    assert result["route"]["open_first"] == "docs/agent/automotive_repair_source_playbook.md"
+    assert any("AutoStop App" in item for item in result["allowed_actions"])
+    assert any("forum" in item.casefold() for item in result["read_order"])
+    assert any("fixed workflow" in item for item in result["hot_rules"])
+    assert any("write CRM" in item for item in result["forbidden_actions"])
+
+
 def test_agent_brief_routes_compact_project_engineering_query_to_startup(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
@@ -71,7 +100,8 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert result["memory_sources"] == {
         "local_sqlite": "knowledge_index_and_local_rules",
         "crm_mcp": "operational_memory_and_live_board_context",
-        "rule": "before CRM work, read live MCP context; before broad docs, use local knowledge routes",
+        "store_api": "live_store_catalog_stock_orders_quotes_and_marketplace_context",
+        "rule": "before CRM or store work, read live focused context; before broad docs, use local knowledge routes",
     }
     assert result["route"]["domain"] == "board_cleanup_autopilot"
     assert result["route"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
@@ -108,6 +138,127 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     ]
     assert any("workflow_status" in step for step in result["context_safety"]["recovery"])
     assert any("raw board snapshots" in rule for rule in result["context_safety"]["rules"])
+
+
+def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "Покажи состояние склада", limit=8)
+
+    assert result["route"]["domain"] == "store_management"
+    assert result["route"]["open_first"] == "docs/agent/store_management_playbook.md"
+    assert "catalog" in result["source_boundaries"]["store"]
+    assert "repair orders" in result["source_boundaries"]["crm"]
+    assert any("stateless Store readiness snapshot" in item for item in result["read_order"])
+    assert any("agent_search" in item for item in result["read_order"])
+    assert any("dedicated quote credential" in item for item in result["read_order"])
+    assert any("contacts, VIN" in item for item in result["hot_rules"])
+    assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
+    assert not any("no contact scope" in item for item in result["hot_rules"])
+    assert any("guarded store_owner_api" in item for item in result["forbidden_actions"])
+    assert any("store_owner_capabilities" in item for item in result["read_order"])
+    assert any("final page" in item for item in result["verification"])
+    assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
+
+
+def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    read_brief = context.build_agent_brief(store, "Покажи заявки без исполнителя", limit=8)
+    write_brief = context.build_agent_brief(store, "очисти внутренний комментарий заявки", limit=8)
+
+    assert set(read_brief["route"]["read_entity_selection"]) == {
+        "store_part",
+        "store_order",
+        "store_quote_request",
+        "store_supplier",
+        "store_batch",
+        "store_warehouse_operation",
+        "store_marketplace_listing",
+        "store_state",
+        "store_sourcing_offer",
+    }
+    assert set(write_brief["route"]["operation_selection"]) == {
+        "assign_quote_request",
+        "set_quote_request_status",
+        "update_quote_request_comment",
+        "add_quote_request_note",
+        "replace_quote_offer_drafts",
+        "set_batch_storage_location",
+        "mark_order_ready",
+        "owner_api_fallback",
+    }
+    comment = write_brief["route"]["operation_selection"]["update_quote_request_comment"]
+    note = write_brief["route"]["operation_selection"]["add_quote_request_note"]
+    assert "replace or clear" in comment["use_when"]
+    assert "append" in note["use_when"]
+    assert "employee/admin OpenAPI" in write_brief["route"]["operation_selection"]["owner_api_fallback"]["use_when"]
+
+
+def test_store_agent_brief_deterministically_selects_each_write_operation(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+    phrases = {
+        "назначь заявку на подбор сотруднику": "assign_quote_request",
+        "переведи заявку на подбор в работу": "set_quote_request_status",
+        "очисти внутренний комментарий заявки": "update_quote_request_comment",
+        "добавь заметку в заявку на проценку": "add_quote_request_note",
+        "очисти приватные черновики предложений": "replace_quote_offer_drafts",
+        "переложи партию в ячейку": "set_batch_storage_location",
+        "отметь собранный заказ готовым": "mark_order_ready",
+    }
+
+    for phrase, operation in phrases.items():
+        result = context.build_agent_brief(store, phrase, limit=8)
+        assert result["route"]["selected_operation"]["operation"] == operation, phrase
+
+
+def test_agent_brief_documentation_hygiene_has_safe_cleanup_contract(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(
+        store,
+        "Обнови документацию, удали мусорные инструкции и закоммить изменения",
+    )
+
+    assert result["route"]["domain"] == "knowledge_intake"
+    assert result["route"]["command_id"] == "manager_documentation_hygiene"
+    assert any("cleanup-audit" in item for item in result["read_order"])
+    assert any("unique instruction" in item for item in result["forbidden_actions"])
+
+
+def test_agent_brief_remote_route_requires_exact_device_and_secret_safety(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(store, "Проверь managed-pc и удалённый Windows компьютер")
+
+    assert result["route"]["domain"] == "remote_codex_access"
+    assert result["route"]["open_first"] == "docs/agent/codex_home_pc_reverse_ssh.md"
+    assert any("exact alias" in item for item in result["read_order"])
+    assert any("private keys" in item for item in result["forbidden_actions"])
+
+
+def test_quote_pricing_request_routes_to_store_and_exposes_full_quote_workflow(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store.seed_default_rules()
+    sync_knowledge_base(store)
+
+    result = context.build_agent_brief(
+        store,
+        "Прочитай новый запрос на проценку, найди запчасти и подготовь комментарий",
+        limit=8,
+    )
+
+    assert result["route"]["domain"] == "store_management"
+    assert any("dedicated quote credential" in item for item in result["read_order"])
+    assert any("contacts, VIN" in item for item in result["hot_rules"])
+    assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
+    assert any("append a note" in item for item in result["allowed_actions"])
 
 
 def test_agent_brief_exposes_optional_runtime_catalog_cache_and_part_context(tmp_path):

@@ -59,6 +59,12 @@ Castrol, LIQUI MOLY, Mobil, AMSOIL, Motul, RAVENOL, Shell, and Valvoline
 selectors can help map OEM specifications to available products. Treat their
 results as supplemental unless they are explicitly quoting OEM data.
 
+Mercedes-Benz Operating Fluids and ZF lubricant references are useful official
+starting points for approval families and product mapping. They do not, by
+themselves, confirm the exact vehicle, unit variant, service fill amount, or
+level-check procedure. Use the ZF/Mercedes reference route only together with
+the vehicle and aggregate context required above.
+
 ## Tooling
 
 On production Gateway v2, use raw capability discovery, schema lookup, and

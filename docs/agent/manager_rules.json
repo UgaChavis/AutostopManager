@@ -1,6 +1,11 @@
 {
   "rules": [
     {
+      "id": "store-analytics-aggregate-only",
+      "priority": 40,
+      "rule": "For storefront analytics, use docs/agent/store_analytics_playbook.md and get_store_analytics_report. Return only aggregate metrics in Asia/Krasnoyarsk; never request, expose, persist, or place in prompts raw analytics events, visitor_id, session_id, IP, exact User-Agent, exact search text, form values, customer links, contacts, VIN, or click coordinates. Do not claim legal compliance; preserve the public notice, opt-out, and approximately 60-day raw retention boundary."
+    },
+    {
       "id": "codex-window-is-control-room",
       "priority": 5,
       "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."
@@ -8,7 +13,7 @@
     {
       "id": "home-pc-remote-codex-access",
       "priority": 6,
-      "rule": "This server has working reverse-SSH access to the owner's home Windows PC through alias home-pc. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with it. ssh home-pc, sftp/scp, pwsh, Python, and CodexRemote helper scripts are available for filesystem, process, and visible-desktop work. Do not rotate or overwrite home-pc key material unless the Windows side is updated in the same operation."
+      "rule": "This server has two independent Windows reverse-SSH routes: the legacy owner's home PC through alias home-pc, and the multi-device managed-pc fleet enrolled from SECRET_KEY\\AUTOSTOP_REMOTE. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with either. For the fleet, run managed-pc doctor and status on the exact alias first; shell/run/powershell/copy/repair/rename/revoke remain exact-target operations. After a control-plane upgrade, refresh active generated SSH configs with managed-pc refresh-device-files; persistent control sockets are root-only and revocation or reenrollment must close them. Never print runtime private keys or the USB enrollment credential. Do not rotate or overwrite legacy home-pc key material while operating on the managed fleet."
     },
     {
       "id": "crm-source-of-truth",
@@ -113,7 +118,7 @@
     {
       "id": "knowledge-route-card-maintenance",
       "priority": 22,
-      "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize BMW, Toyota GR Yaris, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
+      "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize general automotive technical questions, explicit BMW or Toyota GR Yaris cases, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
     },
     {
       "id": "model-specific-knowledge-route",
@@ -188,7 +193,7 @@
     {
       "id": "crm-read-order",
       "priority": 30,
-      "rule": "For CRM orientation, start with agent_bootstrap, then agent_board_digest; use agent_search and agent_entity_context before heavy board exports. Use get_connector_identity or get_runtime_status when connector availability or auth behavior is uncertain."
+      "rule": "The production CRM connector must expose exactly 24 Gateway v2 tools over owner-approved OAuth 2.1 with PKCE and rotating refresh tokens; never depend on the deployment-rotated internal bearer or call hidden legacy tools. For CRM orientation, start with agent_bootstrap, then agent_board_digest, then agent_search and agent_entity_context. Before any write, build prepare_action_contract, run the applicable named workflow in dry_run and apply modes, then reread the exact target and verify it. Use raw discovery only when no named workflow covers the operation. Use get_connector_identity or get_runtime_status only when connector availability or auth behavior is uncertain."
     },
     {
       "id": "automotive-do-not-invent",
@@ -198,7 +203,7 @@
     {
       "id": "automotive-repair-source-routing",
       "priority": 31,
-      "rule": "For repair diagnostics, TSBs, recalls, repair procedures, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, consult docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts."
+      "rule": "For repair diagnostics, ГРМ/timing marks or phases, repair procedures, maintenance schedules, aggregate design, TSBs, recalls, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, start with docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts. Select evidence adaptively: CRM only for an identified live card/vehicle, AutoStop App only for internal catalog/stock/price, VIN/OEM for applicability, official public evidence for recalls/communications, and public web/forums for research. Generic technical questions stay on this route; BMW or Toyota GR Yaris playbooks require explicit brand/model/engine/chassis markers."
     },
     {
       "id": "browser-web-research-boundary",
@@ -276,6 +281,31 @@
       "rule": "When the owner asks to source parts, first normalize the vehicle identity through the vehicle-identity playbook if the input is a VIN, chassis number, or market-specific code; then use the dedicated parts-search playbook: normalize OEM and fitment fields, search Drom first with exact number plus Krasnoyarsk context, then ZZap and Avito, then broaden to model/platform and descriptive terms if exact hits are sparse."
     },
     {
+      "id": "store-source-boundary",
+      "priority": 34,
+      "rule": "AutoStop App is the source of truth for the store catalog, physical/reserved/available stock, batches and storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state. Read it only through the pure-read internal agent API; never use direct store database access or legacy GET routes with side effects."
+    },
+    {
+      "id": "store-read-order-and-cursors",
+      "priority": 34,
+      "rule": "For store work open docs/agent/store_management_playbook.md. Use agent_bootstrap for a one-request stateless degraded-safe snapshot, agent_board_digest(scope=store) for the owner digest, agent_search for bounded lists, and agent_entity_context for an exact object. Bootstrap has no cursor or ACK and never reads or advances store_digest. The owner store_digest checkpoint advances only after the final page; failed or abandoned paging must preserve the committed cursor."
+    },
+    {
+      "id": "store-memory-privacy",
+      "priority": 35,
+      "rule": "Do not persist raw store orders, customers, contacts, line items, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, workflow events, or checkpoints. Store only technical cursors, timestamps, success state, compact entity/id/version refs, counts, and verification booleans."
+    },
+    {
+      "id": "store-write-parity",
+      "priority": 38,
+      "rule": "Keep the seven strict quote/batch/READY actions as optimized named agent_inventory_workflow operations. For every other non-financial action necessary to the active owner task and present in the live employee OpenAPI, use guarded store_owner_capabilities then store_owner_api with the reserved store:owner principal. Every write requires exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, operation-specific reread, and refs-only workflow state; an applied but unverified result remains compensating. Supplier orders, refunds, payouts, and financial-total changes need a direct owner instruction."
+    },
+    {
+      "id": "store-write-security-boundary",
+      "priority": 39,
+      "rule": "Full Store parity never authorizes anonymous access, direct database writes, human-session reuse, undocumented routes, secret disclosure, or unverified outcomes. High-risk warehouse, bulk, publication, return, delete, and settings operations require exact current state, active-task scope, dry-run proof, idempotency, correlation, apply, and exact readback or absence plus audit. Financial operations additionally require a direct owner instruction. Hidden generic legacy Store adapters remain INTERNAL_ONLY; only the guarded owner capability/API pair may be raw-discovered."
+    },
+    {
       "id": "gmail-read-order",
       "priority": 35,
       "rule": "For Gmail or inbox work, use docs/agent/gmail_workflow_playbook.md: inspect labels or search first, then open the relevant message or thread before drafting replies, tasks, reminders, or follow-ups."
@@ -288,12 +318,17 @@
     {
       "id": "gmail-write-safety",
       "priority": 36,
-      "rule": "Do not send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail unless the active workflow contains task-specific owner intent and the exact mailbox targets. Agent Gateway v2 adds no second confirmation state: preview targets, apply automatic preflight and idempotency, inspect the active connector schema, execute once, verify result refs, and never store raw bodies in manager SQLite."
+      "rule": "Send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail only when necessary to complete the active owner task and exact mailbox targets are resolved. Agent Gateway v2 adds no second confirmation state: preview targets, apply automatic preflight and idempotency, inspect the active connector schema, execute once, verify result refs, and never store raw bodies in manager SQLite."
     },
     {
       "id": "write-safety",
       "priority": 40,
-      "rule": "Before CRM writes, identify the exact target by id. Do not overwrite manual card/client fields unless the owner explicitly asks or the board_cleanup_autopilot playbook allows a safe preserving edit."
+      "rule": "Before CRM writes, identify the exact target by id. The active owner task authorizes non-financial exact-target changes needed for completion after preflight and reread; never make unrelated cleanup changes. Do not overwrite manual card/client fields unless the task needs it or the board_cleanup_autopilot playbook allows a safe preserving edit. Payments, cashboxes, refunds, payroll payouts, supplier orders, and changes to financial totals require a direct owner instruction."
+    },
+    {
+      "id": "adaptive-evidence-and-learning-loop",
+      "priority": 41,
+      "rule": "Treat each owner request as an adaptive evidence problem, not a fixed script: split the work into claims, choose CRM, Store, Gmail, VIN/OEM, licensed, official, supplier, public-web, or forum evidence according to ownership and risk, reconcile conflicts, and return one practical conclusion. Resolve the effective work or learning mode at startup. In learning mode, close a privacy-safe post-run review before the final answer, persist only compact technical experience, promote lessons only after verified success, and repair only one reproducible local low-risk issue within the configured budget and with a regression check. Never automatically repair external systems, change credentials, bypass access controls, or make financial changes."
     },
     {
       "id": "journal-important-work",

@@ -10,7 +10,6 @@ from .storage import ManagerMemoryStore
 
 
 COMMAND_ROUTES_PATH = PROJECT_ROOT / "docs" / "agent" / "command_routes.json"
-ACTIVE_WORKFLOW_STATES = {"planned", "executing", "external_wait", "verifying", "compensating", "running"}
 
 
 def agent_envelope(
@@ -67,16 +66,61 @@ def build_agent_bootstrap(
     query: str = "",
     intent: str | None = None,
     limit: int = 8,
+    mode_override: str | None = None,
+    external_turn_id: str = "",
 ) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     brief = build_agent_brief(memory, query, intent=intent, limit=limit)
     route = find_command_route(query, intent=intent)
-    recent = memory.list_manager_runs(limit=20, include_events=False).get("items", [])
-    unfinished = [_compact_run(item) for item in recent if str(item.get("status") or "") in ACTIVE_WORKFLOW_STATES]
+    active = memory.list_active_manager_runs(limit=500).get("items", [])
+    unfinished = [_compact_run(item) for item in active]
     selected = _compact_workflow(route) if route else None
+    mode = memory.resolve_agent_mode(mode_override)
+    if not mode.get("ok"):
+        return agent_envelope(
+            ok=False,
+            status="failed",
+            summary={"agent_mode": mode},
+            warnings=[str(mode.get("error") or "agent_mode_resolution_failed")],
+        )
+    active_turn: dict[str, Any] = {"ok": True, "active_turn": None}
+    if mode["effective_mode"] == "learning":
+        active_turn = memory.get_active_agent_turn(
+            query,
+            external_turn_id=external_turn_id,
+            effective_mode="learning",
+        )
+        if active_turn.get("ok") and not active_turn.get("active_turn"):
+            started_turn = memory.start_agent_turn(
+                query,
+                mode_override=mode["mode_override"],
+                workflow_id=(selected or {}).get("workflow_id") or "",
+                source="agent_bootstrap",
+                external_turn_id=external_turn_id,
+            )
+            if started_turn.get("ok"):
+                active_turn = {
+                    "ok": True,
+                    "active_turn": {
+                        key: started_turn.get(key)
+                        for key in (
+                            "turn_id",
+                            "external_turn_id",
+                            "task_signature",
+                            "effective_mode",
+                            "mode_override",
+                            "status",
+                            "started_at",
+                        )
+                    },
+                }
+            else:
+                active_turn = {"ok": False, "error": started_turn.get("error")}
     warnings: list[str] = []
     if not selected:
         warnings.append("workflow_not_resolved_use_list_agent_workflows_or_focused_reads")
+    if not active_turn.get("ok"):
+        warnings.append("learning_turn_not_started")
 
     return agent_envelope(
         ok=True,
@@ -89,6 +133,13 @@ def build_agent_bootstrap(
             "required_context": brief.get("required_context", []),
             "missing_context": brief.get("missing_context", []),
             "unfinished_runs": unfinished,
+            "agent_mode": {
+                "global_mode": mode["global_mode"],
+                "mode_override": mode["mode_override"],
+                "effective_mode": mode["effective_mode"],
+                "active_turn": active_turn.get("active_turn") if active_turn.get("ok") else None,
+                "learning_review_required": mode["effective_mode"] == "learning",
+            },
             "policy": {
                 "full_owner_agent_capability": True,
                 "owner_confirmation_state": False,
@@ -105,6 +156,8 @@ def build_agent_bootstrap(
             "workflow_registry_count": len(_load_workflows()),
             "workflow_registry_tool": "list_agent_workflows",
             "action_contract_tool": "prepare_action_contract",
+            "agent_mode_tool": "agent_mode",
+            "case_resolver_tool": "agent_case_resolver",
         },
     )
 

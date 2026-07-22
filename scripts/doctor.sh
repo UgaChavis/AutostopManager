@@ -75,6 +75,21 @@ require_tool() {
   run "tool: ${tool}" command -v "$tool"
 }
 
+system_chromium_version() {
+  local bin output
+  for bin in chromium chromium-browser google-chrome; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+    output="$("$bin" --version 2>&1)" || continue
+    # Ubuntu's chromium-browser snap shim can exit successfully while only
+    # asking to install Chromium. Treat it as unavailable rather than green.
+    if [[ "$output" =~ ^(Chromium|Google[[:space:]]Chrome) ]]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+  done
+  return 1
+}
+
 section "System"
 for tool in python3 git docker curl ss pdftotext pdftoppm gs libreoffice 7z node npm nginx; do
   require_tool "$tool"
@@ -82,7 +97,11 @@ done
 run "/tmp writable" bash -c 'tmp="$(mktemp /tmp/autostop-doctor.XXXXXX)" && rm -f "$tmp"'
 run "docker daemon" docker info
 run "gh auth status" gh auth status
-run "chromium version" bash -c 'for bin in chromium chromium-browser google-chrome; do if command -v "$bin" >/dev/null 2>&1; then "$bin" --version; exit 0; fi; done; exit 127'
+if system_chromium_version; then
+  printf '[OK] system Chromium version\n'
+else
+  skip "system Chromium launcher unavailable; CRM Playwright browser smoke is authoritative"
+fi
 
 section "AutostopManager"
 run "manager git status" git -C "$MANAGER_ROOT" status --short --branch

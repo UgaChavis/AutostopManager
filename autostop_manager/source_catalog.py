@@ -44,6 +44,15 @@ _SAFETY_CRITICAL_DATA_TYPES = {
     "wiring_diagrams",
 }
 
+_DATA_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "timing": ("repair_procedures", "torque_specs", "special_tools", "service_information"),
+    "timing_belt": ("repair_procedures", "torque_specs", "special_tools"),
+    "timing_chain": ("repair_procedures", "torque_specs", "special_tools"),
+    "camshaft_timing": ("repair_procedures", "torque_specs", "special_tools"),
+    "maintenance_intervals": ("maintenance", "maintenance_intervals", "service_information"),
+    "service_intervals": ("maintenance", "maintenance_intervals", "service_information"),
+}
+
 
 def _normalize_key(value: str | None) -> str:
     if not value:
@@ -183,10 +192,16 @@ def _citation_shape(source: dict[str, Any]) -> dict[str, str]:
 
 def _score_source(source: dict[str, Any], *, brand_match: bool, data_type_match: bool) -> int:
     score = int(source.get("priority_score_1_5") or 0) * 10
-    if brand_match:
-        score += 8
-    if data_type_match:
-        score += 8
+    # For a make-specific request, a source which matches both the requested
+    # make and data type must outrank another maker's generic/OEM portal. A
+    # brand-only official source remains the useful fallback when the catalog
+    # does not have a precise data-type tag yet.
+    if brand_match and data_type_match:
+        score += 120
+    elif brand_match:
+        score += 70
+    elif data_type_match:
+        score += 20
     if source.get("category") == "oem_service_portal":
         score += 4
     if source.get("category") == "open_government_data":
@@ -206,6 +221,18 @@ def recommend_automotive_sources(
     """Return source routes for a repair question without copying source content."""
     brand_key, brand_sources = _find_map_values(load_brand_source_map(), brand)
     data_type_key, data_type_sources = _find_map_values(load_data_type_source_map(), data_type)
+    normalized_data_type = _normalize_key(data_type)
+    if not data_type_sources and normalized_data_type in _DATA_TYPE_ALIASES:
+        data_type_key = normalized_data_type
+        source_map = load_data_type_source_map()
+        merged: dict[str, dict[str, Any]] = {}
+        for alias in _DATA_TYPE_ALIASES[normalized_data_type]:
+            _, alias_sources = _find_map_values(source_map, alias)
+            for source in alias_sources:
+                source_id = _source_id(source)
+                if source_id:
+                    merged.setdefault(source_id, source)
+        data_type_sources = list(merged.values())
     catalog = _source_index()
 
     by_id: dict[str, dict[str, Any]] = {}
@@ -264,7 +291,7 @@ def recommend_automotive_sources(
         warnings.append(f"No exact data-type route found for {data_type}; use repair source playbook.")
     if not include_licensed and (brand_key or data_type_key) and not rows:
         warnings.append("No open-only source route remained after licensed or license-dependent sources were filtered.")
-    if _normalize_key(data_type) in _SAFETY_CRITICAL_DATA_TYPES:
+    if normalized_data_type in _SAFETY_CRITICAL_DATA_TYPES:
         warnings.append("Safety-critical route: use OEM or licensed professional sources only.")
 
     endpoints = []

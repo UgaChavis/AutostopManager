@@ -3,6 +3,51 @@
   "entrypoint": "docs/agent/knowledge_shelves.md",
   "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_shelves.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
   "domains": {
+    "ecosystem_capability_parity": {
+      "title": "AutostopManager, CRM, and Store production capability parity",
+      "use_when": [
+        "owner requests a full ecosystem refactor or production-readiness program",
+        "CRM or Store human UI actions must become available through Manager",
+        "building capability coverage, change-feed, audit, performance, migration, or deploy evidence"
+      ],
+      "aliases": [
+        "functional parity",
+        "функциональный паритет",
+        "production-ready AutostopManager",
+        "полный рефакторинг CRM и магазина",
+        "все действия пользователя",
+        "матрица покрытия"
+      ],
+      "keywords": [
+        "Gateway capability parity",
+        "CRM UI backend coverage",
+        "Store UI backend coverage",
+        "capability matrix",
+        "CRM Store change feed",
+        "cursor ACK replay tombstone",
+        "multi-repository rollback deploy"
+      ],
+      "questions": [
+        "как добиться полного паритета Manager с CRM и Store",
+        "какие человеческие действия ещё недоступны через Gateway",
+        "как проверить полноту событий и безопасно развернуть изменения"
+      ],
+      "source_of_truth_files": [
+        "AGENTS.md",
+        "README.md",
+        "docs/agent/autostop_manager_skill.md",
+        "docs/agent/deployment_runbook.md",
+        "docs/agent/command_routes.json",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "AGENTS.md",
+        "docs/agent/autostop_manager_skill.md",
+        "docs/agent/deployment_runbook.md",
+        "docs/agent/command_routes.json"
+      ]
+    },
     "startup_and_identity": {
       "title": "Manager startup, identity, and operating rules",
       "use_when": [
@@ -73,6 +118,64 @@
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json"
       ]
+    },
+    "intelligent_agent_learning": {
+      "title": "Adaptive execution, evidence reconciliation, and learning mode",
+      "use_when": [
+        "the owner asks the manager to work adaptively across CRM, Store, Gmail, OEM sources, or public research",
+        "switching between ordinary work mode and learning mode",
+        "reviewing a completed agent turn, promoting a reusable lesson, or repairing a reproducible local tool issue",
+        "planning a multi-source automotive answer that needs source conflict resolution"
+      ],
+      "aliases": [
+        "learning mode",
+        "work mode",
+        "self improvement",
+        "self repair",
+        "case resolver",
+        "evidence bundle",
+        "режим обучения",
+        "рабочий режим",
+        "самообучение",
+        "самоисправление",
+        "разбор результата",
+        "проверка качества ответа",
+        "интеллектуальный поиск"
+      ],
+      "keywords": [
+        "agent_mode",
+        "post_run_review",
+        "agent_learning_workflow",
+        "experience review",
+        "improvement candidate",
+        "EvidenceBundle",
+        "CaseResolver",
+        "tool event",
+        "learning budget",
+        "repair budget",
+        "safe metadata"
+      ],
+      "questions": [
+        "как включить режим обучения менеджера",
+        "как менеджер анализирует выполненную задачу",
+        "когда можно автоматически исправить инструмент",
+        "как не хранить данные CRM или почты в опыте",
+        "как объединить CRM каталог VIN и веб-исследование в один ответ",
+        "как посмотреть накопленный опыт и кандидаты улучшений"
+      ],
+      "source_of_truth_files": [
+        "AGENTS.md",
+        "docs/agent/intelligent_agent_learning_playbook.md",
+        "docs/agent/autostop_manager_skill.md",
+        ".agents/skills/autostop-learning-loop/SKILL.md",
+        "docs/agent/manager_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/intelligent_agent_learning_playbook.md",
+        ".agents/skills/autostop-learning-loop/SKILL.md",
+        "AGENTS.md"
+      ],
+      "skill_path": ".agents/skills/autostop-learning-loop/SKILL.md"
     },
     "knowledge_intake": {
       "title": "Knowledge intake, indexing, and source organization",
@@ -432,6 +535,7 @@
         "TSBs and recalls",
         "wiring and electrical",
         "repair procedures",
+        "timing/ГРМ, marks, phases, chains, belts, torque, maintenance schedules, and aggregate design",
         "torque, fluids, labor, ADAS, SRS, HV, immobilizer, programming"
       ],
       "aliases": [
@@ -450,7 +554,21 @@
         "поиск по форумам",
         "браузерный поиск",
         "TSB",
-        "recall"
+        "recall",
+        "ГРМ",
+        "метки ГРМ",
+        "фазы",
+        "цепь ГРМ",
+        "ремень ГРМ",
+        "распредвал",
+        "коленвал",
+        "момент затяжки",
+        "доворот",
+        "ГБЦ",
+        "регламент ТО",
+        "интервал ТО",
+        "код ошибки",
+        "устройство агрегата"
       ],
       "keywords": [
         "DTC",
@@ -465,14 +583,22 @@
         "ADAS",
         "SRS",
         "HV",
-        "programming"
+        "programming",
+        "timing",
+        "timing marks",
+        "torque specs",
+        "maintenance intervals",
+        "forum evidence"
       ],
       "questions": [
         "где искать техническую информацию по ремонту",
         "какой источник использовать для ошибки или схемы",
         "как искать профильные форумы по ремонту",
         "когда использовать браузерный fetch для сайта",
-        "как проверить TSB recall wiring torque fluids"
+        "как проверить TSB recall wiring torque fluids",
+        "как выставить ГРМ и где проверить метки и фазы",
+        "какие моменты затяжки и довороты нужны для конкретного двигателя",
+        "как проверить регламент ТО, код ошибки или устройство агрегата"
       ],
       "source_of_truth_files": [
         "docs/agent/automotive_repair_source_playbook.md",
@@ -481,9 +607,7 @@
       "primary_files": [
         "docs/agent/automotive_repair_source_playbook.md",
         "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
-        "docs/agent/automotive_sources/open_dataset_endpoints.json",
-        "docs/agent/bmw_repair_playbook.md",
-        "docs/agent/toyota_gr_yaris_playbook.md"
+        "docs/agent/automotive_sources/open_dataset_endpoints.json"
       ],
       "required_context": [
         "VIN or chassis",
@@ -495,7 +619,9 @@
         "complaint",
         "scan results"
       ],
-      "reference_files": []
+      "reference_files": [
+        "docs/agent/manager_mcp_catalog.json"
+      ]
     },
     "ecu_calibration_programming": {
       "title": "ECU calibration, programming, coding, and instrument-cluster route",
@@ -894,6 +1020,10 @@
       "primary_files": [
         "docs/agent/fluid_maintenance_playbook.md",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
+      ],
+      "reference_files": [
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
+        "docs/agent/manager_mcp_catalog.json"
       ]
     },
     "transmission": {
@@ -1414,6 +1544,8 @@
       "title": "Krasnoyarsk workshop service management route",
       "use_when": [
         "daily CRM control",
+        "active-card timer floor above two days",
+        "bulk_set_deadline_if_below dry-run and apply",
         "Krasnoyarsk workshop decisions",
         "procurement blockers",
         "staff load",
@@ -1443,6 +1575,12 @@
         "наличие Красноярск"
       ],
       "keywords": [
+        "timer floor",
+        "deadline floor",
+        "bulk_set_deadline_if_below",
+        "таймер более двух суток",
+        "таймеры более двух суток",
+        "активные карточки",
         "procurement",
         "staff load",
         "customer flow",
@@ -1528,9 +1666,11 @@
       ]
     },
     "remote_codex_access": {
-      "title": "Home Windows PC reverse SSH access for Codex",
+      "title": "Windows reverse SSH access for Codex: home-pc and managed fleet",
       "use_when": [
         "server-side Codex needs command or filesystem access to the owner's Windows home PC",
+        "enroll, inspect, operate, repair, copy files to, or revoke an owner-authorized managed Windows PC",
+        "prepare or verify the SECRET_KEY AUTOSTOP_REMOTE USB bundle",
         "connect a home computer to the Autostop server without public SSH",
         "prepare, verify, or repair the home-pc SSH alias and reverse tunnel",
         "interact with the home PC through ssh, sftp/scp, pwsh, Python, or visible-desktop helper scripts"
@@ -1544,6 +1684,12 @@
         "Windows OpenSSH",
         "codexadmin",
         "codex-home-tunnel",
+        "managed-pc",
+        "managed-pc-enroll",
+        "managed-pc-tunnel",
+        "SECRET_KEY",
+        "AUTOSTOP_REMOTE",
+        "CodexMaintenance",
         "PowerShell 7",
         "pwsh",
         "Python 3.14.6",
@@ -1552,7 +1698,10 @@
         "CodexRemote helper scripts",
         "подключить домашний ПК",
         "доступ Codex к Windows",
-        "удаленный компьютер Codex"
+        "удаленный компьютер Codex",
+        "удалённый компьютер Codex",
+        "управление удаленным Windows компьютером",
+        "управление удалённым Windows компьютером"
       ],
       "keywords": [
         "Codex",
@@ -1562,6 +1711,16 @@
         "OpenSSH Server",
         "Scheduled Task",
         "127.0.0.1:22220",
+        "127.0.0.1:22300",
+        "managed-pc list",
+        "managed-pc status",
+        "managed-pc shell",
+        "managed-pc repair",
+        "managed-pc rename",
+        "managed-pc revoke",
+        "managed-pc refresh-device-files",
+        "ControlPersist 600",
+        "127.0.0.1:9223",
         "PowerShell 7.6.3",
         "Python 3.14.6",
         "scp",
@@ -1581,7 +1740,11 @@
         "как использовать scp или sftp с home-pc",
         "как открыть файл на домашнем ПК через Codex",
         "есть ли доступ к домашнему ПК с сервера",
-        "как откатить codex-home-tunnel"
+        "как откатить codex-home-tunnel",
+        "как подключить новый Windows компьютер с флешки SECRET_KEY",
+        "как проверить или отозвать managed-pc",
+        "как обновить SSH конфиги managed-pc после обновления сервера",
+        "как безопасно управлять удаленным Windows компьютером"
       ],
       "source_of_truth_files": [
         "docs/agent/codex_home_pc_reverse_ssh.md",
@@ -1595,90 +1758,30 @@
     "crm_vin_oem_parts_lookup": {
       "title": "CRM VIN/frame OEM parts lookup and compact CRM writeback",
       "use_when": [
-        "CRM card contains VIN/frame/body number and requested part",
-        "find OEM catalog number for plugs, pads, filters, or other parts from VIN/frame",
-        "find replacements, crosses, analogs, procurement price, RF market price, and write result back to CRM"
+        "an identified CRM card contains VIN/frame/body number and requested part",
+        "owner explicitly asks to prepare a CRM writeback or edit CRM card/repair-order material data",
+        "find OEM/cross/price evidence for an identified CRM target before a separately authorized CRM write"
       ],
       "aliases": [
         "CRM VIN OEM parts lookup",
         "VIN parts writeback",
         "VIN OEM card result",
-        "frame parts lookup",
-        "body number parts lookup",
-        "KDM VIN parts lookup",
-        "JDM frame OEM",
         "OEM writeback",
-        "каталожный номер по VIN",
-        "оригинальный номер по VIN",
-        "номер кузова запчасти",
         "записать в карточку CRM",
-        "подбор запчастей по VIN",
-        "свечи по VIN",
-        "колодки по VIN",
-        "фильтр по VIN",
-        "закупка по VIN",
-        "аналоги по VIN",
-        "кроссы по VIN",
-        "MAN webMANTIS",
-        "MAN partslink24",
-        "MAHLE catalog",
-        "Bosch eCat",
-        "MANN-FILTER",
-        "Hengst",
-        "Donaldson",
-        "Fleetguard",
-        "NGK Part Finder",
-        "offline PDF catalog",
-        "local catalog cache",
-        "fetch_page_browser",
-        "офлайн каталог запчастей"
+        "подбор запчасти по VIN в CRM",
+        "найди по VIN и запиши в карточку"
       ],
       "keywords": [
         "CRM",
         "card_id",
-        "VIN",
-        "frame number",
-        "body number",
-        "KDM VIN",
-        "JDM frame",
-        "OEM",
-        "catalog number",
-        "original number",
-        "spark plugs",
-        "brake pads",
-        "filters",
-        "supersession",
-        "replacement",
-        "cross",
-        "analog",
-        "applicability",
-        "side",
-        "axle",
-        "production date",
-        "procurement price",
-        "public retail price",
-        "client sale price",
         "compact public result",
         "writeback",
         "replace_repair_order_materials",
         "update_card",
         "set_card_board_summary",
-        "каталожный номер",
-        "оригинальный номер",
-        "свечи",
-        "колодки",
-        "фильтры",
-        "закупка",
-        "рыночная цена РФ",
-        "кроссы",
-        "аналоги",
-        "применяемость",
         "запись в CRM",
-        "offline_parts_catalogs",
-        "catalog_index.json",
-        "PDF catalog",
-        "XLSX interchange",
-        "browser public catalog"
+        "карточка CRM",
+        "ремонтный заказ CRM"
       ],
       "questions": [
         "как найти оригинальный номер детали по VIN из карточки CRM",
@@ -1811,6 +1914,143 @@
         "print orientation and hardware used"
       ]
     },
+    "store_management": {
+      "title": "AutoStop App full owner parity, reliable digest, stock, orders, quotes, warehouse, and marketplace",
+      "use_when": [
+        "owner asks what is new in the store",
+        "store internet orders or quote requests",
+        "searching the internal store catalog",
+        "physical reserved available stock or storage locations",
+        "warehouse receipts shipments or low stock",
+        "Avito or Drom marketplace export errors",
+        "one of the optimized named store actions",
+        "any owner-approved employee Store operation exposed by the live OpenAPI"
+      ],
+      "aliases": [
+        "AutoStop App",
+        "магазин AutoStop",
+        "магазин автозапчастей",
+        "store digest",
+        "store orders",
+        "заявки на подбор",
+        "заявка на проценку",
+        "заказ на проценку",
+        "запрос на проценку",
+        "проценка запчастей",
+        "наш каталог",
+        "состояние склада",
+        "место хранения",
+        "остатки магазина",
+        "приходы и отгрузки",
+        "ошибки выгрузки Avito Drom",
+        "полное управление магазином",
+        "товары цены клиенты поставщики склад возвраты публикации"
+      ],
+      "keywords": [
+        "store_agent_v1",
+        "store_part",
+        "store_order",
+        "store_quote_request",
+        "store_supplier",
+        "store_batch",
+        "store_warehouse_operation",
+        "store_marketplace_listing",
+        "store_state",
+        "store_digest",
+        "store_bootstrap",
+        "physical reserved available",
+        "opaque cursor",
+        "expected_updated_at",
+        "agent_inventory_workflow",
+        "store_owner_capabilities",
+        "store_owner_api",
+        "store:owner",
+        "schema-bound dry-run proof"
+      ],
+      "questions": [
+        "что нового появилось в магазине",
+        "есть ли новые или активные заказы магазина",
+        "что заказали в точном интернет-заказе",
+        "какие новые заявки на подбор",
+        "какой новый заказ или запрос пришел на проценку",
+        "что запрашивают в точной заявке на проценку",
+        "прочитать заявку на проценку и найти варианты запчастей",
+        "есть ли деталь в нашем каталоге",
+        "сколько физически зарезервировано и доступно",
+        "в каких ячейках лежит деталь",
+        "какие позиции заканчиваются",
+        "какие ошибки выгрузки Avito или Drom",
+        "какие изменения магазина разрешены через dry_run и apply",
+        "как выполнить любое действие сотрудника магазина через owner principal"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/store_management_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/store_management_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "required_context": []
+    },
+    "store_analytics_reporting": {
+      "title": "Aggregate-only first-party AutoStop storefront analytics",
+      "use_when": [
+        "owner asks how many visitors or sessions the store had",
+        "owner asks which pages or products were viewed",
+        "owner asks about search quality, meaningful clicks, active time, or conversion",
+        "storefront analytics must be compared with the previous equal period"
+      ],
+      "aliases": [
+        "store analytics",
+        "site analytics",
+        "store statistics",
+        "аналитика сайта",
+        "статистика магазина",
+        "посетители сегодня",
+        "товары за неделю",
+        "куда нажимают",
+        "время на сайте",
+        "конверсия в корзину",
+        "конверсия в заказ"
+      ],
+      "keywords": [
+        "get_store_analytics_report",
+        "store_analytics_report_v1",
+        "Asia/Krasnoyarsk",
+        "visitors",
+        "sessions",
+        "page views",
+        "engaged time",
+        "zero result rate",
+        "top products",
+        "funnel",
+        "previous period",
+        "aggregate only"
+      ],
+      "questions": [
+        "сколько посетителей сегодня",
+        "какие товары смотрели за неделю",
+        "куда чаще нажимают",
+        "сколько времени проводят на сайте",
+        "какая конверсия в корзину и заказ"
+      ],
+      "source_of_truth_files": [
+        "docs/agent/store_analytics_playbook.md",
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "primary_files": [
+        "docs/agent/store_analytics_playbook.md"
+      ],
+      "reference_files": [
+        "docs/agent/manager_mcp_catalog.json",
+        "docs/agent/crm_mcp_catalog.json"
+      ],
+      "required_context": []
+    },
     "work_labor_pricing": {
       "title": "Read-only labor work pricing from public Russia STO prices plus public labor-time plausibility",
       "use_when": [
@@ -1900,7 +2140,9 @@
     "business_documents": "rg -n \"счет|счёт|акт|КП|коммерческое предложение|PDF|DOCX|XLSX|НДС|реквизит|audit_business_document\" docs/agent",
     "gmail_operations": "rg -n \"Gmail|gmail|email|почт|письм|входящие|ярлык|черновик|вложен|_search_emails|_read_attachment\" docs/agent",
     "source_intake": "rg -n \"source_id|license|ingest|catalog\" docs/agent",
-    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md"
+    "3d_printing_cad": "rg -n \"3D|3д|Anycubic|Kobra|STL|OpenSCAD|BOSL2|PLA|PETG|Moonraker|Rinkhals|OrcaSlicer|remote|clip|clamp|thread|болт|гайк|клипс|хомут\" docs/agent/3d_printing_cad_playbook.md",
+    "store_management": "rg -n \"store_|магазин|заявк на подбор|состояние склада|место хранения|physical|reserved|available|marketplace|Avito|Drom\" docs/agent/store_management_playbook.md docs/agent/manager_mcp_catalog.json docs/agent/crm_mcp_catalog.json",
+    "ecosystem_capability_parity": "rg -n \"functional parity|функциональн.*паритет|production-ready|change feed|Gateway v2|матриц.*покрыт\" AGENTS.md README.md docs/agent"
   },
-  "updated_at": "2026-07-14"
+  "updated_at": "2026-07-21"
 }

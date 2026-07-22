@@ -114,3 +114,31 @@ def test_open_dataset_endpoints_are_normalized_for_source_routing():
     assert all(endpoint.get("source_id") for endpoint in endpoints)
     assert all(endpoint.get("url") for endpoint in endpoints)
     assert any(endpoint["source_id"] == "nhtsa_vpic_decodevinvalues" for endpoint in endpoints)
+
+
+def test_timing_route_prefers_requested_brand_over_another_oem_portal():
+    result = recommend_automotive_sources(brand="Mercedes-Benz", data_type="timing", limit=10)
+
+    assert result["matched_brand_key"] == "Mercedes-Benz"
+    assert result["matched_data_type_key"] == "timing"
+    assert result["sources"]
+    assert result["sources"][0]["source_id"] == "mercedes_startekinfo"
+    assert all(source["source_id"] != "honda_serviceexpress" for source in result["sources"][:1])
+
+
+def test_mercedes_repair_route_ranks_mercedes_oem_source_before_other_brand_sources():
+    result = recommend_automotive_sources(brand="Mercedes-Benz", data_type="repair_procedures", limit=10)
+
+    assert result["sources"]
+    assert result["sources"][0]["source_id"] == "mercedes_startekinfo"
+
+
+def test_source_catalog_contains_public_evidence_sources_for_runtime_lookup():
+    catalog_path = ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json"
+    endpoint_path = ROOT / "docs" / "agent" / "automotive_sources" / "open_dataset_endpoints.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    endpoint_ids = {row["id"] for row in json.loads(endpoint_path.read_text(encoding="utf-8"))["endpoints"]}
+
+    assert catalog["source_count"] == len(catalog["sources"])
+    assert any(row["id"] == "mercedes_operating_fluids" for row in catalog["sources"])
+    assert "nhtsa_recalls_by_vehicle_api" in endpoint_ids

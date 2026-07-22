@@ -8,6 +8,8 @@ import subprocess
 import tomllib
 
 from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
+from autostop_manager.action_contract import STORE_ACTIONS
+from autostop_manager.store_api import STORE_ENTITIES, STORE_MANAGEMENT_OPERATIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +108,9 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "Python 3.14.6",
         "write-public-desktop-note.ps1",
         "open-in-user-session.ps1",
+        "managed-pc refresh-device-files",
+        "ControlPersist 600",
+        "127.0.0.1:9223",
     ]:
         assert expected in combined
 
@@ -172,6 +177,130 @@ def test_every_command_route_has_gateway_v2_execution_contract():
         assert route["completion_checks"]
 
 
+def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text())
+    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text())
+    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text())
+    required_docs = [
+        ROOT / "AGENTS.md",
+        ROOT / "README.md",
+        ROOT / "docs" / "agent" / "autostop_manager_skill.md",
+        ROOT / "docs" / "agent" / "store_management_playbook.md",
+        ROOT / "docs" / "agent" / "deployment_runbook.md",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in required_docs)
+
+    for expected in [
+        "AutoStop App is the source of truth",
+        "stateless",
+        "store_digest",
+        "physical",
+        "reserved",
+        "available",
+        "expected_updated_at",
+        "agent_inventory_workflow",
+        "AUTOSTOP_STORE_API_URL",
+        "AUTOSTOP_STORE_READ_TOKEN",
+        "AUTOSTOP_STORE_QUOTE_TOKEN",
+        "AUTOSTOP_STORE_MANAGE_TOKEN",
+        "AUTOSTOP_STORE_OWNER_TOKEN",
+        "raw store",
+    ]:
+        assert expected in combined
+
+    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 77
+    assert set(manager_catalog["store_tools"]) == {
+        "store_runtime_status",
+        "store_digest",
+        "store_search",
+        "store_entity_context",
+        "download_store_quote_vin_photo",
+        "store_management_action",
+        "store_owner_capabilities",
+        "store_owner_api",
+    }
+    assert crm_catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
+    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 77
+    assert crm_catalog["agent_gateway_v2"]["store_extensions"]["public_tool_count_unchanged"] == 24
+    assert "dedicated quote credential" in crm_catalog["agent_gateway_v2"]["store_extensions"]["agent_entity_context"]
+    assert "dedicated quote credential" in manager_catalog["tool_contracts"]["store_entity_context"]
+    assert "no contact scope" not in json.dumps({"manager": manager_catalog, "crm": crm_catalog}, ensure_ascii=False)
+    assert "store_management" in knowledge_map["domains"]
+    for expected in ["append-only quote note", "private structured quote-offer draft"]:
+        assert expected in combined
+
+
+def test_store_command_reference_covers_live_entities_operations_and_strict_fields():
+    routes_payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text())
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text())
+    playbook = (ROOT / "docs" / "agent" / "store_management_playbook.md").read_text(encoding="utf-8")
+    routes = {route["command_id"]: route for route in routes_payload["routes"]}
+
+    read_selection = routes["store_read_workflow"]["read_entity_selection"]
+    operation_selection = routes["store_management_workflow"]["operation_selection"]
+    catalog_search = manager_catalog["store_tool_schemas"]["store_search"]
+    catalog_actions = manager_catalog["store_tool_schemas"]["store_management_action"]
+
+    assert set(read_selection) == set(STORE_ENTITIES)
+    assert set(catalog_search["filters_by_entity"]) == set(STORE_ENTITIES)
+    assert set(operation_selection) == set(STORE_MANAGEMENT_OPERATIONS) | {"owner_api_fallback"}
+    assert set(catalog_actions["planned_changes_by_action"]) == set(STORE_MANAGEMENT_OPERATIONS)
+    assert {
+        (value["domain"], operation)
+        for operation, value in operation_selection.items()
+        if operation != "owner_api_fallback"
+    } == STORE_ACTIONS
+    assert operation_selection["owner_api_fallback"]["domain"] == "store_owner_api"
+    assert all(value["aliases"] for value in operation_selection.values())
+
+    strict_fields = {
+        "assign_quote_request": "assignee_id",
+        "set_quote_request_status": "status",
+        "update_quote_request_comment": "internal_comment",
+        "add_quote_request_note": "text",
+        "replace_quote_offer_drafts": "items",
+        "set_batch_storage_location": "storage_location",
+        "mark_order_ready": "status",
+    }
+    for operation, field in strict_fields.items():
+        assert operation in playbook
+        assert field in operation_selection[operation]["planned_changes"]
+        assert field in catalog_actions["planned_changes_by_action"][operation]
+
+    for required in [
+        'agent_board_digest(scope="store")',
+        'status="FAILED"',
+        "no filters or cursor",
+        "update_quote_request_comment",
+        "append-only `add_quote_request_note`",
+        "raw job messages",
+        "Retry and publication",
+        "not supported by the optimized named workflow",
+        "store_owner_api",
+    ]:
+        assert required in playbook
+
+    workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
+    for expected in [
+        'python-version: "3.11"',
+        'pip install -e ".[dev]"',
+        "knowledge-sync",
+        "knowledge-audit",
+        "annotations-audit",
+        "skills-audit",
+        "cleanup-audit",
+        "ruff check .",
+        "ruff format --check autostop_manager tests",
+        "mypy autostop_manager",
+        "pytest -q",
+        "coverage report --fail-under=82",
+        "node --check frontend/control-center/app.js",
+        "workflow_dispatch",
+        "pull_request",
+    ]:
+        assert expected in workflow
+
+
 def test_gmail_playbook_lists_current_documented_surface():
     playbook = (ROOT / "docs" / "agent" / "gmail_workflow_playbook.md").read_text(encoding="utf-8")
     tools = [
@@ -200,7 +329,7 @@ def test_gmail_playbook_lists_current_documented_surface():
 
     assert len(tools) == len(set(tools)) == 21
     assert all(tool in playbook for tool in tools)
-    for expected in ["attachment_files", "body_file", "html_body", "content_type", "2026-07-14"]:
+    for expected in ["attachment_files", "body_file", "html_body", "content_type", "2026-07-19"]:
         assert expected in playbook
 
 

@@ -23,6 +23,7 @@ from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
+from .integration_audit import build_integration_audit
 from .knowledge_base import (
     audit_knowledge_annotations,
     audit_knowledge_base,
@@ -41,6 +42,7 @@ from .partsapi_category_index import (
     validate_partsapi_category_index,
 )
 from .provider_smoke import build_provider_smoke_report
+from .public_automotive_evidence import lookup_public_automotive_evidence
 from .service_management import build_service_management_plan
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
@@ -186,6 +188,20 @@ def build_parser() -> argparse.ArgumentParser:
     memory_context.add_argument("--limit", type=int, default=5)
 
     sub.add_parser("memory-gaps", help="Show sparse or empty memory areas")
+
+    agent_mode = sub.add_parser("agent-mode", help="Read or change the durable AgentExecutionMode")
+    agent_mode_sub = agent_mode.add_subparsers(dest="agent_mode_action", required=True)
+    agent_mode_sub.add_parser("status", help="Show global work/learning mode")
+    agent_mode_set = agent_mode_sub.add_parser("set", help="Set global work/learning mode")
+    agent_mode_set.add_argument("mode", choices=["work", "learning"])
+    agent_mode_set.add_argument("--expected-state-version", type=int, default=None)
+    agent_mode_resolve = agent_mode_sub.add_parser("resolve", help="Resolve a one-turn mode override")
+    agent_mode_resolve.add_argument("--mode-override", choices=["work", "learning"], default=None)
+
+    learning_summary = sub.add_parser(
+        "learning-summary", help="Show privacy-safe learning turn and improvement summary"
+    )
+    learning_summary.add_argument("--limit", type=int, default=20)
 
     task = sub.add_parser("task", help="Add a manager task")
     task.add_argument("title")
@@ -573,6 +589,20 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_fluids.add_argument("--open-only", action="store_true")
     maintenance_fluids.add_argument("--limit", type=int, default=10)
 
+    public_automotive_evidence = sub.add_parser(
+        "public-automotive-evidence",
+        help="Read official public recall, manufacturer-communication, and fluid-reference evidence without writes",
+    )
+    public_automotive_evidence.add_argument("--vin", default=None)
+    public_automotive_evidence.add_argument("--make", default=None)
+    public_automotive_evidence.add_argument("--model", default=None)
+    public_automotive_evidence.add_argument("--year", dest="model_year", type=int, default=None)
+    public_automotive_evidence.add_argument("--topic", dest="topics", action="append", default=[])
+    public_automotive_evidence.add_argument("--system", default=None)
+    public_automotive_evidence.add_argument("--include-tsb", action="store_true")
+    public_automotive_evidence.add_argument("--limit", type=int, default=10)
+    public_automotive_evidence.add_argument("--timeout", type=float, default=12.0)
+
     service_plan = sub.add_parser(
         "service-plan",
         help="Build a Krasnoyarsk workshop-management action plan for parts, repair, staff, client, finance, or knowledge work",
@@ -629,6 +659,42 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="Initialize SQLite storage")
     sub.add_parser("seed-rules", help="Seed default manager rules from docs")
 
+    store_checkpoint_status = sub.add_parser(
+        "store-checkpoint-status",
+        help="Show one scoped Store digest/bootstrap delivery checkpoint",
+    )
+    store_checkpoint_status.add_argument(
+        "--stream",
+        required=True,
+        choices=["store_digest", "store_bootstrap"],
+    )
+
+    store_checkpoint_reset = sub.add_parser(
+        "store-checkpoint-reset",
+        help="Reset one verified-broken Store cursor so its next read creates a fresh baseline",
+    )
+    store_checkpoint_reset.add_argument(
+        "--stream",
+        required=True,
+        choices=["store_digest", "store_bootstrap"],
+    )
+    store_checkpoint_reset.add_argument("--expected-state-version", required=True, type=int)
+    store_checkpoint_reset.add_argument(
+        "--reason",
+        required=True,
+        choices=[
+            "cursor_generation_mismatch",
+            "cursor_ahead_after_store_restore",
+            "operator_verified_rebaseline",
+        ],
+    )
+    store_checkpoint_reset.add_argument(
+        "--confirm-rebaseline",
+        required=True,
+        action="store_true",
+        help="Acknowledge that only this Store stream will discard its cursor and baseline again",
+    )
+
     sub.add_parser("knowledge-sync", help="Index the local knowledge map into SQLite")
 
     knowledge_intake = sub.add_parser(
@@ -658,6 +724,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("system-audit", help="Run the read-only AutoStop Manager health audit")
     sub.add_parser("doctor", help="Alias for system-audit")
+
+    integration_audit = sub.add_parser(
+        "integration-audit",
+        help="Verify live CRM, Store, web research, Gmail readiness, and docs/runtime contracts",
+    )
+    integration_audit.add_argument("--full", action="store_true")
+    integration_audit.add_argument(
+        "--gmail-proof",
+        default="/var/lib/autostop-manager/integration/gmail-proof.json",
+    )
+    integration_audit.add_argument("--output", default=None)
 
     control_report = sub.add_parser(
         "control-report",
@@ -707,6 +784,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         store.initialize()
         seed_result = store.seed_default_rules()
         _print_json({"ok": True, "db_path": str(store.path), "seed_rules": seed_result})
+    elif args.command == "store-checkpoint-status":
+        return _print_checked_json(store.get_store_checkpoint(args.stream))
+    elif args.command == "store-checkpoint-reset":
+        return _print_checked_json(
+            store.reset_store_checkpoint_for_rebaseline(
+                stream=args.stream,
+                expected_state_version=args.expected_state_version,
+                reason=args.reason,
+            )
+        )
     elif args.command == "seed-rules":
         _print_json(store.seed_default_rules())
     elif args.command == "knowledge-sync":
@@ -723,6 +810,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return _print_checked_json(build_cleanup_audit(store=store))
     elif args.command in {"system-audit", "doctor"}:
         return _print_checked_json(build_system_audit(store=store))
+    elif args.command == "integration-audit":
+        report = build_integration_audit(full=args.full, gmail_proof_path=args.gmail_proof)
+        _write_output(args.output, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return _print_checked_json(report)
     elif args.command in {"control-report", "environment-report"}:
         report = build_control_report(store=store)
         if args.format == "markdown":
@@ -812,6 +903,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _print_json(store.memory_context_for(args.task, limit=args.limit))
     elif args.command == "memory-gaps":
         _print_json(store.memory_gaps())
+    elif args.command == "agent-mode":
+        if args.agent_mode_action == "status":
+            _print_json(store.get_agent_mode())
+        elif args.agent_mode_action == "set":
+            _print_json(store.set_agent_mode(args.mode, expected_state_version=args.expected_state_version))
+        else:
+            _print_json(store.resolve_agent_mode(args.mode_override))
+    elif args.command == "learning-summary":
+        _print_json(store.get_agent_learning_summary(limit=args.limit))
     elif args.command == "task":
         _print_json(
             store.add_task(
@@ -1192,6 +1292,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 level_check_procedure=args.level_check_procedure,
                 include_licensed=not args.open_only,
                 limit=args.limit,
+            )
+        )
+    elif args.command == "public-automotive-evidence":
+        _print_json(
+            lookup_public_automotive_evidence(
+                vin=args.vin,
+                make=args.make,
+                model=args.model,
+                model_year=args.model_year,
+                topics=args.topics,
+                system=args.system,
+                include_tsb=args.include_tsb,
+                limit=args.limit,
+                timeout=args.timeout,
             )
         )
     elif args.command == "service-plan":
