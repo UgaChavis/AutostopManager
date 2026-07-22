@@ -507,6 +507,25 @@
       "verification": "Use exact OEM and vehicle/model queries; verify city, photos, seller, warranty, and whether price is for one item or a set."
     },
     {
+      "source_id": "euroauto_catalog",
+      "name": "EuroAuto public catalog",
+      "aliases": ["евроавто", "euroauto"],
+      "category": "marketplace_parts",
+      "city_focus": "Красноярск / Россия",
+      "url": "https://krasnoyarsk.euroauto.ru/",
+      "use_for": [
+        "used_parts",
+        "contract_parts",
+        "new_parts",
+        "exact_oem_or_vin_catalog_search",
+        "market_price_reference"
+      ],
+      "access_mode": "public_site_manual",
+      "api_status": "no_approved_buyer_api; public catalog only",
+      "integration_priority": "medium",
+      "verification": "EuroAuto is not AutoEuro. Use the public catalog by exact OEM/article first; a VIN only narrows catalog selection. Verify the current listing, condition, donor/fitment notes, delivery to Krasnoyarsk, warranty, and return terms. Do not automate login, basket, checkout, messages, private/mobile endpoints, or anti-bot bypass."
+    },
+    {
       "source_id": "avito_parts",
       "name": "Avito Parts Красноярск",
       "category": "marketplace_parts",
@@ -518,7 +537,7 @@
         "rare_parts"
       ],
       "access_mode": "public_site",
-      "api_status": "manual",
+      "api_status": "public marketplace search is manual; an owner-approved Avito Business API integration may operate only AutoStop's own account via official authorization, not search other sellers' full catalog",
       "integration_priority": "low",
       "verification": "Use only after checking photos, exact article, seller reliability, return terms, and whether the part is damaged or incomplete."
     },

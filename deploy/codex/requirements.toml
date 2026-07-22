@@ -1,0 +1,32 @@
+# Installed by deploy/install_managed_learning_hook.sh on the AutoStop server.
+# This policy applies only to the server-side Codex runtime that executes the
+# AutoStop Manager agent.
+allow_managed_hooks_only = true
+
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/opt/autostop-managed-hooks"
+
+[[hooks.UserPromptSubmit]]
+hooks = [
+  { type = "command", command = "/opt/autostop-managed-hooks/run_learning_hook.sh", timeout = 10, statusMessage = "Resolving AutoStop execution mode" },
+]
+
+[[hooks.PreToolUse]]
+matcher = "*"
+hooks = [
+  { type = "command", command = "/opt/autostop-managed-hooks/run_learning_hook.sh", timeout = 10, statusMessage = "Recording safe learning telemetry" },
+]
+
+[[hooks.PostToolUse]]
+matcher = "*"
+hooks = [
+  { type = "command", command = "/opt/autostop-managed-hooks/run_learning_hook.sh", timeout = 10, statusMessage = "Reviewing safe learning telemetry" },
+]
+
+[[hooks.Stop]]
+hooks = [
+  { type = "command", command = "/opt/autostop-managed-hooks/run_learning_hook.sh", timeout = 10, statusMessage = "Enforcing AutoStop learning review" },
+]

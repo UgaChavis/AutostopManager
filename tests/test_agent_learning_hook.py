@@ -25,6 +25,7 @@ class FakeLearningStore:
         self.fast_turn_lookup_calls = 0
         self.legacy_turn_lookup_calls = 0
         self.initialize_calls = 0
+        self.mode_changes: list[str] = []
 
     def initialize(self) -> None:
         self.initialize_calls += 1
@@ -32,6 +33,11 @@ class FakeLearningStore:
 
     def resolve_agent_mode(self, mode_override: str | None = None) -> dict[str, str]:
         return {"effective_mode": mode_override or self.mode}
+
+    def set_agent_mode(self, mode: str, *, expected_state_version: int | None = None) -> dict[str, str]:
+        self.mode = mode
+        self.mode_changes.append(mode)
+        return {"ok": True, "global_mode": mode}
 
     def start_agent_turn(self, task_signature: str, **kwargs: Any) -> dict[str, str]:
         self.started.append({"task_signature": task_signature, **kwargs})
@@ -146,6 +152,34 @@ def test_explicit_work_override_wins_over_learning_default() -> None:
 
 def test_negative_learning_instruction_is_a_work_override() -> None:
     assert HOOK.explicit_mode_override("не включай режим обучения для этой задачи") == "work"
+
+
+def test_explicit_voice_command_persists_learning_mode() -> None:
+    store = FakeLearningStore(mode="work")
+
+    result = HOOK.handle_hook(_prompt_payload("Переведи в режим обучения."), store)
+
+    assert store.mode_changes == ["learning"]
+    assert len(store.started) == 1
+    assert "Global mode was set to learning" in result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_embedded_mode_phrase_does_not_change_global_mode() -> None:
+    store = FakeLearningStore(mode="work")
+
+    HOOK.handle_hook(_prompt_payload("Объясни, как перевести AutoStop Manager в режим обучения"), store)
+
+    assert store.mode_changes == []
+
+
+def test_explicit_voice_command_persists_work_mode() -> None:
+    store = FakeLearningStore(mode="learning")
+
+    result = HOOK.handle_hook(_prompt_payload("Выключи режим обучения"), store)
+
+    assert store.mode_changes == ["work"]
+    assert store.started == []
+    assert "Global mode was set to work" in result["hookSpecificOutput"]["additionalContext"]
 
 
 def test_tool_events_store_only_safe_metadata() -> None:

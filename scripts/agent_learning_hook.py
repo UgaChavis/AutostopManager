@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(os.environ.get("AUTOSTOP_MANAGER_ROOT", Path(__file__).resolve().parents[1])).resolve()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -41,6 +42,19 @@ _LEARNING_MODE_RE = re.compile(
     r"\b(?:(?:режим(?:е|а)?|mode)\s+(?:само)?обучени[яе]|(?:само)?обучени[яе]\s+режим(?:е|а)?|learning\s+mode)\b",
     re.IGNORECASE,
 )
+_PERSISTENT_LEARNING_COMMAND_RE = re.compile(
+    r"^(?:(?:пожалуйста|давай)\s+)?(?:включ(?:и|ить)|перевед(?:и|ти)|переключ(?:и|ить)|"
+    r"перейд(?:и|ти)|установ(?:и|ить)|активир(?:уй|овать))\s+(?:в\s+|на\s+)?"
+    r"(?:режим\s+)?(?:само)?обучени[яе]$",
+    re.IGNORECASE,
+)
+_PERSISTENT_WORK_COMMAND_RE = re.compile(
+    r"^(?:(?:пожалуйста|давай)\s+)?(?:(?:выключ(?:и|ить)|отключ(?:и|ить))\s+"
+    r"(?:режим\s+)?(?:само)?обучени[яе]|(?:перевед(?:и|ти)|переключ(?:и|ить)|"
+    r"перейд(?:и|ти)|установ(?:и|ить)|верн(?:и|уться))\s+(?:в\s+|на\s+)?"
+    r"(?:(?:обычн(?:ый|ом)|рабоч(?:ий|ем))\s+режим|work\s+mode))$",
+    re.IGNORECASE,
+)
 _MODES = frozenset({"work", "learning"})
 
 
@@ -48,6 +62,8 @@ class LearningStore(Protocol):
     """The narrow, safe storage contract used by hook processes."""
 
     def resolve_agent_mode(self, mode_override: str | None = None) -> Any: ...
+
+    def set_agent_mode(self, mode: str, *, expected_state_version: int | None = None) -> Any: ...
 
     def start_agent_turn(
         self,
@@ -132,6 +148,23 @@ def explicit_mode_override(prompt: Any) -> str | None:
     if _WORK_MODE_RE.search(normalized):
         return "work"
     if _LEARNING_MODE_RE.search(normalized):
+        return "learning"
+    return None
+
+
+def persistent_mode_command(prompt: Any) -> str | None:
+    """Accept only a whole owner command that changes the durable mode.
+
+    Voice transcription frequently adds punctuation, so normalize it while
+    deliberately rejecting a mode phrase embedded in an ordinary task.
+    """
+
+    if not isinstance(prompt, str):
+        return None
+    normalized = " ".join(prompt.casefold().split()).strip(" .,!?:;")
+    if _PERSISTENT_WORK_COMMAND_RE.fullmatch(normalized):
+        return "work"
+    if _PERSISTENT_LEARNING_COMMAND_RE.fullmatch(normalized):
         return "learning"
     return None
 
@@ -248,17 +281,27 @@ def _tool_metadata(payload: dict[str, Any], *, phase: str, response_shape: str |
     return metadata
 
 
-def _mode_context(mode: str, *, external_turn_id: str = "") -> dict[str, Any]:
+def _mode_context(
+    mode: str,
+    *,
+    external_turn_id: str = "",
+    persistent_change: bool = False,
+) -> dict[str, Any]:
     if mode == "learning":
         turn_reference = f" Learning turn reference: {external_turn_id}." if external_turn_id else ""
+        mode_change = " Global mode was set to learning by an explicit owner command." if persistent_change else ""
         text = (
             "AutoStopManager effective mode: learning. Finish the requested work, then call "
             "post_run_review with the learning turn reference before the final answer."
-            f"{turn_reference} Record only safe technical metadata; never copy "
+            f"{turn_reference}{mode_change} Record only safe technical metadata; never copy "
             "prompts, tool payloads, CRM/Store/Gmail data, secrets, or financial values into learning data."
         )
     else:
-        text = "AutoStopManager effective mode: work. Use normal verification; no mandatory post-run learning review."
+        mode_change = " Global mode was set to work by an explicit owner command." if persistent_change else ""
+        text = (
+            "AutoStopManager effective mode: work. Use normal verification; no mandatory post-run learning review."
+            f"{mode_change}"
+        )
     return {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
@@ -274,12 +317,21 @@ def handle_user_prompt_submit(store: LearningStore, payload: dict[str, Any]) -> 
         return None
 
     mode_override = explicit_mode_override(prompt)
+    persistent_change = persistent_mode_command(prompt)
+    if persistent_change:
+        try:
+            changed = store.set_agent_mode(persistent_change)
+        except Exception:  # noqa: BLE001 - a mode command must fail open.
+            return None
+        if not isinstance(changed, dict) or changed.get("ok") is False:
+            return None
+        mode_override = persistent_change
     try:
         mode = _mode_from_value(store.resolve_agent_mode(mode_override))
     except Exception:  # noqa: BLE001 - a mode lookup must fail open in a lifecycle hook.
         return None
     if mode != "learning":
-        return _mode_context(mode)
+        return _mode_context(mode, persistent_change=bool(persistent_change))
 
     session_id = _safe_opaque_id(payload.get("session_id"))
     task_signature = _hash(f"{session_id}\x00{prompt}", purpose="task")
@@ -299,8 +351,8 @@ def handle_user_prompt_submit(store: LearningStore, payload: dict[str, Any]) -> 
     if not isinstance(started, dict) or started.get("ok") is False:
         return None
     if _mode_from_value(started) != "learning":
-        return _mode_context("work")
-    return _mode_context("learning", external_turn_id=external_turn_id)
+        return _mode_context("work", persistent_change=bool(persistent_change))
+    return _mode_context("learning", external_turn_id=external_turn_id, persistent_change=bool(persistent_change))
 
 
 def handle_pre_tool_use(store: LearningStore, payload: dict[str, Any]) -> None:
