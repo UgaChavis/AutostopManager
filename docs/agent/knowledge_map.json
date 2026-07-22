@@ -1505,12 +1505,18 @@
         "environment",
         "privacy",
         "runtime artifacts",
-        "SQLite"
+        "SQLite",
+        "git push",
+        "Git Credential Manager",
+        "HEAD:AutostopManager",
+        "gh auth status"
       ],
       "questions": [
         "как запустить MCP локально",
         "что можно публиковать в GitHub",
-        "какие данные нельзя коммитить"
+        "какие данные нельзя коммитить",
+        "как правильно пушить AutostopManager в GitHub",
+        "нужен ли gh auth status для git push"
       ],
       "source_of_truth_files": [
         "docs/agent/deployment_runbook.md",

@@ -78,6 +78,17 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 - Remote `home-pc` access -> `docs/agent/codex_home_pc_reverse_ssh.md`; use
   `ssh home-pc`, `sftp`/`scp`, `pwsh`, and Python only after opening that file.
 
+## Git And Deploy
+
+- Publish from the workstation with
+  `git push origin HEAD:AutostopManager`; use `-u` only when the upstream is
+  missing. The configured Git credential helper owns HTTPS authentication.
+- `gh auth status` is not a prerequisite for Git fetch/push. Never force-push
+  the production branch and never use the production server as the normal
+  publisher.
+- Follow `docs/agent/deployment_runbook.md` for exact revision checks and the
+  CRM bounded deploy path.
+
 ## Documentation Hygiene
 
 - Prefer updating the smallest existing canonical file over creating a new one.

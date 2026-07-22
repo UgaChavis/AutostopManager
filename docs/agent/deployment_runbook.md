@@ -66,27 +66,44 @@ and deploy:
 5. Check `git status --short --ignored` and confirm `data/`, caches, SQLite
    files, runtime snapshots, credentials, and CRM evidence are not staged.
 6. Commit only code, tests, documentation, and safe owner-provided source packs.
-7. Push the current branch to GitHub.
+7. Push the checked-out commit from the workstation with the explicit
+   `HEAD:AutostopManager` refspec below.
 
-## GitHub Access From Codex VPS
+## GitHub Publish From The Workstation
 
-Verified on the production server on 2026-07-14. The configured Manager remote
-uses the server SSH alias for fetch and the credentialed HTTPS push URL for
-publish. Treat the current `git remote -v` output as runtime truth; do not
-rewrite a working remote or print credentials.
+Normal publishing uses Git over HTTPS through the configured Git credential
+helper (Windows Git Credential Manager on the maintained workstation). GitHub
+CLI authentication is separate: a failing `gh auth status` must not block
+`git fetch` or `git push`. Use `gh auth login` only for operations performed by
+`gh`, such as creating a pull request or working with GitHub issues.
 
-Normal publish check from `/opt/AutostopManager`:
+After the intended files pass checks and are committed:
 
-```bash
-git status --short
+```powershell
+git status --short --branch
 git branch --show-current
-git fetch origin AutostopManager
-git push origin AutostopManager
+git fetch origin AutostopManager --prune
+git merge-base --is-ancestor origin/AutostopManager HEAD
+if ($LASTEXITCODE -ne 0) { throw "origin/AutostopManager is not an ancestor of HEAD" }
+git push origin HEAD:AutostopManager
+git rev-parse HEAD
+git ls-remote origin refs/heads/AutostopManager
 ```
 
-The expected branch is `AutostopManager`. Keep private keys, tokens, credential
-helper output, and remote URLs containing credentials out of Git, chat, CRM,
-and logs.
+Use `git push -u origin HEAD:AutostopManager` only when the local upstream is
+missing. Use `git push --dry-run origin HEAD:AutostopManager` only while
+diagnosing authentication or refspec routing; routine publishing does not need
+both a dry-run and a real push. The final two hashes must match.
+
+If another commit reaches GitHub first, fetch and inspect it, integrate it
+intentionally, and rerun checks affected by the changed tree. Never force-push
+the production branch. Treat `git remote -v` as runtime truth; do not rewrite a
+working remote or print credential-helper output, private keys, tokens, or URLs
+containing credentials.
+
+The production server is a fetch/deploy target, not the normal publisher. On
+the server, fetch the branch and verify exact revision parity; do not push from
+`/opt/AutostopManager` and do not reset a dirty parallel checkout.
 
 ## Local MCP Server
 
