@@ -78,7 +78,7 @@ def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch
     assert result["ok"] is True
     assert result["summary"]["count"] == 2
     assert result["summary"]["part_intent_recognized_count"] == 2
-    assert result["summary"]["manual_public_search_count"] == 6
+    assert result["summary"]["manual_public_search_count"] == 8
     assert result["summary"]["manual_public_queries_with_raw_identifier_count"] == 0
     assert result["summary"]["full_auto_lookup_count"] == 0
     assert "PARTSAPI_KEY" in result["summary"]["missing_env_names"]

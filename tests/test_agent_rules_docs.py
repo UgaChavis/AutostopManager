@@ -178,9 +178,9 @@ def test_every_command_route_has_gateway_v2_execution_contract():
 
 
 def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
-    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text())
-    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text())
-    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text())
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
+    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
+    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     required_docs = [
         ROOT / "AGENTS.md",
         ROOT / "README.md",
@@ -231,8 +231,8 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
 
 
 def test_store_command_reference_covers_live_entities_operations_and_strict_fields():
-    routes_payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text())
-    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text())
+    routes_payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
+    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
     playbook = (ROOT / "docs" / "agent" / "store_management_playbook.md").read_text(encoding="utf-8")
     routes = {route["command_id"]: route for route in routes_payload["routes"]}
 

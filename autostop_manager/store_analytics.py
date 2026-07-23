@@ -71,13 +71,10 @@ class _NoRedirectHandler(HTTPRedirectHandler):
         del req, fp, code, msg, headers, newurl
 
 
-_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
-
-
 def urlopen(request: Request, timeout: float):
     """Open without redirects so Authorization never crosses an origin boundary."""
 
-    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
 
 
 def get_store_analytics_report(
