@@ -55,6 +55,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    adaptive source selection, not a fixed workflow; final safety, procedure,
    torque, fluid, programming, and exact-fitment facts need an appropriate
    OEM/licensed source and vehicle/unit context.
+   For a symptom or practical repair-case request where public owner experience
+   is useful, use `research_drive2_cases` through raw discovery before broad
+   generic search. It is public-only, bounded, and hypothesis-level evidence;
+   never use it as final authority for safety, procedure, or exact-fitment facts.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->
@@ -133,6 +137,10 @@ verification.
   `get_raw_capability_schema` -> `call_raw_capability`. Search first; use the
   browser only for public JS-heavy pages. Do not bypass CAPTCHA, login, paywall,
   or IP blocks; report manual access needed.
+- Drive2 repair cases -> `docs/agent/automotive_repair_source_playbook.md`, then
+  resolve `research_drive2_cases` via raw discovery for vehicle/aggregate/symptom
+  research. Use the compact case cards and URLs, never store raw journals or
+  bypass login/CAPTCHA; verify final technical facts through OEM/licensed sources.
 - Business documents -> `docs/agent/business_document_quality_playbook.md`.
 - Remote Windows access -> `docs/agent/codex_home_pc_reverse_ssh.md`; keep the
   `managed-pc` fleet and legacy `home-pc` route independent, resolve the exact

@@ -2,7 +2,7 @@
   "package": "automotive_repair_knowledge_pack",
   "generated_on": "2026-07-14",
   "description": "Legal catalog of authoritative automotive repair knowledge sources for CRM/agent ingestion. Proprietary sources are indexed as acquisition targets, not copied content.",
-  "source_count": 123,
+  "source_count": 124,
   "sources": [
     {
       "id": "bosch_automotive_electrics_electronics",
@@ -3459,6 +3459,35 @@
       "evidence_url": "https://aftermarket.zf.com/lubricants/en/te-ml_11-en.pdf",
       "last_verified": "2026-05-03",
       "forum_or_unofficial": false
+    },
+    {
+      "id": "drive2_public_logbooks",
+      "name": "Drive2 Public Vehicle Logbooks",
+      "publisher": "Drive2",
+      "category": "public_forum_case_repository",
+      "source_type": "public_owner_repair_case",
+      "url": "https://www.drive2.ru/experience/",
+      "regions": [
+        "Russia",
+        "Global"
+      ],
+      "brands": [
+        "Multi-brand"
+      ],
+      "data_types": [
+        "symptom_patterns",
+        "repair_case_history",
+        "diagnostic_hypotheses",
+        "owner_experience"
+      ],
+      "access": "public_browse_with_optional_login",
+      "legal_ingestion_status": "bounded_public_research_link_only_no_account_no_raw_retention",
+      "priority_score_1_5": 3,
+      "recommended_ingestion_route": "Use research_drive2_cases for bounded public case discovery. Keep only compact case evidence and URLs in the response/cache; do not use an account, bypass access controls, bulk crawl, or treat forum cases as final procedure, safety, OEM-fitment, torque, wiring, fluid, or programming evidence.",
+      "notes": "High-value practical Russian-language repair histories; relevance depends on exact engine, transmission, production split, symptoms, and confirmed result.",
+      "evidence_url": "https://www.drive2.ru/experience/",
+      "last_verified": "2026-07-23",
+      "forum_or_unofficial": true
     }
   ]
 }

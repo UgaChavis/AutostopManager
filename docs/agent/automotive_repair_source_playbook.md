@@ -70,6 +70,28 @@ the browser result reports `captcha_required`, `login_required`, `ip_blocked`,
 `access_denied`, or similar flags, stop and report that manual or approved
 account access is required.
 
+## Drive2 Practical Repair Cases
+
+When the owner asks for real repair histories, recurring symptoms, or the
+practical sequence that led to a confirmed result, prefer the hidden read-only
+`research_drive2_cases` capability. Resolve it through
+`discover_raw_capabilities` -> `get_raw_capability_schema` ->
+`call_raw_capability`; never invoke it directly.
+
+Pass the actual complaint plus the smallest useful vehicle context: model,
+engine code, transmission, and DTCs when known. The route issues at most three
+public `site:drive2.ru/l/` searches, reads at most five candidate journals
+sequentially, deduplicates URLs, joins only compact case evidence, and keeps a
+bounded 15-minute in-process cache. It never uses an account, does not bypass
+login/CAPTCHA/IP restrictions, and does not persist raw journal pages.
+
+Each returned case is a hypothesis card: title/URL, vehicle and date hints,
+short evidence excerpts, relevance score, and separate article/comment access
+status. `comments_limited=true` does not invalidate a public article; require a
+human only when the article itself cannot be read or a real access block is
+reported. Do not turn a Drive2 narrative into a confirmed diagnosis without
+matching vehicle/aggregate context and independent evidence.
+
 ## Required Vehicle Context
 
 Before a technical recommendation, extract from CRM or ask for:

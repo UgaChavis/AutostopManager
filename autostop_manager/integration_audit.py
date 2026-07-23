@@ -47,7 +47,9 @@ EXPECTED_GATEWAY_TOOLS = frozenset(
         "workflow_wait_for_external",
     }
 )
-EXPECTED_WEB_CAPABILITIES = frozenset({"search_web_multi", "fetch_page_excerpt", "fetch_page_browser"})
+EXPECTED_WEB_CAPABILITIES = frozenset(
+    {"search_web_multi", "fetch_page_excerpt", "fetch_page_browser", "research_drive2_cases"}
+)
 EXPECTED_MANAGER_RAW_TOOL_COUNT = 77
 _GMAIL_REQUIRED_PROOF_CHECKS = frozenset(
     {"profile_read", "labels_read", "search_read", "self_delivery_readback", "self_delivery_cleanup"}
