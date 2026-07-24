@@ -1559,7 +1559,9 @@
         "staff load",
         "customer flow",
         "finance control",
-        "procurement pricing"
+        "procurement pricing",
+        "current road conditions near AutoStop",
+        "public traffic camera Semafornaya 185"
       ],
       "aliases": [
         "service management",
@@ -1580,7 +1582,12 @@
         "заказ-наряды",
         "закупочная цена",
         "цена материалов",
-        "наличие Красноярск"
+        "наличие Красноярск",
+        "Семафорная 185",
+        "Семафорная камера",
+        "камера у AutoStop",
+        "дорожная камера",
+        "что на Семафорной"
       ],
       "keywords": [
         "timer floor",
@@ -1600,7 +1607,12 @@
         "board cleanup",
         "blocked cards",
         "materials total",
-        "local supplier"
+        "local supplier",
+        "c_6171",
+        "Семафорная 185",
+        "24око",
+        "public traffic camera",
+        "current traffic near AutoStop"
       ],
       "questions": [
         "как управлять сервисом сегодня",
@@ -1608,7 +1620,9 @@
         "как прибраться на доске",
         "где смотреть финансы и загрузку",
         "как проверить закупочную стоимость материалов",
-        "как сделать менеджерский обзор клиентов, касс и заказ-нарядов"
+        "как сделать менеджерский обзор клиентов, касс и заказ-нарядов",
+        "что сейчас на Семафорной 185",
+        "посмотри камеру у AutoStop"
       ],
       "source_of_truth_files": [
         "docs/agent/krasnoyarsk_service_management_playbook.md",

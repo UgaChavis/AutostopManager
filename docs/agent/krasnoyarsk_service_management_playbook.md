@@ -15,6 +15,35 @@ control, CRM hygiene, and knowledge intake for a Krasnoyarsk workshop.
 5. Checkpoint meaningful changes in the Gateway v2 workflow; add a compact
    schema-hashed raw `manager_journal` entry only for a durable conclusion.
 
+## Local Traffic Camera: Semafornaya 185
+
+For requests such as `посмотри камеру`, `что на Семафорной`, `как дорога у
+AutoStop`, or `Семафорная 185`, use this exact public camera first:
+
+- provider page: `https://24oko.ru/city`;
+- stable public camera reference: `c_6171`;
+- expected title: `Семафорная 185`;
+- helper: `scripts/capture_semafornaya_185.py`.
+
+Capture one current frame, then inspect it and answer only about road traffic,
+weather, or freely visible parking/approach conditions. Example:
+
+```bash
+frame_path=$(mktemp /tmp/autostop-semafornaya185-XXXXXX.png)
+.venv/bin/python scripts/capture_semafornaya_185.py --output "$frame_path" --overwrite
+```
+
+The helper opens the public `24око` page in a browser context, gets the current
+player only for `c_6171`, checks the expected camera title and provider host,
+then saves exactly one frame. It neither polls nor records video.
+
+Do not persist the dynamic player URL, call the `fl-*.telecoma.tv` host directly,
+spoof access headers, bypass a restriction, retrieve an archive, recognize a
+person, read or report plates, or use the camera to track people. If the public
+browser page or frame is blocked, report that access is unavailable; do not
+attempt a workaround. Delete the temporary frame after the current request
+unless the owner explicitly asks to retain it.
+
 ## Current CRM Operating Model
 
 Refresh this model with `agent_bootstrap` and `agent_board_digest` when the board changes.

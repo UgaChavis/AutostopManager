@@ -16,7 +16,7 @@ from .config import PROJECT_ROOT
 INTEGRATION_AUDIT_FORMAT = "autostop_integration_audit_v1"
 GMAIL_PROOF_FORMAT = "autostop_gmail_integration_proof_v1"
 DEFAULT_CRM_ROOT = Path("/opt/autostopcrm")
-DEFAULT_STORE_ROOT = Path("/opt/autostop-app-source")
+DEFAULT_STORE_ROOT = Path("/opt/autostopapp")
 DEFAULT_GMAIL_PLUGIN_ROOT = Path("/root/.codex/plugins/cache/openai-curated-remote/gmail")
 DEFAULT_GMAIL_PROOF_PATH = Path("/var/lib/autostop-manager/integration/gmail-proof.json")
 EXPECTED_GATEWAY_TOOLS = frozenset(

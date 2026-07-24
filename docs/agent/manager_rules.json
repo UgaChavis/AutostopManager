@@ -211,6 +211,11 @@
       "rule": "For public internet research, resolve search_web_multi, excerpt, and fetch_page_browser through discover_raw_capabilities, get_raw_capability_schema, and call_raw_capability. Search first; use the browser only for public JS-heavy pages. Do not bypass CAPTCHA, login walls, paywalls, IP blocks, private cabinets, or access restrictions; report manual or approved account access required."
     },
     {
+      "id": "public-camera-semafornaya-185",
+      "priority": 31,
+      "rule": "For owner requests about the road, weather, approach, or camera at Semafornaya 185 near AutoStop, use the public 24око camera c_6171 through docs/agent/krasnoyarsk_service_management_playbook.md and scripts/capture_semafornaya_185.py. Capture one current browser-rendered frame only; do not retain dynamic player URLs, frames, archives, faces, or plates, and do not bypass a block or restriction."
+    },
+    {
       "id": "bmw-f15-n63-route",
       "priority": 31,
       "rule": "For BMW X5 F15 xDrive50i, N63TU/N63T, BDC/gateway/network faults, F15 electrical/electronics, MEVD17.2.8, injector bulletins, misfires, oil consumption, or cooling faults, use docs/agent/bmw_repair_playbook.md and the indexed BMW repair source cache, then verify VIN-specific facts through BMW ISTA/AIR/ETK or official BMW sources."

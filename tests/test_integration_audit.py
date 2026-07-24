@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from autostop_manager.integration_audit import (
+    DEFAULT_STORE_ROOT,
     EXPECTED_GATEWAY_TOOLS,
     EXPECTED_WEB_CAPABILITIES,
     GMAIL_PROOF_FORMAT,
@@ -13,6 +14,10 @@ from autostop_manager.integration_audit import (
     audit_gmail_connector,
     build_integration_audit,
 )
+
+
+def test_default_store_root_uses_current_publisher_checkout() -> None:
+    assert DEFAULT_STORE_ROOT == Path("/opt/autostopapp")
 
 
 def _write_catalog(root) -> None:

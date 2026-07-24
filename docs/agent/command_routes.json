@@ -161,6 +161,53 @@
       ]
     },
     {
+      "command_id": "semafornaya_185_camera",
+      "workflow_id": "semafornaya_185_camera",
+      "priority": 98,
+      "intent": "local_traffic_camera",
+      "domain": "service_management",
+      "open_first": "docs/agent/krasnoyarsk_service_management_playbook.md",
+      "aliases": [
+        "посмотри камеру",
+        "камера на Семафорной",
+        "Семафорная 185",
+        "камера у AutoStop",
+        "что на Семафорной",
+        "какая дорога у AutoStop"
+      ],
+      "keywords": [
+        "камера",
+        "Семафорная",
+        "185",
+        "AutoStop",
+        "дорожная обстановка",
+        "пробка"
+      ],
+      "memory_queries": [
+        "public camera Semafornaya 185",
+        "c_6171",
+        "traffic near AutoStop"
+      ],
+      "required_reads": [
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
+        "public 24oko camera record c_6171 and its expected title Семафорная 185"
+      ],
+      "write_domains": [],
+      "external_connectors": [
+        "24око public browser page"
+      ],
+      "completion_checks": [
+        "one current browser-rendered frame was captured from the expected public camera or access failure was reported",
+        "no dynamic player URL, video archive, frame, face, or plate was retained in Manager memory"
+      ],
+      "next_actions": [
+        "run scripts/capture_semafornaya_185.py with an exact temporary output path",
+        "inspect the single frame and report traffic, weather, or approach conditions with capture time",
+        "delete the temporary frame unless the owner explicitly asks to retain it",
+        "if public access is blocked, report the block and do not bypass it"
+      ]
+    },
+    {
       "command_id": "daily_ready_unpaid_check",
       "workflow_id": "daily_ready_unpaid_check",
       "priority": 85,

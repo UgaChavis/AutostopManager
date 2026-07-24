@@ -121,6 +121,10 @@ verification.
 - `Приберись` -> `docs/agent/board_cleanup_autopilot_playbook.md`.
 - CRM card descriptions -> `docs/agent/crm_card_description_standard.md`.
 - `ready unpaid` / daily control -> `docs/agent/krasnoyarsk_service_management_playbook.md`.
+- `Семафорная 185` / `камера у AutoStop` -> public camera `c_6171` through
+  `docs/agent/krasnoyarsk_service_management_playbook.md` and one-frame helper
+  `scripts/capture_semafornaya_185.py`; never retain video, dynamic player
+  URLs, faces, or plates and never bypass an access block.
 - Timer floor -> `docs/agent/crm_manager_data_playbook.md` and
   `prepare_action_contract(domain="board", action="bulk_set_deadline_if_below")`,
   then `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run

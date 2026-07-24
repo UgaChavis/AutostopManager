@@ -1,9 +1,19 @@
 {
-  "generated_on": "2026-07-14",
+  "generated_on": "2026-07-24",
   "city": "Красноярск",
   "purpose": "Service-management routing; procurement sources are loaded from the canonical procurement catalog.",
   "procurement_source_catalog": "docs/agent/procurement_price_sources.json",
   "sources": [
+    {
+      "source_id": "public_camera_24oko_semafornaya_185",
+      "name": "24око: Семафорная 185",
+      "category": "public_traffic_camera",
+      "city_focus": "Красноярск, Свердловский район",
+      "url": "https://24oko.ru/city",
+      "camera_id": "c_6171",
+      "use_for": ["current_road_conditions_near_autostop", "weather_visibility", "approach_conditions"],
+      "verification": "Use one browser-rendered current frame through scripts/capture_semafornaya_185.py. Do not persist dynamic player URLs, poll, archive, identify people, or read/report plates."
+    },
     {
       "source_id": "hh_ru",
       "name": "hh.ru",
@@ -42,6 +52,14 @@
     }
   ],
   "areas": {
+    "local_traffic_camera": {
+      "source_ids": ["public_camera_24oko_semafornaya_185"],
+      "required_context": ["current_owner_request"],
+      "crm_tools": [],
+      "actions": ["Use the fixed public camera c_6171 for Semafornaya 185 first.", "Capture one current browser-rendered frame and answer only about road, weather, or approach conditions.", "Report access unavailable rather than bypassing a block; delete the temporary frame after the request unless retention is explicitly requested."],
+      "kpis": ["current_frame_available", "capture_time", "road_condition_confidence"],
+      "memory_rules": ["Store only the durable camera reference and access rule; never store frames, dynamic player URLs, faces, or plates."]
+    },
     "daily_control": {
       "source_ids": [],
       "required_context": ["crm_board_state"],
