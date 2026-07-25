@@ -13,6 +13,10 @@ from autostop_manager import store_owner_api
 from autostop_manager.store_owner_api import OwnerCapability, StoreOwnerApiClient
 
 
+def test_owner_preflight_contract_matches_current_store_api() -> None:
+    assert store_owner_api.OWNER_PREFLIGHT_CONTRACT_VERSION == "store-owner-preflight-v2"
+
+
 class _Response:
     def __init__(self, payload, *, content_type="application/json", status=200, headers=None):
         self.payload = payload if isinstance(payload, bytes) else json.dumps(payload).encode()

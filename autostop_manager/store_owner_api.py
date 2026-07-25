@@ -41,7 +41,7 @@ DRY_RUN_PROOF_HEADER = "X-Autostop-Dry-Run-Proof"
 ACTION_MODE_HEADER = "X-Autostop-Action-Mode"
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 OWNER_REVISION_PATH = "/internal/owner/v1/write-revision"
-OWNER_PREFLIGHT_CONTRACT_VERSION = "store-owner-preflight-v1"
+OWNER_PREFLIGHT_CONTRACT_VERSION = "store-owner-preflight-v2"
 OWNER_PREFLIGHT_MAX_TTL = timedelta(minutes=5, seconds=30)
 _OPERATION_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,199}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
