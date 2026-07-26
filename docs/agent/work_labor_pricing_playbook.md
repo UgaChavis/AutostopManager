@@ -37,10 +37,12 @@ python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "заме
 3. If the input is only a complaint, do not price the final repair. Price only
    diagnostics when public prices exist, then return a diagnostic checklist and
    missing context for the final estimate.
-4. Read the aggregate internal snapshot
-   `data/private_knowledge/service_pricing_experience.json`. Match the exact
-   operation and use its median/IQR, sample size, vehicle segment, and
-   freshness as a historical anchor. Never treat it as a current price list.
+4. Read the aggregate labor-only snapshot
+   `data/private_knowledge/service_labor_experience.json`. Match the exact
+   operation and use its recency-weighted median, IQR, sample size, applicable
+   vehicle segment, price drift, and freshness as a historical anchor. Fall
+   back to `service_pricing_experience.json` only when the full snapshot is
+   unavailable. Never treat either snapshot as a current price list.
 5. Collect current public Russia STO prices for the same operation and comparable
    vehicle class. Keep only labor-only prices. Do not mix work prices with
    parts, fluids, programming licenses, towing, or aggregates.
@@ -73,7 +75,34 @@ python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "заме
 
 ## Internal AutoStop Experience
 
-Refresh on direct owner request or an intentional pricing review:
+Refresh the preferred full labor-only snapshot on direct owner request or an
+intentional pricing review:
+
+```bash
+.venv/bin/python -m autostop_manager.cli service-labor-refresh \
+  --state-json /opt/autostopcrm/data/state.json
+```
+
+The command reads one immutable-in-process copy of the live state, selects every
+repair order whose status is `closed`, hashes the source bytes for audit, and
+writes three private `0600` artifacts atomically:
+
+- `service_labor_experience.json`: aggregate operation statistics without
+  employee, order, client, vehicle-identifier, payment, salary, or margin data;
+- `restricted/service_labor_executor_report.json`: employee volume and client
+  price distributions for private operational review only;
+- `reports/service_labor_analysis.md`: readable labor-only summary.
+
+Existing files are copied to private timestamped `backups/` before replacement.
+Recent observations receive exponentially larger weight with a 90-day
+half-life. `total / quantity` is the canonical client unit price; `total`
+controls when it differs from `price * quantity`. Invalid quantity and
+zero/missing `total` rows remain visible in data-quality counts but do not enter a
+price baseline. IQR outliers remain counted and visible but do not set the
+recommended anchor.
+
+The legacy 100-order mixed snapshot remains available for backward compatibility
+and historical article references:
 
 ```bash
 .venv/bin/python -m autostop_manager.cli service-pricing-refresh \
@@ -81,12 +110,11 @@ Refresh on direct owner request or an intentional pricing review:
   --limit 100
 ```
 
-The snapshot is aggregate-only and private. It contains no order ids, clients,
-phones, VINs, plates, payments, or raw order rows. Labor baselines use unit
-work-row prices before separately displayed order tax and report sample count,
-median, P25/P75, min/max, freshness, and coarse vehicle segment. Article price
-references require a catalog number and remain historical until live Store,
-supplier, public market, and applicability checks pass.
+Both snapshots are aggregate-only and private. The full labor snapshot is the
+preferred estimator source. Executor statistics must not enter customer
+pricing, durable agent memory, docs, Git, or public reports. Article price
+references remain separate historical hints until live Store, supplier, public
+market, and applicability checks pass.
 
 ## PartsAPI AUTONORMS Layer
 

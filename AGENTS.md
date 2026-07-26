@@ -72,13 +72,18 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    is useful, use `research_drive2_cases` through raw discovery before broad
    generic search. It is public-only, bounded, and hypothesis-level evidence;
    never use it as final authority for safety, procedure, or exact-fitment facts.
-   Aggregate closed-order experience from
-   `data/private_knowledge/service_pricing_experience.json` is an internal
-   historical anchor only. Refresh it with `service-pricing-refresh` from a
-   live read-only CRM state when the owner requests analysis; never persist the
-   raw orders. High-confidence labor pricing needs exact scope and at least
-   three independent evidence families such as internal experience, current
-   market, and vehicle-specific labor time/service data.
+   Full labor-only closed-order experience from
+   `data/private_knowledge/service_labor_experience.json` is the preferred
+   internal historical anchor. Refresh it with `service-labor-refresh` from one
+   live read-only CRM state snapshot; it covers all closed orders, weights recent
+   prices with a 90-day half-life, stores aggregate statistics only, and keeps
+   executor analysis in a separate restricted report that must never influence
+   customer pricing or agent memory. The legacy
+   `service_pricing_experience.json` and `service-pricing-refresh --limit 100`
+   remain a fallback and historical article-reference route. Never persist raw
+   orders. High-confidence labor pricing needs exact scope and at least three
+   independent evidence families such as internal experience, current market,
+   and vehicle-specific labor time/service data.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->

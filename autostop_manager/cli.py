@@ -44,6 +44,12 @@ from .partsapi_category_index import (
 from .provider_smoke import build_provider_smoke_report
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .service_management import build_service_management_plan
+from .service_labor_experience import (
+    build_service_labor_experience_from_state_file,
+    save_service_labor_artifacts,
+    summarize_service_labor_snapshot,
+)
+from .service_labor_report import build_service_labor_report_artifact, save_service_labor_report_artifact
 from .service_pricing_experience import (
     build_service_pricing_experience_from_state_file,
     save_service_pricing_experience,
@@ -692,6 +698,29 @@ def build_parser() -> argparse.ArgumentParser:
     pricing_refresh.add_argument(
         "--output",
         default="data/private_knowledge/service_pricing_experience.json",
+    )
+
+    labor_refresh = sub.add_parser(
+        "service-labor-refresh",
+        help="Refresh labor-only aggregate experience from all closed CRM repair orders",
+    )
+    labor_refresh.add_argument("--state-json", required=True)
+    labor_refresh.add_argument("--half-life-days", type=int, default=90)
+    labor_refresh.add_argument(
+        "--output",
+        default="data/private_knowledge/service_labor_experience.json",
+    )
+    labor_refresh.add_argument(
+        "--executor-output",
+        default="data/private_knowledge/restricted/service_labor_executor_report.json",
+    )
+    labor_refresh.add_argument(
+        "--report-output",
+        default="data/private_knowledge/reports/service_labor_analysis.md",
+    )
+    labor_refresh.add_argument(
+        "--artifact-output",
+        default="data/private_knowledge/reports/service_labor_analysis.artifact.json",
     )
 
     sub.add_parser("init", help="Initialize SQLite storage")
@@ -1418,6 +1447,35 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 "ok": True,
                 "output_path": str(output_path),
                 **summarize_snapshot(snapshot),
+            }
+        )
+    elif args.command == "service-labor-refresh":
+        snapshot, executor_report = build_service_labor_experience_from_state_file(
+            args.state_json,
+            recency_half_life_days=args.half_life_days,
+        )
+        paths = save_service_labor_artifacts(
+            snapshot,
+            executor_report,
+            output_path=args.output,
+            executor_output_path=args.executor_output,
+            report_output_path=args.report_output,
+        )
+        artifact_output_path = save_service_labor_report_artifact(
+            build_service_labor_report_artifact(snapshot),
+            args.artifact_output,
+        )
+        _print_json(
+            {
+                "ok": True,
+                **paths,
+                "artifact_output_path": str(artifact_output_path),
+                **summarize_service_labor_snapshot(snapshot),
+                "executor_report": {
+                    "restricted": True,
+                    "executor_count": len(executor_report.get("executors") or []),
+                    "must_not_feed_customer_pricing": True,
+                },
             }
         )
     return 0

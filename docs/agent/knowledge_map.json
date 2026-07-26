@@ -2160,6 +2160,8 @@
         "GetNormsTimes",
         "PartsAPI labor time",
         "internal closed repair order experience",
+        "service_labor_experience",
+        "service-labor-refresh",
         "service_pricing_experience",
         "EvidenceBundle"
       ],
@@ -2192,6 +2194,7 @@
         ".agents/skills/resolve-autostop-service-case/references/evidence-contract.md"
       ],
       "optional_runtime_files": [
+        "data/private_knowledge/service_labor_experience.json",
         "data/private_knowledge/service_pricing_experience.json"
       ],
       "required_context": [

@@ -33,7 +33,7 @@
       "required_reads": [
         ".agents/skills/resolve-autostop-service-case/SKILL.md",
         "exact live CRM vehicle and repair-order context when a card or identifier is supplied",
-        "data/private_knowledge/service_pricing_experience.json as an aggregate internal anchor",
+        "data/private_knowledge/service_labor_experience.json as the preferred aggregate labor anchor, with service_pricing_experience.json only as fallback",
         "current norm-hours, OEM/applicability, supplier, and public-market evidence selected for the case"
       ],
       "write_domains": [

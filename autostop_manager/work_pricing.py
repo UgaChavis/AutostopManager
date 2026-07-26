@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
+from .service_labor_experience import load_service_labor_experience
 from .service_pricing_experience import find_labor_experience, load_service_pricing_experience
 from .work_pricing_research import collect_public_work_pricing_research
 
@@ -941,7 +942,7 @@ def estimate_repair_work_cost(
     if isinstance(internal_experience_json, dict):
         experience_snapshot = internal_experience_json
     elif use_internal_experience:
-        experience_snapshot = load_service_pricing_experience()
+        experience_snapshot = load_service_labor_experience() or load_service_pricing_experience()
     else:
         experience_snapshot = None
     research = collect_public_work_pricing_research(
@@ -1090,6 +1091,9 @@ def estimate_repair_work_cost(
             "auto_research": bool(auto_research),
             "internal_experience_enabled": bool(use_internal_experience),
             "internal_experience_available": experience_snapshot is not None,
+            "internal_experience_schema_version": (
+                experience_snapshot.get("schema_version") if experience_snapshot else None
+            ),
             "manual_owner_labor_time_required": False,
             "rule": "No single source creates a high-confidence final price; reconcile internal experience, current market, labor time and exact scope.",
         },

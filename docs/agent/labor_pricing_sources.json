@@ -30,18 +30,21 @@
       "forum claims without a public price source"
     ],
     "internal_experience_policy": {
-      "path": "data/private_knowledge/service_pricing_experience.json",
-      "basis": "aggregate_only_latest_closed_repair_orders",
+      "path": "data/private_knowledge/service_labor_experience.json",
+      "fallback_path": "data/private_knowledge/service_pricing_experience.json",
+      "basis": "aggregate_only_all_closed_repair_orders_recency_weighted",
       "use_for": [
-        "historical_median_and_interquartile_range",
+        "historical_recency_weighted_median_and_interquartile_range",
         "operation_frequency",
-        "internal_price_drift_and_conflict_detection"
+        "internal_price_drift_and_conflict_detection",
+        "sample_reliability_and_vehicle_segment_applicability"
       ],
       "not_used_for": [
         "sole_high_confidence_price",
         "raw_order_reconstruction",
         "current_supplier_or_parts_price",
-        "fitment_proof"
+        "fitment_proof",
+        "executor_based_customer_price_adjustment"
       ]
     },
     "labor_time_policy": {
