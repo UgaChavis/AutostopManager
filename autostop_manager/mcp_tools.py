@@ -1307,9 +1307,9 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="estimate_repair_work_cost",
         description=(
-            "Build a read-only labor cost estimate from vehicle/work items, public Russia STO labor-only prices, "
-            "and a public norm-hours/labor-time plausibility layer. Returns Russia average, AutoStop +50% price, "
-            "labor-time checks, confidence, missing context, and next actions without writing repair orders."
+            "Build a read-only multi-source labor estimate from aggregate-only closed repair-order experience, "
+            "public Russia STO labor-only prices, exact vehicle context, and norm-hours/labor-time plausibility. "
+            "Returns evidence families, a reconciled recommendation, confidence, gaps, and next actions without writes."
         ),
     )
     def estimate_repair_work_cost_tool(
@@ -1327,6 +1327,7 @@ def register_manager_memory_tools(  # noqa: C901
         quotes_json: list[dict[str, Any]] | dict[str, Any] | None = None,
         auto_research: bool = True,
         labor_time_policy: str = "public_only",
+        use_internal_experience: bool = True,
     ) -> dict[str, Any]:
         return estimate_repair_work_cost(
             vehicle=vehicle,
@@ -1343,6 +1344,7 @@ def register_manager_memory_tools(  # noqa: C901
             quotes_json=quotes_json,
             auto_research=auto_research,
             labor_time_policy=labor_time_policy,
+            use_internal_experience=use_internal_experience,
         )
 
     @server.tool(
@@ -1465,15 +1467,17 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="partsapi_catalog_lookup",
         description=(
-            "Call or dry-run PartsAPI VIN/OE/applicability/cross lookup. Live calls require PARTSAPI_BASE_URL plus "
+            "Call or dry-run PartsAPI VIN/plate/OE/applicability/cross/part-name/AUTONORMS lookup. Live calls require PARTSAPI_BASE_URL plus "
             "PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, "
-            "getOEApplicability, getCrosses, getCrossesWithBrand, getCrossesTitle, getArticleCrosses, searchArticles, and getEngine. For getPartsbyVIN, "
+            "getOEApplicability, getCrosses, getCrossesWithBrand, getCrossesTitle, getArticleCrosses, searchArticles, getEngine, "
+            "gosnomer2vin, getPartnameByBrandNumber, and GetNormsMakes/GetNormsModels/GetNormsMotors/GetNormsTimes/GetFillVolumes. For getPartsbyVIN, "
             "part_type defaults to oem; use omit/non-oem to skip the type query parameter."
         ),
     )
     def partsapi_catalog_lookup_tool(
         operation: str,
         identifier: str | None = None,
+        registration_number: str | None = None,
         part_number: str | None = None,
         article_id: str | int | None = None,
         brand: str | None = None,
@@ -1483,6 +1487,12 @@ def register_manager_memory_tools(  # noqa: C901
         type_id: str | None = None,
         lang: str | None = None,
         lang_id: int | None = None,
+        make_name_seo: str | None = None,
+        model_id: str | int | None = None,
+        motor_id: str | int | None = None,
+        top_category_id: str | int | None = None,
+        sub_category_id: str | int | None = None,
+        car_id: str | int | None = None,
         timeout: float = 20.0,
         max_attempts: int = 1,
         dry_run: bool = False,
@@ -1490,6 +1500,7 @@ def register_manager_memory_tools(  # noqa: C901
         return partsapi_catalog_lookup(
             operation=operation,
             identifier=identifier,
+            registration_number=registration_number,
             part_number=part_number,
             article_id=article_id,
             brand=brand,
@@ -1499,6 +1510,12 @@ def register_manager_memory_tools(  # noqa: C901
             type_id=type_id,
             lang=lang,
             lang_id=lang_id,
+            make_name_seo=make_name_seo,
+            model_id=model_id,
+            motor_id=motor_id,
+            top_category_id=top_category_id,
+            sub_category_id=sub_category_id,
+            car_id=car_id,
             timeout=timeout,
             max_attempts=max_attempts,
             dry_run=dry_run,

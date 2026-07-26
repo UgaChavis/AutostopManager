@@ -1,10 +1,11 @@
 # Work Labor Pricing Playbook
 
-Purpose: estimate AutoStop labor price for repair work from public Russia STO
-labor-only prices and add a second public labor-time / norm-hours plausibility
-layer. The labor-time layer does not replace the price basis. This route is
-read-only: it prepares a manager estimate but does not write repair-order
-works, materials, prices, payments, or cashbox data.
+Purpose: estimate AutoStop labor price by reconciling the exact vehicle/work
+scope, aggregate-only experience from closed AutoStop repair orders, current
+public labor-only market prices, and AUTONORMS/OEM/professional labor-time
+evidence. No one source is the answer by itself. This route is read-only: it
+prepares a manager estimate but does not write repair-order works, materials,
+prices, payments, or cashbox data.
 
 ## Trigger
 
@@ -36,38 +37,93 @@ python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "заме
 3. If the input is only a complaint, do not price the final repair. Price only
    diagnostics when public prices exist, then return a diagnostic checklist and
    missing context for the final estimate.
-4. Collect public Russia STO prices for the same operation and comparable
+4. Read the aggregate internal snapshot
+   `data/private_knowledge/service_pricing_experience.json`. Match the exact
+   operation and use its median/IQR, sample size, vehicle segment, and
+   freshness as a historical anchor. Never treat it as a current price list.
+5. Collect current public Russia STO prices for the same operation and comparable
    vehicle class. Keep only labor-only prices. Do not mix work prices with
    parts, fluids, programming licenses, towing, or aggregates.
-5. Separately search public labor-time language: `нормо-часы`, `норма
+6. Resolve vehicle/operation labor time through AUTONORMS when configured,
+   then use public/professional service evidence as additional plausibility.
+   Search terms include `нормо-часы`, `норма
    времени`, `трудоемкость`, `время выполнения`, and `снять/установить`. Use
-   only public web rows/snippets and never call closed RMI/EPC accounts,
-   CAPTCHA-gated pages, paid databases, or owner-provided manual norm-hours.
-6. Store a short market sample only: source, city/region, operation name,
+   licensed sources only through legal configured access; never bypass login,
+   CAPTCHA, paywalls, or copy licensed tables.
+7. Store a short market sample only: source, city/region, operation name,
    price, `includes_parts=false`, capture date, and quote confidence. Do not
    store full HTML pages, full price lists, or raw screenshots in memory/CRM.
-7. Store a short labor-time sample only: source, operation, hours/range, capture
+8. Store a short labor-time sample only: source, operation, hours/range, capture
    date, confidence, and whether the source is public. Do not call it official
    OEM norm-hours unless the public source itself is an official open source.
-8. Exclude obvious outliers. Then calculate:
+9. Exclude obvious outliers. Keep the legacy public benchmark:
    `russia_average_rub = arithmetic_mean(valid_public_quotes_after_outlier_filter)`.
-9. Calculate AutoStop labor price:
+10. Keep the legacy public-only AutoStop benchmark:
    `autostop_price_rub = round_to_100(russia_average_rub * 1.50)`.
-10. Use labor-time only as the second layer: plausibility check, effective
-    hourly-rate check, and overlap detection. Norm-hours alone must not create a
-    confident AutoStop price.
-    Missing public labor-time data should set `labor_time_confidence=blocked`
-    and add a next action. It does not by itself override a valid market
-    estimate from 3+ comparable labor-only quotes; lower the overall confidence
-    when the job is complex, safety-critical, or still too broad.
-11. If fewer than 3 valid comparable labor-only quotes remain, return
-   `confidence=low` and do not present the AutoStop price as confident.
-12. Before a repair-order write, require a separate explicit owner command and a
+11. Build `recommended_price_rub` by reconciling the internal anchor and
+    current market. Use labor time for effective-rate, overlap, and scope
+    checks. If evidence diverges materially, show `recommended_range_rub`,
+    explain why, and lower `decision_confidence`.
+12. High confidence requires exact vehicle/work context and at least three
+    independent evidence families. Internal experience alone is `low`, even
+    with many observations. Fewer than three public quotes no longer blocks a
+    provisional internal estimate, but it blocks a current market-confirmed one.
+13. Before a repair-order write, require a separate explicit owner command and a
    live CRM target. This tool must not call `replace_repair_order_works`.
+
+## Internal AutoStop Experience
+
+Refresh on direct owner request or an intentional pricing review:
+
+```bash
+.venv/bin/python -m autostop_manager.cli service-pricing-refresh \
+  --state-json /opt/autostopcrm/data/state.json \
+  --limit 100
+```
+
+The snapshot is aggregate-only and private. It contains no order ids, clients,
+phones, VINs, plates, payments, or raw order rows. Labor baselines use unit
+work-row prices before separately displayed order tax and report sample count,
+median, P25/P75, min/max, freshness, and coarse vehicle segment. Article price
+references require a catalog number and remain historical until live Store,
+supplier, public market, and applicability checks pass.
+
+## PartsAPI AUTONORMS Layer
+
+When the vehicle and work are specific enough, use AUTONORMS as the preferred
+configured labor-time evidence layer before broad public-web plausibility
+searches. It is not a price-list source and does not replace the public Russia
+labor-only market sample.
+
+1. If only a Russian registration number is available, use the read-only
+   `plate_to_vin` route first and verify any returned VIN against the vehicle
+   and CRM; do not write it automatically.
+2. Resolve the full AUTONORMS chain with bounded one-method calls:
+   `norms_makes` -> `norms_models(make_name_seo)` ->
+   `norms_motors(model_id)` ->
+   `norms_times(motor_id, top_category_id, sub_category_id)`.
+3. Choose the category from the public AUTONORMS category source referenced in
+   `partsapi_method_contracts.md`; retain only the selected category/work rows,
+   never a copied database dump.
+4. Match returned `workName`/`workTarget` to the requested operation. Account
+   for overlap: do not simply sum rows that contain the same remove/install
+   work.
+5. Use `workTime` only for plausibility, scope comparison, and effective hourly
+   rate. Do not treat provider `workPrice` (often zero) as the AutoStop price.
+   Final price remains `round_to_100(russia_average_rub * 1.50)` when the
+   market sample is sufficient.
+6. Demo keys are method-specific and quota-limited. Make the minimum number of
+   calls, use `max_attempts=1` by default, and return `provider_unavailable` or
+   `inconclusive` for provider HTTP 5xx/empty data rather than inventing hours.
+
+For brand/article wording, use `part_name_by_brand_number`; for localized
+replacement descriptions, use `crosses_title`. Both are article enrichment and
+never fitment proof or a substitute for VIN-specific OEM evidence.
 
 ## Source Basis
 
-Primary basis: public STO price lists and public service pages across Russia.
+Evidence families: internal closed-order aggregate, current public STO market,
+vehicle-specific labor time/service data, and exact live vehicle/scope context.
 
 Use directories/search as discovery routes:
 
@@ -83,13 +139,12 @@ labor-time sources may be listed as future routes, but v1 uses public web only.
 
 ## Confidence
 
-- `high`: at least 5 valid labor-only quotes, 3+ sources/regions, exact
-  operation, no major missing vehicle context, plus 2+ independent public
-  labor-time confirmations.
-- `medium`: at least 3 valid comparable quotes and exact operation; labor-time
-  may be partial or absent, but the price remains market-based.
-- `low`: fewer than 3 quotes, quote confidence is weak, labor-time is absent
-  for a complex job, or safety-critical context is incomplete.
+- `high`: exact vehicle and operation, three independent evidence families,
+  and no material unresolved conflict.
+- `medium`: two independent families with exact enough scope, or a three-family
+  estimate with a documented conflict/range.
+- `low`: one family only, anecdotal/old internal data, weak market evidence,
+  absent labor-time data for a complex job, or incomplete safety context.
 - `blocked`: no exact work, no usable labor-only sample, or the request is only
   a complaint and final repair is unknown.
 

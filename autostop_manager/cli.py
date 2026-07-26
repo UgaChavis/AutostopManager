@@ -44,6 +44,11 @@ from .partsapi_category_index import (
 from .provider_smoke import build_provider_smoke_report
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .service_management import build_service_management_plan
+from .service_pricing_experience import (
+    build_service_pricing_experience_from_state_file,
+    save_service_pricing_experience,
+    summarize_snapshot,
+)
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -332,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     partsapi = sub.add_parser(
         "partsapi-lookup",
-        help="Call or dry-run PartsAPI VIN/OE/applicability/cross lookup using PARTSAPI_KEY/PARTSAPI_BASE_URL",
+        help="Call or dry-run PartsAPI VIN/plate/OE/applicability/cross/part-name lookup using PARTSAPI_KEY/PARTSAPI_BASE_URL",
     )
     partsapi.add_argument(
         "--operation",
@@ -340,11 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "vin_decode",
             "vin_decode_oe",
+            "plate_to_vin",
             "parts_by_vin",
             "oe_applicability",
             "crosses",
             "crosses_with_brand",
             "crosses_title",
+            "part_name_by_brand_number",
             "article_crosses",
             "search_articles",
             "engine_info",
@@ -352,9 +359,17 @@ def build_parser() -> argparse.ArgumentParser:
             "articles",
             "article",
             "article_criteria",
+            "norms_makes",
+            "norms_models",
+            "norms_motors",
+            "norms_times",
+            "fill_volumes",
         ],
     )
     partsapi.add_argument("--identifier", default=None)
+    partsapi.add_argument(
+        "--registration-number", default=None, help="Russian vehicle registration number for plate_to_vin"
+    )
     partsapi.add_argument("--part-number", default=None)
     partsapi.add_argument("--article-id", default=None)
     partsapi.add_argument("--brand", default=None)
@@ -368,6 +383,12 @@ def build_parser() -> argparse.ArgumentParser:
     partsapi.add_argument("--type-id", default=None)
     partsapi.add_argument("--lang", default=None)
     partsapi.add_argument("--lang-id", type=int, default=None)
+    partsapi.add_argument("--make-name-seo", default=None)
+    partsapi.add_argument("--model-id", default=None)
+    partsapi.add_argument("--motor-id", default=None)
+    partsapi.add_argument("--top-category-id", default=None)
+    partsapi.add_argument("--sub-category-id", default=None)
+    partsapi.add_argument("--car-id", default=None)
     partsapi.add_argument("--timeout", type=float, default=20.0)
     partsapi.add_argument("--max-attempts", type=int, default=1)
     partsapi.add_argument("--dry-run", action="store_true")
@@ -639,7 +660,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     estimate_work = sub.add_parser(
         "estimate-work",
-        help="Build a read-only labor cost estimate from public Russia STO prices plus AutoStop 50%% markup",
+        help="Build a read-only multi-source labor estimate from internal experience, market, and labor time",
     )
     estimate_work.add_argument("--vehicle", default=None)
     estimate_work.add_argument("--vin", default=None)
@@ -655,6 +676,23 @@ def build_parser() -> argparse.ArgumentParser:
     estimate_work.add_argument("--quotes-json", default=None)
     estimate_work.add_argument("--auto-research", action=argparse.BooleanOptionalAction, default=True)
     estimate_work.add_argument("--labor-time-policy", choices=["public_only"], default="public_only")
+    estimate_work.add_argument(
+        "--internal-experience",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the aggregate-only local closed-order experience snapshot",
+    )
+
+    pricing_refresh = sub.add_parser(
+        "service-pricing-refresh",
+        help="Refresh aggregate-only labor and article price experience from recent closed CRM repair orders",
+    )
+    pricing_refresh.add_argument("--state-json", required=True)
+    pricing_refresh.add_argument("--limit", type=int, default=100)
+    pricing_refresh.add_argument(
+        "--output",
+        default="data/private_knowledge/service_pricing_experience.json",
+    )
 
     sub.add_parser("init", help="Initialize SQLite storage")
     sub.add_parser("seed-rules", help="Seed default manager rules from docs")
@@ -1039,6 +1077,13 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 type_id=args.type_id,
                 lang=args.lang,
                 lang_id=args.lang_id,
+                registration_number=args.registration_number,
+                make_name_seo=args.make_name_seo,
+                model_id=args.model_id,
+                motor_id=args.motor_id,
+                top_category_id=args.top_category_id,
+                sub_category_id=args.sub_category_id,
+                car_id=args.car_id,
                 timeout=args.timeout,
                 max_attempts=args.max_attempts,
                 dry_run=args.dry_run,
@@ -1359,7 +1404,21 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 quotes_json=_json_file(args.quotes_json, option_name="--quotes-json"),
                 auto_research=args.auto_research,
                 labor_time_policy=args.labor_time_policy,
+                use_internal_experience=args.internal_experience,
             )
+        )
+    elif args.command == "service-pricing-refresh":
+        snapshot = build_service_pricing_experience_from_state_file(
+            args.state_json,
+            limit=args.limit,
+        )
+        output_path = save_service_pricing_experience(snapshot, args.output)
+        _print_json(
+            {
+                "ok": True,
+                "output_path": str(output_path),
+                **summarize_snapshot(snapshot),
+            }
         )
     return 0
 

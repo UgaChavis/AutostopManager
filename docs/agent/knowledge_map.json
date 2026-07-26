@@ -1168,6 +1168,8 @@
         "вин",
         "номер кузова",
         "номер рамы",
+        "госномер",
+        "VIN по госномеру",
         "кузов",
         "каталог",
         "оригинальный номер",
@@ -1217,6 +1219,7 @@
       ],
       "questions": [
         "как расшифровать VIN или номер кузова",
+        "как найти VIN по госномеру",
         "где искать оригинальный номер детали",
         "как определить рынок и комплектацию",
         "где искать оригинальные номера MAN по VIN",
@@ -1349,9 +1352,7 @@
         "selected part",
         "OEM reference",
         "price basis",
-        "заказ-наряд",
-        "ЗН",
-        "оригинальный номер",
+      "оригинальный номер",
         "заменитель",
         "цена непонятна",
         "материалы ЗН",
@@ -1691,6 +1692,8 @@
       "title": "Windows reverse SSH access for Codex: home-pc and managed fleet",
       "use_when": [
         "server-side Codex needs command or filesystem access to the owner's Windows home PC",
+        "owner requests administration or operational assistance for the AutoStop service reception Windows PC",
+        "owner requests administration or operational assistance for the AutoStop mechanics' Windows PC",
         "enroll, inspect, operate, repair, copy files to, or revoke an owner-authorized managed Windows PC",
         "prepare or verify the SECRET_KEY AUTOSTOP_REMOTE USB bundle",
         "connect a home computer to the Autostop server without public SSH",
@@ -1709,6 +1712,19 @@
         "managed-pc",
         "managed-pc-enroll",
         "managed-pc-tunnel",
+        "desktop-e0e84lt",
+        "DESKTOP-E0E84LT",
+        "reception PC",
+        "reception workstation",
+        "ресепшен",
+        "компьютер на ресепшене",
+        "компьютер ресепшена",
+        "Компьютер механиков",
+        "WIN-CRINTQ55M38",
+        "mechanics PC",
+        "mechanics workstation",
+        "компьютер у механиков",
+        "компьютер механиков",
         "SECRET_KEY",
         "AUTOSTOP_REMOTE",
         "CodexMaintenance",
@@ -1734,6 +1750,15 @@
         "Scheduled Task",
         "127.0.0.1:22220",
         "127.0.0.1:22300",
+        "AutoStop service reception",
+        "reception computer",
+        "desktop-e0e84lt",
+        "DESKTOP-E0E84LT",
+        "WIN-CRINTQ55M38",
+        "AutoStop mechanics workstation",
+        "механики",
+        "AutostopCodexRemoteTunnel",
+        "sleep recovery",
         "managed-pc list",
         "managed-pc status",
         "managed-pc shell",
@@ -1765,6 +1790,11 @@
         "как откатить codex-home-tunnel",
         "как подключить новый Windows компьютер с флешки SECRET_KEY",
         "как проверить или отозвать managed-pc",
+        "есть ли доступ к компьютеру на ресепшене",
+        "как администрировать компьютер ресепшена",
+        "есть ли доступ к компьютеру механиков",
+        "как администрировать компьютер у механиков",
+        "что делать если managed PC уснул и туннель пропал",
         "как обновить SSH конфиги managed-pc после обновления сервера",
         "как безопасно управлять удаленным Windows компьютером"
       ],
@@ -2074,12 +2104,13 @@
       "required_context": []
     },
     "work_labor_pricing": {
-      "title": "Read-only labor work pricing from public Russia STO prices plus public labor-time plausibility",
+      "title": "Adaptive AutoStop service-case and labor pricing from internal experience, current market, and labor-time evidence",
       "use_when": [
         "repair work cost estimate",
         "labor-only pricing",
         "average Russia work price plus AutoStop markup",
-        "diagnostic-first estimate from complaint"
+        "diagnostic-first estimate from complaint",
+        "repair-order drafting and price review"
       ],
       "aliases": [
         "work pricing",
@@ -2097,9 +2128,15 @@
         "прайс СТО",
         "нормочасы",
         "нормо-часы",
-        "норма времени",
-        "трудоемкость",
-        "диагностика перед сметой"
+        "AUTONORMS",
+        "PartsAPI нормо-часы",
+      "норма времени",
+      "трудоемкость",
+      "диагностика перед сметой",
+      "процени работы и запчасти",
+      "распиши заказ-наряд",
+      "составить заказ-наряд",
+      "стоимость работ и запчастей"
       ],
       "keywords": [
         "labor-only",
@@ -2118,28 +2155,44 @@
         "Mitchell ProDemand",
         "MOTOR Estimated Work Times",
         "TecAlliance",
-        "Autodata"
+        "Autodata",
+        "AUTONORMS",
+        "GetNormsTimes",
+        "PartsAPI labor time",
+        "internal closed repair order experience",
+        "service_pricing_experience",
+        "EvidenceBundle"
       ],
       "questions": [
         "как оценить стоимость работ",
         "как посчитать среднюю цену работ по России плюс 50%",
         "какие источники использовать для прайсов СТО",
-        "как не смешивать работы и запчасти",
-        "что делать если есть только жалоба без списка работ",
-        "когда можно считать цену уверенной"
+      "как не смешивать работы и запчасти",
+      "что делать если есть только жалоба без списка работ",
+      "когда можно считать цену уверенной",
+      "как использовать AUTONORMS без подмены цены нормо-часами",
+      "как проценить работы и запчасти и расписать заказ-наряд"
       ],
       "source_of_truth_files": [
         "docs/agent/work_labor_pricing_playbook.md",
+        "docs/agent/partsapi_method_contracts.md",
         "docs/agent/labor_pricing_sources.json",
-        "docs/agent/krasnoyarsk_service_management_playbook.md"
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
+        ".agents/skills/resolve-autostop-service-case/SKILL.md"
       ],
       "primary_files": [
         "docs/agent/work_labor_pricing_playbook.md",
+        "docs/agent/partsapi_method_contracts.md",
         "docs/agent/labor_pricing_sources.json",
-        "docs/agent/krasnoyarsk_service_management_playbook.md"
+        "docs/agent/krasnoyarsk_service_management_playbook.md",
+        ".agents/skills/resolve-autostop-service-case/SKILL.md"
       ],
       "reference_files": [
-        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
+        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
+        ".agents/skills/resolve-autostop-service-case/references/evidence-contract.md"
+      ],
+      "optional_runtime_files": [
+        "data/private_knowledge/service_pricing_experience.json"
       ],
       "required_context": [
         "vehicle or VIN/chassis",
@@ -2147,8 +2200,10 @@
         "public labor-only quote sample",
         "public norm-hours/labor-time sample when available",
         "city/region and vehicle class",
-        "engine/transmission when they affect the operation"
-      ]
+        "engine/transmission when they affect the operation",
+        "independent source families and unresolved evidence conflicts"
+      ],
+      "skill_path": ".agents/skills/resolve-autostop-service-case/SKILL.md"
     }
   },
   "search_patterns": {

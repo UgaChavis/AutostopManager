@@ -1,8 +1,15 @@
 {
   "generated_on": "2026-05-21",
-  "purpose": "Source routing for read-only labor cost estimates: public Russia STO labor-only prices first, public norm-hours/labor-time mentions as the second plausibility layer.",
+  "purpose": "Source routing for adaptive read-only labor estimates: aggregate AutoStop closed-order experience, current Russia STO labor-only prices, exact vehicle context, and AUTONORMS/OEM/professional labor-time evidence.",
   "pricing_policy": {
-    "primary_basis": "public_russia_sto_labor_prices",
+    "model": "multi_source_evidence_bundle",
+    "high_confidence_minimum_independent_source_families": 3,
+    "source_families": [
+      "internal_closed_repair_order_experience",
+      "current_public_labor_market",
+      "vehicle_specific_labor_time_or_service_data",
+      "live_verified_vehicle_and_operation_scope"
+    ],
     "markup_multiplier": 1.5,
     "rounding": "round_to_100_rub",
     "minimum_confident_quotes": 3,
@@ -22,7 +29,22 @@
       "closed licensed database snippets",
       "forum claims without a public price source"
     ],
-    "secondary_labor_time_policy": {
+    "internal_experience_policy": {
+      "path": "data/private_knowledge/service_pricing_experience.json",
+      "basis": "aggregate_only_latest_closed_repair_orders",
+      "use_for": [
+        "historical_median_and_interquartile_range",
+        "operation_frequency",
+        "internal_price_drift_and_conflict_detection"
+      ],
+      "not_used_for": [
+        "sole_high_confidence_price",
+        "raw_order_reconstruction",
+        "current_supplier_or_parts_price",
+        "fitment_proof"
+      ]
+    },
+    "labor_time_policy": {
       "basis": "public_web_only_norm_hours_or_labor_time_mentions",
       "use_for": [
         "operation_scope_plausibility",
@@ -31,13 +53,29 @@
         "missing_context_for_complex_jobs"
       ],
       "not_used_for": [
-        "replacing_public_russia_average",
-        "presenting_official_oem_norm_hours_without_official_public_source",
-        "confident_price_when_fewer_than_3_labor_only_quotes"
+        "being_treated_as_a_price",
+        "presenting_public_rows_as_official_oem_norm_hours",
+        "overriding_unresolved_scope_or_fitment"
       ],
       "manual_owner_input_required": false
     }
   },
+  "internal_experience_sources": [
+    {
+      "source_id": "autostop_closed_order_aggregate",
+      "name": "Aggregate AutoStop closed repair-order experience",
+      "category": "internal_historical_labor_anchor",
+      "access_mode": "local_private_aggregate",
+      "use_for": [
+        "labor_unit_price_median",
+        "p25_p75_range",
+        "sample_count",
+        "recent_internal_reference"
+      ],
+      "capture_rule": "Persist aggregate statistics only; never order ids, clients, phones, VINs, plates, payments, or raw rows.",
+      "verification": "Match exact operation and scope; compare with current market and labor time before a customer quote."
+    }
+  ],
   "public_price_sources": [
     {
       "source_id": "public_sto_price_pages",

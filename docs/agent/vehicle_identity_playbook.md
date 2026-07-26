@@ -89,6 +89,24 @@ Typical checks:
 - cross-check trim, engine, transmission, and plant against the manufacturer
   or EPC source
 
+### Russian Registration Number
+
+Use a Russian registration number only as a read-only route to an identity
+lead. If the PartsAPI method-specific access is configured, call
+`partsapi_catalog_lookup(operation="plate_to_vin", registration_number=...)`;
+it maps to `gosnomer2vin`.
+
+- Normalize spaces and use the Latin letters/digits format required by the
+  provider. Do not place the plate in docs, durable memory, Git, or broad logs.
+- An empty response means only that this provider did not return a VIN. It is
+  not evidence that the car/VIN does not exist.
+- A returned VIN must be compared with the vehicle plate, make/model/year and
+  exact live CRM context before it becomes a vehicle identity or is written to
+  CRM. Never overwrite an existing VIN from a plate-only hit.
+- If the plate route is unavailable, empty, or conflicts with the vehicle,
+  request a photo of the registration certificate/vehicle plate or use the
+  existing VIN/frame route instead.
+
 ### Other Market-Specific Codes
 
 Some vehicles expose extra internal identifiers:

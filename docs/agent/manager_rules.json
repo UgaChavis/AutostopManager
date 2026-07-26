@@ -278,7 +278,7 @@
     {
       "id": "work-labor-pricing-workflow",
       "priority": 32,
-      "rule": "When the owner asks to estimate repair work cost, use docs/agent/work_labor_pricing_playbook.md. On production Gateway v2 resolve estimate_repair_work_cost through raw discovery and schema lookup. Price labor only from public Russia STO samples, calculate the average after outlier filtering, apply AutoStop +50%, add public norm-hours/labor-time plausibility when available, and do not call replace_repair_order_works without a separate explicit owner command."
+      "rule": "When the owner asks to price work, parts, or draft/check a repair order, use the project resolve-autostop-service-case skill and docs/agent/work_labor_pricing_playbook.md. Resolve estimate_repair_work_cost through the named/raw Gateway route as available. Reconcile aggregate-only closed-order experience, exact live vehicle/scope, current labor-only market, and vehicle/operation labor time; no single source or fixed formula creates high confidence. AUTONORMS workTime is scope/effective-rate evidence, not a price. Historical article prices require live Store/supplier/market and fitment verification. Do not call replace_repair_order_works without a separate explicit owner command."
     },
     {
       "id": "parts-search-workflow",

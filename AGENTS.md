@@ -55,10 +55,30 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    adaptive source selection, not a fixed workflow; final safety, procedure,
    torque, fluid, programming, and exact-fitment facts need an appropriate
    OEM/licensed source and vehicle/unit context.
+   For a VIN by Russian registration-number request, a part-name/cross request,
+   or a labor estimate, open `docs/agent/vehicle_identity_playbook.md`,
+   `docs/agent/partsapi_method_contracts.md`, and, for labor, also
+   `docs/agent/work_labor_pricing_playbook.md`. For an applied service case
+   (`процени`, `распиши ЗН`, `сколько работы и запчасти`, complaint-to-estimate),
+   use the project `resolve-autostop-service-case` skill. It chooses sources
+   adaptively and must not reduce the answer to one fixed formula or provider.
+   Use the narrow
+   `partsapi_catalog_lookup` operation with its method-specific configured key;
+   never print keys or persist raw VIN/plate/payloads. A VIN found by plate is
+   an identity lead that must be checked against the vehicle/CRM before a write;
+   AUTONORMS `workTime` is a labor-time evidence layer, never the final selling
+   price.
    For a symptom or practical repair-case request where public owner experience
    is useful, use `research_drive2_cases` through raw discovery before broad
    generic search. It is public-only, bounded, and hypothesis-level evidence;
    never use it as final authority for safety, procedure, or exact-fitment facts.
+   Aggregate closed-order experience from
+   `data/private_knowledge/service_pricing_experience.json` is an internal
+   historical anchor only. Refresh it with `service-pricing-refresh` from a
+   live read-only CRM state when the owner requests analysis; never persist the
+   raw orders. High-confidence labor pricing needs exact scope and at least
+   three independent evidence families such as internal experience, current
+   market, and vehicle-specific labor time/service data.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->

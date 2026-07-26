@@ -13,7 +13,9 @@ from autostop_manager.catalog_clients import (
     emex_price_lookup,
     exist_price_lookup,
     extract_partsapi_article_candidates,
+    extract_partsapi_autonorms_rows,
     extract_partsapi_cross_candidates,
+    extract_partsapi_fill_volumes,
     extract_partsapi_parts_by_vin_candidates,
     extract_partsapi_vehicle_profiles,
     mann_filter_catalog_lookup,
@@ -30,11 +32,13 @@ from autostop_manager.catalog_clients import (
 PARTSAPI_METHOD_ENV_NAMES = [
     "PARTSAPI_VINDECODE_KEY",
     "PARTSAPI_VINDECODE_OE_KEY",
+    "PARTSAPI_GOSNOMER2VIN_KEY",
     "PARTSAPI_PARTS_BY_VIN_KEY",
     "PARTSAPI_OE_APPLICABILITY_KEY",
     "PARTSAPI_CROSSES_KEY",
     "PARTSAPI_CROSSES_WITH_BRAND_KEY",
     "PARTSAPI_CROSSES_TITLE_KEY",
+    "PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY",
     "PARTSAPI_ARTICLE_CROSSES_KEY",
     "PARTSAPI_SEARCH_ARTICLES_KEY",
     "PARTSAPI_GET_ENGINE_KEY",
@@ -42,6 +46,11 @@ PARTSAPI_METHOD_ENV_NAMES = [
     "PARTSAPI_ARTICLES_KEY",
     "PARTSAPI_ARTICLE_KEY",
     "PARTSAPI_ARTICLE_CRITERIA_KEY",
+    "PARTSAPI_GET_NORMS_MAKES_KEY",
+    "PARTSAPI_GET_NORMS_MODELS_KEY",
+    "PARTSAPI_GET_NORMS_MOTORS_KEY",
+    "PARTSAPI_GET_NORMS_TIMES_KEY",
+    "PARTSAPI_GET_FILL_VOLUMES_KEY",
 ]
 
 
@@ -229,6 +238,32 @@ def test_partsapi_lookup_can_use_method_specific_test_key(monkeypatch):
     assert "method-secret" not in result["request_plan"]["redacted_url"]
 
 
+def test_partsapi_plate_and_part_name_operations_use_documented_params(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setenv("PARTSAPI_GOSNOMER2VIN_KEY", "plate-secret")
+    monkeypatch.setenv("PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY", "name-secret")
+
+    plate = partsapi_catalog_lookup(operation="plate_to_vin", registration_number="A564AA99", dry_run=True)
+    part_name = partsapi_catalog_lookup(
+        operation="part_name_by_brand_number",
+        brand="MAHLE",
+        part_number="OC1038",
+        dry_run=True,
+    )
+
+    assert plate["partsapi_method"] == "gosnomer2vin"
+    assert plate["request_plan"]["params"] == {"gosnomer": "A56***A99"}
+    assert plate["request_plan"]["method_key_env_name"] == "PARTSAPI_GOSNOMER2VIN_KEY"
+    assert plate["redacted_registration_number"] == "A56***A99"
+    assert "A564AA99" not in plate["request_plan"]["redacted_url"]
+    assert part_name["partsapi_method"] == "getPartnameByBrandNumber"
+    assert part_name["request_plan"]["params"] == {"brand": "MAHLE", "number": "OC1038", "lang": "ru"}
+    assert part_name["request_plan"]["method_key_env_name"] == "PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY"
+    assert "name-secret" not in part_name["request_plan"]["redacted_url"]
+
+
 def test_partsapi_lookup_dry_run_with_configured_env(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
@@ -323,6 +358,110 @@ def test_partsapi_engine_info_uses_tecdoc_type_params_and_method_key(monkeypatch
     assert "TYPE=PC" in result["request_plan"]["redacted_url"]
     assert "TYPE_ID=1404" in result["request_plan"]["redacted_url"]
     assert "method-secret" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_autonorms_operations_use_method_keys_and_documented_params(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setenv("PARTSAPI_GET_NORMS_MAKES_KEY", "makes-secret")
+    monkeypatch.setenv("PARTSAPI_GET_NORMS_MODELS_KEY", "models-secret")
+    monkeypatch.setenv("PARTSAPI_GET_NORMS_MOTORS_KEY", "motors-secret")
+    monkeypatch.setenv("PARTSAPI_GET_NORMS_TIMES_KEY", "times-secret")
+    monkeypatch.setenv("PARTSAPI_GET_FILL_VOLUMES_KEY", "volumes-secret")
+
+    makes = partsapi_catalog_lookup(operation="norms_makes", dry_run=True)
+    models = partsapi_catalog_lookup(operation="norms_models", make_name_seo="toyota", dry_run=True)
+    motors = partsapi_catalog_lookup(operation="norms_motors", model_id="123", dry_run=True)
+    times = partsapi_catalog_lookup(
+        operation="norms_times",
+        motor_id="456",
+        top_category_id="10",
+        sub_category_id="20",
+        dry_run=True,
+    )
+    volumes = partsapi_catalog_lookup(operation="fill_volumes", car_id="24458", dry_run=True)
+
+    assert makes["partsapi_method"] == "GetNormsMakes"
+    assert makes["request_plan"]["params"] == {}
+    assert models["request_plan"]["params"] == {"makeNameSEO": "toyota"}
+    assert motors["request_plan"]["params"] == {"modelId": "123"}
+    assert times["request_plan"]["params"] == {"motorId": "456", "TopCatId": "10", "SubCatId": "20"}
+    assert volumes["partsapi_method"] == "GetFillVolumes"
+    assert volumes["request_plan"]["params"] == {"carId": "24458"}
+    for result, expected_env_name, secret in (
+        (makes, "PARTSAPI_GET_NORMS_MAKES_KEY", "makes-secret"),
+        (models, "PARTSAPI_GET_NORMS_MODELS_KEY", "models-secret"),
+        (motors, "PARTSAPI_GET_NORMS_MOTORS_KEY", "motors-secret"),
+        (times, "PARTSAPI_GET_NORMS_TIMES_KEY", "times-secret"),
+        (volumes, "PARTSAPI_GET_FILL_VOLUMES_KEY", "volumes-secret"),
+    ):
+        assert result["ok"] is True
+        assert result["request_plan"]["method_key_env_name"] == expected_env_name
+        assert secret not in result["request_plan"]["redacted_url"]
+
+
+def test_extract_partsapi_autonorms_times_keeps_norm_hours_separate_from_price():
+    rows = extract_partsapi_autonorms_rows(
+        operation="norms_times",
+        payload={
+            "data": {
+                "array": [
+                    {
+                        "workId": "42",
+                        "workName": "Замена передних колодок",
+                        "workTime": "0.8",
+                        "workPrice": "0",
+                        "TopCatId": "10",
+                        "SubCatId": "20",
+                    }
+                ]
+            }
+        },
+    )
+
+    assert rows[0]["workName"] == "Замена передних колодок"
+    assert rows[0]["workTime"] == "0.8"
+    assert rows[0]["workPrice"] == "0"
+
+
+def test_extract_partsapi_fill_volumes_keeps_fluid_evidence_separate():
+    rows = extract_partsapi_fill_volumes(
+        payload={
+            "data": {
+                "array": [
+                    {
+                        "fillVolume": "4.8",
+                        "fillUnit": "л",
+                        "fillType": "Моторное масло",
+                        "fillTitle": "Двигатель",
+                        "fillInfo": "с фильтром",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert rows[0]["fillVolume"] == "4.8"
+    assert rows[0]["fillType"] == "Моторное масло"
+    assert rows[0]["source_operation"] == "fill_volumes"
+
+
+def test_extract_partsapi_plate_and_part_name_payloads():
+    profiles = extract_partsapi_vehicle_profiles(
+        operation="plate_to_vin",
+        payload={"data": {"array": {"VIN": "XW7BF4FK60S145161"}}},
+    )
+    candidates = extract_partsapi_article_candidates(
+        operation="part_name_by_brand_number",
+        payload={"data": [{"brand": "MAHLE", "number": "OC1038", "partname": "Масляный фильтр"}]},
+    )
+
+    assert profiles[0]["redacted_identifier"] == "XW7***161"
+    assert "XW7BF4FK60S145161" not in profiles[0].values()
+    assert candidates[0]["brand"] == "MAHLE"
+    assert candidates[0]["part_number"] == "OC1038"
+    assert candidates[0]["product_name"] == "Масляный фильтр"
 
 
 def test_partsapi_search_tree_and_article_operations_use_safe_params(monkeypatch):

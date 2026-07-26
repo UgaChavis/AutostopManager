@@ -3,23 +3,17 @@ from __future__ import annotations
 import json
 
 from autostop_manager import config as manager_config
+from autostop_manager.catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES
 from autostop_manager.vin_parts_work_order import build_vin_parts_work_order
 
 
-PARTSAPI_ENV_NAMES = [
-    "PARTSAPI_KEY",
-    "PARTSAPI_VINDECODE_KEY",
-    "PARTSAPI_VINDECODE_OE_KEY",
-    "PARTSAPI_PARTS_BY_VIN_KEY",
-    "PARTSAPI_OE_APPLICABILITY_KEY",
-    "PARTSAPI_CROSSES_KEY",
-    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
-    "PARTSAPI_CROSSES_TITLE_KEY",
-    "PARTSAPI_ARTICLE_CROSSES_KEY",
-    "PARTSAPI_SEARCH_ARTICLES_KEY",
-    "PARTSAPI_GET_ENGINE_KEY",
-    "PARTSAPI_BASE_URL",
-]
+PARTSAPI_ENV_NAMES = sorted(
+    {
+        "PARTSAPI_BASE_URL",
+        "PARTSAPI_KEY",
+        *PARTSAPI_METHOD_KEY_ENV_NAMES.values(),
+    }
+)
 
 
 def _clear_partsapi_env(monkeypatch):

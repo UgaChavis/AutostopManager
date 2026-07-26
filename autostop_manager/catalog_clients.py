@@ -80,6 +80,13 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "docs_url": "https://partsapi.ru/method/doc/VINdecodeOE",
         "role": "VIN/frame decode by original catalogs.",
     },
+    "plate_to_vin": {
+        "method": "gosnomer2vin",
+        "required": ("registration_number",),
+        "params": {"gosnomer": "registration_number"},
+        "docs_url": "https://partsapi.ru/method/doc/gosnomer2vin",
+        "role": "VIN lookup by Russian vehicle registration number; identity lead that must be verified before writes.",
+    },
     "parts_by_vin": {
         "method": "getPartsbyVIN",
         "required": ("identifier", "part_type", "category"),
@@ -116,6 +123,14 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "defaults": {"lang": "ru"},
         "docs_url": "https://partsapi.ru/method/doc/getCrossesTitle",
         "role": "Cross/replacement lookup by part number with localized part names.",
+    },
+    "part_name_by_brand_number": {
+        "method": "getPartnameByBrandNumber",
+        "required": ("brand", "part_number", "lang"),
+        "params": {"brand": "brand", "number": "part_number", "lang": "lang"},
+        "defaults": {"lang": "ru"},
+        "docs_url": "https://partsapi.ru/method/doc/getPartnameByBrandNumber",
+        "role": "Part-name lookup by aftermarket brand and article number; article enrichment only.",
     },
     "article_crosses": {
         "method": "getArticleCrosses",
@@ -173,16 +188,53 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "docs_url": "https://partsapi.ru/method/doc/getArticleCriteria",
         "role": "TecDoc article characteristics/criteria by article identifier.",
     },
+    "norms_makes": {
+        "method": "GetNormsMakes",
+        "required": (),
+        "params": {},
+        "docs_url": "https://partsapi.ru/method/doc/GetNormsMakes",
+        "role": "AUTONORMS makes and their provider identifiers.",
+    },
+    "norms_models": {
+        "method": "GetNormsModels",
+        "required": ("make_name_seo",),
+        "params": {"makeNameSEO": "make_name_seo"},
+        "docs_url": "https://partsapi.ru/method/doc/GetNormsModels",
+        "role": "AUTONORMS models for one make identifier.",
+    },
+    "norms_motors": {
+        "method": "GetNormsMotors",
+        "required": ("model_id",),
+        "params": {"modelId": "model_id"},
+        "docs_url": "https://partsapi.ru/method/doc/GetNormsMotors",
+        "role": "AUTONORMS engine modifications for one model identifier.",
+    },
+    "norms_times": {
+        "method": "GetNormsTimes",
+        "required": ("motor_id", "top_category_id", "sub_category_id"),
+        "params": {"motorId": "motor_id", "TopCatId": "top_category_id", "SubCatId": "sub_category_id"},
+        "docs_url": "https://partsapi.ru/method/doc/GetNormsTimes",
+        "role": "AUTONORMS work list and norm-hours for one engine and work category.",
+    },
+    "fill_volumes": {
+        "method": "GetFillVolumes",
+        "required": ("car_id",),
+        "params": {"carId": "car_id"},
+        "docs_url": "https://partsapi.ru/method/doc/GetFillVolumes",
+        "role": "AUTONORMS fluid fill volumes for one vehicle modification.",
+    },
 }
 
 PARTSAPI_METHOD_KEY_ENV_NAMES = {
     "VINdecode": "PARTSAPI_VINDECODE_KEY",
     "VINdecodeOE": "PARTSAPI_VINDECODE_OE_KEY",
+    "gosnomer2vin": "PARTSAPI_GOSNOMER2VIN_KEY",
     "getPartsbyVIN": "PARTSAPI_PARTS_BY_VIN_KEY",
     "getOEApplicability": "PARTSAPI_OE_APPLICABILITY_KEY",
     "getCrosses": "PARTSAPI_CROSSES_KEY",
     "getCrossesWithBrand": "PARTSAPI_CROSSES_WITH_BRAND_KEY",
     "getCrossesTitle": "PARTSAPI_CROSSES_TITLE_KEY",
+    "getPartnameByBrandNumber": "PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY",
     "getArticleCrosses": "PARTSAPI_ARTICLE_CROSSES_KEY",
     "searchArticles": "PARTSAPI_SEARCH_ARTICLES_KEY",
     "getEngine": "PARTSAPI_GET_ENGINE_KEY",
@@ -190,6 +242,11 @@ PARTSAPI_METHOD_KEY_ENV_NAMES = {
     "getArticles": "PARTSAPI_ARTICLES_KEY",
     "getArticle": "PARTSAPI_ARTICLE_KEY",
     "getArticleCriteria": "PARTSAPI_ARTICLE_CRITERIA_KEY",
+    "GetNormsMakes": "PARTSAPI_GET_NORMS_MAKES_KEY",
+    "GetNormsModels": "PARTSAPI_GET_NORMS_MODELS_KEY",
+    "GetNormsMotors": "PARTSAPI_GET_NORMS_MOTORS_KEY",
+    "GetNormsTimes": "PARTSAPI_GET_NORMS_TIMES_KEY",
+    "GetFillVolumes": "PARTSAPI_GET_FILL_VOLUMES_KEY",
 }
 
 PARTSAPI_OMIT_PART_TYPE_VALUES = {"omit", "none", "non-oem", "non_oem", "nonoriginal", "non-original", "aftermarket"}
@@ -253,6 +310,8 @@ _SENSITIVE_REQUEST_PARAM_NAMES = {
     "chassisno",
     "body",
     "body_no",
+    "gosnomer",
+    "registration_number",
     "identifier",
 }
 
@@ -1784,6 +1843,20 @@ def _partsapi_vehicle_profile_from_item(item: dict[str, Any], *, operation: str 
     return profile
 
 
+def _partsapi_plate_vin_records(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [record for item in payload for record in _partsapi_plate_vin_records(item)]
+    if not isinstance(payload, dict):
+        return []
+    if _first_value(payload, ("vin", "VIN")) not in (None, ""):
+        return [payload]
+    return [
+        record
+        for key in ("data", "result", "array", "items")
+        for record in _partsapi_plate_vin_records(payload.get(key))
+    ]
+
+
 def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str | None = None) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -1813,8 +1886,94 @@ def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str
                     items.extend(item for item in nested if isinstance(item, dict))
             elif isinstance(value, list):
                 items.extend(item for item in value if isinstance(item, dict))
+    elif operation == "plate_to_vin":
+        items.extend(_partsapi_plate_vin_records(payload))
 
     return [_partsapi_vehicle_profile_from_item(item, operation=operation) for item in items]
+
+
+_AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
+    "norms_makes": ("makeName", "makeNameSEO"),
+    "norms_models": ("makeName", "model", "kuzov", "modelId", "fuel", "years"),
+    "norms_motors": (
+        "engineCode",
+        "engineSalesName",
+        "fuel",
+        "kuzov",
+        "makeName",
+        "model",
+        "modification_name",
+        "motorId",
+        "year",
+    ),
+    "norms_times": (
+        "SubCat",
+        "TopCat",
+        "motorId",
+        "parent",
+        "SubCatId",
+        "TopCatId",
+        "workId",
+        "workName",
+        "workPrice",
+        "workTarget",
+        "workTime",
+    ),
+}
+
+_FILL_VOLUME_FIELDS = ("fillVolume", "fillUnit", "fillType", "fillTitle", "fillInfo")
+
+
+def _partsapi_autonorms_records(payload: Any, *, fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    if any(field in payload for field in fields):
+        return [payload]
+    records: list[dict[str, Any]] = []
+    for key in ("result", "data", "array", "items"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            records.extend(_partsapi_autonorms_records(nested, fields=fields))
+        elif isinstance(nested, list):
+            records.extend(item for item in nested if isinstance(item, dict))
+    return records
+
+
+def extract_partsapi_autonorms_rows(*, payload: Any, operation: str) -> list[dict[str, Any]]:
+    """Return a compact, provider-neutral AUTONORMS row set without pricing it."""
+
+    fields = _AUTONORMS_FIELDS.get(operation, ())
+    if not fields:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in _partsapi_autonorms_records(payload, fields=fields):
+        row = {
+            "provider": "partsapi_ru",
+            "source_operation": operation,
+            "raw_keys": sorted(str(key) for key in item),
+        }
+        row.update({field: item[field] for field in fields if item.get(field) not in (None, "")})
+        if len(row) > 3:
+            rows.append(row)
+    return rows
+
+
+def extract_partsapi_fill_volumes(*, payload: Any) -> list[dict[str, Any]]:
+    """Return compact fluid-volume evidence without selecting a product or approval."""
+
+    rows: list[dict[str, Any]] = []
+    for item in _partsapi_autonorms_records(payload, fields=_FILL_VOLUME_FIELDS):
+        row = {
+            "provider": "partsapi_ru",
+            "source_operation": "fill_volumes",
+            "raw_keys": sorted(str(key) for key in item),
+        }
+        row.update({field: item[field] for field in _FILL_VOLUME_FIELDS if item.get(field) not in (None, "")})
+        if len(row) > 3:
+            rows.append(row)
+    return rows
 
 
 def _partsapi_parts_by_vin_records(payload: Any) -> list[dict[str, Any]]:
@@ -1952,7 +2111,15 @@ def _partsapi_article_records(payload: Any) -> list[dict[str, Any]]:
         return []
     if any(
         key in payload
-        for key in ("ART_ID", "ART_ARTICLE_NR", "ART_SUP_BRAND", "ARL_ART_ID", "ARL_DISPLAY_NR", "ARL_BRA_BRAND")
+        for key in (
+            "ART_ID",
+            "ART_ARTICLE_NR",
+            "ART_SUP_BRAND",
+            "ARL_ART_ID",
+            "ARL_DISPLAY_NR",
+            "ARL_BRA_BRAND",
+            "partname",
+        )
     ):
         return [payload]
     records: list[dict[str, Any]] = []
@@ -1993,7 +2160,9 @@ def extract_partsapi_article_candidates(
                 "article_id": article_id,
                 "part_number": str(part_number).strip() if part_number not in (None, "") else None,
                 "brand": brand,
-                "product_name": _first_value(item, ("ART_PRODUCT_NAME", "productName", "product_name", "name")),
+                "product_name": _first_value(
+                    item, ("ART_PRODUCT_NAME", "productName", "product_name", "partname", "partName", "name")
+                ),
                 "found_via": _first_value(item, ("FOUND_VIA", "foundVia", "found_via")),
                 "fitment_evidence": {"fitment_confirmed": False},
                 "confidence": 0.5,
@@ -2213,6 +2382,13 @@ def _partsapi_operation_params(
     type_id: str | None = None,
     lang: str | None = None,
     lang_id: int | None = None,
+    registration_number: str | None = None,
+    make_name_seo: str | None = None,
+    model_id: str | int | None = None,
+    motor_id: str | int | None = None,
+    top_category_id: str | int | None = None,
+    sub_category_id: str | int | None = None,
+    car_id: str | int | None = None,
 ) -> dict[str, Any]:
     spec = PARTSAPI_OPERATIONS[operation]
     values = dict(spec.get("defaults", {}))
@@ -2230,6 +2406,13 @@ def _partsapi_operation_params(
                 "type_id": type_id,
                 "lang": lang,
                 "lang_id": lang_id,
+                "registration_number": registration_number,
+                "make_name_seo": make_name_seo,
+                "model_id": model_id,
+                "motor_id": motor_id,
+                "top_category_id": top_category_id,
+                "sub_category_id": sub_category_id,
+                "car_id": car_id,
             }.items()
             if value not in (None, "")
         }
@@ -2255,6 +2438,13 @@ def partsapi_catalog_lookup(
     type_id: str | None = None,
     lang: str | None = None,
     lang_id: int | None = None,
+    registration_number: str | None = None,
+    make_name_seo: str | None = None,
+    model_id: str | int | None = None,
+    motor_id: str | int | None = None,
+    top_category_id: str | int | None = None,
+    sub_category_id: str | int | None = None,
+    car_id: str | int | None = None,
     timeout: float = 20.0,
     max_attempts: int = 1,
     dry_run: bool = False,
@@ -2284,6 +2474,13 @@ def partsapi_catalog_lookup(
                 "type_id": type_id,
                 "lang": lang,
                 "lang_id": lang_id,
+                "registration_number": registration_number,
+                "make_name_seo": make_name_seo,
+                "model_id": model_id,
+                "motor_id": motor_id,
+                "top_category_id": top_category_id,
+                "sub_category_id": sub_category_id,
+                "car_id": car_id,
             }.items()
             if value not in (None, "")
         }
@@ -2301,6 +2498,13 @@ def partsapi_catalog_lookup(
         type_id=type_id,
         lang=lang,
         lang_id=lang_id,
+        registration_number=registration_number,
+        make_name_seo=make_name_seo,
+        model_id=model_id,
+        motor_id=motor_id,
+        top_category_id=top_category_id,
+        sub_category_id=sub_category_id,
+        car_id=car_id,
     )
     request_plan = build_partsapi_request(method=spec["method"], params=params)
     base = {
@@ -2312,7 +2516,11 @@ def partsapi_catalog_lookup(
         "quota_cost_estimate": 1,
         "request_plan": _safe_request_plan(request_plan, omit={"url"}),
         "redacted_identifier": _redact_identifier(identifier or "") if identifier else None,
-        "privacy": {"raw_identifier_is_sensitive": bool(identifier), "secret_exposed": False},
+        "redacted_registration_number": _redact_identifier(registration_number or "") if registration_number else None,
+        "privacy": {
+            "raw_identifier_is_sensitive": bool(identifier or registration_number),
+            "secret_exposed": False,
+        },
     }
     if missing_params:
         return {
@@ -2367,7 +2575,15 @@ def partsapi_catalog_lookup(
     )
     article_candidates = (
         extract_partsapi_article_candidates(payload=payload, operation=operation)
-        if operation in {"search_articles", "article_crosses", "articles", "article", "article_criteria"}
+        if operation
+        in {
+            "search_articles",
+            "article_crosses",
+            "articles",
+            "article",
+            "article_criteria",
+            "part_name_by_brand_number",
+        }
         else []
     )
     oem_candidates = (
@@ -2382,6 +2598,7 @@ def partsapi_catalog_lookup(
             "articles",
             "article",
             "article_criteria",
+            "part_name_by_brand_number",
         }
         else extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation)
     )
@@ -2400,6 +2617,8 @@ def partsapi_catalog_lookup(
         "oem_candidates": oem_candidates,
         "cross_candidates": cross_candidates,
         "article_candidates": article_candidates,
+        "autonorms_rows": extract_partsapi_autonorms_rows(payload=payload, operation=operation),
+        "fill_volumes": extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else [],
     }
 
 

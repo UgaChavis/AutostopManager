@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
+from .service_pricing_experience import find_labor_experience, load_service_pricing_experience
 from .work_pricing_research import collect_public_work_pricing_research
 
 ROUNDING_STEP_RUB = 100
@@ -158,6 +159,8 @@ def _canonical_operation(raw: str) -> str:
     if "рейк" in text and any(token in text for token in ("помен", "замен", "сня", "установ")):
         return "замена рулевой рейки"
     if any(token in text for token in ("диагност", "провер", "scan", "скан")):
+        if any(token in text for token in ("ходов", "подвес")):
+            return "диагностика подвески"
         if any(token in text for token in ("акпп", "кпп", "dsg", "короб", "transmission")):
             return "диагностика трансмиссии"
         return "диагностика"
@@ -477,7 +480,7 @@ def _operation_estimate(
     quotes: list[dict[str, Any]],
     vehicle_context: dict[str, Any],
 ) -> dict[str, Any]:
-    operation_name = str(operation.get("normalized_name") or operation.get("input") or "")
+    operation_name = str(operation.get("input") or operation.get("normalized_name") or "")
     matched: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     for quote in quotes:
@@ -593,6 +596,97 @@ def _operation_labor_time_analysis(
         "effective_market_rate_rub_per_hour": market_rate,
         "autostop_effective_rate_rub_per_hour": autostop_rate,
         "rule": "public labor-time rows are a plausibility layer, not the primary price basis",
+    }
+
+
+def _attach_internal_experience(
+    *,
+    estimate: dict[str, Any],
+    operation: dict[str, Any],
+    experience_snapshot: dict[str, Any] | None,
+) -> None:
+    operation_name = str(operation.get("normalized_name") or operation.get("input") or "")
+    matches = find_labor_experience(operation_name, snapshot=experience_snapshot, limit=3)
+    exact = matches[0] if matches and float(matches[0].get("match_score") or 0) >= 0.8 else None
+    estimate["internal_experience"] = {
+        "available": exact is not None,
+        "matches": matches,
+        "selected": exact,
+        "rule": "historical closed-order prices are an internal anchor, not a final quote",
+    }
+
+    public_price = estimate.get("autostop_price_rub")
+    internal_price = exact.get("recommended_anchor_rub") if exact else None
+    internal_count = int(exact.get("sample_count") or 0) if exact else 0
+    recommended: int | None
+    recommended_range: list[int | None] | None
+    basis: str
+    source_families: list[str] = []
+    if public_price is not None:
+        source_families.append("public_russia_sto_market")
+    if internal_price is not None:
+        source_families.append("internal_closed_repair_order_experience")
+
+    if public_price is not None and internal_price is not None:
+        assert exact is not None
+        public_weight = max(1, min(5, int(estimate.get("sample", {}).get("valid_count") or 1)))
+        internal_weight = max(1, min(10, internal_count))
+        recommended = _round_to_100(
+            (float(public_price) * public_weight + float(internal_price) * internal_weight)
+            / (public_weight + internal_weight)
+        )
+        range_values = [
+            float(value) for value in (exact.get("p25_rub"), exact.get("p75_rub"), public_price) if value is not None
+        ]
+        recommended_range = [
+            _round_to_100(min(range_values)),
+            _round_to_100(max(range_values)),
+        ]
+        basis = "weighted_public_market_and_internal_experience"
+    elif internal_price is not None and internal_count >= 3:
+        assert exact is not None
+        recommended = _round_to_100(float(internal_price))
+        recommended_range = [
+            _round_to_100(float(exact.get("p25_rub") or internal_price)),
+            _round_to_100(float(exact.get("p75_rub") or internal_price)),
+        ]
+        basis = "internal_experience_provisional"
+    else:
+        recommended = public_price
+        recommended_range = [public_price, public_price] if public_price is not None else None
+        basis = "public_market_only" if public_price is not None else "insufficient_evidence"
+
+    estimate["recommended_price_rub"] = recommended
+    estimate["recommended_range_rub"] = recommended_range
+    estimate["recommendation_basis"] = basis
+    estimate["evidence_source_families"] = source_families
+
+
+def _finalize_evidence_confidence(
+    estimate: dict[str, Any],
+    labor_analysis: dict[str, Any],
+) -> None:
+    source_families = list(estimate.get("evidence_source_families") or [])
+    if labor_analysis.get("valid_count"):
+        source_families.append("vehicle_or_operation_labor_time")
+    source_families = list(dict.fromkeys(source_families))
+    estimate["evidence_source_families"] = source_families
+    family_count = len(source_families)
+    recommendation = estimate.get("recommended_price_rub")
+    if recommendation is None:
+        confidence = "blocked"
+    elif family_count >= 3 and not estimate.get("missing_context"):
+        confidence = "high"
+    elif family_count >= 2:
+        confidence = "medium"
+    else:
+        confidence = "low"
+    estimate["decision_confidence"] = confidence
+    estimate["evidence_bundle"] = {
+        "source_family_count": family_count,
+        "source_families": source_families,
+        "high_confidence_requirement": "three independent source families plus exact vehicle/work context",
+        "conflict_rule": "show a range and lower confidence when internal, market and labor-time evidence disagree",
     }
 
 
@@ -821,8 +915,10 @@ def estimate_repair_work_cost(
     quotes_json: Any = None,
     auto_research: bool = True,
     labor_time_policy: str = "public_only",
+    internal_experience_json: Any = None,
+    use_internal_experience: bool = True,
 ) -> dict[str, Any]:
-    """Build a read-only labor-price estimate with a public labor-time check layer."""
+    """Build a read-only multi-source labor-price estimate."""
 
     vehicle_context = {
         "vehicle": vehicle,
@@ -841,6 +937,13 @@ def estimate_repair_work_cost(
     normalized_operations, complaint_only = _normalize_operations(_as_text_list(work_items), complaint)
     manual_quote_rows = _quote_rows(quotes_json)
     embedded_labor_time_rows = _labor_time_rows(quotes_json)
+    experience_snapshot: dict[str, Any] | None
+    if isinstance(internal_experience_json, dict):
+        experience_snapshot = internal_experience_json
+    elif use_internal_experience:
+        experience_snapshot = load_service_pricing_experience()
+    else:
+        experience_snapshot = None
     research = collect_public_work_pricing_research(
         vehicle_context=_research_vehicle_context(vehicle_context),
         operations=normalized_operations,
@@ -863,6 +966,12 @@ def estimate_repair_work_cost(
         _operation_estimate(operation=operation, quotes=quote_sample, vehicle_context=vehicle_context)
         for operation in normalized_operations
     ]
+    for operation, estimate in zip(normalized_operations, operation_estimates, strict=False):
+        _attach_internal_experience(
+            estimate=estimate,
+            operation=operation,
+            experience_snapshot=experience_snapshot,
+        )
     labor_time_analysis = [
         _operation_labor_time_analysis(
             operation=operation,
@@ -874,6 +983,7 @@ def estimate_repair_work_cost(
     ]
     for estimate, labor_analysis in zip(operation_estimates, labor_time_analysis, strict=False):
         estimate["labor_time_analysis"] = labor_analysis
+        _finalize_evidence_confidence(estimate, labor_analysis)
 
     for operation in operation_estimates:
         missing_context.extend(operation.get("missing_context", []))
@@ -914,11 +1024,34 @@ def estimate_repair_work_cost(
             "operation": estimate.get("operation"),
             "russia_average_rub": estimate.get("russia_average_rub"),
             "autostop_price_rub": estimate.get("autostop_price_rub"),
+            "recommended_price_rub": estimate.get("recommended_price_rub"),
+            "recommended_range_rub": estimate.get("recommended_range_rub"),
             "confidence": estimate.get("confidence"),
+            "decision_confidence": estimate.get("decision_confidence"),
             "norm_hours": estimate.get("labor_time_analysis", {}).get("average_hours"),
+            "source_families": estimate.get("evidence_source_families"),
         }
         for estimate in operation_estimates
     ]
+    recommended_values = [
+        int(estimate["recommended_price_rub"])
+        for estimate in operation_estimates
+        if estimate.get("recommended_price_rub") is not None
+    ]
+    recommended_total = (
+        sum(recommended_values)
+        if operation_estimates and len(recommended_values) == len(operation_estimates) and not complaint_only
+        else None
+    )
+    decision_confidences = [str(estimate.get("decision_confidence")) for estimate in operation_estimates]
+    if not decision_confidences or all(value == "blocked" for value in decision_confidences):
+        decision_confidence = "blocked"
+    elif all(value == "high" for value in decision_confidences):
+        decision_confidence = "high"
+    elif recommended_total is not None and all(value in {"high", "medium"} for value in decision_confidences):
+        decision_confidence = "medium"
+    else:
+        decision_confidence = "low"
 
     return {
         "ok": True,
@@ -946,12 +1079,19 @@ def estimate_repair_work_cost(
         "overlap_adjustments": overlap_adjustments,
         "sources_checked": research.get("sources_checked", []),
         "pricing_basis": {
+            "model": "adaptive_multi_source_evidence_bundle",
             "primary": "public_russia_sto_labor_only_prices",
             "secondary": "public_labor_time_plausibility_layer",
+            "internal": "aggregate_only_closed_repair_order_experience",
+            "market": "public_russia_sto_labor_only_prices",
+            "labor_time": "vehicle_or_operation_labor_time_plausibility",
+            "vehicle_context": "live_crm_or_verified_vehicle_identity",
             "labor_time_policy": labor_time_policy,
             "auto_research": bool(auto_research),
+            "internal_experience_enabled": bool(use_internal_experience),
+            "internal_experience_available": experience_snapshot is not None,
             "manual_owner_labor_time_required": False,
-            "rule": "norm-hours do not replace the Russia average x AutoStop markup formula",
+            "rule": "No single source creates a high-confidence final price; reconcile internal experience, current market, labor time and exact scope.",
         },
         "market_sample": {
             "quotes": valid_quotes,
@@ -971,6 +1111,8 @@ def estimate_repair_work_cost(
         "autostop_price_rub": totals["autostop_price_rub"],
         "total_works_rub": totals["total_works_rub"],
         "confidence": totals["confidence"],
+        "recommended_total_works_rub": recommended_total,
+        "decision_confidence": decision_confidence,
         "missing_context": _dedupe(missing_context),
         "next_actions": _dedupe(next_actions),
         "manager_summary": {
@@ -987,6 +1129,7 @@ def estimate_repair_work_cost(
             "Do not call replace_repair_order_works from this estimate.",
             "Parts, fluids, materials, and procurement markup are separate from labor pricing.",
             "Public labor-time rows are plausibility checks, not the primary price basis or official OEM norm-hours.",
+            "Internal repair-order aggregates are historical anchors; verify current scope and market before a customer quote.",
         ],
         "privacy": {
             "raw_vehicle_identifier_redacted_from_output": bool(

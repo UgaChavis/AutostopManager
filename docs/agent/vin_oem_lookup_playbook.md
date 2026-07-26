@@ -101,12 +101,17 @@ route blocked until authorized evidence is available.
 4. Use PartsAPI as the current MVP route:
    - `vin_decode` / `VINdecode` -> TecDoc/TecRMI identity and `carId`.
    - `vin_decode_oe` / `VINdecodeOE` -> OE-catalog vehicle identity.
+   - `plate_to_vin` / `gosnomer2vin` -> read-only VIN lead from a Russian
+     registration number. Verify against vehicle/CRM before treating it as the
+     identity or writing anything.
    - `parts_by_vin` / `getPartsbyVIN` -> VIN-specific OEM candidates; live
      calls require numeric `cat` id and default to `type=oem`.
    - `oe_applicability` -> extra applicability evidence only; empty output is
      not a negative fitment proof.
    - `crosses` / `crosses_with_brand` / `crosses_title` -> replacements in
      `cross_candidates`; `crosses_title` also carries localized `partname`.
+   - `part_name_by_brand_number` / `getPartnameByBrandNumber` -> article-name
+     enrichment by brand/article; it does not establish applicability.
    - `search_articles` -> TecDoc metadata in `article_candidates`.
    - `article_crosses` / `getArticleCrosses` -> related TecDoc cross articles
      after `search_articles` has returned an `ART_ID`.
@@ -126,6 +131,11 @@ route blocked until authorized evidence is available.
      not in `oem_candidates`, unless the source is the genuine OEM EPC.
 7. Start supplier/market price lookup only after the OEM reference or selected
    replacement is stable.
+
+For labor estimates, hand the confirmed vehicle profile to
+`docs/agent/work_labor_pricing_playbook.md`. Its AUTONORMS chain supplies
+operation-specific `workTime` evidence, while the labor price still comes from
+the separate public-market estimate.
 
 ## PartsAPI Output Buckets
 

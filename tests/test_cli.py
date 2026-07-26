@@ -139,6 +139,35 @@ def test_cli_parser_has_core_commands():
         [
             "partsapi-lookup",
             "--operation",
+            "plate_to_vin",
+            "--registration-number",
+            "A564AA99",
+            "--dry-run",
+        ]
+    )
+    assert args.operation == "plate_to_vin"
+    assert args.registration_number == "A564AA99"
+
+    args = parser.parse_args(
+        [
+            "partsapi-lookup",
+            "--operation",
+            "part_name_by_brand_number",
+            "--brand",
+            "MAHLE",
+            "--part-number",
+            "OC1038",
+            "--dry-run",
+        ]
+    )
+    assert args.operation == "part_name_by_brand_number"
+    assert args.brand == "MAHLE"
+    assert args.part_number == "OC1038"
+
+    args = parser.parse_args(
+        [
+            "partsapi-lookup",
+            "--operation",
             "article_crosses",
             "--article-id",
             "1878343",

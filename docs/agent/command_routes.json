@@ -3,6 +3,64 @@
   "format": "agent_workflow_registry_v2",
   "routes": [
     {
+      "command_id": "adaptive_service_case",
+      "workflow_id": "adaptive_service_case",
+      "priority": 190,
+      "intent": "service_case_resolution",
+      "domain": "work_labor_pricing",
+      "open_first": ".agents/skills/resolve-autostop-service-case/SKILL.md",
+      "aliases": [
+        "процени работы и запчасти",
+        "распиши заказ-наряд",
+        "составь заказ-наряд",
+        "оцени стоимость ремонта",
+        "сколько будет стоить ремонт"
+      ],
+      "keywords": [
+        "процени",
+        "стоимость работ",
+        "стоимость запчастей",
+        "смета ремонта",
+        "заказ-наряд",
+        "нормо-часы",
+        "EvidenceBundle"
+      ],
+      "memory_queries": [
+        "adaptive service case",
+        "internal closed repair order experience",
+        "labor pricing AUTONORMS current market"
+      ],
+      "required_reads": [
+        ".agents/skills/resolve-autostop-service-case/SKILL.md",
+        "exact live CRM vehicle and repair-order context when a card or identifier is supplied",
+        "data/private_knowledge/service_pricing_experience.json as an aggregate internal anchor",
+        "current norm-hours, OEM/applicability, supplier, and public-market evidence selected for the case"
+      ],
+      "write_domains": [
+        "repair_order_only_when_explicitly_authorized"
+      ],
+      "external_connectors": [
+        "AutoStop CRM",
+        "AutoStop App and suppliers",
+        "PartsAPI AUTONORMS and catalog routes",
+        "public automotive and market sources"
+      ],
+      "completion_checks": [
+        "vehicle identity and exact operation scope are explicit or uncertainty is reported",
+        "internal history is not the sole final price source",
+        "labor, parts, procurement cost, client sale price, taxes, and contingencies are separated",
+        "high confidence is used only with exact scope and at least three independent evidence families",
+        "any repair-order write has a dry-run, explicit target, authorization, and exact reread"
+      ],
+      "next_actions": [
+        "build a case-specific evidence plan instead of following a fixed provider sequence",
+        "read live CRM context and aggregate AutoStop experience",
+        "resolve exact vehicle, OEM applicability, operation scope, and labor-time evidence",
+        "compare live supplier and public-market prices, then reconcile conflicts",
+        "return a decision-ready estimate or repair-order draft with ranges, assumptions, confidence, and missing checks"
+      ]
+    },
+    {
       "command_id": "ecosystem_capability_parity",
       "workflow_id": "ecosystem_capability_parity",
       "priority": 200,
@@ -438,6 +496,12 @@
         "подключись к удалённому компьютеру",
         "управляй удаленным Windows компьютером",
         "управляй удалённым Windows компьютером",
+        "проверь компьютер на ресепшене",
+        "подключись к компьютеру на ресепшене",
+        "администрируй компьютер ресепшена",
+        "проверь компьютер механиков",
+        "подключись к компьютеру механиков",
+        "администрируй компьютер у механиков",
         "проверь home-pc",
         "проверь managed-pc",
         "подключи новый компьютер с флешки AUTOSTOP_REMOTE"
@@ -445,6 +509,15 @@
       "keywords": [
         "home-pc",
         "managed-pc",
+        "desktop-e0e84lt",
+        "DESKTOP-E0E84LT",
+        "ресепшен",
+        "компьютер ресепшена",
+        "Компьютер механиков",
+        "WIN-CRINTQ55M38",
+        "механики",
+        "компьютер механиков",
+        "AutostopCodexRemoteTunnel",
         "AUTOSTOP_REMOTE",
         "удаленный компьютер",
         "удалённый компьютер",
@@ -454,11 +527,17 @@
       "memory_queries": [
         "remote_codex_access",
         "managed-pc fleet",
+        "AutoStop reception managed PC",
+        "AutoStop mechanics managed PC",
+        "managed PC sleep recovery",
         "home-pc reverse SSH"
       ],
       "required_reads": [
         "docs/agent/codex_home_pc_reverse_ssh.md",
         "managed-pc doctor and exact alias status for fleet operations",
+        "the reception workstation is managed-pc alias desktop-e0e84lt; verify current status before an operation",
+        "the mechanics workstation is managed-pc alias Компьютер механиков; verify current status before an operation",
+        "if a device is asleep or offline, restore its on-site tunnel task and wait for ssh_ok=true; do not re-enroll or rotate keys",
         "legacy home-pc BatchMode quick check for the independent home route"
       ],
       "write_domains": [
@@ -491,6 +570,8 @@
         "расшифруй VIN",
         "расшифруй номер кузова",
         "проверь VIN",
+        "найди VIN по госномеру",
+        "определи авто по госномеру",
         "определи машину по VIN",
         "определи авто по номеру кузова",
         "vehicle identity decode"
@@ -505,7 +586,10 @@
         "WMI",
         "модель по VIN",
         "год по VIN",
-        "двигатель по VIN"
+        "двигатель по VIN",
+        "госномер",
+        "VIN по госномеру",
+        "gosnomer2vin"
       ],
       "memory_queries": [
         "vehicle_identity_and_oem",
@@ -529,6 +613,7 @@
       ],
       "next_actions": [
         "run decode_vehicle_identity or decode_vehicle_identities",
+        "for a Russian registration-number request, use the read-only PartsAPI plate_to_vin route when configured and verify any returned VIN against vehicle/CRM before use",
         "check vPIC/WMI/platform evidence and CRM context conflicts",
         "report confidence and required EPC/API source before VIN-critical parts lookup",
         "do not store raw customer VIN/frame in durable memory or Git"

@@ -22,6 +22,34 @@ project `/opt/autostop-managed-pc`.
 - Server health: `managed-pc doctor` and
   `autostop-managed-pc-health.timer`.
 
+### Named AutoStop service workstations
+
+Both entries below are owner-authorized managed Windows PCs for exact
+administration and operational support. They are separate from the legacy
+`home-pc` route and from each other: never reuse credentials, listener ports,
+or a prior status result between them.
+
+| Managed-PC alias | Hostname | Physical role |
+| --- | --- | --- |
+| `desktop-e0e84lt` | `DESKTOP-E0E84LT` | AutoStop service reception (ресепшен) |
+| `Компьютер механиков` | `WIN-CRINTQ55M38` | AutoStop mechanics' workstation |
+
+- Resolve the requested role to the exact alias, run `managed-pc doctor`, then
+  `managed-pc status <alias>`. Only after a successful status check may
+  `shell`, `run`, `powershell`, Codex, browser, or file-copy commands be used
+  for the owner-requested task.
+- Do not rely on a remembered listener port, hostname, or health result:
+  reread current status every time. Keep all managed-PC safety limits in force,
+  including no reboot, shutdown, destructive change, or service stoppage
+  without the owner's separate instruction.
+- A sleeping, powered-off, or disconnected PC cannot be repaired remotely. Do
+  not re-enroll it or rotate keys for that condition. An on-site administrator
+  wakes the PC and starts `\Autostop\AutostopCodexRemoteTunnel`; only resume
+  remote work after `managed-pc status <alias>` confirms `ssh_ok=true`.
+- A no-sleep power-policy change is an owner-requested machine setting, not an
+  assumption. It must be applied and reread only when the owner asks for that
+  exact device.
+
 Normal workflow:
 
 ```bash
@@ -117,6 +145,60 @@ server sides are updated together.
 - `/etc/ssh/sshd_config.d/90-codex-home-tunnel.conf`: restricts
   `codex-home-tunnel` to remote forwarding on `127.0.0.1:22220`.
 - `scripts/codex_home_pc_bootstrap.ps1`: canonical Windows bootstrap script.
+
+## Interactive Route Performance
+
+The legacy `home-pc` alias uses a root-only OpenSSH control socket:
+
+```sshconfig
+ControlMaster auto
+ControlPath /root/.ssh/controlmasters/%C
+ControlPersist 10m
+```
+
+Keep `/root/.ssh/controlmasters` at mode `0700` and `/root/.ssh/config` at
+`0600`. Check or close the shared connection with:
+
+```bash
+ssh -O check home-pc
+ssh -O exit home-pc
+```
+
+Do not add `ControlMaster` to the Windows OpenSSH client configuration. The
+Win32 client is not the supported side of this optimization; multiplexing is
+done by the Linux server when it connects to `home-pc`.
+
+For interactive Codex work on the VPS, use:
+
+```bash
+codex-session
+codex-session /path/to/workspace
+```
+
+`/usr/local/bin/codex-session` points to `scripts/codex-session`. It creates or
+reattaches the tmux session `codex-main`, so a home ISP or VPN interruption does
+not terminate the running Codex CLI. Override the name only when necessary with
+`CODEX_TMUX_SESSION`.
+
+The VPS uses the static Cloudflare resolvers `1.1.1.1` and `1.0.0.1` in
+`/etc/resolv.conf`. Before changing resolvers again, save the current file under
+`/root/autostop-route-backups/<UTC timestamp>/` and compare repeated DNS plus
+OpenAI HTTPS timings. Existing containers keep their embedded Docker resolver
+state until they are recreated; do not restart production containers solely to
+refresh this route.
+
+The home AmneziaVPN route keeps MTU `1280`. These canonical tasks must remain
+enabled and point to the stable PowerShell executable
+`C:\Program Files\PowerShell\7\pwsh.exe` and scripts under
+`%LOCALAPPDATA%\AutostopVPN` for the active desktop user:
+
+- `AutostopVPN Codex client optimization`
+- `AutostopVPN Recovery Checks`
+- `AutostopVPN Daily Deep Check`
+
+The obsolete `AutostopVPN-RecoveryChecks` task stays disabled. Do not weaken
+packet-loss or OpenAI reachability checks to obtain a green result; repeat the
+short check to distinguish a transient provider event from a persistent fault.
 
 ## Quick Check
 

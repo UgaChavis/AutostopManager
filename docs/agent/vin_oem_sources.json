@@ -66,6 +66,7 @@
       "authority": "official",
       "inputs": [
         "vin",
+        "registration_number",
         "frame_number",
         "model_name",
         "catalog_code"
@@ -761,29 +762,43 @@
         "tecdoc_vehicle"
       ],
       "url": "https://partsapi.ru/docs",
-      "role": "VIN/OE decode, TecDoc-style catalog, applicability, crosses, CROSSBASE-style analogs, and part metadata.",
+      "role": "VIN/registration-number/OE decode, TecDoc-style catalog, applicability, crosses, part metadata, and AUTONORMS labor-time data.",
       "access": "API key from PARTSAPI account; demo keys may be available in cabinet.",
       "data": [
         "VINdecode",
         "VINdecodeOE",
+        "gosnomer2vin",
         "getPartsbyVIN",
         "getOEApplicability",
         "getArticleCrosses",
         "getApplicability",
         "getEngine",
         "getCrosses",
-    "getCrossesWithBrand",
-    "getCrossesTitle",
-    "searchArticles",
-    "getSearchTree",
-    "getArticles",
-    "getArticle",
-    "getArticleCriteria"
+        "getCrossesWithBrand",
+        "getCrossesTitle",
+        "getPartnameByBrandNumber",
+        "searchArticles",
+        "getSearchTree",
+        "getArticles",
+        "getArticle",
+        "getArticleCriteria",
+        "GetNormsMakes",
+        "GetNormsModels",
+        "GetNormsMotors",
+        "GetNormsTimes",
+        "GetFillVolumes"
       ],
       "limits": "Not a закупка source by itself unless connected price/stock data is explicitly available; validate license and regional data freshness.",
       "env_names": [
         "PARTSAPI_KEY",
-        "PARTSAPI_BASE_URL"
+        "PARTSAPI_BASE_URL",
+        "PARTSAPI_GOSNOMER2VIN_KEY",
+        "PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY",
+        "PARTSAPI_GET_NORMS_MAKES_KEY",
+        "PARTSAPI_GET_NORMS_MODELS_KEY",
+        "PARTSAPI_GET_NORMS_MOTORS_KEY",
+        "PARTSAPI_GET_NORMS_TIMES_KEY",
+        "PARTSAPI_GET_FILL_VOLUMES_KEY"
       ],
       "mvp_priority": "high",
       "test_vin_checks": [
@@ -792,7 +807,7 @@
         "getOEApplicability for selected OEM",
         "crosses for selected analog"
       ],
-      "notes": "Good MVP candidate for cross/applicability layer after OEM candidate is found."
+      "notes": "Good MVP candidate for registration-number/VIN identity leads, cross/applicability after an OEM candidate is found, and the AUTONORMS make -> model -> motor -> work-time route. Verify a plate-derived VIN against the vehicle/CRM before any write. Norm-hours do not establish the workshop selling price by themselves."
     },
     {
       "source_id": "vin17_api",

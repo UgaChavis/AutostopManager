@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+session_name="${CODEX_TMUX_SESSION:-codex-main}"
+workspace="${1:-/opt/AutostopManager}"
+codex_command="${CODEX_SESSION_COMMAND:-exec codex}"
+
+if [[ "${1:-}" == "--help" ]]; then
+  cat <<'EOF'
+Usage: codex-session [workspace]
+
+Attach to the persistent Codex tmux session, creating it when needed.
+Environment overrides:
+  CODEX_TMUX_SESSION     tmux session name (default: codex-main)
+  CODEX_SESSION_COMMAND  command for a newly created session (default: exec codex)
+EOF
+  exit 0
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  printf 'codex-session: tmux is not installed\n' >&2
+  exit 1
+fi
+
+if ! command -v codex >/dev/null 2>&1; then
+  printf 'codex-session: codex is not installed\n' >&2
+  exit 1
+fi
+
+if [[ ! -d "$workspace" ]]; then
+  printf 'codex-session: workspace does not exist: %s\n' "$workspace" >&2
+  exit 1
+fi
+
+if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+  tmux new-session -d -s "$session_name" -c "$workspace" "$codex_command"
+fi
+
+if [[ -n "${TMUX:-}" ]]; then
+  exec tmux switch-client -t "=$session_name"
+fi
+
+exec tmux attach-session -t "=$session_name"

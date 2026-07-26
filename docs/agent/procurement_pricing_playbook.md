@@ -71,17 +71,22 @@ preliminary and name the missing supplier confirmation.
 1. Identify the exact vehicle and part/fluid route:
    VIN/chassis, market, year, engine, gearbox, drivetrain, OEM number, fluid
    approval, and required service quantity.
-2. Search local Krasnoyarsk availability:
+2. If `data/private_knowledge/service_pricing_experience.json` has the exact
+   article, use its historical cost/sale median and last-seen date only as an
+   internal reference. A row without an article is not fitment-safe evidence.
+3. Read live AutoStop App catalog/stock/batches and supplier offers for current
+   cost, quantity, storage, and delivery.
+4. Search local Krasnoyarsk availability:
    ROSSKO/Armtek/Autopiter/Emex/Exist/Autodoc/fifth-gear/local suppliers if
    accessible, Drom Красноярск, Avito Красноярск, ZZap with region, and direct
    supplier phone confirmation when web data is weak. For public discovery,
    resolve `search_web_multi` through the Gateway v2 raw-capability route before
    opening result excerpts.
-3. Search nearby Siberia if Krasnoyarsk is weak:
+5. Search nearby Siberia if Krasnoyarsk is weak:
    Novosibirsk, Kemerovo, Tomsk, Irkutsk, Barnaul.
-4. Search Russia-wide order through configured routes such as Autopiter,
+6. Search Russia-wide order through configured routes such as Autopiter,
    AutoEuro, Emex, Exist, Autodoc, AutoSputnik/APEC, ZZap, and Drom.
-5. Keep international prices only as sanity checks, not as a primary Russian
+7. Keep international prices only as sanity checks, not as a primary Russian
    procurement price.
 
 ## Source Catalog
