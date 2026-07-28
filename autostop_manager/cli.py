@@ -23,6 +23,12 @@ from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
+from .gateway_attestation import (
+    DEFAULT_MCP_URL as DEFAULT_GATEWAY_ATTESTATION_MCP_URL,
+    DEFAULT_OUTPUT_ROOT as DEFAULT_GATEWAY_ATTESTATION_OUTPUT_ROOT,
+    default_gateway_attestation_run_id,
+    run_gateway_attestation,
+)
 from .integration_audit import build_integration_audit
 from .knowledge_base import (
     audit_knowledge_annotations,
@@ -803,6 +809,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     integration_audit.add_argument("--output", default=None)
 
+    gateway_attestation = sub.add_parser(
+        "crm-gateway-attest",
+        help="Run one stop-the-line AutoStop CRM Gateway v2 attestation step",
+    )
+    gateway_attestation.add_argument(
+        "action",
+        choices=["inventory", "next", "resume", "case", "retry", "cleanup", "summary"],
+    )
+    gateway_attestation.add_argument("--run-id", default="")
+    gateway_attestation.add_argument("--case-id", default="")
+    gateway_attestation.add_argument("--apply-synthetic", action="store_true")
+    gateway_attestation.add_argument("--force", action="store_true")
+    gateway_attestation.add_argument(
+        "--mcp-url",
+        default=DEFAULT_GATEWAY_ATTESTATION_MCP_URL,
+    )
+    gateway_attestation.add_argument(
+        "--output-root",
+        default=str(DEFAULT_GATEWAY_ATTESTATION_OUTPUT_ROOT),
+    )
+
     control_report = sub.add_parser(
         "control-report",
         help="Generate the Control Center V1 report as safe JSON or Markdown",
@@ -881,6 +908,35 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         report = build_integration_audit(full=args.full, gmail_proof_path=args.gmail_proof)
         _write_output(args.output, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         return _print_checked_json(report)
+    elif args.command == "crm-gateway-attest":
+        run_id = args.run_id or (
+            default_gateway_attestation_run_id()
+            if args.action == "inventory"
+            else ""
+        )
+        if not run_id:
+            raise SystemExit("--run-id is required after inventory")
+        if args.force and args.action not in {"inventory", "case"}:
+            raise SystemExit("--force is valid only for inventory or case")
+        if args.apply_synthetic and args.action in {
+            "inventory",
+            "cleanup",
+            "summary",
+        }:
+            raise SystemExit(
+                "--apply-synthetic is valid only for next, resume, case, or retry"
+            )
+        return _print_checked_json(
+            run_gateway_attestation(
+                action=args.action,
+                run_id=run_id,
+                mcp_url=args.mcp_url,
+                output_root=args.output_root,
+                case_id=args.case_id,
+                apply_synthetic=args.apply_synthetic,
+                force=args.force,
+            )
+        )
     elif args.command in {"control-report", "environment-report"}:
         report = build_control_report(store=store)
         if args.format == "markdown":

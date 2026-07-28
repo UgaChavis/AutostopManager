@@ -163,8 +163,9 @@ Verified production shape on 2026-07-14:
 - CRM checkout: `/opt/autostopcrm`
 - CRM compose file: `/opt/autostopcrm/docker-compose.yml`
 - CRM deploy script: `/opt/autostopcrm/deploy.sh`
+- CRM API inside container: `http://127.0.0.1:41731`
 - CRM MCP endpoint inside container: `http://127.0.0.1:41831/mcp`
-- host port for MCP: `127.0.0.1:8001`
+- host ports: `127.0.0.1:8000 -> 41731` (API), `127.0.0.1:8001 -> 41831` (MCP)
 - public MCP endpoint: `https://crm.autostopcrm.ru/mcp`
 - AutoStop App production directory: `/opt/autostop-app`
 - AutoStop App public site: `https://autostop24.shop`
@@ -173,6 +174,11 @@ The deploy script creates an immutable Manager snapshot under
 `/opt/autostop-manager-releases/` and atomically points
 `/opt/autostop-manager-releases/current` at it. Docker mounts that current
 release read-only and overlays only the Manager SQLite data directory.
+
+The `41731` and `41831` addresses are container-local. From the production
+host use ports `8000` and `8001`; external clients use only the public HTTPS
+endpoint and OAuth. Do not put a container-local URL into a ChatGPT/App
+connector configuration.
 
 ```yaml
 AUTOSTOP_MANAGER_PATH: /opt/AutostopManager

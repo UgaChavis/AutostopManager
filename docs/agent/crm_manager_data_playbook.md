@@ -71,6 +71,53 @@ named workflow in `dry_run` and then `apply`, and reread the exact target. Do
 not invoke a hidden legacy capability directly; use guarded raw discovery only
 when no named workflow exists.
 
+### Creating a new card
+
+`create_card` is not a manager-board operation. Do not send it to
+`agent_board_workflow` and do not call a legacy App/connector tool that happens
+to have the same name. While the public Gateway has no named create-card
+workflow:
+
+1. Search the exact client and a duplicate card/vehicle first.
+2. Call `discover_raw_capabilities(query="create_card")` with the literal name;
+   a natural-language search intentionally returns read capabilities only.
+3. Read the returned `create_card` schema, then call it only through
+   `call_raw_capability` with that schema hash and a unique idempotency key.
+4. Reread the exact new card. If it belongs to an existing client or is a new
+   client vehicle, resolve `link_card_to_client` by the same exact-name,
+   schema-hashed raw sequence. Reread both targets first, pass
+   `expected_card_updated_at` and `expected_client_updated_at`, use a new
+   idempotency key, and require exact card/client readback.
+
+The raw write creates its own durable Gateway ledger. Record its result and
+readback; do not substitute an unsupported dry-run or bypass the Gateway with
+the local API.
+
+### Gateway v2 attestation
+
+Use `crm-gateway-attest` for stop-the-line integration certification. One
+invocation performs one action only:
+
+```bash
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest inventory
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest next --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest next --run-id AST-GWAT-YYYYMMDDTHHMMSSZ --apply-synthetic
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest retry --run-id AST-GWAT-YYYYMMDDTHHMMSSZ --apply-synthetic
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest cleanup --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest summary --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
+```
+
+`inventory` freezes the live 24-tool public contract, 43 CRM workflow
+operations and Manager-used CRM raw capabilities. A failed command leaves the
+campaign blocked until that exact case is fixed, released and retried.
+Production apply is valid only for isolated entities named with the run
+prefix. Reports live outside Git under
+`/var/lib/autostop-manager/integration/gateway-attestation/<run-id>/` and must
+contain only hashes, sizes, timings, statuses and compact refs. `cleanup`
+performs exact rereads, restores financial effects, deletes compensable
+fixtures, archives synthetic cards and records any capability limitation
+without claiming a false pass.
+
 ## Read-Only CRM Health Flow
 
 Use this flow before proposing CRM hygiene work. It is read-only and must not

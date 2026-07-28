@@ -6,7 +6,7 @@
   "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-07-22",
+  "last_verified": "2026-07-28",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 94,
     "autostop_manager_tools_in_raw_registry": 77,
@@ -57,6 +57,22 @@
       "get_raw_capability_schema",
       "call_raw_capability"
     ],
+    "card_creation": "No named Gateway v2 create-card workflow is advertised. After exact client and duplicate reads, resolve the literal raw name create_card, inspect its live schema, call it with a unique idempotency key, and require the Gateway exact-card readback. When linking, reread both targets and pass expected_card_updated_at plus expected_client_updated_at to link_card_to_client with a new idempotency key; require exact card/client readback. Do not call a legacy App tool and do not use agent_board_workflow for create_card.",
+    "gateway_attestation": {
+      "manager_command": ".venv/bin/python -m autostop_manager.cli crm-gateway-attest",
+      "runner": "/opt/autostopcrm/scripts/attest_agent_gateway_v2.py",
+      "report_root": "/var/lib/autostop-manager/integration/gateway-attestation/<run-id>",
+      "actions": [
+        "inventory",
+        "next",
+        "resume",
+        "case",
+        "retry",
+        "cleanup",
+        "summary"
+      ],
+      "contract": "One command per invocation. Inventory freezes the exact 24 public tools, 43 CRM workflow operations, and Manager-used CRM raw capabilities. A defect blocks later cases. Mutating cases require an explicit synthetic apply, exact reread, idempotency and cleanup. Runtime evidence remains outside Git and stores hashes, sizes, timings, statuses and compact refs only."
+    },
     "web_research_capabilities": [
       "search_web_multi",
       "fetch_page_excerpt",
@@ -379,6 +395,7 @@
     "For AutoStop App use docs/agent/store_management_playbook.md: agent_bootstrap reports a one-request stateless degraded-safe Store snapshot; agent_board_digest(scope=store) uses the owner-visible store_digest cursor and unchanged ACK/replay/CAS; agent_search and agent_entity_context provide bounded pure reads; no Manager component reads the store database.",
     "Manager work/learning mode is local and does not expand the 24-tool Gateway facade: resolve agent_mode at startup, use post_run_review plus agent_learning_workflow only for a learning turn, and use agent_case_resolver only as a read-only planner/reconciler before the owning CRM/Store/Gmail/OEM/web reads.",
     "discover_raw_capabilities preserves exact-name raw escape behavior and conservatively matches natural-language technical intent only to read-only capabilities; inspect the current schema before every raw call.",
+    "For a new CRM card, first search the exact client and duplicate vehicle/card. Resolve literal create_card through the schema-hashed raw escape with a unique idempotency key and require its exact readback. Before literal link_card_to_client, reread both card and client, pass expected_card_updated_at and expected_client_updated_at with a new idempotency key, and require exact readback of both targets. Never call legacy create_card directly or send it to agent_board_workflow.",
     "Store digest is one-page-per-call. Continue page.next_cursor until has_more=false; only the final page commits the high-water cursor. Calling again without a cursor after an abandoned read restarts from the committed checkpoint, and failures never advance it.",
     "Seven common Store writes use prepare_action_contract plus agent_inventory_workflow as optimized named operations. All remaining owner-approved employee actions use guarded raw store_owner_capabilities/store_owner_api with the dedicated store:owner principal, live schema hash, exact refs, idempotency, correlation, schema-bound dry-run proof and operation-specific reread. Applied but unverified owner operations remain compensating.",
     "General Drom/Avito sourcing remains parts_sourcing and service заказ-наряд remains CRM. Store marketplace routing applies only to AutoStop App export state/errors.",
@@ -411,7 +428,7 @@
   ],
   "schema_notes": {
     "live_discovery_rule": "Before CRM writes, prefer the currently exposed MCP/tool schema over stale docs or static wrappers.",
-    "set_card_deadline": "Deadline-capable CRM tools accept duration-style payloads such as days/hours/minutes/seconds or total_seconds on the live connector; wrapper metadata may render the field loosely.",
+    "set_card_deadline": "Deadline-capable CRM tools accept duration-style payloads such as days/hours/minutes/seconds or total_seconds. create_card preserves a positive total_seconds through the MCP client; compare the returned duration and exact reread before confirming an appointment timer.",
     "write_response_mode": "High-traffic CRM write tools accept response_mode=full|compact; manager operations always return compact run metadata with scanned/eligible/changed/skipped/errors/verification.",
     "repair_order_privacy": "list_repair_orders accepts compact=true and redact_private=true for low-payload diagnostics without client phone/VIN fields.",
     "manager_operation_modes": "Invoke bulk_set_deadline_if_below, bulk_refresh_board_summaries, cleanup_card, and apply_ready_unpaid_followups through agent_board_workflow. Start with mode=dry_run; mode=apply requires a new unique idempotency key and returns compact verification. The named workflow owns its ledger, records mode/dry_run, and does not need a duplicate manual start_workflow for a single operation.",
@@ -419,6 +436,7 @@
     "agent_search_store_entities": "Existing CRM entity schemas remain unchanged. Store entities use compact snake_case DTOs, opaque cursors, strict limits, and general contact redaction.",
     "agent_inventory_workflow_store_mode": "Store mode accepts one optimized named operation, payload with domain/target_id/expected_updated_at/owner_intent/planned_changes/correlation_id, idempotency_key, and mode=dry_run|apply. Other employee mutations route only through the separately guarded owner capability/API pair.",
     "store_outage": "Store transport, auth, or schema failure appears only as a store degraded warning/status; CRM reads and writes keep their existing behavior.",
+    "read_only_vin_oem_tools": "decode_vehicle_identity, partsapi_catalog_lookup, and lookup_oem_catalog_candidates are read-only raw capabilities. They do not require a write idempotency key or a workflow ledger; provider blocks and empty candidates are reported as inconclusive evidence.",
     "write_scope": "All CRM tools operate only on the current AutoStop CRM board served by this MCP/API endpoint.",
     "autostop_document_printing": "create_document_without_card_pdf accepts request_text, optional document_type, manual_document, selected_template_ids, and print_settings; manual_document may include tax_label such as НДС (5%) or Без НДС, and request_text may include a line like НДС: Без НДС. When document_type is omitted or auto, the CRM MCP client infers invoice, invoice_factura, completion_act, vehicle_acceptance_act, repair_order, inspection_sheet, or parts_sale from Russian request_text phrases. It renders application/pdf via the same CRM print module, PrintServiceProfile, standard AutoStop templates, template engine, and PDF render as card-based printing."
   }

@@ -60,6 +60,7 @@ and the project-local execution skill is
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
 .venv/bin/python -m autostop_manager.cli integration-audit
 .venv/bin/python -m autostop_manager.cli integration-audit --full
+.venv/bin/python -m autostop_manager.cli crm-gateway-attest summary --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
 ```
 
 For a new non-trivial task: `agent-brief` or `prepare-context` first. For CRM:
@@ -68,7 +69,13 @@ tools over owner-approved OAuth 2.1; use `agent_bootstrap` ->
 `agent_board_digest` -> `agent_search`/`agent_entity_context` ->
 	`prepare_action_contract` -> named workflow `dry_run`/`apply` -> exact-target
 reread. Raw discovery is allowed only when no named workflow exists; never call
-a hidden legacy name directly. For local docs: `knowledge-probe` first.
+a hidden legacy name directly. Semantic raw discovery returns read capabilities
+only: for a needed raw write, discover its exact literal capability name, read
+its live schema, then call it with an idempotency key. In particular,
+`create_card` is not an `agent_board_workflow` operation; create the card
+through this guarded route, reread it, and then use the same route for
+`link_card_to_client` when an existing client/new vehicle must be linked. For
+local docs: `knowledge-probe` first.
 The integration audit runs both machine-verifiable capability matrices in
 strict mode, so UI/API actions cannot silently lose Gateway coverage.
 
