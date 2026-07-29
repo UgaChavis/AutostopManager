@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
+import json
+
+import pytest
 
 from autostop_manager.service_pricing_experience import (
     build_service_pricing_experience,
+    build_service_pricing_experience_from_state_file,
     canonicalize_work_name,
     find_labor_experience,
+    load_service_pricing_experience,
+    money_value,
+    parse_decimal,
+    save_service_pricing_experience,
+    summarize_snapshot,
 )
 from autostop_manager.service_pricing_report import build_service_pricing_report_artifact
 from autostop_manager.work_pricing import estimate_repair_work_cost
@@ -88,6 +98,54 @@ def test_canonicalization_keeps_related_but_distinct_operations_separate():
     assert canonicalize_work_name("Замена топливного фильтра")["key"] == "замена_топливного_фильтра"
     assert canonicalize_work_name("Замена проводки АКПП")["key"] != "снятие_установка_трансмиссии"
     assert canonicalize_work_name("Демонтаж / монтаж АКПП")["key"] == "снятие_установка_трансмиссии"
+
+
+@pytest.mark.parametrize(
+    ("work_name", "category"),
+    [
+        ("Ремонт двигателя", "engine"),
+        ("Ремонт рулевой рейки", "steering"),
+        ("Заправка кондиционера", "climate"),
+        ("Ремонт генератора", "electrical"),
+        ("Балансировка колес", "wheels"),
+    ],
+)
+def test_canonicalization_covers_service_categories(work_name, category):
+    assert canonicalize_work_name(work_name)["category"] == category
+
+
+def test_shared_money_parsing_handles_empty_invalid_and_localized_values():
+    assert parse_decimal(None) is None
+    assert parse_decimal("") is None
+    assert parse_decimal("not-a-number") is None
+    assert parse_decimal("1 250,50") == Decimal("1250.50")
+    assert parse_decimal("NaN") is None
+    assert money_value(None) is None
+
+
+def test_snapshot_file_helpers_validate_round_trip_and_summary(tmp_path):
+    invalid_state = tmp_path / "invalid-state.json"
+    invalid_state.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="CRM state"):
+        build_service_pricing_experience_from_state_file(invalid_state)
+
+    snapshot = {
+        "schema_version": "autostop_service_pricing_experience_v1",
+        "scope": {},
+        "data_quality": {},
+        "labor_baselines": [{"sample_count": 3, "operation_name": "диагностика"}],
+        "part_price_references": [{}],
+        "privacy": {},
+    }
+    output = save_service_pricing_experience(snapshot, tmp_path / "nested" / "snapshot.json")
+    assert load_service_pricing_experience(output) == snapshot
+    assert summarize_snapshot(snapshot)["reusable_labor_baselines"] == 1
+
+    output.write_text(json.dumps({**snapshot, "schema_version": "old"}), encoding="utf-8")
+    assert load_service_pricing_experience(output) is None
+    output.write_text("{invalid", encoding="utf-8")
+    assert load_service_pricing_experience(output) is None
+    assert load_service_pricing_experience(tmp_path / "missing.json") is None
 
 
 def test_find_labor_experience_and_estimator_return_provisional_internal_anchor():

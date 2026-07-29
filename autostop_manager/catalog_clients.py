@@ -2534,7 +2534,7 @@ def partsapi_catalog_lookup(
             **base,
             "ok": False,
             "missing_env_names": request_plan["missing_env_names"],
-            "error": "PARTSAPI_KEY and PARTSAPI_BASE_URL are required for live PartsAPI requests.",
+            "error": "PARTSAPI_BASE_URL plus PARTSAPI_KEY or the method-specific PartsAPI key are required for live requests.",
         }
     if dry_run:
         return {
@@ -3029,14 +3029,17 @@ def lookup_oem_catalog_candidates(
         if blocker:
             blockers.append(blocker)
 
+    has_successful_provider = any(result.get("ok") is True for result in provider_results)
     return {
-        "ok": bool(oem_candidates) or (dry_run and bool(provider_results)),
+        "ok": True,
+        "status": "completed" if oem_candidates else "inconclusive",
         "provider": "multi_oem_catalog_lookup",
         "identifier": {"redacted": _redact_identifier(identifier), "raw_identifier_is_sensitive": True},
         "requested_part": requested_part,
         "part_profile": part_profile,
         "provider_count": len(provider_results),
         "candidate_count": len(oem_candidates),
+        "has_successful_provider": has_successful_provider,
         "provider_results": [_compact_provider_result(result) for result in provider_results],
         "partsapi_category_resolution": partsapi_category_resolution,
         "oem_candidates": oem_candidates,

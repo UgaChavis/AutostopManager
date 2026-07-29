@@ -37,7 +37,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    `agent_bootstrap`, then `agent_board_digest`; Store bootstrap is one
    stateless snapshot request with no cursor/ACK. Use `agent_search` and
    `agent_entity_context` for focused detail. Run broad control through
-   `agent_board_workflow`, not the hidden legacy surface.
+   `agent_board_workflow`, not the hidden legacy surface. New-card creation is
+   the current exception: exact client/duplicate search -> literal raw
+   `create_card` schema/call -> card reread -> literal raw
+   `link_card_to_client` schema/call and reread when linkage is needed.
 4. For store work, open `docs/agent/store_management_playbook.md`; use existing
    Gateway tools with store scope/entities. Bootstrap uses `store_bootstrap`;
    owner “what is new” reads use `store_digest`. Never call the store DB or
@@ -45,6 +48,9 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    named workflow may use guarded raw `store_owner_capabilities` and
    `store_owner_api`; they require the reserved `store:owner` service principal
    through `AUTOSTOP_STORE_OWNER_TOKEN` and the live OpenAPI operation schema.
+   A service-material request authorizes sourcing, not a customer/ROSSKO order;
+   without a dedicated supplier operation return
+   `supplier_order_capability_unavailable`.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
 6. For automotive technical questions, start with the returned knowledge route,
@@ -83,12 +89,16 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    remain a fallback and historical article-reference route. Never persist raw
    orders. High-confidence labor pricing needs exact scope and at least three
    independent evidence families such as internal experience, current market,
-   and vehicle-specific labor time/service data.
+   and vehicle-specific labor time/service data. Treat `market average * 1.50`
+   only as a legacy comparison benchmark; reconcile comparable evidence into a
+   case-specific result or range and omit inapplicable internal aggregates.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->
    `get_raw_capability_schema` -> `call_raw_capability` only when no named
    workflow covers the task; never invoke a hidden capability directly.
+   Raw writes require literal-name discovery, the current schema hash, and a
+   unique idempotency key.
 8. Resolve the effective `work`/`learning` mode before a non-trivial task. In
    `learning`, use the project `autostop-learning-loop` skill and close the
    post-run review before the final answer. Open
@@ -122,6 +132,8 @@ verification.
   dry-run/preflight, unique idempotency and correlation IDs, then exact reread.
   High-risk apply also requires the matching dry-run proof; unresolved outcomes
   remain `compensating`.
+- Supplier procurement requires a dedicated advertised operation and a separate
+  exact owner command; never substitute a customer order.
 - For finance, inventory, documents, files, Gmail, or destructive writes, build
   the action contract, use a unique idempotency key, and keep any applied but
   unverified result in `compensating` until exact-target reconciliation.

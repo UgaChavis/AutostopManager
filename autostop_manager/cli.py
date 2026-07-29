@@ -909,11 +909,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _write_output(args.output, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         return _print_checked_json(report)
     elif args.command == "crm-gateway-attest":
-        run_id = args.run_id or (
-            default_gateway_attestation_run_id()
-            if args.action == "inventory"
-            else ""
-        )
+        run_id = args.run_id or (default_gateway_attestation_run_id() if args.action == "inventory" else "")
         if not run_id:
             raise SystemExit("--run-id is required after inventory")
         if args.force and args.action not in {"inventory", "case"}:
@@ -923,9 +919,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             "cleanup",
             "summary",
         }:
-            raise SystemExit(
-                "--apply-synthetic is valid only for next, resume, case, or retry"
-            )
+            raise SystemExit("--apply-synthetic is valid only for next, resume, case, or retry")
         return _print_checked_json(
             run_gateway_attestation(
                 action=args.action,

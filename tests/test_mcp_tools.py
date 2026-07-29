@@ -42,11 +42,13 @@ class _FakeServer:
     def __init__(self):
         self.tools = {}
         self.descriptions = {}
+        self.options = {}
 
-    def tool(self, name: str, description: str = "", **_kwargs):
+    def tool(self, name: str, description: str = "", **kwargs):
         def decorator(func):
             self.tools[name] = func
             self.descriptions[name] = description
+            self.options[name] = kwargs
             return func
 
         return decorator
@@ -114,6 +116,16 @@ def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeyp
     assert captured["identifier"] == "WBA00000000000000"
     assert captured["live_vpic"] is False
     assert captured["live_wmi"] is False
+
+
+def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
+    server = _FakeServer()
+    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    for name in ("decode_vehicle_identity", "partsapi_catalog_lookup", "lookup_oem_catalog_candidates"):
+        annotations = server.options[name]["annotations"]
+        assert annotations.readOnlyHint is True
+        assert annotations.destructiveHint is False
 
 
 def test_decode_vehicle_identities_tool_is_registered(tmp_path):

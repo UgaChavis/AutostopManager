@@ -62,6 +62,16 @@ call a hidden Store tool directly:
 | one of the seven optimized writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
 | any other authorized employee operation | guarded raw discovery -> `store_owner_capabilities` / `store_owner_api` | exact `operation_id`, live `schema_hash`, target/revision, ActionContractV2, unique idempotency/correlation ids, `dry_run` proof, `apply`, exact reread |
 
+### Service materials and supplier purchases
+
+A service-card request to buy oil or a filter authorizes identification,
+stock/sourcing reads, and a verified material list only. Never substitute a
+customer `SalesOrder`, `create_manual_order`, or ROSSKO confirmation for
+workshop procurement. Execute a supplier purchase only when the live OpenAPI
+advertises a dedicated supplier operation and the owner separately directs
+that exact purchase. Otherwise return
+`supplier_order_capability_unavailable`; this is a safe terminal result.
+
 `agent_search` entity selection and accepted filters:
 
 | Entity | Use for | Accepted filters |

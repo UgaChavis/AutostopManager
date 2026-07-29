@@ -110,12 +110,14 @@ before calling it.
 Rules:
 
 - Price work separately from parts, fluids, materials, and procurement markup.
-- Use public Russia STO labor prices as the main basis.
+- Reconcile exact scope, vehicle context, current labor-only prices, applicable
+  aggregate closed-order experience, and labor-time evidence.
 - Add public norm-hours/labor-time as a second plausibility layer when it can
   be found automatically; do not ask the owner to provide norm-hours.
 - Group only comparable operations and comparable vehicle classes.
-- Calculate average after outlier filtering, then AutoStop price as
-  `average * 1.50`, rounded to 100 rubles.
+- Keep `average * 1.50`, rounded to 100 rubles, only as the legacy public
+  benchmark; the canonical recommendation rules are in
+  `work_labor_pricing_playbook.md`.
 - Use norm-hours to check complexity and overlapping operations, not as a
   replacement for the public price average.
 - If fewer than 3 valid labor-only prices remain, return low confidence and

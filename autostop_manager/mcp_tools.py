@@ -1354,6 +1354,11 @@ def register_manager_memory_tools(  # noqa: C901
             "classification, check digit/model-year diagnostics, vPIC/WMI/platform evidence, "
             "CRM-context conflicts, confidence, and required EPC/API sources for parts lookup."
         ),
+        annotations=ToolAnnotations(
+            title="Vehicle Identity",
+            readOnlyHint=True,
+            destructiveHint=False,
+        ),
     )
     def decode_vehicle_identity_tool(
         identifier: str,
@@ -1472,6 +1477,11 @@ def register_manager_memory_tools(  # noqa: C901
             "getOEApplicability, getCrosses, getCrossesWithBrand, getCrossesTitle, getArticleCrosses, searchArticles, getEngine, "
             "gosnomer2vin, getPartnameByBrandNumber, and GetNormsMakes/GetNormsModels/GetNormsMotors/GetNormsTimes/GetFillVolumes. For getPartsbyVIN, "
             "part_type defaults to oem; use omit/non-oem to skip the type query parameter."
+        ),
+        annotations=ToolAnnotations(
+            title="PartsAPI Catalog Lookup",
+            readOnlyHint=True,
+            destructiveHint=False,
         ),
     )
     def partsapi_catalog_lookup_tool(
@@ -1608,6 +1618,11 @@ def register_manager_memory_tools(  # noqa: C901
         description=(
             "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part. "
             "Combines Parts-Catalogs, PartsAPI, and 17VIN when their credentials and routing ids are available; no CRM writes or orders are created."
+        ),
+        annotations=ToolAnnotations(
+            title="OEM Catalog Candidates",
+            readOnlyHint=True,
+            destructiveHint=False,
         ),
     )
     def lookup_oem_catalog_candidates_tool(

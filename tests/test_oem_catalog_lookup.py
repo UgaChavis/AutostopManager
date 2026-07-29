@@ -251,6 +251,22 @@ def test_lookup_oem_catalog_candidates_uses_partsapi_vin_decode_oe_fallback(monk
     assert any(blocker.get("fallback_operation") == "vin_decode_oe" for blocker in result["blockers"])
 
 
+def test_lookup_oem_catalog_candidates_reports_unavailable_providers_as_inconclusive(monkeypatch):
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
+
+    result = lookup_oem_catalog_candidates(
+        identifier="SYNTHETICVIN00001",
+        requested_part="масляный фильтр",
+        dry_run=False,
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "inconclusive"
+    assert result["candidate_count"] == 0
+    assert result["has_successful_provider"] is False
+
+
 def test_lookup_oem_catalog_candidates_redacts_raw_identifier_from_dry_run(monkeypatch):
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)

@@ -13,28 +13,13 @@ Default owner-facing style: Russian, short, practical, direct.
 
 ## Startup Routine
 
-1. Run CLI `agent-brief` for non-trivial tasks.
-2. Run CLI `prepare-context` when a task needs local memory, command routing,
-   missing context, or next actions.
-3. Run CLI `knowledge-probe` before broad local reads. If it finds a route,
-   open `open_first` / source-of-truth files first.
-4. For CRM work, start with `agent_bootstrap` and `agent_board_digest`; use
-   `agent_search` and `agent_entity_context` before heavy exports. Invoke broad
-   scans through `agent_board_workflow`. For any write, build
-   `prepare_action_contract`, run the named workflow in `dry_run` and `apply`
-   modes, then reread the exact target and verify it.
-5. For store work, open `docs/agent/store_management_playbook.md`; use
-   `agent_board_digest(scope="store")`, store entities in `agent_search` and
-   `agent_entity_context`. Prefer `agent_inventory_workflow` for its seven
-   optimized named writes; resolve every other employee action through guarded
-   `store_owner_capabilities` and `store_owner_api` with the reserved
-   `store:owner` principal. Bootstrap is one stateless snapshot request and
-   never reads or advances the owner-visible `store_digest` cursor.
-6. For Gmail work, open `docs/agent/gmail_workflow_playbook.md` and read/search
-   before any mailbox mutation.
-7. For broad CRM, store, procurement, finance, knowledge-intake, or multi-step work,
-   start a Gateway v2 workflow, checkpoint compact events with
-   `expected_state_version`, and finish only with positive readback evidence.
+1. Follow the startup and write-safety rules in `AGENTS.md`.
+2. Use `agent-brief` for non-trivial work and `knowledge-probe` before broad
+   local reads; open the returned source of truth first.
+3. Open the domain playbook from the route table below before a specialized
+   workflow.
+4. For broad multi-step work, use the Gateway ledger contract described under
+   **Run Ledger**.
 
 ## Intelligent Execution and Learning
 
@@ -54,27 +39,15 @@ repair, and budget rules.
 
 ## Source Boundaries
 
-- Local SQLite memory: non-CRM rules, owner preferences, lessons, tasks,
-  reminders, compact journal rows, and knowledge index facts.
-- AutoStop CRM: cards, clients, vehicles, repair orders, payments, cashboxes,
-  files, board state, and operational memory.
-- AutoStop App: store catalog, physical/reserved/available stock, batches and
-  storage locations, suppliers, quote requests, internet orders, warehouse
-  operations, and marketplace state.
-- Gmail: raw messages, threads, labels, drafts, attachments, sent/archive
-  history.
-
-An empty local `memory-map` means only the local memory section is empty; it
-does not mean live CRM or MCP context is empty.
+The canonical ownership and privacy boundaries are in `AGENTS.md`. An empty
+local `memory-map` means only local memory is empty; it says nothing about live
+CRM, Store, or Gmail state.
 
 ## Main Routes
 
-The production CRM connector exposes exactly 24 Gateway v2 tools over
-owner-approved OAuth 2.1 with PKCE and rotating refresh tokens. The table may
-name a hidden Manager capability to identify the intended operation. Never call
-that name directly: use a named CRM workflow first. Only when no named workflow
-covers the task may you use `discover_raw_capabilities`,
-`get_raw_capability_schema`, and `call_raw_capability`.
+The production CRM connector exposes exactly 24 Gateway v2 tools. The table may
+name a hidden capability for routing; execute it only through a named workflow
+or the guarded raw sequence defined in `AGENTS.md`.
 
 | Task | Open first / tool | Notes |
 | --- | --- | --- |
@@ -107,86 +80,29 @@ context, internal availability, VIN/OEM applicability, and external research.
 
 ## CRM Write Boundary
 
-- Identify the exact target id.
-- Use preflight/dry-run tools when available.
-- Read the target with `agent_entity_context`, build `prepare_action_contract`,
-  and use `agent_board_workflow(operation="cleanup_card")` in dry-run and apply
-  modes for card description or vehicle_profile writes.
-- Public card descriptions must follow
-  `docs/agent/crm_card_description_standard.md`.
-- Reread after saving and record verification.
-- Preserve user-entered CRM data.
-- The active owner task authorizes non-financial exact-target changes needed to
-  complete it after automatic preflight, idempotency, concurrency checks, and
-  readback. Do not make unrelated changes. Payments, cashbox records, refunds,
-  payroll payouts, supplier orders, and changes to financial totals require a
-  direct owner instruction for the exact operation.
+Use the exact-target ladder in `AGENTS.md`. Card create/update rules live only
+in `crm_card_description_standard.md`; other domain writes use their named
+playbook. Financial actions always require a direct exact owner instruction.
 
 ## Store Write Boundary
 
-- Read store state only through the internal pure-read AutoStop App agent API;
-  do not access its database or legacy mutating GET routes.
-- Seven common quote/batch/READY actions use strict named
-  `agent_inventory_workflow`; their quote-draft and notification constraints
-  remain operation-specific.
-- Every other action available to an authorized employee uses the live
-  operation/schema from guarded `store_owner_capabilities`, then
-  `store_owner_api` with `store:owner`; never a human ADMIN session.
-- Require that a Store action is necessary to the active owner task, then use
-  exact target/current revision where applicable, ActionContractV2, unique
-  idempotency key, correlation ID, schema-bound `dry_run`, `apply`, and
-  operation-specific exact reread. Financial effects still require a direct
-  owner instruction.
-- Keep applied but unverified results in `compensating` until exact
-  reconciliation. An idempotent replay may already match without advancing the
-  revision again.
-- High-risk prices, stock, finance, returns, destructive, bulk, publication,
-  messaging, and settings actions require stricter preflight/readback but are
-  not hidden from an explicitly authorized owner principal. Never bypass the
-  Store API or expose secrets.
+`store_management_playbook.md` is the only detailed Store read/write contract.
+It owns named operations, owner parity, supplier-procurement limits, dry-run,
+readback, compensation, and notification rules.
 
 ## Memory Use
 
-Store in AutostopManager:
-
-- owner preferences and recurring rules
-- durable decisions and lessons
-- non-vehicle reminders/tasks
-- compact email-derived commitments
-- source routes and reusable operating conclusions
-
-Do not store raw CRM snapshots, store orders/customer contacts/line items/stock
-rows/warehouse dumps, client databases, phone/VIN/license tables, cashbox
-ledgers, full repair orders, raw Gmail threads, supplier credentials, or
-temporary marketplace search results.
-
-Use `learn_from_feedback` after strong owner praise, criticism, clear success,
-clear failure, or changed preference. Store the reusable lesson, not the event
-dump.
-
-In `learning` mode, use the structured experience review rather than promoting
-an unverified self-assessment. Never persist raw prompt, tool response, CRM,
-Store, Gmail, VIN, client, money, or secret data in an experience row.
+Store only the durable, non-operational facts allowed by `AGENTS.md`. Learning
+promotion and privacy are defined in
+`intelligent_agent_learning_playbook.md`; never persist raw source records,
+prompts, tool payloads, identifiers, money data, or secrets.
 
 ## Catalog Maintenance
 
-- `docs/agent/manager_mcp_catalog.json` mirrors
-  `autostop_manager.mcp_tools.register_manager_memory_tools`.
-- `docs/agent/crm_mcp_catalog.json` mirrors the live AutoStop CRM connector
-  surface; the canonical CRM branch is `autostopcrm-v1`.
-- `docs/agent/knowledge_map.json` is the machine route map.
-- `docs/agent/knowledge_annotations.jsonl` is the compact file-level index.
-- `docs/agent/knowledge_shelves.md` is the placement/deletion policy.
-
-After durable route or catalog changes, run:
-
-```powershell
-python -m autostop_manager.cli knowledge-sync
-python -m autostop_manager.cli knowledge-audit
-python -m autostop_manager.cli annotations-audit
-python -m autostop_manager.cli skills-audit
-python -m autostop_manager.cli cleanup-audit
-```
+Manager and CRM MCP catalogs mirror their live registries; `knowledge_map.json`
+and `knowledge_annotations.jsonl` own routing. Placement and deletion policy
+lives in `knowledge_shelves.md`; verification commands live in
+`deployment_runbook.md`.
 
 ## Run Ledger
 
@@ -207,17 +123,3 @@ external completion, resume, and cancel calls. A stale version returns
 `workflow_state_conflict`; reread with `workflow_status` before retrying. Never
 mark a workflow `completed` when executor or readback/verification evidence is
 explicitly false or failed.
-
-## After Important Work
-
-Append a short `manager_journal` entry through schema-hashed raw discovery when
-work changed durable docs, routes, catalogs, operational policy, or source
-intake. Include what changed, affected object or domain, follow-up, and
-verification. Use `learn_from_feedback` through the same raw route instead when
-the important result is a reusable behavior lesson.
-
-For an enabled learning cycle, close `post_run_review` and
-`agent_learning_workflow` first. A reproducible local tool failure may be
-repaired before answering only with a regression test and verification; an
-external failure should use fallback/deferred handling instead of speculative
-code changes.

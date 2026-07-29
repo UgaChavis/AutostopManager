@@ -10,7 +10,9 @@
       "vehicle_specific_labor_time_or_service_data",
       "live_verified_vehicle_and_operation_scope"
     ],
-    "markup_multiplier": 1.5,
+    "legacy_public_benchmark_multiplier": 1.5,
+    "legacy_public_benchmark_rule": "round_to_100(public_market_average * 1.50); comparison only, never an automatic final price",
+    "recommendation_rule": "reconcile comparable exact-scope evidence; return a range and lower confidence when evidence conflicts or is absent",
     "rounding": "round_to_100_rub",
     "minimum_confident_quotes": 3,
     "required_quote_fields": [

@@ -9,14 +9,14 @@ import shutil
 import tempfile
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import PROJECT_ROOT
-from .service_pricing_experience import canonicalize_work_name
+from .service_pricing_experience import canonicalize_work_name, money_value, parse_decimal
 
 DEFAULT_LABOR_EXPERIENCE_PATH = PROJECT_ROOT / "data" / "private_knowledge" / "service_labor_experience.json"
 DEFAULT_EXECUTOR_REPORT_PATH = (
@@ -81,23 +81,6 @@ def canonicalize_labor_name(value: Any) -> dict[str, str]:
         "name": canonical_name,
         "category": fallback["category"],
     }
-
-
-def _decimal(value: Any) -> Decimal | None:
-    if value is None or isinstance(value, bool):
-        return None
-    text = _clean_text(value).replace(" ", "").replace(",", ".")
-    if not text:
-        return None
-    try:
-        parsed = Decimal(text)
-    except (InvalidOperation, ValueError):
-        return None
-    return parsed if parsed.is_finite() else None
-
-
-def _money(value: Decimal | float | int | None) -> float | None:
-    return None if value is None else round(float(value), 2)
 
 
 def _round_to_100(value: float | None) -> int | None:
@@ -174,19 +157,19 @@ def _vehicle_segment(vehicle: Any) -> str:
 
 def _line_observation(row: dict[str, Any]) -> tuple[float | None, float | None, list[str]]:
     reasons: list[str] = []
-    quantity = _decimal(row.get("quantity"))
-    price = _decimal(row.get("price"))
-    total = _decimal(row.get("total"))
+    quantity = parse_decimal(row.get("quantity"))
+    price = parse_decimal(row.get("price"))
+    total = parse_decimal(row.get("total"))
     if quantity is None or quantity <= 0:
-        return None, _money(quantity), ["invalid_quantity"]
+        return None, money_value(quantity), ["invalid_quantity"]
     if total is None or total <= 0:
-        return None, _money(quantity), ["zero_or_missing_total"]
+        return None, money_value(quantity), ["zero_or_missing_total"]
     unit_price = total / quantity
     if price is not None and price > 0:
         delta = abs((price * quantity) - total)
         if delta > max(Decimal(1), total * Decimal("0.02")):
             reasons.append("price_total_mismatch")
-    return _money(unit_price), _money(quantity), reasons
+    return money_value(unit_price), money_value(quantity), reasons
 
 
 def _outlier_mask(values: list[float]) -> list[bool]:
@@ -232,19 +215,19 @@ def _aggregate_stats(
         for row in inlier_rows
     ]
     weighted_median = _weighted_quantile(weighted_values, 0.5)
-    unweighted_median = _money(median(inlier_values)) if inlier_values else None
+    unweighted_median = money_value(median(inlier_values)) if inlier_values else None
     anchor = weighted_median if weighted_median is not None else unweighted_median
     return {
         "sample_count": len(rows),
         "inlier_sample_count": len(inlier_rows),
         "outlier_count": sum(outlier_flags),
-        "min_rub": _money(min(values)) if values else None,
-        "p25_rub": _money(_quantile(inlier_values, 0.25)),
+        "min_rub": money_value(min(values)) if values else None,
+        "p25_rub": money_value(_quantile(inlier_values, 0.25)),
         "median_rub": unweighted_median,
-        "weighted_median_rub": _money(weighted_median),
-        "p75_rub": _money(_quantile(inlier_values, 0.75)),
-        "max_rub": _money(max(values)) if values else None,
-        "mean_rub": _money(mean(inlier_values)) if inlier_values else None,
+        "weighted_median_rub": money_value(weighted_median),
+        "p75_rub": money_value(_quantile(inlier_values, 0.75)),
+        "max_rub": money_value(max(values)) if values else None,
+        "mean_rub": money_value(mean(inlier_values)) if inlier_values else None,
         "recommended_anchor_rub": _round_to_100(anchor),
         "confidence": _confidence(len(inlier_rows)),
     }

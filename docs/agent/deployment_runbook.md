@@ -203,22 +203,12 @@ the store network, do not publish the internal agent API to the internet, and
 do not grant Manager direct database connectivity. Preserve production `.env`,
 uploads, and PostgreSQL volumes during store deploy.
 
-Release flow:
+Release flow: complete **Local Verification** above in the clean Manager
+release checkout, then verify both pinned revisions and deploy:
 
 ```bash
 cd /opt/AutostopManager
 git switch AutostopManager
-.venv/bin/python -m autostop_manager.cli knowledge-sync
-.venv/bin/python -m autostop_manager.cli knowledge-audit
-.venv/bin/python -m autostop_manager.cli annotations-audit
-.venv/bin/python -m autostop_manager.cli skills-audit
-.venv/bin/python -m ruff check .
-.venv/bin/python -m ruff format --check autostop_manager tests
-.venv/bin/python -m mypy autostop_manager
-.venv/bin/python -m pytest -q
-.venv/bin/python -m coverage run -m pytest -q
-.venv/bin/python -m coverage report
-node --check frontend/control-center/app.js
 git status --short
 git fetch origin AutostopManager
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/AutostopManager)"

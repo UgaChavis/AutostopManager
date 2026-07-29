@@ -46,7 +46,7 @@ def _fold_text(value: Any) -> str:
     return _clean_text(value).casefold().replace("ё", "е")
 
 
-def _decimal(value: Any) -> Decimal | None:
+def parse_decimal(value: Any) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
     text = _clean_text(value).replace(" ", "").replace(",", ".")
@@ -59,7 +59,7 @@ def _decimal(value: Any) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
-def _money(value: Decimal | float | int | None) -> float | None:
+def money_value(value: Decimal | float | int | None) -> float | None:
     if value is None:
         return None
     return round(float(value), 2)
@@ -200,9 +200,9 @@ def canonicalize_work_name(value: Any) -> dict[str, str]:
 
 def _line_observation(row: dict[str, Any]) -> tuple[float | None, float | None, list[str]]:
     reasons: list[str] = []
-    quantity = _decimal(row.get("quantity"))
-    price = _decimal(row.get("price"))
-    total = _decimal(row.get("total"))
+    quantity = parse_decimal(row.get("quantity"))
+    price = parse_decimal(row.get("price"))
+    total = parse_decimal(row.get("total"))
     if quantity is None or quantity <= 0:
         reasons.append("invalid_quantity")
         quantity = Decimal(1)
@@ -217,8 +217,8 @@ def _line_observation(row: dict[str, Any]) -> tuple[float | None, float | None, 
         total = price * quantity
         reasons.append("total_derived_from_price")
     else:
-        return None, _money(quantity), [*reasons, "zero_or_missing_price"]
-    return _money(unit_price), _money(quantity), reasons
+        return None, money_value(quantity), [*reasons, "zero_or_missing_price"]
+    return money_value(unit_price), money_value(quantity), reasons
 
 
 def _sample_confidence(count: int) -> str:
@@ -234,12 +234,12 @@ def _sample_confidence(count: int) -> str:
 def _stats(values: list[float]) -> dict[str, Any]:
     return {
         "sample_count": len(values),
-        "min_rub": _money(min(values)) if values else None,
-        "p25_rub": _money(_quantile(values, 0.25)),
-        "median_rub": _money(median(values)) if values else None,
-        "p75_rub": _money(_quantile(values, 0.75)),
-        "max_rub": _money(max(values)) if values else None,
-        "mean_rub": _money(mean(values)) if values else None,
+        "min_rub": money_value(min(values)) if values else None,
+        "p25_rub": money_value(_quantile(values, 0.25)),
+        "median_rub": money_value(median(values)) if values else None,
+        "p75_rub": money_value(_quantile(values, 0.75)),
+        "max_rub": money_value(max(values)) if values else None,
+        "mean_rub": money_value(mean(values)) if values else None,
         "recommended_anchor_rub": _round_to_100(float(median(values))) if values else None,
         "confidence": _sample_confidence(len(values)),
     }
@@ -343,7 +343,7 @@ def build_service_pricing_experience(
             catalog_number = re.sub(r"[^0-9A-ZА-Я]+", "", _clean_text(row.get("catalog_number")).upper())
             name = _clean_text(row.get("name"))
             sale_price, quantity, reasons = _line_observation(row)
-            cost_price = _decimal(row.get("cost_price"))
+            cost_price = parse_decimal(row.get("cost_price"))
             if not catalog_number:
                 quality["material_rows_without_catalog_number"] += 1
             if sale_price is None:
@@ -357,7 +357,9 @@ def build_service_pricing_experience(
                     "catalog_number": catalog_number,
                     "part_name": _fold_text(name),
                     "sale_unit_price_rub": sale_price,
-                    "cost_unit_price_rub": _money(cost_price) if cost_price is not None and cost_price > 0 else None,
+                    "cost_unit_price_rub": money_value(cost_price)
+                    if cost_price is not None and cost_price > 0
+                    else None,
                     "quantity": quantity,
                     "closed_at": order_ref.closed_at.date().isoformat(),
                 }

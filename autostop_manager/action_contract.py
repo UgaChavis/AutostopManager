@@ -18,6 +18,10 @@ MUTATING_ACTIONS = {
     "merge",
     "set_deadline",
     "bulk_set_deadline_if_below",
+    "cleanup_card",
+    "create_client",
+    "create_card",
+    "link_card_to_client",
     "record_payment",
     "cash_transaction",
     "transfer",
@@ -100,6 +104,10 @@ EXECUTOR_TOOLS = {
     ("card", "archive"): "archive_card",
     ("card", "set_deadline"): "set_card_deadline",
     ("board", "bulk_set_deadline_if_below"): "agent_board_workflow",
+    ("board", "cleanup_card"): "agent_board_workflow",
+    ("crm", "create_client"): "call_raw_capability",
+    ("crm", "create_card"): "call_raw_capability",
+    ("crm", "link_card_to_client"): "call_raw_capability",
     ("client", "create"): "create_client",
     ("client", "update"): "update_client",
     ("vehicle", "create"): "upsert_client_vehicle",
@@ -158,6 +166,8 @@ STORE_ACTIONS = {
     ("store_order", "mark_order_ready"),
 }
 STORE_OWNER_ACTIONS = {("store_owner_api", "execute_owner_api")}
+RAW_CRM_ACTIONS = frozenset({"create_client", "create_card", "link_card_to_client"})
+RAW_CRM_COLLECTION_CREATES = frozenset({"create_client", "create_card"})
 STORE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
 MAX_MONEY_MINOR = 100_000_000_000_000
 MAX_MONEY_AMOUNT = MAX_MONEY_MINOR / 100
@@ -196,9 +206,11 @@ def prepare_action_contract(
     requested_correlation_id = str(correlation_id or "").strip()
     revision = str(expected_revision or "").strip() or None
     owner_collection_create = _is_store_owner_collection_create(normalized_domain, changes)
+    raw_crm_create = normalized_domain == "crm" and normalized_action in RAW_CRM_COLLECTION_CREATES
     exact_target_id_required = (
         normalized_action not in CREATE_ACTIONS
         and (normalized_domain, normalized_action) not in COLLECTION_TARGET_ACTIONS
+        and not raw_crm_create
     )
     concurrency_required = (
         exact_target_id_required and not owner_collection_create
@@ -211,6 +223,8 @@ def prepare_action_contract(
     if not normalized_action:
         blockers.append("missing_action")
     if normalized_action not in MUTATING_ACTIONS:
+        blockers.append("unsupported_mutating_action")
+    elif normalized_action in RAW_CRM_ACTIONS and normalized_domain != "crm":
         blockers.append("unsupported_mutating_action")
     if exact_target_id_required and not normalized_target:
         blockers.append("missing_exact_target_id")
@@ -269,6 +283,8 @@ def prepare_action_contract(
         preflight_checks.extend(["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"])
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
+    if normalized_domain == "crm" and normalized_action in RAW_CRM_ACTIONS:
+        preflight_checks.extend(["raw_capability_exact_name_checked", "raw_capability_schema_hash_checked"])
     preflight_checks.extend(
         _store_preflight_checks(
             domain=normalized_domain,
@@ -278,43 +294,17 @@ def prepare_action_contract(
         )
     )
 
-    workflow_operation = (
-        normalized_action
-        if normalized_domain == "board"
-        else "record_repair_order_payment"
-        if normalized_domain == "payment" and normalized_action == "record_payment"
-        else None
+    workflow_operation, gateway_arguments = _gateway_execution(
+        domain=normalized_domain,
+        action=normalized_action,
+        target_id=normalized_target,
+        changes=changes,
+        revision=revision,
+        owner_intent=intent,
+        idempotency_key=key,
+        correlation_id=stable_correlation_id,
+        dry_run=dry_run,
     )
-    gateway_arguments = None
-    if normalized_domain == "board" and normalized_action == "bulk_set_deadline_if_below":
-        gateway_arguments = {
-            "operation": normalized_action,
-            "payload": changes,
-            "idempotency_key": key or None,
-            "mode": "dry_run" if dry_run else "apply",
-        }
-    elif normalized_domain == "payment" and normalized_action == "record_payment":
-        gateway_arguments = {
-            "operation": "record_repair_order_payment",
-            "payload": {**changes, "expected_updated_at": revision},
-            "idempotency_key": key or None,
-        }
-    elif (normalized_domain, normalized_action) in STORE_ACTIONS:
-        gateway_arguments = {
-            "operation": normalized_action,
-            "payload": {
-                "domain": normalized_domain,
-                "target_id": normalized_target,
-                "expected_updated_at": revision,
-                "owner_intent": intent,
-                "planned_changes": changes,
-                "correlation_id": stable_correlation_id,
-                **changes,
-            },
-            "idempotency_key": key or None,
-            "mode": "dry_run" if dry_run else "apply",
-        }
-        workflow_operation = normalized_action
 
     return {
         "ok": not blockers,
@@ -363,6 +353,62 @@ def prepare_action_contract(
         },
         "warnings": list(dict.fromkeys(warnings)),
     }
+
+
+def _gateway_execution(
+    *,
+    domain: str,
+    action: str,
+    target_id: str,
+    changes: dict[str, Any],
+    revision: str | None,
+    owner_intent: str,
+    idempotency_key: str,
+    correlation_id: str,
+    dry_run: bool,
+) -> tuple[str | None, dict[str, Any] | None]:
+    mode = "dry_run" if dry_run else "apply"
+    if domain == "board" and action in {"bulk_set_deadline_if_below", "cleanup_card"}:
+        payload = (
+            changes
+            if action == "bulk_set_deadline_if_below"
+            else {**changes, "card_id": target_id, "expected_updated_at": revision}
+        )
+        return action, {
+            "operation": action,
+            "payload": payload,
+            "idempotency_key": idempotency_key or None,
+            "mode": mode,
+        }
+    if domain == "crm" and action in RAW_CRM_ACTIONS:
+        return None, {
+            "raw_capability": action,
+            "arguments": changes,
+            "idempotency_key": idempotency_key or None,
+            "requires_schema_discovery": True,
+        }
+    if domain == "payment" and action == "record_payment":
+        return "record_repair_order_payment", {
+            "operation": "record_repair_order_payment",
+            "payload": {**changes, "expected_updated_at": revision},
+            "idempotency_key": idempotency_key or None,
+        }
+    if (domain, action) in STORE_ACTIONS:
+        return action, {
+            "operation": action,
+            "payload": {
+                "domain": domain,
+                "target_id": target_id,
+                "expected_updated_at": revision,
+                "owner_intent": owner_intent,
+                "planned_changes": changes,
+                "correlation_id": correlation_id,
+                **changes,
+            },
+            "idempotency_key": idempotency_key or None,
+            "mode": mode,
+        }
+    return (action if domain == "board" else None), None
 
 
 def _validate_domain_changes(

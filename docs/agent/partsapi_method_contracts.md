@@ -17,6 +17,10 @@ keys are supported:
 `PARTSAPI_GET_NORMS_MODELS_KEY`, `PARTSAPI_GET_NORMS_MOTORS_KEY`, and
 `PARTSAPI_GET_NORMS_TIMES_KEY`, and `PARTSAPI_GET_FILL_VOLUMES_KEY`.
 
+Select credentials by exact method; a missing global key is not a configuration
+failure when its method-specific key exists. Provider/config blocks and empty
+candidate sets are `inconclusive`, never proof of no fitment.
+
 | operation | PartsAPI method | required input | normalized output | notes |
 | --- | --- | --- | --- | --- |
 | `vin_decode` | `VINdecode` | `identifier`, `lang` default `ru` | `vehicle_profiles` | TecDoc/TecRMI identity, `carId`, make/model/engine/year routing evidence. |
@@ -99,6 +103,8 @@ that the part or cross does not exist.
 
 - `getPartsbyVIN` requires a numeric group id; text categories must be resolved
   first.
+- `lookup_oem_catalog_candidates` returns `status=inconclusive` with blockers
+  when no candidate/provider is available; never invent a category or OEM.
 - `getPartsbyVIN` can be slow or time out; retry metadata must stay redacted
   and callers should cap live request count.
 - `getOEApplicability` is advisory: empty payloads and provider-side failures

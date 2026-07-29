@@ -932,6 +932,90 @@ def test_card_deadline_matches_live_connector_ranges_and_requires_positive_durat
     assert "invalid_positive_deadline" in unknown["preflight"]["blocking_reasons"]
 
 
+def test_raw_crm_create_contract_uses_schema_bound_raw_route_without_revision():
+    result = prepare_action_contract(
+        domain="crm",
+        action="create_card",
+        planned_changes={"title": "Запись на замену масла", "deadline": {"total_seconds": 160_982}},
+        owner_intent="Создай карточку записи клиента на четверг",
+        idempotency_key="create-card-appointment-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["concurrency"] == {"expected_revision": None, "required": False}
+    assert result["execution"] == {
+        "ready": True,
+        "tool": "call_raw_capability",
+        "operation": None,
+        "gateway_arguments": {
+            "raw_capability": "create_card",
+            "arguments": {"title": "Запись на замену масла", "deadline": {"total_seconds": 160_982}},
+            "idempotency_key": "create-card-appointment-v1",
+            "requires_schema_discovery": True,
+        },
+        "external_connector": None,
+        "response_mode": "compact",
+    }
+    assert "raw_capability_schema_hash_checked" in result["preflight"]["checks"]
+
+
+def test_raw_crm_client_create_contract_is_a_collection_create():
+    result = prepare_action_contract(
+        domain="crm",
+        action="create_client",
+        planned_changes={"last_name": "Хондошко", "first_name": "Иван"},
+        owner_intent="Создай найденного клиента без дубля",
+        idempotency_key="create-client-khondoshko-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["concurrency"] == {"expected_revision": None, "required": False}
+    assert result["execution"]["tool"] == "call_raw_capability"
+    assert result["execution"]["gateway_arguments"]["raw_capability"] == "create_client"
+
+
+def test_raw_crm_link_contract_requires_target_revision_and_uses_raw_route():
+    result = prepare_action_contract(
+        domain="crm",
+        action="link_card_to_client",
+        target_id="card-42",
+        planned_changes={
+            "card_id": "card-42",
+            "client_id": "client-7",
+            "expected_card_updated_at": "2026-07-28T10:00:00+00:00",
+            "expected_client_updated_at": "2026-07-28T09:00:00+00:00",
+        },
+        owner_intent="Свяжи карточку с точным клиентом",
+        expected_revision="2026-07-28T10:00:00+00:00",
+        idempotency_key="link-card-42-client-7-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["concurrency"]["required"] is True
+    assert result["execution"]["tool"] == "call_raw_capability"
+    assert result["execution"]["gateway_arguments"]["raw_capability"] == "link_card_to_client"
+
+
+def test_card_cleanup_contract_routes_exact_revision_to_named_workflow():
+    result = prepare_action_contract(
+        domain="board",
+        action="cleanup_card",
+        target_id="card-42",
+        planned_changes={"description": "Обновлённая запись"},
+        owner_intent="Обнови описание точной карточки",
+        expected_revision="2026-07-28T10:00:00+00:00",
+        idempotency_key="cleanup-card-42-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == "agent_board_workflow"
+    assert result["execution"]["gateway_arguments"]["payload"] == {
+        "description": "Обновлённая запись",
+        "card_id": "card-42",
+        "expected_updated_at": "2026-07-28T10:00:00+00:00",
+    }
+
+
 def test_active_board_timer_floor_contract_routes_to_named_workflow_without_revision():
     result = prepare_action_contract(
         domain="crm_board",

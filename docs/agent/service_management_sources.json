@@ -112,7 +112,7 @@
       "source_ids": [],
       "required_context": ["vehicle", "work_items", "public_labor_only_quotes"],
       "crm_tools": ["agent_search(card)", "agent_entity_context", "discover_raw_capabilities", "get_raw_capability_schema", "call_raw_capability(estimate_repair_work_cost)"],
-      "actions": ["Normalize vehicle and exact labor operations.", "Collect comparable public Russia labor-only prices and optional norm-hour plausibility evidence.", "Filter outliers, average valid quotes, and apply AutoStop +50%.", "Return missing context when fewer than three valid quotes remain.", "Keep the estimate read-only until the owner separately authorizes an exact repair-order write."],
+      "actions": ["Classify and normalize the exact vehicle and labor scope.", "Collect comparable public labor-only prices, applicable aggregate closed-order experience, and optional labor-time evidence.", "Keep average * 1.50 only as a legacy benchmark; reconcile evidence into a recommendation or range.", "Return missing context for an insufficient market sample or inapplicable aggregate.", "Keep the estimate read-only until the owner separately authorizes an exact repair-order write."],
       "kpis": ["valid labor-only quote count", "source count", "confidence", "missing context"],
       "memory_rules": ["Do not store full price lists; keep only durable pricing rules and the compact quote schema."]
     },

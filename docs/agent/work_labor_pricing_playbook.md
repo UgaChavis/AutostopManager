@@ -1,11 +1,9 @@
 # Work Labor Pricing Playbook
 
-Purpose: estimate AutoStop labor price by reconciling the exact vehicle/work
-scope, aggregate-only experience from closed AutoStop repair orders, current
-public labor-only market prices, and AUTONORMS/OEM/professional labor-time
-evidence. No one source is the answer by itself. This route is read-only: it
-prepares a manager estimate but does not write repair-order works, materials,
-prices, payments, or cashbox data.
+Purpose: prepare a decision-ready AutoStop labor estimate by reconciling exact
+scope, aggregate-only closed-order experience, current public labor-only prices,
+and labor-time evidence. The result is a case-specific EvidenceBundle, not a
+fixed formula. This read-only route never writes repair orders or money data.
 
 ## Trigger
 
@@ -58,14 +56,16 @@ python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "заме
 8. Store a short labor-time sample only: source, operation, hours/range, capture
    date, confidence, and whether the source is public. Do not call it official
    OEM norm-hours unless the public source itself is an official open source.
-9. Exclude obvious outliers. Keep the legacy public benchmark:
+9. Exclude obvious outliers. Calculate the public-market benchmark only from
+   comparable labor-only quotes:
    `russia_average_rub = arithmetic_mean(valid_public_quotes_after_outlier_filter)`.
-10. Keep the legacy public-only AutoStop benchmark:
+10. Retain the legacy public-only benchmark for comparison, not as an automatic
+    client price:
    `autostop_price_rub = round_to_100(russia_average_rub * 1.50)`.
-11. Build `recommended_price_rub` by reconciling the internal anchor and
-    current market. Use labor time for effective-rate, overlap, and scope
-    checks. If evidence diverges materially, show `recommended_range_rub`,
-    explain why, and lower `decision_confidence`.
+11. Reconcile only applicable evidence into `recommended_price_rub`; an
+    aggregate with no matching observations contributes nothing. Use labor time
+    for effective-rate, overlap, and scope checks. On material divergence,
+    return `recommended_range_rub`, the reason, and lower confidence.
 12. High confidence requires exact vehicle/work context and at least three
     independent evidence families. Internal experience alone is `low`, even
     with many observations. Fewer than three public quotes no longer blocks a
@@ -137,9 +137,8 @@ labor-only market sample.
    for overlap: do not simply sum rows that contain the same remove/install
    work.
 5. Use `workTime` only for plausibility, scope comparison, and effective hourly
-   rate. Do not treat provider `workPrice` (often zero) as the AutoStop price.
-   Final price remains `round_to_100(russia_average_rub * 1.50)` when the
-   market sample is sufficient.
+   rate. Do not treat provider `workPrice` (often zero) as the AutoStop price;
+   the legacy multiplier remains a comparison benchmark only.
 6. Demo keys are method-specific and quota-limited. Make the minimum number of
    calls, use `max_attempts=1` by default, and return `provider_unavailable` or
    `inconclusive` for provider HTTP 5xx/empty data rather than inventing hours.

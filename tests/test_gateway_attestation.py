@@ -174,10 +174,7 @@ def test_runner_rejects_mismatched_run_id_or_data_contract(tmp_path) -> None:
     )
 
     assert result["ok"] is False
-    assert (
-        result["blocked"]["error_code"]
-        == "crm_gateway_attestation_contract_invalid"
-    )
+    assert result["blocked"]["error_code"] == "crm_gateway_attestation_contract_invalid"
 
 
 def test_runner_rejects_exit_status_that_disagrees_with_payload(tmp_path) -> None:
@@ -212,10 +209,7 @@ def test_runner_rejects_exit_status_that_disagrees_with_payload(tmp_path) -> Non
     )
 
     assert result["ok"] is False
-    assert (
-        result["blocked"]["error_code"]
-        == "crm_gateway_attestation_exit_status_mismatch"
-    )
+    assert result["blocked"]["error_code"] == "crm_gateway_attestation_exit_status_mismatch"
 
 
 def test_cli_exposes_gateway_attestation_without_default_apply() -> None:
