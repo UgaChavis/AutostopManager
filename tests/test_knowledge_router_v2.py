@@ -311,7 +311,7 @@ def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misr
 def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
-    query = "Покажи активные заказы магазина, но без Store — магазин не трогать"
+    query = "Покажи активные заказы магазина, но магазином автозапчастей не занимайся — он пока в разработке"
 
     assert find_command_route(query) is None
     assert find_command_route(query, intent="store_read") is None
@@ -322,6 +322,32 @@ def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path):
     assert result["best_domain"] not in {"store_management", "store_analytics_reporting"}
     assert all(route["domain"] not in {"store_management", "store_analytics_reporting"} for route in result["routes"])
     assert brief["route"]["domain"] not in {"store_management", "store_analytics_reporting"}
+    assert "store_api" not in brief["memory_sources"]
+    assert "store" not in brief["memory_sources"]["rule"].casefold()
+    assert {"store", "store_analytics"}.isdisjoint(brief["source_boundaries"])
+    assert all("store" not in domain.casefold() for domain in brief["route"]["write_domains"])
+
+
+def test_explicit_store_opt_out_excludes_ecosystem_parity_and_common_store_context(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+    query = (
+        "Полностью отрефакторировать экосистему AutostopManager и получить функциональный паритет CRM и магазина, "
+        "но магазин автозапчастей пока в разработке"
+    )
+
+    result = probe_knowledge_base(store, query, limit=5)
+    brief = build_agent_brief(store, query, limit=5)
+
+    excluded_domains = {"store_management", "store_analytics_reporting", "ecosystem_capability_parity"}
+    assert find_command_route(query) is None
+    assert find_command_route(query, intent="ecosystem_capability_parity") is None
+    assert result["best_domain"] not in excluded_domains
+    assert all(route["domain"] not in excluded_domains for route in result["routes"])
+    assert brief["route"]["domain"] not in excluded_domains
+    assert "store_api" not in brief["memory_sources"]
+    assert {"store", "store_analytics"}.isdisjoint(brief["source_boundaries"])
+    assert all("store" not in domain.casefold() for domain in brief["route"]["write_domains"])
 
 
 def test_store_write_phrases_route_to_allowlisted_management_workflow():

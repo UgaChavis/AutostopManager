@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .knowledge_base import find_command_route, probe_knowledge_base
+from .knowledge_base import find_command_route, probe_knowledge_base, store_scope_excluded
 from .storage import ManagerMemoryStore
 
 
@@ -306,6 +306,33 @@ MEMORY_SOURCES = {
     "rule": "before CRM or store work, read live focused context; before broad docs, use local knowledge routes",
 }
 
+SOURCE_BOUNDARIES = {
+    "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
+    "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state",
+    "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
+    "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
+    "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
+}
+
+
+def _brief_common_sources(store_excluded: bool) -> tuple[dict[str, str], dict[str, str]]:
+    memory_sources = dict(MEMORY_SOURCES)
+    source_boundaries = dict(SOURCE_BOUNDARIES)
+    if not store_excluded:
+        return memory_sources, source_boundaries
+
+    memory_sources.pop("store_api", None)
+    memory_sources["rule"] = "before CRM work, read live focused context; before broad docs, use local knowledge routes"
+    source_boundaries.pop("store", None)
+    source_boundaries.pop("store_analytics", None)
+    return memory_sources, source_boundaries
+
+
+def _without_store_write_domains(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if "store" not in str(value).casefold()]
+
 
 def _unique_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     best_by_key: dict[tuple[str, int], dict[str, Any]] = {}
@@ -490,6 +517,7 @@ def build_agent_brief(
     limit: int = 8,
 ) -> dict[str, Any]:
     context = prepare_manager_context(store, query, intent=intent, limit=limit)
+    store_excluded = store_scope_excluded(str(context.get("query") or query))
     knowledge = context.get("knowledge", {})
     command_route = context.get("command_route") or {}
     has_actionable_knowledge = bool(knowledge.get("has_knowledge")) or bool(command_route)
@@ -546,6 +574,13 @@ def build_agent_brief(
         verification = DEFAULT_VERIFICATION
         next_actions = list(context.get("next_actions") or [])
 
+    if store_excluded:
+        forbidden_actions = [
+            *forbidden_actions,
+            "do not access the AutoStop App or Store while the owner has explicitly placed it out of scope",
+        ]
+    memory_sources, source_boundaries = _brief_common_sources(store_excluded)
+
     return {
         "ok": True,
         "format": "agent_brief_v1",
@@ -554,7 +589,7 @@ def build_agent_brief(
         "role": "AutoStop CRM manager agent",
         "language": "ru",
         "answer_style": "short, practical, direct",
-        "memory_sources": MEMORY_SOURCES,
+        "memory_sources": memory_sources,
         "route": {
             "command_id": command_route.get("command_id"),
             "workflow_id": command_route.get("workflow_id") or command_route.get("command_id"),
@@ -573,7 +608,11 @@ def build_agent_brief(
             "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
             "confidence": knowledge.get("confidence"),
             "required_reads": command_route.get("required_reads", []),
-            "write_domains": command_route.get("write_domains", []),
+            "write_domains": (
+                _without_store_write_domains(command_route.get("write_domains", []))
+                if store_excluded
+                else command_route.get("write_domains", [])
+            ),
             "external_connectors": command_route.get("external_connectors", []),
             "completion_checks": command_route.get("completion_checks", []),
             "read_entity_selection": command_route.get("read_entity_selection", {}),
@@ -583,13 +622,7 @@ def build_agent_brief(
                 command_route.get("operation_selection", {}),
             ),
         },
-        "source_boundaries": {
-            "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
-            "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state",
-            "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
-            "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
-            "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
-        },
+        "source_boundaries": source_boundaries,
         "hot_rules": _compact_hot_rules(domain, limit),
         "read_order": read_order,
         "allowed_actions": allowed_actions,

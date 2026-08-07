@@ -83,11 +83,12 @@ PROJECT_ENGINEERING_ACTION_TERMS = (
     "unit test",
 )
 
-_STORE_ROUTE_DOMAINS = frozenset({"store_management", "store_analytics_reporting"})
+STORE_DEPENDENT_DOMAINS = frozenset({"store_management", "store_analytics_reporting", "ecosystem_capability_parity"})
+_STORE_SCOPE_SUBJECT_RE = r"(?:store|магазин\w*(?:\s+автозапчаст\w*)?)"
 _STORE_SCOPE_EXCLUSION_RE = re.compile(
-    r"(?:\b(?:без|without)\s+(?:работы\s+с\s+|the\s+)?(?:store|магазин\w*)\b"
-    r"|\b(?:store|магазин\w*)\s+(?:(?:пока\s+)?не\s+(?:трог\w*|заним\w*)|на\s+паузе|в\s+разработке)\b"
-    r"|\b(?:не\s+(?:трог\w*|заним\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))\s+(?:the\s+)?(?:store|магазин\w*)\b)"
+    rf"(?:\b(?:без|without)\s+(?:работы\s+с\s+|the\s+)?{_STORE_SCOPE_SUBJECT_RE}\b"
+    rf"|\b{_STORE_SCOPE_SUBJECT_RE}\s+(?:(?:пока\s+)?(?:не\s+(?:трог\w*|заним\w*)|на\s+паузе|в\s+разработке)|is\s+(?:paused|under\s+development))\b"
+    rf"|\b(?:не\s+(?:трог\w*|заним\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))\s+(?:the\s+)?{_STORE_SCOPE_SUBJECT_RE}\b)"
 )
 
 
@@ -330,7 +331,7 @@ def probe_knowledge_base(
     tokens = _tokens(query)
     command_route = find_command_route(query)
     domain_hints = _domain_hints(query)
-    excluded_domains = _STORE_ROUTE_DOMAINS if _store_scope_excluded(query) else frozenset()
+    excluded_domains = STORE_DEPENDENT_DOMAINS if store_scope_excluded(query) else frozenset()
     route_definitions = (_load_knowledge_map().get("domains") or {}) if KNOWLEDGE_MAP_PATH.exists() else {}
     if command_route:
         domain_hints[str(command_route.get("domain") or "")] = max(
@@ -954,7 +955,7 @@ def _load_command_routes() -> dict[str, Any]:
     }
 
 
-def _store_scope_excluded(query: str) -> bool:
+def store_scope_excluded(query: str) -> bool:
     return bool(_STORE_SCOPE_EXCLUSION_RE.search((query or "").casefold()))
 
 
@@ -962,8 +963,8 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
     lowered = (query or "").casefold()
     normalized_intent = (intent or "").casefold()
     routes = [dict(route) for route in _load_command_routes().get("routes", [])]
-    if _store_scope_excluded(query):
-        routes = [route for route in routes if str(route.get("domain") or "").casefold() not in _STORE_ROUTE_DOMAINS]
+    if store_scope_excluded(query):
+        routes = [route for route in routes if str(route.get("domain") or "").casefold() not in STORE_DEPENDENT_DOMAINS]
     if normalized_intent:
         exact_intent_routes = [
             route for route in routes if normalized_intent == str(route.get("intent") or "").casefold()
