@@ -37,6 +37,16 @@ def test_prepare_card_action_flags_long_board_summary():
     assert "board_summary_too_many_lines" in result["risk_flags"]
 
 
+def test_prepare_card_action_flags_five_line_board_summary_at_canonical_boundary():
+    result = prepare_crm_card_action(
+        card_id="card-123",
+        expected_updated_at="2026-06-08T10:00:00+07:00",
+        board_summary="1\n2\n3\n4\n5",
+    )
+
+    assert "board_summary_too_many_lines" in result["risk_flags"]
+
+
 def test_prepare_card_action_flags_private_data_in_board_summary():
     result = prepare_crm_card_action(
         card_id="card-123",

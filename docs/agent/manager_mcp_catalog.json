@@ -422,8 +422,7 @@
         "enrich source-backed vehicle profiles including VIN, plate, mileage, engine, gearbox, and drivetrain when evidence is adequate",
         "move phone/VIN/plate/mileage/aggregate facts into structured fields, link or update the clear matching client by phone first, and upsert confirmed client vehicle facts",
         "source VIN/OEM/parts/maintenance data for direct safe tasks written in the card",
-        "rewrite non-empty public descriptions per docs/agent/crm_card_description_standard.md as very short rich-text working facts with sparse emoji while preserving prices, OEM numbers, oil/fluid capacities, and important facts",
-        "update the separate hidden board_summary preview",
+        "rewrite non-empty public descriptions and update the separate hidden board_summary only under docs/agent/crm_card_description_standard.md",
         "leave archive recommendations when a card looks completed"
       ],
       "forbidden_actions": [
@@ -433,9 +432,9 @@
         "delete or merge client records during routine cleanup",
         "change card deadlines or indicators unless the owner asks for timer/signal work for the exact target",
         "invent text for an empty public description during routine cleanup",
-        "add risks, safety caveats, source/provenance, selection method, search history, supplier-check reminders, or quote-matrix reports to public descriptions",
+        "add text prohibited by docs/agent/crm_card_description_standard.md to public descriptions or board_summary",
         "keep transferred phone, VIN, license plate, mileage, engine, gearbox, or drivetrain in the public description by default",
-        "put phone, VIN, full client identity, raw scan dumps, or long issue lists into board_summary"
+        "put fields excluded by docs/agent/crm_card_description_standard.md into board_summary"
       ],
       "protected_data": [
         "repair-order works",

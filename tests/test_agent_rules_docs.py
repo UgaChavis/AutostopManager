@@ -403,6 +403,24 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     )
 
 
+def test_crm_description_standard_is_the_only_style_and_board_summary_template_owner():
+    canonical = (ROOT / "docs" / "agent" / "crm_card_description_standard.md").read_text(encoding="utf-8")
+    scoped_docs = [
+        ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md",
+        ROOT / "docs" / "agent" / "crm_vin_oem_parts_lookup_playbook.md",
+        ROOT / "docs" / "agent" / "command_routes.json",
+        ROOT / "docs" / "agent" / "crm_mcp_catalog.json",
+        ROOT / "docs" / "agent" / "manager_mcp_catalog.json",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in scoped_docs).casefold()
+
+    assert "Use 1-4 short lines." in canonical
+    assert "recommended `board_summary` shape" not in combined
+    assert "four or five short lines" not in combined
+    assert "under 5 non-empty lines" not in combined
+    assert all("crm_card_description_standard.md" in path.read_text(encoding="utf-8") for path in scoped_docs)
+
+
 def test_business_documents_route_requires_crm_print_module_for_autostop_documents():
     playbook = (ROOT / "docs" / "agent" / "business_document_quality_playbook.md").read_text(encoding="utf-8")
     annotations = (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").read_text(encoding="utf-8")
