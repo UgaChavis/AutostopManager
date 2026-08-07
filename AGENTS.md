@@ -24,6 +24,13 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
   only an explicit allowlist of non-secret names and print secret presence or
   validation booleans, never values.
 
+## Current owner policy
+
+- AutoStop App Store is paused while it is in development. Follow
+  `store-development-pause` in `docs/agent/manager_rules.json`: do not call,
+  inspect, change, or report Store or Store Analytics until the owner gives a
+  new explicit reauthorization.
+
 ## Startup
 
 1. For non-trivial owner requests, run one compact context command first:
@@ -41,16 +48,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    the current exception: exact client/duplicate search -> literal raw
    `create_card` schema/call -> card reread -> literal raw
    `link_card_to_client` schema/call and reread when linkage is needed.
-4. For store work, open `docs/agent/store_management_playbook.md`; use existing
-   Gateway tools with store scope/entities. Bootstrap uses `store_bootstrap`;
-   owner “what is new” reads use `store_digest`. Never call the store DB or
-   legacy GET routes with side effects. Human-UI parity operations without a
-   named workflow may use guarded raw `store_owner_capabilities` and
-   `store_owner_api`; they require the reserved `store:owner` service principal
-   through `AUTOSTOP_STORE_OWNER_TOKEN` and the live OpenAPI operation schema.
-   A service-material request authorizes sourcing, not a customer/ROSSKO order;
-   without a dedicated supplier operation return
-   `supplier_order_capability_unavailable`.
+4. After a separate owner reauthorization of Store work, open
+   `docs/agent/store_management_playbook.md`; it owns the current Gateway
+   route and Store safety boundary. Never call the store DB or legacy GET
+   routes with side effects.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
 6. For automotive technical questions, start with the returned knowledge route,

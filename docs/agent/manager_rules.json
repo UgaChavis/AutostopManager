@@ -11,6 +11,11 @@
       "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."
     },
     {
+      "id": "store-development-pause",
+      "priority": 7,
+      "rule": "Owner policy: AutoStop App Store is under development and paused. Until the owner explicitly reauthorizes it, do not route, bootstrap, inspect, call, change, or report Store or Store Analytics. This overrides normal Store playbooks and source-boundary rules; CRM, managed-PC, server, documentation, and public parts-research work remain available."
+    },
+    {
       "id": "home-pc-remote-codex-access",
       "priority": 6,
       "rule": "This server has two independent Windows reverse-SSH routes: the legacy owner's home PC through alias home-pc, and the multi-device managed-pc fleet enrolled from SECRET_KEY\\AUTOSTOP_REMOTE. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with either. For the fleet, run managed-pc doctor and status on the exact alias first; shell/run/powershell/copy/repair/rename/revoke remain exact-target operations. After a control-plane upgrade, refresh active generated SSH configs with managed-pc refresh-device-files; persistent control sockets are root-only and revocation or reenrollment must close them. Never print runtime private keys or the USB enrollment credential. Do not rotate or overwrite legacy home-pc key material while operating on the managed fleet."
