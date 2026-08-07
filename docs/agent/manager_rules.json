@@ -168,7 +168,7 @@
     {
       "id": "memory-curator",
       "priority": 24,
-      "rule": "Use audit_memory before memory cleanup or when recall quality looks weak. Use curate_memory only for non-destructive duplicate archiving; do not delete source memory records during routine curation."
+      "rule": "Use audit_memory before memory cleanup or when recall quality looks weak. Before any memory mutation, require explicit owner authorization and preview the exact target scope. Use curate_memory only for non-destructive duplicate archiving; do not delete source memory records during routine curation."
     },
     {
       "id": "phone-shared-memory",
