@@ -26,10 +26,10 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
 
 ## Current owner policy
 
-- AutoStop App Store is paused while it is in development. Follow
-  `store-development-pause` in `docs/agent/manager_rules.json`: do not call,
-  inspect, change, or report Store or Store Analytics until the owner gives a
-  new explicit reauthorization.
+- Store access is controlled by `runtime_policies.autostop_store.state` in
+  `docs/agent/manager_rules.json`. `paused` (and a missing or invalid policy)
+  blocks Store/Store Analytics; only explicit owner reauthorization plus
+  changing that state to `enabled` reopens it.
 
 ## Startup
 
@@ -40,11 +40,11 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    platforms; do not fall back to the host system Python.
 2. For local knowledge/docs work, run `knowledge-probe "<query>"` and open the
    returned `open_first` / source-of-truth files before broad reads.
-3. For live CRM work, use the AutoStop CRM MCP connector. Start with
-   `agent_bootstrap`, then `agent_board_digest`; Store bootstrap is one
-   stateless snapshot request with no cursor/ACK. Use `agent_search` and
-   `agent_entity_context` for focused detail. Run broad control through
-   `agent_board_workflow`, not the hidden legacy surface. New-card creation is
+3. For live CRM work, use the AutoStop CRM MCP connector. While Store is paused,
+   start with focused CRM reads (`agent_board_digest`, `agent_search`, and
+   `agent_entity_context`), not a bootstrap carrying a Store snapshot. When it
+   is enabled, `agent_bootstrap` then `agent_board_digest` is normal. Run broad
+   control through `agent_board_workflow`, not the hidden legacy surface. New-card creation is
    the current exception: exact client/duplicate search -> literal raw
    `create_card` schema/call -> card reread -> literal raw
    `link_card_to_client` schema/call and reread when linkage is needed.
@@ -56,7 +56,7 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    before any mailbox-changing action.
 6. For automotive technical questions, start with the returned knowledge route,
    then select only the capabilities needed by the actual question: CRM for an
-   identified live card or vehicle, AutoStop App for internal catalog/stock/price,
+   identified live card or vehicle, AutoStop App for internal catalog/stock/price only when enabled,
    VIN/OEM sources for identity and applicability, official public evidence for
    recalls/communications, and public web/forums for research. Treat this as
    adaptive source selection, not a fixed workflow; final safety, procedure,
@@ -168,10 +168,9 @@ verification.
   then `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run
   first. This collection action does not require `expected_revision`.
 - VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
-- Store analytics questions -> `docs/agent/store_analytics_playbook.md` and the
-  aggregate-only `get_store_analytics_report` capability through Gateway v2 raw
-  discovery. Never request or persist raw events or visitor/session ids.
-- Store state/catalog/stock/orders/quotes/marketplace/full owner operations ->
+- When Store is enabled, analytics uses `docs/agent/store_analytics_playbook.md`
+  and aggregate-only `get_store_analytics_report`; Store state/catalog/stock/
+  orders/quotes/marketplace/full owner operations use
   `docs/agent/store_management_playbook.md`. General Drom/Avito sourcing stays
   in the parts route; service `заказ-наряд` stays in CRM.
 - Internet/repair web research -> resolve `search_web_multi`, excerpt, and

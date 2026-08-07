@@ -4,6 +4,9 @@ Purpose: make AutostopManager stricter and more useful for repair diagnostics,
 technical recommendations, recalls, TSBs, OEM service information, and
 source-backed parts decisions.
 
+When Store is paused in `docs/agent/manager_rules.json`, skip AutoStop App and
+supplier APIs; retain CRM, VIN/OEM/EPC, official/licensed, and public-market routes.
+
 ## Source Catalog
 
 Use the local knowledge package in `docs/agent/automotive_sources/`:
@@ -27,8 +30,9 @@ following a fixed sequence:
 
 - Use live CRM only when an identified card or its vehicle/repair-order context
   answers part of the question. It is not a substitute for service literature.
-- Use AutoStop App only for internal catalog, stock, price, supplier, or quote
-  facts. It does not prove vehicle applicability or a repair procedure.
+- When the Store policy is `enabled`, use AutoStop App only for internal
+  catalog, stock, price, supplier, or quote facts. It does not prove vehicle
+  applicability or a repair procedure.
 - Use VIN/frame and OEM/EPC routes when identity, configuration, part
   applicability, production split, engine, or transmission must be proven.
 - Use `lookup_public_automotive_evidence` for compact official public recall

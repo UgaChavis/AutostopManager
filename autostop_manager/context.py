@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .knowledge_base import find_command_route, probe_knowledge_base, store_scope_excluded
+from .knowledge_base import STORE_DEPENDENT_DOMAINS, find_command_route, probe_knowledge_base, store_scope_excluded
+from .runtime_policy import get_store_access_policy
 from .storage import ManagerMemoryStore
 
 
@@ -35,7 +36,7 @@ DOMAIN_BRIEF_RULES = {
         "Preserve operator evidence while moving structured data to structured fields: phone to client, VIN/plate/mileage/engine/gearbox/drivetrain to vehicle_profile; after verified transfer, do not keep those raw identifiers in the public description by default.",
         "For 'Приберись', first inspect vehicle passport and client data; phone is the primary client match key, source-backed vehicle fields include engine/gearbox/drivetrain when evidence is adequate, and description is a very short formatted summary: if empty leave it empty, otherwise preserve prices/OEM/facts with **bold**, *italic*, ++underline++, and sparse emoji.",
         "Do not put 'Статус:', 'Следующий шаг:', source lists, safety disclaimers, or 'нужно перепроверить данные' caveats into the public description.",
-        "Keep vehicle as compact make/model and title as the short issue/work essence; keep board_summary a plain 4-5 line factual preview without private data or decorative formatting.",
+        "Keep vehicle as compact make/model and title as the short issue/work essence; board_summary follows docs/agent/crm_card_description_standard.md.",
         "If the card description contains a direct safe task such as find parts, find OEM, price maintenance, or decode VIN, do it during cleanup and write back only a compact result.",
         "Update a live repair order, works, materials, prices, payments, cashboxes, or cash records only when the owner explicitly asks for that exact target.",
         "After saving CRM description, inspect the visible text/preview and remove formatting artifacts immediately.",
@@ -66,6 +67,11 @@ DOMAIN_BRIEF_RULES = {
         "Do not turn a source recommendation into a fixed workflow: combine only the capabilities that answer the current question and state the missing vehicle context instead of guessing.",
     ],
 }
+
+PAUSED_AUTOMOTIVE_SOURCE_GUIDANCE = (
+    "Use CRM for an identified live card, VIN/OEM or licensed sources for applicability and procedure, "
+    "and public-market research for parts evidence; do not claim internal availability or price."
+)
 
 DEFAULT_READ_ORDER = [
     "prepare_manager_context",
@@ -328,10 +334,49 @@ def _brief_common_sources(store_excluded: bool) -> tuple[dict[str, str], dict[st
     return memory_sources, source_boundaries
 
 
-def _without_store_write_domains(values: object) -> list[str]:
+def filter_store_route_values(values: object) -> list[str]:
+    """Remove Store-only route guidance and retain a useful public service route."""
+
     if not isinstance(values, list):
         return []
-    return [str(value) for value in values if "store" not in str(value).casefold()]
+    result: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        item = str(value).replace("supplier, and ", "").replace("live supplier and ", "")
+        if item and not _is_store_route_value(item):
+            result.append(item)
+    return result
+
+
+def _brief_route_values(values: object, *, store_excluded: bool) -> list[str]:
+    return filter_store_route_values(values) if store_excluded else list(values) if isinstance(values, list) else []
+
+
+def _is_store_route_value(value: object) -> bool:
+    lowered = str(value or "").casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "autostop app",
+            "autostop store",
+            "store:",
+            "store_",
+            " store ",
+            "store/",
+            "/store",
+            "магазин",
+            "supplier api",
+            "поставщик api",
+        )
+    )
+
+
+def _brief_context_safety(*, store_excluded: bool) -> dict[str, object]:
+    if not store_excluded:
+        return LONG_RUN_CONTEXT_SAFETY
+    recovery = [step.replace("agent_bootstrap", "agent_board_digest") for step in LONG_RUN_CONTEXT_SAFETY["recovery"]]
+    return {**LONG_RUN_CONTEXT_SAFETY, "recovery": recovery}
 
 
 def _unique_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -483,8 +528,13 @@ def prepare_manager_context(
     }
 
 
-def _compact_hot_rules(domain: str | None, limit: int) -> list[str]:
-    rules = [*GENERAL_HOT_RULES, *DOMAIN_BRIEF_RULES.get(str(domain or ""), [])]
+def _compact_hot_rules(domain: str | None, limit: int, *, store_paused: bool) -> list[str]:
+    domain_rules = list(DOMAIN_BRIEF_RULES.get(str(domain or ""), []))
+    if store_paused:
+        domain_rules = filter_store_route_values(domain_rules)
+        if domain == "automotive_repair":
+            domain_rules.insert(0, PAUSED_AUTOMOTIVE_SOURCE_GUIDANCE)
+    rules = [*GENERAL_HOT_RULES, *domain_rules]
     return rules[: max(1, min(limit, 8))]
 
 
@@ -517,7 +567,9 @@ def build_agent_brief(
     limit: int = 8,
 ) -> dict[str, Any]:
     context = prepare_manager_context(store, query, intent=intent, limit=limit)
-    store_excluded = store_scope_excluded(str(context.get("query") or query))
+    store_policy = get_store_access_policy()
+    query_scope_excluded = store_scope_excluded(str(context.get("query") or query))
+    store_excluded = store_policy.paused or query_scope_excluded
     knowledge = context.get("knowledge", {})
     command_route = context.get("command_route") or {}
     has_actionable_knowledge = bool(knowledge.get("has_knowledge")) or bool(command_route)
@@ -525,8 +577,14 @@ def build_agent_brief(
         (knowledge.get("best_domain") if has_actionable_knowledge else None) or command_route.get("domain") or ""
     )
 
-    if domain == "board_cleanup_autopilot":
-        read_order = BOARD_CLEANUP_READ_ORDER
+    if store_excluded and domain in STORE_DEPENDENT_DOMAINS:
+        read_order = []
+        allowed_actions = []
+        forbidden_actions = []
+        verification = []
+        next_actions = []
+    elif domain == "board_cleanup_autopilot":
+        read_order = [step for step in BOARD_CLEANUP_READ_ORDER if not store_excluded or step != "agent_bootstrap"]
         allowed_actions = BOARD_CLEANUP_ALLOWED_ACTIONS
         forbidden_actions = BOARD_CLEANUP_FORBIDDEN_ACTIONS
         verification = BOARD_CLEANUP_VERIFICATION
@@ -562,8 +620,17 @@ def build_agent_brief(
         verification = REMOTE_ACCESS_VERIFICATION
         next_actions = list(context.get("next_actions") or [])
     elif domain == "automotive_repair":
-        read_order = AUTOMOTIVE_REPAIR_READ_ORDER
-        allowed_actions = AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS
+        read_order = (
+            filter_store_route_values(AUTOMOTIVE_REPAIR_READ_ORDER) if store_excluded else AUTOMOTIVE_REPAIR_READ_ORDER
+        )
+        allowed_actions = (
+            filter_store_route_values(AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS)
+            if store_excluded
+            else AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS
+        )
+        if store_excluded:
+            read_order.insert(1, "choose relevant CRM, VIN/OEM, public official, or public web research context")
+            allowed_actions.insert(2, PAUSED_AUTOMOTIVE_SOURCE_GUIDANCE)
         forbidden_actions = AUTOMOTIVE_REPAIR_FORBIDDEN_ACTIONS
         verification = AUTOMOTIVE_REPAIR_VERIFICATION
         next_actions = list(context.get("next_actions") or [])
@@ -577,9 +644,27 @@ def build_agent_brief(
     if store_excluded:
         forbidden_actions = [
             *forbidden_actions,
-            "do not access the AutoStop App or Store while the owner has explicitly placed it out of scope",
+            (
+                "do not access the AutoStop App or Store while the global owner policy is paused"
+                if store_policy.paused
+                else "do not access the AutoStop App or Store while the owner has explicitly placed it out of scope"
+            ),
         ]
     memory_sources, source_boundaries = _brief_common_sources(store_excluded)
+    route_required_reads = command_route.get("required_reads", [])
+    route_next_actions = command_route.get("next_actions", [])
+    route_external_connectors = command_route.get("external_connectors", [])
+    route_completion_checks = command_route.get("completion_checks", [])
+    if store_excluded:
+        route_required_reads = filter_store_route_values(route_required_reads)
+        route_next_actions = filter_store_route_values(route_next_actions)
+        route_external_connectors = filter_store_route_values(route_external_connectors)
+        route_completion_checks = filter_store_route_values(route_completion_checks)
+    route_operation_selection = {} if store_excluded else command_route.get("operation_selection", {})
+    route_read_entity_selection = {} if store_excluded else command_route.get("read_entity_selection", {})
+    route_open_first = knowledge.get("open_first") if has_actionable_knowledge else None
+    if store_excluded and _is_store_route_value(route_open_first):
+        route_open_first = None
 
     return {
         "ok": True,
@@ -594,42 +679,62 @@ def build_agent_brief(
             "command_id": command_route.get("command_id"),
             "workflow_id": command_route.get("workflow_id") or command_route.get("command_id"),
             "domain": domain or None,
-            "open_first": knowledge.get("open_first") if has_actionable_knowledge else None,
-            "source_of_truth": knowledge.get("source_of_truth", []) if has_actionable_knowledge else [],
-            "reference_files": knowledge.get("reference_files", []) if has_actionable_knowledge else [],
-            "optional_runtime_files": knowledge.get("optional_runtime_files", []) if has_actionable_knowledge else [],
-            "optional_available_files": knowledge.get("optional_available_files", [])
+            "open_first": route_open_first,
+            "source_of_truth": _brief_route_values(knowledge.get("source_of_truth", []), store_excluded=store_excluded)
             if has_actionable_knowledge
             else [],
-            "optional_missing_files": knowledge.get("optional_missing_files", []) if has_actionable_knowledge else [],
+            "reference_files": _brief_route_values(knowledge.get("reference_files", []), store_excluded=store_excluded)
+            if has_actionable_knowledge
+            else [],
+            "optional_runtime_files": _brief_route_values(
+                knowledge.get("optional_runtime_files", []), store_excluded=store_excluded
+            )
+            if has_actionable_knowledge
+            else [],
+            "optional_available_files": _brief_route_values(
+                knowledge.get("optional_available_files", []), store_excluded=store_excluded
+            )
+            if has_actionable_knowledge
+            else [],
+            "optional_missing_files": _brief_route_values(
+                knowledge.get("optional_missing_files", []), store_excluded=store_excluded
+            )
+            if has_actionable_knowledge
+            else [],
             "optional_runtime_available": knowledge.get("optional_runtime_available", False)
             if has_actionable_knowledge
             else False,
             "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
             "confidence": knowledge.get("confidence"),
-            "required_reads": command_route.get("required_reads", []),
-            "write_domains": (
-                _without_store_write_domains(command_route.get("write_domains", []))
-                if store_excluded
-                else command_route.get("write_domains", [])
-            ),
-            "external_connectors": command_route.get("external_connectors", []),
-            "completion_checks": command_route.get("completion_checks", []),
-            "read_entity_selection": command_route.get("read_entity_selection", {}),
-            "operation_selection": command_route.get("operation_selection", {}),
+            "required_reads": route_required_reads,
+            "write_domains": filter_store_route_values(command_route.get("write_domains", []))
+            if store_excluded
+            else command_route.get("write_domains", []),
+            "external_connectors": route_external_connectors,
+            "completion_checks": route_completion_checks,
+            "read_entity_selection": route_read_entity_selection,
+            "operation_selection": route_operation_selection,
             "selected_operation": _select_store_operation(
                 str(context.get("query") or ""),
-                command_route.get("operation_selection", {}),
+                route_operation_selection,
             ),
         },
         "source_boundaries": source_boundaries,
-        "hot_rules": _compact_hot_rules(domain, limit),
+        "runtime_policies": {
+            "autostop_store": {
+                "state": store_policy.state,
+                "valid": store_policy.valid,
+                "query_scope_excluded": query_scope_excluded,
+                "effective_paused": store_excluded,
+            }
+        },
+        "hot_rules": _compact_hot_rules(domain, limit, store_paused=store_excluded),
         "read_order": read_order,
         "allowed_actions": allowed_actions,
         "forbidden_actions": forbidden_actions,
         "required_context": context.get("required_context", []),
         "missing_context": context.get("missing_context", []),
-        "context_safety": LONG_RUN_CONTEXT_SAFETY,
-        "next_actions": next_actions,
+        "context_safety": _brief_context_safety(store_excluded=store_excluded),
+        "next_actions": route_next_actions if store_excluded else route_next_actions or next_actions,
         "verification": verification,
     }

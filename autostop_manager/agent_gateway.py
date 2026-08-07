@@ -4,8 +4,9 @@ import json
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .context import build_agent_brief
-from .knowledge_base import find_command_route
+from .context import build_agent_brief, filter_store_route_values
+from .knowledge_base import STORE_DEPENDENT_DOMAINS, find_command_route
+from .runtime_policy import store_access_is_paused
 from .storage import ManagerMemoryStore
 
 
@@ -43,7 +44,7 @@ def agent_envelope(
 
 
 def list_agent_workflows(*, query: str = "", intent: str | None = None, limit: int = 50) -> dict[str, Any]:
-    workflows = _load_workflows()
+    workflows = _available_workflows()
     selected = find_command_route(query, intent=intent) if query or intent else None
     limit = max(1, min(int(limit), 100))
     items = workflows[:limit]
@@ -73,8 +74,12 @@ def build_agent_bootstrap(
     brief = build_agent_brief(memory, query, intent=intent, limit=limit)
     route = find_command_route(query, intent=intent)
     active = memory.list_active_manager_runs(limit=500).get("items", [])
+    if store_access_is_paused():
+        active = [item for item in active if not _is_store_run(item)]
     unfinished = [_compact_run(item) for item in active]
     selected = _compact_workflow(route) if route else None
+    if selected is not None and store_access_is_paused():
+        selected = _without_store_workflow_guidance(selected)
     mode = memory.resolve_agent_mode(mode_override)
     if not mode.get("ok"):
         return agent_envelope(
@@ -153,7 +158,7 @@ def build_agent_bootstrap(
         warnings=warnings,
         next_actions=list(brief.get("next_actions") or []),
         meta={
-            "workflow_registry_count": len(_load_workflows()),
+            "workflow_registry_count": len(_available_workflows()),
             "workflow_registry_tool": "list_agent_workflows",
             "action_contract_tool": "prepare_action_contract",
             "agent_mode_tool": "agent_mode",
@@ -173,6 +178,38 @@ def _load_workflows() -> list[dict[str, Any]]:
     workflows = [_compact_workflow(item) for item in routes if isinstance(item, dict)]
     workflows.sort(key=lambda item: (-int(item.get("priority") or 0), str(item.get("workflow_id") or "")))
     return workflows
+
+
+def _available_workflows() -> list[dict[str, Any]]:
+    workflows = _load_workflows()
+    if not store_access_is_paused():
+        return workflows
+    return [
+        _without_store_workflow_guidance(workflow)
+        for workflow in workflows
+        if str(workflow.get("domain") or "").casefold() not in STORE_DEPENDENT_DOMAINS
+    ]
+
+
+def _is_store_run(item: dict[str, Any]) -> bool:
+    workflow_id = str(item.get("workflow_id") or "").casefold()
+    store_workflow_ids = {
+        str(workflow.get("workflow_id") or "").casefold()
+        for workflow in _load_workflows()
+        if str(workflow.get("domain") or "").casefold() in STORE_DEPENDENT_DOMAINS
+    }
+    return workflow_id in store_workflow_ids or workflow_id.startswith(("inventory:", "raw:store_", "store:", "store_"))
+
+
+def _without_store_workflow_guidance(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Keep a mixed service workflow usable without advertising paused Store access."""
+
+    result = dict(workflow)
+    open_first = filter_store_route_values([result.get("open_first")])
+    result["open_first"] = open_first[0] if open_first else None
+    for field in ("required_reads", "write_domains", "external_connectors", "completion_checks"):
+        result[field] = filter_store_route_values(result.get(field))
+    return result
 
 
 def _compact_workflow(route: dict[str, Any]) -> dict[str, Any]:

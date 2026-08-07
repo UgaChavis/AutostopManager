@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .runtime_policy import store_access_is_paused
 from .storage import ManagerMemoryStore, _json_list, _now, _string_list
 
 
@@ -90,6 +91,7 @@ _STORE_SCOPE_EXCLUSION_RE = re.compile(
     rf"|\b{_STORE_SCOPE_SUBJECT_RE}\s+(?:(?:пока\s+)?(?:не\s+(?:трог\w*|заним\w*)|на\s+паузе|в\s+разработке)|is\s+(?:paused|under\s+development))\b"
     rf"|\b(?:не\s+(?:трог\w*|заним\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))\s+(?:the\s+)?{_STORE_SCOPE_SUBJECT_RE}\b)"
 )
+_STORE_REQUEST_RE = re.compile(r"(?:\bstore\b|магазин\w*|склад\w*|маркетплейс\w*|внутренн\w+\s+каталог)")
 
 
 @dataclass(frozen=True)
@@ -328,10 +330,11 @@ def probe_knowledge_base(
     if _route_card_count(memory) == 0:
         sync_knowledge_base(memory)
 
+    paused_store_request = store_access_is_paused() and _store_access_request(query)
     tokens = _tokens(query)
     command_route = find_command_route(query)
     domain_hints = _domain_hints(query)
-    excluded_domains = STORE_DEPENDENT_DOMAINS if store_scope_excluded(query) else frozenset()
+    excluded_domains = STORE_DEPENDENT_DOMAINS if store_access_excluded(query) else frozenset()
     route_definitions = (_load_knowledge_map().get("domains") or {}) if KNOWLEDGE_MAP_PATH.exists() else {}
     if command_route:
         domain_hints[str(command_route.get("domain") or "")] = max(
@@ -412,6 +415,8 @@ def probe_knowledge_base(
         routes.append(route)
 
     routes.sort(key=lambda value: (value["score"], len(value["matching_terms"])), reverse=True)
+    if paused_store_request:
+        routes = []
     routes = routes[:limit]
     best = routes[0] if routes else None
     confidence = float(best["confidence"]) if best else 0.0
@@ -433,8 +438,12 @@ def probe_knowledge_base(
         "optional_runtime_note": best["optional_runtime_note"] if best else "",
         "command_route": command_route,
         "routes": routes,
-        "next_action": "open_source_of_truth" if has_knowledge else "route_external_sources",
-        "needs_broad_search": not has_knowledge,
+        "next_action": "store_access_paused"
+        if paused_store_request
+        else "open_source_of_truth"
+        if has_knowledge
+        else "route_external_sources",
+        "needs_broad_search": False if paused_store_request else not has_knowledge,
         "probed_at": _now(),
     }
 
@@ -959,11 +968,25 @@ def store_scope_excluded(query: str) -> bool:
     return bool(_STORE_SCOPE_EXCLUSION_RE.search((query or "").casefold()))
 
 
+def _store_access_request(query: str) -> bool:
+    return bool(_STORE_REQUEST_RE.search((query or "").casefold()))
+
+
+def store_access_excluded(query: str = "") -> bool:
+    """Return whether Store routes are unavailable for this request.
+
+    The persisted owner policy applies to every query.  A request-local
+    exclusion remains additive after the owner later reauthorizes Store work.
+    """
+
+    return store_access_is_paused() or store_scope_excluded(query)
+
+
 def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
     lowered = (query or "").casefold()
     normalized_intent = (intent or "").casefold()
     routes = [dict(route) for route in _load_command_routes().get("routes", [])]
-    if store_scope_excluded(query):
+    if store_access_excluded(query):
         routes = [route for route in routes if str(route.get("domain") or "").casefold() not in STORE_DEPENDENT_DOMAINS]
     if normalized_intent:
         exact_intent_routes = [

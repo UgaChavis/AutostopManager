@@ -49,6 +49,7 @@ from .partsapi_category_index import (
 from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
 from .public_automotive_evidence import lookup_public_automotive_evidence
+from .runtime_policy import store_access_block
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -454,6 +455,8 @@ def register_manager_memory_tools(  # noqa: C901
         date_to: str | None = None,
         top_limit: int = 10,
     ) -> dict[str, Any]:
+        if blocked := store_access_block("get_store_analytics_report"):
+            return blocked
         return get_store_analytics_report(
             api_url=get_store_api_url(),
             read_token=get_store_read_token(),
@@ -480,6 +483,8 @@ def register_manager_memory_tools(  # noqa: C901
         ),
     )
     def store_owner_capabilities_tool(query: str = "", limit: int = 200) -> dict[str, Any]:
+        if blocked := store_access_block("store_owner_capabilities"):
+            return blocked
         return store_owner_client.list_capabilities(query=query, limit=limit)
 
     @server.tool(
@@ -517,6 +522,8 @@ def register_manager_memory_tools(  # noqa: C901
         dry_run_proof: str | None = None,
         allow_binary_response: bool = False,
     ) -> dict[str, Any]:
+        if blocked := store_access_block("store_owner_api"):
+            return blocked
         prepared = store_owner_client.prepare_invocation(
             operation_id=operation_id,
             path_parameters=path_parameters,
@@ -724,6 +731,8 @@ def register_manager_memory_tools(  # noqa: C901
         live: bool = False,
         bootstrap_snapshot: bool = False,
     ) -> dict[str, Any]:
+        if blocked := store_access_block("store_runtime_status"):
+            return blocked
         return store_adapter.runtime_status(
             live=live,
             bootstrap_snapshot=bootstrap_snapshot,
@@ -746,6 +755,8 @@ def register_manager_memory_tools(  # noqa: C901
         limit: int = 25,
         stream: str = "store_digest",
     ) -> dict[str, Any]:
+        if blocked := store_access_block("store_digest"):
+            return blocked
         return store_adapter.digest(
             baseline=baseline,
             since=since,
@@ -770,6 +781,8 @@ def register_manager_memory_tools(  # noqa: C901
         cursor: str | None = None,
         limit: int = 25,
     ) -> dict[str, Any]:
+        if blocked := store_access_block("store_search"):
+            return blocked
         return store_adapter.search(entity=entity, query=query, filters=filters, cursor=cursor, limit=limit)
 
     @server.tool(
@@ -785,6 +798,8 @@ def register_manager_memory_tools(  # noqa: C901
         entity_id: str,
         detail: str = "summary",
     ) -> dict[str, Any]:
+        if blocked := store_access_block("store_entity_context"):
+            return blocked
         return store_adapter.entity_context(entity=entity, entity_id=entity_id, detail=detail)
 
     @server.tool(
@@ -806,6 +821,8 @@ def register_manager_memory_tools(  # noqa: C901
         quote_request_id: str,
         expected_photo_sha256: str,
     ) -> dict[str, Any]:
+        if blocked := store_access_block("download_store_quote_vin_photo"):
+            return blocked
         return store_adapter.quote_vin_photo_preview(
             quote_request_id=quote_request_id,
             expected_photo_sha256=expected_photo_sha256,
@@ -831,6 +848,8 @@ def register_manager_memory_tools(  # noqa: C901
         correlation_id: str,
         mode: str = "dry_run",
     ) -> dict[str, Any]:
+        if blocked := store_access_block("store_management_action"):
+            return blocked
         return store_adapter.management_action(
             domain=domain,
             action=action,

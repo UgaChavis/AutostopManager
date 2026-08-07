@@ -1,4 +1,10 @@
 {
+  "runtime_policies": {
+    "autostop_store": {
+      "state": "paused",
+      "change_control": "explicit_owner_reauthorization"
+    }
+  },
   "rules": [
     {
       "id": "store-analytics-aggregate-only",
@@ -13,7 +19,7 @@
     {
       "id": "store-development-pause",
       "priority": 7,
-      "rule": "Owner policy: AutoStop App Store is under development and paused. Until the owner explicitly reauthorizes it, do not route, bootstrap, inspect, call, change, or report Store or Store Analytics. This overrides normal Store playbooks and source-boundary rules; CRM, managed-PC, server, documentation, and public parts-research work remain available."
+      "rule": "Store access is controlled only by runtime_policies.autostop_store in this file. state=paused blocks routing, bootstrap, inspection, calls, changes, and reporting for Store and Store Analytics; CRM, managed-PC, server, documentation, VIN/OEM, and public parts research remain available. state=enabled takes effect only after a new explicit owner reauthorization and this exact config change; never infer it from a later natural-language Store query. Invalid or missing policy fails closed to paused."
     },
     {
       "id": "home-pc-remote-codex-access",
@@ -78,7 +84,7 @@
     {
       "id": "board-cleanup-public-summary",
       "priority": 19,
-      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description follows docs/agent/crm_card_description_standard.md: short readable formatted working facts only; do not add 'Статус:' or 'Следующий шаг:' blocks, risk/caveat/safety blocks, source/provenance, selection method, search history, or supplier-check reminders. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, long issue lists, and next-action instructions out of it."
+      "rule": "During board cleanup, keep public description and hidden board_summary separate. Both follow docs/agent/crm_card_description_standard.md; write board_summary through set_card_board_summary."
     },
     {
       "id": "board-cleanup-vin-profile-enrichment",

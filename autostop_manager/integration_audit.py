@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .runtime_policy import store_access_is_paused
 
 
 INTEGRATION_AUDIT_FORMAT = "autostop_integration_audit_v1"
@@ -73,6 +74,7 @@ def build_integration_audit(
     crm_path = Path(crm_root)
     store_path = Path(store_root)
     manager_path = Path(manager_root)
+    store_paused = store_access_is_paused()
     checks: dict[str, dict[str, Any]] = {}
 
     checks["docs_runtime_contract"] = audit_docs_runtime_contract(manager_path)
@@ -87,10 +89,14 @@ def build_integration_audit(
         script_name="crm_capability_parity.py",
         command_runner=command_runner,
     )
-    checks["store_capability_parity"] = _run_capability_parity_check(
-        repo_path=store_path,
-        script_name="store_capability_parity.py",
-        command_runner=command_runner,
+    checks["store_capability_parity"] = (
+        {"ok": True, "status": "skipped", "reason": "store_access_paused"}
+        if store_paused
+        else _run_capability_parity_check(
+            repo_path=store_path,
+            script_name="store_capability_parity.py",
+            command_runner=command_runner,
+        )
     )
 
     token = _read_env_value(crm_path / ".env", "MINIMAL_KANBAN_MCP_BEARER_TOKEN")
@@ -102,6 +108,7 @@ def build_integration_audit(
             mcp_url=local_mcp_url,
             token=token,
             exhaustive=full,
+            require_store=not store_paused,
             command_runner=command_runner,
         )
         if full:
@@ -110,6 +117,7 @@ def build_integration_audit(
                 mcp_url=public_mcp_url,
                 token=token,
                 exhaustive=True,
+                require_store=not store_paused,
                 command_runner=command_runner,
             )
 
@@ -297,6 +305,7 @@ def _run_gateway_check(
     mcp_url: str,
     token: str,
     exhaustive: bool,
+    require_store: bool,
     command_runner: Callable[..., subprocess.CompletedProcess[str]],
 ) -> dict[str, Any]:
     python = crm_path / ".venv" / "bin" / "python"
@@ -308,9 +317,10 @@ def _run_gateway_check(
         str(script),
         "--mcp-url",
         mcp_url,
-        "--require-store",
         "--require-web",
     ]
+    if require_store:
+        command.append("--require-store")
     if exhaustive:
         command.append("--exhaustive")
     environment = os.environ.copy()

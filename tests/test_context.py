@@ -44,7 +44,7 @@ def test_prepare_manager_context_flags_missing_required_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
-def test_agent_brief_for_store_analytics_is_aggregate_only_and_needs_no_clarification(tmp_path):
+def test_agent_brief_for_store_analytics_is_aggregate_only_and_needs_no_clarification(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -67,7 +67,8 @@ def test_agent_brief_for_general_automotive_repair_selects_sources_adaptively(tm
 
     assert result["route"]["domain"] == "automotive_repair"
     assert result["route"]["open_first"] == "docs/agent/automotive_repair_source_playbook.md"
-    assert any("AutoStop App" in item for item in result["allowed_actions"])
+    assert not any("AutoStop App" in item for item in result["allowed_actions"])
+    assert any("VIN/OEM" in item for item in result["allowed_actions"])
     assert any("forum" in item.casefold() for item in result["read_order"])
     assert any("fixed workflow" in item for item in result["hot_rules"])
     assert any("write CRM" in item for item in result["forbidden_actions"])
@@ -100,8 +101,7 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert result["memory_sources"] == {
         "local_sqlite": "knowledge_index_and_local_rules",
         "crm_mcp": "operational_memory_and_live_board_context",
-        "store_api": "live_store_catalog_stock_orders_quotes_and_marketplace_context",
-        "rule": "before CRM or store work, read live focused context; before broad docs, use local knowledge routes",
+        "rule": "before CRM work, read live focused context; before broad docs, use local knowledge routes",
     }
     assert result["route"]["domain"] == "board_cleanup_autopilot"
     assert result["route"]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
@@ -112,7 +112,7 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert any("empty leave it empty" in rule for rule in result["hot_rules"])
     assert any("phone is the primary client match key" in rule for rule in result["hot_rules"])
     assert any("rare operational tags capped at three" in rule for rule in result["hot_rules"])
-    assert "agent_bootstrap" in result["read_order"][0]
+    assert "agent_board_digest" in result["read_order"][0]
     assert any("audit_client_links" in action for action in result["read_order"])
     assert any("board_summary" in action for action in result["allowed_actions"])
     assert any("client" in action and "vehicle" in action for action in result["allowed_actions"])
@@ -137,10 +137,11 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
         "verification",
     ]
     assert any("workflow_status" in step for step in result["context_safety"]["recovery"])
+    assert not any("agent_bootstrap" in step for step in result["context_safety"]["recovery"])
     assert any("raw board snapshots" in rule for rule in result["context_safety"]["rules"])
 
 
-def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_path):
+def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()
     sync_knowledge_base(store)
@@ -163,7 +164,7 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
 
 
-def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp_path):
+def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -198,7 +199,7 @@ def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp
     assert "employee/admin OpenAPI" in write_brief["route"]["operation_selection"]["owner_api_fallback"]["use_when"]
 
 
-def test_store_agent_brief_deterministically_selects_each_write_operation(tmp_path):
+def test_store_agent_brief_deterministically_selects_each_write_operation(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
     phrases = {
@@ -243,7 +244,7 @@ def test_agent_brief_remote_route_requires_exact_device_and_secret_safety(tmp_pa
     assert any("private keys" in item for item in result["forbidden_actions"])
 
 
-def test_quote_pricing_request_routes_to_store_and_exposes_full_quote_workflow(tmp_path):
+def test_quote_pricing_request_routes_to_store_and_exposes_full_quote_workflow(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()
     sync_knowledge_base(store)

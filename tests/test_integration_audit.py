@@ -113,7 +113,7 @@ def test_gmail_connector_full_mode_requires_fresh_ref_only_proof(tmp_path):
     assert result["proof"]["required_checks_passed"] is True
 
 
-def test_full_integration_audit_runs_local_and_public_without_exposing_token(tmp_path):
+def test_full_integration_audit_runs_local_and_public_without_exposing_token(tmp_path, enabled_store_policy):
     manager_root = tmp_path / "manager"
     crm_root = tmp_path / "crm"
     store_root = tmp_path / "store"
@@ -168,7 +168,61 @@ def test_full_integration_audit_runs_local_and_public_without_exposing_token(tmp
     assert "test-secret" not in json.dumps(result)
 
 
-def test_gateway_timeout_fails_closed_without_subprocess_details(tmp_path):
+def test_integration_audit_skips_store_parity_and_gateway_store_requirement_while_paused(tmp_path):
+    manager_root = tmp_path / "manager"
+    crm_root = tmp_path / "crm"
+    plugin_root = tmp_path / "gmail"
+    proof_path = tmp_path / "gmail-proof.json"
+    _write_catalog(manager_root)
+    _write_gmail_runtime(plugin_root, proof_path)
+    python = crm_root / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    script = crm_root / "scripts" / "check_agent_gateway_v2.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    _write_parity_checker(crm_root, "crm_capability_parity.py")
+    (crm_root / ".env").write_text("MINIMAL_KANBAN_MCP_BEARER_TOKEN=test-secret\n", encoding="utf-8")
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        assert not any("store_capability_parity" in part for part in command)
+        assert "--require-store" not in command
+        if command[1].endswith("crm_capability_parity.py"):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(_parity_payload("autostopcrm_capability_parity_v1")),
+                stderr="",
+            )
+        payload = {
+            "ok": True,
+            "checks": {"tool_count_exactly_24": True, "search_web_multi_call_ok": True},
+            "metrics": {"tool_count": 24},
+            "failed_invocations": [],
+        }
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    result = build_integration_audit(
+        crm_root=crm_root,
+        store_root=tmp_path / "store-not-touched",
+        manager_root=manager_root,
+        gmail_plugin_root=plugin_root,
+        gmail_proof_path=proof_path,
+        command_runner=runner,
+    )
+
+    assert result["ok"] is True
+    assert result["checks"]["store_capability_parity"] == {
+        "ok": True,
+        "status": "skipped",
+        "reason": "store_access_paused",
+    }
+    assert len(calls) == 2
+
+
+def test_gateway_timeout_fails_closed_without_subprocess_details(tmp_path, enabled_store_policy):
     manager_root = tmp_path / "manager"
     crm_root = tmp_path / "crm"
     plugin_root = tmp_path / "gmail"
@@ -203,7 +257,7 @@ def test_gateway_timeout_fails_closed_without_subprocess_details(tmp_path):
     assert "sensitive-output" not in json.dumps(result)
 
 
-def test_gateway_check_retries_once_and_reports_safe_recovery(tmp_path):
+def test_gateway_check_retries_once_and_reports_safe_recovery(tmp_path, enabled_store_policy):
     manager_root = tmp_path / "manager"
     crm_root = tmp_path / "crm"
     plugin_root = tmp_path / "gmail"

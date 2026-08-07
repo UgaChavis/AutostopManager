@@ -622,7 +622,7 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
         assert retired_tool not in server.tools
 
 
-def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_path):
+def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_path, enabled_store_policy):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     register_manager_memory_tools(server, store)
@@ -659,6 +659,7 @@ def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_pat
 def test_store_analytics_tool_is_registered_as_read_only_raw_and_uses_internal_runtime_config(
     tmp_path,
     monkeypatch,
+    enabled_store_policy,
 ):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -697,7 +698,7 @@ def test_store_analytics_tool_is_registered_as_read_only_raw_and_uses_internal_r
     }
 
 
-def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_path, monkeypatch):
+def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_path, monkeypatch, enabled_store_policy):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     captured = {}
@@ -873,6 +874,117 @@ def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_pat
     assert write["meta"]["request_sha256"] == "c" * 64
     assert write["meta"]["schema_hash"] == "a" * 64
     assert captured["invoke"][-1]["dry_run_proof"] == "b" * 64
+
+
+def _register_fake_store_guard_tools(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeStoreIntegration:
+        def __init__(self, **_kwargs):
+            pass
+
+        def runtime_status(self, **_kwargs):
+            calls.append("runtime")
+            return {"ok": True}
+
+        def digest(self, **_kwargs):
+            calls.append("digest")
+            return {"ok": True}
+
+        def search(self, **_kwargs):
+            calls.append("search")
+            return {"ok": True}
+
+        def entity_context(self, **_kwargs):
+            calls.append("entity_context")
+            return {"ok": True}
+
+        def quote_vin_photo_preview(self, **_kwargs):
+            calls.append("quote_photo")
+            return {"ok": True}
+
+        def management_action(self, **_kwargs):
+            calls.append("management")
+            return {"ok": True}
+
+    class FakeOwnerClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def list_capabilities(self, **_kwargs):
+            calls.append("owner_capabilities")
+            return {"ok": True}
+
+        def prepare_invocation(self, *_args, **_kwargs):
+            calls.append("owner_prepare")
+            return {"ok": True, "summary": {"method": "GET", "path_parameters": []}}
+
+        def invoke(self, **_kwargs):
+            calls.append("owner_invoke")
+            return {"ok": True}
+
+    def fake_analytics(**_kwargs):
+        calls.append("analytics")
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "StoreIntegration", FakeStoreIntegration)
+    monkeypatch.setattr(mcp_tools_module, "StoreOwnerApiClient", FakeOwnerClient)
+    monkeypatch.setattr(mcp_tools_module, "get_store_analytics_report", fake_analytics)
+    server = _FakeServer()
+    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    return server, calls
+
+
+def _call_store_guarded_tools(server):
+    return [
+        server.tools["get_store_analytics_report"](),
+        server.tools["store_owner_capabilities"](),
+        server.tools["store_owner_api"](operation_id="read", mode="read"),
+        server.tools["store_runtime_status"](),
+        server.tools["store_digest"](),
+        server.tools["store_search"](entity="store_part"),
+        server.tools["store_entity_context"](entity="store_part", entity_id="part-1"),
+        server.tools["download_store_quote_vin_photo"](quote_request_id="quote-1", expected_photo_sha256="a" * 64),
+        server.tools["store_management_action"](
+            domain="store_order",
+            action="mark_order_ready",
+            target_id="order-1",
+            planned_changes={"status": "READY"},
+            owner_intent="test",
+            expected_updated_at="v1",
+            idempotency_key="store-guard-test",
+            correlation_id="store-guard-test",
+        ),
+    ]
+
+
+def test_store_mcp_execution_guard_blocks_every_direct_client_call(tmp_path, monkeypatch):
+    server, calls = _register_fake_store_guard_tools(monkeypatch, tmp_path)
+
+    results = _call_store_guarded_tools(server)
+
+    assert all(result["error"]["code"] == "store_access_paused" for result in results)
+    assert calls == []
+
+
+def test_store_mcp_execution_guard_restores_direct_calls_when_enabled(tmp_path, monkeypatch, enabled_store_policy):
+    server, calls = _register_fake_store_guard_tools(monkeypatch, tmp_path)
+
+    results = _call_store_guarded_tools(server)
+
+    assert all(result["ok"] is True for result in results)
+    assert calls == [
+        "analytics",
+        "owner_capabilities",
+        "owner_prepare",
+        "owner_invoke",
+        "runtime",
+        "digest",
+        "search",
+        "entity_context",
+        "quote_photo",
+        "management",
+    ]
 
 
 def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_path):

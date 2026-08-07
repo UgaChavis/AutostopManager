@@ -6,6 +6,7 @@ import math
 import re
 from typing import Any
 
+from .runtime_policy import store_access_is_paused
 from .store_owner_api import is_safe_reversible_collection_create
 
 
@@ -218,6 +219,8 @@ def prepare_action_contract(
 
     blockers: list[str] = []
     warnings: list[str] = []
+    if normalized_domain in STORE_DOMAINS and store_access_is_paused():
+        blockers.append("store_access_paused")
     if not normalized_domain:
         blockers.append("missing_domain")
     if not normalized_action:
