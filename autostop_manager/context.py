@@ -334,20 +334,23 @@ def _brief_common_sources(store_excluded: bool) -> tuple[dict[str, str], dict[st
     return memory_sources, source_boundaries
 
 
-def _without_store_route_values(values: object) -> list[str]:
+def filter_store_route_values(values: object) -> list[str]:
     """Remove Store-only route guidance and retain a useful public service route."""
 
     if not isinstance(values, list):
         return []
-    return [
-        item
-        for value in values
-        if not _is_store_route_value(item := str(value).replace("supplier, and ", "").replace("live supplier and ", ""))
-    ]
+    result: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        item = str(value).replace("supplier, and ", "").replace("live supplier and ", "")
+        if item and not _is_store_route_value(item):
+            result.append(item)
+    return result
 
 
 def _brief_route_values(values: object, *, store_excluded: bool) -> list[str]:
-    return _without_store_route_values(values) if store_excluded else list(values) if isinstance(values, list) else []
+    return filter_store_route_values(values) if store_excluded else list(values) if isinstance(values, list) else []
 
 
 def _is_store_route_value(value: object) -> bool:
@@ -528,7 +531,7 @@ def prepare_manager_context(
 def _compact_hot_rules(domain: str | None, limit: int, *, store_paused: bool) -> list[str]:
     domain_rules = list(DOMAIN_BRIEF_RULES.get(str(domain or ""), []))
     if store_paused:
-        domain_rules = _without_store_route_values(domain_rules)
+        domain_rules = filter_store_route_values(domain_rules)
         if domain == "automotive_repair":
             domain_rules.insert(0, PAUSED_AUTOMOTIVE_SOURCE_GUIDANCE)
     rules = [*GENERAL_HOT_RULES, *domain_rules]
@@ -618,12 +621,10 @@ def build_agent_brief(
         next_actions = list(context.get("next_actions") or [])
     elif domain == "automotive_repair":
         read_order = (
-            _without_store_route_values(AUTOMOTIVE_REPAIR_READ_ORDER)
-            if store_excluded
-            else AUTOMOTIVE_REPAIR_READ_ORDER
+            filter_store_route_values(AUTOMOTIVE_REPAIR_READ_ORDER) if store_excluded else AUTOMOTIVE_REPAIR_READ_ORDER
         )
         allowed_actions = (
-            _without_store_route_values(AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS)
+            filter_store_route_values(AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS)
             if store_excluded
             else AUTOMOTIVE_REPAIR_ALLOWED_ACTIONS
         )
@@ -655,10 +656,10 @@ def build_agent_brief(
     route_external_connectors = command_route.get("external_connectors", [])
     route_completion_checks = command_route.get("completion_checks", [])
     if store_excluded:
-        route_required_reads = _without_store_route_values(route_required_reads)
-        route_next_actions = _without_store_route_values(route_next_actions)
-        route_external_connectors = _without_store_route_values(route_external_connectors)
-        route_completion_checks = _without_store_route_values(route_completion_checks)
+        route_required_reads = filter_store_route_values(route_required_reads)
+        route_next_actions = filter_store_route_values(route_next_actions)
+        route_external_connectors = filter_store_route_values(route_external_connectors)
+        route_completion_checks = filter_store_route_values(route_completion_checks)
     route_operation_selection = {} if store_excluded else command_route.get("operation_selection", {})
     route_read_entity_selection = {} if store_excluded else command_route.get("read_entity_selection", {})
     route_open_first = knowledge.get("open_first") if has_actionable_knowledge else None
@@ -706,7 +707,7 @@ def build_agent_brief(
             "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
             "confidence": knowledge.get("confidence"),
             "required_reads": route_required_reads,
-            "write_domains": _without_store_route_values(command_route.get("write_domains", []))
+            "write_domains": filter_store_route_values(command_route.get("write_domains", []))
             if store_excluded
             else command_route.get("write_domains", []),
             "external_connectors": route_external_connectors,

@@ -136,6 +136,35 @@ def test_paused_automotive_and_service_briefs_keep_crm_oem_and_public_routes_wit
     assert "supplier api" not in active_guidance
     assert "compare live supplier" not in active_guidance
 
+    service_workflow = next(
+        item
+        for item in list_agent_workflows(query="", limit=100)["summary"]["items"]
+        if item["workflow_id"] == "adaptive_service_case"
+    )
+    workflow_guidance = "\n".join(
+        [
+            str(service_workflow.get("open_first") or ""),
+            *service_workflow["required_reads"],
+            *service_workflow["external_connectors"],
+            *service_workflow["completion_checks"],
+        ]
+    ).casefold()
+    assert "autostop app" not in workflow_guidance
+    assert "supplier" not in workflow_guidance
+
+    selected = build_agent_bootstrap(memory, query="оцени стоимость ремонта Ford Focus замена сцепления")["summary"][
+        "selected_workflow"
+    ]
+    selected_guidance = "\n".join(
+        [
+            str(selected.get("open_first") or ""),
+            *selected["required_reads"],
+            *selected["external_connectors"],
+        ]
+    ).casefold()
+    assert "autostop app" not in selected_guidance
+    assert "supplier" not in selected_guidance
+
 
 def test_paused_brief_filters_stale_store_guidance_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
@@ -253,3 +282,49 @@ def test_paused_bootstrap_hides_prior_store_runs_and_reauthorization_restores_th
     reauthorized = build_agent_bootstrap(memory, query="Приберись")["summary"]["unfinished_runs"]
 
     assert {item["run_id"] for item in reauthorized} == {crm_run["id"], store_run["id"]}
+
+
+def test_paused_policy_blocks_direct_lifecycle_access_to_existing_store_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_store_policy(monkeypatch, tmp_path, "enabled")
+    memory = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    started = memory.start_workflow_run(
+        workflow_id="store_management_workflow",
+        intent="store_management",
+        idempotency_key="store-direct-lifecycle-policy-test",
+        scope={"domain": "store_order", "target_id": "order-1", "operation": "mark_order_ready"},
+    )
+    assert started["ok"] is True
+    run_id = int(started["id"])
+
+    _set_store_policy(monkeypatch, tmp_path, "paused")
+    blocked_results = [
+        memory.get_manager_run(run_id),
+        memory.transition_workflow_run(run_id, status="executing", expected_state_version=1),
+        memory.checkpoint_workflow_run(run_id, checkpoint={}, expected_state_version=1),
+        memory.register_external_step(
+            run_id,
+            step_id="external-1",
+            connector="gmail",
+            action="send",
+            request_refs={"external_ref": "ref-1"},
+            expected_state_version=1,
+        ),
+        memory.complete_external_step(
+            run_id,
+            step_id="external-1",
+            result_refs={"external_ref": "ref-1"},
+            expected_state_version=1,
+        ),
+        memory.resume_workflow_run(run_id, expected_state_version=1),
+        memory.cancel_workflow_run(run_id, expected_state_version=1),
+    ]
+    assert all(result.get("error") == "store_access_paused" for result in blocked_results)
+    assert memory.list_active_manager_runs()["items"] == []
+    assert memory.list_manager_runs()["items"] == []
+
+    _set_store_policy(monkeypatch, tmp_path, "enabled")
+    restored = memory.get_manager_run(run_id)
+    assert restored["ok"] is True
+    assert memory.transition_workflow_run(run_id, status="executing", expected_state_version=1)["ok"] is True

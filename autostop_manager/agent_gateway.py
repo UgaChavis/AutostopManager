@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .context import build_agent_brief
+from .context import build_agent_brief, filter_store_route_values
 from .knowledge_base import STORE_DEPENDENT_DOMAINS, find_command_route
 from .runtime_policy import store_access_is_paused
 from .storage import ManagerMemoryStore
@@ -78,6 +78,8 @@ def build_agent_bootstrap(
         active = [item for item in active if not _is_store_run(item)]
     unfinished = [_compact_run(item) for item in active]
     selected = _compact_workflow(route) if route else None
+    if selected is not None and store_access_is_paused():
+        selected = _without_store_workflow_guidance(selected)
     mode = memory.resolve_agent_mode(mode_override)
     if not mode.get("ok"):
         return agent_envelope(
@@ -183,7 +185,7 @@ def _available_workflows() -> list[dict[str, Any]]:
     if not store_access_is_paused():
         return workflows
     return [
-        workflow
+        _without_store_workflow_guidance(workflow)
         for workflow in workflows
         if str(workflow.get("domain") or "").casefold() not in STORE_DEPENDENT_DOMAINS
     ]
@@ -197,6 +199,17 @@ def _is_store_run(item: dict[str, Any]) -> bool:
         if str(workflow.get("domain") or "").casefold() in STORE_DEPENDENT_DOMAINS
     }
     return workflow_id in store_workflow_ids or workflow_id.startswith(("inventory:", "raw:store_", "store:", "store_"))
+
+
+def _without_store_workflow_guidance(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Keep a mixed service workflow usable without advertising paused Store access."""
+
+    result = dict(workflow)
+    open_first = filter_store_route_values([result.get("open_first")])
+    result["open_first"] = open_first[0] if open_first else None
+    for field in ("required_reads", "write_domains", "external_connectors", "completion_checks"):
+        result[field] = filter_store_route_values(result.get(field))
+    return result
 
 
 def _compact_workflow(route: dict[str, Any]) -> dict[str, Any]:

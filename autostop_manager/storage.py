@@ -571,6 +571,70 @@ def _is_store_workflow(*, workflow_id: str = "", intent: str = "", scope: dict[s
     return any("store" in str(scope_payload.get(key) or "").casefold() for key in ("domain", "source", "workflow_id"))
 
 
+def _paused_store_run_block(
+    row: sqlite3.Row, *, run_id: int, policy_paused: bool | None = None
+) -> dict[str, Any] | None:
+    """Block direct lifecycle access to a pre-existing Store run while Store is paused."""
+
+    if not (store_access_is_paused() if policy_paused is None else policy_paused):
+        return None
+    if not _is_store_workflow(
+        workflow_id=str(row["workflow_id"] or ""),
+        intent=str(row["intent"] or ""),
+        scope=_decode_json(row["scope_json"], {}),
+    ):
+        return None
+    return {"ok": False, "status": "blocked", "error": "store_access_paused", "run_id": run_id}
+
+
+def _store_transition_validation_error(
+    *,
+    row: sqlite3.Row,
+    run_id: int,
+    current_status: str,
+    target_status: str,
+    expected_state_version: int | None,
+    verification: dict[str, Any] | None,
+    message: str,
+    summary: str,
+) -> dict[str, Any] | None:
+    scope_payload = _decode_json(row["scope_json"], {})
+    if not _is_store_workflow(workflow_id=row["workflow_id"], intent=row["intent"], scope=scope_payload):
+        return None
+    operation = _store_workflow_operation(workflow_id=row["workflow_id"], intent=row["intent"], scope=scope_payload)
+    if operation == STORE_OWNER_LEDGER_OPERATION:
+        owner_error = _store_owner_transition_error(
+            run_id,
+            current_status=current_status,
+            target_status=target_status,
+            expected_state_version=expected_state_version,
+            scope=scope_payload,
+            checkpoint=_decode_json(row["checkpoint_json"], {}),
+        )
+        if owner_error is not None:
+            return owner_error
+    if len(str(summary or "").encode("utf-8")) > 4096:
+        return {"ok": False, "error": "store_workflow_summary_too_large", "run_id": run_id}
+    store_forbidden = _find_forbidden_store_payload_keys(verification or {})
+    if verification and (
+        not (operation == STORE_OWNER_LEDGER_OPERATION and _store_owner_verification_is_refs_only(verification))
+        and _safe_store_scalar_map(verification, kind="verification") is None
+    ):
+        store_forbidden.append("verification")
+    if not _store_message_is_allowed(message, operation=operation):
+        store_forbidden.append("message")
+    if not _store_summary_is_allowed(summary, operation=operation):
+        store_forbidden.append("summary")
+    if store_forbidden:
+        return {
+            "ok": False,
+            "error": "raw_store_payload_not_allowed_in_manager_ledger",
+            "run_id": run_id,
+            "forbidden_keys": list(dict.fromkeys(store_forbidden)),
+        }
+    return None
+
+
 def _store_machine_value_is_safe(value: Any) -> bool:
     if not isinstance(value, str):
         return isinstance(value, (bool, int)) or value is None or (isinstance(value, float) and math.isfinite(value))
@@ -4402,7 +4466,7 @@ class ManagerMemoryStore:
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT id, workflow_id, intent, status, checkpoint_json, state_version, updated_at
+                SELECT id, workflow_id, intent, scope_json, status, checkpoint_json, state_version, updated_at
                 FROM manager_runs
                 WHERE status IN ({placeholders})
                 ORDER BY updated_at DESC
@@ -4411,8 +4475,12 @@ class ManagerMemoryStore:
                 [*sorted(ACTIVE_WORKFLOW_STATES), limit],
             ).fetchall()
         items = []
+        policy_paused = store_access_is_paused()
         for row in rows:
+            if _paused_store_run_block(row, run_id=int(row["id"]), policy_paused=policy_paused):
+                continue
             item = dict(row)
+            item.pop("scope_json", None)
             item["checkpoint"] = _safe_bootstrap_checkpoint(_decode_json(item.pop("checkpoint_json"), {}))
             items.append(item)
         return {"ok": True, "items": items, "total_returned": len(items)}
@@ -4624,55 +4692,21 @@ class ManagerMemoryStore:
             row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not row:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if blocked := _paused_store_run_block(row, run_id=run_id):
+                return blocked
             current = str(row["status"] or "")
             current_version = int(row["state_version"] or 1)
-            if _is_store_workflow(
-                workflow_id=row["workflow_id"], intent=row["intent"], scope=_decode_json(row["scope_json"], {})
+            if store_error := _store_transition_validation_error(
+                row=row,
+                run_id=run_id,
+                current_status=current,
+                target_status=target_status,
+                expected_state_version=expected_state_version,
+                verification=verification,
+                message=message,
+                summary=summary,
             ):
-                scope_payload = _decode_json(row["scope_json"], {})
-                operation = _store_workflow_operation(
-                    workflow_id=row["workflow_id"],
-                    intent=row["intent"],
-                    scope=scope_payload,
-                )
-                owner_transition_error = (
-                    _store_owner_transition_error(
-                        run_id,
-                        current_status=current,
-                        target_status=target_status,
-                        expected_state_version=expected_state_version,
-                        scope=scope_payload,
-                        checkpoint=_decode_json(row["checkpoint_json"], {}),
-                    )
-                    if operation == STORE_OWNER_LEDGER_OPERATION
-                    else None
-                )
-                if owner_transition_error is not None or len(str(summary or "").encode("utf-8")) > 4096:
-                    return owner_transition_error or {
-                        "ok": False,
-                        "error": "store_workflow_summary_too_large",
-                        "run_id": run_id,
-                    }
-                store_forbidden = _find_forbidden_store_payload_keys(verification or {})
-                if verification and (
-                    not (
-                        operation == STORE_OWNER_LEDGER_OPERATION
-                        and _store_owner_verification_is_refs_only(verification)
-                    )
-                    and _safe_store_scalar_map(verification, kind="verification") is None
-                ):
-                    store_forbidden.append("verification")
-                if not _store_message_is_allowed(message, operation=operation):
-                    store_forbidden.append("message")
-                if not _store_summary_is_allowed(summary, operation=operation):
-                    store_forbidden.append("summary")
-                if store_forbidden:
-                    return {
-                        "ok": False,
-                        "error": "raw_store_payload_not_allowed_in_manager_ledger",
-                        "run_id": run_id,
-                        "forbidden_keys": list(dict.fromkeys(store_forbidden)),
-                    }
+                return store_error
             conflict = _workflow_state_conflict(
                 run_id,
                 expected_state_version=expected_state_version,
@@ -4826,6 +4860,8 @@ class ManagerMemoryStore:
             row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not row:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if blocked := _paused_store_run_block(row, run_id=run_id):
+                return blocked
             if _is_store_workflow(
                 workflow_id=row["workflow_id"], intent=row["intent"], scope=_decode_json(row["scope_json"], {})
             ):
@@ -4943,6 +4979,8 @@ class ManagerMemoryStore:
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if blocked := _paused_store_run_block(run, run_id=run_id):
+                return blocked
             if (
                 _store_workflow_operation(
                     workflow_id=run["workflow_id"],
@@ -5061,6 +5099,8 @@ class ManagerMemoryStore:
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if blocked := _paused_store_run_block(run, run_id=run_id):
+                return blocked
             if (
                 _store_workflow_operation(
                     workflow_id=run["workflow_id"],
@@ -5274,6 +5314,8 @@ class ManagerMemoryStore:
             ).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if blocked := _paused_store_run_block(run, run_id=run_id):
+                return blocked
             if _is_store_workflow(
                 workflow_id=run["workflow_id"],
                 intent=run["intent"],
@@ -5338,6 +5380,8 @@ class ManagerMemoryStore:
             ).fetchone()
         if not existing:
             return {"ok": False, "error": "manager run not found", "run_id": run_id}
+        if blocked := _paused_store_run_block(existing, run_id=run_id):
+            return blocked
         if (
             _store_workflow_operation(
                 workflow_id=existing["workflow_id"],
@@ -5379,6 +5423,12 @@ class ManagerMemoryStore:
                 "SELECT * FROM manager_runs ORDER BY started_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
+            policy_paused = store_access_is_paused()
+            rows = [
+                row
+                for row in rows
+                if not _paused_store_run_block(row, run_id=int(row["id"]), policy_paused=policy_paused)
+            ]
             items = [self._row_to_dict(row) for row in rows]
             if include_events and items:
                 events_by_run: dict[int, list[dict[str, Any]]] = {int(item["id"]): [] for item in items}
@@ -5410,6 +5460,8 @@ class ManagerMemoryStore:
             row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not row:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
+            if blocked := _paused_store_run_block(row, run_id=run_id):
+                return blocked
             item = self._row_to_dict(row)
             if include_events:
                 event_rows = conn.execute(
