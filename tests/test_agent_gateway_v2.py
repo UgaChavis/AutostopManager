@@ -5,7 +5,7 @@ from autostop_manager.knowledge_base import find_command_route
 from autostop_manager.storage import ManagerMemoryStore
 
 
-def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
+def test_named_registry_resolves_integration_finance_documents_and_crm_gmail(tmp_path, enabled_store_policy):
     cases = {
         "проанализируй связь Codex с Автостоп CRM, MCP команды, тестовый профиль и перегруженные ответы": "crm_agent_integration_audit",
         "проведи оплату в CRM": "crm_finance_operation",

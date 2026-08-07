@@ -5,6 +5,9 @@ scope, aggregate-only closed-order experience, current public labor-only prices,
 and labor-time evidence. The result is a case-specific EvidenceBundle, not a
 fixed formula. This read-only route never writes repair orders or money data.
 
+When Store is paused in `docs/agent/manager_rules.json`, omit Store/supplier-API
+evidence and use CRM, VIN/OEM, AUTONORMS, and public-market evidence instead.
+
 ## Trigger
 
 Use this playbook when the owner asks:
@@ -113,8 +116,8 @@ and historical article references:
 Both snapshots are aggregate-only and private. The full labor snapshot is the
 preferred estimator source. Executor statistics must not enter customer
 pricing, durable agent memory, docs, Git, or public reports. Article price
-references remain separate historical hints until live Store, supplier, public
-market, and applicability checks pass.
+references remain separate historical hints until applicable public-market and
+fitment checks pass; add live Store/supplier evidence only when enabled.
 
 ## PartsAPI AUTONORMS Layer
 

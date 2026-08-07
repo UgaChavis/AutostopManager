@@ -7,7 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
+import pytest
+
 from autostop_manager.storage import ManagerMemoryStore
+
+
+@pytest.fixture(autouse=True)
+def _enable_store_for_legacy_ledger_tests(enabled_store_policy) -> None:
+    """Keep legacy Store-ledger behavior tests explicit about reauthorization."""
 
 
 def test_manager_run_ledger_records_events_and_finish_state(tmp_path):

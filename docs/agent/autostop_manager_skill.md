@@ -21,6 +21,9 @@ Default owner-facing style: Russian, short, practical, direct.
 4. For broad multi-step work, use the Gateway ledger contract described under
    **Run Ledger**.
 
+Store routes are available only when
+`runtime_policies.autostop_store.state=enabled` in `docs/agent/manager_rules.json`.
+
 ## Intelligent Execution and Learning
 
 Treat routing as adaptive evidence selection, not as a rigid script. Break a

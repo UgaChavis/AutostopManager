@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT, get_db_path
+from .runtime_policy import store_access_is_paused
 
 
 WORKFLOW_TERMINAL_STATES = {"completed", "failed", "cancelled"}
@@ -4490,7 +4491,10 @@ class ManagerMemoryStore:
                 "error": "raw_external_body_not_allowed_in_manager_ledger",
                 "forbidden_keys": forbidden,
             }
-        if _is_store_workflow(workflow_id=workflow_id, intent=intent, scope=scope_payload):
+        store_workflow = _is_store_workflow(workflow_id=workflow_id, intent=intent, scope=scope_payload)
+        if store_workflow and store_access_is_paused():
+            return {"ok": False, "status": "blocked", "error": "store_access_paused"}
+        if store_workflow:
             store_forbidden = _find_forbidden_store_payload_keys({"scope": scope_payload, "metadata": metadata_payload})
             store_forbidden.extend(
                 _store_start_channel_forbidden(

@@ -26,7 +26,7 @@ def test_board_cleanup_route_has_single_canonical_alias():
     assert route["aliases"] == ["Приберись"]
 
 
-def test_store_analytics_natural_query_routes_to_aggregate_playbook(tmp_path):
+def test_store_analytics_natural_query_routes_to_aggregate_playbook(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -180,7 +180,7 @@ def test_probe_routes_project_refactoring_to_startup_sources(tmp_path):
     assert result["open_first"] == "AGENTS.md"
 
 
-def test_probe_routes_full_ecosystem_parity_to_dedicated_program(tmp_path):
+def test_probe_routes_full_ecosystem_parity_to_dedicated_program(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -219,7 +219,7 @@ def test_general_automotive_technical_queries_route_to_adaptive_repair_sources(t
         assert result["command_route"] is None, query
 
 
-def test_automotive_vehicle_and_store_context_are_selected_only_when_present(tmp_path):
+def test_automotive_vehicle_and_store_context_are_selected_only_when_present(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -262,7 +262,7 @@ def test_low_confidence_generic_interrogative_does_not_activate_store_analytics_
     assert brief["route"]["open_first"] is None
 
 
-def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misrouting(tmp_path):
+def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misrouting(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
     phrases = [
@@ -308,7 +308,7 @@ def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misr
         assert result["best_domain"] not in {"parts_sourcing", "work_labor_pricing"}, phrase
 
 
-def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path):
+def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
     query = "Покажи активные заказы магазина, но магазином автозапчастей не занимайся — он пока в разработке"
@@ -328,7 +328,7 @@ def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path):
     assert all("store" not in domain.casefold() for domain in brief["route"]["write_domains"])
 
 
-def test_explicit_store_opt_out_excludes_ecosystem_parity_and_common_store_context(tmp_path):
+def test_explicit_store_opt_out_excludes_ecosystem_parity_and_common_store_context(tmp_path, enabled_store_policy):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
     query = (
@@ -350,7 +350,7 @@ def test_explicit_store_opt_out_excludes_ecosystem_parity_and_common_store_conte
     assert all("store" not in domain.casefold() for domain in brief["route"]["write_domains"])
 
 
-def test_store_write_phrases_route_to_allowlisted_management_workflow():
+def test_store_write_phrases_route_to_allowlisted_management_workflow(tmp_path, enabled_store_policy):
     phrases = [
         "назначь заявку на подбор сотруднику",
         "переведи заявку на подбор в работу",
@@ -376,7 +376,7 @@ def test_store_write_phrases_route_to_allowlisted_management_workflow():
         assert route["workflow_id"] == "store_management_workflow", phrase
 
 
-def test_full_store_owner_parity_phrases_route_to_management_workflow():
+def test_full_store_owner_parity_phrases_route_to_management_workflow(tmp_path, enabled_store_policy):
     for phrase in [
         "создай товар в магазине",
         "измени цену товара",
@@ -404,7 +404,9 @@ def test_general_drom_sourcing_and_crm_repair_order_stay_outside_store_route(tmp
     assert (repair_order["command_route"] or {}).get("workflow_id") != "store_read_workflow"
 
 
-def test_store_today_route_documents_krasnoyarsk_business_time_and_opaque_utc_checkpoint():
+def test_store_today_route_documents_krasnoyarsk_business_time_and_opaque_utc_checkpoint(
+    tmp_path, enabled_store_policy
+):
     route = find_command_route("Что нового сегодня в магазине?")
     playbook = (knowledge_base.PROJECT_ROOT / "docs" / "agent" / "store_management_playbook.md").read_text(
         encoding="utf-8"

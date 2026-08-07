@@ -4,22 +4,31 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import get_mcp_host, get_mcp_path, get_mcp_port
 from .mcp_tools import register_manager_memory_tools
+from .runtime_policy import store_access_is_paused
+
+
+def _server_instructions() -> str:
+    store_guidance = (
+        "Store and Store Analytics are paused by owner policy: do not bootstrap, route, or invoke them; start CRM/Gmail work with focused reads. "
+        if store_access_is_paused()
+        else "Start non-trivial CRM/store/Gmail work with agent_bootstrap, use the named workflow registry, and expose Store only through existing Gateway tools. "
+    )
+    return (
+        "Headless Agent Gateway, manager memory, workflow ledger, and source-routing layer for AutoStop CRM and AutoStop App. "
+        f"{store_guidance}"
+        "Prepare ActionContractV2 before writes, and keep resumable progress in the workflow lifecycle tools. "
+        "Gmail remains a separate connector: store only message/thread/file result references through complete_external_step, never bodies. "
+        "Use these tools only for durable non-CRM/store memory, routing rules, technical cursors/compact refs, knowledge navigation, and knowledge intake. "
+        "Probe the knowledge base first, then open the returned source-of-truth route before broad file reads when the task involves diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge. "
+        "When new files are supplied, extract durable conclusions and update the relevant playbooks or catalogs; do not store raw dumps. "
+        "Use the existing AutoStop CRM MCP tools for cards, clients, vehicles, repair orders, cashboxes, and board state."
+    )
 
 
 def build_server() -> FastMCP:
     server = FastMCP(
         name="AutostopManager",
-        instructions=(
-            "Headless Agent Gateway, manager memory, workflow ledger, and source-routing layer for AutoStop CRM and AutoStop App. "
-            "Start non-trivial CRM/store/Gmail work with agent_bootstrap, use the named workflow registry, "
-            "prepare ActionContractV2 before writes, and keep resumable progress in the workflow lifecycle tools. "
-            "Gmail remains a separate connector: store only message/thread/file result references through complete_external_step, never bodies. "
-            "AutoStop App remains the store source of truth: use only its pure-read agent API, keep raw store payload out of Manager state, and expose store access through existing Gateway tools. "
-            "Use these tools only for durable non-CRM/store memory, routing rules, technical cursors/compact refs, knowledge navigation, and knowledge intake. "
-            "Probe the knowledge base first, then open the returned source-of-truth route before broad file reads when the task involves diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge. "
-            "When new files are supplied, extract durable conclusions and update the relevant playbooks or catalogs; do not store raw dumps. "
-            "Use the existing AutoStop CRM MCP tools for cards, clients, vehicles, repair orders, cashboxes, and board state."
-        ),
+        instructions=_server_instructions(),
         host=get_mcp_host(),
         port=get_mcp_port(),
         streamable_http_path=get_mcp_path(),

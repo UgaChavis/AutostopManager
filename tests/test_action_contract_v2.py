@@ -11,6 +11,11 @@ from autostop_manager.action_contract import EXECUTOR_TOOLS, INVENTORY_EXECUTOR_
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _enable_store_for_legacy_contract_tests(enabled_store_policy) -> None:
+    """Keep legacy Store-contract behavior tests explicit about reauthorization."""
+
+
 def test_payment_action_contract_requires_and_reconciles_financial_context():
     result = prepare_action_contract(
         domain="payment",
