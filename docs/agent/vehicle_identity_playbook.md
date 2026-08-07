@@ -204,7 +204,7 @@ If sources disagree:
 
 Once the vehicle identity is stable, pass the result to:
 
-- `docs/agent/vin_oem_lookup_playbook.md`
+- `docs/agent/crm_vin_oem_parts_lookup_playbook.md` for an identified CRM card
 - `docs/agent/parts_search_playbook.md`
 
 Before writing to CRM materials, identity should be at least `high` for the

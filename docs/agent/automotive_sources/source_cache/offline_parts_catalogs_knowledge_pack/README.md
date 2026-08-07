@@ -19,7 +19,7 @@ re-download official public sources as needed.
 
 ## Load Order
 
-1. Open `docs/agent/vin_oem_lookup_playbook.md` for OEM-vs-cross boundaries.
+1. Open `docs/agent/crm_vin_oem_parts_lookup_playbook.md` for OEM-vs-cross boundaries.
 2. Check `data/offline_parts_catalogs/catalog_index.json` if it exists.
 3. Search extracted text with a narrow number or vehicle query:
 

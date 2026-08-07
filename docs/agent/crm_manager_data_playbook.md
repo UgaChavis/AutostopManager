@@ -93,31 +93,6 @@ The raw write creates its own durable Gateway ledger. Record its result and
 readback; do not substitute an unsupported dry-run or bypass the Gateway with
 the local API.
 
-### Gateway v2 attestation
-
-Use `crm-gateway-attest` for stop-the-line integration certification. One
-invocation performs one action only:
-
-```bash
-.venv/bin/python -m autostop_manager.cli crm-gateway-attest inventory
-.venv/bin/python -m autostop_manager.cli crm-gateway-attest next --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
-.venv/bin/python -m autostop_manager.cli crm-gateway-attest next --run-id AST-GWAT-YYYYMMDDTHHMMSSZ --apply-synthetic
-.venv/bin/python -m autostop_manager.cli crm-gateway-attest retry --run-id AST-GWAT-YYYYMMDDTHHMMSSZ --apply-synthetic
-.venv/bin/python -m autostop_manager.cli crm-gateway-attest cleanup --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
-.venv/bin/python -m autostop_manager.cli crm-gateway-attest summary --run-id AST-GWAT-YYYYMMDDTHHMMSSZ
-```
-
-`inventory` freezes the live 24-tool public contract, 43 CRM workflow
-operations and Manager-used CRM raw capabilities. A failed command leaves the
-campaign blocked until that exact case is fixed, released and retried.
-Production apply is valid only for isolated entities named with the run
-prefix. Reports live outside Git under
-`/var/lib/autostop-manager/integration/gateway-attestation/<run-id>/` and must
-contain only hashes, sizes, timings, statuses and compact refs. `cleanup`
-performs exact rereads, restores financial effects, deletes compensable
-fixtures, archives synthetic cards and records any capability limitation
-without claiming a false pass.
-
 ## Read-Only CRM Health Flow
 
 Use this flow before proposing CRM hygiene work. It is read-only and must not

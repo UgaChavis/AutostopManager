@@ -7,6 +7,36 @@ from typing import Any
 from .storage import ManagerMemoryStore, _now
 
 
+_SENSITIVE_MEMORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("email", re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)),
+    ("phone", re.compile(r"(?<!\d)(?:\+7|8)[\s()\-]*\d(?:[\s()\-]*\d){9}(?!\d)")),
+    ("vin", re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)),
+    (
+        "vehicle_identifier_label",
+        re.compile(r"\b(?:vin|frame|chassis|кузов|шасси)\s*(?:number|номер)?\s*[:=]?\s*[A-Z0-9-]{6,}", re.IGNORECASE),
+    ),
+    (
+        "license_plate",
+        re.compile(r"\b[АВЕКМНОРСТУХABEKMHOPCTYX]\d{3}[АВЕКМНОРСТУХABEKMHOPCTYX]{2}\d{2,3}\b", re.IGNORECASE),
+    ),
+    ("crm_entity_ref", re.compile(r"\b(?:C|CL)-[0-9A-F]{8}\b", re.IGNORECASE)),
+    (
+        "entity_uuid_label",
+        re.compile(
+            r"\b(?:card|client|repair[ _-]?order|cashbox)[ _-]?(?:id)?\s*[:=]?\s*"
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            re.IGNORECASE,
+        ),
+    ),
+    ("api_key", re.compile(r"\bsk-[A-Z0-9_-]{8,}\b", re.IGNORECASE)),
+    ("private_key", re.compile(r"-----BEGIN(?: [A-Z]+)? PRIVATE KEY-----", re.IGNORECASE)),
+    (
+        "secret_assignment",
+        re.compile(r"\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+", re.IGNORECASE),
+    ),
+)
+
+
 def audit_memory(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     memory.initialize()
@@ -30,6 +60,7 @@ def audit_memory(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
     duplicates: list[dict[str, Any]] = []
     expired: list[dict[str, Any]] = []
     superseded: list[dict[str, Any]] = []
+    sensitive_candidates: list[dict[str, Any]] = []
     for kind, rows in rows_by_kind.items():
         by_normalized: dict[str, list[dict[str, Any]]] = defaultdict(list)
         by_id = {int(row["id"]): row for row in rows}
@@ -40,6 +71,11 @@ def audit_memory(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
             expires_at = row.get("expires_at")
             if expires_at and str(expires_at) <= now:
                 expired.append(_compact_memory(row))
+            detectors = _sensitive_memory_detectors(row)
+            if detectors:
+                candidate = _compact_memory(row)
+                candidate["detectors"] = detectors
+                sensitive_candidates.append(candidate)
 
         for group in by_normalized.values():
             if len(group) > 1:
@@ -69,14 +105,19 @@ def audit_memory(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
         warnings.append("expired memories found")
     if superseded:
         warnings.append("superseded memories found")
+    if sensitive_candidates:
+        warnings.append("sensitive memory candidates found; review without exporting content")
     return {
         "ok": True,
         "duplicates": duplicates,
         "expired": expired,
         "superseded": superseded,
+        "sensitive_candidates": sensitive_candidates,
         "privacy": {
             "content_preview_included": False,
             "raw_private_data_redacted": True,
+            "sensitive_candidate_content_redacted": True,
+            "sensitive_candidate_count": len(sensitive_candidates),
         },
         "warnings": warnings,
         "checked_at": now,
@@ -107,6 +148,7 @@ def curate_memory(store: ManagerMemoryStore | None = None, *, apply: bool = Fals
         "duplicate_groups": audit["duplicates"],
         "expired": audit["expired"],
         "superseded": audit["superseded"],
+        "sensitive_candidates": audit["sensitive_candidates"],
         "checked_at": audit["checked_at"],
     }
 
@@ -124,6 +166,11 @@ def _memory_text(row: dict[str, Any]) -> str:
 
 def _normalize_memory_text(row: dict[str, Any]) -> str:
     return re.sub(r"\s+", " ", _memory_text(row).casefold()).strip()
+
+
+def _sensitive_memory_detectors(row: dict[str, Any]) -> list[str]:
+    text = _memory_text(row)
+    return [name for name, pattern in _SENSITIVE_MEMORY_PATTERNS if pattern.search(text)]
 
 
 def _compact_memory(row: dict[str, Any]) -> dict[str, Any]:

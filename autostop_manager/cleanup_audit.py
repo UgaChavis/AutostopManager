@@ -25,6 +25,11 @@ IGNORED_CACHE_SCAN_ROOTS = {
     "data",
     "output",
 }
+PROJECT_FOOTPRINT_LARGEST_FILES_LIMIT = 10
+PROJECT_FOOTPRINT_PRODUCTION_NET_LINE_WARNING = 500
+PROJECT_FOOTPRINT_TEST_NET_LINE_WARNING = 500
+PROJECT_FOOTPRINT_DOCS_NET_LINE_WARNING = 300
+PROJECT_FOOTPRINT_TOTAL_NET_LINE_WARNING = 1000
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,7 @@ def build_cleanup_audit(
     if local_db is not None:
         retained_items.append(local_db)
     candidates.extend(_source_pack_overindexed_candidates(root))
+    project_footprint = _project_footprint(root)
 
     category_counts = Counter(candidate.category for candidate in candidates)
     retained_category_counts = Counter(item.category for item in retained_items)
@@ -86,6 +92,7 @@ def build_cleanup_audit(
         },
         "candidates": [candidate.to_dict() for candidate in candidates],
         "retained_items": [item.to_dict() for item in retained_items],
+        "project_footprint": project_footprint,
         "checked_at": _now(),
     }
 
@@ -112,6 +119,151 @@ def _ignored_cache_candidates(root: Path) -> list[CleanupCandidate]:
             )
         )
     return candidates
+
+
+def _project_footprint(root: Path) -> dict[str, Any]:
+    tracked_paths = set(_git_tracked_paths(root))
+    untracked_paths = set(_git_untracked_paths(root))
+    worktree_files: list[dict[str, Any]] = []
+    python_lines = 0
+    documentation_lines = 0
+    for relative_path in sorted(tracked_paths | untracked_paths):
+        path = root / relative_path
+        if not path.is_file():
+            continue
+        line_count = _file_line_count(path)
+        normalized_path = relative_path.replace("\\", "/")
+        size_bytes = _path_size(path)
+        worktree_files.append(
+            {
+                "path": normalized_path,
+                "size_bytes": size_bytes,
+                "line_count": line_count,
+                "tracked": relative_path in tracked_paths,
+            }
+        )
+        if path.suffix == ".py":
+            python_lines += line_count
+        if normalized_path.startswith("docs/"):
+            documentation_lines += line_count
+
+    diff_rows = _git_diff_numstat(root)
+    changed_files = [row for row in diff_rows if row[0] or row[1]]
+    growth_warnings = [
+        {
+            "code": "large_production_file_growth",
+            "path": path,
+            "net_lines": added_lines - deleted_lines,
+            "threshold_net_lines": PROJECT_FOOTPRINT_PRODUCTION_NET_LINE_WARNING,
+        }
+        for path, added_lines, deleted_lines in changed_files
+        if path.startswith("autostop_manager/")
+        and path.endswith(".py")
+        and added_lines - deleted_lines > PROJECT_FOOTPRINT_PRODUCTION_NET_LINE_WARNING
+    ]
+    category_growth = {
+        "tests": sum(added - deleted for path, added, deleted in changed_files if path.startswith("tests/")),
+        "docs": sum(added - deleted for path, added, deleted in changed_files if path.startswith("docs/")),
+        "total": sum(added - deleted for _, added, deleted in changed_files),
+    }
+    for category, threshold in (
+        ("tests", PROJECT_FOOTPRINT_TEST_NET_LINE_WARNING),
+        ("docs", PROJECT_FOOTPRINT_DOCS_NET_LINE_WARNING),
+        ("total", PROJECT_FOOTPRINT_TOTAL_NET_LINE_WARNING),
+    ):
+        if category_growth[category] > threshold:
+            growth_warnings.append(
+                {
+                    "code": f"large_{category}_growth",
+                    "net_lines": category_growth[category],
+                    "threshold_net_lines": threshold,
+                }
+            )
+    tracked_files = [item for item in worktree_files if item["tracked"]]
+    return {
+        "tracked_file_count": len(tracked_files),
+        "tracked_size_bytes": sum(item["size_bytes"] for item in tracked_files),
+        "untracked_file_count": len(worktree_files) - len(tracked_files),
+        "worktree_file_count": len(worktree_files),
+        "worktree_size_bytes": sum(item["size_bytes"] for item in worktree_files),
+        "python_line_count": python_lines,
+        "documentation_line_count": documentation_lines,
+        "largest_tracked_files": sorted(
+            tracked_files,
+            key=lambda item: (-int(item["size_bytes"]), str(item["path"])),
+        )[:PROJECT_FOOTPRINT_LARGEST_FILES_LIMIT],
+        "largest_worktree_files": sorted(
+            worktree_files,
+            key=lambda item: (-int(item["size_bytes"]), str(item["path"])),
+        )[:PROJECT_FOOTPRINT_LARGEST_FILES_LIMIT],
+        "working_tree_diff": {
+            "changed_file_count": len(changed_files),
+            "added_lines": sum(row[1] for row in changed_files),
+            "deleted_lines": sum(row[2] for row in changed_files),
+            "net_lines": sum(row[1] - row[2] for row in changed_files),
+        },
+        "warnings": growth_warnings,
+    }
+
+
+def _git_tracked_paths(root: Path) -> list[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "ls-files"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def _git_diff_numstat(root: Path) -> list[tuple[str, int, int]]:
+    try:
+        repo_root = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if Path(repo_root).resolve() != root.resolve():
+            raise subprocess.CalledProcessError(1, "git-root-mismatch")
+        completed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--numstat", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        diff_output = ""
+    else:
+        diff_output = completed.stdout
+    rows: list[tuple[str, int, int]] = []
+    for line in diff_output.splitlines():
+        added, separator, remainder = line.partition("\t")
+        if not separator:
+            continue
+        deleted, separator, path = remainder.partition("\t")
+        if not separator or not added.isdigit() or not deleted.isdigit():
+            continue
+        rows.append((path.replace("\\", "/"), int(added), int(deleted)))
+    changed_paths = {path for path, _, _ in rows}
+    for relative_path in _git_untracked_paths(root):
+        normalized_path = relative_path.replace("\\", "/")
+        absolute_path = root / relative_path
+        if normalized_path in changed_paths or not absolute_path.is_file():
+            continue
+        rows.append((normalized_path, _file_line_count(absolute_path), 0))
+    return rows
+
+
+def _file_line_count(path: Path) -> int:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return 0
+    return data.count(b"\n") + int(bool(data) and not data.endswith(b"\n"))
 
 
 def _is_under_ignored_cache_root(path: Path, root: Path) -> bool:

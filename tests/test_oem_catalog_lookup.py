@@ -252,8 +252,15 @@ def test_lookup_oem_catalog_candidates_uses_partsapi_vin_decode_oe_fallback(monk
 
 
 def test_lookup_oem_catalog_candidates_reports_unavailable_providers_as_inconclusive(monkeypatch):
-    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
-    monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.partsapi_catalog_lookup",
+        lambda **kwargs: {
+            "ok": False,
+            "provider": "partsapi_ru",
+            "operation": kwargs["operation"],
+            "error": "provider unavailable",
+        },
+    )
 
     result = lookup_oem_catalog_candidates(
         identifier="SYNTHETICVIN00001",
@@ -261,7 +268,7 @@ def test_lookup_oem_catalog_candidates_reports_unavailable_providers_as_inconclu
         dry_run=False,
     )
 
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert result["status"] == "inconclusive"
     assert result["candidate_count"] == 0
     assert result["has_successful_provider"] is False

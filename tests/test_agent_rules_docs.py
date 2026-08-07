@@ -46,7 +46,6 @@ def test_codex_native_startup_files_are_present_and_safe():
         "annotations-audit",
         "skills-audit",
         "cleanup-audit",
-        "docs/agent/autostop_manager_skill.md",
     ]:
         assert expected in agents
 
@@ -111,8 +110,19 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "managed-pc refresh-device-files",
         "ControlPersist 600",
         "127.0.0.1:9223",
+        "/root/.codex/CODEX_VPN_FST_ACCESS.md",
+        "autostop-vpn-fst",
+        "autostop-vps27560",
+        "StrictHostKeyChecking=no",
+        "host-key mismatch",
+        "route CRM traffic through a VPN",
     ]:
         assert expected in combined
+
+    access_doc = (ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md").read_text(encoding="utf-8")
+    assert len(access_doc.splitlines()) <= 180
+    assert "AutostopVPN Daily Deep Check" not in access_doc
+    assert "static Cloudflare resolvers" not in access_doc
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]
@@ -124,7 +134,6 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
         ROOT / "AGENTS.md",
         ROOT / "README.md",
         ROOT / "docs" / "agent" / "knowledge_shelves.md",
-        ROOT / "docs" / "agent" / "autostop_manager_skill.md",
         ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
@@ -184,7 +193,6 @@ def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
     required_docs = [
         ROOT / "AGENTS.md",
         ROOT / "README.md",
-        ROOT / "docs" / "agent" / "autostop_manager_skill.md",
         ROOT / "docs" / "agent" / "store_management_playbook.md",
         ROOT / "docs" / "agent" / "deployment_runbook.md",
     ]
@@ -336,7 +344,6 @@ def test_gmail_playbook_lists_current_documented_surface():
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():
     checked_paths = [
         ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md",
-        ROOT / "docs" / "agent" / "autostop_manager_skill.md",
         ROOT / "docs" / "agent" / "command_routes.json",
         ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
         ROOT / "docs" / "agent" / "manager_mcp_catalog.json",
@@ -370,17 +377,19 @@ def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_previe
 
 def test_board_cleanup_description_and_structured_field_contract_is_documented():
     playbook = (ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md").read_text(encoding="utf-8")
+    description_standard = (ROOT / "docs" / "agent" / "crm_card_description_standard.md").read_text(encoding="utf-8")
     route = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
     manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
     crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
     assert "This playbook is the only detailed source of truth" in playbook
-    assert "leave it empty" in playbook
+    assert "crm_card_description_standard.md" in playbook
+    assert "leave it empty" in description_standard
     assert "phone goes to the client" in playbook
     assert "VIN/plate/mileage" in playbook
     assert "vehicle` as a compact make/model" in playbook
     assert "no more than three tags" in playbook
-    assert "Bad public `description` patterns" in playbook
+    assert "Must Not Do" in description_standard
     assert "repair_orders_changed=0 and payments_changed=0" in playbook
 
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
@@ -571,12 +580,11 @@ def test_compacted_source_pack_manifests_match_retained_files():
         if path.is_file() and path.name != "manifest.json"
     )
 
-    ai_root = cache_root / "ai_parts_krasnoyarsk_project_pack"
     offline_root = cache_root / "offline_parts_catalogs_knowledge_pack"
 
     assert bmw_manifest["file_count_excluding_manifest"] == len(bmw_files)
     assert bmw_manifest["files"] == bmw_files
-    assert {path.name for path in ai_root.iterdir() if path.is_file()} == {"MANIFEST.md", "README.md"}
+    assert not (cache_root / "ai_parts_krasnoyarsk_project_pack").exists()
     assert not (offline_root / "sources" / "citations.md").exists()
     assert (offline_root / "sources" / "offline_parts_catalog_sources.json").is_file()
 

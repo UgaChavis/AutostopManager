@@ -3031,7 +3031,7 @@ def lookup_oem_catalog_candidates(
 
     has_successful_provider = any(result.get("ok") is True for result in provider_results)
     return {
-        "ok": True,
+        "ok": has_successful_provider,
         "status": "completed" if oem_candidates else "inconclusive",
         "provider": "multi_oem_catalog_lookup",
         "identifier": {"redacted": _redact_identifier(identifier), "raw_identifier_is_sensitive": True},

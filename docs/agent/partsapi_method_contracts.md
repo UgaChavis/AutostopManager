@@ -17,9 +17,11 @@ keys are supported:
 `PARTSAPI_GET_NORMS_MODELS_KEY`, `PARTSAPI_GET_NORMS_MOTORS_KEY`, and
 `PARTSAPI_GET_NORMS_TIMES_KEY`, and `PARTSAPI_GET_FILL_VOLUMES_KEY`.
 
-Select credentials by exact method; a missing global key is not a configuration
-failure when its method-specific key exists. Provider/config blocks and empty
-candidate sets are `inconclusive`, never proof of no fitment.
+The key is selected by the exact method: for example, `VINdecode` uses
+`PARTSAPI_VINDECODE_KEY`. A missing global key alone is not a configuration
+failure when that method key is present. Provider/auth/config blocks and empty
+candidate sets are `inconclusive`, not evidence that a part does not exist or
+fits the vehicle.
 
 | operation | PartsAPI method | required input | normalized output | notes |
 | --- | --- | --- | --- | --- |
@@ -87,6 +89,13 @@ they do not establish OEM status or VIN-specific fitment. Provider HTTP 5xx,
 an empty response, or test-key quota exhaustion is `inconclusive`, not evidence
 that the part or cross does not exist.
 
+### Bounded VIN/OEM smoke
+
+Use `partsapi-vin-smoke` for one read-only CRM-like item or an explicit
+identifier/category check. Prefer `--dry-run` until the exact method key and a
+numeric category are confirmed; its redacted result proves adapter behavior,
+not final fitment and never authorizes CRM writeback.
+
 ## Normalized Buckets
 
 - `vehicle_profiles`: safe vehicle summaries; include redacted identifier only.
@@ -103,8 +112,9 @@ that the part or cross does not exist.
 
 - `getPartsbyVIN` requires a numeric group id; text categories must be resolved
   first.
-- `lookup_oem_catalog_candidates` returns `status=inconclusive` with blockers
-  when no candidate/provider is available; never invent a category or OEM.
+- When `lookup_oem_catalog_candidates` has no candidate or no configured
+  provider, it completes with `status=inconclusive` and explicit blockers; do
+  not treat that as a write/transport failure or invent a numeric `cat` id.
 - `getPartsbyVIN` can be slow or time out; retry metadata must stay redacted
   and callers should cap live request count.
 - `getOEApplicability` is advisory: empty payloads and provider-side failures

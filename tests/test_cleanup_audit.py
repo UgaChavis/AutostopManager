@@ -132,6 +132,68 @@ def test_cleanup_audit_handles_invalid_knowledge_map_structure(tmp_path):
     assert result["summary"]["candidate_count"] == 0
 
 
+def test_cleanup_audit_reports_project_footprint_and_large_module_growth(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    source = root / "autostop_manager" / "large.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("first\nsecond\n", encoding="utf-8")
+    documentation = root / "docs" / "agent" / "route.md"
+    documentation.parent.mkdir(parents=True)
+    documentation.write_text("# Route\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        cleanup_audit_module,
+        "_git_tracked_paths",
+        lambda _root: ["autostop_manager/large.py", "docs/agent/route.md"],
+    )
+    monkeypatch.setattr(
+        cleanup_audit_module,
+        "_git_diff_numstat",
+        lambda _root: [("autostop_manager/large.py", 501, 0)],
+    )
+
+    result = build_cleanup_audit(project_root=root, store=ManagerMemoryStore(root / "data.sqlite3"))
+
+    footprint = result["project_footprint"]
+    assert footprint["tracked_file_count"] == 2
+    assert footprint["python_line_count"] == 2
+    assert footprint["documentation_line_count"] == 1
+    assert footprint["working_tree_diff"]["net_lines"] == 501
+    assert footprint["warnings"] == [
+        {
+            "code": "large_production_file_growth",
+            "path": "autostop_manager/large.py",
+            "net_lines": 501,
+            "threshold_net_lines": 500,
+        }
+    ]
+
+
+def test_cleanup_audit_counts_untracked_source_growth(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    source = root / "autostop_manager" / "new_module.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("one\ntwo\n", encoding="utf-8")
+
+    monkeypatch.setattr(cleanup_audit_module, "_git_tracked_paths", lambda _root: [])
+    monkeypatch.setattr(
+        cleanup_audit_module,
+        "_git_untracked_paths",
+        lambda _root: ["autostop_manager/new_module.py"],
+    )
+
+    footprint = build_cleanup_audit(
+        project_root=root,
+        store=ManagerMemoryStore(root / "data.sqlite3"),
+    )["project_footprint"]
+
+    assert footprint["tracked_file_count"] == 0
+    assert footprint["untracked_file_count"] == 1
+    assert footprint["worktree_file_count"] == 1
+    assert footprint["python_line_count"] == 2
+    assert footprint["working_tree_diff"]["added_lines"] == 2
+
+
 def test_cleanup_audit_handles_unreadable_knowledge_annotations(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     docs_agent = root / "docs" / "agent"

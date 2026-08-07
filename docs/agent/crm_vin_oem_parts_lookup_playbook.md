@@ -5,11 +5,10 @@ VIN/frame/body number, the owner asks for a concrete part, and the manager must
 find the OEM catalog number, check replacements/crosses, quote procurement and
 Russian market prices, then write a structured result back to CRM.
 
-This is the orchestration layer. It does not replace:
+This is the orchestration layer. Use it with:
 
 - `docs/agent/vehicle_identity_playbook.md` for identifier classification;
-- `docs/agent/vin_oem_lookup_playbook.md` for source-aware OEM routing;
-- `docs/agent/procurement_pricing_playbook.md` for закупка, retail, and CRM
+- `docs/agent/parts_search_playbook.md` for sourcing, retail, and CRM
   material-price discipline;
 - live AutoStop CRM MCP tools for cards, repair orders, clients, and files.
 
@@ -194,7 +193,7 @@ acceptance checklist.
 
 ## Price Flow
 
-Use `docs/agent/procurement_pricing_playbook.md` before writing prices.
+Use `docs/agent/parts_search_playbook.md` before writing prices.
 
 1. Quote only after OEM/reference identity is stable enough.
 2. For every candidate, capture:

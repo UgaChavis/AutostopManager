@@ -52,13 +52,15 @@ DOMAIN_BRIEF_RULES = {
     ],
     "knowledge_intake": [
         "For documentation hygiene, inventory tracked docs and their reference graph before editing or deleting anything.",
-        "Prefer the smallest existing canonical file; migrate unique active rules before deleting an obsolete document.",
+        "Keep one canonical owner per rule, link instead of duplicating procedures, and migrate unique active rules before deleting obsolete text.",
         "Run cleanup-audit before deletion, then knowledge-sync, knowledge-audit, annotations-audit, and skills-audit after durable documentation changes.",
     ],
     "remote_codex_access": [
-        "Keep the managed-pc fleet and legacy home-pc route independent; never reuse or rotate one route's keys while operating on the other.",
+        "Use docs/agent/codex_home_pc_reverse_ssh.md for server or remote-PC access; for FST.KZ first read /root/.codex/CODEX_VPN_FST_ACCESS.md and use autostop-vpn-fst.",
+        "Start with a bounded read-only identity/status check and stop on any SSH host-key mismatch; never bypass or silently accept a changed key.",
+        "Keep server, managed-pc, and legacy home-pc credentials independent.",
         "For managed-pc, resolve the exact alias and run status before shell, run, PowerShell, copy, repair, rename, or revoke operations.",
-        "Never print private keys, passwords, tokens, USB enrollment credentials, or protected runtime state.",
+        "Never print secrets, VPN profiles, USB enrollment credentials, or protected runtime state, and never route CRM traffic through a VPN.",
     ],
     "automotive_repair": [
         "Choose sources from the actual request: CRM only for an identified live card or its vehicle context, AutoStop App only for internal catalog, stock, or price facts, and public web or forums only for research evidence.",
@@ -235,7 +237,8 @@ KNOWLEDGE_HYGIENE_VERIFICATION = [
 
 REMOTE_ACCESS_READ_ORDER = [
     "open docs/agent/codex_home_pc_reverse_ssh.md",
-    "choose managed-pc or legacy home-pc without mixing their credentials or commands",
+    "choose the exact server or PC route and read any target-specific first-read instruction",
+    "run the documented bounded identity/status check and stop on a host-key mismatch",
     "for managed-pc run doctor, resolve the exact alias, then run status before an operation",
     "for legacy home-pc run the documented loopback listener and BatchMode quick checks",
 ]
@@ -249,12 +252,12 @@ REMOTE_ACCESS_ALLOWED_ACTIONS = [
 
 REMOTE_ACCESS_FORBIDDEN_ACTIONS = [
     "print, copy, commit, or expose private keys, passwords, tokens, USB enrollment credentials, or protected runtime state",
-    "mix managed-pc and legacy home-pc credentials or rotate one route while operating on the other",
+    "bypass SSH host-key verification, mix credentials between routes, or route CRM traffic through a VPN",
     "format disks, change bootloaders, mass-delete data, disable protection, reboot or shut down, or stop critical business services without a separate exact instruction",
 ]
 
 REMOTE_ACCESS_VERIFICATION = [
-    "report the exact alias or legacy route that was used",
+    "report the exact server alias or PC route that was used",
     "reread status or run the documented health check after a change",
     "confirm secrets were neither printed nor committed",
 ]

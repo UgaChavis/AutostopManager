@@ -38,9 +38,8 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    stateless snapshot request with no cursor/ACK. Use `agent_search` and
    `agent_entity_context` for focused detail. Run broad control through
    `agent_board_workflow`, not the hidden legacy surface. New-card creation is
-   the current exception: exact client/duplicate search -> literal raw
-   `create_card` schema/call -> card reread -> literal raw
-   `link_card_to_client` schema/call and reread when linkage is needed.
+   the guarded raw-write exception documented once in
+   `docs/agent/crm_manager_data_playbook.md`.
 4. For store work, open `docs/agent/store_management_playbook.md`; use existing
    Gateway tools with store scope/entities. Bootstrap uses `store_bootstrap`;
    owner “what is new” reads use `store_digest`. Never call the store DB or
@@ -48,9 +47,8 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    named workflow may use guarded raw `store_owner_capabilities` and
    `store_owner_api`; they require the reserved `store:owner` service principal
    through `AUTOSTOP_STORE_OWNER_TOKEN` and the live OpenAPI operation schema.
-   A service-material request authorizes sourcing, not a customer/ROSSKO order;
-   without a dedicated supplier operation return
-   `supplier_order_capability_unavailable`.
+   Supplier procurement boundaries are owned by that playbook; never substitute
+   a customer order for a supplier purchase.
 5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
    before any mailbox-changing action.
 6. For automotive technical questions, start with the returned knowledge route,
@@ -89,16 +87,15 @@ put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
    remain a fallback and historical article-reference route. Never persist raw
    orders. High-confidence labor pricing needs exact scope and at least three
    independent evidence families such as internal experience, current market,
-   and vehicle-specific labor time/service data. Treat `market average * 1.50`
-   only as a legacy comparison benchmark; reconcile comparable evidence into a
-   case-specific result or range and omit inapplicable internal aggregates.
+   and vehicle-specific labor time/service data.
 7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
    work, use the Gateway v2 workflow ledger and compact state-versioned
    checkpoints. Use `discover_raw_capabilities` ->
    `get_raw_capability_schema` -> `call_raw_capability` only when no named
-   workflow covers the task; never invoke a hidden capability directly.
-   Raw writes require literal-name discovery, the current schema hash, and a
-   unique idempotency key.
+   workflow covers the task; never invoke a hidden capability directly. A
+   semantic discovery query returns only read capabilities: for a raw write,
+   query its exact literal capability name, use the returned live schema hash,
+   and provide a unique idempotency key.
 8. Resolve the effective `work`/`learning` mode before a non-trivial task. In
    `learning`, use the project `autostop-learning-loop` skill and close the
    post-run review before the final answer. Open
@@ -132,8 +129,6 @@ verification.
   dry-run/preflight, unique idempotency and correlation IDs, then exact reread.
   High-risk apply also requires the matching dry-run proof; unresolved outcomes
   remain `compensating`.
-- Supplier procurement requires a dedicated advertised operation and a separate
-  exact owner command; never substitute a customer order.
 - For finance, inventory, documents, files, Gmail, or destructive writes, build
   the action contract, use a unique idempotency key, and keep any applied but
   unverified result in `compensating` until exact-target reconciliation.
@@ -183,9 +178,11 @@ verification.
   research. Use the compact case cards and URLs, never store raw journals or
   bypass login/CAPTCHA; verify final technical facts through OEM/licensed sources.
 - Business documents -> `docs/agent/business_document_quality_playbook.md`.
-- Remote Windows access -> `docs/agent/codex_home_pc_reverse_ssh.md`; keep the
-  `managed-pc` fleet and legacy `home-pc` route independent, resolve the exact
-  device, and run the documented status check before an operation.
+- Server and remote Windows access ->
+  `docs/agent/codex_home_pc_reverse_ssh.md`. For FST.KZ read
+  `/root/.codex/CODEX_VPN_FST_ACCESS.md` first and use `autostop-vpn-fst`.
+  Resolve live identity before every operation; never bypass an SSH host-key
+  mismatch or mix server, managed-PC, and legacy `home-pc` credentials.
 
 ## Git And Deploy
 
@@ -200,6 +197,9 @@ verification.
 
 ## Documentation Hygiene
 
+- Keep one canonical owner for each rule. Link to it instead of copying its
+  procedure, and remove migrated, duplicate, dated, or obsolete text rather
+  than preserving an archive in active docs.
 - Prefer updating the smallest existing canonical file over creating a new one.
 - Delete obsolete tracked docs after their rules are migrated and
   `cleanup-audit` plus knowledge audits are green.
@@ -209,7 +209,6 @@ verification.
 
 ## Core References
 
-`README.md`, `docs/agent/autostop_manager_skill.md`,
-`docs/agent/manager_rules.json`, `docs/agent/command_routes.json`,
+`README.md`, `docs/agent/manager_rules.json`, `docs/agent/command_routes.json`,
 `docs/agent/knowledge_shelves.md`,
 `docs/agent/manager_mcp_catalog.json`, `docs/agent/crm_mcp_catalog.json`.

@@ -72,6 +72,25 @@ def test_memory_audit_does_not_return_raw_private_content(tmp_path):
     assert "sk-testsecret" not in rendered
 
 
+def test_memory_audit_flags_sensitive_candidates_without_exposing_content(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sensitive = "Client email test@example.com phone +7 999 123-45-67 VIN WBA00000000000000 C-ABCDEF12"
+    record = store.remember(sensitive, kind="fact", title="private")
+
+    result = audit_memory(store)
+    rendered = json.dumps(result, ensure_ascii=False)
+
+    candidate = next(item for item in result["sensitive_candidates"] if item["id"] == record["id"])
+    assert {"email", "phone", "vin", "crm_entity_ref"}.issubset(candidate["detectors"])
+    assert candidate["content_included"] is False
+    assert result["privacy"]["sensitive_candidate_content_redacted"] is True
+    assert result["privacy"]["sensitive_candidate_count"] == 1
+    assert "test@example.com" not in rendered
+    assert "+7 999 123-45-67" not in rendered
+    assert "WBA00000000000000" not in rendered
+    assert "C-ABCDEF12" not in rendered
+
+
 def test_curate_memory_can_mark_duplicates_archived_without_deleting(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.remember("Duplicate operational note", tags=["ops"])

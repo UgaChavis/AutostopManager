@@ -6,7 +6,7 @@
   "local_repo": "Resolve from AUTOSTOP_CRM_ROOT; do not hard-code a user-profile path in this catalog.",
   "server_repo": "/opt/autostopcrm",
   "public_endpoint": "https://crm.autostopcrm.ru/mcp",
-  "last_verified": "2026-07-28",
+  "last_verified": "2026-08-07",
   "tool_counts": {
     "crm_legacy_tools_hidden_by_gateway": 94,
     "autostop_manager_tools_in_raw_registry": 77,

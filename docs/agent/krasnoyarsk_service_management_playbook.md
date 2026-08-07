@@ -64,7 +64,7 @@ Refresh this model with `agent_bootstrap` and `agent_board_digest` when the boar
 ## Procurement
 
 For закупочная цена, local availability, or repair-order materials pricing,
-use `procurement_pricing_playbook.md` before filling the ЗН. Keep procurement,
+use `parts_search_playbook.md` before filling the ЗН. Keep procurement,
 retail, and client sell prices separate.
 
 Use this order:
@@ -110,14 +110,15 @@ before calling it.
 Rules:
 
 - Price work separately from parts, fluids, materials, and procurement markup.
-- Reconcile exact scope, vehicle context, current labor-only prices, applicable
-  aggregate closed-order experience, and labor-time evidence.
+- Reconcile exact scope and vehicle context, current public labor-only prices,
+  aggregate-only closed-order experience when applicable, and labor-time
+  evidence; no one source or formula is a final price by itself.
 - Add public norm-hours/labor-time as a second plausibility layer when it can
   be found automatically; do not ask the owner to provide norm-hours.
 - Group only comparable operations and comparable vehicle classes.
 - Keep `average * 1.50`, rounded to 100 rubles, only as the legacy public
-  benchmark; the canonical recommendation rules are in
-  `work_labor_pricing_playbook.md`.
+  benchmark. Recommend the reconciled EvidenceBundle result or range, and
+  state a conflict rather than forcing an artificial single price.
 - Use norm-hours to check complexity and overlapping operations, not as a
   replacement for the public price average.
 - If fewer than 3 valid labor-only prices remain, return low confidence and

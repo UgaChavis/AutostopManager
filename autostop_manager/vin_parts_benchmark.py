@@ -409,6 +409,8 @@ def _oem_catalog_smoke_digest(call: dict[str, Any]) -> dict[str, Any]:
     return {
         "provider": call.get("provider"),
         "ok": bool(call.get("ok")),
+        "status": call.get("status"),
+        "has_successful_provider": bool(call.get("has_successful_provider")),
         "dry_run": True,
         "provider_count": int(call.get("provider_count") or 0),
         "candidate_count": int(call.get("candidate_count") or 0),

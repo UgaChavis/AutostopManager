@@ -1,19 +1,14 @@
 {
   "rules": [
     {
-      "id": "store-analytics-aggregate-only",
-      "priority": 40,
-      "rule": "For storefront analytics, use docs/agent/store_analytics_playbook.md and get_store_analytics_report. Return only aggregate metrics in Asia/Krasnoyarsk; never request, expose, persist, or place in prompts raw analytics events, visitor_id, session_id, IP, exact User-Agent, exact search text, form values, customer links, contacts, VIN, or click coordinates. Do not claim legal compliance; preserve the public notice, opt-out, and approximately 60-day raw retention boundary."
-    },
-    {
       "id": "codex-window-is-control-room",
       "priority": 5,
-      "rule": "Treat this Codex project chat as the primary control room. The owner gives natural language commands here; do not require a separate UI."
+      "rule": "Treat this project chat as the owner control room. Accept natural-language work here and answer in Russian by default, briefly and operationally."
     },
     {
-      "id": "home-pc-remote-codex-access",
+      "id": "server-and-remote-pc-access",
       "priority": 6,
-      "rule": "This server has two independent Windows reverse-SSH routes: the legacy owner's home PC through alias home-pc, and the multi-device managed-pc fleet enrolled from SECRET_KEY\\AUTOSTOP_REMOTE. Use docs/agent/codex_home_pc_reverse_ssh.md before interacting with either. For the fleet, run managed-pc doctor and status on the exact alias first; shell/run/powershell/copy/repair/rename/revoke remain exact-target operations. After a control-plane upgrade, refresh active generated SSH configs with managed-pc refresh-device-files; persistent control sockets are root-only and revocation or reenrollment must close them. Never print runtime private keys or the USB enrollment credential. Do not rotate or overwrite legacy home-pc key material while operating on the managed fleet."
+      "rule": "Use docs/agent/codex_home_pc_reverse_ssh.md. For FST.KZ first read /root/.codex/CODEX_VPN_FST_ACCESS.md and use autostop-vpn-fst. Resolve exact identity, start read-only, stop on a host-key mismatch, keep credential families separate, and never print secrets or route CRM through VPN."
     },
     {
       "id": "crm-source-of-truth",
@@ -21,19 +16,14 @@
       "rule": "Do not copy CRM card, vehicle, client, repair-order, or cashbox data into manager memory as a parallel database. Read it from AutoStop CRM MCP when needed."
     },
     {
-      "id": "answer-style",
-      "priority": 15,
-      "rule": "Answer the owner in Russian by default, briefly and operationally. Expand only when planning, reporting verification, or explaining risk."
+      "id": "live-source-boundaries",
+      "priority": 11,
+      "rule": "CRM owns live service data, AutoStop App owns store and warehouse data, and Gmail owns mailbox data. Manager docs and memory keep only routes, compact durable conclusions, technical cursors and verification; never raw exports, customer tables, ledgers, threads or secrets."
     },
     {
       "id": "board-cleanup-autopilot-trigger",
       "priority": 16,
-      "rule": "When the owner says the canonical command 'Приберись', treat it as the board_cleanup_autopilot command and follow docs/agent/board_cleanup_autopilot_playbook.md. Do not document extra natural-language aliases for this command."
-    },
-    {
-      "id": "board-cleanup-autopilot-authority",
-      "priority": 17,
-      "rule": "The board_cleanup_autopilot command grants autonomy to read active CRM context and update confirmed card title, vehicle, description, up to three operational tags, source-backed vehicle profiles, clear client links/client vehicles, concise AI notes, and hidden board_summary previews. It also requires filling missing vehicle passport fields from available source-backed card/order/VIN data whenever possible. It does not allow moving, archiving, deleting, changing deadlines/indicators, or changing financial/repair-order data without a separate explicit owner command for that exact action."
+      "rule": "The exact owner command 'Приберись' routes to docs/agent/board_cleanup_autopilot_playbook.md and docs/agent/crm_card_description_standard.md. Keep the public description laconic, preserve staff data, and use no more than three operational tags."
     },
     {
       "id": "board-cleanup-no-card-movement",
@@ -41,329 +31,124 @@
       "rule": "During board cleanup, do not move or archive cards. Leave every card in its current column and archive state unless the owner gives a separate explicit owner command with the target card and requested action."
     },
     {
-      "id": "board-cleanup-data-preservation",
+      "id": "board-cleanup-preservation",
       "priority": 18,
-      "rule": "During board cleanup, preserve user-entered CRM data. Do not delete repair-order works, materials, prices, payments, cashbox records, files, client contacts, VIN/chassis/license data, manual diagnostic findings, or historical notes. Prefer short structured description edits: keep important facts, move confirmed phone/VIN/plate/mileage/aggregate data into client or vehicle-profile fields, and avoid keeping noisy old text verbatim unless it is operationally needed."
-    },
-    {
-      "id": "board-cleanup-description-rich-text",
-      "priority": 19,
-      "rule": "During board cleanup after the owner command 'Приберись', leave an empty public card description empty unless the owner explicitly asks for new text. If description exists, rewrite it according to docs/agent/crm_card_description_standard.md as a maximally laconic formatted working note: only task/complaint, important confirmed facts, money/parts note, diagnostics result, prices, oil/fluid capacity, OEM/catalog numbers, and agreements when relevant. Do not add separate 'Статус:' or 'Следующий шаг:' blocks; the manager decides workflow actions from the facts. Split text into short paragraphs only where it improves reading. Use restrained emoji section markers and supported CRM Markdown for scanning: **bold** labels/key facts, *italic* short secondary notes, and ++underline++ for the key amount, oil capacity, OEM/catalog number, approval, or money value. Do not use raw HTML-style tags, pseudo-formatting, or any markup that remains visible to the operator. Do not add risk/caveat/safety blocks, source lists, provenance, selection method, search history, supplier-check reminders, 'нужно перепроверить данные' caveats, or verbose AI explanations."
-    },
-    {
-      "id": "board-cleanup-title-vehicle-tags",
-      "priority": 19,
-      "rule": "During board cleanup, analyze title, vehicle, and description together. Keep vehicle as compact make/model and title as the short essence of the issue, work, or result. Change them only when the card evidence clearly supports a better value. Tags are rare operational cues, not decoration: keep no more than three tags, and add/remove them only when they change what the operator should notice or do."
-    },
-    {
-      "id": "board-cleanup-client-phone-first",
-      "priority": 19,
-      "rule": "During board cleanup, treat the phone number as the primary client matching key. If a phone is present but the client name is missing, search/suggest CRM clients before writing a new name. Link the clear matching client and upsert the confirmed client vehicle; do not create duplicates or force ambiguous links."
-    },
-    {
-      "id": "board-cleanup-repair-order-boundary",
-      "priority": 19,
-      "rule": "During 'Приберись', read repair orders when they explain works, materials, payment, completion, or blockers, but do not write a live repair order unless the owner explicitly asks to fill, update, or расписывать the target ЗН/заказ-наряд. When explicitly asked, preserve existing rows/payments/dates, write only confirmed work/material/payment data, and reread the order after saving."
-    },
-    {
-      "id": "board-cleanup-note-style",
-      "priority": 19,
-      "rule": "During board cleanup, write very short card notes. Prefer one concise 'AI:' line only when it adds a factual question, OEM/price conclusion, payment blocker, missing data, or stale-card fact. Do not write manager-style next-action instructions and do not make people read long explanations or source lists inside cards."
-    },
-    {
-      "id": "board-cleanup-public-summary",
-      "priority": 19,
-      "rule": "During board cleanup, keep public description and hidden board_summary separate. The description follows docs/agent/crm_card_description_standard.md: short readable formatted working facts only; do not add 'Статус:' or 'Следующий шаг:' blocks, risk/caveat/safety blocks, source/provenance, selection method, search history, or supplier-check reminders. board_summary is the four-or-five-line plain operator preview written through set_card_board_summary; keep phone, VIN, full client identity, raw scan dumps, source lists, rich formatting, emoji decoration, long issue lists, and next-action instructions out of it."
-    },
-    {
-      "id": "board-cleanup-vin-profile-enrichment",
-      "priority": 19,
-      "rule": "If VIN/chassis/frame exists and engine_model, gearbox_model, or drivetrain is empty, enrich vehicle_profile only from source-backed data. Preserve manual_fields and record uncertainty in oem_notes or tentative_fields instead of guessing."
+      "rule": "Board cleanup may correct confirmed title, vehicle profile, concise description, board summary and rare tags after exact reread. Preserve repair-order rows, prices, payments, files, contacts and manual findings; an empty public description stays empty unless the owner asks for text."
     },
     {
       "id": "memory-boundary",
       "priority": 20,
-      "rule": "Use AutostopManager memory for facts, agreements, owner preferences, rent, personal matters, reminders, decision history, operating experience, and durable conclusions extracted from email or owner-provided files."
+      "rule": "Manager memory stores owner preferences, agreements, reminders, decisions and reusable non-private lessons. Audit before curation; archive duplicates non-destructively and never persist raw CRM, Store, Gmail or customer records."
     },
     {
       "id": "knowledge-intake-boundary",
       "priority": 21,
-      "rule": "When the owner provides new files, classify the source and license first, then extract only durable conclusions or routing rules. Do not store raw manuals, full spreadsheets, OCR dumps, or copied databases in memory."
-    },
-    {
-      "id": "manager-context-entrypoint",
-      "priority": 21,
-      "rule": "For non-trivial owner requests, use prepare_manager_context to combine command routes, relevant memory/rules, knowledge routing, missing required context, and next actions before acting."
-    },
-    {
-      "id": "command-route-sync",
-      "priority": 22,
-      "rule": "Treat docs/agent/command_routes.json as the canonical route map for standing owner commands such as Приберись; update it when command names, open-first files, or allowed actions change."
+      "rule": "For new files, classify source and license, then keep only durable conclusions or routing. Do not store raw manuals, spreadsheets, OCR dumps or copied databases. Prefer one canonical owner, migrate unique rules, run cleanup-audit before deletion, and remove obsolete docs instead of archiving them in active documentation."
     },
     {
       "id": "knowledge-annotation-index",
       "priority": 22,
-      "rule": "Treat docs/agent/knowledge_annotations.jsonl as the compact file-level annotation index. Update it when durable files, source packs, routes, or skills need better fast routing, and run audit_knowledge_annotations after changes."
+      "rule": "docs/agent/knowledge_map.json is the route map and docs/agent/knowledge_annotations.jsonl is the compact file annotation index. Avoid redundant aliases and update both only when routing changes."
     },
     {
       "id": "knowledge-catalog-sync",
       "priority": 22,
-      "rule": "If a new file changes the supported commands, source routing, or source catalog, update the relevant playbook or catalog first and add a compact durable note through schema-hashed raw manager_journal discovery when the change matters beyond the current task."
+      "rule": "After documentation, catalog, route or skill changes run knowledge-sync, knowledge-audit, annotations-audit and skills-audit; update the smallest canonical file and delete stale paths."
     },
     {
       "id": "knowledge-index-entrypoint",
       "priority": 22,
-      "rule": "For local knowledge-base use, search, expansion, audit, or restructuring, use probe_knowledge_base first. If has_knowledge=true, open open_first/source_of_truth before broad file reads; if more detail is needed, use search_knowledge_base inside the returned domain. If docs, catalogs, or skills changed, run sync_knowledge_base and audit_knowledge_base."
+      "rule": "For local knowledge work run knowledge-probe first and open its open_first/source_of_truth result before broad reading; use knowledge-search only inside the selected domain."
     },
     {
-      "id": "knowledge-route-card-maintenance",
-      "priority": 22,
-      "rule": "Every durable knowledge domain in docs/agent/knowledge_map.json should have aliases, keywords, questions, and source_of_truth_files so the agent can cheaply recognize general automotive technical questions, explicit BMW or Toyota GR Yaris cases, fluids, diagnostics, parts, CRM, and other supported topics before reading full documents."
-    },
-    {
-      "id": "model-specific-knowledge-route",
-      "priority": 22,
-      "rule": "When a vehicle/model-specific corpus becomes substantial, store it as a focused Codex skill and add its triggers, playbook, required context, and source route to docs/agent/knowledge_map.json and docs/agent/knowledge_shelves.md."
-    },
-    {
-      "id": "crm-manager-data-boundary",
-      "priority": 22,
-      "rule": "When summarizing CRM-derived manager information, follow docs/agent/crm_manager_data_playbook.md. Return safe summaries and quality signals only; keep raw client databases, phone lists, VIN/license-plate tables, cashbox ledgers, full repair-order text, and full board dumps in live CRM unless the owner explicitly approves an exact private export."
-    },
-    {
-      "id": "github-publication-privacy",
+      "id": "memory-mcp-sync",
       "priority": 23,
-      "rule": "When saving or syncing AutostopManager to GitHub, commit code, tests, docs, and source-routing catalogs only. Do not commit data/ runtime artifacts, SQLite databases, CRM snapshots, client contacts, payments, VIN/license snapshots, or repair-order dumps."
+      "rule": "docs/agent/manager_mcp_catalog.json is the compact Manager MCP surface mirror; refresh it only when the actual tool surface changes."
     },
     {
       "id": "business-document-quality-gate",
       "priority": 24,
-      "rule": "For PDF, Word, Excel, счет, акт, КП, receipts, requisites sheets, or accounting-style documents, route through docs/agent/business_document_quality_playbook.md. AutoStop service documents, including счет, счет-фактура, акт приема, акт выполненных работ, заказ-наряд, дефектовка, and продажа запчастей, must use the CRM print module with standard AutoStop templates: use download_repair_order_print_pdf for CRM-card documents and create_document_without_card_pdf for Документ без карточки. For manual documents, pass the requested tax_label such as НДС (5%) or Без НДС through CRM instead of editing the rendered PDF. Do not build independent PDF/HTML templates for AutoStop documents. If a focused local Codex skill is installed, it may help with render/audit steps, but the playbook is canonical. Do not claim a document is ready until the relevant render/inspect pass, money/requisites checks, and audit_business_document.py gate have run, or clearly state which gate could not run. For ready CRM-car document batches, including ВашАвто/Ваш Авто, identify live ready cards/repair orders, export standard PDFs through the CRM print module, save runtime outputs under out/*-final, render PNG page previews with pdftoppm, extract text with pdftotext, and deliver PDF links only after page count, non-empty-page, line-item, totals, and document-wording checks pass."
+      "rule": "For PDF, Word, Excel, счет, акт, КП and accounting-style files use docs/agent/business_document_quality_playbook.md. AutoStop documents use the CRM print module with standard AutoStop templates: download_repair_order_print_pdf for card documents and create_document_without_card_pdf for Документ без карточки; pass tax_label such as НДС (5%) or Без НДС through CRM. Do not build independent PDF/HTML templates. Render, inspect and audit before delivery."
     },
     {
-      "id": "business-identity-private-route",
+      "id": "manager-workflow-ledger",
       "priority": 24,
-      "rule": "For ИП реквизиты, карточка предприятия, AutoStop business identity, or ИП Гришкявичус/Гришкевичус questions, use docs/agent/business_identity_playbook.md and private files under data/private_knowledge. Do not copy private bank/contact details into Git-tracked docs or public summaries."
+      "rule": "For broad or multi-step work use the Gateway v2 workflow ledger and compact state-versioned checkpoints. Keep refs and summaries only; mark complete only after positive readback."
     },
     {
-      "id": "manager-run-ledger",
-      "priority": 24,
-      "rule": "For autopilot, procurement, finance, knowledge-intake, or multi-step CRM work, use the Gateway v2 workflow ledger: start_workflow, compact workflow_checkpoint calls, strict state-versioned transitions, and positive readback evidence before completion. Store only operational refs and summaries, never raw CRM or mail content."
-    },
-    {
-      "id": "context-window-safety",
-      "priority": 24,
-      "rule": "For broad CRM scans, multi-card cleanup, ready-unpaid lists, procurement sweeps, or any task likely to exceed the chat context, checkpoint progress outside the model window: start_workflow, call workflow_checkpoint after scope/candidates/batches/verification, keep raw board/card/order snapshots in private local temp files when needed, and resume through agent_bootstrap, workflow_status, and workflow_resume instead of re-reading everything after context compaction."
+      "id": "crm-read-write-safety",
+      "priority": 30,
+      "rule": "Use the 24-tool Gateway v2 CRM connector: agent_bootstrap, agent_board_digest, then focused search/context. A write requires exact target reread, prepare_action_contract, named-workflow dry_run, idempotent apply and exact verification. Raw discovery is only for a literal capability absent from named workflows. Financial totals, payments, refunds, payouts and supplier orders require an exact owner command."
     },
     {
       "id": "crm-card-action-session",
-      "priority": 24,
-      "rule": "For card description or vehicle_profile edits, read the exact target with agent_entity_context, build prepare_action_contract, and run agent_board_workflow operation cleanup_card in dry-run then apply mode. Carry expected_updated_at, exact description text, vehicle_profile metadata, optional board_summary, a unique idempotency key, and a reread verification spec."
-    },
-    {
-      "id": "memory-curator",
-      "priority": 24,
-      "rule": "Use audit_memory before memory cleanup or when recall quality looks weak. Use curate_memory only for non-destructive duplicate archiving; do not delete source memory records during routine curation."
-    },
-    {
-      "id": "phone-shared-memory",
-      "priority": 25,
-      "rule": "ChatGPT Android may write manager memory through the same shared MCP endpoint. Treat those notes as durable context for future Codex work."
-    },
-    {
-      "id": "memory-context-recall",
-      "priority": 26,
-      "rule": "Before context-sensitive CRM, Gmail, writing-style, owner-preference, or repeated workflow decisions, build context with memory_context_for, then use recall or recall_lessons for more detail. Use the result as context, not as a rigid template."
-    },
-    {
-      "id": "memory-feedback-learning",
-      "priority": 27,
-      "rule": "When the owner praises, criticizes, says to do something differently, or when a result is clearly successful or clearly poor, store a concise reusable lesson with learn_from_feedback. Do not copy CRM records, Gmail threads, or full event logs into memory."
-    },
-    {
-      "id": "memory-navigation-review",
-      "priority": 27,
-      "rule": "Use memory_map, memory_topics, and memory_gaps when reviewing what the manager knows, finding weak areas, or checking whether memory has enough context for a style-sensitive or repeated workflow."
-    },
-    {
-      "id": "email-source-of-truth",
-      "priority": 28,
-      "rule": "Do not copy full Gmail threads into manager memory. Store only durable facts, decisions, tasks, reminders, or operating notes extracted from the email."
-    },
-    {
-      "id": "crm-read-order",
       "priority": 30,
-      "rule": "The production CRM connector must expose exactly 24 Gateway v2 tools over owner-approved OAuth 2.1 with PKCE and rotating refresh tokens; never depend on the deployment-rotated internal bearer or call hidden legacy tools. For CRM orientation, start with agent_bootstrap, then agent_board_digest, then agent_search and agent_entity_context. Before any write, build prepare_action_contract, run the applicable named workflow in dry_run and apply modes, then reread the exact target and verify it. Use raw discovery only when no named workflow covers the operation. Use get_connector_identity or get_runtime_status only when connector availability or auth behavior is uncertain."
-    },
-    {
-      "id": "automotive-do-not-invent",
-      "priority": 31,
-      "rule": "Do not invent torque specs, fluid capacities, oil approvals, connector pinouts, wire colors, ADAS/SRS/HV procedures, adaptation/programming codes, labor times, or original part prices. If source-backed data is unavailable, say: Требуется проверка по OEM-сервисной информации для конкретного VIN."
+      "rule": "For card description or vehicle_profile writes, use exact agent_entity_context, prepare_action_contract and agent_board_workflow cleanup_card in dry-run then apply mode with expected_updated_at, a unique idempotency key and reread verification."
     },
     {
       "id": "automotive-repair-source-routing",
       "priority": 31,
-      "rule": "For repair diagnostics, ГРМ/timing marks or phases, repair procedures, maintenance schedules, aggregate design, TSBs, recalls, wiring, fluids, torque specs, labor times, ADAS, SRS, HV, immobilizer, keys, security gateway, and programming work, start with docs/agent/automotive_repair_source_playbook.md and route by brand/data type through docs/agent/automotive_sources before giving technical facts. Select evidence adaptively: CRM only for an identified live card/vehicle, AutoStop App only for internal catalog/stock/price, VIN/OEM for applicability, official public evidence for recalls/communications, and public web/forums for research. Generic technical questions stay on this route; BMW or Toyota GR Yaris playbooks require explicit brand/model/engine/chassis markers."
+      "rule": "For diagnostics, DTC, repair procedure, timing, torque, wiring, fluids, ADAS/SRS/HV or programming start with docs/agent/automotive_repair_source_playbook.md and the exact vehicle/unit context. Never invent safety, procedure, torque, fluid, programming or fitment facts; final facts require OEM/licensed evidence. Public forums and Drive2 are hypotheses only."
     },
     {
       "id": "browser-web-research-boundary",
       "priority": 31,
-      "rule": "For public internet research, resolve search_web_multi, excerpt, and fetch_page_browser through discover_raw_capabilities, get_raw_capability_schema, and call_raw_capability. Search first; use the browser only for public JS-heavy pages. Do not bypass CAPTCHA, login walls, paywalls, IP blocks, private cabinets, or access restrictions; report manual or approved account access required."
-    },
-    {
-      "id": "public-camera-semafornaya-185",
-      "priority": 31,
-      "rule": "For owner requests about the road, weather, approach, or camera at Semafornaya 185 near AutoStop, use the public 24око camera c_6171 through docs/agent/krasnoyarsk_service_management_playbook.md and scripts/capture_semafornaya_185.py. Capture one current browser-rendered frame only; do not retain dynamic player URLs, frames, archives, faces, or plates, and do not bypass a block or restriction."
-    },
-    {
-      "id": "bmw-f15-n63-route",
-      "priority": 31,
-      "rule": "For BMW X5 F15 xDrive50i, N63TU/N63T, BDC/gateway/network faults, F15 electrical/electronics, MEVD17.2.8, injector bulletins, misfires, oil consumption, or cooling faults, use docs/agent/bmw_repair_playbook.md and the indexed BMW repair source cache, then verify VIN-specific facts through BMW ISTA/AIR/ETK or official BMW sources."
-    },
-    {
-      "id": "bmw-general-repair-route",
-      "priority": 31,
-      "rule": "For general BMW repair, diagnostics, BMW fault memory, DTC, body electronics, xDrive, ZF transmission, HV, or BMW fluids when no more specific model skill matches, use search_knowledge_base with domain=\"bmw_repair\" and docs/agent/bmw_repair_playbook.md. Treat the owner-provided BMW repair pack as route/index material; verify final VIN-specific service facts through BMW ISTA/AIR/ETK/AOS/TIS, official BMW owner/recall data, BMW/NHTSA SIBs, or ZF official data."
-    },
-    {
-      "id": "fluid-capacity-no-invention",
-      "priority": 31,
-      "rule": "Never invent oil/fluid capacities, viscosities, approvals, ATF/CVT/DCT specs, gear-oil specs, coolant chemistry, brake-fluid specs, or service-fill procedures. Distinguish oil-only/filter/drain-refill/dry-fill/pan/cooler-line quantities and use lubricant selectors only as cross-check after OEM or licensed source verification."
-    },
-    {
-      "id": "fluid-maintenance-workflow",
-      "priority": 31,
-      "rule": "For oils, operating fluids, fill capacities, and ТО fluid planning, consult docs/agent/fluid_maintenance_playbook.md. On production Gateway v2 resolve recommend_fluid_maintenance_sources through raw discovery and schema lookup; locally use maintenance-fluids. Collect VIN/chassis, market, year, brand, model, engine code, transmission code, drivetrain, exact unit, and service operation before confirming capacity or specification."
+      "rule": "For public research discover search_web_multi/excerpt/fetch_page_browser through Gateway v2. Search first; use a browser only for public JS-heavy pages and never bypass CAPTCHA, login, paywall, IP block or private cabinet."
     },
     {
       "id": "krasnoyarsk-service-management-workflow",
       "priority": 31,
-      "rule": "For workshop-management tasks in Красноярск, route through docs/agent/krasnoyarsk_service_management_playbook.md. On production Gateway v2 resolve recommend_service_management_actions through raw discovery and schema lookup; locally use the manager CLI. Classify blockers as parts, client approval, technician load, diagnosis, payment, appointment, ready pickup, or knowledge intake before acting."
-    },
-    {
-      "id": "toyota-gr-yaris-workflow",
-      "priority": 31,
-      "rule": "For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS work, load docs/agent/toyota_gr_yaris_playbook.md before answering. Verify VIN or Japan frame number, market, production month, grade, transmission, LSD/diff package, and sub-radiator before final repair, fluid, recall, TSB, or OEM part conclusions."
-    },
-    {
-      "id": "transmission-workflow",
-      "priority": 31,
-      "rule": "For gearbox, clutch, CVT, DCT, AMT, or heavy-duty transmission work, consult docs/agent/transmission_playbook.md first. On production Gateway v2 resolve recommend_automotive_sources through raw discovery and schema lookup and call it with data_type=\"transmission\" before confirming fluid, adaptation, torque, or repair facts."
-    },
-    {
-      "id": "vehicle-identity-workflow",
-      "priority": 31,
-      "rule": "When decoding a vehicle identifier, classify it first as ISO VIN, Japanese chassis/frame number, or market-specific body/model code. For Japan-market cars, treat the chassis number from the inspection certificate or plate as the primary key; for Korea and Europe, use the standard VIN path; do not present inferred trim or option data as confirmed without a market-appropriate source."
+      "rule": "For workshop control use docs/agent/krasnoyarsk_service_management_playbook.md and current CRM state. Classify the blocker as parts, client approval, technician load, diagnosis, payment, appointment or ready pickup before acting."
     },
     {
       "id": "vin-oem-lookup-workflow",
       "priority": 31,
-      "rule": "When the owner asks for original catalog numbers from a VIN or chassis number, build a VIN/OEM lookup dossier first: decode ISO VINs through vPIC only for vehicle identity, prefer legal paid/official EPC routes for BMW/VAG, capture OEM candidates and supersessions from VIN-specific EPC evidence, and return missing context instead of guessing."
+      "rule": "For VIN/OEM lookup use vehicle_identity_playbook.md and crm_vin_oem_parts_lookup_playbook.md. Never invent OEM numbers, supersessions, crosses, applicability, stock or prices. High confidence requires VIN/frame-specific evidence plus an independent check. Keep OEM reference, selected part, procurement price, public retail and client sale price separate. Never store raw customer VIN, client identity, card snapshots, supplier credentials or quote dumps."
     },
     {
-      "id": "crm-mcp-sync",
+      "id": "parts-search-workflow",
       "priority": 32,
-      "rule": "Treat the CRM repository's autostopcrm-v1 branch and its MCP docs as canonical for command names, auth behavior, and connector setup. Refresh the local MCP catalog when that source changes."
-    },
-    {
-      "id": "memory-mcp-sync",
-      "priority": 32,
-      "rule": "Treat docs/agent/manager_mcp_catalog.json as the local summary of the AutostopManager MCP surface. Refresh it whenever memory tools, routing tools, or knowledge-intake behavior changes."
-    },
-    {
-      "id": "service-management-source-boundary",
-      "priority": 32,
-      "rule": "Use live AutoStop CRM MCP as the source of truth for board state, repair orders, cashboxes, clients, and vehicle cards. Use docs/agent/service_management_sources.json only for source routing and public/local supplier or labor-market context."
+      "rule": "Use docs/agent/parts_search_playbook.md for part sourcing and pricing. Stabilize identity and fitment, distinguish OEM reference from selected article and price basis, compare current credible offers, keep package quantity explicit, and never turn sourcing into a supplier purchase without an exact owner command."
     },
     {
       "id": "work-labor-pricing-workflow",
       "priority": 32,
-      "rule": "When the owner asks to price work, parts, or draft/check a repair order, use the project resolve-autostop-service-case skill and docs/agent/work_labor_pricing_playbook.md. Resolve estimate_repair_work_cost through the named/raw Gateway route as available. Reconcile aggregate-only closed-order experience, exact live vehicle/scope, current labor-only market, and vehicle/operation labor time; no single source or fixed formula creates high confidence. AUTONORMS workTime is scope/effective-rate evidence, not a price. Historical article prices require live Store/supplier/market and fitment verification. Do not call replace_repair_order_works without a separate explicit owner command."
+      "rule": "For work or repair-order estimates use resolve-autostop-service-case and docs/agent/work_labor_pricing_playbook.md. Reconcile exact scope, aggregate closed-order experience, current labor-only market and vehicle-specific labor time; no fixed markup or single source creates high confidence."
     },
     {
-      "id": "parts-search-workflow",
-      "priority": 33,
-      "rule": "When the owner asks to source parts, first normalize the vehicle identity through the vehicle-identity playbook if the input is a VIN, chassis number, or market-specific code; then use the dedicated parts-search playbook: normalize OEM and fitment fields, search Drom first with exact number plus Krasnoyarsk context, then ZZap and Avito, then broaden to model/platform and descriptive terms if exact hits are sparse."
+      "id": "transmission-and-fluids-workflow",
+      "priority": 32,
+      "rule": "Use transmission_playbook.md for MT/AT/CVT/DCT/DSG and fluid_maintenance_playbook.md for fluids. Confirm exact unit, operation and OEM procedure before fluid, capacity, level, adaptation, software or torque guidance."
     },
     {
-      "id": "store-source-boundary",
+      "id": "model-specific-automotive-routes",
+      "priority": 32,
+      "rule": "Use bmw_repair_playbook.md for BMW and toyota_gr_yaris_playbook.md only for explicit GR Yaris markers; verify final VIN-specific facts through the named OEM/licensed route."
+    },
+    {
+      "id": "store-owner-pause",
       "priority": 34,
-      "rule": "AutoStop App is the source of truth for the store catalog, physical/reserved/available stock, batches and storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state. Read it only through the pure-read internal agent API; never use direct store database access or legacy GET routes with side effects."
+      "rule": "AutoStop App remains the store source of truth, but owner-directed Store work is paused while the shop is under development. Do not read, diagnose or change Store until the owner explicitly reauthorizes that contour; supplier purchases and financial writes always need a separate exact command."
     },
     {
-      "id": "store-read-order-and-cursors",
-      "priority": 34,
-      "rule": "For store work open docs/agent/store_management_playbook.md. Use agent_bootstrap for a one-request stateless degraded-safe snapshot, agent_board_digest(scope=store) for the owner digest, agent_search for bounded lists, and agent_entity_context for an exact object. Bootstrap has no cursor or ACK and never reads or advances store_digest. The owner store_digest checkpoint advances only after the final page; failed or abandoned paging must preserve the committed cursor."
-    },
-    {
-      "id": "store-memory-privacy",
+      "id": "gmail-workflow",
       "priority": 35,
-      "rule": "Do not persist raw store orders, customers, contacts, line items, stock rows, warehouse dumps, VIN lists, or API payloads in Manager memory, docs, Git, workflow events, or checkpoints. Store only technical cursors, timestamps, success state, compact entity/id/version refs, counts, and verification booleans."
+      "rule": "For Gmail follow docs/agent/gmail_workflow_playbook.md: search/read before mutation, resolve exact targets, preflight, execute once with idempotency, verify refs, and keep raw bodies out of Manager storage."
     },
     {
-      "id": "store-write-parity",
-      "priority": 38,
-      "rule": "Keep the seven strict quote/batch/READY actions as optimized named agent_inventory_workflow operations. For every other non-financial action necessary to the active owner task and present in the live employee OpenAPI, use guarded store_owner_capabilities then store_owner_api with the reserved store:owner principal. Every write requires exact target/current revision, ActionContractV2, unique idempotency and correlation ids, a matching schema-bound dry-run proof, apply, operation-specific reread, and refs-only workflow state; an applied but unverified result remains compensating. Supplier orders, refunds, payouts, and financial-total changes need a direct owner instruction."
-    },
-    {
-      "id": "store-write-security-boundary",
-      "priority": 39,
-      "rule": "Full Store parity never authorizes anonymous access, direct database writes, human-session reuse, undocumented routes, secret disclosure, or unverified outcomes. High-risk warehouse, bulk, publication, return, delete, and settings operations require exact current state, active-task scope, dry-run proof, idempotency, correlation, apply, and exact readback or absence plus audit. Financial operations additionally require a direct owner instruction. Hidden generic legacy Store adapters remain INTERNAL_ONLY; only the guarded owner capability/API pair may be raw-discovered."
-    },
-    {
-      "id": "gmail-read-order",
-      "priority": 35,
-      "rule": "For Gmail or inbox work, use docs/agent/gmail_workflow_playbook.md: inspect labels or search first, then open the relevant message or thread before drafting replies, tasks, reminders, or follow-ups."
-    },
-    {
-      "id": "gmail-attachment-quality-gate",
+      "id": "publication-privacy",
       "priority": 36,
-      "rule": "For Gmail attachments, read attachment metadata first. If a PDF/DOCX/XLSX, invoice, act, КП, or requisites document affects output quality, route through the business-document quality gate instead of trusting connector-parsed text."
-    },
-    {
-      "id": "gmail-write-safety",
-      "priority": 36,
-      "rule": "Send, forward, archive, delete, label, bulk-modify, create labels, create drafts, update drafts, or send drafts in Gmail only when necessary to complete the active owner task and exact mailbox targets are resolved. Agent Gateway v2 adds no second confirmation state: preview targets, apply automatic preflight and idempotency, inspect the active connector schema, execute once, verify result refs, and never store raw bodies in manager SQLite."
-    },
-    {
-      "id": "write-safety",
-      "priority": 40,
-      "rule": "Before CRM writes, identify the exact target by id. The active owner task authorizes non-financial exact-target changes needed for completion after preflight and reread; never make unrelated cleanup changes. Do not overwrite manual card/client fields unless the task needs it or the board_cleanup_autopilot playbook allows a safe preserving edit. Payments, cashboxes, refunds, payroll payouts, supplier orders, and changes to financial totals require a direct owner instruction."
+      "rule": "Git and deployment artifacts may contain code, tests, docs and source-routing catalogs only; never commit runtime databases, CRM/Store/Gmail snapshots, contacts, payments, VIN/license tables, repair orders, credentials or generated private outputs."
     },
     {
       "id": "adaptive-evidence-and-learning-loop",
       "priority": 41,
-      "rule": "Treat each owner request as an adaptive evidence problem, not a fixed script: split the work into claims, choose CRM, Store, Gmail, VIN/OEM, licensed, official, supplier, public-web, or forum evidence according to ownership and risk, reconcile conflicts, and return one practical conclusion. Resolve the effective work or learning mode at startup. In learning mode, close a privacy-safe post-run review before the final answer, persist only compact technical experience, promote lessons only after verified success, and repair only one reproducible local low-risk issue within the configured budget and with a regression check. Never automatically repair external systems, change credentials, bypass access controls, or make financial changes."
+      "rule": "Treat each request as an adaptive evidence problem and resolve work/learning mode at startup. In learning mode keep only privacy-safe verified reusable lessons; never auto-repair external systems, bypass controls or make financial changes."
     },
     {
       "id": "journal-important-work",
       "priority": 50,
-      "rule": "After important decisions or source intake, add a short durable note through schema-hashed raw manager_journal discovery. For multi-step work, use Gateway v2 workflow checkpoints and complete only with positive readback evidence."
-    },
-    {
-      "id": "crm-vin-oem-no-hallucination",
-      "priority": 35,
-      "rule": "For CRM VIN/OEM parts lookup, never invent OEM numbers, supersessions, crosses, applicability, stock, procurement prices, retail prices, or client sale prices. If the exact source-backed number is unavailable, report low/medium confidence and the missing check internally; do not put uncertainty text into the public card description."
-    },
-    {
-      "id": "crm-vin-oem-source-confidence",
-      "priority": 35,
-      "rule": "High confidence for OEM/selected part requires VIN/frame-specific catalog or supplier confirmation plus at least one independent check such as OEM/EPC second source, TecDoc/CROSSBASE-style applicability, supplier fitment confirmation, or seller confirmation with article and vehicle evidence visible."
-    },
-    {
-      "id": "crm-vin-oem-price-separation",
-      "priority": 35,
-      "rule": "In parts quotes and CRM writeback, keep OEM reference, selected part, cross/analog, procurement price, public retail/RF market price, and client sale price as separate fields. Repair-order material rows must contain only the selected priced part, not a mixed OEM/analog reference line."
-    },
-    {
-      "id": "crm-vin-oem-crm-writeback-format",
-      "priority": 36,
-      "rule": "CRM VIN/OEM parts public card descriptions must follow docs/agent/crm_card_description_standard.md: compact formatted selected working facts only, such as auto, requested part/work, OEM/catalog number, selected part, quantity, price, and oil/fluid capacity. Do not write VIN/frame source, source/provenance, lookup method, confidence, missing checks, needs-confirmation, supplier-check reminders, or long quote matrices into the public description. Keep internal evidence in the Gateway v2 workflow or owner report. board_summary stays short and excludes raw VIN/client private data."
-    },
-    {
-      "id": "crm-vin-oem-privacy-boundary",
-      "priority": 36,
-      "rule": "Do not store raw customer VIN/frame/body numbers, client identities, card snapshots, supplier credentials, raw quote dumps, or attachment contents from CRM VIN/OEM parts lookup in durable memory or Git. Store only reusable rules, source routes, and non-private conclusions."
+      "rule": "Journal only compact durable decisions or source-intake conclusions through the schema-hashed manager route; multi-step work belongs in verified workflow checkpoints, not duplicated documentation."
     }
   ]
 }

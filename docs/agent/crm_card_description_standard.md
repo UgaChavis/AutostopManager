@@ -14,6 +14,8 @@ It should help the operator scan the card quickly.
 
 ## Must Do
 
+- If the public description is empty, leave it empty unless the owner
+  explicitly asks for new text.
 - Keep the text as short as possible. For a simple card, 2-6 short lines are
   usually enough.
 - Use CRM-supported Markdown only: `**bold**`, `*italic*`, `++underline++`.

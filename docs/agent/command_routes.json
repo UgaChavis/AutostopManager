@@ -485,6 +485,46 @@
       ]
     },
     {
+      "command_id": "agent_coordination",
+      "workflow_id": "agent_coordination",
+      "priority": 118,
+      "intent": "agent_coordination",
+      "domain": "startup_and_identity",
+      "open_first": "AGENTS.md",
+      "aliases": [
+        "назначь задачу помощнику",
+        "распредели работу между агентами",
+        "проверь работу помощников",
+        "управляй агентами Кодекс"
+      ],
+      "keywords": [
+        "delegation",
+        "helper agent"
+      ],
+      "memory_queries": [
+        "proactive service management",
+        "bounded helper coordination"
+      ],
+      "required_reads": [
+        "AGENTS.md",
+        "current exact task and source-of-truth route for the delegated domain"
+      ],
+      "write_domains": [
+        "manager_coordination"
+      ],
+      "external_connectors": [],
+      "completion_checks": [
+        "agent scope and write mode are explicit",
+        "delegated task contains no raw business payload",
+        "delegated work has a positive verification or a visible blocker"
+      ],
+      "next_actions": [
+        "reuse the source route that owns the delegated domain",
+        "state the helper scope and write boundary",
+        "verify the result or blocker before closing the assignment"
+      ]
+    },
+    {
       "command_id": "remote_codex_access",
       "workflow_id": "remote_codex_access",
       "priority": 94,
@@ -492,6 +532,9 @@
       "domain": "remote_codex_access",
       "open_first": "docs/agent/codex_home_pc_reverse_ssh.md",
       "aliases": [
+        "перечисли доступные серверы и компьютеры",
+        "проверь доступ к серверам",
+        "проверь FST.KZ VPN сервер",
         "подключись к удаленному компьютеру",
         "подключись к удалённому компьютеру",
         "управляй удаленным Windows компьютером",
@@ -507,6 +550,11 @@
         "подключи новый компьютер с флешки AUTOSTOP_REMOTE"
       ],
       "keywords": [
+        "server access",
+        "server inventory",
+        "autostop-vpn-fst",
+        "FST.KZ",
+        "SSH host key",
         "home-pc",
         "managed-pc",
         "desktop-e0e84lt",
@@ -525,6 +573,8 @@
         "Windows OpenSSH"
       ],
       "memory_queries": [
+        "server and remote PC access",
+        "FST.KZ VPN server access",
         "remote_codex_access",
         "managed-pc fleet",
         "AutoStop reception managed PC",
@@ -534,6 +584,7 @@
       ],
       "required_reads": [
         "docs/agent/codex_home_pc_reverse_ssh.md",
+        "for every FST.KZ task first read /root/.codex/CODEX_VPN_FST_ACCESS.md",
         "managed-pc doctor and exact alias status for fleet operations",
         "the reception workstation is managed-pc alias desktop-e0e84lt; verify current status before an operation",
         "the mechanics workstation is managed-pc alias Компьютер механиков; verify current status before an operation",
@@ -544,6 +595,8 @@
         "owner_authorized_remote_pc"
       ],
       "external_connectors": [
+        "SSH server aliases",
+        "FST.KZ VPN server SSH",
         "managed-pc reverse SSH",
         "legacy home-pc reverse SSH"
       ],
@@ -553,10 +606,10 @@
         "no private key, password, token, or USB enrollment credential is printed or committed"
       ],
       "next_actions": [
-        "open the remote access playbook and choose managed-pc or legacy home-pc",
-        "run the route-specific health check and resolve the exact device",
+        "open the access playbook and choose the exact server or PC route",
+        "run the route-specific read-only identity/status check",
         "perform only the owner-requested remote operation",
-        "reread status and report the exact affected machine"
+        "reread status and report the exact affected target"
       ]
     },
     {

@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable catalog of AutostopManager memory and routing MCP tools used by the manager agent.",
   "source_of_truth": "autostop_manager.mcp_tools.register_manager_memory_tools",
-  "last_verified": "2026-07-22",
+  "last_verified": "2026-08-07",
   "tool_count": 77,
   "exposed_directly_by": ".venv/bin/python -m autostop_manager.mcp_server",
   "crm_gateway_role": "Mounted into the CRM raw registry; production publishes only the selected Gateway v2 workflow tools, never this whole catalog.",
@@ -239,7 +239,7 @@
     "audit_knowledge_annotations": "Check docs/agent/knowledge_annotations.jsonl compact file-level annotations and their domain coverage.",
     "audit_skill_registry": "Check local Codex skill files linked from knowledge_map.json and report missing or unlinked skills.",
     "system_audit": "Run the canonical read-only AutoStop Manager health layer: knowledge audit, annotations audit, skills audit, cleanup dry-run summary, local SQLite stats, MCP catalog consistency, and tests_status=external.",
-    "cleanup_audit": "Run the dry-run cleanup audit for caches, duplicate PDFs, unreferenced agent docs, untracked generated root artifacts, retained local DB size, and overindexed source packs; never deletes or moves files.",
+    "cleanup_audit": "Run the dry-run cleanup audit for caches, duplicate PDFs, unreferenced agent docs, untracked generated root artifacts, retained local DB size, overindexed source packs, and compact project-footprint metadata; never deletes or moves files.",
     "crm_health_plan": "Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads; never calls live CRM write tools and reports cards_moved=0 and cards_archived=0.",
     "audit_memory": "Check long-term manager memory for duplicate, expired, and superseded note/fact records before cleanup without returning raw content previews.",
     "curate_memory": "Non-destructively curate manager memory; with apply=true, archive duplicate note/fact copies instead of deleting source records.",

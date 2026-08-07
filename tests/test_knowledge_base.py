@@ -273,7 +273,7 @@ def test_probe_routes_dsg_software_update_to_transmission(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "transmission"
-    assert any("dsg_transmission_playbook" in path for path in result["source_of_truth"])
+    assert any("transmission_playbook" in path for path in result["source_of_truth"])
 
 
 def test_search_finds_dsg_mechatronic_software_update_guidance(tmp_path):
@@ -288,7 +288,7 @@ def test_search_finds_dsg_mechatronic_software_update_guidance(tmp_path):
     )
 
     assert result["ok"] is True
-    assert any("dsg_transmission" in item["path"] for item in result["items"])
+    assert any("transmission_playbook" in item["path"] for item in result["items"])
 
 
 def test_probe_routes_cluster_needle_coding_to_ecu_programming_pack(tmp_path):
@@ -363,7 +363,7 @@ def test_probe_routes_procurement_pricing_to_parts_sourcing(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
-    assert any("procurement_pricing_playbook" in path for path in result["routes"][0]["source_of_truth"])
+    assert any("parts_search_playbook" in path for path in result["routes"][0]["source_of_truth"])
 
 
 def test_probe_routes_rossko_api_price_to_parts_sourcing(tmp_path):
@@ -387,7 +387,7 @@ def test_probe_routes_unclear_oem_replacement_price_to_parts_sourcing(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
-    assert any("procurement_pricing_playbook" in path for path in result["routes"][0]["source_of_truth"])
+    assert any("parts_search_playbook" in path for path in result["routes"][0]["source_of_truth"])
 
 
 def test_probe_routes_steering_rack_parts_request_to_ai_parts_pack(tmp_path):
@@ -399,7 +399,8 @@ def test_probe_routes_steering_rack_parts_request_to_ai_parts_pack(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
-    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["reference_files"])
+    assert any("parts_search_playbook" in path for path in result["source_of_truth"])
+    assert not any("ai_parts_krasnoyarsk_project_pack" in path for path in result["reference_files"])
 
 
 def test_probe_routes_inflected_contract_steering_rack_with_analogs_to_parts_sourcing(tmp_path):
@@ -411,7 +412,8 @@ def test_probe_routes_inflected_contract_steering_rack_with_analogs_to_parts_sou
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "parts_sourcing"
-    assert any("ai_parts_krasnoyarsk_project_pack" in path for path in result["reference_files"])
+    assert any("parts_search_playbook" in path for path in result["source_of_truth"])
+    assert not any("ai_parts_krasnoyarsk_project_pack" in path for path in result["reference_files"])
 
 
 def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):

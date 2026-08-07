@@ -60,11 +60,7 @@ On production Gateway v2, discover the raw catalog, read the schema, then call
 `recommend_automotive_sources` with `data_type="transmission"`; locally, use
 the corresponding manager CLI. Narrow the result by brand and exact unit.
 
-## VAG DSG / Audi S Tronic Route
-
-For Volkswagen Group DSG or Audi S tronic questions, open
-`docs/agent/dsg_transmission_playbook.md` before giving software, adaptation,
-fluid, mechatronic, or parts-fitment guidance.
+## VAG DSG / Audi S Tronic
 
 DSG/S tronic trigger terms include:
 
@@ -84,6 +80,21 @@ Rules:
   oil, clutch, service, and failure logic.
 - For used mechatronic or gearbox sourcing, require transmission code,
   hardware/software numbers, old part suffix, donor details, and coding status.
+
+| Family | Common codes | Boundary |
+|---|---|---|
+| DQ200 | 0AM, 0CW | Transverse 7-speed dry clutch; separate mechatronic-fluid logic. |
+| DQ250 | 02E | Transverse 6-speed wet clutch. |
+| DQ380/DQ381 | 0DE, 0GC | Transverse 7-speed wet clutch; platform and market matter. |
+| DQ500 | 0BH, 0BT, 0DL | Higher-torque transverse 7-speed wet clutch. |
+| DL501 | 0B5 | Longitudinal Audi 7-speed wet clutch. |
+| DL382 | 0CK, 0CL | Longitudinal Audi 7-speed; do not reuse DL501 values. |
+
+Preserve pre-scan, software/coding and adaptation values. Use exact-VIN VAG
+service information, ODIS guided functions and applicable SVM action; there is
+no generic latest-firmware or routine-reset route. Used modules may require
+authorized coding and component protection. Never provide bypass, cloning,
+VIN/odometer manipulation, emissions suppression or unverified flash files.
 
 ## Diagnostic Workflow
 

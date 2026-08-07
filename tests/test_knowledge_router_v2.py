@@ -308,6 +308,22 @@ def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misr
         assert result["best_domain"] not in {"parts_sourcing", "work_labor_pricing"}, phrase
 
 
+def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+    query = "Покажи активные заказы магазина, но без Store — магазин не трогать"
+
+    assert find_command_route(query) is None
+    assert find_command_route(query, intent="store_read") is None
+
+    result = probe_knowledge_base(store, query, limit=5)
+    brief = build_agent_brief(store, query, limit=5)
+
+    assert result["best_domain"] not in {"store_management", "store_analytics_reporting"}
+    assert all(route["domain"] not in {"store_management", "store_analytics_reporting"} for route in result["routes"])
+    assert brief["route"]["domain"] not in {"store_management", "store_analytics_reporting"}
+
+
 def test_store_write_phrases_route_to_allowlisted_management_workflow():
     phrases = [
         "назначь заявку на подбор сотруднику",
