@@ -212,7 +212,7 @@ def _risk_flags(
             flags.append("description_contains_deprecated_blocks")
     if board_summary and _has_rich_formatting(board_summary):
         flags.append("board_summary_contains_rich_formatting")
-    if board_summary and _board_summary_line_count(board_summary) > 5:
+    if board_summary and _board_summary_line_count(board_summary) > 4:
         flags.append("board_summary_too_many_lines")
     if board_summary and _has_private_board_summary_data(board_summary):
         flags.append("board_summary_contains_private_identifier")

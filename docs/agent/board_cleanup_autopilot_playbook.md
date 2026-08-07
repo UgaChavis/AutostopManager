@@ -151,25 +151,15 @@ operationally needed.
 ## Description And Board Summary
 
 Public `description` and hidden `board_summary` are different fields. Public
-description content, formatting, and examples are governed by the canonical
+description and board-summary content, formatting, privacy, and length rules
+are governed by the canonical
 [CRM Card Description Standard](crm_card_description_standard.md).
 
-During cleanup, if `description` is empty, leave it empty unless the owner
-explicitly asks for new public text. For non-empty text, make only small
-fact-preserving changes needed to remove duplicated noise or improve
-scanability; do not invent replacement text.
-
-`board_summary` is the compact board preview. Keep it plain, stable, and no
-longer than four or five short lines. Do not include phone, VIN, full client
-identity, raw scan dumps, rich formatting, source lists, or long issue lists.
-
-Recommended `board_summary` shape:
-
-```text
-<vehicle or job>.
-Факт: <main issue, work, or result>.
-Деньги/запчасти: <only if relevant>.
-```
+Cleanup-specific behavior: if `description` is empty, leave it empty unless the
+owner explicitly requests new public text. For non-empty text, make only small
+fact-preserving changes that remove duplicated noise or improve scanability;
+do not invent replacement facts. Refresh `board_summary` only when the
+verified patch changes the board preview.
 
 ## Title, Vehicle, Tags
 

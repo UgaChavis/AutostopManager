@@ -219,29 +219,13 @@ Use `docs/agent/procurement_pricing_playbook.md` before writing prices.
      foreign-only offers from the main average;
    - record whether the number is закупка, retail upper bound, or client sale.
 
-## CRM Public Description
+## CRM Description And Board Summary
 
-Every nontrivial CRM writeback must follow
-`docs/agent/crm_card_description_standard.md`. The public card description gets
-only the selected working facts, not the lookup dossier.
-
-```markdown
-🚘 **Авто:** <make model, year/build only if useful>.
-
-**Задача:** **<requested part/work>**.
-
-**Каталожный номер:** **++<OEM/catalog number>++**.
-
-**Выбор:** **++<selected brand/article>++**, <quantity/price if known>.
-```
-
-Do not write source/provenance, lookup method, confidence, missing checks,
-supplier-check reminders, or `Нужна проверка` blocks into the public
-description. Keep source evidence and confidence in the internal owner report,
-Gateway v2 workflow, or structured lookup result when needed.
-
-Do not put phone numbers, full client names, raw VIN dumps, or long private
-source excerpts into `board_summary`.
+Every nontrivial CRM writeback follows the canonical
+[CRM Card Description Standard](crm_card_description_standard.md). This route
+writes only confirmed selected work/part facts; keep the lookup dossier,
+confidence, and missing checks in the internal owner report, Gateway v2
+workflow, or structured lookup result.
 
 ## CRM Material Lines
 
@@ -288,9 +272,9 @@ that is the priced selected part.
    its schema, and call it through `call_raw_capability` only for selected
    priced parts, not OEM references. This is not an `agent_finance_workflow`
    operation.
-9. Update `board_summary` with a short plain result without VIN/client private
-   data, source lists, or confidence/provenance text:
-   `OEM найден, выбран NGK 91568`.
+9. If the confirmed selection changes the board preview, update
+   `board_summary` in the same patch under the canonical standard; show only
+   the selected result, not the lookup dossier.
 10. Re-open the card and repair order with `agent_entity_context`.
 11. Verify description, board summary, material totals, quantity basis, and the
     internal confidence/evidence record.
