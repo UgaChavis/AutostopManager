@@ -6,9 +6,12 @@ Purpose: define the standard behavior when the owner says the canonical command
 The command has one spelling: `Приберись`. Do not document extra
 natural-language aliases for it.
 
-This playbook is the only detailed source of truth for `Приберись`. Route maps,
-hot rules, MCP catalogs, and annotations must stay compact and point back here
-instead of redefining parallel behavior.
+This playbook is the detailed source of truth for cleanup-specific
+`Приберись` behavior. Public CRM card-description content, formatting, and
+templates belong to the canonical
+[CRM Card Description Standard](crm_card_description_standard.md). Route maps,
+hot rules, MCP catalogs, and annotations must stay compact and point to their
+canonical source instead of redefining parallel behavior.
 
 ## Authority
 
@@ -147,61 +150,14 @@ operationally needed.
 
 ## Description And Board Summary
 
-Public `description` and hidden `board_summary` are different fields.
+Public `description` and hidden `board_summary` are different fields. Public
+description content, formatting, and examples are governed by the canonical
+[CRM Card Description Standard](crm_card_description_standard.md).
 
-If `description` is empty, leave it empty unless the owner explicitly asks for
-new public text. If it contains text, compress it according to
-`docs/agent/crm_card_description_standard.md`: maximally laconic working facts
-only.
-
-The public `description` may contain only the operational facts needed to scan
-the card: task/complaint, confirmed diagnostics, OEM/catalog numbers, selected
-parts/materials, oil/fluid capacity, prices, agreements, and useful vehicle
-facts.
-
-Do not add separate `Статус:` or `Следующий шаг:` blocks. Do not write source
-lists, search history, selection method, diagnostic theory, risk/caveat/safety
-blocks, supplier-check reminders, `нужно перепроверить данные`, or verbose AI
-explanations.
-
-Readable formatting rules:
-
-- split dense text into short paragraphs
-- use **bold** for labels and decisive facts
-- use *italic* only for a short secondary working note
-- use ++underline++ for one key amount, oil capacity, OEM/catalog number,
-  approval, or money value when emphasis helps
-- use restrained emoji markers only when they speed scanning
-- use only CRM-supported Markdown: `**bold**`, `*italic*`, `++underline++`
-- never use raw HTML-style tags or pseudo-formatting
-- after saving, inspect visible preview and remove any visible technical markup
-
-Preferred public `description` shape:
-
-```markdown
-**Авто:** <автомобиль>.
-
-**Задача:** <важный факт или итог>.
-
-**Запчасти/OEM:** **++<номер или выбранный вариант>++**.
-
-**Масло/жидкости:** **++<объем/спецификация>++**.
-
-**Деньги:** **++<сумма или согласование>++**.
-```
-
-Use only blocks that matter. Two short paragraphs are enough for a tiny card.
-
-Bad public `description` patterns:
-
-```markdown
-Статус: ...
-Следующий шаг: ...
-По данным источников нужно перепроверить...
-Основание подбора: ...
-В целях безопасности пользователя...
-AI: длинное объяснение поиска и всех источников...
-```
+During cleanup, if `description` is empty, leave it empty unless the owner
+explicitly asks for new public text. For non-empty text, make only small
+fact-preserving changes needed to remove duplicated noise or improve
+scanability; do not invent replacement text.
 
 `board_summary` is the compact board preview. Keep it plain, stable, and no
 longer than four or five short lines. Do not include phone, VIN, full client

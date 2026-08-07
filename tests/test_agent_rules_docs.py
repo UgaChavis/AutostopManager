@@ -374,13 +374,15 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
     crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
-    assert "This playbook is the only detailed source of truth" in playbook
+    assert "This playbook is the detailed source of truth for cleanup-specific" in playbook
     assert "leave it empty" in playbook
     assert "phone goes to the client" in playbook
     assert "VIN/plate/mileage" in playbook
     assert "vehicle` as a compact make/model" in playbook
     assert "no more than three tags" in playbook
-    assert "Bad public `description` patterns" in playbook
+    assert "crm_card_description_standard.md" in playbook
+    assert "Preferred public `description` shape" not in playbook
+    assert "Bad public `description` patterns" not in playbook
     assert "repair_orders_changed=0 and payments_changed=0" in playbook
 
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
