@@ -21,17 +21,16 @@ The generated runtime cache is intentionally untracked:
 
 - `data/offline_parts_catalogs/catalog_index.json`
 - `data/offline_parts_catalogs/README.md`
-- `data/offline_parts_catalogs/pdf/*.pdf`
-- `data/offline_parts_catalogs/xlsx/*.xlsx`
 - `data/offline_parts_catalogs/text/*.txt`
 - `data/offline_parts_catalogs/csv/*.csv`
 
-The generated cache contained 10 source files, about 197 MB total, with PDF
-text extracted by `pdftotext -layout` and MAHLE XLSX rows extracted to text/CSV.
+The compact cache retains searchable text/CSV, source URLs and hashes. Ten
+verified PDF/XLSX originals (148 MB) were removed after extraction; restore an
+original only when page layout or source context is required.
 
 ## Rebuild Outline
 
-1. Download each source URL listed in
+1. Download the required source URL listed in
    `sources/offline_parts_catalog_sources.json`.
 2. Store PDFs under `data/offline_parts_catalogs/pdf/` and spreadsheets under
    `data/offline_parts_catalogs/xlsx/`.

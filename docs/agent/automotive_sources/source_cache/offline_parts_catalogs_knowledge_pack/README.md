@@ -8,8 +8,6 @@ committing large PDF/XLSX catalogs or copied catalog tables to Git.
 The runtime cache lives here when present:
 
 - `data/offline_parts_catalogs/catalog_index.json`
-- `data/offline_parts_catalogs/pdf/`
-- `data/offline_parts_catalogs/xlsx/`
 - `data/offline_parts_catalogs/text/`
 - `data/offline_parts_catalogs/csv/`
 
@@ -30,8 +28,8 @@ rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text
 4. Open the matching source entry from
    `sources/offline_parts_catalog_sources.json` to identify title, publisher,
    source URL, scope, and limits.
-5. If needed, inspect the original PDF locally by path from
-   `data/offline_parts_catalogs/catalog_index.json`.
+5. If page layout or source context is needed, re-download the original from
+   its recorded official URL and verify its recorded SHA-256 first.
 
 ## Last Recorded Cache Contents
 

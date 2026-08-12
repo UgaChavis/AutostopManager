@@ -56,11 +56,6 @@ from .service_labor_experience import (
     summarize_service_labor_snapshot,
 )
 from .service_labor_report import build_service_labor_report_artifact, save_service_labor_report_artifact
-from .service_pricing_experience import (
-    build_service_pricing_experience_from_state_file,
-    save_service_pricing_experience,
-    summarize_snapshot,
-)
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
@@ -693,17 +688,6 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use the aggregate-only local closed-order experience snapshot",
-    )
-
-    pricing_refresh = sub.add_parser(
-        "service-pricing-refresh",
-        help="Refresh aggregate-only labor and article price experience from recent closed CRM repair orders",
-    )
-    pricing_refresh.add_argument("--state-json", required=True)
-    pricing_refresh.add_argument("--limit", type=int, default=100)
-    pricing_refresh.add_argument(
-        "--output",
-        default="data/private_knowledge/service_pricing_experience.json",
     )
 
     labor_refresh = sub.add_parser(
@@ -1485,19 +1469,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 labor_time_policy=args.labor_time_policy,
                 use_internal_experience=args.internal_experience,
             )
-        )
-    elif args.command == "service-pricing-refresh":
-        snapshot = build_service_pricing_experience_from_state_file(
-            args.state_json,
-            limit=args.limit,
-        )
-        output_path = save_service_pricing_experience(snapshot, args.output)
-        _print_json(
-            {
-                "ok": True,
-                "output_path": str(output_path),
-                **summarize_snapshot(snapshot),
-            }
         )
     elif args.command == "service-labor-refresh":
         snapshot, executor_report = build_service_labor_experience_from_state_file(

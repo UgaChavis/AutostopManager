@@ -38,9 +38,8 @@ python -m autostop_manager.cli estimate-work --vehicle "BMW X5" --work "заме
 4. Read the aggregate labor-only snapshot
    `data/private_knowledge/service_labor_experience.json`. Match the exact
    operation and use its recency-weighted median, IQR, sample size, applicable
-   vehicle segment, price drift, and freshness as a historical anchor. Fall
-   back to `service_pricing_experience.json` only when the full snapshot is
-   unavailable. Never treat either snapshot as a current price list.
+   vehicle segment, price drift, and freshness as a historical anchor. Never
+   treat the snapshot as a current price list.
 5. Collect current public Russia STO prices for the same operation and comparable
    vehicle class. Keep only labor-only prices. Do not mix work prices with
    parts, fluids, programming licenses, towing, or aggregates.
@@ -101,20 +100,10 @@ zero/missing `total` rows remain visible in data-quality counts but do not enter
 price baseline. IQR outliers remain counted and visible but do not set the
 recommended anchor.
 
-The legacy 100-order mixed snapshot remains available for backward compatibility
-and historical article references:
-
-```bash
-.venv/bin/python -m autostop_manager.cli service-pricing-refresh \
-  --state-json /opt/autostopcrm/data/state.json \
-  --limit 100
-```
-
-Both snapshots are aggregate-only and private. The full labor snapshot is the
-preferred estimator source. Executor statistics must not enter customer
-pricing, durable agent memory, docs, Git, or public reports. Article price
-references remain separate historical hints until live Store, supplier, public
-market, and applicability checks pass.
+The snapshot is aggregate-only and private. Executor statistics must not enter
+customer pricing, durable agent memory, docs, Git, or public reports. Parts
+prices always require live Store, supplier, public-market, and applicability
+checks.
 
 ## PartsAPI AUTONORMS Layer
 

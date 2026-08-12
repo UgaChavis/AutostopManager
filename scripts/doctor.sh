@@ -106,7 +106,7 @@ fi
 section "AutostopManager"
 run "manager git status" git -C "$MANAGER_ROOT" status --short --branch
 run "manager doctor" bash -c '"$1" -m autostop_manager.cli doctor >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
-run "manager control report" bash -c '"$1" -m autostop_manager.cli control-report --format json --output "$2/frontend/control-center/control-report.json" >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python" "$MANAGER_ROOT"
+run "manager control report" bash -c '"$1" -m autostop_manager.cli control-report --format json >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager environment report" bash -c '"$1" -m autostop_manager.cli environment-report --format json >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager memory review" bash -c '"$1" -m autostop_manager.cli memory-review >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"
 run "manager provider smoke" bash -c '"$1" -m autostop_manager.cli provider-smoke --provider all --mode dry-run >/dev/null' _ "$MANAGER_ROOT/.venv/bin/python"

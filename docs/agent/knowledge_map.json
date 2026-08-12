@@ -1,7 +1,7 @@
 {
   "purpose": "Machine-readable navigation map for AutostopManager knowledge files.",
   "entrypoint": "docs/agent/knowledge_shelves.md",
-  "update_rule": "When adding a durable playbook, source catalog, or specialized skill, update this file and docs/agent/knowledge_shelves.md. Every domain should include aliases, keywords, questions, and source_of_truth_files for cheap probe routing.",
+  "update_rule": "For a durable route, keep concise aliases/keywords and one ordered primary_files list; add references or optional runtime files only when needed.",
   "domains": {
     "ecosystem_capability_parity": {
       "title": "AutostopManager, CRM, and Store production capability parity",
@@ -27,23 +27,13 @@
         "cursor ACK replay tombstone",
         "multi-repository rollback deploy"
       ],
-      "questions": [
-        "как добиться полного паритета Manager с CRM и Store",
-        "какие человеческие действия ещё недоступны через Gateway",
-        "как проверить полноту событий и безопасно развернуть изменения"
-      ],
-      "source_of_truth_files": [
+      "primary_files": [
         "AGENTS.md",
         "README.md",
         "docs/agent/deployment_runbook.md",
         "docs/agent/command_routes.json",
         "docs/agent/manager_mcp_catalog.json",
         "docs/agent/crm_mcp_catalog.json"
-      ],
-      "primary_files": [
-        "AGENTS.md",
-        "docs/agent/deployment_runbook.md",
-        "docs/agent/command_routes.json"
       ]
     },
     "startup_and_identity": {
@@ -85,18 +75,6 @@
         "routing",
         "project footprint",
         "code growth"
-      ],
-      "questions": [
-        "как должен начинать работу менеджер",
-        "какие правила ответа и памяти действуют",
-        "какой файл открыть первым для инструкций агента",
-        "как контролировать рост кода и документации"
-      ],
-      "source_of_truth_files": [
-        "AGENTS.md",
-        "docs/agent/manager_rules.json",
-        "docs/agent/command_routes.json",
-        "docs/agent/manager_mcp_catalog.json"
       ],
       "primary_files": [
         "AGENTS.md",
@@ -141,22 +119,11 @@
         "repair budget",
         "safe metadata"
       ],
-      "questions": [
-        "как включить режим обучения менеджера",
-        "как менеджер анализирует выполненную задачу",
-        "когда можно автоматически исправить инструмент",
-        "как посмотреть накопленный опыт и кандидаты улучшений"
-      ],
-      "source_of_truth_files": [
+      "primary_files": [
         "AGENTS.md",
         "docs/agent/intelligent_agent_learning_playbook.md",
         ".agents/skills/autostop-learning-loop/SKILL.md",
         "docs/agent/manager_mcp_catalog.json"
-      ],
-      "primary_files": [
-        "docs/agent/intelligent_agent_learning_playbook.md",
-        ".agents/skills/autostop-learning-loop/SKILL.md",
-        "AGENTS.md"
       ],
       "skill_path": ".agents/skills/autostop-learning-loop/SKILL.md"
     },
@@ -196,17 +163,6 @@
         "knowledge shelves",
         "documentation hygiene",
         "delete obsolete docs"
-      ],
-      "questions": [
-        "как добавить новый документ в базу знаний",
-        "как проверить что база знаний проиндексирована",
-        "куда положить новый источник",
-        "когда запускать cleanup-audit"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/knowledge_shelves.md",
-        "docs/agent/knowledge_map.json",
-        "docs/agent/knowledge_annotations.jsonl"
       ],
       "primary_files": [
         "docs/agent/knowledge_shelves.md",
@@ -261,15 +217,6 @@
         "tender response",
         "договор аренды"
       ],
-      "questions": [
-        "какие актуальные реквизиты моего ИП",
-        "что известно про ИП Гришкявичус",
-        "какая карточка предприятия самая свежая",
-        "где взять текущие контакты для коммерческого предложения"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/business_identity_playbook.md"
-      ],
       "primary_files": [
         "docs/agent/business_identity_playbook.md"
       ],
@@ -317,16 +264,6 @@
         "render_pdf",
         "completion_act",
         "parts_sale"
-      ],
-      "questions": [
-        "как сделать качественный счет",
-        "как проверить акт или КП перед отправкой",
-        "как оформить PDF Word Excel документ без кривой верстки",
-        "можно ли делать AutoStop счет самодельным PDF HTML шаблоном"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/business_document_quality_playbook.md",
-        "docs/agent/business_identity_playbook.md"
       ],
       "primary_files": [
         "docs/agent/business_document_quality_playbook.md",
@@ -382,16 +319,6 @@
         "_archive_emails",
         "email source of truth"
       ],
-      "questions": [
-        "как работать с Gmail connector",
-        "какие команды Gmail доступны",
-        "как проверить почту или входящие",
-        "что делать если тело письма декодировалось кракозябрами"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/gmail_workflow_playbook.md",
-        "docs/agent/manager_rules.json"
-      ],
       "primary_files": [
         "docs/agent/gmail_workflow_playbook.md",
         "docs/agent/manager_rules.json"
@@ -442,16 +369,6 @@
         "forum evidence",
         "public repair cases"
       ],
-      "questions": [
-        "где искать техническую информацию по ремонту",
-        "какой источник использовать для ошибки или схемы",
-        "как искать профильные форумы по ремонту",
-        "как найти реальные журналы ремонта Drive2"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/automotive_repair_source_playbook.md",
-        "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
-      ],
       "primary_files": [
         "docs/agent/automotive_repair_source_playbook.md",
         "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
@@ -494,7 +411,8 @@
         "EEPROM",
         "NVM",
         "адаптация ЭБУ",
-        "дамп"
+        "дамп",
+        "стрелковка KOMBI BMW приборка coding"
       ],
       "keywords": [
         "KOMBI",
@@ -510,14 +428,6 @@
         "BDC",
         "odometer",
         "mileage"
-      ],
-      "questions": [
-        "стрелковка KOMBI BMW приборка coding",
-        "как работает программирование ECU",
-        "что нельзя делать с EEPROM дампом пробегом иммобилайзером и emissions delete"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/ecu_calibration_programming_playbook.md"
       ],
       "primary_files": [
         "docs/agent/ecu_calibration_programming_playbook.md",
@@ -590,15 +500,6 @@
         "Longlife",
         "high voltage"
       ],
-      "questions": [
-        "есть ли локальная информация по ремонту BMW",
-        "где искать ошибку BMW fault memory",
-        "где смотреть xDrive ZF IHKA IBS BMW",
-        "какой BMW документ открыть первым"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/bmw_repair_playbook.md"
-      ],
       "primary_files": [
         "docs/agent/bmw_repair_playbook.md",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_chassis_codes.jsonl",
@@ -665,16 +566,6 @@
         "TSB",
         "OEM parts"
       ],
-      "questions": [
-        "какое сцепление искать для Toyota GR Yaris",
-        "есть ли локальная база по GR Yaris",
-        "где смотреть G16E-GTS GXPA16 GR-FOUR",
-        "какой документ открыть для Toyota Yaris GR"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/toyota_gr_yaris_playbook.md",
-        "docs/agent/automotive_sources/fluid_maintenance_sources.json"
-      ],
       "primary_files": [
         "docs/agent/toyota_gr_yaris_playbook.md",
         "docs/agent/automotive_sources/fluid_maintenance_sources.json"
@@ -727,17 +618,6 @@
         "oil consumption",
         "drivetrain malfunction"
       ],
-      "questions": [
-        "есть ли локальная информация по BMW X5 F15 N63",
-        "где смотреть электрику BMW F15",
-        "что открыть для N63TU misfire injector oil consumption",
-        "куда идти при ошибках BDC MEVD FlexRay"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/bmw_repair_playbook.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
-        "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json"
-      ],
       "primary_files": [
         "docs/agent/bmw_repair_playbook.md",
         "docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md",
@@ -777,16 +657,6 @@
         "dry fill",
         "oil filter",
         "lubricant selector"
-      ],
-      "questions": [
-        "какое масло заливать",
-        "какой заправочный объем",
-        "какая спецификация жидкости",
-        "как проверить fluid capacity"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/fluid_maintenance_playbook.md",
-        "docs/agent/automotive_sources/fluid_maintenance_sources.json"
       ],
       "primary_files": [
         "docs/agent/fluid_maintenance_playbook.md",
@@ -837,15 +707,6 @@
         "shift quality",
         "drain refill"
       ],
-      "questions": [
-        "как диагностировать коробку",
-        "какое масло в трансмиссию",
-        "как выбрать сцепление или проверить адаптацию",
-        "какие ограничения по контрактному мехатронику DSG"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/transmission_playbook.md"
-      ],
       "primary_files": [
         "docs/agent/transmission_playbook.md"
       ],
@@ -889,18 +750,6 @@
         "MAHLE",
         "расходники по VIN",
         "фильтр по VIN"
-      ],
-      "questions": [
-        "подбери фильтр по VIN и аналоги",
-        "как расшифровать VIN или номер кузова",
-        "как отделить OEM EPC от MAHLE Bosch MANN Hengst кроссов"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/vehicle_identity_playbook.md",
-        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
-        "docs/agent/partsapi_method_contracts.md",
-        "docs/agent/partsapi_category_index.json",
-        "docs/agent/vin_oem_sources.json"
       ],
       "primary_files": [
         "docs/agent/vehicle_identity_playbook.md",
@@ -965,16 +814,6 @@
         "XLSX interchange",
         "cross reference"
       ],
-      "questions": [
-        "где искать запчасть",
-        "как сравнить цену Drom ZZap Avito",
-        "как искать аналог по OEM номеру",
-        "какие workflow docs использовать для поиска и оценки предложений по запчастям"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/parts_search_playbook.md",
-        "docs/agent/procurement_price_sources.json"
-      ],
       "primary_files": [
         "docs/agent/parts_search_playbook.md",
         "docs/agent/procurement_price_sources.json",
@@ -1019,17 +858,6 @@
         "parts blocker",
         "manual owner command"
       ],
-      "questions": [
-        "что делать когда владелец сказал Приберись",
-        "как агент должен убирать CRM карточки",
-        "какие CRM правки разрешены автопилоту",
-        "что нельзя удалять при уборке доски"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/board_cleanup_autopilot_playbook.md",
-        "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/manager_rules.json"
-      ],
       "primary_files": [
         "docs/agent/board_cleanup_autopilot_playbook.md",
         "docs/agent/manager_mcp_catalog.json",
@@ -1071,18 +899,6 @@
         "описание",
         "карточка",
         "объем масла"
-      ],
-      "questions": [
-        "как заполнять описание карточки CRM",
-        "что писать в публичное описание карточки",
-        "как оформить подбор запчастей в карточке",
-        "какой стандарт описания карточки использовать"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/crm_card_description_standard.md",
-        "docs/agent/board_cleanup_autopilot_playbook.md",
-        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
-        "docs/agent/manager_rules.json"
       ],
       "primary_files": [
         "docs/agent/crm_card_description_standard.md",
@@ -1135,20 +951,6 @@
         "public traffic camera",
         "current traffic near AutoStop"
       ],
-      "questions": [
-        "как управлять сервисом сегодня",
-        "что делать с закупкой или блокером",
-        "как прибраться на доске",
-        "посмотри камеру у AutoStop"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/krasnoyarsk_service_management_playbook.md",
-        "docs/agent/crm_manager_data_playbook.md",
-        "docs/agent/parts_search_playbook.md",
-        "docs/agent/procurement_price_sources.json",
-        "docs/agent/service_management_sources.json",
-        "docs/agent/board_cleanup_autopilot_playbook.md"
-      ],
       "primary_files": [
         "docs/agent/krasnoyarsk_service_management_playbook.md",
         "docs/agent/crm_manager_data_playbook.md",
@@ -1188,16 +990,6 @@
         "HEAD:AutostopManager",
         "gh auth status"
       ],
-      "questions": [
-        "как запустить MCP локально",
-        "что можно публиковать в GitHub",
-        "какие данные нельзя коммитить",
-        "нужен ли gh auth status для git push"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/deployment_runbook.md",
-        "README.md"
-      ],
       "primary_files": [
         "docs/agent/deployment_runbook.md",
         "README.md"
@@ -1216,7 +1008,9 @@
         "prepare or verify the SECRET_KEY AUTOSTOP_REMOTE USB bundle",
         "connect a home computer to the Autostop server without public SSH",
         "prepare, verify, or repair the home-pc SSH alias and reverse tunnel",
-        "interact with the home PC through ssh, sftp/scp, pwsh, Python, or visible-desktop helper scripts"
+        "interact with the home PC through ssh, sftp/scp, pwsh, Python, or visible-desktop helper scripts",
+        "print PDF on reception printer",
+        "печать PDF на ресепшене"
       ],
       "aliases": [
         "FST.KZ VPN server",
@@ -1245,20 +1039,14 @@
         "Scheduled Task",
         "127.0.0.1:22220",
         "process access",
-        "no public SSH"
-      ],
-      "questions": [
-        "какие серверы и компьютеры доступны Codex",
-        "как проверить доступ к FST.KZ VPN серверу",
-        "что делать при изменении SSH host key",
-        "как безопасно управлять удаленным Windows компьютером"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/codex_home_pc_reverse_ssh.md",
-        "scripts/codex_home_pc_bootstrap.ps1"
+        "no public SSH",
+        "HUAWEI PixLab X1",
+        "print-pdf",
+        "принтер ресепшена"
       ],
       "primary_files": [
         "docs/agent/codex_home_pc_reverse_ssh.md",
+        "docs/agent/reception_pdf_printing_playbook.md",
         "scripts/codex_home_pc_bootstrap.ps1"
       ]
     },
@@ -1290,13 +1078,7 @@
         "карточка CRM",
         "ремонтный заказ CRM"
       ],
-      "questions": [
-        "как найти оригинальный номер детали по VIN из карточки CRM",
-        "как проверить OEM, замену, кросс и применяемость перед записью в CRM",
-        "как разделить закупку, рынок РФ и цену клиенту в карточке CRM",
-        "как использовать официальные каталоги расходников после OEM подбора"
-      ],
-      "source_of_truth_files": [
+      "primary_files": [
         "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
         "docs/agent/vehicle_identity_playbook.md",
         "docs/agent/partsapi_method_contracts.md",
@@ -1305,18 +1087,9 @@
         "docs/agent/crm_card_description_standard.md",
         "docs/agent/parts_search_playbook.md",
         "docs/agent/procurement_price_sources.json",
-        "docs/agent/crm_mcp_catalog.json"
-      ],
-      "primary_files": [
-        "docs/agent/crm_vin_oem_parts_lookup_playbook.md",
-        "docs/agent/vehicle_identity_playbook.md",
-        "docs/agent/partsapi_method_contracts.md",
-        "docs/agent/partsapi_category_index.json",
+        "docs/agent/crm_mcp_catalog.json",
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/README.md",
-        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl",
-        "docs/agent/crm_card_description_standard.md",
-        "docs/agent/parts_search_playbook.md",
-        "docs/agent/procurement_price_sources.json"
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/rules/offline_parts_catalog_usage_rules.jsonl"
       ],
       "reference_files": [
         "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
@@ -1363,15 +1136,6 @@
         "250 x 250 x 250",
         "clearance",
         "gcode"
-      ],
-      "questions": [
-        "как спроектировать деталь для 3D печати",
-        "какие размеры нужны для модели по фотографии",
-        "как сделать STL для Anycubic Kobra S1",
-        "можно ли отправить файл на Anycubic по сети"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/3d_printing_cad_playbook.md"
       ],
       "primary_files": [
         "docs/agent/3d_printing_cad_playbook.md"
@@ -1424,17 +1188,6 @@
         "store_state",
         "schema-bound dry-run proof"
       ],
-      "questions": [
-        "что нового появилось в магазине",
-        "есть ли новые или активные заказы магазина",
-        "что заказали в точном интернет-заказе",
-        "как выполнить любое действие сотрудника магазина через owner principal"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/store_management_playbook.md",
-        "docs/agent/manager_mcp_catalog.json",
-        "docs/agent/crm_mcp_catalog.json"
-      ],
       "primary_files": [
         "docs/agent/store_management_playbook.md",
         "docs/agent/manager_mcp_catalog.json",
@@ -1477,19 +1230,10 @@
         "previous period",
         "aggregate only"
       ],
-      "questions": [
-        "сколько посетителей сегодня",
-        "какие товары смотрели за неделю",
-        "куда чаще нажимают",
-        "какая конверсия в корзину и заказ"
-      ],
-      "source_of_truth_files": [
+      "primary_files": [
         "docs/agent/store_analytics_playbook.md",
         "docs/agent/manager_mcp_catalog.json",
         "docs/agent/crm_mcp_catalog.json"
-      ],
-      "primary_files": [
-        "docs/agent/store_analytics_playbook.md"
       ],
       "reference_files": [
         "docs/agent/manager_mcp_catalog.json",
@@ -1533,21 +1277,7 @@
         "round_to_100",
         "outlier filter",
         "minimum 3 quotes",
-        "service-labor-refresh",
-        "service_pricing_experience"
-      ],
-      "questions": [
-        "как оценить стоимость работ",
-        "как посчитать среднюю цену работ по России плюс 50%",
-        "какие источники использовать для прайсов СТО",
-        "как проценить работы и запчасти и расписать заказ-наряд"
-      ],
-      "source_of_truth_files": [
-        "docs/agent/work_labor_pricing_playbook.md",
-        "docs/agent/partsapi_method_contracts.md",
-        "docs/agent/labor_pricing_sources.json",
-        "docs/agent/krasnoyarsk_service_management_playbook.md",
-        ".agents/skills/resolve-autostop-service-case/SKILL.md"
+        "service-labor-refresh"
       ],
       "primary_files": [
         "docs/agent/work_labor_pricing_playbook.md",
@@ -1561,8 +1291,7 @@
         ".agents/skills/resolve-autostop-service-case/references/evidence-contract.md"
       ],
       "optional_runtime_files": [
-        "data/private_knowledge/service_labor_experience.json",
-        "data/private_knowledge/service_pricing_experience.json"
+        "data/private_knowledge/service_labor_experience.json"
       ],
       "required_context": [
         "vehicle or VIN/chassis",

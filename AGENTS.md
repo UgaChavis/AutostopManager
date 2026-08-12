@@ -1,214 +1,140 @@
 # AutostopManager Codex Instructions
 
-Canonical startup file for Codex in `/opt/AutostopManager`. Keep docs compact;
-put detailed workflows in `docs/agent/*_playbook.md` and route metadata in
-`docs/agent/knowledge_map.json`.
+Canonical compact startup file for Codex in `/opt/AutostopManager`.
+Detailed procedures live in `docs/agent/*_playbook.md`; routing metadata lives
+in `docs/agent/knowledge_map.json` and `docs/agent/command_routes.json`.
+Keep docs compact.
 
-## Role
+## Role And Sources
 
-- Answer the owner in Russian by default: short, operational, direct.
-- AutostopManager stores only durable non-CRM memory and no raw store data:
-  routes, playbooks, technical cursors, compact refs/catalogs, server checks,
-  and verification.
+- Answer the owner in Russian by default: short, operational and direct.
+- AutostopManager stores only durable non-CRM memory: routes, rules, compact
+  references, technical cursors, server checks and verified lessons.
 - AutoStop CRM is the source of truth for cards, clients, vehicles, repair
-  orders, payments, cashboxes, files, and live board state.
-- AutoStop App is the source of truth for the store catalog, stock, batches,
-  storage locations, suppliers, quote requests, internet orders, warehouse
-  operations, and marketplace state.
+  orders, payments, cashboxes, files and board state.
+- AutoStop App is the source of truth for catalog, stock, batches, suppliers,
+  quotes, internet orders, warehouse and marketplace state.
 - Gmail is the source of truth for messages, threads, labels, drafts,
-  attachments, and sent/archive history.
-- Do not store raw CRM/store exports, full store orders/stock rows, full Gmail
-  threads, phone/VIN/license tables, cashbox ledgers, credentials, OAuth state,
-  or secrets in docs, Git, memory, workflow state, or chat summaries.
-- Never dump `.env`, Docker `.Config.Env`, or a process environment. Inspect
-  only an explicit allowlist of non-secret names and print secret presence or
-  validation booleans, never values.
+  attachments and sent/archive history.
+- Never persist raw CRM/Store/Gmail exports, customer or vehicle identifier
+  tables, ledgers, credentials, OAuth state or secrets in docs, Git, memory,
+  workflow state or chat summaries.
+- Never dump `.env`, Docker `.Config.Env` or process environments. Inspect an
+  explicit non-secret allowlist and report only presence or validation booleans.
 
 ## Startup
 
-1. For non-trivial owner requests, run one compact context command first:
+1. For a non-trivial request run one project-venv context command:
    `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"` or
-   `.venv/bin/python -m autostop_manager.cli prepare-context "<query>"` on the
-   production Linux checkout. Use the active project venv equivalent on other
-   platforms; do not fall back to the host system Python.
-2. For local knowledge/docs work, run `knowledge-probe "<query>"` and open the
-   returned `open_first` / source-of-truth files before broad reads.
-3. For live CRM work, use the AutoStop CRM MCP connector. Start with
-   `agent_bootstrap`, then `agent_board_digest`; Store bootstrap is one
-   stateless snapshot request with no cursor/ACK. Use `agent_search` and
-   `agent_entity_context` for focused detail. Run broad control through
-   `agent_board_workflow`, not the hidden legacy surface. New-card creation is
-   the guarded raw-write exception documented once in
-   `docs/agent/crm_manager_data_playbook.md`.
-4. For store work, open `docs/agent/store_management_playbook.md`; use existing
-   Gateway tools with store scope/entities. Bootstrap uses `store_bootstrap`;
-   owner “what is new” reads use `store_digest`. Never call the store DB or
-   legacy GET routes with side effects. Human-UI parity operations without a
-   named workflow may use guarded raw `store_owner_capabilities` and
-   `store_owner_api`; they require the reserved `store:owner` service principal
-   through `AUTOSTOP_STORE_OWNER_TOKEN` and the live OpenAPI operation schema.
-   Supplier procurement boundaries are owned by that playbook; never substitute
-   a customer order for a supplier purchase.
-5. For Gmail work, open `docs/agent/gmail_workflow_playbook.md`; read/search
-   before any mailbox-changing action.
-6. For automotive technical questions, start with the returned knowledge route,
-   then select only the capabilities needed by the actual question: CRM for an
-   identified live card or vehicle, AutoStop App for internal catalog/stock/price,
-   VIN/OEM sources for identity and applicability, official public evidence for
-   recalls/communications, and public web/forums for research. Treat this as
-   adaptive source selection, not a fixed workflow; final safety, procedure,
-   torque, fluid, programming, and exact-fitment facts need an appropriate
-   OEM/licensed source and vehicle/unit context.
-   For a VIN by Russian registration-number request, a part-name/cross request,
-   or a labor estimate, open `docs/agent/vehicle_identity_playbook.md`,
-   `docs/agent/partsapi_method_contracts.md`, and, for labor, also
-   `docs/agent/work_labor_pricing_playbook.md`. For an applied service case
-   (`процени`, `распиши ЗН`, `сколько работы и запчасти`, complaint-to-estimate),
-   use the project `resolve-autostop-service-case` skill. It chooses sources
-   adaptively and must not reduce the answer to one fixed formula or provider.
-   Use the narrow
-   `partsapi_catalog_lookup` operation with its method-specific configured key;
-   never print keys or persist raw VIN/plate/payloads. A VIN found by plate is
-   an identity lead that must be checked against the vehicle/CRM before a write;
-   AUTONORMS `workTime` is a labor-time evidence layer, never the final selling
-   price.
-   For a symptom or practical repair-case request where public owner experience
-   is useful, use `research_drive2_cases` through raw discovery before broad
-   generic search. It is public-only, bounded, and hypothesis-level evidence;
-   never use it as final authority for safety, procedure, or exact-fitment facts.
-   Full labor-only closed-order experience from
-   `data/private_knowledge/service_labor_experience.json` is the preferred
-   internal historical anchor. Refresh it with `service-labor-refresh` from one
-   live read-only CRM state snapshot; it covers all closed orders, weights recent
-   prices with a 90-day half-life, stores aggregate statistics only, and keeps
-   executor analysis in a separate restricted report that must never influence
-   customer pricing or agent memory. The legacy
-   `service_pricing_experience.json` and `service-pricing-refresh --limit 100`
-   remain a fallback and historical article-reference route. Never persist raw
-   orders. High-confidence labor pricing needs exact scope and at least three
-   independent evidence families such as internal experience, current market,
-   and vehicle-specific labor time/service data.
-7. For broad CRM, store, procurement, finance, knowledge-intake, or other multi-step
-   work, use the Gateway v2 workflow ledger and compact state-versioned
-   checkpoints. Use `discover_raw_capabilities` ->
-   `get_raw_capability_schema` -> `call_raw_capability` only when no named
-   workflow covers the task; never invoke a hidden capability directly. A
-   semantic discovery query returns only read capabilities: for a raw write,
-   query its exact literal capability name, use the returned live schema hash,
-   and provide a unique idempotency key.
-8. Resolve the effective `work`/`learning` mode before a non-trivial task. In
-   `learning`, use the project `autostop-learning-loop` skill and close the
-   post-run review before the final answer. Open
-   `docs/agent/intelligent_agent_learning_playbook.md` for the policy.
+   `prepare-context "<query>"`. Never fall back to host Python.
+2. For local docs/knowledge work run `knowledge-probe "<query>"`, then open
+   `open_first` and only the returned sources before broader reads.
+3. Resolve `work` or `learning` mode. In learning mode use the
+   `autostop-learning-loop` skill and finish its post-run review.
+4. For multi-step work use the Gateway v2 workflow ledger with compact,
+   state-versioned checkpoints. Raw discovery is only for a capability not
+   covered by a named workflow; a raw write requires its exact literal name,
+   live schema hash and unique idempotency key.
 
-The production connector must expose exactly 24 Gateway v2 tools. Codex/Apps
-authenticate through owner-approved OAuth 2.1 with PKCE and rotating refresh
-tokens; the deployment-rotated bearer is internal compatibility only. For a
-write, the mandatory order is focused reread -> `prepare_action_contract` ->
-named workflow `dry_run` -> named workflow `apply` -> exact-target reread and
-verification.
+## Live Systems
+
+- CRM: use the 24-tool Gateway v2 connector. Start with `agent_bootstrap` and
+  `agent_board_digest`, then `agent_search` and `agent_entity_context`.
+  Broad control uses named `agent_board_workflow` operations. The only guarded
+  raw new-card exception is documented in
+  `docs/agent/crm_manager_data_playbook.md`.
+- Store: open `docs/agent/store_management_playbook.md`. Bootstrap is one
+  stateless snapshot; owner-visible changes use `store_digest`. Never read the
+  Store DB or side-effecting legacy GET routes. Common writes use
+  `agent_inventory_workflow`; other employee operations require the live
+  OpenAPI, reserved `store:owner` principal and guarded `store_owner_api`.
+  A customer order is never a supplier purchase.
+- Gmail: open `docs/agent/gmail_workflow_playbook.md`; search/read before a
+  mailbox mutation and keep only refs in the workflow ledger.
+
+The production connector exposes exactly 24 Gateway v2 tools. Codex/Apps use
+owner-approved OAuth 2.1 with PKCE and rotating refresh tokens; the rotated
+bearer is internal compatibility only.
+
+## Automotive Work
+
+- Follow the returned knowledge route and select sources for the actual fact:
+  focused CRM vehicle/card context, Store catalog/stock/price, VIN/OEM
+  applicability, official public communications, licensed service data or
+  public research. Final safety, procedure, torque, fluid, programming and exact
+  fitment facts require an appropriate vehicle/unit-specific OEM or licensed
+  source.
+- VIN by Russian registration number, part/cross and labor tasks route through
+  `vehicle_identity_playbook.md`, `partsapi_method_contracts.md` and, when
+  applicable, `work_labor_pricing_playbook.md`. A plate-derived VIN is an
+  identity lead that must be checked against the vehicle/CRM before use.
+- Applied estimates (`процени`, `распиши ЗН`, complaint-to-estimate) use the
+  `resolve-autostop-service-case` skill. Labor pricing reconciles the
+  aggregate-only `service_labor_experience.json`, current labor-only market
+  and vehicle-specific labor time; high confidence needs exact scope and three
+  independent evidence families. AUTONORMS `workTime` is evidence, not price.
+- `research_drive2_cases` supplies bounded public hypotheses only. Never
+  bypass login, CAPTCHA, paywall or IP blocks, and never use forums as final
+  authority for procedure, safety or fitment.
 
 ## Write Safety
 
-- The owner's active task authorizes the non-financial exact-target changes
-  needed to complete it. Choose scope intelligently, but never expand into
-  unrelated cleanup; retain preflight, idempotency, concurrency, and readback.
-- Payments, cashboxes, refunds, payroll payouts, supplier orders, and any
-  change to a financial total require a direct owner instruction for that
-  exact operation, even in `learning` mode.
-- Before CRM writes: exact target id, dry-run/preflight where available, then
-  reread and verify.
-- Seven common quote/batch/READY writes remain optimized named operations in
-  `agent_inventory_workflow`; their existing strict DTO and notification rules
-  remain in force. Every other employee/admin Store action exposed by the live
-  OpenAPI is available only through guarded `store_owner_api` and the reserved
-  `store:owner` principal. Exact full quote reads still use the dedicated
-  quote-scoped credential when the named read path is sufficient.
-- Broader Store owner operations must be necessary to the active owner task and
-  use an exact OpenAPI operation and target refs, ActionContractV2,
-  dry-run/preflight, unique idempotency and correlation IDs, then exact reread.
-  High-risk apply also requires the matching dry-run proof; unresolved outcomes
-  remain `compensating`.
-- For finance, inventory, documents, files, Gmail, or destructive writes, build
-  the action contract, use a unique idempotency key, and keep any applied but
-  unverified result in `compensating` until exact-target reconciliation.
-- For card `description` or vehicle_profile writes, read the exact target with
-  `agent_entity_context`, build `prepare_action_contract`, then use
+- The active task authorizes only necessary non-financial exact-target changes.
+  Do not expand into unrelated cleanup.
+- Mandatory order: focused reread -> `prepare_action_contract` -> named
+  workflow `dry_run` -> `apply` -> exact-target reread and verification.
+  Use idempotency, concurrency controls and a correlation id; unresolved
+  outcomes remain `compensating`.
+- Payments, cashboxes, refunds, payroll, supplier orders and any financial-total
+  change require a direct owner instruction for that exact operation.
+- Card description or vehicle-profile writes use
   `agent_board_workflow(operation="cleanup_card")` in dry-run and apply modes.
-- Public CRM card descriptions must follow
-  `docs/agent/crm_card_description_standard.md`: laconic working facts only;
-  no risks, provenance, selection method, supplier-check reminders, or long AI
-  explanations.
-- Move, archive, delete, change deadlines/indicators, or edit a repair order
-  only when it is necessary to the active task and the exact target passes the
-  normal safeguards. Financial repair-order changes still need direct owner
-  instruction.
-- Gmail send/archive/delete/label/draft mutations may be performed when needed
-  to complete the active owner task and an exact mailbox target is resolved.
-  After preflight, execute once with idempotency and record only
-  message/thread/file refs in the run ledger.
+  Follow `docs/agent/crm_card_description_standard.md`: laconic working facts,
+  no risks, provenance, selection method, supplier reminders or long AI text.
+- Move, archive, delete, deadline/indicator changes and repair-order edits must
+  be necessary to the active task and pass the same safeguards.
+- Finance, inventory, documents, files, Gmail and destructive writes require an
+  action contract, unique idempotency and exact reconciliation.
 
 ## Standing Routes
 
 - `Приберись` -> `docs/agent/board_cleanup_autopilot_playbook.md`.
-- CRM card descriptions -> `docs/agent/crm_card_description_standard.md`.
-- `ready unpaid` / daily control -> `docs/agent/krasnoyarsk_service_management_playbook.md`.
-- `Семафорная 185` / `камера у AutoStop` -> public camera `c_6171` through
-  `docs/agent/krasnoyarsk_service_management_playbook.md` and one-frame helper
-  `scripts/capture_semafornaya_185.py`; never retain video, dynamic player
-  URLs, faces, or plates and never bypass an access block.
-- Timer floor -> `docs/agent/crm_manager_data_playbook.md` and
-  `prepare_action_contract(domain="board", action="bulk_set_deadline_if_below")`,
-  then `agent_board_workflow(operation="bulk_set_deadline_if_below")`, dry-run
-  first. This collection action does not require `expected_revision`.
-- VIN/OEM/parts CRM writeback -> `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
-- Store analytics questions -> `docs/agent/store_analytics_playbook.md` and the
-  aggregate-only `get_store_analytics_report` capability through Gateway v2 raw
-  discovery. Never request or persist raw events or visitor/session ids.
-- Store state/catalog/stock/orders/quotes/marketplace/full owner operations ->
-  `docs/agent/store_management_playbook.md`. General Drom/Avito sourcing stays
-  in the parts route; service `заказ-наряд` stays in CRM.
-- Internet/repair web research -> resolve `search_web_multi`, excerpt, and
-  `fetch_page_browser` through `discover_raw_capabilities` ->
-  `get_raw_capability_schema` -> `call_raw_capability`. Search first; use the
-  browser only for public JS-heavy pages. Do not bypass CAPTCHA, login, paywall,
-  or IP blocks; report manual access needed.
-- Drive2 repair cases -> `docs/agent/automotive_repair_source_playbook.md`, then
-  resolve `research_drive2_cases` via raw discovery for vehicle/aggregate/symptom
-  research. Use the compact case cards and URLs, never store raw journals or
-  bypass login/CAPTCHA; verify final technical facts through OEM/licensed sources.
-- Business documents -> `docs/agent/business_document_quality_playbook.md`.
-- Server and remote Windows access ->
-  `docs/agent/codex_home_pc_reverse_ssh.md`. For FST.KZ read
+- CRM descriptions -> `docs/agent/crm_card_description_standard.md`.
+- `ready unpaid` / daily control ->
+  `docs/agent/krasnoyarsk_service_management_playbook.md`.
+- Timer floor -> `docs/agent/crm_manager_data_playbook.md`, then
+  `bulk_set_deadline_if_below` dry-run before apply.
+- VIN/OEM CRM writeback ->
+  `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
+- Business documents ->
+  `docs/agent/business_document_quality_playbook.md`.
+- Store state and operations -> `docs/agent/store_management_playbook.md`;
+  Store analytics -> `docs/agent/store_analytics_playbook.md` and aggregate
+  `get_store_analytics_report`.
+- Public repair research -> `docs/agent/automotive_repair_source_playbook.md`;
+  use Gateway search/excerpt/browser routes without bypassing access controls.
+- `Семафорная 185` / camera -> one public frame via
+  `scripts/capture_semafornaya_185.py`; retain no video, player URLs, faces or
+  plates.
+- Server/Windows -> `docs/agent/codex_home_pc_reverse_ssh.md`. For FST.KZ read
   `/root/.codex/CODEX_VPN_FST_ACCESS.md` first and use `autostop-vpn-fst`.
-  Resolve live identity before every operation; never bypass an SSH host-key
-  mismatch or mix server, managed-PC, and legacy `home-pc` credentials.
+  Resolve live identity and stop on host-key mismatch.
+- Reception PDF printing ->
+  `docs/agent/reception_pdf_printing_playbook.md`.
 
-## Git And Deploy
+## Git, Deploy And Docs
 
-- Publish from the workstation with
-  `git push origin HEAD:AutostopManager`; use `-u` only when the upstream is
-  missing. The configured Git credential helper owns HTTPS authentication.
-- `gh auth status` is not a prerequisite for Git fetch/push. Never force-push
-  the production branch and never use the production server as the normal
-  publisher.
-- Follow `docs/agent/deployment_runbook.md` for exact revision checks and the
-  CRM bounded deploy path.
+- Publish from the workstation with `git push origin HEAD:AutostopManager`;
+  never force-push production or use the production server as normal publisher.
+  `gh auth status` is not required for Git push.
+- Follow `docs/agent/deployment_runbook.md` for revision checks, deploy and
+  rollback.
+- Keep one canonical owner per rule, link instead of copying, update the
+  smallest existing file and remove migrated, duplicate or dated text.
+- Run `cleanup-audit` before deleting tracked/generated artifacts. After docs,
+  routes, catalogs or skills change run `knowledge-sync`, `knowledge-audit`,
+  `annotations-audit` and `skills-audit`.
 
-## Documentation Hygiene
-
-- Keep one canonical owner for each rule. Link to it instead of copying its
-  procedure, and remove migrated, duplicate, dated, or obsolete text rather
-  than preserving an archive in active docs.
-- Prefer updating the smallest existing canonical file over creating a new one.
-- Delete obsolete tracked docs after their rules are migrated and
-  `cleanup-audit` plus knowledge audits are green.
-- After docs/routing/catalog changes run:
-  `knowledge-sync`, `knowledge-audit`, `annotations-audit`, `skills-audit`;
-  run `cleanup-audit` before deleting docs or generated artifacts.
-
-## Core References
-
-`README.md`, `docs/agent/manager_rules.json`, `docs/agent/command_routes.json`,
-`docs/agent/knowledge_shelves.md`,
+Core references: `README.md`, `docs/agent/manager_rules.json`,
+`docs/agent/command_routes.json`, `docs/agent/knowledge_shelves.md`,
 `docs/agent/manager_mcp_catalog.json`, `docs/agent/crm_mcp_catalog.json`.

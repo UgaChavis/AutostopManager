@@ -5,8 +5,7 @@ from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
-from .service_labor_experience import load_service_labor_experience
-from .service_pricing_experience import find_labor_experience, load_service_pricing_experience
+from .service_labor_experience import find_labor_experience, load_service_labor_experience
 from .work_pricing_research import collect_public_work_pricing_research
 
 ROUNDING_STEP_RUB = 100
@@ -942,7 +941,7 @@ def estimate_repair_work_cost(
     if isinstance(internal_experience_json, dict):
         experience_snapshot = internal_experience_json
     elif use_internal_experience:
-        experience_snapshot = load_service_labor_experience() or load_service_pricing_experience()
+        experience_snapshot = load_service_labor_experience()
     else:
         experience_snapshot = None
     research = collect_public_work_pricing_research(

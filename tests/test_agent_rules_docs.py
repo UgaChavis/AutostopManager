@@ -126,7 +126,7 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]
-    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"]["source_of_truth_files"]
+    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"]["primary_files"]
 
 
 def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
@@ -302,7 +302,6 @@ def test_store_command_reference_covers_live_entities_operations_and_strict_fiel
         "mypy autostop_manager",
         "pytest -q",
         "coverage report --fail-under=82",
-        "node --check frontend/control-center/app.js",
         "workflow_dispatch",
         "pull_request",
     ]:
@@ -593,7 +592,7 @@ def test_every_tracked_agent_document_has_a_knowledge_map_route():
     knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     routed: set[str] = set()
     for domain in knowledge_map["domains"].values():
-        for field in ("source_of_truth_files", "primary_files", "reference_files", "optional_runtime_files"):
+        for field in ("primary_files", "reference_files", "optional_runtime_files"):
             routed.update(domain.get(field, []))
 
     tracked = subprocess.run(

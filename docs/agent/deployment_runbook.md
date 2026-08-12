@@ -21,7 +21,6 @@ Run once on the final tree:
 .venv/bin/python -m pytest -q
 .venv/bin/python -m coverage run -m pytest -q
 .venv/bin/python -m coverage report --fail-under=82
-node --check frontend/control-center/app.js
 git diff --check
 ```
 

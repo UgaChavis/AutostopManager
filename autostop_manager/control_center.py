@@ -255,7 +255,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
         [
             "",
             "## Commands",
-            "- `python -m autostop_manager.cli control-report --format json --output frontend/control-center/control-report.json`",
+            "- `python -m autostop_manager.cli control-report --format json`",
             "- `python -m autostop_manager.cli environment-report --format markdown --output reports/environment-report.md`",
             "- `python -m autostop_manager.cli control-report --format markdown --output reports/control-report.md`",
             "- `python -m autostop_manager.cli doctor`",

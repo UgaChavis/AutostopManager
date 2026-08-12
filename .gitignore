@@ -12,15 +12,12 @@ tmp/
 output/
 out/
 reports/
-frontend/control-center/control-report.json
 generated_invoices/
 data/
 data/*.sqlite3
 data/*.sqlite3-*
 !docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/
 !docs/agent/automotive_sources/source_cache/ecu_calibration_programming_knowledge_pack/data/**
-!docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/
-!docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack/data/**
 !docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/
 !docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/**
 dist/

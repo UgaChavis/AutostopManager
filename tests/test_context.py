@@ -68,8 +68,8 @@ def test_agent_brief_for_general_automotive_repair_selects_sources_adaptively(tm
     assert result["route"]["domain"] == "automotive_repair"
     assert result["route"]["open_first"] == "docs/agent/automotive_repair_source_playbook.md"
     assert any("AutoStop App" in item for item in result["allowed_actions"])
-    assert any("forum" in item.casefold() for item in result["read_order"])
-    assert any("fixed workflow" in item for item in result["hot_rules"])
+    assert any("adaptively" in item for item in result["hot_rules"])
+    assert any("Forums are hypotheses" in item for item in result["hot_rules"])
     assert any("write CRM" in item for item in result["forbidden_actions"])
 
 
@@ -108,26 +108,22 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert len(result["hot_rules"]) <= 8
     assert any("CRM" in rule and "source of truth" in rule for rule in result["hot_rules"])
     assert any("vehicle passport and client data" in rule for rule in result["hot_rules"])
-    assert any("very short formatted summary" in rule for rule in result["hot_rules"])
-    assert any("empty leave it empty" in rule for rule in result["hot_rules"])
+    assert any("empty description empty" in rule for rule in result["hot_rules"])
     assert any("phone is the primary client match key" in rule for rule in result["hot_rules"])
-    assert any("rare operational tags capped at three" in rule for rule in result["hot_rules"])
+    assert any("at most three tags" in rule for rule in result["hot_rules"])
     assert "agent_bootstrap" in result["read_order"][0]
     assert any("audit_client_links" in action for action in result["read_order"])
     assert any("board_summary" in action for action in result["allowed_actions"])
-    assert any("client" in action and "vehicle" in action for action in result["allowed_actions"])
-    assert any("direct safe card tasks" in action for action in result["allowed_actions"])
-    assert any("at most three" in action and "tags" in action for action in result["allowed_actions"])
-    assert any("phone/VIN/plate/mileage" in action for action in result["allowed_actions"])
+    assert any("vehicle/client" in action for action in result["allowed_actions"])
+    assert any("direct safe card task" in action for action in result["allowed_actions"])
     assert any("move" in action for action in result["forbidden_actions"])
     assert any("archive" in action for action in result["forbidden_actions"])
     assert any("delete" in action for action in result["forbidden_actions"])
     assert any("payments" in action and "repair-order" in action for action in result["forbidden_actions"])
-    assert any("client" in action and "merge" in action for action in result["forbidden_actions"])
-    assert any("empty public description" in action for action in result["forbidden_actions"])
-    assert any("verified structured transfer" in action for action in result["forbidden_actions"])
+    assert any("merge" in action for action in result["forbidden_actions"])
+    assert any("phone, VIN, plate" in action for action in result["forbidden_actions"])
     assert any("board_summary_stale=false" in check for check in result["verification"])
-    assert any("payments_changed=0" in check for check in result["verification"])
+    assert any("payment counts" in check for check in result["verification"])
     assert result["context_safety"]["checkpoint_event_types"] == [
         "planned_action",
         "checkpoint",
@@ -154,13 +150,13 @@ def test_store_agent_brief_exposes_store_source_boundary_and_safe_workflow(tmp_p
     assert any("stateless Store readiness snapshot" in item for item in result["read_order"])
     assert any("agent_search" in item for item in result["read_order"])
     assert any("dedicated quote credential" in item for item in result["read_order"])
-    assert any("contacts, VIN" in item for item in result["hot_rules"])
+    assert any("full quotes are transient" in item for item in result["hot_rules"])
     assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
     assert not any("no contact scope" in item for item in result["hot_rules"])
     assert any("guarded store_owner_api" in item for item in result["forbidden_actions"])
     assert any("store_owner_capabilities" in item for item in result["read_order"])
     assert any("final page" in item for item in result["verification"])
-    assert any("AutoStop App is the source of truth" in item for item in result["hot_rules"])
+    assert any("AutoStop App" in item and "source of truth" in item for item in result["hot_rules"])
 
 
 def test_store_agent_brief_exposes_complete_read_and_write_command_selectors(tmp_path):
@@ -256,7 +252,7 @@ def test_quote_pricing_request_routes_to_store_and_exposes_full_quote_workflow(t
 
     assert result["route"]["domain"] == "store_management"
     assert any("dedicated quote credential" in item for item in result["read_order"])
-    assert any("contacts, VIN" in item for item in result["hot_rules"])
+    assert any("full quotes are transient" in item for item in result["hot_rules"])
     assert any("store_sourcing_offer" in item for item in result["allowed_actions"])
     assert any("append a note" in item for item in result["allowed_actions"])
 

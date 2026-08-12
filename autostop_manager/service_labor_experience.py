@@ -9,14 +9,13 @@ import shutil
 import tempfile
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import PROJECT_ROOT
-from .service_pricing_experience import canonicalize_work_name, money_value, parse_decimal
 
 DEFAULT_LABOR_EXPERIENCE_PATH = PROJECT_ROOT / "data" / "private_knowledge" / "service_labor_experience.json"
 DEFAULT_EXECUTOR_REPORT_PATH = (
@@ -30,6 +29,17 @@ CRM_TIMEZONE = ZoneInfo("Asia/Krasnoyarsk")
 
 _SPACE_RE = re.compile(r"\s+")
 _SAFE_KEY_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
+_GENERIC_LABOR_WORDS = {
+    "автомобиле",
+    "автомобиля",
+    "или",
+    "на",
+    "по",
+    "работ",
+    "работа",
+    "работы",
+    "шт",
+}
 _LABOR_ALIASES: tuple[tuple[str, str, str], ...] = (
     (r"^диагностика (?:ходовой|подвески)$", "диагностика подвески", "diagnostics"),
     (r"^компьютерная диагностика$", "компьютерная диагностика", "diagnostics"),
@@ -63,6 +73,39 @@ def _fold_text(value: Any) -> str:
     return _clean_text(value).casefold().replace("ё", "е")
 
 
+def parse_decimal(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    text = _clean_text(value).replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def money_value(value: Decimal | float | int | None) -> float | None:
+    return None if value is None else round(float(value), 2)
+
+
+def _labor_category(text: str) -> str:
+    categories = (
+        ("diagnostics", ("диагност", "дефектов", "провер")),
+        ("maintenance", ("масл", "фильтр", "техническ обслуж", " то ")),
+        ("brakes", ("тормоз", "колод", "суппорт", "диск")),
+        ("suspension", ("подвес", "амортиз", "стойк", "рычаг", "сайлент", "ступиц", "шаров")),
+        ("transmission", ("акпп", "кпп", "dsg", "сцеплен", "короб", "мехатрон")),
+        ("engine", ("двигател", "двс", "грм", "турбин", "форсунк", "свеч")),
+        ("steering", ("рулев", "рейк", "гур")),
+        ("climate", ("кондицион", "климат", "фреон")),
+        ("electrical", ("электр", "генератор", "стартер", "сигнализац", "провод")),
+        ("wheels", ("шиномонтаж", "колес", "шина", "баланс")),
+    )
+    return next((category for category, tokens in categories if any(token in text for token in tokens)), "other")
+
+
 def canonicalize_labor_name(value: Any) -> dict[str, str]:
     text = _fold_text(value)
     text = re.sub(r"^\s*\d+[.)-]?\s*", "", text)
@@ -74,12 +117,19 @@ def canonicalize_labor_name(value: Any) -> dict[str, str]:
                 "name": canonical_name,
                 "category": category,
             }
-    fallback = canonicalize_work_name(text)
     canonical_name = " ".join(text.split()[:20]) or "прочая работа"
     return {
         "key": _SAFE_KEY_RE.sub("_", canonical_name).strip("_"),
         "name": canonical_name,
-        "category": fallback["category"],
+        "category": _labor_category(f" {text} "),
+    }
+
+
+def _tokens(value: Any) -> set[str]:
+    return {
+        token
+        for token in _SAFE_KEY_RE.sub(" ", _fold_text(value)).split()
+        if len(token) >= 3 and token not in _GENERIC_LABOR_WORDS
     }
 
 
@@ -621,6 +671,38 @@ def load_service_labor_experience(
     if not isinstance(payload, dict) or payload.get("schema_version") != LABOR_SNAPSHOT_SCHEMA_VERSION:
         return None
     return payload
+
+
+def find_labor_experience(
+    operation_name: str,
+    *,
+    snapshot: dict[str, Any] | None = None,
+    path: str | Path = DEFAULT_LABOR_EXPERIENCE_PATH,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    source = snapshot if snapshot is not None else load_service_labor_experience(path)
+    if not source:
+        return []
+    canonical = canonicalize_labor_name(operation_name)
+    query_tokens = _tokens(canonical["name"])
+    matches: list[tuple[float, dict[str, Any]]] = []
+    for row in source.get("labor_baselines") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("operation_key") == canonical["key"]:
+            score = 1.0
+        else:
+            row_tokens = _tokens(row.get("operation_name"))
+            union = query_tokens | row_tokens
+            score = (len(query_tokens & row_tokens) / len(union)) if union else 0.0
+            if row.get("category") == canonical["category"]:
+                score += 0.1
+        if score >= 0.45:
+            match = dict(row)
+            match["match_score"] = round(min(score, 1.0), 3)
+            matches.append((score, match))
+    matches.sort(key=lambda item: (-item[0], -int(item[1].get("sample_count") or 0)))
+    return [item for _, item in matches[: max(0, limit)]]
 
 
 def summarize_service_labor_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:

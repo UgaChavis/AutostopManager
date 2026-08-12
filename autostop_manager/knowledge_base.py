@@ -516,7 +516,7 @@ def _knowledge_audit_warnings(
     if counts["route_cards"] != domain_count:
         warnings.append("route card count does not match knowledge_map domain count")
     if domains_without_source_of_truth:
-        warnings.append("some domains do not declare source_of_truth_files")
+        warnings.append("some domains do not declare primary source files")
     if domains_without_aliases:
         warnings.append("some domains do not declare aliases")
     if missing_files:

@@ -26,14 +26,11 @@
         "EvidenceBundle"
       ],
       "memory_queries": [
-        "adaptive service case",
-        "internal closed repair order experience",
-        "labor pricing AUTONORMS current market"
+        "adaptive service case"
       ],
       "required_reads": [
-        ".agents/skills/resolve-autostop-service-case/SKILL.md",
         "exact live CRM vehicle and repair-order context when a card or identifier is supplied",
-        "data/private_knowledge/service_labor_experience.json as the preferred aggregate labor anchor, with service_pricing_experience.json only as fallback",
+        "data/private_knowledge/service_labor_experience.json as the aggregate labor anchor",
         "current norm-hours, OEM/applicability, supplier, and public-market evidence selected for the case"
       ],
       "write_domains": [
@@ -54,9 +51,6 @@
       ],
       "next_actions": [
         "build a case-specific evidence plan instead of following a fixed provider sequence",
-        "read live CRM context and aggregate AutoStop experience",
-        "resolve exact vehicle, OEM applicability, operation scope, and labor-time evidence",
-        "compare live supplier and public-market prices, then reconcile conflicts",
         "return a decision-ready estimate or repair-order draft with ranges, assumptions, confidence, and missing checks"
       ]
     },
@@ -83,9 +77,7 @@
         "матрица покрытия"
       ],
       "memory_queries": [
-        "Gateway v2 capability parity",
-        "CRM Store event feed",
-        "production deploy rollback"
+        "Gateway v2 capability parity"
       ],
       "required_reads": [
         "all AGENTS, README, architecture, MCP, API, test, and deployment sources in Manager, CRM, and Store",
@@ -111,9 +103,6 @@
       ],
       "next_actions": [
         "create one durable multi-repository workflow ledger",
-        "record baseline and preserve every dirty worktree",
-        "build machine-verifiable CRM, Store, and event coverage matrices",
-        "repair confirmed foundations before expanding owner-authorized operations",
         "iterate through implementation, tests, publication, rollback-safe deploy, and live readback"
       ]
     },
@@ -144,14 +133,10 @@
         "разбор результата"
       ],
       "memory_queries": [
-        "intelligent agent learning",
-        "work learning mode",
-        "experience review",
-        "tool repair"
+        "intelligent agent learning"
       ],
       "required_reads": [
         "agent_bootstrap and the effective execution mode",
-        "docs/agent/intelligent_agent_learning_playbook.md",
         "the project autostop-learning-loop skill when effective mode is learning"
       ],
       "write_domains": [
@@ -168,8 +153,6 @@
       ],
       "next_actions": [
         "read the current mode and choose work or learning for the exact task",
-        "in learning mode execute the task, record safe tool outcomes, then submit post_run_review",
-        "promote only verified reusable lessons; record a bounded candidate for unresolved issues",
         "repair one reproducible local low-risk defect only after a failing regression test and exact verification"
       ]
     },
@@ -185,9 +168,7 @@
       ],
       "keywords": [],
       "memory_queries": [
-        "board-cleanup",
-        "Приберись",
-        "board-cleanup-no-card-movement"
+        "board-cleanup"
       ],
       "required_reads": [
         "agent_bootstrap and agent_board_digest",
@@ -207,15 +188,8 @@
       ],
       "next_actions": [
         "read live CRM board state with agent_bootstrap and agent_board_digest",
-        "classify blockers",
-        "when the owner asks to run Приберись for many or all active cards, apply the same one-card cleanup locally to each card that actually needs it; select the explicit group or top-priority board candidates, process in small verified batches, and leave already-clear cards unchanged",
-        "use list_cards_missing_manager_data, triage_inbox_cards, audit_repair_order_consistency, audit_client_links, suggest_clients_for_card, search_clients, and get_client before one-card writes when relevant",
-        "prepare focused CRM card description or vehicle_profile writes through Gateway v2 agent_entity_context, prepare_action_contract, and agent_board_workflow cleanup_card dry-run/apply so expected_updated_at, exact text, metadata, board_summary target, idempotency, and reread verification are explicit",
-        "use cleanup_card dry_run/apply for compact safe card patches; follow the canonical field contract in board_cleanup_autopilot_playbook.md and docs/agent/crm_card_description_standard.md: if description is empty leave it empty, otherwise compress it into a very short rich-text working summary with sparse emoji while preserving prices/OEM/facts; never add risks, sources/provenance, selection method, or supplier-check reminders; move phone/VIN/plate/mileage/aggregates into client or vehicle-profile fields after verification; keep vehicle as make/model, title as short issue/work essence, and tags rare with no more than three",
-        "if the card description contains a direct safe task such as find parts, find OEM, price ТО, or decode VIN, perform it during cleanup and write back only the compact result",
-        "do not edit repair orders, works, materials, prices, payments, cashboxes, or cash records unless the owner explicitly asks for that exact target",
-        "leave cards in their current columns",
-        "do not archive cards without a separate explicit owner command; leave archive recommendations instead"
+        "use cleanup_card dry_run/apply: if description is empty leave it empty; move phone/VIN/plate/mileage/aggregates to verified structured fields; keep title and vehicle concise and tags rare with no more than three",
+        "reread changed targets; report blockers and confirm cards, repair orders, payments and archives stayed unchanged unless exactly authorized"
       ]
     },
     {
@@ -242,12 +216,9 @@
         "пробка"
       ],
       "memory_queries": [
-        "public camera Semafornaya 185",
-        "c_6171",
-        "traffic near AutoStop"
+        "public camera Semafornaya 185"
       ],
       "required_reads": [
-        "docs/agent/krasnoyarsk_service_management_playbook.md",
         "public 24oko camera record c_6171 and its expected title Семафорная 185"
       ],
       "write_domains": [],
@@ -260,8 +231,6 @@
       ],
       "next_actions": [
         "run scripts/capture_semafornaya_185.py with an exact temporary output path",
-        "inspect the single frame and report traffic, weather, or approach conditions with capture time",
-        "delete the temporary frame unless the owner explicitly asks to retain it",
         "if public access is blocked, report the block and do not bypass it"
       ]
     },
@@ -289,10 +258,7 @@
         "ready unpaid"
       ],
       "memory_queries": [
-        "daily_control",
-        "payment",
-        "ready unpaid cars",
-        "service-management"
+        "daily_control"
       ],
       "required_reads": [
         "agent_bootstrap and agent_board_digest",
@@ -310,9 +276,6 @@
       ],
       "next_actions": [
         "read live CRM board state with agent_bootstrap and agent_board_digest",
-        "check ready cars and due totals with agent_board_workflow(operation=list_ready_unpaid_cards, mode=dry_run)",
-        "classify payment blockers",
-        "run agent_board_workflow(operation=apply_ready_unpaid_followups, mode=dry_run), then mode=apply with a unique idempotency key when safe",
         "create short follow-up notes or manager tasks only for blockers the CRM operation cannot resolve"
       ]
     },
@@ -337,9 +300,7 @@
         "triage"
       ],
       "memory_queries": [
-        "inbox triage",
-        "board-cleanup",
-        "manager operations"
+        "inbox triage"
       ],
       "required_reads": [
         "agent_bootstrap and agent_board_digest",
@@ -359,8 +320,6 @@
       ],
       "next_actions": [
         "read agent_bootstrap and agent_board_digest, then run triage_inbox_cards through agent_board_workflow",
-        "run audit_client_links and list_cards_missing_manager_data through agent_board_workflow for incomplete cards",
-        "run cleanup_card through agent_board_workflow in dry_run then apply mode for safe one-card cleanup patches",
         "do not move or archive cards without a separate explicit owner command"
       ]
     },
@@ -391,9 +350,7 @@
         "172800"
       ],
       "memory_queries": [
-        "timer floor",
-        "deadline",
-        "bulk_set_deadline_if_below"
+        "timer floor"
       ],
       "required_reads": [
         "agent_bootstrap and active-card board digest",
@@ -410,8 +367,6 @@
       ],
       "next_actions": [
         "read agent_bootstrap and agent_board_digest",
-        "run bulk_set_deadline_if_below through agent_board_workflow in dry_run with min_total_seconds=172800 and target_total_seconds=173700 so every changed timer is strictly above two days",
-        "apply with a new unique idempotency key only after dry_run shows eligible cards and no unexpected errors; do not start a duplicate manual workflow because agent_board_workflow owns its ledger",
         "verify changed cards with response verification and a compact reread"
       ]
     },
@@ -455,10 +410,7 @@
         "битые ссылки"
       ],
       "memory_queries": [
-        "knowledge_intake",
-        "documentation cleanup",
-        "knowledge quality",
-        "старые документы"
+        "knowledge_intake"
       ],
       "required_reads": [
         "knowledge-probe route and returned source-of-truth files",
@@ -478,9 +430,6 @@
       ],
       "next_actions": [
         "classify files as active, source pack, runtime, generated, or archive",
-        "delete fully migrated or obsolete historical implementation plans instead of keeping a growing archive",
-        "remove stale absolute paths and duplicate active instructions",
-        "update knowledge_map, knowledge_annotations, and navigation docs",
         "run knowledge-sync, knowledge-audit, annotations-audit, and focused tests"
       ]
     },
@@ -502,11 +451,9 @@
         "helper agent"
       ],
       "memory_queries": [
-        "proactive service management",
-        "bounded helper coordination"
+        "proactive service management"
       ],
       "required_reads": [
-        "AGENTS.md",
         "current exact task and source-of-truth route for the delegated domain"
       ],
       "write_domains": [
@@ -520,7 +467,6 @@
       ],
       "next_actions": [
         "reuse the source route that owns the delegated domain",
-        "state the helper scope and write boundary",
         "verify the result or blocker before closing the assignment"
       ]
     },
@@ -573,17 +519,9 @@
         "Windows OpenSSH"
       ],
       "memory_queries": [
-        "server and remote PC access",
-        "FST.KZ VPN server access",
-        "remote_codex_access",
-        "managed-pc fleet",
-        "AutoStop reception managed PC",
-        "AutoStop mechanics managed PC",
-        "managed PC sleep recovery",
-        "home-pc reverse SSH"
+        "server and remote PC access"
       ],
       "required_reads": [
-        "docs/agent/codex_home_pc_reverse_ssh.md",
         "for every FST.KZ task first read /root/.codex/CODEX_VPN_FST_ACCESS.md",
         "managed-pc doctor and exact alias status for fleet operations",
         "the reception workstation is managed-pc alias desktop-e0e84lt; verify current status before an operation",
@@ -607,9 +545,52 @@
       ],
       "next_actions": [
         "open the access playbook and choose the exact server or PC route",
-        "run the route-specific read-only identity/status check",
-        "perform only the owner-requested remote operation",
         "reread status and report the exact affected target"
+      ]
+    },
+    {
+      "command_id": "reception_pdf_printing",
+      "workflow_id": "reception_pdf_printing",
+      "priority": 95,
+      "intent": "reception_pdf_printing",
+      "domain": "remote_codex_access",
+      "open_first": "docs/agent/reception_pdf_printing_playbook.md",
+      "aliases": [
+        "распечатай последний PDF на ресепшене",
+        "распечатай PDF на принтере ресепшена",
+        "распечатай документ на HUAWEI PixLab X1",
+        "отправь PDF на принтер ресепшена"
+      ],
+      "keywords": [
+        "печать PDF",
+        "принтер ресепшена",
+        "HUAWEI PixLab X1",
+        "print-pdf",
+        "desktop-e0e84lt",
+        "DESKTOP-E0E84LT"
+      ],
+      "memory_queries": [
+        "reception PDF printing"
+      ],
+      "required_reads": [
+        "docs/agent/codex_home_pc_reverse_ssh.md",
+        "managed-pc doctor and exact alias status before printing"
+      ],
+      "write_domains": [
+        "owner_authorized_remote_pc"
+      ],
+      "external_connectors": [
+        "managed-pc reverse SSH",
+        "Windows print spooler"
+      ],
+      "completion_checks": [
+        "the exact local PDF and reception device were resolved",
+        "the printer is HUAWEI PixLab X1 and the requested copy count is explicit",
+        "Windows spool acceptance is reported without overstating physical delivery"
+      ],
+      "next_actions": [
+        "resolve the PDF and verify desktop-e0e84lt live identity, SSH status and HUAWEI PixLab X1",
+        "run managed-pc print-pdf once and report spool acceptance without claiming physical delivery"
       ]
     },
     {
@@ -645,10 +626,7 @@
         "gosnomer2vin"
       ],
       "memory_queries": [
-        "vehicle_identity_and_oem",
-        "decode_vehicle_identity",
-        "VIN frame route",
-        "ROW JDM VIN caveats"
+        "vehicle_identity_and_oem"
       ],
       "required_reads": [
         "exact identifier and market context",
@@ -666,9 +644,6 @@
       ],
       "next_actions": [
         "run decode_vehicle_identity or decode_vehicle_identities",
-        "for a Russian registration-number request, use the read-only PartsAPI plate_to_vin route when configured and verify any returned VIN against vehicle/CRM before use",
-        "check vPIC/WMI/platform evidence and CRM context conflicts",
-        "report confidence and required EPC/API source before VIN-critical parts lookup",
         "do not store raw customer VIN/frame in durable memory or Git"
       ]
     },
@@ -698,10 +673,7 @@
         "номер кузова запчасти в CRM"
       ],
       "memory_queries": [
-        "crm_vin_oem_parts_lookup",
-        "VIN OEM parts CRM writeback",
-        "selected part price basis",
-        "OEM no invention"
+        "crm_vin_oem_parts_lookup"
       ],
       "required_reads": [
         "exact live CRM card, vehicle, and repair order",
@@ -724,9 +696,6 @@
       ],
       "next_actions": [
         "read exact live CRM card and repair order context",
-        "classify VIN/frame/body number and identify vehicle by market",
-        "find source-backed OEM number for requested part and verify applicability",
-        "find supersession, crosses, analogs, procurement price, and RF market range",
         "write only the compact public result to card description using docs/agent/crm_card_description_standard.md, write selected priced part only to materials, then reread CRM and verify"
       ]
     },
@@ -765,9 +734,7 @@
         "тестовый профиль CRM"
       ],
       "memory_queries": [
-        "CRM MCP integration",
-        "Agent Gateway",
-        "connector payload"
+        "CRM MCP integration"
       ],
       "required_reads": [
         "agent_bootstrap",
@@ -789,9 +756,6 @@
       ],
       "next_actions": [
         "take private rollback-safe repository, data, auth-config, and image backups",
-        "implement owner-approved production OAuth 2.1 with PKCE, rotating refresh tokens, exact audience/scopes, encrypted persistent state, and clear 401 discovery",
-        "make Codex URL-only OAuth config and enforce the 24-tool Gateway v2 manifest",
-        "synchronize CRM and Manager instructions to agent_bootstrap -> digest -> focused reads -> action contract -> named dry_run/apply -> reread",
         "run focused/full tests and CI, publish both repositories, deploy twice, and verify refresh continuity, live CRM reread, site, and VPN"
       ]
     },
@@ -821,9 +785,7 @@
         "перевод между кассами"
       ],
       "memory_queries": [
-        "finance control",
-        "repair order payment",
-        "cashbox verification"
+        "finance control"
       ],
       "required_reads": [
         "exact repair order",
@@ -843,8 +805,6 @@
       ],
       "next_actions": [
         "resolve the exact repair order and cashbox",
-        "build prepare_action_contract with card_id, amount, payment_method, current expected_updated_at, current debt, and idempotency key",
-        "apply the CRM finance command only after automatic preflight",
         "reread the cash journal and repair order balance and record verification"
       ]
     },
@@ -871,9 +831,7 @@
         "отправь документ"
       ],
       "memory_queries": [
-        "business document quality",
-        "CRM print module",
-        "document render QA"
+        "business document quality"
       ],
       "required_reads": [
         "exact card or document-without-card inputs",
@@ -894,8 +852,6 @@
       ],
       "next_actions": [
         "collect exact document inputs and build prepare_action_contract",
-        "generate only through the CRM print module",
-        "render and verify every page, totals, tax wording, and requisites",
         "upload to CRM and use a refs-only Gmail external step when delivery is requested"
       ]
     },
@@ -921,9 +877,7 @@
         "вложение поставщика в CRM"
       ],
       "memory_queries": [
-        "Gmail CRM workflow",
-        "external connector step",
-        "email attachment CRM"
+        "Gmail CRM workflow"
       ],
       "required_reads": [
         "exact Gmail message or thread",
@@ -948,9 +902,6 @@
       ],
       "next_actions": [
         "start a workflow with one correlation and idempotency key",
-        "read the exact Gmail thread and exact CRM context",
-        "build and execute CRM action contracts",
-        "register workflow_wait_for_external and call the separate Gmail connector",
         "complete_external_step with refs only, resume, and verify both systems"
       ]
     },
@@ -1022,9 +973,7 @@
         "варианты поставки ROSSKO"
       ],
       "memory_queries": [
-        "store_management",
-        "AutoStop App store",
-        "store digest cursor"
+        "store_management"
       ],
       "required_reads": [
         "agent_bootstrap for degraded-safe store readiness",
@@ -1043,9 +992,6 @@
       ],
       "next_actions": [
         "open the store playbook and read compact store runtime state",
-        "use agent_board_digest(scope=store) for summary or agent_search for a focused entity",
-        "continue every digest page with its opaque next_cursor until has_more=false",
-        "use agent_entity_context only for an exact requested object",
         "report store outage as degraded without blocking CRM"
       ],
       "read_entity_selection": {
@@ -1117,10 +1063,7 @@
         "настройки магазина"
       ],
       "memory_queries": [
-        "store owner parity",
-        "ActionContractV2 store",
-        "store optimistic concurrency",
-        "store_owner_capabilities store_owner_api"
+        "store owner parity"
       ],
       "required_reads": [
         "exact store entity or reviewed collection and current revision",
@@ -1147,9 +1090,6 @@
       ],
       "next_actions": [
         "reread the exact store target or reviewed collection",
-        "prefer the optimized named workflow; otherwise resolve the exact live employee operation through store_owner_capabilities",
-        "build ActionContractV2 with exact target, owner intent, planned fields, current revision when required, schema hash, and unique idempotency/correlation ids",
-        "run dry_run and inspect effects, then apply the identical schema-bound plan",
         "reread according to the operation matrix and reconcile the compact audit correlation; keep unverified applies compensating"
       ],
       "operation_selection": {
@@ -1279,8 +1219,6 @@
       ],
       "next_actions": [
         "resolve the requested preset or custom period in Asia/Krasnoyarsk",
-        "discover get_store_analytics_report through Gateway v2 raw discovery because no named public workflow is needed for this read",
-        "call get_store_analytics_report with the original natural query",
         "answer from its aggregate summary, rankings, funnel, and previous-period comparison only"
       ]
     }

@@ -33,7 +33,6 @@
     ],
     "internal_experience_policy": {
       "path": "data/private_knowledge/service_labor_experience.json",
-      "fallback_path": "data/private_knowledge/service_pricing_experience.json",
       "basis": "aggregate_only_all_closed_repair_orders_recency_weighted",
       "use_for": [
         "historical_recency_weighted_median_and_interquartile_range",
