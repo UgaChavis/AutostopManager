@@ -1,8 +1,0 @@
-{"risk_id": "low_voltage_during_flash", "effect": "ECU stops responding", "prevention": "Use service power supply; do not use weak charger", "response": "Run official recovery if available"}
-{"risk_id": "wrong_hardware_variant", "effect": "Programming abort or ECU brick", "prevention": "Verify hardware number and VIN compatibility", "response": "Stop and obtain correct ECU/package"}
-{"risk_id": "coding_missing", "effect": "New DTC after programming", "prevention": "Run OEM coding plan", "response": "Code by VO/FA/VIN then validate"}
-{"risk_id": "adaptation_missing", "effect": "Rough idle, shift issues, actuator errors", "prevention": "Follow OEM adaptation checklist", "response": "Perform teach-in and road test"}
-{"risk_id": "network_fault", "effect": "Timeouts and failed transfer", "prevention": "Diagnose CAN/DoIP/gateway first", "response": "Repair network before programming"}
-{"risk_id": "emissions_delete_request", "effect": "Legal and technical non-compliance", "prevention": "Refuse delete and offer repair diagnostics", "response": "Restore compliant system"}
-{"risk_id": "unknown_tuned_file", "effect": "Official tool mismatch", "prevention": "Identify software/calibration IDs", "response": "Restore official software"}
-{"risk_id": "DPF_forced_regen_without_checks", "effect": "Fire or filter damage", "prevention": "Check soot/ash/temp/sensors first", "response": "Abort if conditions unsafe"}

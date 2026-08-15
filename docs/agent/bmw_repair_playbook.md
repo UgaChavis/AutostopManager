@@ -1,17 +1,13 @@
 # BMW Repair Playbook
 
-Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, xDrive, ZF transmission, HV, and fluid-maintenance questions into the local BMW repair knowledge pack without treating it as a closed OEM manual.
+Canonical route for BMW repair, diagnostics, DTC, electronics, xDrive, ZF,
+HV and fluids. Local JSONL indexes are lookup hints, not an OEM manual.
 
 ## Source Pack
 
-- Path: `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/`
-- Intake source: owner-provided archive; original user download path is
-  historical and not part of active routing.
-- Created in pack manifest: `2026-05-03T10:32:46Z`
-- Classification: compact owner-provided reference pack retained as README,
-  manifest, and JSONL indexes used by active routing. Long Markdown modules
-  were migrated into this playbook and removed during documentation reduction.
-- License/source boundary: safe for local reference as owner-provided material; still verify final repair procedures, wiring, torque, coding, programming, campaigns, and fluid capacities by VIN in BMW ISTA/AIR/ETK/AOS/TIS or official/public bulletins.
+- Pack: `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/`.
+- Verify final procedures, wiring, torque, coding, programming, campaigns and
+  capacities by VIN in BMW ISTA/AIR/ETK/AOS/TIS or official bulletins.
 
 ## Use This First When
 
@@ -32,14 +28,8 @@ Purpose: route general BMW repair, diagnostics, DTC, chassis, body electronics, 
 
 ## Pack Navigation
 
-Retained pack files:
-
-- `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/README_ru.md`
-  - provenance, source boundary, and load policy.
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/manifest.json`
-  - retained-file list and compacted-pack metadata.
-
-Data indexes:
+- Data indexes:
 
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_chassis_codes.jsonl` - BMW chassis/body-code lookup hints.
 - `docs/agent/automotive_sources/source_cache/bmw_repair_knowledge_pack/data/bmw_control_units_glossary.jsonl` - BMW module abbreviations and diagnostic meaning.

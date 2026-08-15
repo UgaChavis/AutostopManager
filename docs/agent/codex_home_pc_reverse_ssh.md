@@ -100,6 +100,21 @@ Root-only SSH control sessions use `ControlPersist 600`. The Windows
 maintenance account may forward only to `127.0.0.1:9223` for the dedicated CRM
 Chrome diagnostics profile.
 
+## Reception PDF Printing
+
+Print only by a direct owner instruction after resolving the exact local PDF,
+copy count, live alias `desktop-e0e84lt`, expected hostname and allowlisted
+`HUAWEI PixLab X1`. Require `tunnel_up=true` and `ssh_ok=true`, then use:
+
+```bash
+managed-pc print-pdf desktop-e0e84lt --file /absolute/path/document.pdf \
+  --printer "HUAWEI PixLab X1" --copies 1
+```
+
+The route is independent of FST.KZ VPN. Report filename, device, printer,
+copies, pages and Windows spool acceptance; do not claim physical delivery or
+repeat an ambiguous job without a new instruction.
+
 ## Legacy Home PC
 
 `home-pc` is independent of the managed fleet. It reaches Windows OpenSSH

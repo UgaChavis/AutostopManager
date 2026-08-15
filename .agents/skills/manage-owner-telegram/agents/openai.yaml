@@ -1,0 +1,4 @@
+interface:
+  display_name: "Управление Telegram владельца"
+  short_description: "Безопасное чтение и отправка через Telegram"
+  default_prompt: "Используй $manage-owner-telegram для безопасной работы с Telegram владельца."

@@ -16,6 +16,8 @@ Keep docs compact.
   quotes, internet orders, warehouse and marketplace state.
 - Gmail is the source of truth for messages, threads, labels, drafts,
   attachments and sent/archive history.
+- Telegram is the source of truth for its dialogs, messages, groups, channels,
+  contacts and account authorization. Keep its private content transient.
 - Never persist raw CRM/Store/Gmail exports, customer or vehicle identifier
   tables, ledgers, credentials, OAuth state or secrets in docs, Git, memory,
   workflow state or chat summaries.
@@ -51,6 +53,9 @@ Keep docs compact.
   A customer order is never a supplier purchase.
 - Gmail: open `docs/agent/gmail_workflow_playbook.md`; search/read before a
   mailbox mutation and keep only refs in the workflow ledger.
+- Telegram: open `docs/agent/telegram_workflow_playbook.md`; use the private
+  local bridge, resolve exact peer IDs, and keep reads bounded and writes
+  owner-authorized, idempotent and independently verified.
 
 The production connector exposes exactly 24 Gateway v2 tools. Codex/Apps use
 owner-approved OAuth 2.1 with PKCE and rotating refresh tokens; the rotated
@@ -113,14 +118,16 @@ bearer is internal compatibility only.
   `get_store_analytics_report`.
 - Public repair research -> `docs/agent/automotive_repair_source_playbook.md`;
   use Gateway search/excerpt/browser routes without bypassing access controls.
+- Telegram messages, contacts, groups, QR login or connection checks ->
+  `.agents/skills/manage-owner-telegram/SKILL.md` and
+  `docs/agent/telegram_workflow_playbook.md`.
 - `Семафорная 185` / camera -> one public frame via
   `scripts/capture_semafornaya_185.py`; retain no video, player URLs, faces or
   plates.
 - Server/Windows -> `docs/agent/codex_home_pc_reverse_ssh.md`. For FST.KZ read
   `/root/.codex/CODEX_VPN_FST_ACCESS.md` first and use `autostop-vpn-fst`.
   Resolve live identity and stop on host-key mismatch.
-- Reception PDF printing ->
-  `docs/agent/reception_pdf_printing_playbook.md`.
+- Reception PDF printing -> `docs/agent/codex_home_pc_reverse_ssh.md`.
 
 ## Git, Deploy And Docs
 
