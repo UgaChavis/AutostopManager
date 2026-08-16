@@ -61,7 +61,14 @@ def get_db_path() -> Path:
 
 
 def get_mcp_host() -> str:
-    return os.environ.get("AUTOSTOP_MANAGER_MCP_HOST", "127.0.0.1")
+    configured = os.environ.get("AUTOSTOP_MANAGER_MCP_HOST", "127.0.0.1").strip()
+    try:
+        address = ipaddress.ip_address(configured)
+    except ValueError as exc:
+        raise ValueError("mcp_host_invalid") from exc
+    if not address.is_loopback:
+        raise ValueError("mcp_host_not_loopback")
+    return str(address)
 
 
 def get_mcp_port() -> int:

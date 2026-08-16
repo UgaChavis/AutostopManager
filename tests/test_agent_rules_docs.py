@@ -103,8 +103,6 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "sftp",
         "scp",
         "pwsh",
-        "PowerShell 7.6.3",
-        "Python 3.14.6",
         "write-public-desktop-note.ps1",
         "open-in-user-session.ps1",
         "managed-pc refresh-device-files",
@@ -118,6 +116,8 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "route CRM traffic through a VPN",
     ]:
         assert expected in combined
+
+    assert "no `health-check.ps1` is installed" in combined
 
     access_doc = (ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md").read_text(encoding="utf-8")
     assert len(access_doc.splitlines()) <= 180

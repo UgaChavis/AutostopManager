@@ -131,11 +131,9 @@ ssh -o BatchMode=yes home-pc \
   'pwsh -NoLogo -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"'
 ```
 
-`ssh`, `scp`, `sftp`, and `pwsh` are supported. The last verified toolset also
-included PowerShell 7.6.3 and Python 3.14.6, but versions must be reread before
-relying on them. Visible-desktop helpers are
-`write-public-desktop-note.ps1` and `open-in-user-session.ps1`; run
-`health-check.ps1` for compact state.
+`ssh`, `scp`, `sftp`, and `pwsh` are supported. Visible-desktop helpers are
+`write-public-desktop-note.ps1` and `open-in-user-session.ps1`. For compact
+state, rerun the bounded probes above; no `health-check.ps1` is installed.
 
 If the listener is absent, the PC is not currently reachable. Wake it on site
 and start `\Autostop\CodexRemoteReverseTunnel`; do not rotate keys as an outage

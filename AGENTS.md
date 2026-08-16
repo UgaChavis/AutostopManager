@@ -121,9 +121,16 @@ bearer is internal compatibility only.
 - Telegram messages, contacts, groups, QR login or connection checks ->
   `.agents/skills/manage-owner-telegram/SKILL.md` and
   `docs/agent/telegram_workflow_playbook.md`.
-- `Семафорная 185` / camera -> one public frame via
-  `scripts/capture_semafornaya_185.py`; retain no video, player URLs, faces or
-  plates.
+- public Krasnoyarsk camera / street / address / landmark -> resolve the strict
+  allowlist through `.agents/skills/capture-public-camera/SKILL.md` and capture
+  one frame via `scripts/capture_public_camera.py`; retain no video, player
+  URLs, frames, faces or plates. `scripts/capture_semafornaya_185.py` remains
+  the AutoStop compatibility route.
+- `домашняя камера` / `Tapo C225` -> explicit owner-requested photo, short
+  silent clip, or bounded PTZ/vehicle scan via
+  `docs/agent/home_camera_playbook.md`, `scripts/capture_home_camera.py`, and
+  `scripts/control_home_camera_ptz.py`; never schedule, publish, identify
+  people, continuously track, or retain the private stream.
 - Server/Windows -> `docs/agent/codex_home_pc_reverse_ssh.md`. For FST.KZ read
   `/root/.codex/CODEX_VPN_FST_ACCESS.md` first and use `autostop-vpn-fst`.
   Resolve live identity and stop on host-key mismatch.

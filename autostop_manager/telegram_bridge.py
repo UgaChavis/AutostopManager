@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -24,8 +25,12 @@ DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
 DEFAULT_2FA_PASSWORD_PATH = Path("/run/autostop-telegram/2fa-password.once")
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_MESSAGE_CHARS = 4096
+MAX_CAPTION_CHARS = 1024
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
 CONTRACT_TTL_SECONDS = 15 * 60
+DEFAULT_OUTBOX_DIR = Path("/run/autostop-telegram/outbox")
 SENSITIVE_URI_PATTERN = re.compile(r"(?i)\b(?:tg|vpn)://[^\s]+")
+_MUTATION_LOCK = asyncio.Lock()
 
 
 class BridgeError(RuntimeError):
@@ -44,19 +49,39 @@ class TelegramConfig:
     socket_path: Path = DEFAULT_SOCKET_PATH
 
     @classmethod
-    def load(cls, credentials_path: Path = DEFAULT_CREDENTIALS_PATH) -> TelegramConfig:
+    def load(
+        cls,
+        credentials_path: Path = DEFAULT_CREDENTIALS_PATH,
+        *,
+        session_path: Path = DEFAULT_SESSION_PATH,
+        state_dir: Path = DEFAULT_STATE_DIR,
+        socket_path: Path = DEFAULT_SOCKET_PATH,
+    ) -> TelegramConfig:
+        runtime_paths = (credentials_path, session_path, state_dir, socket_path)
+        if any(not path.is_absolute() for path in runtime_paths):
+            raise BridgeError("runtime_path_not_absolute")
+        if session_path.parent != state_dir:
+            raise BridgeError("session_state_mismatch")
         try:
-            file_stat = credentials_path.stat()
+            credentials_fd = os.open(credentials_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
         except OSError as exc:
             raise BridgeError("credentials_unavailable") from exc
-        if stat.S_IMODE(file_stat.st_mode) & 0o077:
-            raise BridgeError("credentials_permissions_too_open")
-
-        values: dict[str, str] = {}
         try:
-            lines = credentials_path.read_text(encoding="ascii").splitlines()
+            file_stat = os.fstat(credentials_fd)
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_uid != os.geteuid():
+                raise BridgeError("credentials_invalid")
+            if stat.S_IMODE(file_stat.st_mode) & 0o077:
+                raise BridgeError("credentials_permissions_too_open")
+            raw_credentials = os.read(credentials_fd, 16 * 1024 + 1)
+            if len(raw_credentials) > 16 * 1024:
+                raise BridgeError("credentials_invalid")
+            lines = raw_credentials.decode("ascii").splitlines()
         except (OSError, UnicodeError) as exc:
             raise BridgeError("credentials_unreadable") from exc
+        finally:
+            os.close(credentials_fd)
+
+        values: dict[str, str] = {}
         for raw_line in lines:
             line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -70,7 +95,14 @@ class TelegramConfig:
             raise BridgeError("api_id_invalid")
         if len(api_hash) != 32 or any(char not in "0123456789abcdefABCDEF" for char in api_hash):
             raise BridgeError("api_hash_invalid")
-        return cls(api_id=int(api_id_raw), api_hash=api_hash, credentials_path=credentials_path)
+        return cls(
+            api_id=int(api_id_raw),
+            api_hash=api_hash,
+            credentials_path=credentials_path,
+            session_path=session_path,
+            state_dir=state_dir,
+            socket_path=socket_path,
+        )
 
 
 def _canonical_json(payload: dict[str, Any]) -> bytes:
@@ -136,6 +168,71 @@ def verify_send_contract(
     return payload
 
 
+def issue_photo_contract(
+    secret: bytes,
+    *,
+    peer_id: int,
+    caption: str,
+    photo_sha256: str,
+    last_message_id: int,
+    now: int | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else int(now)
+    payload = {
+        "caption_sha256": hashlib.sha256(caption.encode("utf-8")).hexdigest(),
+        "issued_at": issued_at,
+        "last_message_id": int(last_message_id),
+        "peer_id": int(peer_id),
+        "photo_sha256": photo_sha256,
+        "type": "photo",
+    }
+    encoded = base64.urlsafe_b64encode(_canonical_json(payload)).rstrip(b"=")
+    signature = hmac.new(secret, encoded, hashlib.sha256).digest()
+    return f"{encoded.decode('ascii')}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
+def verify_photo_contract(
+    token: str,
+    secret: bytes,
+    *,
+    peer_id: int,
+    caption: str,
+    photo_sha256: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    try:
+        encoded_raw, signature_raw = token.split(".", 1)
+        encoded = encoded_raw.encode("ascii")
+        signature = base64.urlsafe_b64decode(signature_raw + "=" * (-len(signature_raw) % 4))
+        expected = hmac.new(secret, encoded, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise BridgeError("contract_invalid")
+        decoded = base64.urlsafe_b64decode(encoded_raw + "=" * (-len(encoded_raw) % 4))
+        payload = json.loads(decoded)
+    except BridgeError:
+        raise
+    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BridgeError("contract_invalid") from exc
+
+    current_time = int(time.time()) if now is None else int(now)
+    if not isinstance(payload, dict) or payload.get("type") != "photo":
+        raise BridgeError("contract_invalid")
+    if payload.get("peer_id") != int(peer_id):
+        raise BridgeError("contract_target_changed")
+    if payload.get("caption_sha256") != hashlib.sha256(caption.encode("utf-8")).hexdigest():
+        raise BridgeError("contract_text_changed")
+    if payload.get("photo_sha256") != photo_sha256:
+        raise BridgeError("contract_photo_changed")
+    issued_at = payload.get("issued_at")
+    if not isinstance(issued_at, int) or issued_at > current_time + 60:
+        raise BridgeError("contract_invalid")
+    if current_time - issued_at > CONTRACT_TTL_SECONDS:
+        raise BridgeError("contract_expired")
+    if not isinstance(payload.get("last_message_id"), int):
+        raise BridgeError("contract_invalid")
+    return payload
+
+
 def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
     peer = str(request.get("peer") or "").strip()
     text = str(request.get("text") or "")
@@ -150,6 +247,85 @@ def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
     if mode == "apply" and not idempotency_key:
         raise BridgeError("idempotency_key_required")
     return peer, text, mode, idempotency_key
+
+
+def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
+    peer = str(request.get("peer") or "").strip()
+    photo = Path(str(request.get("photo") or ""))
+    caption = str(request.get("caption") or "")
+    mode = str(request.get("mode") or "dry_run")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    if not peer:
+        raise BridgeError("peer_required")
+    if not caption or len(caption) > MAX_CAPTION_CHARS:
+        raise BridgeError("caption_length_invalid")
+    if mode not in {"dry_run", "apply"}:
+        raise BridgeError("mode_invalid")
+    if mode == "apply" and not idempotency_key:
+        raise BridgeError("idempotency_key_required")
+    return peer, photo, caption, mode, idempotency_key
+
+
+def _load_validated_photo_file(
+    path: Path,
+    *,
+    outbox_dir: Path = DEFAULT_OUTBOX_DIR,
+) -> tuple[Path, str, int, bytes]:
+    if not path.is_absolute() or not outbox_dir.is_absolute() or path.parent != outbox_dir:
+        raise BridgeError("photo_path_invalid")
+    if path.name in {"", ".", ".."} or path.suffix.casefold() not in {".jpg", ".jpeg"}:
+        raise BridgeError("photo_path_invalid")
+    try:
+        outbox_fd = os.open(
+            outbox_dir,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        raise BridgeError("photo_unavailable") from exc
+    try:
+        outbox_stat = os.fstat(outbox_fd)
+        if outbox_stat.st_uid != os.geteuid() or stat.S_IMODE(outbox_stat.st_mode) != 0o700:
+            raise BridgeError("photo_outbox_permissions_invalid")
+        try:
+            file_fd = os.open(
+                path.name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=outbox_fd,
+            )
+        except OSError as exc:
+            raise BridgeError("photo_unavailable") from exc
+        try:
+            file_stat = os.fstat(file_fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise BridgeError("photo_invalid")
+            if file_stat.st_uid != os.geteuid() or stat.S_IMODE(file_stat.st_mode) != 0o600:
+                raise BridgeError("photo_permissions_invalid")
+            if not 4 <= file_stat.st_size <= MAX_PHOTO_BYTES:
+                raise BridgeError("photo_size_invalid")
+            content = bytearray()
+            while len(content) <= MAX_PHOTO_BYTES:
+                chunk = os.read(file_fd, min(1024 * 1024, MAX_PHOTO_BYTES + 1 - len(content)))
+                if not chunk:
+                    break
+                content.extend(chunk)
+            if len(content) > MAX_PHOTO_BYTES:
+                raise BridgeError("photo_size_invalid")
+        except OSError as exc:
+            raise BridgeError("photo_unreadable") from exc
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(outbox_fd)
+    if not content.startswith(b"\xff\xd8") or not content.endswith(b"\xff\xd9"):
+        raise BridgeError("photo_invalid")
+    immutable_content = bytes(content)
+    return path, hashlib.sha256(immutable_content).hexdigest(), len(immutable_content), immutable_content
+
+
+def validate_photo_file(path: Path, *, outbox_dir: Path = DEFAULT_OUTBOX_DIR) -> tuple[Path, str, int]:
+    """Validate one private JPEG without allowing a later pathname race."""
+    validated_path, digest, size, _content = _load_validated_photo_file(path, outbox_dir=outbox_dir)
+    return validated_path, digest, size
 
 
 def redact_sensitive_message_text(text: str) -> tuple[str, bool]:
@@ -176,58 +352,118 @@ def _load_qrcode() -> Any:
 
 def _read_one_time_password(path: Path) -> str:
     try:
-        file_stat = path.stat()
+        file_fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     except OSError as exc:
         raise BridgeError("two_factor_password_unavailable") from exc
-    if not stat.S_ISREG(file_stat.st_mode) or stat.S_IMODE(file_stat.st_mode) & 0o077:
-        raise BridgeError("two_factor_password_permissions_invalid")
-    if file_stat.st_size > 1024:
-        raise BridgeError("two_factor_password_invalid")
+    consumed = False
     try:
-        password = path.read_text(encoding="utf-8").rstrip("\r\n")
+        file_stat = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(file_stat.st_mode) != 0o600
+        ):
+            raise BridgeError("two_factor_password_permissions_invalid")
+        if file_stat.st_size > 1024:
+            raise BridgeError("two_factor_password_invalid")
+        consumed = True
+        raw = os.read(file_fd, 1025)
+        if len(raw) > 1024:
+            raise BridgeError("two_factor_password_invalid")
+        password = raw.decode("utf-8").rstrip("\r\n")
     except (OSError, UnicodeError) as exc:
         raise BridgeError("two_factor_password_unreadable") from exc
     finally:
-        path.unlink(missing_ok=True)
+        os.close(file_fd)
+        if consumed:
+            path.unlink(missing_ok=True)
     if not password:
         raise BridgeError("two_factor_password_invalid")
     return password
 
 
 def _ensure_private_key(path: Path) -> bytes:
-    if path.exists():
-        if stat.S_IMODE(path.stat().st_mode) & 0o077:
-            raise BridgeError("contract_key_permissions_too_open")
-        return path.read_bytes()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = secrets.token_bytes(32)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "wb") as stream:
-        stream.write(key)
-    return key
+    for _ in range(2):
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            key = secrets.token_bytes(32)
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    0o600,
+                )
+            except FileExistsError:
+                continue
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(key)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return key
+        except OSError as exc:
+            raise BridgeError("contract_key_unavailable") from exc
+        try:
+            file_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_uid != os.geteuid():
+                raise BridgeError("contract_key_invalid")
+            if stat.S_IMODE(file_stat.st_mode) != 0o600:
+                raise BridgeError("contract_key_permissions_too_open")
+            key = os.read(descriptor, 33)
+        finally:
+            os.close(descriptor)
+        if len(key) != 32:
+            raise BridgeError("contract_key_invalid")
+        return key
+    raise BridgeError("contract_key_unavailable")
 
 
 def _load_idempotency(path: Path) -> dict[str, dict[str, Any]]:
-    if not path.exists():
-        return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise BridgeError("idempotency_state_unreadable") from exc
+    try:
+        file_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(file_stat.st_mode) != 0o600
+            or file_stat.st_size > 5 * 1024 * 1024
+        ):
+            raise BridgeError("idempotency_state_invalid")
+        raw = os.read(descriptor, 5 * 1024 * 1024 + 1)
+        if len(raw) > 5 * 1024 * 1024:
+            raise BridgeError("idempotency_state_invalid")
+        payload = json.loads(raw)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BridgeError("idempotency_state_unreadable") from exc
+    finally:
+        os.close(descriptor)
     if not isinstance(payload, dict):
         raise BridgeError("idempotency_state_invalid")
     return {str(key): value for key, value in payload.items() if isinstance(value, dict)}
 
 
 def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
-    descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temp_path, path)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        descriptor = os.open(
+            temp_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _target_from_entity(entity: Any, utils: Any) -> dict[str, Any]:
@@ -315,6 +551,91 @@ async def _resolve_peer(client: Any, raw_peer: str) -> tuple[Any, dict[str, Any]
 async def _last_message_id(client: Any, entity: Any) -> int:
     messages = await client.get_messages(entity, limit=1)
     return int(messages[0].id) if messages else 0
+
+
+async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+    peer, photo, caption, mode, idempotency_key = validate_photo_request(request)
+    photo_path, photo_sha256, photo_bytes, photo_content = _load_validated_photo_file(
+        photo,
+        outbox_dir=config.socket_path.parent / "outbox",
+    )
+    entity, target = await _resolve_peer(client, peer)
+    last_message_id = await _last_message_id(client, entity)
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
+    if mode == "dry_run":
+        return {
+            "ok": True,
+            "mode": "dry_run",
+            "target": target,
+            "caption_chars": len(caption),
+            "caption_sha256": caption_sha256,
+            "photo_bytes": photo_bytes,
+            "photo_sha256": photo_sha256,
+            "last_message_id": last_message_id,
+            "contract_token": issue_photo_contract(
+                contract_key,
+                peer_id=target["id"],
+                caption=caption,
+                photo_sha256=photo_sha256,
+                last_message_id=last_message_id,
+            ),
+        }
+
+    contract_token = str(request.get("contract_token") or "")
+    if not contract_token:
+        raise BridgeError("contract_required")
+    contract = verify_photo_contract(
+        contract_token,
+        contract_key,
+        peer_id=target["id"],
+        caption=caption,
+        photo_sha256=photo_sha256,
+    )
+    if contract["last_message_id"] != last_message_id:
+        raise BridgeError("conversation_changed_since_dry_run")
+
+    idempotency_path = config.state_dir / "idempotency.json"
+    idempotency = _load_idempotency(idempotency_path)
+    previous = idempotency.get(idempotency_key)
+    if previous is not None:
+        if (
+            previous.get("operation") != "send_photo"
+            or previous.get("peer_id") != target["id"]
+            or previous.get("caption_sha256") != caption_sha256
+            or previous.get("photo_sha256") != photo_sha256
+        ):
+            raise BridgeError("idempotency_key_conflict")
+        return {
+            "ok": True,
+            "mode": "apply",
+            "replayed": True,
+            "target": target,
+            "message_id": previous.get("message_id"),
+        }
+
+    upload = io.BytesIO(photo_content)
+    upload.name = photo_path.name
+    sent = await client.send_file(entity, upload, caption=caption, force_document=False)
+    idempotency[idempotency_key] = {
+        "operation": "send_photo",
+        "message_id": int(sent.id),
+        "peer_id": target["id"],
+        "caption_sha256": caption_sha256,
+        "photo_sha256": photo_sha256,
+    }
+    _save_idempotency(idempotency_path, idempotency)
+    readback = await client.get_messages(entity, ids=int(sent.id))
+    if readback is None or str(readback.message or "") != caption or readback.media is None:
+        raise BridgeError("send_readback_failed")
+    return {
+        "ok": True,
+        "mode": "apply",
+        "replayed": False,
+        "target": target,
+        "message_id": int(sent.id),
+        "verified": True,
+    }
 
 
 async def _handle_operation(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
@@ -412,7 +733,11 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
         idempotency = _load_idempotency(idempotency_path)
         previous = idempotency.get(idempotency_key)
         if previous is not None:
-            if previous.get("peer_id") != target["id"] or previous.get("text_sha256") != text_sha256:
+            if (
+                previous.get("operation") not in {None, "send_text"}
+                or previous.get("peer_id") != target["id"]
+                or previous.get("text_sha256") != text_sha256
+            ):
                 raise BridgeError("idempotency_key_conflict")
             return {
                 "ok": True,
@@ -424,6 +749,7 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
 
         sent = await client.send_message(entity, text)
         idempotency[idempotency_key] = {
+            "operation": "send_text",
             "message_id": int(sent.id),
             "peer_id": target["id"],
             "text_sha256": text_sha256,
@@ -441,7 +767,14 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
             "verified": True,
         }
 
+    if operation == "send_photo":
+        return await _handle_send_photo(client, config, request)
+
     raise BridgeError("operation_not_supported")
+
+
+def _requires_mutation_lock(request: dict[str, Any]) -> bool:
+    return request.get("operation") in {"send", "send_photo"} and request.get("mode") == "apply"
 
 
 async def _serve_client(
@@ -455,7 +788,11 @@ async def _serve_client(
         request = json.loads(raw)
         if not isinstance(request, dict):
             raise BridgeError("request_invalid")
-        response = await _handle_operation(client, config, request)
+        if _requires_mutation_lock(request):
+            async with _MUTATION_LOCK:
+                response = await _handle_operation(client, config, request)
+        else:
+            response = await _handle_operation(client, config, request)
     except BridgeError as exc:
         response = {"ok": False, "error": exc.code}
     except (json.JSONDecodeError, UnicodeError, ValueError):
@@ -472,6 +809,9 @@ async def run_daemon(config: TelegramConfig) -> None:
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
     config.socket_path.parent.mkdir(parents=True, exist_ok=True)
+    outbox_dir = config.socket_path.parent / "outbox"
+    outbox_dir.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(outbox_dir, 0o700)
     config.socket_path.unlink(missing_ok=True)
     client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
     await client.connect()
@@ -576,11 +916,13 @@ def send_local_request(socket_path: Path, request: dict[str, Any]) -> dict[str, 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram")
     parser.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS_PATH)
+    parser.add_argument("--session", type=Path, default=DEFAULT_SESSION_PATH)
+    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("daemon")
     qr_login = subparsers.add_parser("qr-login")
-    qr_login.add_argument("--output", type=Path, default=DEFAULT_STATE_DIR / "login-qr.png")
+    qr_login.add_argument("--output", type=Path)
     qr_login.add_argument("--password-file", type=Path)
     subparsers.add_parser("status")
     dialogs = subparsers.add_parser("dialogs")
@@ -597,6 +939,13 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send.add_argument("--contract-token", default="")
     send.add_argument("--idempotency-key", default="")
+    send_photo = subparsers.add_parser("send-photo")
+    send_photo.add_argument("--peer", required=True)
+    send_photo.add_argument("--file", required=True, type=Path)
+    send_photo.add_argument("--caption", required=True)
+    send_photo.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    send_photo.add_argument("--contract-token", default="")
+    send_photo.add_argument("--idempotency-key", default="")
     return parser
 
 
@@ -604,19 +953,24 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "daemon":
-            config = TelegramConfig.load(args.credentials)
-            config = TelegramConfig(
-                api_id=config.api_id,
-                api_hash=config.api_hash,
-                credentials_path=config.credentials_path,
+            config = TelegramConfig.load(
+                args.credentials,
+                session_path=args.session,
+                state_dir=args.state_dir,
                 socket_path=args.socket,
             )
             asyncio.run(run_daemon(config))
             return 0
         if args.command == "qr-login":
-            config = TelegramConfig.load(args.credentials)
+            config = TelegramConfig.load(
+                args.credentials,
+                session_path=args.session,
+                state_dir=args.state_dir,
+                socket_path=args.socket,
+            )
             two_factor_password = _read_one_time_password(args.password_file) if args.password_file else ""
-            payload = asyncio.run(run_qr_login(config, args.output, two_factor_password=two_factor_password))
+            output_path = args.output or config.state_dir / "login-qr.png"
+            payload = asyncio.run(run_qr_login(config, output_path, two_factor_password=two_factor_password))
         else:
             request: dict[str, Any] = {"operation": args.command}
             if args.command == "dialogs":
@@ -630,6 +984,18 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "peer": args.peer,
                         "text": args.text,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "send-photo":
+                request.update(
+                    {
+                        "operation": "send_photo",
+                        "peer": args.peer,
+                        "photo": str(args.file),
+                        "caption": args.caption,
                         "mode": args.mode,
                         "contract_token": args.contract_token,
                         "idempotency_key": args.idempotency_key,

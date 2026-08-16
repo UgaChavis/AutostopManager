@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from autostop_manager import config
 
 
@@ -59,14 +61,29 @@ def test_load_runtime_env_skips_missing_paths_and_force_rechecks(monkeypatch, tm
 def test_runtime_getters_normalize_configured_values(monkeypatch, tmp_path):
     db_path = tmp_path / "manager.sqlite3"
     monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(db_path))
-    monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_HOST", "0.0.0.0")
+    monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_HOST", "127.0.0.1")
     monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_PORT", "42000")
     monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_PATH", "manager-mcp")
 
     assert config.get_db_path() == db_path.resolve()
-    assert config.get_mcp_host() == "0.0.0.0"
+    assert config.get_mcp_host() == "127.0.0.1"
     assert config.get_mcp_port() == 42000
     assert config.get_mcp_path() == "/manager-mcp"
+
+
+@pytest.mark.parametrize("host", ("0.0.0.0", "::", "192.0.2.1", "manager.example"))
+def test_mcp_host_rejects_non_loopback_values(monkeypatch, host):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_HOST", host)
+
+    with pytest.raises(ValueError, match=r"mcp_host_(invalid|not_loopback)"):
+        config.get_mcp_host()
+
+
+@pytest.mark.parametrize("host", ("127.0.0.1", "::1"))
+def test_mcp_host_accepts_literal_loopback_values(monkeypatch, host):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_MCP_HOST", host)
+
+    assert config.get_mcp_host() == host
 
 
 def test_runtime_getters_use_project_defaults(monkeypatch):

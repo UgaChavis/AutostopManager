@@ -80,13 +80,14 @@ cd /opt/autostopcrm
 git status --short --branch
 git fetch origin autostopcrm-v1
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/autostopcrm-v1)"
-./deploy.sh
+# Only inside a separately approved release contract:
+AUTOSTOP_INSTALL_WATCHDOG=0 ./deploy.sh
 ```
 
-The CRM deploy script must keep the CRM checkout clean, create rollback data,
-prebuild the immutable image, snapshot Manager, preserve `.env`, uploads and
-PostgreSQL volumes, replace only the CRM service in the bounded window, and run
-internal/public Gateway smoke. There is no Git-sync bypass.
+A bare `./deploy.sh` is forbidden because it enables the disabled watchdog by default. Approved releases
+use the command above, verify the timer is `disabled`/`inactive`, and keep the CRM checkout clean.
+They create rollback data and a Manager snapshot, preserve `.env`/uploads/PostgreSQL volumes, and replace only CRM in the bounded window.
+They must pass internal/public smoke. No Git-sync bypass.
 
 For a Store-affecting release, use backup -> Store API/auth/migration -> pure
 read/service-scope checks -> internal network -> Manager snapshot -> CRM
@@ -109,6 +110,8 @@ cd /opt/AutostopManager
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
 .venv/bin/python -m autostop_manager.cli integration-audit --full
 ./scripts/doctor.sh --full
+cd /opt/autostop-manager-releases/current
+/opt/AutostopManager/.venv/bin/python scripts/capture_public_camera.py --verify-runner
 ```
 
 Confirm:
@@ -121,6 +124,8 @@ Confirm:
 - CRM, public Gateway, AutoStop App/site, VPN, nginx and required systemd units
   remain healthy;
 - the deployed Manager revision equals GitHub and rollback refs exist.
+- the public-camera non-root sandbox launches its pinned browser with networking
+  disabled for the self-test; this check captures no camera frame.
 
 Production Store management smoke stays dry-run unless an explicitly approved,
 safe and reversible synthetic object exists. Record only compact ids, counts,

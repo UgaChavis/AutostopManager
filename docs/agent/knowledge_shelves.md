@@ -28,6 +28,7 @@ Store or web access when the question does not need them.
 | ECU programming | `ecu_calibration_programming` | `docs/agent/ecu_calibration_programming_playbook.md` |
 | 3D printing | `3d_printing_cad` | `docs/agent/3d_printing_cad_playbook.md` |
 | Server/remote PCs | `remote_codex_access` | `docs/agent/codex_home_pc_reverse_ssh.md` |
+| Public city cameras | `public_camera` | `.agents/skills/capture-public-camera/SKILL.md` |
 | Deployment | `deployment` | `docs/agent/deployment_runbook.md` |
 
 Use `knowledge-search --domain <domain>` only when the first file is

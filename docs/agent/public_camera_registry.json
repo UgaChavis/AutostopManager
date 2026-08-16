@@ -1,0 +1,119 @@
+{
+  "format": "autostop_public_camera_registry_v1",
+  "provider": {
+    "name": "24oko",
+    "public_page": "https://24oko.ru/city"
+  },
+  "cameras": [
+    {
+      "key": "semafornaya-185",
+      "provider_camera_id": "c_6171",
+      "title": "Семафорная 185",
+      "aliases": ["Семафорная 185", "на Семафорной 185", "Семафорной", "Автостоп", "автосервис AutoStop", "камера у автосервиса"],
+      "latitude": 55.982147,
+      "longitude": 92.856051,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:05:44Z"
+    },
+    {
+      "key": "kopylova-partizanskaya",
+      "provider_camera_id": "c_5",
+      "title": "Копылова – Партизанская",
+      "aliases": ["Копылова Партизанская", "Копылова", "Партизанская", "Партизанской", "подъезд к Копыловскому мосту"],
+      "latitude": 56.012197,
+      "longitude": 92.803578,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:05:52Z"
+    },
+    {
+      "key": "predmostnaya-ploshchad",
+      "provider_camera_id": "c_8",
+      "title": "Кольцо предмостная площадь 1",
+      "aliases": ["Предмостная площадь", "Предмостной площади", "кольцо Предмостная", "Предмостная", "предмостное кольцо"],
+      "latitude": 55.990775,
+      "longitude": 92.887734,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:01Z"
+    },
+    {
+      "key": "karla-marksa-bkz",
+      "provider_camera_id": "c_32",
+      "title": "Карла Маркса — БКЗ",
+      "aliases": ["Карла Маркса БКЗ", "БКЗ", "Большой концертный зал", "центр у БКЗ"],
+      "latitude": 56.011189,
+      "longitude": 92.891482,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:08Z"
+    },
+    {
+      "key": "molokova-baturina",
+      "provider_camera_id": "c_6404",
+      "title": "Молокова-Батурина",
+      "aliases": ["Молокова Батурина", "перекресток Молокова и Батурина", "Батурина", "Взлетка Батурина"],
+      "latitude": 56.04000465825028,
+      "longitude": 92.90389780308284,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:08:01Z"
+    },
+    {
+      "key": "aviatorov-molokova",
+      "provider_camera_id": "c_40",
+      "title": "Авиаторов — Молокова",
+      "aliases": ["Авиаторов Молокова", "перекресток Авиаторов и Молокова", "Авиаторов", "Взлетка Авиаторов"],
+      "latitude": 56.047426,
+      "longitude": 92.913659,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:24Z"
+    },
+    {
+      "key": "dobrovolcheskoy-molokova",
+      "provider_camera_id": "c_95",
+      "title": "78 Добровольческой бригады — Молокова",
+      "aliases": ["78 Добровольческой бригады Молокова", "Добровольческой Молокова", "перекресток 78 Добровольческой и Молокова"],
+      "latitude": 56.0424,
+      "longitude": 92.9101,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:32Z"
+    },
+    {
+      "key": "krasnoyarskiy-circus",
+      "provider_camera_id": "c_6145",
+      "title": "Цирк",
+      "aliases": ["Красноярский цирк", "Красноярского цирка", "Цирк", "Цирка", "площадь у цирка", "проспект Красноярский рабочий у цирка"],
+      "latitude": 55.996836,
+      "longitude": 92.909635,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:40Z"
+    },
+    {
+      "key": "9-maya-78-dobrovolcheskoy",
+      "provider_camera_id": "c_7289",
+      "title": "9 Мая - 78 Добровольческой бригады",
+      "aliases": ["9 Мая 78 Добровольческой бригады", "улица 9 Мая", "9 Мая", "перекресток 9 Мая и 78 Добровольческой"],
+      "latitude": 56.050825,
+      "longitude": 92.89907,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:49Z"
+    },
+    {
+      "key": "kalinina-maerchaka-bryanskaya",
+      "provider_camera_id": "c_6247",
+      "title": "Кольцо Калинина - Маерчака - Брянская",
+      "aliases": ["Калинина Маерчака Брянская", "Калинина Маерчака Брянской", "кольцо Калинина", "Маерчака Брянская", "Калининское кольцо"],
+      "latitude": 56.035487,
+      "longitude": 92.832415,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:06:57Z"
+    },
+    {
+      "key": "dubrovinskogo-dekabristov",
+      "provider_camera_id": "c_100",
+      "title": "Дубровинского - Декабристов",
+      "aliases": ["Дубровинского Декабристов", "набережная Дубровинского", "Декабристов", "набережная Енисея"],
+      "latitude": 56.0045884656,
+      "longitude": 92.8479931667,
+      "status": "working",
+      "last_verified_at": "2026-08-16T09:07:05Z"
+    }
+  ]
+}

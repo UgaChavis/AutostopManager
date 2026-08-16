@@ -12,7 +12,8 @@ only this route and de-identified technical verification.
 
 - Service: `autostop-telegram.service`.
 - CLI module: `autostop_manager.telegram_bridge` in
-  `/opt/autostop-telegram-venv` with `PYTHONPATH=/opt/AutostopManager`.
+  `/opt/autostop-telegram-venv` with the active immutable Manager release as
+  `PYTHONPATH` and working directory.
 - Credentials: root/service-controlled file under `/etc/autostop-telegram`.
 - Session: root/service-controlled SQLite file under
   `/var/lib/autostop-telegram`.
@@ -27,7 +28,7 @@ session contains the authorization key and can grant account access.
 Run commands as `autostop-telegram`; return only bounded, task-relevant fields.
 
 ```bash
-sudo -u autostop-telegram env PYTHONPATH=/opt/AutostopManager \
+sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-manager-releases/current \
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status
 ```
 
@@ -42,6 +43,8 @@ Current write surface:
 
 - `send --peer ID --text TEXT --mode dry_run`
 - `send --peer ID --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
+- `send-photo --peer ID --file /run/autostop-telegram/outbox/NAME.jpg --caption TEXT --mode dry_run`
+- `send-photo --peer ID --file ... --caption TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
 
 Use the local daemon for normal work. Do not open the same SQLite session with
 a second Telethon client while the daemon is active. Stop the daemon only for a
@@ -85,6 +88,15 @@ message text or clearly delegates wording in the active request.
 If the apply response times out or is lost, outcome is unknown. Do not issue a
 new key or resend. First read the exact target and reconcile the full outgoing
 text; resend only after confirmed absence. This rule prevents duplicates.
+
+Photo sends follow the same exact-target, dry-run/apply, unchanged contract,
+fresh idempotency, and independent readback sequence. Stage only one JPEG in
+the service-owned mode-0700 `/run/autostop-telegram/outbox` directory; the file
+must be service-owned mode 0600, at most 10 MiB, and have an explicit caption.
+Do not accept a symlink, relative path, another directory, video, document, or
+arbitrary media type. After verified delivery, unlink that exact staged copy;
+on an unknown outcome, retain it only until the dialog is reconciled. Never
+use a real photo send as a health check.
 
 ## QR And 2FA Recovery
 

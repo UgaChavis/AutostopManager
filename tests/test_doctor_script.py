@@ -54,7 +54,8 @@ def test_doctor_script_syntax_and_readiness_checks():
     assert "manager environment report" in content
     assert "crm playwright version" in content
     assert "nginx config" in content
-    assert "production watchdog timer active" in content
+    assert "production watchdog timer disabled" in content
+    assert "production watchdog timer inactive" in content
     assert "check_agent_gateway_v2.py" in content
     assert "crm local Gateway v2" in content
     assert "crm public Gateway v2" in content

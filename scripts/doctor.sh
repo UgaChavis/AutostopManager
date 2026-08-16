@@ -169,7 +169,10 @@ if [[ -f "$CRM_ROOT/docker-compose.yml" ]]; then
 fi
 run "nginx config" nginx -t
 if systemctl show autostopcrm-watchdog.timer --property=LoadState --value --no-pager | grep -qx loaded; then
-  run "production watchdog timer active" systemctl is-active --quiet autostopcrm-watchdog.timer
+  run "production watchdog timer disabled" bash -c \
+    'systemctl is-enabled autostopcrm-watchdog.timer 2>/dev/null | grep -qx disabled'
+  run "production watchdog timer inactive" bash -c \
+    'systemctl is-active autostopcrm-watchdog.timer 2>/dev/null | grep -qx inactive'
   run "production watchdog service unit present" bash -c 'systemctl show autostopcrm-watchdog.service --property=LoadState --value | grep -qx loaded'
 else
   skip "production watchdog timer not installed"

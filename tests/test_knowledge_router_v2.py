@@ -74,6 +74,47 @@ def test_remote_windows_management_routes_to_managed_pc_playbook(tmp_path):
     assert result["command_route"]["command_id"] == "remote_codex_access"
 
 
+def test_private_home_camera_routes_separately_from_public_camera(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    private_result = probe_knowledge_base(store, "Сними фото с домашней камеры Tapo C225", limit=5)
+    ptz_result = probe_knowledge_base(store, "Поверни домашнюю камеру вправо и проверь машину", limit=5)
+    public_route = find_command_route("Семафорная 185")
+
+    assert private_result["best_domain"] == "home_camera"
+    assert private_result["open_first"] == "docs/agent/home_camera_playbook.md"
+    assert private_result["command_route"]["command_id"] == "home_tapo_camera"
+    assert ptz_result["best_domain"] == "home_camera"
+    assert ptz_result["command_route"]["command_id"] == "home_tapo_camera"
+    assert public_route is not None
+    assert public_route["command_id"] == "public_city_camera"
+
+
+def test_telegram_photo_send_routes_to_private_bridge_workflow():
+    route = find_command_route("отправь фото в Telegram")
+
+    assert route is not None
+    assert route["command_id"] == "telegram_owner_operations"
+    assert route["write_domains"] == ["telegram_message_or_photo_only_when_explicitly_authorized"]
+
+
+def test_public_camera_address_and_landmark_queries_do_not_route_to_parts(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    for query in (
+        "пришли фотографию с публичной камеры у БКЗ",
+        "покажи наружную камеру на 9 Мая",
+        "снимок улицы с камеры на Предмостной площади",
+    ):
+        result = probe_knowledge_base(store, query, limit=5)
+
+        assert result["best_domain"] == "public_camera", query
+        assert result["open_first"] == ".agents/skills/capture-public-camera/SKILL.md", query
+        assert result["command_route"]["command_id"] == "public_city_camera", query
+
+
 def test_generic_documentation_cleanup_word_is_not_board_cleanup_hint():
     hints = knowledge_base._domain_hints("documentation cleanup for AutostopManager")
 
