@@ -141,6 +141,7 @@ def search_partsapi_category_index(
     limit: int = 8,
 ) -> dict[str, Any]:
     index = load_partsapi_category_index(path)
+    limit = max(limit, 0)
     rows = []
     for row in index.get("categories", []):
         score = _score_category(row, query=query, intent_id=intent_id)

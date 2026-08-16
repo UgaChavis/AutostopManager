@@ -1427,6 +1427,36 @@ def _validate_agent_learning_lesson(value: str, *, allow_empty: bool = False) ->
     return text
 
 
+def _validate_durable_memory_text(value: Any, *, allow_empty: bool = False) -> str | None:
+    """Keep user-facing memory free of direct identifiers and credentials.
+
+    Unlike the learning ledger, normal memory may contain ordinary natural
+    language and durable routing guidance.  It must nevertheless never become
+    a store for copied CRM, email, financial, or credential values.
+    """
+
+    text = str(value or "").strip()
+    if not text:
+        return "" if allow_empty else None
+    if len(text) > 4096 or _looks_like_sensitive_learning_value(text):
+        return None
+    return text
+
+
+def _validate_durable_memory_tags(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        return None
+    result: list[str] = []
+    for value in values[:100]:
+        normalized = _validate_durable_memory_text(value)
+        if normalized is None:
+            return None
+        result.append(normalized)
+    return list(dict.fromkeys(result))
+
+
 def _tokens(value: str) -> list[str]:
     aliases = {
         "вин": ["vin"],
@@ -2333,6 +2363,16 @@ class ManagerMemoryStore:
         sensitivity: str = "normal",
     ) -> dict[str, Any]:
         self.initialize()
+        normalized_content = _validate_durable_memory_text(content)
+        normalized_title = _validate_durable_memory_text(title, allow_empty=True)
+        normalized_category = _validate_durable_memory_text(category)
+        normalized_source = _validate_durable_memory_text(source)
+        normalized_tags = _validate_durable_memory_tags(tags)
+        if (
+            None in {normalized_content, normalized_title, normalized_category, normalized_source}
+            or normalized_tags is None
+        ):
+            return {"ok": False, "error": "unsafe_durable_memory_value"}
         now = _now()
         table = "facts" if kind == "fact" else "notes"
         importance = _clamp01(importance)
@@ -2347,15 +2387,15 @@ class ManagerMemoryStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        content,
-                        category,
-                        source,
+                        normalized_content,
+                        normalized_category,
+                        normalized_source,
                         float(confidence),
                         float(importance),
                         expires_at,
                         supersedes_id,
                         sensitivity,
-                        _json_list(tags),
+                        _json_list(normalized_tags),
                         now,
                         now,
                     ),
@@ -2370,15 +2410,15 @@ class ManagerMemoryStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        title,
-                        content,
-                        category,
-                        source,
+                        normalized_title,
+                        normalized_content,
+                        normalized_category,
+                        normalized_source,
                         float(importance),
                         expires_at,
                         supersedes_id,
                         sensitivity,
-                        _json_list(tags),
+                        _json_list(normalized_tags),
                         now,
                         now,
                     ),
@@ -2405,6 +2445,28 @@ class ManagerMemoryStore:
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         self.initialize()
+        normalized_content = _validate_durable_memory_text(content)
+        normalized_title = _validate_durable_memory_text(title, allow_empty=True)
+        normalized_applies_to = _validate_durable_memory_text(applies_to)
+        normalized_signal = _validate_durable_memory_text(signal)
+        normalized_recommendation = _validate_durable_memory_text(recommendation, allow_empty=True)
+        normalized_avoid = _validate_durable_memory_text(avoid, allow_empty=True)
+        normalized_source = _validate_durable_memory_text(source)
+        normalized_tags = _validate_durable_memory_tags(tags)
+        if (
+            None
+            in {
+                normalized_content,
+                normalized_title,
+                normalized_applies_to,
+                normalized_signal,
+                normalized_recommendation,
+                normalized_avoid,
+                normalized_source,
+            }
+            or normalized_tags is None
+        ):
+            return {"ok": False, "error": "unsafe_durable_memory_value"}
         now = _now()
         importance = _clamp01(importance)
         confidence = _clamp01(confidence)
@@ -2418,16 +2480,16 @@ class ManagerMemoryStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    title,
-                    content,
-                    applies_to,
-                    signal,
-                    recommendation,
-                    avoid,
+                    normalized_title,
+                    normalized_content,
+                    normalized_applies_to,
+                    normalized_signal,
+                    normalized_recommendation,
+                    normalized_avoid,
                     importance,
                     confidence,
-                    source,
-                    _json_list(tags),
+                    normalized_source,
+                    _json_list(normalized_tags),
                     now,
                     now,
                 ),
@@ -2437,8 +2499,8 @@ class ManagerMemoryStore:
             "kind": "lesson",
             "id": cursor.lastrowid,
             "created_at": now,
-            "applies_to": applies_to,
-            "signal": signal,
+            "applies_to": normalized_applies_to,
+            "signal": normalized_signal,
             "importance": importance,
             "confidence": confidence,
         }

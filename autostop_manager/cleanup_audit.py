@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 from collections import Counter
@@ -209,14 +210,13 @@ def _project_footprint(root: Path) -> dict[str, Any]:
 def _git_tracked_paths(root: Path) -> list[str]:
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), "ls-files"],
+            ["git", "-C", str(root), "ls-files", "-z"],
             check=True,
             capture_output=True,
-            text=True,
         )
     except (OSError, subprocess.CalledProcessError):
         return []
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return _git_nul_paths(completed.stdout)
 
 
 def _git_diff_numstat(root: Path) -> list[tuple[str, int, int]]:
@@ -230,17 +230,16 @@ def _git_diff_numstat(root: Path) -> list[tuple[str, int, int]]:
         if Path(repo_root).resolve() != root.resolve():
             raise subprocess.CalledProcessError(1, "git-root-mismatch")
         completed = subprocess.run(
-            ["git", "-C", str(root), "diff", "--numstat", "HEAD"],
+            ["git", "-C", str(root), "diff", "--numstat", "-z", "HEAD"],
             check=True,
             capture_output=True,
-            text=True,
         )
     except (OSError, subprocess.CalledProcessError):
         diff_output = ""
     else:
-        diff_output = completed.stdout
+        diff_output = os.fsdecode(completed.stdout)
     rows: list[tuple[str, int, int]] = []
-    for line in diff_output.splitlines():
+    for line in diff_output.split("\0"):
         added, separator, remainder = line.partition("\t")
         if not separator:
             continue
@@ -482,14 +481,17 @@ def _referenced_agent_paths(root: Path) -> set[str]:
 def _git_untracked_paths(root: Path) -> list[str]:
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard"],
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
             check=True,
             capture_output=True,
-            text=True,
         )
     except (OSError, subprocess.CalledProcessError):
         return []
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return _git_nul_paths(completed.stdout)
+
+
+def _git_nul_paths(output: bytes) -> list[str]:
+    return [os.fsdecode(path) for path in output.split(b"\0") if path]
 
 
 def _source_pack_root(source_cache: Path, path: Path) -> Path:

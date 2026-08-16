@@ -26,6 +26,13 @@ def test_category_index_search_and_validate_are_safe():
     assert validation["privacy"]["secret_exposed"] is False
 
 
+def test_category_index_search_rejects_negative_limit():
+    search = search_partsapi_category_index("стойка стабилизатора", limit=-1)
+
+    assert search["count"] == 0
+    assert search["matches"] == []
+
+
 def test_category_index_loader_handles_invalid_payload(tmp_path):
     index_path = tmp_path / "partsapi_category_index.json"
     index_path.write_text("[]", encoding="utf-8")
@@ -61,7 +68,7 @@ def test_category_index_loader_handles_unreadable_payload(tmp_path, monkeypatch)
     index_path = tmp_path / "partsapi_category_index.json"
     index_path.write_text("{}", encoding="utf-8")
 
-    def fake_read_text(self, encoding="utf-8-sig"):
+    def fake_read_text(self, *args, **kwargs):
         raise OSError("permission denied")
 
     monkeypatch.setattr(type(index_path), "read_text", fake_read_text)

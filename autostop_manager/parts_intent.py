@@ -597,6 +597,9 @@ def normalize_part_intent(
     raw: str | None, *, axle: str | None = None, side: str | None = None, position: str | None = None
 ) -> dict[str, Any]:
     text = str(raw or "").strip()
+    axle = axle.strip() if axle else None
+    side = side.strip() if side else None
+    position = position.strip() if position else None
     lowered = text.casefold()
     matched = next((rule for rule in PART_INTENT_RULES if rule.matches(lowered)), None)
 

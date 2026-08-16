@@ -675,7 +675,7 @@ def test_agent_docs_do_not_expose_partsapi_test_keys_or_crm_contacts():
         re.compile(r"Тестовый ключ", re.IGNORECASE),
         re.compile(r"key=[0-9a-f]{30,}", re.IGNORECASE),
         re.compile(r"PARTSAPI_KEY=(?!<|\$|your|YOUR|xxx|\*)\S+", re.IGNORECASE),
-        re.compile(r"(?<!\d)(?:\+?7|8)\s?[\d\s() -]{9,18}"),
+        re.compile(r"(?<![\d.])(?:\+?7|8)\s?[\d\s() -]{9,18}"),
     ]
     for raw_path in tracked_docs:
         path = ROOT / raw_path

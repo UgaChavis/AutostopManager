@@ -44,6 +44,23 @@ def test_remember_clamps_importance_and_confidence(tmp_path):
     assert recalled["confidence"] == 1.0
 
 
+@pytest.mark.parametrize(
+    ("method", "kwargs"),
+    [
+        ("remember", {"content": "VIN JTEBU3FJX05027767"}),
+        ("remember", {"content": "Связаться по +7 999 123-45-67"}),
+        ("learn_from_feedback", {"content": "token=sk-secret-value"}),
+    ],
+)
+def test_durable_memory_rejects_sensitive_values_before_persistence(tmp_path, method, kwargs):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    result = getattr(store, method)(**kwargs)
+
+    assert result == {"ok": False, "error": "unsafe_durable_memory_value"}
+    assert store.recall()["items"] == []
+
+
 def test_recall_filters_and_scores_russian_memory(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 

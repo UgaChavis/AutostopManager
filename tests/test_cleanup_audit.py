@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 import autostop_manager.cleanup_audit as cleanup_audit_module
 from autostop_manager.cleanup_audit import build_cleanup_audit
 from autostop_manager.storage import ManagerMemoryStore
+
+
+def test_git_path_helpers_preserve_unicode_paths(monkeypatch, tmp_path):
+    def fake_run(command, **_kwargs):
+        if "--others" in command:
+            stdout = "отчёты/черновик.pdf\0".encode()
+        else:
+            stdout = "документы/правило.md\0ordinary.py\0".encode()
+        return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+    monkeypatch.setattr(cleanup_audit_module.subprocess, "run", fake_run)
+
+    assert cleanup_audit_module._git_tracked_paths(tmp_path) == ["документы/правило.md", "ordinary.py"]
+    assert cleanup_audit_module._git_untracked_paths(tmp_path) == ["отчёты/черновик.pdf"]
 
 
 def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
@@ -209,10 +224,10 @@ def test_cleanup_audit_handles_unreadable_knowledge_annotations(tmp_path, monkey
 
     original_read_text = cleanup_audit_module.Path.read_text
 
-    def fake_read_text(self, encoding="utf-8-sig", *args, **kwargs):
+    def fake_read_text(self, *args, **kwargs):
         if self == annotations_path:
             raise OSError("permission denied")
-        return original_read_text(self, *args, encoding=encoding, **kwargs)
+        return original_read_text(self, *args, **kwargs)
 
     monkeypatch.setattr(cleanup_audit_module.Path, "read_text", fake_read_text)
 

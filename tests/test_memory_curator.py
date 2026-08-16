@@ -6,6 +6,23 @@ from autostop_manager.memory_curator import audit_memory, curate_memory
 from autostop_manager.storage import ManagerMemoryStore
 
 
+def _insert_legacy_fact(store: ManagerMemoryStore, content: str, *, expires_at: str | None = None) -> int:
+    """Seed a pre-validation row so the audit still covers existing databases."""
+
+    store.initialize()
+    with store.connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO facts
+                (content, category, source, confidence, importance, expires_at, sensitivity, tags_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (content, "legacy", "migration_fixture", 1.0, 0.5, expires_at, "normal", "[]", "2026-01-01", "2026-01-01"),
+        )
+    assert cursor.lastrowid is not None
+    return int(cursor.lastrowid)
+
+
 def test_recall_ranks_tags_importance_and_priority_above_plain_recency(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.remember("Generic unrelated card cleanup note", title="old", tags=["misc"])
@@ -55,10 +72,10 @@ def test_memory_audit_finds_duplicates_expired_and_superseded(tmp_path):
 def test_memory_audit_does_not_return_raw_private_content(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sensitive = "Client email test@example.com phone +7 999 123-45-67 VIN WBA00000000000000"
-    store.remember(sensitive, kind="fact", title="private")
-    store.remember(sensitive, kind="fact", title="private")
-    store.remember(
-        "Temporary token sk-testsecret123456789 expires.", kind="fact", expires_at="2000-01-01T00:00:00+00:00"
+    _insert_legacy_fact(store, sensitive)
+    _insert_legacy_fact(store, sensitive)
+    _insert_legacy_fact(
+        store, "Temporary token sk-testsecret123456789 expires.", expires_at="2000-01-01T00:00:00+00:00"
     )
 
     result = audit_memory(store)
@@ -75,12 +92,12 @@ def test_memory_audit_does_not_return_raw_private_content(tmp_path):
 def test_memory_audit_flags_sensitive_candidates_without_exposing_content(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sensitive = "Client email test@example.com phone +7 999 123-45-67 VIN WBA00000000000000 C-ABCDEF12"
-    record = store.remember(sensitive, kind="fact", title="private")
+    record_id = _insert_legacy_fact(store, sensitive)
 
     result = audit_memory(store)
     rendered = json.dumps(result, ensure_ascii=False)
 
-    candidate = next(item for item in result["sensitive_candidates"] if item["id"] == record["id"])
+    candidate = next(item for item in result["sensitive_candidates"] if item["id"] == record_id)
     assert {"email", "phone", "vin", "crm_entity_ref"}.issubset(candidate["detectors"])
     assert candidate["content_included"] is False
     assert result["privacy"]["sensitive_candidate_content_redacted"] is True

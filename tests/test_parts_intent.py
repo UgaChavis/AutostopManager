@@ -59,6 +59,13 @@ def test_normalize_part_intent_unknown_keeps_search_text():
     assert result["clarification_required"] is True
 
 
+def test_normalize_part_intent_ignores_blank_position_context():
+    result = normalize_part_intent("редкая штука", axle="  ", side="\t", position="\n")
+
+    assert result["positions"] == []
+    assert result["clarification_required"] is True
+
+
 def test_normalize_part_intent_recognizes_current_crm_part_phrases():
     cases = {
         "свечи зажигания": "spark_plug",
