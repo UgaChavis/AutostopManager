@@ -37,7 +37,10 @@ Keep docs compact.
    `open_first` and only the returned sources before broader reads.
 3. Resolve `work` or `learning` mode. In learning mode use the
    `autostop-learning-loop` skill and finish its post-run review.
-4. For multi-step work use the Gateway v2 workflow ledger with compact,
+4. When the owner starts `режим директора`, `директор автосервиса`, or a
+   recurring director goal, load `.agents/skills/run-autostop-director/SKILL.md`
+   and `docs/agent/service_director_manifest.md` before live reads.
+5. For multi-step work use the Gateway v2 workflow ledger with compact,
    state-versioned checkpoints. Raw discovery is only for a capability not
    covered by a named workflow; a raw write requires its exact literal name,
    live schema hash and unique idempotency key.
@@ -111,6 +114,9 @@ bearer is internal compatibility only.
 
 ## Standing Routes
 
+- Director mode / recurring workshop goal ->
+  `.agents/skills/run-autostop-director/SKILL.md` and
+  `docs/agent/service_director_manifest.md`.
 - `Приберись` -> `docs/agent/board_cleanup_autopilot_playbook.md`.
 - CRM descriptions -> `docs/agent/crm_card_description_standard.md`.
 - `ready unpaid` / daily control ->

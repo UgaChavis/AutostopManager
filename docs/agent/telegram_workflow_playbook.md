@@ -151,7 +151,11 @@ state.
 ## Send Workflow
 
 A send is authorized only when the owner names the intended recipient and
-message text or clearly delegates wording in the active request.
+message text or clearly delegates recipient role, topic scope and wording in
+the active request. An active director goal governed by
+`service_director_manifest.md` is standing delegation only for its allowlisted
+internal roles and operational questions; it is not permission for clients,
+suppliers, financial commitments or general outreach.
 
 1. Search the target and resolve exactly one numeric peer ID. A positive ID is
    normally a private user; negative IDs are groups/channels. `kind` is the
@@ -169,6 +173,14 @@ message text or clearly delegates wording in the active request.
 If the apply response times out or is lost, outcome is unknown. Do not issue a
 new key or resend. First read the exact target and reconcile the full outgoing
 text; resend only after confirmed absence. This rule prevents duplicates.
+
+For a director follow-up, register the verified outgoing message as a refs-only
+`workflow_wait_for_external` Telegram step. Keep only IDs, timestamps, a safe
+purpose tag/hash and next-check time; never store the text. On later goal
+continuations read a small window of the exact chat, accept only a relevant
+message newer than the question, and complete/resume the workflow after the
+fact is sufficient. Do not busy-poll or use a long blocking sleep. One reminder
+is the default maximum before role escalation or owner review.
 
 Photo sends follow the same exact-target, dry-run/apply, unchanged contract,
 fresh idempotency, and independent readback sequence. Stage only one JPEG in

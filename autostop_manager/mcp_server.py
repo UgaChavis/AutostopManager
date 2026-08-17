@@ -13,7 +13,7 @@ def build_server() -> FastMCP:
             "Headless Agent Gateway, manager memory, workflow ledger, and source-routing layer for AutoStop CRM and AutoStop App. "
             "Start non-trivial CRM/store/Gmail work with agent_bootstrap, use the named workflow registry, "
             "prepare ActionContractV2 before writes, and keep resumable progress in the workflow lifecycle tools. "
-            "Gmail remains a separate connector: store only message/thread/file result references through complete_external_step, never bodies. "
+            "Gmail and Telegram remain separate connectors: store only message/thread/file result references through complete_external_step, never bodies or chat text. "
             "AutoStop App remains the store source of truth: use only its pure-read agent API, keep raw store payload out of Manager state, and expose store access through existing Gateway tools. "
             "Use these tools only for durable non-CRM/store memory, routing rules, technical cursors/compact refs, knowledge navigation, and knowledge intake. "
             "Probe the knowledge base first, then open the returned source-of-truth route before broad file reads when the task involves diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge. "

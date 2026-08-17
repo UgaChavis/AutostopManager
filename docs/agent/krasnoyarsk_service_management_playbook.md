@@ -4,16 +4,13 @@ Purpose: make the AutoStop manager useful beyond one vehicle card:
 parts procurement, repair routing, customer flow, staff management, finance
 control, CRM hygiene, and knowledge intake for a Krasnoyarsk workshop.
 
-## Daily Manager Loop
+## Director Mode
 
-1. Read `today_context`.
-2. Read CRM board context with `agent_bootstrap` and `agent_board_digest`.
-3. Check overdue cards, ready unpaid cars, parts-order columns, and cars in
-   repair zones with no recent event.
-4. For each blocker, decide whether the next action is parts, client approval,
-   technician assignment, diagnostic data, payment, or archive/ready state.
-5. Checkpoint meaningful changes in the Gateway v2 workflow; add a compact
-   schema-hashed raw `manager_journal` entry only for a durable conclusion.
+Autonomous recurring control, deep card-history analysis, prioritization,
+internal Telegram follow-up and goal continuation are owned only by
+`service_director_manifest.md` and the `run-autostop-director` skill. This file
+retains the workshop-domain reference for procurement, repair, staff, customer
+flow and finance control.
 
 ## Public Traffic Cameras
 

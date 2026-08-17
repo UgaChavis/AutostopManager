@@ -14,6 +14,7 @@ Store or web access when the question does not need them.
 | Learning | `intelligent_agent_learning` | `docs/agent/intelligent_agent_learning_playbook.md` |
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
+| Service director | `service_director` | `.agents/skills/run-autostop-director/SKILL.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
 | Store/analytics *(paused until explicit reauthorization)* | `store_management`, `store_analytics_reporting` | `docs/agent/store_management_playbook.md` |
 | Gmail | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` |

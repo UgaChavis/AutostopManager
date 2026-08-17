@@ -1193,7 +1193,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="workflow_wait_for_external",
         description=(
-            "Register a refs-only step for a separate connector such as Gmail and move the workflow to external_wait. "
+            "Register a refs-only step for a separate connector such as Gmail or Telegram and move the workflow to external_wait. "
             "Use expected_state_version compare-and-swap; message bodies, snippets, and raw content are rejected."
         ),
     )
@@ -1221,7 +1221,7 @@ def register_manager_memory_tools(  # noqa: C901
         name="complete_external_step",
         description=(
             "Complete one external connector step with message/thread/draft/attachment/file IDs and timestamps only. "
-            "Use expected_state_version compare-and-swap and never store raw Gmail bodies in the manager ledger."
+            "Use expected_state_version compare-and-swap and never store raw Gmail or Telegram content in the manager ledger."
         ),
     )
     def complete_external_step_tool(
@@ -1253,7 +1253,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="workflow_cancel",
         description=(
-            "Cancel a non-terminal workflow with expected_state_version compare-and-swap without changing CRM or Gmail state."
+            "Cancel a non-terminal workflow with expected_state_version compare-and-swap without changing CRM, Gmail, or Telegram state."
         ),
     )
     def workflow_cancel_tool(

@@ -195,6 +195,27 @@ def test_every_command_route_has_gateway_v2_execution_contract():
         assert route["completion_checks"]
 
 
+def test_service_director_mode_has_one_canonical_route_and_guarded_autonomy():
+    manifest = (ROOT / "docs" / "agent" / "service_director_manifest.md").read_text(encoding="utf-8")
+    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
+    command_routes = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
+    rules = json.loads((ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8"))
+
+    assert "Полный управленческий обзор" in manifest
+    assert "workflow_wait_for_external" in manifest
+    assert "get_card_log" in manifest
+    assert "Циклическую директорскую цель завершать только по команде владельца" in manifest
+    director_domain = knowledge_map["domains"]["service_director"]
+    assert director_domain["skill_path"] == ".agents/skills/run-autostop-director/SKILL.md"
+    director_route = next(
+        route for route in command_routes["routes"] if route["command_id"] == "service_director_cycle"
+    )
+    assert director_route["open_first"] == ".agents/skills/run-autostop-director/SKILL.md"
+    assert "owner Telegram bridge for bounded internal operational questions" in director_route["external_connectors"]
+    director_rule = next(rule for rule in rules["rules"] if rule["id"] == "service-director-autonomy")
+    assert "Financial actions" in director_rule["rule"]
+
+
 def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
     manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
     crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
