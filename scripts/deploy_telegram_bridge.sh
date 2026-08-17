@@ -57,30 +57,45 @@ rollback() {
     ln -s "${previous_release}" "${rollback_link}"
     mv -Tf -- "${rollback_link}" "${current_link}"
     systemctl restart autostop-telegram.service || true
+    return 0
   fi
+  return 1
 }
 
 if ! systemctl restart autostop-telegram.service; then
-  rollback
-  echo "ERROR: Telegram service restart failed; previous release restored" >&2
+  if rollback; then
+    echo "ERROR: Telegram service restart failed; previous release restored" >&2
+  else
+    echo "ERROR: Telegram service restart failed; no previous Telegram release exists" >&2
+  fi
   exit 1
 fi
-if ! systemctl is-active --quiet autostop-telegram.service; then
-  rollback
-  echo "ERROR: Telegram service is not active; previous release restored" >&2
-  exit 1
-fi
-if ! sudo -u autostop-telegram env PYTHONPATH="${current_link}" \
-  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status >/dev/null; then
-  rollback
-  echo "ERROR: Telegram bridge status failed; previous release restored" >&2
+bridge_ready=0
+for _attempt in $(seq 1 15); do
+  if systemctl is-active --quiet autostop-telegram.service \
+    && sudo -u autostop-telegram env PYTHONPATH="${current_link}" \
+      /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status >/dev/null; then
+    bridge_ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "${bridge_ready}" -ne 1 ]]; then
+  if rollback; then
+    echo "ERROR: Telegram bridge readiness failed; previous release restored" >&2
+  else
+    echo "ERROR: Telegram bridge readiness failed; no previous Telegram release exists" >&2
+  fi
   exit 1
 fi
 if ! sudo -u autostop-telegram env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
   /opt/autostop-telegram-venv/bin/python -c \
   'from autostop_manager.telegram_transcribe import DEFAULT_MODEL_DIR; from faster_whisper import WhisperModel; assert DEFAULT_MODEL_DIR.is_dir(); assert WhisperModel' ; then
-  rollback
-  echo "ERROR: local Telegram transcription runtime failed; previous release restored" >&2
+  if rollback; then
+    echo "ERROR: local Telegram transcription runtime failed; previous release restored" >&2
+  else
+    echo "ERROR: local Telegram transcription runtime failed; no previous Telegram release exists" >&2
+  fi
   exit 1
 fi
 
