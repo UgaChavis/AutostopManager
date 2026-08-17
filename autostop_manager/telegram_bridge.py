@@ -23,6 +23,7 @@ DEFAULT_SESSION_PATH = Path("/var/lib/autostop-telegram/account")
 DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
 DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
 DEFAULT_2FA_PASSWORD_PATH = Path("/run/autostop-telegram/2fa-password.once")
+DEFAULT_ROLE_BINDINGS_PATH = Path("/var/lib/autostop-telegram/director_roles.json")
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_MESSAGE_CHARS = 4096
 MAX_CAPTION_CHARS = 1024
@@ -46,6 +47,14 @@ DOWNLOAD_MIME_SUFFIXES = {
     "text/plain": ".txt",
 }
 SENSITIVE_URI_PATTERN = re.compile(r"(?i)\b(?:tg|vpn)://[^\s]+")
+DIRECTOR_ROLES = frozenset(
+    {
+        "director_admin",
+        "director_reception",
+        "director_workshop",
+    }
+)
+MAX_ROLE_BINDINGS_BYTES = 4096
 _MUTATION_LOCK = asyncio.Lock()
 
 
@@ -63,6 +72,7 @@ class TelegramConfig:
     session_path: Path = DEFAULT_SESSION_PATH
     state_dir: Path = DEFAULT_STATE_DIR
     socket_path: Path = DEFAULT_SOCKET_PATH
+    role_bindings_path: Path = DEFAULT_ROLE_BINDINGS_PATH
 
     @classmethod
     def load(
@@ -72,8 +82,9 @@ class TelegramConfig:
         session_path: Path = DEFAULT_SESSION_PATH,
         state_dir: Path = DEFAULT_STATE_DIR,
         socket_path: Path = DEFAULT_SOCKET_PATH,
+        role_bindings_path: Path = DEFAULT_ROLE_BINDINGS_PATH,
     ) -> TelegramConfig:
-        runtime_paths = (credentials_path, session_path, state_dir, socket_path)
+        runtime_paths = (credentials_path, session_path, state_dir, socket_path, role_bindings_path)
         if any(not path.is_absolute() for path in runtime_paths):
             raise BridgeError("runtime_path_not_absolute")
         if session_path.parent != state_dir:
@@ -118,6 +129,7 @@ class TelegramConfig:
             session_path=session_path,
             state_dir=state_dir,
             socket_path=socket_path,
+            role_bindings_path=role_bindings_path,
         )
 
 
@@ -131,6 +143,7 @@ def issue_send_contract(
     peer_id: int,
     text: str,
     last_message_id: int,
+    role: str | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -140,6 +153,8 @@ def issue_send_contract(
         "peer_id": int(peer_id),
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
     }
+    if role is not None:
+        payload["role"] = _validate_role(role)
     encoded = base64.urlsafe_b64encode(_canonical_json(payload)).rstrip(b"=")
     signature = hmac.new(secret, encoded, hashlib.sha256).digest()
     return f"{encoded.decode('ascii')}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
@@ -151,6 +166,7 @@ def verify_send_contract(
     *,
     peer_id: int,
     text: str,
+    role: str | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     try:
@@ -172,6 +188,10 @@ def verify_send_contract(
         raise BridgeError("contract_invalid")
     if payload.get("peer_id") != int(peer_id):
         raise BridgeError("contract_target_changed")
+    if role is None and "role" in payload:
+        raise BridgeError("contract_role_required")
+    if role is not None and payload.get("role") != _validate_role(role):
+        raise BridgeError("contract_role_changed")
     if payload.get("text_sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
         raise BridgeError("contract_text_changed")
     issued_at = payload.get("issued_at")
@@ -181,6 +201,67 @@ def verify_send_contract(
         raise BridgeError("contract_expired")
     if not isinstance(payload.get("last_message_id"), int):
         raise BridgeError("contract_invalid")
+    return payload
+
+
+def issue_role_binding_contract(
+    secret: bytes,
+    *,
+    role: str,
+    peer_id: int,
+    replace: bool,
+    now: int | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else int(now)
+    payload = {
+        "issued_at": issued_at,
+        "peer_id": int(peer_id),
+        "replace": bool(replace),
+        "role": _validate_role(role),
+        "type": "role_binding",
+    }
+    encoded = base64.urlsafe_b64encode(_canonical_json(payload)).rstrip(b"=")
+    signature = hmac.new(secret, encoded, hashlib.sha256).digest()
+    return f"{encoded.decode('ascii')}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
+def verify_role_binding_contract(
+    token: str,
+    secret: bytes,
+    *,
+    role: str,
+    peer_id: int,
+    replace: bool,
+    now: int | None = None,
+) -> dict[str, Any]:
+    try:
+        encoded_raw, signature_raw = token.split(".", 1)
+        encoded = encoded_raw.encode("ascii")
+        signature = base64.urlsafe_b64decode(signature_raw + "=" * (-len(signature_raw) % 4))
+        expected = hmac.new(secret, encoded, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise BridgeError("contract_invalid")
+        decoded = base64.urlsafe_b64decode(encoded_raw + "=" * (-len(encoded_raw) % 4))
+        payload = json.loads(decoded)
+    except BridgeError:
+        raise
+    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BridgeError("contract_invalid") from exc
+
+    current_time = int(time.time()) if now is None else int(now)
+    if not isinstance(payload, dict) or payload.get("type") != "role_binding":
+        raise BridgeError("contract_invalid")
+    if payload.get("role") != _validate_role(role):
+        raise BridgeError("contract_role_changed")
+    if payload.get("peer_id") != int(peer_id):
+        raise BridgeError("contract_target_changed")
+    if payload.get("replace") is not bool(replace):
+        raise BridgeError("contract_replace_changed")
+    issued_at = payload.get("issued_at")
+    if not isinstance(issued_at, int) or issued_at > current_time + 60:
+        raise BridgeError("contract_invalid")
+    if current_time - issued_at > CONTRACT_TTL_SECONDS:
+        raise BridgeError("contract_expired")
     return payload
 
 
@@ -308,6 +389,49 @@ def verify_download_contract(
     if current_time - issued_at > CONTRACT_TTL_SECONDS:
         raise BridgeError("contract_expired")
     return payload
+
+
+def _validate_role(value: str) -> str:
+    role = str(value or "").strip()
+    if role not in DIRECTOR_ROLES:
+        raise BridgeError("role_invalid")
+    return role
+
+
+def validate_role_request(request: dict[str, Any]) -> str:
+    return _validate_role(str(request.get("role") or ""))
+
+
+def validate_bind_role_request(request: dict[str, Any]) -> tuple[str, str, str, str, bool]:
+    role = validate_role_request(request)
+    peer = str(request.get("peer") or "").strip()
+    mode = str(request.get("mode") or "dry_run")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    raw_replace = request.get("replace", False)
+    if not isinstance(raw_replace, bool):
+        raise BridgeError("replace_invalid")
+    replace = raw_replace
+    if not peer:
+        raise BridgeError("peer_required")
+    if mode not in {"dry_run", "apply"}:
+        raise BridgeError("mode_invalid")
+    if mode == "apply" and not idempotency_key:
+        raise BridgeError("idempotency_key_required")
+    return role, peer, mode, idempotency_key, replace
+
+
+def validate_send_role_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
+    role = validate_role_request(request)
+    text = str(request.get("text") or "")
+    mode = str(request.get("mode") or "dry_run")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    if not text or len(text) > MAX_MESSAGE_CHARS:
+        raise BridgeError("message_length_invalid")
+    if mode not in {"dry_run", "apply"}:
+        raise BridgeError("mode_invalid")
+    if mode == "apply" and not idempotency_key:
+        raise BridgeError("idempotency_key_required")
+    return role, text, mode, idempotency_key
 
 
 def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
@@ -719,6 +843,80 @@ def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def _validate_role_bindings_payload(payload: Any) -> dict[str, int]:
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise BridgeError("role_bindings_invalid")
+    raw_roles = payload.get("roles")
+    if not isinstance(raw_roles, dict) or any(role not in DIRECTOR_ROLES for role in raw_roles):
+        raise BridgeError("role_bindings_invalid")
+    bindings: dict[str, int] = {}
+    for raw_role, raw_peer_id in raw_roles.items():
+        role = _validate_role(str(raw_role))
+        if isinstance(raw_peer_id, bool) or not isinstance(raw_peer_id, int) or raw_peer_id == 0:
+            raise BridgeError("role_bindings_invalid")
+        bindings[role] = raw_peer_id
+    if len(set(bindings.values())) != len(bindings):
+        raise BridgeError("role_bindings_invalid")
+    return bindings
+
+
+def _load_role_bindings(path: Path) -> dict[str, int]:
+    if not path.is_absolute():
+        raise BridgeError("role_bindings_path_invalid")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise BridgeError("role_bindings_unavailable") from exc
+    try:
+        file_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(file_stat.st_mode) != 0o600
+            or not 0 < file_stat.st_size <= MAX_ROLE_BINDINGS_BYTES
+        ):
+            raise BridgeError("role_bindings_invalid")
+        raw = os.read(descriptor, MAX_ROLE_BINDINGS_BYTES + 1)
+        if len(raw) > MAX_ROLE_BINDINGS_BYTES:
+            raise BridgeError("role_bindings_invalid")
+        payload = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BridgeError("role_bindings_unreadable") from exc
+    finally:
+        os.close(descriptor)
+    return _validate_role_bindings_payload(payload)
+
+
+def _save_role_bindings(path: Path, bindings: dict[str, int]) -> None:
+    normalized = _validate_role_bindings_payload({"version": 1, "roles": bindings})
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_stat = path.parent.stat()
+    if parent_stat.st_uid != os.geteuid() or stat.S_IMODE(parent_stat.st_mode) & 0o077:
+        raise BridgeError("role_bindings_directory_invalid")
+    temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        descriptor = os.open(
+            temp_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                {"version": 1, "roles": normalized},
+                stream,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def _target_from_entity(entity: Any, utils: Any) -> dict[str, Any]:
     title = (
         getattr(entity, "title", None)
@@ -742,6 +940,7 @@ def _target_from_entity(entity: Any, utils: Any) -> dict[str, Any]:
         "title": str(title),
         "username": getattr(entity, "username", None),
         "kind": kind,
+        "is_contact": bool(getattr(entity, "contact", False)),
     }
 
 
@@ -766,7 +965,6 @@ async def _search_entities(client: Any, query: str, limit: int) -> list[tuple[An
         seen.add(target["id"])
         target["exact_title"] = title == normalized
         target["exact_username"] = username == normalized.lstrip("@")
-        target["is_contact"] = bool(getattr(entity, "contact", False))
         matches.append((entity, target))
     matches.sort(
         key=lambda item: (
@@ -799,6 +997,31 @@ async def _resolve_peer(client: Any, raw_peer: str) -> tuple[Any, dict[str, Any]
             raise BridgeError("peer_ambiguous")
         entity = matches[0]
     return entity, _target_from_entity(entity, utils)
+
+
+def _safe_role_target(role: str, target: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "bound": True,
+        "is_contact": bool(target.get("is_contact")),
+        "kind": str(target.get("kind") or "unknown"),
+        "role": _validate_role(role),
+    }
+
+
+async def _resolve_role(
+    client: Any,
+    config: TelegramConfig,
+    role: str,
+) -> tuple[Any, dict[str, Any]]:
+    normalized_role = _validate_role(role)
+    bindings = _load_role_bindings(config.role_bindings_path)
+    peer_id = bindings.get(normalized_role)
+    if peer_id is None:
+        raise BridgeError("role_not_bound")
+    entity, target = await _resolve_peer(client, str(peer_id))
+    if target.get("id") != peer_id or target.get("kind") != "private" or target.get("is_contact") is not True:
+        raise BridgeError("role_binding_invalid")
+    return entity, target
 
 
 async def _last_message_id(client: Any, entity: Any) -> int:
@@ -997,6 +1220,177 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
     }
 
 
+async def _handle_send_text_to_entity(
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+    *,
+    entity: Any,
+    target: dict[str, Any],
+    text: str,
+    mode: str,
+    idempotency_key: str,
+    role: str | None = None,
+) -> dict[str, Any]:
+    last_message_id = await _last_message_id(client, entity)
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    response_target = _safe_role_target(role, target) if role is not None else target
+    if mode == "dry_run":
+        return {
+            "ok": True,
+            "mode": "dry_run",
+            "target": response_target,
+            "message_chars": len(text),
+            "text_sha256": text_sha256,
+            "last_message_id": last_message_id,
+            "contract_token": issue_send_contract(
+                contract_key,
+                peer_id=target["id"],
+                text=text,
+                last_message_id=last_message_id,
+                role=role,
+            ),
+        }
+
+    contract_token = str(request.get("contract_token") or "")
+    if not contract_token:
+        raise BridgeError("contract_required")
+    contract = verify_send_contract(
+        contract_token,
+        contract_key,
+        peer_id=target["id"],
+        text=text,
+        role=role,
+    )
+    if contract["last_message_id"] != last_message_id:
+        raise BridgeError("conversation_changed_since_dry_run")
+
+    idempotency_path = config.state_dir / "idempotency.json"
+    idempotency = _load_idempotency(idempotency_path)
+    previous = idempotency.get(idempotency_key)
+    if previous is not None:
+        if (
+            previous.get("operation") not in {None, "send_text"}
+            or previous.get("peer_id") != target["id"]
+            or previous.get("text_sha256") != text_sha256
+            or previous.get("role") != role
+        ):
+            raise BridgeError("idempotency_key_conflict")
+        return {
+            "ok": True,
+            "mode": "apply",
+            "replayed": True,
+            "target": response_target,
+            "message_id": previous.get("message_id"),
+        }
+
+    sent = await client.send_message(entity, text)
+    idempotency[idempotency_key] = {
+        "operation": "send_text",
+        "message_id": int(sent.id),
+        "peer_id": target["id"],
+        "role": role,
+        "text_sha256": text_sha256,
+    }
+    _save_idempotency(idempotency_path, idempotency)
+    readback = await client.get_messages(entity, ids=int(sent.id))
+    if readback is None or str(readback.message or "") != text:
+        raise BridgeError("send_readback_failed")
+    return {
+        "ok": True,
+        "mode": "apply",
+        "replayed": False,
+        "target": response_target,
+        "message_id": int(sent.id),
+        "verified": True,
+    }
+
+
+async def _handle_bind_role(
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    role, peer, mode, idempotency_key, replace = validate_bind_role_request(request)
+    _entity, target = await _resolve_peer(client, peer)
+    if target.get("kind") != "private" or target.get("is_contact") is not True:
+        raise BridgeError("role_candidate_invalid")
+    peer_id = int(target["id"])
+    bindings = _load_role_bindings(config.role_bindings_path)
+    existing_peer_id = bindings.get(role)
+    if existing_peer_id is not None and existing_peer_id != peer_id and not replace:
+        raise BridgeError("role_already_bound")
+    if any(bound_role != role and bound_peer_id == peer_id for bound_role, bound_peer_id in bindings.items()):
+        raise BridgeError("peer_already_bound")
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    if mode == "dry_run":
+        return {
+            "ok": True,
+            "mode": "dry_run",
+            "role": role,
+            "target": _safe_role_target(role, target),
+            "replace": replace,
+            "contract_token": issue_role_binding_contract(
+                contract_key,
+                role=role,
+                peer_id=peer_id,
+                replace=replace,
+            ),
+        }
+
+    contract_token = str(request.get("contract_token") or "")
+    if not contract_token:
+        raise BridgeError("contract_required")
+    verify_role_binding_contract(
+        contract_token,
+        contract_key,
+        role=role,
+        peer_id=peer_id,
+        replace=replace,
+    )
+    idempotency_path = config.state_dir / "idempotency.json"
+    idempotency = _load_idempotency(idempotency_path)
+    previous = idempotency.get(idempotency_key)
+    if previous is not None:
+        if (
+            previous.get("operation") != "bind_role"
+            or previous.get("role") != role
+            or previous.get("peer_id") != peer_id
+        ):
+            raise BridgeError("idempotency_key_conflict")
+        return {"ok": True, "mode": "apply", "replayed": True, "role": role, "verified": True}
+    bindings[role] = peer_id
+    _save_role_bindings(config.role_bindings_path, bindings)
+    idempotency[idempotency_key] = {
+        "operation": "bind_role",
+        "peer_id": peer_id,
+        "role": role,
+    }
+    _save_idempotency(idempotency_path, idempotency)
+    rebound = _load_role_bindings(config.role_bindings_path)
+    if rebound.get(role) != peer_id:
+        raise BridgeError("role_binding_readback_failed")
+    return {"ok": True, "mode": "apply", "replayed": False, "role": role, "verified": True}
+
+
+async def _handle_roles(client: Any, config: TelegramConfig) -> dict[str, Any]:
+    bindings = _load_role_bindings(config.role_bindings_path)
+    rows = []
+    for role in sorted(DIRECTOR_ROLES):
+        row = {"role": role, "bound": role in bindings, "verified": False}
+        if row["bound"]:
+            try:
+                _entity, target = await _resolve_role(client, config, role)
+            except BridgeError:
+                row["error"] = "role_binding_invalid"
+            else:
+                row["verified"] = True
+                row["kind"] = target["kind"]
+        rows.append(row)
+    return {"ok": True, "roles": rows}
+
+
 async def _handle_operation(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
     operation = str(request.get("operation") or "")
     if operation == "status":
@@ -1032,6 +1426,9 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
         matches = await _search_entities(client, query, limit)
         return {"ok": True, "query": query, "matches": [target for _, target in matches]}
 
+    if operation == "roles":
+        return await _handle_roles(client, config)
+
     if operation == "read":
         peer = str(request.get("peer") or "").strip()
         if not peer:
@@ -1059,77 +1456,62 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
             )
         return {"ok": True, "target": target, "messages": rows}
 
+    if operation == "read_role":
+        role = validate_role_request(request)
+        limit = max(1, min(int(request.get("limit") or 20), 100))
+        entity, target = await _resolve_role(client, config, role)
+        messages = await client.get_messages(entity, limit=limit)
+        rows = []
+        for message in reversed(messages):
+            text, sensitive_content_redacted = redact_sensitive_message_text(str(message.message or ""))
+            rows.append(
+                {
+                    "id": int(message.id),
+                    "date": message.date.isoformat() if message.date else None,
+                    "out": bool(message.out),
+                    "text": text,
+                    "sensitive_content_redacted": sensitive_content_redacted,
+                    "media_type": type(message.media).__name__ if message.media is not None else None,
+                    "media": {
+                        key: value for key, value in _message_media_metadata(message).items() if key != "fingerprint"
+                    }
+                    if message.media is not None
+                    else None,
+                }
+            )
+        return {"ok": True, "target": _safe_role_target(role, target), "messages": rows}
+
     if operation == "send":
         peer, text, mode, idempotency_key = validate_send_request(request)
         entity, target = await _resolve_peer(client, peer)
-        last_message_id = await _last_message_id(client, entity)
-        contract_key = _ensure_private_key(config.state_dir / "contract.key")
-        text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        if mode == "dry_run":
-            return {
-                "ok": True,
-                "mode": "dry_run",
-                "target": target,
-                "message_chars": len(text),
-                "text_sha256": text_sha256,
-                "last_message_id": last_message_id,
-                "contract_token": issue_send_contract(
-                    contract_key,
-                    peer_id=target["id"],
-                    text=text,
-                    last_message_id=last_message_id,
-                ),
-            }
-
-        contract_token = str(request.get("contract_token") or "")
-        if not contract_token:
-            raise BridgeError("contract_required")
-        contract = verify_send_contract(
-            contract_token,
-            contract_key,
-            peer_id=target["id"],
+        return await _handle_send_text_to_entity(
+            client,
+            config,
+            request,
+            entity=entity,
+            target=target,
             text=text,
+            mode=mode,
+            idempotency_key=idempotency_key,
         )
-        if contract["last_message_id"] != last_message_id:
-            raise BridgeError("conversation_changed_since_dry_run")
 
-        idempotency_path = config.state_dir / "idempotency.json"
-        idempotency = _load_idempotency(idempotency_path)
-        previous = idempotency.get(idempotency_key)
-        if previous is not None:
-            if (
-                previous.get("operation") not in {None, "send_text"}
-                or previous.get("peer_id") != target["id"]
-                or previous.get("text_sha256") != text_sha256
-            ):
-                raise BridgeError("idempotency_key_conflict")
-            return {
-                "ok": True,
-                "mode": "apply",
-                "replayed": True,
-                "target": target,
-                "message_id": previous.get("message_id"),
-            }
+    if operation == "send_role":
+        role, text, mode, idempotency_key = validate_send_role_request(request)
+        entity, target = await _resolve_role(client, config, role)
+        return await _handle_send_text_to_entity(
+            client,
+            config,
+            request,
+            entity=entity,
+            target=target,
+            text=text,
+            mode=mode,
+            idempotency_key=idempotency_key,
+            role=role,
+        )
 
-        sent = await client.send_message(entity, text)
-        idempotency[idempotency_key] = {
-            "operation": "send_text",
-            "message_id": int(sent.id),
-            "peer_id": target["id"],
-            "text_sha256": text_sha256,
-        }
-        _save_idempotency(idempotency_path, idempotency)
-        readback = await client.get_messages(entity, ids=int(sent.id))
-        if readback is None or str(readback.message or "") != text:
-            raise BridgeError("send_readback_failed")
-        return {
-            "ok": True,
-            "mode": "apply",
-            "replayed": False,
-            "target": target,
-            "message_id": int(sent.id),
-            "verified": True,
-        }
+    if operation == "bind_role":
+        return await _handle_bind_role(client, config, request)
 
     if operation == "send_photo":
         return await _handle_send_photo(client, config, request)
@@ -1147,7 +1529,8 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
 
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     return (
-        request.get("operation") in {"send", "send_photo", "download"} and request.get("mode") == "apply"
+        request.get("operation") in {"bind_role", "send", "send_photo", "send_role", "download"}
+        and request.get("mode") == "apply"
     ) or request.get("operation") == "discard_download"
 
 
@@ -1296,6 +1679,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session", type=Path, default=DEFAULT_SESSION_PATH)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET_PATH)
+    parser.add_argument("--role-bindings", type=Path, default=DEFAULT_ROLE_BINDINGS_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("daemon")
     qr_login = subparsers.add_parser("qr-login")
@@ -1307,15 +1691,32 @@ def build_parser() -> argparse.ArgumentParser:
     search = subparsers.add_parser("search")
     search.add_argument("--query", required=True)
     search.add_argument("--limit", type=int, default=20)
+    subparsers.add_parser("roles")
     read = subparsers.add_parser("read")
     read.add_argument("--peer", required=True)
     read.add_argument("--limit", type=int, default=20)
+    read_role = subparsers.add_parser("read-role")
+    read_role.add_argument("--role", required=True, choices=sorted(DIRECTOR_ROLES))
+    read_role.add_argument("--limit", type=int, default=20)
     send = subparsers.add_parser("send")
     send.add_argument("--peer", required=True)
     send.add_argument("--text", required=True)
     send.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send.add_argument("--contract-token", default="")
     send.add_argument("--idempotency-key", default="")
+    send_role = subparsers.add_parser("send-role")
+    send_role.add_argument("--role", required=True, choices=sorted(DIRECTOR_ROLES))
+    send_role.add_argument("--text", required=True)
+    send_role.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    send_role.add_argument("--contract-token", default="")
+    send_role.add_argument("--idempotency-key", default="")
+    bind_role = subparsers.add_parser("bind-role")
+    bind_role.add_argument("--role", required=True, choices=sorted(DIRECTOR_ROLES))
+    bind_role.add_argument("--peer", required=True)
+    bind_role.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    bind_role.add_argument("--contract-token", default="")
+    bind_role.add_argument("--idempotency-key", default="")
+    bind_role.add_argument("--replace", action="store_true")
     send_photo = subparsers.add_parser("send-photo")
     send_photo.add_argument("--peer", required=True)
     send_photo.add_argument("--file", required=True, type=Path)
@@ -1343,6 +1744,7 @@ def main(argv: list[str] | None = None) -> int:
                 session_path=args.session,
                 state_dir=args.state_dir,
                 socket_path=args.socket,
+                role_bindings_path=args.role_bindings,
             )
             asyncio.run(run_daemon(config))
             return 0
@@ -1352,6 +1754,7 @@ def main(argv: list[str] | None = None) -> int:
                 session_path=args.session,
                 state_dir=args.state_dir,
                 socket_path=args.socket,
+                role_bindings_path=args.role_bindings,
             )
             two_factor_password = _read_one_time_password(args.password_file) if args.password_file else ""
             output_path = args.output or config.state_dir / "login-qr.png"
@@ -1362,8 +1765,12 @@ def main(argv: list[str] | None = None) -> int:
                 request["limit"] = args.limit
             elif args.command == "search":
                 request.update({"query": args.query, "limit": args.limit})
+            elif args.command == "roles":
+                pass
             elif args.command == "read":
                 request.update({"peer": args.peer, "limit": args.limit})
+            elif args.command == "read-role":
+                request.update({"operation": "read_role", "role": args.role, "limit": args.limit})
             elif args.command == "send":
                 request.update(
                     {
@@ -1372,6 +1779,29 @@ def main(argv: list[str] | None = None) -> int:
                         "mode": args.mode,
                         "contract_token": args.contract_token,
                         "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "send-role":
+                request.update(
+                    {
+                        "operation": "send_role",
+                        "role": args.role,
+                        "text": args.text,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "bind-role":
+                request.update(
+                    {
+                        "operation": "bind_role",
+                        "role": args.role,
+                        "peer": args.peer,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                        "replace": args.replace,
                     }
                 )
             elif args.command == "send-photo":

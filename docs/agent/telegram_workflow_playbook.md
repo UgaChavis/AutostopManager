@@ -17,6 +17,10 @@ only this route and de-identified technical verification.
 - Credentials: root/service-controlled file under `/etc/autostop-telegram`.
 - Session: root/service-controlled SQLite file under
   `/var/lib/autostop-telegram`.
+- Director role bindings: service-owned mode-0600
+  `/var/lib/autostop-telegram/director_roles.json`. The file contains only the
+  three opaque role keys and exact numeric peers; never copy it to Git, Manager
+  memory, workflow state, logs, or chat.
 - Local RPC: mode-0600 Unix socket under `/run/autostop-telegram`.
 - Immutable code release: `/opt/autostop-telegram-releases/current`; Telegram
   releases are deployed independently and do not switch the CRM Manager
@@ -41,6 +45,8 @@ Current read surface:
 - `dialogs --limit N`
 - `search --query TEXT --limit N`
 - `read --peer ID --limit N`
+- `roles`
+- `read-role --role director_admin|director_reception|director_workshop --limit N`
 - `download --peer ID --message-id ID --mode dry_run`
 - `download --peer ID --message-id ID --mode apply --contract-token TOKEN --idempotency-key KEY`
 - `discard-download --file /run/autostop-telegram/inbox/NAME`
@@ -49,6 +55,10 @@ Current write surface:
 
 - `send --peer ID --text TEXT --mode dry_run`
 - `send --peer ID --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
+- `send-role --role ROLE --text TEXT --mode dry_run`
+- `send-role --role ROLE --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
+- `bind-role --role ROLE --peer ID --mode dry_run`
+- `bind-role --role ROLE --peer ID --mode apply --contract-token TOKEN --idempotency-key KEY`
 - `send-photo --peer ID --file /run/autostop-telegram/outbox/NAME.jpg --caption TEXT --mode dry_run`
 - `send-photo --peer ID --file ... --caption TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
 
@@ -157,18 +167,46 @@ the active request. An active director goal governed by
 internal roles and operational questions; it is not permission for clients,
 suppliers, financial commitments or general outreach.
 
-1. Search the target and resolve exactly one numeric peer ID. A positive ID is
-   normally a private user; negative IDs are groups/channels. `kind` is the
-   authoritative bridge hint.
-2. Focused-read the target by ID. If candidates remain ambiguous, stop and ask
-   the owner; do not infer identity from a similar username.
+In director mode the allowlist contains exactly three opaque routes:
+
+- `director_admin` -> owner-confirmed contact «Мария Администратор»;
+- `director_reception` -> owner-confirmed contact «Ресепшн Автостоп»;
+- `director_workshop` -> owner-confirmed contact «Сергей Немец».
+
+The display labels explain the route; they are never used as the send target.
+Codex chooses one role and phrases the operational question without per-message
+owner confirmation. Any client, supplier, other employee or other Telegram
+target requires a separate direct owner instruction naming the exact recipient
+and intent. Never fall back from an unresolved role to a similar name or role.
+Keep numeric peer IDs and phone numbers out of Git, Manager memory and workflow
+state.
+
+An owner-confirmed display-name spelling variant of an allowlisted role is a
+runtime identity lead, not durable contact data. Do not copy that variant, a
+peer ID, phone number, or screenshot into docs, Git, or Manager memory. If the
+canonical role name has no exact current match, use one narrow role/surname
+search and accept only one private-contact candidate that the owner has
+confirmed in the current task; reread that exact peer before each send. If the
+candidate changes, is absent, or is not unique, stop and ask the owner again.
+After owner confirmation bind it through `bind-role` dry-run/apply. A binding is
+accepted only for one exact private Telegram contact, is unique across roles,
+and must survive an exact private-file readback. Rebinding a role to another
+peer additionally requires `--replace`. Normal director work must not search by
+display name again.
+
+1. Run `roles` and require the selected role to have `bound=true`,
+   `verified=true`, `kind=private`. The bridge re-resolves the stored peer and
+   requires it still to be a Telegram contact; drift fails closed.
+2. Focused-read with `read-role --role ROLE`. The response exposes the opaque
+   role and bounded messages, not the stored peer ID, title, username or phone.
 3. Freeze the exact message text. Make agent authorship clear when relevant.
-4. Call `send` in `dry_run` mode. Check target ID/title, message length,
-   conversation tail, and contract creation.
+4. Call `send-role` in `dry_run` mode. Check the role-safe target, message
+   length, conversation tail, and contract creation.
 5. Call `apply` once with unchanged target/text, the returned contract token,
    and a fresh idempotency key.
-6. Require bridge readback, then independently read the exact dialog and match
-   the outgoing message ID/text.
+6. Require bridge readback, then independently use `read-role` and match the
+   outgoing message ID/text. A role contract cannot be replayed as a direct
+   peer send or for a different role.
 
 If the apply response times out or is lost, outcome is unknown. Do not issue a
 new key or resend. First read the exact target and reconcile the full outgoing
