@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -18,12 +19,15 @@ from autostop_manager.telegram_bridge import (
     _requires_mutation_lock,
     _save_qr,
     build_parser,
+    issue_download_contract,
     issue_send_contract,
     issue_photo_contract,
     redact_sensitive_message_text,
+    validate_download_request,
     validate_photo_file,
     validate_photo_request,
     validate_send_request,
+    verify_download_contract,
     verify_photo_contract,
     verify_send_contract,
 )
@@ -32,12 +36,24 @@ from autostop_manager.telegram_bridge import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_telegram_service_uses_active_immutable_manager_release() -> None:
+def test_telegram_service_uses_dedicated_immutable_telegram_release() -> None:
     service = (ROOT / "deploy/systemd/autostop-telegram.service").read_text(encoding="utf-8")
 
-    assert "WorkingDirectory=/opt/autostop-manager-releases/current" in service
-    assert "Environment=PYTHONPATH=/opt/autostop-manager-releases/current" in service
+    assert "WorkingDirectory=/opt/autostop-telegram-releases/current" in service
+    assert "Environment=PYTHONPATH=/opt/autostop-telegram-releases/current" in service
     assert "/opt/AutostopManager" not in service
+
+
+def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
+    script = ROOT / "scripts/deploy_telegram_bridge.sh"
+    completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
+
+    assert completed.returncode == 0
+    text = script.read_text(encoding="utf-8")
+    assert "origin/${BRANCH}" in text
+    assert 'git -C "${SOURCE_DIR}" archive' in text
+    assert "autostop-telegram.service" in text
+    assert "docker" not in text
 
 
 def test_credentials_require_private_permissions_and_valid_values(tmp_path) -> None:
@@ -200,18 +216,62 @@ def test_photo_contract_binds_target_caption_photo_and_expiry() -> None:
         )
 
 
+def test_download_contract_binds_target_message_media_and_expiry() -> None:
+    secret = b"x" * 32
+    token = issue_download_contract(
+        secret,
+        peer_id=10,
+        message_id=22,
+        media_fingerprint="a" * 64,
+        now=100,
+    )
+
+    payload = verify_download_contract(
+        token,
+        secret,
+        peer_id=10,
+        message_id=22,
+        media_fingerprint="a" * 64,
+        now=101,
+    )
+
+    assert payload["message_id"] == 22
+    with pytest.raises(BridgeError, match="contract_message_changed"):
+        verify_download_contract(
+            token,
+            secret,
+            peer_id=10,
+            message_id=23,
+            media_fingerprint="a" * 64,
+            now=101,
+        )
+    with pytest.raises(BridgeError, match="contract_media_changed"):
+        verify_download_contract(
+            token,
+            secret,
+            peer_id=10,
+            message_id=22,
+            media_fingerprint="b" * 64,
+            now=101,
+        )
+
+
 def test_apply_requires_idempotency_key() -> None:
     with pytest.raises(BridgeError, match="idempotency_key_required"):
         validate_send_request({"peer": "@target", "text": "hello", "mode": "apply"})
 
     with pytest.raises(BridgeError, match="idempotency_key_required"):
         validate_photo_request({"peer": "@target", "photo": "/run/example.jpg", "caption": "hello", "mode": "apply"})
+    with pytest.raises(BridgeError, match="idempotency_key_required"):
+        validate_download_request({"peer": "@target", "message_id": 10, "mode": "apply"})
 
 
 def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send_photo", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
+    assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
+    assert _requires_mutation_lock({"operation": "discard_download"}) is True
     assert _requires_mutation_lock({"operation": "read"}) is False
 
 
@@ -488,6 +548,210 @@ def test_read_only_bridge_operations_are_bounded_and_redacted(monkeypatch, tmp_p
     assert search_result["matches"][0]["id"] == 20
     assert read["messages"][1]["text"] == "[redacted_sensitive_uri]"
     assert read["messages"][1]["sensitive_content_redacted"] is True
+
+
+def test_download_media_requires_dry_run_and_saves_private_verified_file(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    content = b"%PDF-1.7\nexample"
+    message = SimpleNamespace(
+        id=44,
+        media=SimpleNamespace(),
+        file=SimpleNamespace(name="inspection.pdf", mime_type="application/pdf", size=len(content)),
+    )
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    class Client:
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 44
+            return message
+
+        async def download_media(self, exact_message, *, file):
+            assert exact_message is message
+            assert file is bytes
+            return content
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    client = Client()
+    dry = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {"operation": "download", "peer": "10", "message_id": 44, "mode": "dry_run"},
+        )
+    )
+
+    assert dry["media"]["downloadable"] is True
+    applied = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "download",
+                "peer": "10",
+                "message_id": 44,
+                "mode": "apply",
+                "contract_token": dry["contract_token"],
+                "idempotency_key": "download-test-key",
+            },
+        )
+    )
+
+    saved_path = Path(applied["saved_path"])
+    assert saved_path.read_bytes() == content
+    assert saved_path.stat().st_mode & 0o777 == 0o600
+    discarded = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {"operation": "discard_download", "path": str(saved_path)},
+        )
+    )
+    assert discarded["removed"] is True
+    assert not saved_path.exists()
+
+
+def test_telegram_voice_is_downloadable_when_duration_is_bounded(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    content = b"OggS" + b"voice-data"
+    AudioAttribute = type("DocumentAttributeAudio", (), {})
+    audio_attribute = AudioAttribute()
+    audio_attribute.duration = 42
+    audio_attribute.voice = True
+    message = SimpleNamespace(
+        id=46,
+        media=SimpleNamespace(),
+        file=SimpleNamespace(name="audio.ogg", mime_type="audio/ogg", size=len(content)),
+        document=SimpleNamespace(attributes=[audio_attribute]),
+    )
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    class Client:
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 46
+            return message
+
+        async def download_media(self, exact_message, *, file):
+            assert exact_message is message
+            assert file is bytes
+            return content
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    client = Client()
+    dry = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {"operation": "download", "peer": "10", "message_id": 46, "mode": "dry_run"},
+        )
+    )
+
+    assert dry["media"]["downloadable"] is True
+    assert dry["media"]["voice"] is True
+    assert dry["media"]["duration_seconds"] == 42
+    applied = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "download",
+                "peer": "10",
+                "message_id": 46,
+                "mode": "apply",
+                "contract_token": dry["contract_token"],
+                "idempotency_key": "voice-download-test-key",
+            },
+        )
+    )
+    assert Path(applied["saved_path"]).suffix == ".ogg"
+
+
+def test_telegram_voice_over_ten_minutes_is_not_downloadable(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    AudioAttribute = type("DocumentAttributeAudio", (), {})
+    audio_attribute = AudioAttribute()
+    audio_attribute.duration = 601
+    audio_attribute.voice = True
+    message = SimpleNamespace(
+        id=47,
+        media=SimpleNamespace(),
+        file=SimpleNamespace(name="audio.ogg", mime_type="audio/ogg", size=100),
+        document=SimpleNamespace(attributes=[audio_attribute]),
+    )
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    class Client:
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 47
+            return message
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    with pytest.raises(BridgeError, match="media_not_downloadable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                Client(),
+                config,
+                {"operation": "download", "peer": "10", "message_id": 47, "mode": "dry_run"},
+            )
+        )
+
+
+def test_download_rejects_unsupported_or_oversized_media(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    message = SimpleNamespace(
+        id=45,
+        media=SimpleNamespace(),
+        file=SimpleNamespace(name="archive.zip", mime_type="application/zip", size=100),
+    )
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    class Client:
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 45
+            return message
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    with pytest.raises(BridgeError, match="media_not_downloadable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                Client(),
+                config,
+                {"operation": "download", "peer": "10", "message_id": 45, "mode": "dry_run"},
+            )
+        )
+
+
+def test_discard_download_rejects_symlink(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    inbox = config.socket_path.parent / "inbox"
+    inbox.mkdir(parents=True, mode=0o700)
+    target = inbox / "target.pdf"
+    target.write_bytes(b"%PDF-1.7\nexample")
+    target.chmod(0o600)
+    link = inbox / "link.pdf"
+    link.symlink_to(target.name)
+
+    with pytest.raises(BridgeError, match="download_unavailable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(),
+                config,
+                {"operation": "discard_download", "path": str(link)},
+            )
+        )
+
+    assert target.exists()
 
 
 def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> None:

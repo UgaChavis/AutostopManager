@@ -131,6 +131,34 @@ Production Store management smoke stays dry-run unless an explicitly approved,
 safe and reversible synthetic object exists. Record only compact ids, counts,
 versions, health booleans and rollback refs.
 
+## Telegram-Only Release
+
+Telegram bridge and local voice-recognition changes do not require a CRM or
+Store deployment. They use the dedicated immutable
+`/opt/autostop-telegram-releases/current` release so an owner-authorized
+Telegram-only update cannot replace CRM containers or the shared Manager
+release.
+
+After the normal Manager gates, publish the exact Manager commit to
+`origin/AutostopManager`, install the Telegram Python dependencies and pinned
+local model, then run:
+
+```bash
+cd /opt/AutostopManager
+git fetch origin AutostopManager --prune
+revision="$(git rev-parse origin/AutostopManager)"
+sudo ./scripts/deploy_telegram_bridge.sh "$revision"
+```
+
+The script archives only that exact remote commit into a new root-owned
+read-only release, atomically switches the Telegram-specific `current`
+symlink, installs the unit, restarts only `autostop-telegram.service`, and
+checks authorization plus the offline transcription runtime. On failure it
+restores the previous Telegram release. It does not deploy or restart CRM,
+Store, VPN, nginx or other Manager consumers. A dirty Manager working tree may
+remain untouched because the archive is built from the exact published commit;
+never include uncommitted files in the release.
+
 ## Failure And Rollback
 
 Stop on a dirty/unmatched checkout, failed backup, failed schema/capability

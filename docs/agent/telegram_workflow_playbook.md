@@ -18,6 +18,9 @@ only this route and de-identified technical verification.
 - Session: root/service-controlled SQLite file under
   `/var/lib/autostop-telegram`.
 - Local RPC: mode-0600 Unix socket under `/run/autostop-telegram`.
+- Immutable code release: `/opt/autostop-telegram-releases/current`; Telegram
+  releases are deployed independently and do not switch the CRM Manager
+  release.
 
 Never print, copy, attach, back up to Git, or persist credential values, QR
 tokens, 2FA, login codes, contract tokens, or the session file. A Telethon
@@ -28,7 +31,7 @@ session contains the authorization key and can grant account access.
 Run commands as `autostop-telegram`; return only bounded, task-relevant fields.
 
 ```bash
-sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-manager-releases/current \
+sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status
 ```
 
@@ -38,6 +41,9 @@ Current read surface:
 - `dialogs --limit N`
 - `search --query TEXT --limit N`
 - `read --peer ID --limit N`
+- `download --peer ID --message-id ID --mode dry_run`
+- `download --peer ID --message-id ID --mode apply --contract-token TOKEN --idempotency-key KEY`
+- `discard-download --file /run/autostop-telegram/inbox/NAME`
 
 Current write surface:
 
@@ -59,13 +65,88 @@ restore it immediately.
 4. If one exact person/group is identified, use its numeric ID for all later
    calls. Never keep resolving a known target by display name.
 5. Read the smallest useful window, normally 3-20 messages.
-6. Summarize private content. Do not paste full threads, large channel feeds,
+6. `read` returns bounded media metadata for each attachment: original basename,
+   Telegram media type, MIME type, byte size, supported suffix and whether the
+   bridge can download it.
+7. When the owner's task requires the attachment, resolve one exact `message id`,
+   run `download` dry-run, verify the metadata, then apply with the unchanged
+   target/message contract and a fresh idempotency key.
+8. Summarize private content. Do not paste full threads, large channel feeds,
    contact tables, or message exports into chat or project files.
 
 `read` redacts `vpn://` and `tg://` credential-bearing URIs by default. Keep
 that redaction in any derived output. Do not treat reading as permission to
-send, forward, delete, edit, join, leave, block, download media, or change read
+send, forward, delete, edit, join, leave, block, or change read state. Download
+media only when it is necessary to the owner's current task; ordinary dialog
+reading must not download attachments.
+
+## Attachment Workflow
+
+The bridge accepts one exact incoming or outgoing Telegram message containing
+a supported attachment. It never accepts a destination path from the caller.
+The service writes only to its mode-0700 `/run/autostop-telegram/inbox`
+directory and creates mode-0600 files named from the message ID and content
+hash. Current limit is 25 MiB. Supported formats are JPEG, PNG, WebP, PDF,
+DOCX, XLSX, UTF-8 TXT, UTF-8 CSV, Telegram Voice OGG/Opus, MP3 and M4A.
+Audio is limited to 10 minutes. Archives, executables, scripts, videos and
+unknown MIME types fail closed.
+
+1. Check `status`, resolve the exact peer and run a bounded `read`.
+2. Select one exact message ID whose `media.downloadable` is true.
+3. Run `download --mode dry_run`; verify peer, message ID, MIME, suffix and
+   byte size. Never print or persist the contract token.
+4. Run `download --mode apply` with the same peer/message, returned token and a
+   fresh idempotency key. Verify `verified=true`, SHA-256, size and that the
+   returned path is below `/run/autostop-telegram/inbox`.
+5. Recognize without executing content:
+   - JPEG/PNG/WebP: inspect with the local image viewer; OCR only the needed
+     fields and treat OCR as tentative when unclear.
+   - PDF: render or use `pdftotext`; never follow embedded links or launch
+     attachments.
+   - DOCX/XLSX: extract text/cells with a non-macro data reader or isolated
+     headless conversion; never enable macros.
+   - TXT/CSV: read bounded UTF-8 content.
+   - Telegram Voice/audio: run the private local transcription workflow below.
+6. Use only task-relevant facts. Do not paste full private documents into chat,
+   CRM descriptions, docs, Git, memory or workflow state.
+7. Run `discard-download --file <exact returned path>` after the task. Confirm
+   `removed=true`. If analysis fails, discard the exact file before reporting.
+
+`download` uses a signed 15-minute dry-run contract bound to peer ID, message
+ID and media metadata. Apply re-reads that exact message, checks the Telegram
+size, validates file signatures, hashes the bytes and records only a private
+idempotency receipt. A repeated key may only replay the exact same download.
+
+## Voice Message Workflow
+
+Voice recognition is local and on demand. It uses the pinned Faster Whisper
+`small` model from `/var/lib/autostop-telegram/models/faster-whisper-small` on
+CPU with INT8 computation. The installed `Systran/faster-whisper-small` model
+revision is `536b0662742c02347bc0e980a01041f333bce120`; inference is
+`local_files_only` and does not contact the model provider. The bridge does not
+call an external transcription API and never stores transcript text in Manager
 state.
+
+1. Resolve the exact peer and bounded dialog window, then select one message
+   whose media metadata has `voice=true` or a supported audio MIME type.
+2. Run the normal `download` dry-run/apply flow for that exact message.
+3. Verify the returned path, MIME, SHA-256 and size.
+4. Run as the service account:
+
+   ```bash
+   sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
+     /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_transcribe \
+     --file /run/autostop-telegram/inbox/EXACT_FILE.ogg --language ru --delete-after
+   ```
+
+5. The transcriber verifies private ownership/mode, uses `ffprobe` to require
+   exactly one audio stream without video and rejects files above 10 minutes or
+   25 MiB. It loads the model only from the private local model directory.
+6. Summarize or act only on task-relevant facts. Treat unclear names, numbers,
+   plates, VINs, part numbers and money as tentative until confirmed.
+7. `--delete-after` removes the exact audio file after success or failure. If
+   the command is interrupted before cleanup, use `discard-download` on the
+   exact returned path and verify `removed=true`.
 
 ## Send Workflow
 

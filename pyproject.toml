@@ -20,6 +20,11 @@ dev = [
     "requests>=2.32",
     "ruff>=0.8",
 ]
+telegram = [
+    "faster-whisper>=1.1,<2",
+    "qrcode[pil]>=8,<9",
+    "telethon>=1.40,<2",
+]
 
 [tool.setuptools]
 include-package-data = false

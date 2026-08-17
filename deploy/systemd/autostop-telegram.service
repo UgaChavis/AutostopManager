@@ -7,9 +7,9 @@ After=network-online.target
 Type=simple
 User=autostop-telegram
 Group=autostop-telegram
-WorkingDirectory=/opt/autostop-manager-releases/current
+WorkingDirectory=/opt/autostop-telegram-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
-Environment=PYTHONPATH=/opt/autostop-manager-releases/current
+Environment=PYTHONPATH=/opt/autostop-telegram-releases/current
 UMask=0077
 RuntimeDirectory=autostop-telegram
 RuntimeDirectoryMode=0700

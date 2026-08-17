@@ -29,6 +29,22 @@ MAX_CAPTION_CHARS = 1024
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 CONTRACT_TTL_SECONDS = 15 * 60
 DEFAULT_OUTBOX_DIR = Path("/run/autostop-telegram/outbox")
+DEFAULT_INBOX_DIR = Path("/run/autostop-telegram/inbox")
+MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+DOWNLOAD_MIME_SUFFIXES = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".opus",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "text/csv": ".csv",
+    "text/plain": ".txt",
+}
 SENSITIVE_URI_PATTERN = re.compile(r"(?i)\b(?:tg|vpn)://[^\s]+")
 _MUTATION_LOCK = asyncio.Lock()
 
@@ -233,6 +249,67 @@ def verify_photo_contract(
     return payload
 
 
+def issue_download_contract(
+    secret: bytes,
+    *,
+    peer_id: int,
+    message_id: int,
+    media_fingerprint: str,
+    now: int | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else int(now)
+    payload = {
+        "issued_at": issued_at,
+        "media_fingerprint": media_fingerprint,
+        "message_id": int(message_id),
+        "peer_id": int(peer_id),
+        "type": "download",
+    }
+    encoded = base64.urlsafe_b64encode(_canonical_json(payload)).rstrip(b"=")
+    signature = hmac.new(secret, encoded, hashlib.sha256).digest()
+    return f"{encoded.decode('ascii')}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
+def verify_download_contract(
+    token: str,
+    secret: bytes,
+    *,
+    peer_id: int,
+    message_id: int,
+    media_fingerprint: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    try:
+        encoded_raw, signature_raw = token.split(".", 1)
+        encoded = encoded_raw.encode("ascii")
+        signature = base64.urlsafe_b64decode(signature_raw + "=" * (-len(signature_raw) % 4))
+        expected = hmac.new(secret, encoded, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise BridgeError("contract_invalid")
+        decoded = base64.urlsafe_b64decode(encoded_raw + "=" * (-len(encoded_raw) % 4))
+        payload = json.loads(decoded)
+    except BridgeError:
+        raise
+    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BridgeError("contract_invalid") from exc
+
+    current_time = int(time.time()) if now is None else int(now)
+    if not isinstance(payload, dict) or payload.get("type") != "download":
+        raise BridgeError("contract_invalid")
+    if payload.get("peer_id") != int(peer_id):
+        raise BridgeError("contract_target_changed")
+    if payload.get("message_id") != int(message_id):
+        raise BridgeError("contract_message_changed")
+    if payload.get("media_fingerprint") != media_fingerprint:
+        raise BridgeError("contract_media_changed")
+    issued_at = payload.get("issued_at")
+    if not isinstance(issued_at, int) or issued_at > current_time + 60:
+        raise BridgeError("contract_invalid")
+    if current_time - issued_at > CONTRACT_TTL_SECONDS:
+        raise BridgeError("contract_expired")
+    return payload
+
+
 def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
     peer = str(request.get("peer") or "").strip()
     text = str(request.get("text") or "")
@@ -264,6 +341,174 @@ def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str
     if mode == "apply" and not idempotency_key:
         raise BridgeError("idempotency_key_required")
     return peer, photo, caption, mode, idempotency_key
+
+
+def validate_download_request(request: dict[str, Any]) -> tuple[str, int, str, str]:
+    peer = str(request.get("peer") or "").strip()
+    mode = str(request.get("mode") or "dry_run")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    try:
+        message_id = int(request.get("message_id") or 0)
+    except (TypeError, ValueError) as exc:
+        raise BridgeError("message_id_invalid") from exc
+    if not peer:
+        raise BridgeError("peer_required")
+    if message_id <= 0:
+        raise BridgeError("message_id_invalid")
+    if mode not in {"dry_run", "apply"}:
+        raise BridgeError("mode_invalid")
+    if mode == "apply" and not idempotency_key:
+        raise BridgeError("idempotency_key_required")
+    return peer, message_id, mode, idempotency_key
+
+
+def _message_media_metadata(message: Any) -> dict[str, Any]:
+    media = getattr(message, "media", None)
+    file = getattr(message, "file", None)
+    mime_type = str(getattr(file, "mime_type", None) or "").casefold()
+    file_name = str(getattr(file, "name", None) or "")
+    try:
+        size_bytes = int(getattr(file, "size", None) or 0)
+    except (TypeError, ValueError):
+        size_bytes = 0
+    suffix = DOWNLOAD_MIME_SUFFIXES.get(mime_type, "")
+    if file_name:
+        supplied_suffix = Path(file_name).suffix.casefold()
+        if supplied_suffix == suffix:
+            suffix = supplied_suffix
+    duration_seconds = 0
+    voice = False
+    document = getattr(message, "document", None)
+    for attribute in getattr(document, "attributes", None) or []:
+        if type(attribute).__name__ != "DocumentAttributeAudio":
+            continue
+        try:
+            duration_seconds = int(getattr(attribute, "duration", None) or 0)
+        except (TypeError, ValueError):
+            duration_seconds = 0
+        voice = bool(getattr(attribute, "voice", False))
+        break
+    if mime_type.startswith("audio/") and not 0 < duration_seconds <= 10 * 60:
+        suffix = ""
+    downloadable = media is not None and bool(suffix) and 0 < size_bytes <= MAX_DOWNLOAD_BYTES
+    fingerprint_payload = {
+        "file_name": Path(file_name).name if file_name else "",
+        "media_type": type(media).__name__ if media is not None else None,
+        "mime_type": mime_type,
+        "size_bytes": size_bytes,
+        "suffix": suffix,
+        "duration_seconds": duration_seconds or None,
+        "voice": voice,
+    }
+    return {
+        **fingerprint_payload,
+        "downloadable": downloadable,
+        "fingerprint": hashlib.sha256(_canonical_json(fingerprint_payload)).hexdigest(),
+    }
+
+
+def _validate_download_content(content: bytes, *, mime_type: str, suffix: str) -> None:
+    if not content or len(content) > MAX_DOWNLOAD_BYTES:
+        raise BridgeError("download_size_invalid")
+    valid = False
+    if mime_type == "image/jpeg":
+        valid = content.startswith(b"\xff\xd8\xff") and content.endswith(b"\xff\xd9")
+    elif mime_type == "image/png":
+        valid = content.startswith(b"\x89PNG\r\n\x1a\n")
+    elif mime_type == "image/webp":
+        valid = len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+    elif mime_type == "application/pdf":
+        valid = content.startswith(b"%PDF-")
+    elif mime_type in {"audio/ogg", "audio/opus"}:
+        valid = content.startswith(b"OggS")
+    elif mime_type == "audio/mpeg":
+        valid = content.startswith(b"ID3") or (len(content) >= 2 and content[0] == 0xFF and content[1] & 0xE0 == 0xE0)
+    elif mime_type == "audio/mp4":
+        valid = len(content) >= 12 and content[4:8] == b"ftyp"
+    elif suffix in {".docx", ".xlsx"}:
+        valid = content.startswith(b"PK\x03\x04")
+    elif mime_type in {"text/plain", "text/csv"}:
+        try:
+            content.decode("utf-8")
+            valid = True
+        except UnicodeDecodeError:
+            valid = False
+    if not valid:
+        raise BridgeError("download_content_invalid")
+
+
+def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbox_dir: Path) -> tuple[Path, str]:
+    inbox_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(inbox_dir, 0o700)
+    inbox_stat = inbox_dir.stat()
+    if inbox_stat.st_uid != os.geteuid() or stat.S_IMODE(inbox_stat.st_mode) != 0o700:
+        raise BridgeError("download_inbox_permissions_invalid")
+    digest = hashlib.sha256(content).hexdigest()
+    output_path = inbox_dir / f"{message_id}-{digest[:16]}{suffix}"
+    if output_path.exists():
+        existing = _read_private_download(output_path, inbox_dir=inbox_dir)
+        if not hmac.compare_digest(hashlib.sha256(existing).hexdigest(), digest):
+            raise BridgeError("download_existing_conflict")
+        return output_path, digest
+    temp_path = inbox_dir / f".{message_id}-{secrets.token_hex(8)}.tmp"
+    try:
+        descriptor = os.open(
+            temp_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, output_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return output_path, digest
+
+
+def _read_private_download(path: Path, *, inbox_dir: Path) -> bytes:
+    if not path.is_absolute() or path.parent != inbox_dir or path.name in {"", ".", ".."}:
+        raise BridgeError("download_path_invalid")
+    try:
+        inbox_fd = os.open(inbox_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise BridgeError("download_inbox_unavailable") from exc
+    try:
+        inbox_stat = os.fstat(inbox_fd)
+        if inbox_stat.st_uid != os.geteuid() or stat.S_IMODE(inbox_stat.st_mode) != 0o700:
+            raise BridgeError("download_inbox_permissions_invalid")
+        try:
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=inbox_fd)
+        except OSError as exc:
+            raise BridgeError("download_unavailable") from exc
+        try:
+            file_stat = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(file_stat.st_mode)
+                or file_stat.st_uid != os.geteuid()
+                or stat.S_IMODE(file_stat.st_mode) != 0o600
+                or not 0 < file_stat.st_size <= MAX_DOWNLOAD_BYTES
+            ):
+                raise BridgeError("download_permissions_invalid")
+            content = os.read(descriptor, MAX_DOWNLOAD_BYTES + 1)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(inbox_fd)
+    if len(content) > MAX_DOWNLOAD_BYTES:
+        raise BridgeError("download_size_invalid")
+    return content
+
+
+def _discard_private_download(path: Path, *, inbox_dir: Path) -> bool:
+    if not path.is_absolute() or path.parent != inbox_dir or path.name in {"", ".", ".."}:
+        raise BridgeError("download_path_invalid")
+    if not path.exists() and not path.is_symlink():
+        return False
+    _read_private_download(path, inbox_dir=inbox_dir)
+    path.unlink()
+    return True
 
 
 def _load_validated_photo_file(
@@ -638,6 +883,112 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
     }
 
 
+async def _handle_download(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+    peer, message_id, mode, idempotency_key = validate_download_request(request)
+    entity, target = await _resolve_peer(client, peer)
+    message = await client.get_messages(entity, ids=message_id)
+    if message is None or int(getattr(message, "id", 0) or 0) != message_id:
+        raise BridgeError("message_not_found")
+    metadata = _message_media_metadata(message)
+    if not metadata["downloadable"]:
+        raise BridgeError("media_not_downloadable")
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    if mode == "dry_run":
+        return {
+            "ok": True,
+            "mode": "dry_run",
+            "target": target,
+            "message_id": message_id,
+            "media": {key: value for key, value in metadata.items() if key != "fingerprint"},
+            "contract_token": issue_download_contract(
+                contract_key,
+                peer_id=target["id"],
+                message_id=message_id,
+                media_fingerprint=metadata["fingerprint"],
+            ),
+        }
+
+    contract_token = str(request.get("contract_token") or "")
+    if not contract_token:
+        raise BridgeError("contract_required")
+    verify_download_contract(
+        contract_token,
+        contract_key,
+        peer_id=target["id"],
+        message_id=message_id,
+        media_fingerprint=metadata["fingerprint"],
+    )
+    idempotency_path = config.state_dir / "idempotency.json"
+    idempotency = _load_idempotency(idempotency_path)
+    previous = idempotency.get(idempotency_key)
+    if previous is not None:
+        if (
+            previous.get("operation") != "download_media"
+            or previous.get("peer_id") != target["id"]
+            or previous.get("message_id") != message_id
+            or previous.get("media_fingerprint") != metadata["fingerprint"]
+        ):
+            raise BridgeError("idempotency_key_conflict")
+        saved_path = Path(str(previous.get("saved_path") or ""))
+        try:
+            replay_content = _read_private_download(
+                saved_path,
+                inbox_dir=config.socket_path.parent / "inbox",
+            )
+        except BridgeError as exc:
+            raise BridgeError("download_replay_missing") from exc
+        if len(replay_content) != previous.get("size_bytes") or hashlib.sha256(
+            replay_content
+        ).hexdigest() != previous.get("sha256"):
+            raise BridgeError("download_replay_mismatch")
+        return {
+            "ok": True,
+            "mode": "apply",
+            "replayed": True,
+            "target": target,
+            "message_id": message_id,
+            "saved_path": str(saved_path),
+            "sha256": previous.get("sha256"),
+            "size_bytes": previous.get("size_bytes"),
+            "mime_type": metadata["mime_type"],
+        }
+
+    content = await client.download_media(message, file=bytes)
+    if not isinstance(content, bytes):
+        raise BridgeError("download_failed")
+    if metadata["size_bytes"] != len(content):
+        raise BridgeError("download_size_mismatch")
+    _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
+    saved_path, digest = _save_private_download(
+        content,
+        message_id=message_id,
+        suffix=metadata["suffix"],
+        inbox_dir=config.socket_path.parent / "inbox",
+    )
+    idempotency[idempotency_key] = {
+        "operation": "download_media",
+        "peer_id": target["id"],
+        "message_id": message_id,
+        "media_fingerprint": metadata["fingerprint"],
+        "saved_path": str(saved_path),
+        "sha256": digest,
+        "size_bytes": len(content),
+    }
+    _save_idempotency(idempotency_path, idempotency)
+    return {
+        "ok": True,
+        "mode": "apply",
+        "replayed": False,
+        "target": target,
+        "message_id": message_id,
+        "saved_path": str(saved_path),
+        "sha256": digest,
+        "size_bytes": len(content),
+        "mime_type": metadata["mime_type"],
+        "verified": True,
+    }
+
+
 async def _handle_operation(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
     operation = str(request.get("operation") or "")
     if operation == "status":
@@ -691,6 +1042,11 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
                     "text": text,
                     "sensitive_content_redacted": sensitive_content_redacted,
                     "media_type": type(message.media).__name__ if message.media is not None else None,
+                    "media": {
+                        key: value for key, value in _message_media_metadata(message).items() if key != "fingerprint"
+                    }
+                    if message.media is not None
+                    else None,
                 }
             )
         return {"ok": True, "target": target, "messages": rows}
@@ -770,11 +1126,21 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
     if operation == "send_photo":
         return await _handle_send_photo(client, config, request)
 
+    if operation == "download":
+        return await _handle_download(client, config, request)
+
+    if operation == "discard_download":
+        path = Path(str(request.get("path") or ""))
+        removed = _discard_private_download(path, inbox_dir=config.socket_path.parent / "inbox")
+        return {"ok": True, "removed": removed, "path": str(path)}
+
     raise BridgeError("operation_not_supported")
 
 
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
-    return request.get("operation") in {"send", "send_photo"} and request.get("mode") == "apply"
+    return (
+        request.get("operation") in {"send", "send_photo", "download"} and request.get("mode") == "apply"
+    ) or request.get("operation") == "discard_download"
 
 
 async def _serve_client(
@@ -812,6 +1178,9 @@ async def run_daemon(config: TelegramConfig) -> None:
     outbox_dir = config.socket_path.parent / "outbox"
     outbox_dir.mkdir(mode=0o700, exist_ok=True)
     os.chmod(outbox_dir, 0o700)
+    inbox_dir = config.socket_path.parent / "inbox"
+    inbox_dir.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(inbox_dir, 0o700)
     config.socket_path.unlink(missing_ok=True)
     client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
     await client.connect()
@@ -946,6 +1315,14 @@ def build_parser() -> argparse.ArgumentParser:
     send_photo.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send_photo.add_argument("--contract-token", default="")
     send_photo.add_argument("--idempotency-key", default="")
+    download = subparsers.add_parser("download")
+    download.add_argument("--peer", required=True)
+    download.add_argument("--message-id", required=True, type=int)
+    download.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    download.add_argument("--contract-token", default="")
+    download.add_argument("--idempotency-key", default="")
+    discard_download = subparsers.add_parser("discard-download")
+    discard_download.add_argument("--file", required=True, type=Path)
     return parser
 
 
@@ -1001,6 +1378,18 @@ def main(argv: list[str] | None = None) -> int:
                         "idempotency_key": args.idempotency_key,
                     }
                 )
+            elif args.command == "download":
+                request.update(
+                    {
+                        "peer": args.peer,
+                        "message_id": args.message_id,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "discard-download":
+                request.update({"operation": "discard_download", "path": str(args.file)})
             payload = send_local_request(args.socket, request)
     except BridgeError as exc:
         payload = {"ok": False, "error": exc.code}
