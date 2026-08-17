@@ -108,7 +108,8 @@ def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path)
     assert len(result["hot_rules"]) <= 8
     assert any("CRM" in rule and "source of truth" in rule for rule in result["hot_rules"])
     assert any("vehicle passport and client data" in rule for rule in result["hot_rules"])
-    assert any("empty description empty" in rule for rule in result["hot_rules"])
+    assert any("minimum-sufficient handoff" in rule for rule in result["hot_rules"])
+    assert any("4-10 short lines" in rule for rule in result["hot_rules"])
     assert any("phone is the primary client match key" in rule for rule in result["hot_rules"])
     assert any("at most three tags" in rule for rule in result["hot_rules"])
     assert "agent_bootstrap" in result["read_order"][0]

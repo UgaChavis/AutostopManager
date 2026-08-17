@@ -10,7 +10,8 @@ catalogs and rules point here instead of copying the procedure.
 cards. It may read the focused card/client/vehicle/order context and update:
 
 - confirmed title and compact vehicle;
-- an existing public description;
+- a public description, including creating a minimum-sufficient description
+  from confirmed working facts when an empty card needs a human handoff;
 - up to three operational tags;
 - hidden `board_summary`;
 - source-backed vehicle profile and clear client/vehicle links;
@@ -81,11 +82,18 @@ content or empty-description rules here. `board_summary` stays separate and
 contains only a short plain operator preview, without rich formatting, private
 identity, raw scans or source lists.
 
+Description quality is judged by operational completeness, not minimum length.
+For a nontrivial active card, preserve every applicable confirmed complaint,
+finding, agreed work, parts state, result and customer arrangement; do not
+collapse that handoff into a three-word task label. Create text for an empty
+description only from supported facts, and leave it empty when no useful facts
+are available.
+
 - keep `vehicle` as a compact make/model;
 - keep `title` as the short issue/work/result essence;
 - use no more than three tags and retain useful existing tags;
 - tags are operator action cues, not decoration;
-- do not rewrite a clear card only for style.
+- do not rewrite a clear and operationally complete card only for style.
 
 Typical cues: `НУЖЕН VIN`, `ЖДЕТ ЗАПЧАСТИ`, `ЗАПЧАСТИ ПРИШЛИ`,
 `СОГЛАСОВАТЬ`, `ЖДЕТ ОПЛАТЫ`, `НУЖНА ДИАГНОСТИКА`, `ЖДЕМ КЛИЕНТА`,

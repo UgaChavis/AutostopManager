@@ -383,7 +383,10 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
     assert "This playbook is the only detailed source of truth" in playbook
     assert "crm_card_description_standard.md" in playbook
-    assert "leave it empty" in description_standard
+    assert "minimum-sufficient working handoff" in description_standard
+    assert "4-10 short lines" in description_standard
+    assert "complaint/request" in description_standard
+    assert "three-word label" in description_standard
     assert "phone goes to the client" in playbook
     assert "VIN/plate/mileage" in playbook
     assert "vehicle` as a compact make/model" in playbook
@@ -393,18 +396,20 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
     route_text = "\n".join(cleanup_route["next_actions"])
-    assert "if description is empty leave it empty" in route_text
+    assert "minimum-sufficient public description" in route_text
+    assert "leave it empty only when no useful supported content exists" in route_text
     assert "tags rare with no more than three" in route_text
     assert "move phone/VIN/plate/mileage/aggregates" in route_text
 
     command = manager_catalog["natural_language_commands"]["Приберись"]
     assert command["aliases"] == ["Приберись"]
     assert any("no more than three operational tags" in item for item in command["allowed_actions"])
-    assert any("invent text for an empty public description" in item for item in command["forbidden_actions"])
+    assert any("minimum-sufficient rich-text handoffs" in item for item in command["allowed_actions"])
+    assert any("invent unsupported filler" in item for item in command["forbidden_actions"])
 
     assert "cleanup_card_content" in crm_catalog["not_mcp_runtime_tools"]
     assert any(
-        "leave empty descriptions empty" in item and "tags rare and capped at three" in item
+        "minimum-sufficient rich-text working handoffs" in item and "tags rare and capped at three" in item
         for item in crm_catalog["operation_notes"]
     )
 
