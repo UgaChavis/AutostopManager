@@ -413,39 +413,38 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
     assert "This playbook is the only detailed source of truth" in playbook
     assert "crm_card_description_standard.md" in playbook
-    assert "concise but complete working handoff" in description_standard
-    assert "5-12 short semantic lines" in description_standard
-    assert "current work status" in description_standard
-    assert "summary is a shorter factual rendering" in description_standard
-    assert "complaint/request" in description_standard
-    assert "three-word label" in description_standard
+    assert "complete, coherent and gradually developing story" in description_standard
+    assert "There are no mandatory headings, blocks, dates, line counts" in description_standard
+    assert "one or two natural sentences" in description_standard
+    assert "reread the entire existing description" in description_standard
+    assert "what was found, what was agreed, what was done" in description_standard
+    assert "fresh natural-language" in description_standard
+    assert "complaint, findings and diagnostic results" in description_standard
+    assert "Do not merely append the latest event" in description_standard
     assert "phone goes to the client" in playbook
     assert "VIN/plate/mileage" in playbook
     assert "vehicle` as a compact make/model" in playbook
     assert "no more than three tags" in playbook
-    assert "Must Not Do" in description_standard
+    assert "Facts To Preserve And Exclude" in description_standard
     assert "repair_orders_changed=0 and payments_changed=0" in playbook
 
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
     route_text = "\n".join(cleanup_route["next_actions"])
-    assert "concise but complete public description" in route_text
-    assert "current work status" in route_text
-    assert "shorter factual rendering" in route_text
-    assert "leave the description empty only when no useful supported content exists" in route_text
+    assert "single text model" in route_text
+    assert "update description and board_summary together" in route_text
+    assert "leave description empty only when no useful supported content exists" in route_text
     assert "tags rare with no more than three" in route_text
     assert "move phone/VIN/plate/mileage/aggregates" in route_text
 
     command = manager_catalog["natural_language_commands"]["Приберись"]
     assert command["aliases"] == ["Приберись"]
     assert any("no more than three operational tags" in item for item in command["allowed_actions"])
-    assert any("concise but complete rich-text handoffs" in item for item in command["allowed_actions"])
+    assert any("single canonical" in item for item in command["allowed_actions"])
     assert any("invent unsupported filler" in item for item in command["forbidden_actions"])
 
     assert "cleanup_card_content" in crm_catalog["not_mcp_runtime_tools"]
     assert any(
-        "concise but complete rich-text working handoffs" in item
-        and "current work status" in item
-        and "summary is a shorter factual rendering" in item
+        "single canonical" in item and "description and board_summary" in item
         for item in crm_catalog["operation_notes"]
     )
 

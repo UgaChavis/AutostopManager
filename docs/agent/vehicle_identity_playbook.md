@@ -210,8 +210,9 @@ Once the vehicle identity is stable, pass the result to:
 Before writing to CRM materials, identity should be at least `high` for the
 vehicle and the selected part still needs VIN/frame-specific EPC or supplier
 confirmation. If identity is only `medium`, keep the uncertainty and required
-confirmation in the internal quote matrix/owner report; do not put it in the
-public description or write final parts as confirmed.
+confirmation in the internal quote matrix/owner report; public CRM card text
+follows `crm_card_description_standard.md`, and unconfirmed parts are not
+written as confirmed.
 
 Keep only durable conclusions in memory:
 

@@ -205,15 +205,12 @@ def _risk_flags(
     if not planned_patch and board_summary is None:
         flags.append("no_target_fields")
     description = planned_patch.get("description")
-    if isinstance(description, str):
-        if re.search(r"<[^>]+>", description):
-            flags.append("description_contains_raw_html")
-        if re.search(r"(?im)^\s*(статус|следующий шаг)\s*:", description):
-            flags.append("description_contains_deprecated_blocks")
+    if isinstance(description, str) and re.search(r"<[^>]+>", description):
+        flags.append("description_contains_raw_html")
     if board_summary and _has_rich_formatting(board_summary):
         flags.append("board_summary_contains_rich_formatting")
-    if board_summary and _board_summary_line_count(board_summary) > 5:
-        flags.append("board_summary_too_many_lines")
+    if board_summary and _board_summary_line_count(board_summary) > 2:
+        flags.append("board_summary_not_compact_natural_text")
     if board_summary and _has_private_board_summary_data(board_summary):
         flags.append("board_summary_contains_private_identifier")
     profile_patch = planned_patch.get("vehicle_profile")

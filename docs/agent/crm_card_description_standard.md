@@ -1,170 +1,84 @@
-# CRM Card Description Standard
+# CRM Card Text Standard
 
-Canonical style for public AutoStop CRM card `description` edits.
+Canonical standard for AutoStop CRM card `description` and `board_summary`.
+All card-creation, cleanup, VIN/OEM, service-management and director workflows
+link here instead of defining their own shape, length or wording rules.
 
-Use this standard whenever AutostopManager creates a card, updates a public
-card description, writes parts/fluid/price results back to a card, or cleans an
-existing non-empty description. It complements the task playbooks; it does not
-replace their lookup, verification, write-boundary, or reread rules.
+## Meaning Of The Fields
 
-## Core Rule
+`board_summary` is the manager's short, current explanation of what is happening
+with the vehicle now, what it is waiting for, or what should happen next. Write
+one or two natural sentences in ordinary clean text. It should sound like a
+colleague briefly explaining the situation, not a status code, a rigid template
+or a telegraphic list. Do not repeat the vehicle make unless it prevents
+ambiguity. Do not use Markdown or decorative emoji.
 
-The public card description is a concise but complete working handoff, not a
-research report and not a three-word label. It must let another employee
-continue the job without reconstructing the current case from the full event
-history. Prefer concise factual blocks, but never shorten away a confirmed
-complaint, finding, current work status, agreed scope, parts state, result,
-technical next step or blocker, or customer arrangement that still affects the
-work.
+`description` is the complete, coherent and gradually developing story of the
+vehicle: why it arrived, what was found, what was agreed, what was done, what is
+happening now and what remains to do. Its purpose is to let another employee
+understand and continue the case without reconstructing it from the event log.
+It is not a fixed form, a mandatory chronology or an internal research report.
 
-## Must Do
+## Editing The Story
 
-- If the public description is empty, create it when confirmed working facts
-  are available and the card needs a human-readable handoff. Leave it empty
-  only when there is no supported operational content; never invent filler.
-- Use the shortest text that remains operationally complete. A normal
-  nontrivial active card should usually contain 5-12 short semantic lines. A
-  genuinely tiny one-step card may use 2-4 lines when no additional confirmed
-  context affects the work.
-- Include every applicable confirmed block: complaint/request, checked finding
-  or diagnosis, current work status, agreed work, selected parts/materials and
-  their current state, completed result, current technical next step or
-  blocker, and current customer arrangement or follow-up point.
-- When a confirmed status arrives after intake or an earlier handoff, update
-  the description with a factual `**Текущий статус:**` block whenever the
-  existing text would otherwise omit or contradict it. Preserve useful prior
-  facts; consolidate them into the appropriate blocks instead of appending a
-  message-by-message history.
-- When the same status is shown in `board_summary`, update the description and
-  board summary in the same protected write. The summary may be shorter, but
-  it must be an accurate plain-language condensation of facts present in the
-  description, never a separate version of the case.
-- Preserve useful staff-entered facts. Consolidate repetition, but do not
-  replace a meaningful history-derived handoff with only a generic task name.
-- Use CRM-supported Markdown only: `**bold**`, `*italic*`, `++underline++`.
-- Use **bold** for labels and decisive facts.
-- Use `++underline++` for the key catalog/OEM number, amount, oil capacity,
-  approval, or money value when emphasis helps.
-- Use *italic* only for a short secondary working note.
-- Use restrained emoji markers only when they improve scanning.
-- Keep only facts needed for the work: auto, complaint/request, checked
-  finding, current work status, agreed work, selected part/material and its
-  state, OEM/catalog number, oil/fluid capacity, spec, confirmed price,
-  completed result, current technical next step or blocker, and compact
-  customer arrangement or follow-up point.
-- Put phone, VIN, plate, mileage, engine, gearbox, and drivetrain into
-  structured CRM fields/vehicle_profile when possible. Keep them in public
-  description only when the owner explicitly wants them visible there or the
-  current intake still needs them operationally visible.
+Whenever a new confirmed fact appears, reread the entire existing description
+and edit it as one text. Weave the fact into the most natural place, correct
+outdated wording, retain useful history, remove repetition and improve the flow.
+Do not merely append the latest event and do not reduce a meaningful history to
+a few words.
 
-## Must Not Do
+Choose the composition, length, paragraphs and wording for the actual card.
+There are no mandatory headings, blocks, dates, line counts or fixed order of
+facts. A small case may be brief; a complex or long-running repair may need a
+substantial history. Operational completeness and readability decide the
+length.
 
-- Do not add risk/caveat/safety blocks.
-- Do not use vague metadata-only text such as `Статус: в работе` or
-  `Следующий шаг: продолжить`. A concrete current state or follow-up belongs in
-  a factual block such as `**Проверено:**`, `**Согласовано:**`,
-  `**Запчасти:**`, `**Результат:**` or `**Договорённость:**`.
-- Do not write supplier-check reminders such as `проверить применимость`,
-  `финально сверить у поставщика`, `требуется проверка`, or `перед заказом`.
-- Do not include source/provenance/method text: where the part was found, how
-  it was selected, confidence labels, supplier/source lists, search history, or
-  long diagnostic theory.
-- Do not write AI-style explanations.
-- Do not paste raw scans, long private excerpts, full client identity, or raw
-  VIN dumps into description.
-- Do not use raw HTML tags, pseudo-formatting, or markup that remains visible
-  in the CRM preview.
+The agent is also the editor: split dense text into useful paragraphs, fix
+spacing, move fragments when that improves comprehension and remove obsolete
+duplication. CRM-supported formatting may be used moderately in `description`:
+`**bold**` for genuinely important emphasis, `*italic*` for a rare soft remark
+and `++underline++` for a key value. Emoji are rare and only for faster reading.
+Formatting is optional and must not turn the story into a mechanical form.
 
-## Default Shape
+## Facts To Preserve And Exclude
 
-Use only the blocks that matter, but include all blocks needed for handoff:
+Preserve every confirmed fact that remains useful for the work, including the
+complaint, findings and diagnostic results, agreed scope, completed work,
+current work or wait, parts state, customer arrangement and next action.
+Technical information such as fluid volumes and approvals, part numbers,
+measurements and diagnostic results belongs in `description` when confirmed and
+useful for later work.
 
-```markdown
-🚘 **Авто:** <make/model, year/body only if useful>.
+Do not add invented events, guesses, the agent's internal reasoning, search
+sources or methods, confidence labels, price/evidence matrices, supplier-check
+boilerplate, private contacts, raw VIN, long correspondence, raw scans or other
+service noise. Evidence, provenance, confidence and price matrices stay in the
+internal lookup result, owner report or protected workflow record. Put phone,
+plate, mileage and vehicle identity in structured CRM fields whenever possible;
+repeat them in public text only when the owner explicitly requests it or the
+work genuinely requires the value to remain visible.
 
-**Обращение:** <complaint or requested work>.
+Use only CRM-supported Markdown in `description`; never use raw HTML or visible
+pseudo-formatting.
 
-**Проверено:** <confirmed finding or diagnosis>.
+## Keeping Current State Aligned
 
-**Текущий статус:** <confirmed work now in progress>.
+When the current state changes, update `description` and `board_summary`
+together in the same protected write. The full story must reflect the new state
+without contradicting its history; the summary is a fresh natural-language
+condensation of what matters now, not an independent version of the case.
 
-**Согласовано:** <approved work scope>.
-
-**Запчасти:** **++<selected article/OEM/catalog number>++**, <quantity and current parts state>.
-
-**Масло/жидкости:** **++<capacity/spec>++**.
-
-**Деньги:** **++<sum/agreement>++**.
-
-**Результат:** <completed confirmed result>.
-
-**Следующий шаг/блокер:** <confirmed technical next step or blocker>.
-
-**Договорённость:** <current customer arrangement or follow-up point>.
-```
-
-For a genuinely tiny card, 2-4 lines are enough:
-
-```markdown
-**Задача:** **Замена масла ДВС**.
-**Масло/фильтр:** **++6,5 л++**, фильтр **++A 271 180 05 09++**.
-**Договорённость:** выполнить при текущем визите.
-```
-
-## Parts/OEM Result
-
-```markdown
-🚘 **Авто:** Mercedes-Benz E200.
-
-**Задача:** **Масляный фильтр ДВС**.
-
-**Каталожный номер:** **++A 271 180 05 09++**.
-```
-
-## Service Intake
-
-```markdown
-🚘 **Авто:** Mercedes-Benz E200.
-
-**Обращение:** замена масла в двигателе.
-
-**Масло ДВС:** **++6,5 л++**.
-
-**Согласовано:** масло и фильтр.
-
-**Договорённость:** выполнить при текущем визите.
-```
-
-## Nontrivial Repair Handoff
-
-```markdown
-🚘 **Авто:** Toyota Camry.
-
-**Обращение:** стук спереди на неровностях.
-
-**Проверено:** люфт правой стойки стабилизатора.
-
-**Согласовано:** замена обеих стоек.
-
-**Запчасти:** заказаны, ожидаются 19 августа.
-
-**Договорённость:** после поступления связаться с клиентом.
-```
-
-## Board Summary
-
-`board_summary` is separate from public `description`: it is a 1-4 line board
-preview, not a substitute for the complete working handoff. Keep it plain
-text, without rich formatting, emoji decoration, source lists, phone, full
-client identity, raw VIN, or long issue lists. Do not delete useful description
-facts merely because a shorter version exists in `board_summary`. For an active
-card, its current-status fact must be present in the description as well; the
-summary is a shorter factual rendering of that same status, not an independent
-story.
+In director mode the agent applies this standard autonomously after receiving a
+new confirmed fact: it decides how to revise the whole story and how to express
+the current state briefly for the board. A clear card is not rewritten merely
+to demonstrate activity.
 
 ## Write Flow
 
-Before writing, read the current card and identify the exact card id. Use
-`agent_entity_context`, build `prepare_action_contract`, preview with
-`agent_board_workflow(operation="cleanup_card", mode="dry_run")`, then apply
-with a unique idempotency key and reread through `agent_entity_context`.
+Every write keeps the existing safety sequence:
+
+`exact card reread -> prepare_action_contract -> cleanup_card dry-run -> apply
+with a new idempotency key -> independent exact reread and verification`.
+
+The final reread verifies the complete `description`, exact `board_summary`,
+`board_summary_stale=false`, and that no unplanned card fields changed.

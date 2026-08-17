@@ -39,8 +39,8 @@ owner already gives an OEM/article and only asks for price or availability, use
   independent check: OEM/EPC second source, supplier fitment confirmation,
   TecDoc/CROSSBASE-style applicability, or seller confirmation with article and
   vehicle data visible.
-- If the source is weak, write `confidence: medium` or `confidence: low` and
-  name what is missing.
+- If the source is weak, record `confidence: medium` or `confidence: low` and
+  what is missing in the internal result, never in the public card text.
 - Do not store raw customer VIN/frame, phone, client identity, CRM snapshots,
   supplier secrets, raw quotes, or full card text in durable memory or Git.
 
@@ -221,26 +221,9 @@ Use `docs/agent/parts_search_playbook.md` before writing prices.
 ## CRM Public Description
 
 Every nontrivial CRM writeback must follow
-`docs/agent/crm_card_description_standard.md`. The public card description gets
-only the selected working facts, not the lookup dossier.
-
-```markdown
-🚘 **Авто:** <make model, year/build only if useful>.
-
-**Задача:** **<requested part/work>**.
-
-**Каталожный номер:** **++<OEM/catalog number>++**.
-
-**Выбор:** **++<selected brand/article>++**, <quantity/price if known>.
-```
-
-Do not write source/provenance, lookup method, confidence, missing checks,
-supplier-check reminders, or `Нужна проверка` blocks into the public
-description. Keep source evidence and confidence in the internal owner report,
-Gateway v2 workflow, or structured lookup result when needed.
-
-Do not put phone numbers, full client names, raw VIN dumps, or long private
-source excerpts into `board_summary`.
+`docs/agent/crm_card_description_standard.md`. It is the only owner of public
+text composition, editing, formatting and `board_summary` rules. The lookup
+dossier, source evidence, confidence and price matrix remain internal.
 
 ## CRM Material Lines
 
@@ -262,7 +245,7 @@ Toyota 90919-01275 / NGK 91568
 ```
 
 Keep OEM references, alternatives, rejected crosses, and source notes out of
-the priced material row. Put only the compact selected facts allowed by
+the priced material row. Put only the confirmed useful selected facts allowed by
 `docs/agent/crm_card_description_standard.md` into the public description. If
 the selected part is genuine OEM, the row may use the OEM brand/number because
 that is the priced selected part.
@@ -287,9 +270,8 @@ that is the priced selected part.
    its schema, and call it through `call_raw_capability` only for selected
    priced parts, not OEM references. This is not an `agent_finance_workflow`
    operation.
-9. Update `board_summary` with a short plain result without VIN/client private
-   data, source lists, or confidence/provenance text:
-   `OEM найден, выбран NGK 91568`.
+9. If the current state changed, update `description` and `board_summary`
+   together under the canonical text standard.
 10. Re-open the card and repair order with `agent_entity_context`.
 11. Verify description, board summary, material totals, quantity basis, and the
     internal confidence/evidence record.

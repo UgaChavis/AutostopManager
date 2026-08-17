@@ -27,14 +27,14 @@ def test_prepare_card_action_preserves_manual_vehicle_profile_values():
     assert "vehicle_profile_patch_touches_manual_field" not in result["risk_flags"]
 
 
-def test_prepare_card_action_flags_long_board_summary():
+def test_prepare_card_action_flags_board_summary_that_is_not_compact_natural_text():
     result = prepare_crm_card_action(
         card_id="card-123",
         expected_updated_at="2026-06-08T10:00:00+07:00",
-        board_summary="1\n2\n3\n4\n5\n6",
+        board_summary="Ждём деталь.\nПосле поступления установим её.\nЗатем проведём проверку.",
     )
 
-    assert "board_summary_too_many_lines" in result["risk_flags"]
+    assert "board_summary_not_compact_natural_text" in result["risk_flags"]
 
 
 def test_prepare_card_action_flags_private_data_in_board_summary():

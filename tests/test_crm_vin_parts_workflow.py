@@ -48,7 +48,7 @@ def test_playbook_covers_identifier_markets_confidence_and_crm_writeback():
         "client sale price",
         "oem reference",
         "selected part",
-        "quote matrix",
+        "internal quote matrix",
         "agent_finance_workflow",
         "agent_board_workflow",
         "agent_entity_context",
@@ -85,6 +85,9 @@ def test_pipeline_returns_crm_output_format_and_frame_workflow():
     assert result["context"]["frame"] == "GXE***644"
     assert "OEM reference" in result["crm_note_template"]
     assert "Selected parts" in result["crm_note_template"]
+    assert "не текст CRM-карточки" in result["crm_note_template"]
+    write_step = next(step for step in result["pipeline"] if step["step"] == "write_structured_result_to_crm_card")
+    assert any("quote matrix, sources, confidence" in rule for rule in write_step["rules"])
     assert "price_procurement" in result["pipeline"][5]["schema"]
     assert "price_public_retail" in result["pipeline"][5]["schema"]
     assert "price_client_sale" in result["pipeline"][5]["schema"]

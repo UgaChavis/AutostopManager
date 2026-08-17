@@ -248,7 +248,7 @@ def _registry_warning(name: str, registry: dict[str, Any]) -> str | None:
 def _crm_note_template() -> str:
     return "\n".join(
         [
-            "VIN/OEM подбор:",
+            "Внутренний VIN/OEM результат, не текст CRM-карточки:",
             "Авто: <make model, year/build, engine/transmission/market>",
             "VIN/frame source: <CRM field/card text/file>; <identifier type>",
             "Деталь: <part, side/axis/position/quantity>",
@@ -510,8 +510,9 @@ def build_crm_vin_parts_lookup_pipeline(
                 "manager_tools": ["prepare_action_contract"],
                 "checks": [
                     "expected_updated_at is present before agent_board_workflow cleanup_card apply",
-                    "description patch contains quote matrix and source confidence",
-                    "board_summary is <=5 non-empty lines and excludes VIN/client private data",
+                    "description was reread in full and revised as one coherent history with only confirmed useful working facts",
+                    "board_summary is one or two natural plain-text sentences and excludes VIN/client private data",
+                    "current-state changes update description and board_summary together",
                 ],
             },
             {
@@ -519,9 +520,10 @@ def build_crm_vin_parts_lookup_pipeline(
                 "crm_tools": ["agent_board_workflow", "agent_finance_workflow"],
                 "rules": [
                     "apply card description and board_summary through agent_board_workflow cleanup_card from prepare_action_contract",
-                    "description gets OEM/replacements/quote matrix/source/confidence",
+                    "description preserves the useful history and naturally incorporates confirmed selected OEM/part facts",
+                    "quote matrix, sources, confidence, rejected candidates, and missing checks remain internal",
                     "repair-order materials get selected priced part only",
-                    "board_summary stays short and excludes raw VIN/client private data",
+                    "board_summary explains the current state or next action briefly in natural plain text",
                 ],
             },
             {
@@ -531,7 +533,7 @@ def build_crm_vin_parts_lookup_pipeline(
                     "description persisted",
                     "material total equals manual sum",
                     "selected part line has one price basis",
-                    "confidence and needs-confirmation are visible",
+                    "internal confidence and needs-confirmation remain visible in the protected lookup result",
                 ],
             },
         ],
@@ -542,8 +544,8 @@ def build_crm_vin_parts_lookup_pipeline(
                 "OEM reference",
                 "supersession",
                 "crosses/analogs",
-                "rejected candidates",
-                "source matrix",
+                "selected part and quantity basis",
+                "confirmed price when operationally needed",
             ],
             "quantity_rule": "quantity=1 for kit/package/service set; numeric quantity only when price is per piece",
         },

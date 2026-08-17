@@ -74,9 +74,9 @@ never authorizes an order.
 ## Output And Memory
 
 Report the requested part, selected options, price basis, city, delivery,
-availability and the weak items needing confirmation. Public CRM descriptions
-follow `crm_card_description_standard.md` and contain only confirmed compact
-working facts; source lists and confidence stay in the owner report.
+availability and the weak items needing confirmation. Public CRM card text
+follows the single `crm_card_description_standard.md`; source lists and
+confidence stay in the owner report.
 
 Do not store current offers, seller contacts, customer vehicle identifiers,
 supplier secrets or listing dumps in Manager memory. Keep only reusable search

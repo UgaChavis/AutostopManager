@@ -78,14 +78,7 @@ unless they are still operationally necessary.
 
 Public description follows
 `docs/agent/crm_card_description_standard.md`; do not restate its formatting,
-content or empty-description rules here. `board_summary` stays separate and
-contains only a short plain operator preview, without rich formatting, private
-identity, raw scans or source lists.
-
-Description quality is judged by operational completeness, not minimum length.
-For a nontrivial active card, preserve every applicable confirmed complaint,
-finding, agreed work, parts state, result and customer arrangement; do not
-collapse that handoff into a three-word task label. Create text for an empty
+content, editing or `board_summary` rules here. Create text for an empty
 description only from supported facts, and leave it empty when no useful facts
 are available.
 

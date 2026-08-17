@@ -51,7 +51,7 @@ DOMAIN_POLICIES: dict[str, dict[str, list[str]]] = {
     "board_cleanup_autopilot": {
         "hot_rules": [
             "For 'Приберись', inspect vehicle passport and client data first; phone is the primary client match key.",
-            "Keep title, vehicle, board_summary and at most three tags concise; make description a concise but complete handoff, normally 5-12 short semantic lines for a nontrivial card. Preserve the confirmed current work status and keep it aligned with board_summary.",
+            "Follow docs/agent/crm_card_description_standard.md: revise description as a coherent evolving history and write board_summary as one or two natural plain-text sentences about the current state; update both together when that state changes.",
             "Routine cleanup never moves or archives cards and never changes repair orders or payments without separate exact authorization.",
         ],
         "read_order": [

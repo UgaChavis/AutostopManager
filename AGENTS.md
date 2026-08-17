@@ -106,13 +106,10 @@ bearer is internal compatibility only.
   change require a direct owner instruction for that exact operation.
 - Card description or vehicle-profile writes use
   `agent_board_workflow(operation="cleanup_card")` in dry-run and apply modes.
-  Follow `docs/agent/crm_card_description_standard.md`: write a
-  concise but complete handoff, normally 5-12 short semantic lines for a
-  nontrivial card; preserve confirmed complaint, finding, current work status,
-  agreement, parts state, result, technical next step or blocker and customer
-  arrangement. A current status shown in `board_summary` must also be reflected
-  in `description`; write both together when that fact changes. Do not add
-  risks, provenance, selection method, supplier reminders or long AI text.
+  Follow the single canonical text model in
+  `docs/agent/crm_card_description_standard.md`; do not duplicate its style or
+  content rules here. When the current state changes, update `description` and
+  `board_summary` together.
 - Move, archive, delete, deadline/indicator changes and repair-order edits must
   be necessary to the active task and pass the same safeguards.
 - Finance, inventory, documents, files, Gmail and destructive writes require an
