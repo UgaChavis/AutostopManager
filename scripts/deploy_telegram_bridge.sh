@@ -52,13 +52,29 @@ install -o root -g root -m 0644 "${release_dir}/deploy/systemd/autostop-telegram
 systemctl daemon-reload
 
 rollback() {
-  if [[ -n "${previous_release}" && -d "${previous_release}" ]]; then
-    rollback_link="${RELEASE_ROOT}/.rollback-${release_id}"
-    ln -s "${previous_release}" "${rollback_link}"
-    mv -Tf -- "${rollback_link}" "${current_link}"
-    systemctl restart autostop-telegram.service || true
-    return 0
+  if [[ -z "${previous_release}" || ! -d "${previous_release}" \
+    || ! -f "${previous_release}/deploy/systemd/autostop-telegram.service" ]]; then
+    return 1
   fi
+  rollback_link="${RELEASE_ROOT}/.rollback-${release_id}"
+  ln -s "${previous_release}" "${rollback_link}"
+  mv -Tf -- "${rollback_link}" "${current_link}"
+  if ! install -o root -g root -m 0644 \
+    "${previous_release}/deploy/systemd/autostop-telegram.service" "${UNIT_PATH}"; then
+    return 1
+  fi
+  systemctl daemon-reload
+  if ! systemctl restart autostop-telegram.service; then
+    return 1
+  fi
+  for _rollback_attempt in $(seq 1 15); do
+    if systemctl is-active --quiet autostop-telegram.service \
+      && sudo -u autostop-telegram env PYTHONPATH="${current_link}" \
+        /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
   return 1
 }
 
@@ -90,7 +106,7 @@ if [[ "${bridge_ready}" -ne 1 ]]; then
 fi
 if ! sudo -u autostop-telegram env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
   /opt/autostop-telegram-venv/bin/python -c \
-  'from autostop_manager.telegram_transcribe import DEFAULT_MODEL_DIR; from faster_whisper import WhisperModel; assert DEFAULT_MODEL_DIR.is_dir(); assert WhisperModel' ; then
+  'from autostop_manager.telegram_transcribe import DEFAULT_MODEL_DIR, _validate_local_model; from faster_whisper import WhisperModel; _validate_local_model(DEFAULT_MODEL_DIR); assert WhisperModel' ; then
   if rollback; then
     echo "ERROR: local Telegram transcription runtime failed; previous release restored" >&2
   else

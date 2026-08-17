@@ -110,6 +110,36 @@ def test_cli_delete_after_removes_exact_private_audio(monkeypatch, tmp_path, cap
     assert json.loads(capsys.readouterr().out)["text"] == "готово"
 
 
+def test_cli_delete_after_reports_cleanup_failure(monkeypatch, tmp_path, capsys) -> None:
+    inbox, audio = _private_audio(tmp_path)
+    monkeypatch.setattr(telegram_transcribe, "DEFAULT_INBOX_DIR", inbox)
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "transcribe_private_audio",
+        lambda *_args, **_kwargs: {"ok": True, "text": "private transcript"},
+    )
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "discard_private_audio",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TranscriptionError("audio_cleanup_failed")),
+    )
+
+    assert telegram_transcribe.main(["--file", str(audio), "--delete-after"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "audio_cleanup_failed"}
+
+
 def test_model_loader_fails_closed_without_local_model(tmp_path) -> None:
     with pytest.raises(TranscriptionError, match="transcription_model_unavailable"):
         telegram_transcribe._load_model(tmp_path / "missing", cpu_threads=2)
+
+
+def test_model_validation_requires_pinned_revision_marker(tmp_path) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(mode=0o700)
+    for name in ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"):
+        candidate = model_dir / name
+        candidate.write_bytes(b"model")
+        candidate.chmod(0o600)
+
+    with pytest.raises(TranscriptionError, match="transcription_model_invalid"):
+        telegram_transcribe._validate_local_model(model_dir)

@@ -98,7 +98,7 @@ def _probe_audio(path: Path) -> dict[str, Any]:
     }
 
 
-def _load_model(model_dir: Path, *, cpu_threads: int) -> Any:
+def _validate_local_model(model_dir: Path) -> None:
     if not model_dir.is_absolute() or not model_dir.is_dir():
         raise TranscriptionError("transcription_model_unavailable")
     try:
@@ -107,7 +107,14 @@ def _load_model(model_dir: Path, *, cpu_threads: int) -> Any:
         raise TranscriptionError("transcription_model_unavailable") from exc
     if model_stat.st_uid != os.geteuid() or stat.S_IMODE(model_stat.st_mode) != 0o700:
         raise TranscriptionError("transcription_model_permissions_invalid")
-    for name in ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"):
+    required_files = (
+        "config.json",
+        "model.bin",
+        "tokenizer.json",
+        "vocabulary.txt",
+        f".cache/huggingface/trees/{MODEL_REVISION}.json",
+    )
+    for name in required_files:
         candidate = model_dir / name
         try:
             candidate_stat = candidate.lstat()
@@ -119,6 +126,10 @@ def _load_model(model_dir: Path, *, cpu_threads: int) -> Any:
             or stat.S_IMODE(candidate_stat.st_mode) != 0o600
         ):
             raise TranscriptionError("transcription_model_invalid")
+
+
+def _load_model(model_dir: Path, *, cpu_threads: int) -> Any:
+    _validate_local_model(model_dir)
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
@@ -171,6 +182,16 @@ def transcribe_private_audio(
     }
 
 
+def discard_private_audio(path: Path, *, inbox_dir: Path = DEFAULT_INBOX_DIR) -> None:
+    _validate_private_audio(path, inbox_dir=inbox_dir)
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise TranscriptionError("audio_cleanup_failed") from exc
+    if path.exists() or path.is_symlink():
+        raise TranscriptionError("audio_cleanup_failed")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram-transcribe")
     parser.add_argument("--file", required=True, type=Path)
@@ -190,10 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if args.delete_after:
             try:
-                _validate_private_audio(args.file, inbox_dir=DEFAULT_INBOX_DIR)
-                args.file.unlink()
-            except (OSError, TranscriptionError):
-                pass
+                discard_private_audio(args.file, inbox_dir=DEFAULT_INBOX_DIR)
+            except TranscriptionError:
+                payload = {"ok": False, "error": "audio_cleanup_failed"}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload.get("ok") is True else 1
 

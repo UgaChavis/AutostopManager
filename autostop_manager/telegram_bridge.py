@@ -491,7 +491,15 @@ def _read_private_download(path: Path, *, inbox_dir: Path) -> bytes:
                 or not 0 < file_stat.st_size <= MAX_DOWNLOAD_BYTES
             ):
                 raise BridgeError("download_permissions_invalid")
-            content = os.read(descriptor, MAX_DOWNLOAD_BYTES + 1)
+            chunks: list[bytes] = []
+            remaining = file_stat.st_size
+            while remaining > 0:
+                chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise BridgeError("download_read_incomplete")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            content = b"".join(chunks)
         finally:
             os.close(descriptor)
     finally:

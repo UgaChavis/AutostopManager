@@ -29,6 +29,10 @@ Keep docs compact.
 1. For a non-trivial request run one project-venv context command:
    `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"` or
    `prepare-context "<query>"`. Never fall back to host Python.
+   For a voice session, load `docs/agent/voice_agent_brief.md` before the
+   first owner task. Treat a direct owner voice command as authority to resolve
+   ordinary operational details and complete its intended result; verification
+   gates are internal execution steps, not a request for another confirmation.
 2. For local docs/knowledge work run `knowledge-probe "<query>"`, then open
    `open_first` and only the returned sources before broader reads.
 3. Resolve `work` or `learning` mode. In learning mode use the
@@ -84,8 +88,10 @@ bearer is internal compatibility only.
 
 ## Write Safety
 
-- The active task authorizes only necessary non-financial exact-target changes.
-  Do not expand into unrelated cleanup.
+- A direct owner task authorizes the necessary non-financial changes and the
+  homogeneous target selection reasonably required to achieve its stated
+  outcome. Resolve operational details from focused live reads and act without
+  asking for routine criteria; do not expand into unrelated cleanup.
 - Mandatory order: focused reread -> `prepare_action_contract` -> named
   workflow `dry_run` -> `apply` -> exact-target reread and verification.
   Use idempotency, concurrency controls and a correlation id; unresolved

@@ -49,21 +49,44 @@ targets in the active workflow:
 - `_send_email`
 - `_forward_emails`
 
-## Write Safety
+## Autonomous Voice Execution And Write Safety
 
-Before any mutating Gmail command, identify the exact action, target messages or
-query, labels, recipients, subject, attachments, and intended result. Agent
-Gateway v2 has no second owner-confirmation state once that task-specific intent
-and target are present: use automatic preflight, an idempotency key, active tool
-schema inspection, and result readback.
+For a direct owner voice command, resolve the operational details yourself.
+The command authorizes a focused read, classification, and a homogeneous
+selection that reasonably achieves the named outcome. Do not ask the owner to
+provide a date range, query, IDs, labels, or a choice among safe ways to carry
+out a routine mailbox task. Infer them from the current mailbox and report the
+completed result after verification.
+
+For example, «вычисти технический мусор» authorizes finding and processing the
+currently relevant automated alerts, CI/build notifications, routine test
+reports, and newsletters as a separate homogeneous class. «Удали уведомления
+GitHub о падениях» authorizes a bounded Trash operation over that identified
+class, even if the owner did not state each message ID or date. Preserve a
+message when its sender, subject, thread context, or attachments indicate an
+account or security alert, client, supplier, bank, government body, payment,
+contract, legal obligation, or a non-technical personal matter.
+
+Before any mutating Gmail command, resolve the exact action and resulting
+message IDs or query from that authorized scope. Agent Gateway v2 has no second
+owner-confirmation state once that task-specific intent and target are present:
+use automatic preflight, an idempotency key, active tool schema inspection, and
+result readback. Ask only when the business purpose conflicts, a target is
+genuinely ambiguous, the action would irreversibly affect a mixed set that may
+contain significant mail, or an external send has an ambiguous recipient.
 
 - For individual changes, use message IDs returned by Gmail search/read tools.
-- For server-side bulk labeling or archiving, preview the Gmail query with
-  `_search_emails` first and report the query/target class before executing.
-- Prefer archive over delete for routine cleanup; delete moves messages to
-  Trash and must be explicitly within the workflow's owner-authorized target.
-- For sends/forwards, confirm recipients, subject, body, attachment paths, and
-  whether the message is a new email, reply, draft, or forward.
+- For server-side bulk labeling, archiving, or Trash, preview the Gmail query
+  with `_search_emails` first, classify the result, then execute immediately
+  when it is the homogeneous class authorized by the owner. The preview is an
+  internal verification step, not a reason to request confirmation or issue an
+  intermediate report.
+- Prefer archive when the owner asks generally to clean or hide routine noise.
+  Move an explicitly named homogeneous class to Trash when the owner says
+  «удали» or equivalent; Trash remains recoverable. Never treat a vague cleanup
+  command as authority to delete a mixed or business-significant selection.
+- For sends/forwards, resolve and verify recipients, subject, body, attachment
+  paths, and whether the message is a new email, reply, draft, or forward.
 - For CRM+Gmail workflows, store only connector, action, message/thread/draft/
   attachment/file IDs, timestamps, and status in manager SQLite. Never store
   the raw body, HTML, snippet, or full subject there.

@@ -15,6 +15,7 @@ from autostop_manager.telegram_bridge import (
     BridgeError,
     TelegramConfig,
     _ensure_private_key,
+    _read_private_download,
     _read_one_time_password,
     _requires_mutation_lock,
     _save_qr,
@@ -53,7 +54,26 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert "origin/${BRANCH}" in text
     assert 'git -C "${SOURCE_DIR}" archive' in text
     assert "autostop-telegram.service" in text
+    assert '"${previous_release}/deploy/systemd/autostop-telegram.service"' in text
     assert "docker" not in text
+
+
+def test_private_download_reader_handles_short_system_reads(monkeypatch, tmp_path) -> None:
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(mode=0o700)
+    content = b"%PDF-1.7\ncomplete-content"
+    download = inbox / "42-example.pdf"
+    download.write_bytes(content)
+    download.chmod(0o600)
+    real_read = telegram_bridge.os.read
+
+    monkeypatch.setattr(
+        telegram_bridge.os,
+        "read",
+        lambda descriptor, count: real_read(descriptor, min(count, 3)),
+    )
+
+    assert _read_private_download(download, inbox_dir=inbox) == content
 
 
 def test_credentials_require_private_permissions_and_valid_values(tmp_path) -> None:
