@@ -283,6 +283,108 @@ def test_today_context_returns_due_items(tmp_path):
     assert context["memory_use_order"][0] == "today_context"
 
 
+def test_director_journal_create_read_update_and_today_context(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    created = store.create_director_journal_entry(
+        "повторяется ожидание подтвержденного следующего шага",
+        category="workshop_flow",
+        decision="проверять наличие следующего действия после управленческого обзора",
+        status="waiting",
+        next_review_at="2030-01-02T03:04:05+00:00",
+        workflow_ref_hash="sha256:" + "a" * 64,
+        tags=["директор", "ремзона"],
+    )
+
+    assert created["ok"] is True
+    entry = created["entry"]
+    assert entry["status"] == "waiting"
+    assert entry["category"] == "workshop_flow"
+    assert entry["tags"] == ["директор", "ремзона"]
+    assert created["retention"]["limits"]["max_entries"] == 400
+
+    active = store.read_director_journal(status="active", limit=5)
+    assert [item["id"] for item in active["entries"]] == [entry["id"]]
+
+    updated = store.update_director_journal_entry(
+        entry["id"],
+        status="verified",
+        result="проверка подтвердила пригодность правила",
+        expected_updated_at=entry["updated_at"],
+    )
+    assert updated["ok"] is True
+    assert updated["entry"]["status"] == "verified"
+
+    conflict = store.update_director_journal_entry(
+        entry["id"],
+        status="rejected",
+        expected_updated_at=entry["updated_at"],
+    )
+    assert conflict["ok"] is False
+    assert conflict["error"] == "director_journal_revision_conflict"
+
+    context = store.today_context()
+    assert context["director_journal"]["active_entries"] == []
+    assert context["director_journal"]["limits"]["max_active"] == 50
+
+
+def test_director_journal_rejects_private_or_oversized_content(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    sensitive = store.create_director_journal_entry("Связаться по +7 999 123-45-67")
+    oversized = store.create_director_journal_entry("а" * 601)
+    missing_review = store.create_director_journal_entry(
+        "ожидается внешний подтвержденный результат",
+        status="waiting",
+    )
+
+    assert sensitive == {"ok": False, "error": "unsafe_durable_memory_value"}
+    assert oversized == {"ok": False, "error": "unsafe_durable_memory_value"}
+    assert missing_review == {"ok": False, "error": "next_review_at_required_for_waiting"}
+    assert store.director_journal_stats()["total_entries"] == 0
+
+
+def test_director_journal_enforces_active_and_total_limits(tmp_path, monkeypatch):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    monkeypatch.setattr(storage_module, "DIRECTOR_JOURNAL_MAX_ACTIVE", 2)
+    monkeypatch.setattr(storage_module, "DIRECTOR_JOURNAL_MAX_ENTRIES", 3)
+
+    assert store.create_director_journal_entry("первый открытый управленческий сигнал")["ok"] is True
+    assert store.create_director_journal_entry("второй открытый управленческий сигнал")["ok"] is True
+    blocked = store.create_director_journal_entry("третий открытый управленческий сигнал")
+    assert blocked["error"] == "director_journal_active_limit_reached"
+
+    with store.connect() as conn:
+        conn.execute("UPDATE director_journal SET status = 'verified'")
+
+    for index in range(4):
+        result = store.create_director_journal_entry(
+            f"проверенный управленческий вывод номер {index}",
+            status="verified",
+        )
+        assert result["ok"] is True
+
+    stats = store.director_journal_stats()
+    assert stats["total_entries"] == 3
+    assert stats["limits"]["max_entries"] == 3
+
+
+def test_generic_journal_is_private_and_size_bounded(tmp_path, monkeypatch):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    monkeypatch.setattr(storage_module, "GENERIC_JOURNAL_MAX_ENTRIES", 2)
+
+    assert store.journal("Связаться по +7 999 123-45-67")["ok"] is False
+    assert store.journal("первое безопасное событие")["ok"] is True
+    assert store.journal("второе безопасное событие")["ok"] is True
+    assert store.journal("третье безопасное событие")["ok"] is True
+
+    context = store.today_context(limit=10)
+    assert [item["event"] for item in context["recent_journal"]] == [
+        "третье безопасное событие",
+        "второе безопасное событие",
+    ]
+
+
 def test_seed_default_rules_updates_existing_rule(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()

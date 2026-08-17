@@ -234,6 +234,28 @@ def build_parser() -> argparse.ArgumentParser:
     journal.add_argument("--source", default="codex")
     journal.add_argument("--tags", default="")
 
+    director_journal = sub.add_parser(
+        "director-journal",
+        help="Create, read, update, inspect, or prune the bounded de-identified director journal",
+    )
+    director_journal.add_argument(
+        "operation",
+        choices=["create", "read", "update", "stats", "prune"],
+    )
+    director_journal.add_argument("--event", default="")
+    director_journal.add_argument("--entry-id", type=int, default=None)
+    director_journal.add_argument("--category", default="")
+    director_journal.add_argument("--decision", default="")
+    director_journal.add_argument("--result", default="")
+    director_journal.add_argument("--status", default="")
+    director_journal.add_argument("--next-review-at", default=None)
+    director_journal.add_argument("--expected-updated-at", default="")
+    director_journal.add_argument("--workflow-ref-hash", default="")
+    director_journal.add_argument("--source", default="director")
+    director_journal.add_argument("--tags", default="")
+    director_journal.add_argument("--limit", type=int, default=10)
+    director_journal.add_argument("--apply", action="store_true")
+
     today = sub.add_parser("today", help="Return today's manager context")
     today.add_argument("--limit", type=int, default=20)
 
@@ -1035,6 +1057,44 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
     elif args.command == "journal":
         _print_json(store.journal(args.event, source=args.source, tags=_tags(args.tags)))
+    elif args.command == "director-journal":
+        if args.operation == "create":
+            return _print_checked_json(
+                store.create_director_journal_entry(
+                    args.event,
+                    category=args.category or "operations",
+                    decision=args.decision,
+                    result=args.result,
+                    status=args.status or "open",
+                    next_review_at=args.next_review_at,
+                    workflow_ref_hash=args.workflow_ref_hash,
+                    source=args.source,
+                    tags=_tags(args.tags),
+                )
+            )
+        if args.operation == "read":
+            return _print_checked_json(
+                store.read_director_journal(
+                    status=args.status or "active",
+                    category=args.category,
+                    limit=args.limit,
+                )
+            )
+        if args.operation == "update":
+            if args.entry_id is None:
+                return _print_checked_json({"ok": False, "error": "entry_id_required"})
+            return _print_checked_json(
+                store.update_director_journal_entry(
+                    args.entry_id,
+                    status=args.status,
+                    result=args.result,
+                    next_review_at=args.next_review_at,
+                    expected_updated_at=args.expected_updated_at,
+                )
+            )
+        if args.operation == "stats":
+            return _print_checked_json(store.director_journal_stats())
+        return _print_checked_json(store.maintain_director_journal(apply=args.apply))
     elif args.command == "today":
         _print_json(store.today_context(limit=args.limit))
     elif args.command == "prepare-context":

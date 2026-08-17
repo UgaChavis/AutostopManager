@@ -40,6 +40,10 @@ Keep docs compact.
 4. When the owner starts `режим директора`, `директор автосервиса`, or a
    recurring director goal, load `.agents/skills/run-autostop-director/SKILL.md`
    and `docs/agent/service_director_manifest.md` before live reads.
+   Read `today_context` and at most 10 active structured director-journal entries
+   before the live board scan. The journal is de-identified runtime Manager
+   context, never a CRM history substitute; follow the manifest for write and
+   retention rules.
 5. For multi-step work use the Gateway v2 workflow ledger with compact,
    state-versioned checkpoints. Raw discovery is only for a capability not
    covered by a named workflow; a raw write requires its exact literal name,
@@ -103,10 +107,12 @@ bearer is internal compatibility only.
 - Card description or vehicle-profile writes use
   `agent_board_workflow(operation="cleanup_card")` in dry-run and apply modes.
   Follow `docs/agent/crm_card_description_standard.md`: write a
-  minimum-sufficient handoff, normally 4-10 short lines for a nontrivial card;
-  preserve confirmed complaint, finding, agreement, parts state, result and
-  customer arrangement. Do not add risks, provenance, selection method,
-  supplier reminders or long AI text.
+  concise but complete handoff, normally 5-12 short semantic lines for a
+  nontrivial card; preserve confirmed complaint, finding, current work status,
+  agreement, parts state, result, technical next step or blocker and customer
+  arrangement. A current status shown in `board_summary` must also be reflected
+  in `description`; write both together when that fact changes. Do not add
+  risks, provenance, selection method, supplier reminders or long AI text.
 - Move, archive, delete, deadline/indicator changes and repair-order edits must
   be necessary to the active task and pass the same safeguards.
 - Finance, inventory, documents, files, Gmail and destructive writes require an

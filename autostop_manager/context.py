@@ -51,7 +51,7 @@ DOMAIN_POLICIES: dict[str, dict[str, list[str]]] = {
     "board_cleanup_autopilot": {
         "hot_rules": [
             "For 'Приберись', inspect vehicle passport and client data first; phone is the primary client match key.",
-            "Keep title, vehicle, board_summary and at most three tags concise; make description a minimum-sufficient handoff, normally 4-10 short lines for a nontrivial card, and create it from confirmed useful facts when empty.",
+            "Keep title, vehicle, board_summary and at most three tags concise; make description a concise but complete handoff, normally 5-12 short semantic lines for a nontrivial card. Preserve the confirmed current work status and keep it aligned with board_summary.",
             "Routine cleanup never moves or archives cards and never changes repair orders or payments without separate exact authorization.",
         ],
         "read_order": [
@@ -61,7 +61,7 @@ DOMAIN_POLICIES: dict[str, dict[str, list[str]]] = {
         ],
         "allowed_actions": [
             "cleanup_card dry_run/apply for confirmed card, structured vehicle/client and board_summary deltas",
-            "execute a direct safe card task and write back its minimum-sufficient supported result",
+            "execute a direct safe card task and write back its concise but complete supported result",
         ],
         "forbidden_actions": [
             "move, archive, delete or merge records during routine cleanup",

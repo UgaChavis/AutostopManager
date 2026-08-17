@@ -110,6 +110,28 @@ AGENT_IMPROVEMENT_RISKS = frozenset({"low", "medium", "high"})
 AGENT_IMPROVEMENT_STATUSES = frozenset({"pending", "repairing", "verified", "promoted", "deferred", "rolled_back"})
 AGENT_IMPROVEMENT_TERMINAL_STATUSES = frozenset({"promoted", "deferred", "rolled_back"})
 AGENT_TOOL_EVENT_STATUSES = frozenset({"started", "succeeded", "failed", "skipped"})
+DIRECTOR_JOURNAL_ACTIVE_STATUSES = frozenset({"open", "waiting"})
+DIRECTOR_JOURNAL_TERMINAL_STATUSES = frozenset({"verified", "rejected", "superseded"})
+DIRECTOR_JOURNAL_STATUSES = DIRECTOR_JOURNAL_ACTIVE_STATUSES | DIRECTOR_JOURNAL_TERMINAL_STATUSES
+DIRECTOR_JOURNAL_CATEGORIES = frozenset(
+    {
+        "operations",
+        "customer_commitment",
+        "workshop_flow",
+        "parts_wait",
+        "crm_quality",
+        "staff_coordination",
+        "finance_read_only",
+        "process_improvement",
+        "other",
+    }
+)
+DIRECTOR_JOURNAL_MAX_ENTRIES = 400
+DIRECTOR_JOURNAL_MAX_ACTIVE = 50
+DIRECTOR_JOURNAL_TERMINAL_RETENTION_DAYS = 180
+DIRECTOR_JOURNAL_MAX_TEXT_LENGTH = 600
+GENERIC_JOURNAL_MAX_ENTRIES = 500
+GENERIC_JOURNAL_MAX_EVENT_LENGTH = 768
 AGENT_LEARNING_METADATA_KEYS = frozenset(
     {
         "action_kind",
@@ -1457,6 +1479,35 @@ def _validate_durable_memory_tags(values: list[str] | None) -> list[str] | None:
     return list(dict.fromkeys(result))
 
 
+def _validate_director_journal_text(value: Any, *, allow_empty: bool = False) -> str | None:
+    text = _validate_durable_memory_text(value, allow_empty=allow_empty)
+    if text is None or len(text) > DIRECTOR_JOURNAL_MAX_TEXT_LENGTH:
+        return None
+    return text
+
+
+def _normalize_director_journal_datetime(value: Any, *, allow_empty: bool = True) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return "" if allow_empty else None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC).isoformat()
+
+
+def _normalize_director_journal_ref(value: Any) -> str | None:
+    text = str(value or "").strip().casefold()
+    if not text:
+        return ""
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", text):
+        return text
+    return None
+
+
 def _tokens(value: str) -> list[str]:
     aliases = {
         "вин": ["vin"],
@@ -1843,6 +1894,21 @@ class ManagerMemoryStore:
                     archived_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS director_journal (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    confirmed_fact TEXT NOT NULL,
+                    decision TEXT NOT NULL DEFAULT '',
+                    result TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'open',
+                    next_review_at TEXT,
+                    workflow_ref_hash TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'director',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS manager_rules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
@@ -2129,6 +2195,12 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_agent_improvements_status
                     ON agent_improvements(status, risk, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_director_journal_status_review
+                    ON director_journal(status, next_review_at, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_director_journal_category_updated
+                    ON director_journal(category, updated_at);
                 """
             )
             self._ensure_columns(conn)
@@ -2549,13 +2621,334 @@ class ManagerMemoryStore:
 
     def journal(self, event: str, *, source: str = "codex", tags: list[str] | None = None) -> dict[str, Any]:
         self.initialize()
+        normalized_event = _validate_durable_memory_text(event)
+        normalized_source = _validate_durable_memory_text(source)
+        normalized_tags = _validate_durable_memory_tags(tags)
+        if (
+            normalized_event is None
+            or len(normalized_event) > GENERIC_JOURNAL_MAX_EVENT_LENGTH
+            or normalized_source is None
+            or normalized_tags is None
+        ):
+            return {"ok": False, "error": "unsafe_durable_memory_value"}
         now = _now()
         with self.connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO journal (event, source, tags_json, created_at) VALUES (?, ?, ?, ?)",
-                (event, source, _json_list(tags), now),
+                (normalized_event, normalized_source, _json_list(normalized_tags), now),
+            )
+            conn.execute(
+                """
+                DELETE FROM journal
+                WHERE id IN (
+                    SELECT id FROM journal
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT -1 OFFSET ?
+                )
+                """,
+                (GENERIC_JOURNAL_MAX_ENTRIES,),
             )
         return {"ok": True, "id": cursor.lastrowid, "created_at": now}
+
+    def create_director_journal_entry(
+        self,
+        confirmed_fact: str,
+        *,
+        category: str = "operations",
+        decision: str = "",
+        result: str = "",
+        status: str = "open",
+        next_review_at: str | None = None,
+        workflow_ref_hash: str = "",
+        source: str = "director",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_category = str(category or "").strip().casefold()
+        normalized_status = str(status or "").strip().casefold()
+        normalized_fact = _validate_director_journal_text(confirmed_fact)
+        normalized_decision = _validate_director_journal_text(decision, allow_empty=True)
+        normalized_result = _validate_director_journal_text(result, allow_empty=True)
+        normalized_review_at = _normalize_director_journal_datetime(next_review_at)
+        normalized_ref = _normalize_director_journal_ref(workflow_ref_hash)
+        normalized_source = _validate_director_journal_text(source)
+        normalized_tags = _validate_durable_memory_tags(tags)
+        if normalized_category not in DIRECTOR_JOURNAL_CATEGORIES:
+            return {
+                "ok": False,
+                "error": "invalid_director_journal_category",
+                "allowed": sorted(DIRECTOR_JOURNAL_CATEGORIES),
+            }
+        if normalized_status not in DIRECTOR_JOURNAL_STATUSES:
+            return {
+                "ok": False,
+                "error": "invalid_director_journal_status",
+                "allowed": sorted(DIRECTOR_JOURNAL_STATUSES),
+            }
+        if (
+            normalized_fact is None
+            or normalized_decision is None
+            or normalized_result is None
+            or normalized_review_at is None
+            or normalized_ref is None
+            or normalized_source is None
+            or normalized_tags is None
+        ):
+            return {"ok": False, "error": "unsafe_durable_memory_value"}
+        if normalized_status == "waiting" and not normalized_review_at:
+            return {"ok": False, "error": "next_review_at_required_for_waiting"}
+
+        now = _now()
+        with self.connect() as conn:
+            retention = self._prune_director_journal(conn, now=now, apply=True)
+            if normalized_status in DIRECTOR_JOURNAL_ACTIVE_STATUSES:
+                active_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM director_journal WHERE status IN ('open', 'waiting')"
+                    ).fetchone()[0]
+                )
+                if active_count >= DIRECTOR_JOURNAL_MAX_ACTIVE:
+                    return {
+                        "ok": False,
+                        "error": "director_journal_active_limit_reached",
+                        "active_count": active_count,
+                        "max_active": DIRECTOR_JOURNAL_MAX_ACTIVE,
+                    }
+            cursor = conn.execute(
+                """
+                INSERT INTO director_journal (
+                    category, confirmed_fact, decision, result, status,
+                    next_review_at, workflow_ref_hash, source, tags_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_category,
+                    normalized_fact,
+                    normalized_decision,
+                    normalized_result,
+                    normalized_status,
+                    normalized_review_at or None,
+                    normalized_ref,
+                    normalized_source,
+                    _json_list(normalized_tags),
+                    now,
+                    now,
+                ),
+            )
+            entry_id = _required_lastrowid(cursor)
+            post_retention = self._prune_director_journal(conn, now=now, apply=True)
+            row = conn.execute("SELECT * FROM director_journal WHERE id = ?", (entry_id,)).fetchone()
+        return {
+            "ok": True,
+            "entry": self._row_to_dict(row) if row else None,
+            "retention": {
+                "before_create": retention,
+                "after_create": post_retention,
+                "limits": self._director_journal_limits(),
+            },
+        }
+
+    def update_director_journal_entry(
+        self,
+        entry_id: int,
+        *,
+        status: str,
+        result: str = "",
+        next_review_at: str | None = None,
+        expected_updated_at: str,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_status = str(status or "").strip().casefold()
+        normalized_result = _validate_director_journal_text(result, allow_empty=True)
+        normalized_review_at = _normalize_director_journal_datetime(next_review_at)
+        normalized_expected = _normalize_director_journal_datetime(expected_updated_at, allow_empty=False)
+        if normalized_status not in DIRECTOR_JOURNAL_STATUSES:
+            return {
+                "ok": False,
+                "error": "invalid_director_journal_status",
+                "allowed": sorted(DIRECTOR_JOURNAL_STATUSES),
+            }
+        if normalized_result is None or normalized_review_at is None or normalized_expected is None:
+            return {"ok": False, "error": "unsafe_durable_memory_value"}
+        if normalized_status == "waiting" and not normalized_review_at:
+            return {"ok": False, "error": "next_review_at_required_for_waiting"}
+
+        now = _now()
+        with self.connect() as conn:
+            current = conn.execute("SELECT * FROM director_journal WHERE id = ?", (entry_id,)).fetchone()
+            if not current:
+                return {"ok": False, "error": "director_journal_entry_not_found", "entry_id": entry_id}
+            if str(current["updated_at"]) != normalized_expected:
+                return {
+                    "ok": False,
+                    "error": "director_journal_revision_conflict",
+                    "entry_id": entry_id,
+                    "current_updated_at": current["updated_at"],
+                }
+            conn.execute(
+                """
+                UPDATE director_journal
+                SET status = ?, result = ?, next_review_at = ?, updated_at = ?
+                WHERE id = ? AND updated_at = ?
+                """,
+                (
+                    normalized_status,
+                    normalized_result,
+                    normalized_review_at or None,
+                    now,
+                    entry_id,
+                    normalized_expected,
+                ),
+            )
+            retention = self._prune_director_journal(conn, now=now, apply=True)
+            row = conn.execute("SELECT * FROM director_journal WHERE id = ?", (entry_id,)).fetchone()
+        return {
+            "ok": True,
+            "entry": self._row_to_dict(row) if row else None,
+            "retention": {**retention, "limits": self._director_journal_limits()},
+        }
+
+    def read_director_journal(
+        self,
+        *,
+        status: str = "active",
+        category: str = "",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        self.initialize()
+        normalized_status = str(status or "active").strip().casefold()
+        normalized_category = str(category or "").strip().casefold()
+        allowed_statuses = {"active", "all", *DIRECTOR_JOURNAL_STATUSES}
+        if normalized_status not in allowed_statuses:
+            return {"ok": False, "error": "invalid_director_journal_status_filter"}
+        if normalized_category and normalized_category not in DIRECTOR_JOURNAL_CATEGORIES:
+            return {"ok": False, "error": "invalid_director_journal_category"}
+        limit = max(1, min(int(limit), 50))
+        where: list[str] = []
+        params: list[Any] = []
+        if normalized_status == "active":
+            where.append("status IN ('open', 'waiting')")
+        elif normalized_status != "all":
+            where.append("status = ?")
+            params.append(normalized_status)
+        if normalized_category:
+            where.append("category = ?")
+            params.append(normalized_category)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM director_journal
+                {where_sql}
+                ORDER BY
+                    CASE status WHEN 'waiting' THEN 0 WHEN 'open' THEN 1 ELSE 2 END,
+                    CASE WHEN next_review_at IS NULL THEN 1 ELSE 0 END,
+                    next_review_at ASC,
+                    updated_at DESC
+                LIMIT ?
+                """,
+                (*params, limit),
+            ).fetchall()
+        return {
+            "ok": True,
+            "filters": {"status": normalized_status, "category": normalized_category},
+            "entries": [self._row_to_dict(row) for row in rows],
+            "limits": self._director_journal_limits(),
+        }
+
+    def director_journal_stats(self) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as conn:
+            status_rows = conn.execute(
+                "SELECT status, COUNT(*) AS count FROM director_journal GROUP BY status ORDER BY status"
+            ).fetchall()
+            total = int(conn.execute("SELECT COUNT(*) FROM director_journal").fetchone()[0])
+            oldest = conn.execute("SELECT created_at FROM director_journal ORDER BY created_at ASC LIMIT 1").fetchone()
+        return {
+            "ok": True,
+            "total_entries": total,
+            "by_status": {str(row["status"]): int(row["count"]) for row in status_rows},
+            "oldest_created_at": oldest["created_at"] if oldest else None,
+            "limits": self._director_journal_limits(),
+        }
+
+    def maintain_director_journal(self, *, apply: bool = False) -> dict[str, Any]:
+        self.initialize()
+        now = _now()
+        with self.connect() as conn:
+            result = self._prune_director_journal(conn, now=now, apply=apply)
+        return {
+            "ok": True,
+            "mode": "apply" if apply else "dry_run",
+            **result,
+            "limits": self._director_journal_limits(),
+        }
+
+    @staticmethod
+    def _director_journal_limits() -> dict[str, int]:
+        return {
+            "max_entries": DIRECTOR_JOURNAL_MAX_ENTRIES,
+            "max_active": DIRECTOR_JOURNAL_MAX_ACTIVE,
+            "terminal_retention_days": DIRECTOR_JOURNAL_TERMINAL_RETENTION_DAYS,
+            "max_text_length": DIRECTOR_JOURNAL_MAX_TEXT_LENGTH,
+            "max_read_limit": 50,
+        }
+
+    def _prune_director_journal(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        now: str,
+        apply: bool,
+    ) -> dict[str, Any]:
+        cutoff = (datetime.fromisoformat(now) - timedelta(days=DIRECTOR_JOURNAL_TERMINAL_RETENTION_DAYS)).isoformat()
+        terminal_placeholders = ",".join("?" for _ in DIRECTOR_JOURNAL_TERMINAL_STATUSES)
+        terminal_statuses = tuple(sorted(DIRECTOR_JOURNAL_TERMINAL_STATUSES))
+        expired_rows = conn.execute(
+            f"""
+            SELECT id FROM director_journal
+            WHERE status IN ({terminal_placeholders}) AND updated_at < ?
+            ORDER BY updated_at ASC, id ASC
+            """,
+            (*terminal_statuses, cutoff),
+        ).fetchall()
+        expired_ids = [int(row["id"]) for row in expired_rows]
+        remaining_total = int(conn.execute("SELECT COUNT(*) FROM director_journal").fetchone()[0]) - len(expired_ids)
+        overflow = max(0, remaining_total - DIRECTOR_JOURNAL_MAX_ENTRIES)
+        overflow_ids: list[int] = []
+        if overflow:
+            excluded_sql = ""
+            params: list[Any] = [*terminal_statuses]
+            if expired_ids:
+                excluded_sql = f"AND id NOT IN ({','.join('?' for _ in expired_ids)})"
+                params.extend(expired_ids)
+            overflow_rows = conn.execute(
+                f"""
+                SELECT id FROM director_journal
+                WHERE status IN ({terminal_placeholders}) {excluded_sql}
+                ORDER BY updated_at ASC, id ASC
+                LIMIT ?
+                """,
+                (*params, overflow),
+            ).fetchall()
+            overflow_ids = [int(row["id"]) for row in overflow_rows]
+        delete_ids = list(dict.fromkeys([*expired_ids, *overflow_ids]))
+        if apply and delete_ids:
+            conn.execute(
+                f"DELETE FROM director_journal WHERE id IN ({','.join('?' for _ in delete_ids)})",
+                delete_ids,
+            )
+        total_after = int(conn.execute("SELECT COUNT(*) FROM director_journal").fetchone()[0])
+        if not apply:
+            total_after -= len(delete_ids)
+        return {
+            "eligible_terminal_entries": len(delete_ids),
+            "expired_terminal_entries": len(expired_ids),
+            "overflow_terminal_entries": len(overflow_ids),
+            "deleted_entries": len(delete_ids) if apply else 0,
+            "total_after": total_after,
+        }
 
     def recall(
         self,
@@ -2736,6 +3129,7 @@ class ManagerMemoryStore:
             "tasks": self._section_summary("tasks", "updated_at", where="status = 'open'"),
             "reminders": self._section_summary("reminders", "updated_at", where="status = 'open'"),
             "journal": self._section_summary("journal", "created_at", where="archived_at IS NULL"),
+            "director_journal": self._section_summary("director_journal", "updated_at"),
             "rules": self._section_summary("manager_rules", "updated_at"),
         }
         return {
@@ -2871,6 +3265,7 @@ class ManagerMemoryStore:
             "tasks": self._count_rows("tasks", where="status = 'open'"),
             "reminders": self._count_rows("reminders", where="status = 'open'"),
             "journal": self._count_rows("journal", where="archived_at IS NULL"),
+            "director_journal": self._count_rows("director_journal"),
             "rules": self._count_rows("manager_rules"),
         }
         empty_sections = {name: count for name, count in sections.items() if count == 0}
@@ -3787,6 +4182,22 @@ class ManagerMemoryStore:
                     (limit,),
                 ).fetchall()
             ]
+            director_journal_rows = [
+                self._row_to_dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM director_journal
+                    WHERE status IN ('open', 'waiting')
+                    ORDER BY
+                        CASE status WHEN 'waiting' THEN 0 ELSE 1 END,
+                        CASE WHEN next_review_at IS NULL THEN 1 ELSE 0 END,
+                        next_review_at ASC,
+                        updated_at DESC
+                    LIMIT ?
+                    """,
+                    (min(limit, 10),),
+                ).fetchall()
+            ]
             rules = [
                 self._row_to_dict(row)
                 for row in conn.execute(
@@ -3800,6 +4211,10 @@ class ManagerMemoryStore:
             "tasks": tasks,
             "reminders": reminders,
             "recent_journal": journal_rows,
+            "director_journal": {
+                "active_entries": director_journal_rows,
+                "limits": self._director_journal_limits(),
+            },
             "manager_rules": rules,
             "crm_read_order": [
                 "agent_bootstrap",

@@ -413,8 +413,10 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
     assert "This playbook is the only detailed source of truth" in playbook
     assert "crm_card_description_standard.md" in playbook
-    assert "minimum-sufficient working handoff" in description_standard
-    assert "4-10 short lines" in description_standard
+    assert "concise but complete working handoff" in description_standard
+    assert "5-12 short semantic lines" in description_standard
+    assert "current work status" in description_standard
+    assert "summary is a shorter factual rendering" in description_standard
     assert "complaint/request" in description_standard
     assert "three-word label" in description_standard
     assert "phone goes to the client" in playbook
@@ -426,22 +428,53 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
     route_text = "\n".join(cleanup_route["next_actions"])
-    assert "minimum-sufficient public description" in route_text
-    assert "leave it empty only when no useful supported content exists" in route_text
+    assert "concise but complete public description" in route_text
+    assert "current work status" in route_text
+    assert "shorter factual rendering" in route_text
+    assert "leave the description empty only when no useful supported content exists" in route_text
     assert "tags rare with no more than three" in route_text
     assert "move phone/VIN/plate/mileage/aggregates" in route_text
 
     command = manager_catalog["natural_language_commands"]["Приберись"]
     assert command["aliases"] == ["Приберись"]
     assert any("no more than three operational tags" in item for item in command["allowed_actions"])
-    assert any("minimum-sufficient rich-text handoffs" in item for item in command["allowed_actions"])
+    assert any("concise but complete rich-text handoffs" in item for item in command["allowed_actions"])
     assert any("invent unsupported filler" in item for item in command["forbidden_actions"])
 
     assert "cleanup_card_content" in crm_catalog["not_mcp_runtime_tools"]
     assert any(
-        "minimum-sufficient rich-text working handoffs" in item and "tags rare and capped at three" in item
+        "concise but complete rich-text working handoffs" in item
+        and "current work status" in item
+        and "summary is a shorter factual rendering" in item
         for item in crm_catalog["operation_notes"]
     )
+
+
+def test_director_journal_contract_is_documented_and_bounded():
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    skill = (ROOT / ".agents/skills/run-autostop-director/SKILL.md").read_text(encoding="utf-8")
+    manifest = (ROOT / "docs/agent/service_director_manifest.md").read_text(encoding="utf-8")
+    crm_playbook = (ROOT / "docs/agent/crm_manager_data_playbook.md").read_text(encoding="utf-8")
+    routes = json.loads((ROOT / "docs/agent/command_routes.json").read_text(encoding="utf-8"))
+    manager_catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
+    manager_rules = json.loads((ROOT / "docs/agent/manager_rules.json").read_text(encoding="utf-8"))
+
+    assert "at most 10 active structured director-journal entries" in agents
+    assert 'manager_journal(operation="director_read", status="active", limit=10)' in skill
+    assert "## Директорский журнал" in manifest
+    assert "data/autostop_manager.sqlite3" in manifest
+    assert "не более 50 активных" in manifest
+    assert "не более 400 записей всего" in manifest
+    assert "не более 180 дней" in manifest
+    assert "не более 600 символов" in manifest
+    assert 'operation="director_create"' in manifest
+    assert "expected_updated_at" in manifest
+    assert "service_director_manifest.md" in crm_playbook
+    director_route = next(item for item in routes["routes"] if item["command_id"] == "service_director_cycle")
+    assert any("10 active structured director-journal" in item for item in director_route["required_reads"])
+    assert "capped at 400 total and 50 active records" in manager_catalog["tool_contracts"]["manager_journal"]
+    director_rule = next(item for item in manager_rules["rules"] if item["id"] == "service-director-autonomy")
+    assert "400-total, 50-active, 180-day" in director_rule["rule"]
 
 
 def test_business_documents_route_requires_crm_print_module_for_autostop_documents():

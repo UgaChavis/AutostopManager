@@ -41,6 +41,22 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["today"])
     assert args.command == "today"
 
+    args = parser.parse_args(
+        [
+            "director-journal",
+            "create",
+            "--event",
+            "обезличенный сигнал",
+            "--category",
+            "operations",
+            "--status",
+            "open",
+        ]
+    )
+    assert args.command == "director-journal"
+    assert args.operation == "create"
+    assert args.category == "operations"
+
     args = parser.parse_args(["lookup-oem", "JH4DA9350LS000000"])
     assert args.command == "lookup-oem"
     assert args.identifier == "JH4DA9350LS000000"

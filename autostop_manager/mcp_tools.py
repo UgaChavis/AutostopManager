@@ -249,7 +249,10 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="today_context",
-        description="Return manager memory context for today's work: due tasks, due reminders, recent journal, rules, and reusable routing context.",
+        description=(
+            "Return manager memory context for today's work: due tasks, due reminders, recent generic journal, "
+            "up to ten active structured director-journal entries, rules, and reusable routing context."
+        ),
     )
     def today_context(limit: int = 20) -> dict[str, Any]:
         return memory.today_context(limit=limit)
@@ -911,14 +914,70 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="manager_journal",
-        description="Append a short manager journal entry after important decisions, source changes, file intake, or CRM work.",
+        description=(
+            "Append a bounded generic manager event or create, read, update, inspect, and prune the structured director journal. "
+            "Director entries are de-identified, size-limited, retention-limited, and never replace live CRM history."
+        ),
     )
     def manager_journal(
-        event: str,
+        event: str = "",
         source: str = "chatgpt",
         tags: list[str] | None = None,
+        operation: str = "append",
+        entry_id: int | None = None,
+        category: str = "",
+        decision: str = "",
+        result: str = "",
+        status: str = "",
+        next_review_at: str | None = None,
+        expected_updated_at: str = "",
+        workflow_ref_hash: str = "",
+        limit: int = 10,
+        apply: bool = False,
     ) -> dict[str, Any]:
-        return memory.journal(event, source=source, tags=tags)
+        normalized_operation = str(operation or "append").strip().casefold()
+        if normalized_operation == "append":
+            return memory.journal(event, source=source, tags=tags)
+        if normalized_operation == "director_create":
+            return memory.create_director_journal_entry(
+                event,
+                category=category or "operations",
+                decision=decision,
+                result=result,
+                status=status or "open",
+                next_review_at=next_review_at,
+                workflow_ref_hash=workflow_ref_hash,
+                source=source,
+                tags=tags,
+            )
+        if normalized_operation == "director_update":
+            if entry_id is None:
+                return {"ok": False, "error": "entry_id_required"}
+            return memory.update_director_journal_entry(
+                entry_id,
+                status=status,
+                result=result,
+                next_review_at=next_review_at,
+                expected_updated_at=expected_updated_at,
+            )
+        if normalized_operation == "director_read":
+            return memory.read_director_journal(status=status or "active", category=category, limit=limit)
+        if normalized_operation == "director_stats":
+            return memory.director_journal_stats()
+        if normalized_operation == "director_prune":
+            return memory.maintain_director_journal(apply=apply)
+        return {
+            "ok": False,
+            "error": "invalid_manager_journal_operation",
+            "supported_operations": [
+                "append",
+                "director_create",
+                "director_update",
+                "director_read",
+                "director_stats",
+                "director_prune",
+            ],
+        }
 
     @server.tool(
         name="sync_knowledge_base",

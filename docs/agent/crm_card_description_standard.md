@@ -9,12 +9,13 @@ replace their lookup, verification, write-boundary, or reread rules.
 
 ## Core Rule
 
-The public card description is a minimum-sufficient working handoff, not a
+The public card description is a concise but complete working handoff, not a
 research report and not a three-word label. It must let another employee
 continue the job without reconstructing the current case from the full event
 history. Prefer concise factual blocks, but never shorten away a confirmed
-complaint, finding, agreed scope, parts state, result, or customer arrangement
-that still affects the work.
+complaint, finding, current work status, agreed scope, parts state, result,
+technical next step or blocker, or customer arrangement that still affects the
+work.
 
 ## Must Do
 
@@ -22,12 +23,22 @@ that still affects the work.
   are available and the card needs a human-readable handoff. Leave it empty
   only when there is no supported operational content; never invent filler.
 - Use the shortest text that remains operationally complete. A normal
-  nontrivial active card should usually contain 4-10 short lines. A genuinely
-  tiny one-step card may use 2-4 lines when no additional confirmed context
-  affects the work.
+  nontrivial active card should usually contain 5-12 short semantic lines. A
+  genuinely tiny one-step card may use 2-4 lines when no additional confirmed
+  context affects the work.
 - Include every applicable confirmed block: complaint/request, checked finding
-  or diagnosis, agreed work, selected parts/materials and their current state,
-  completed result, and current customer arrangement or follow-up point.
+  or diagnosis, current work status, agreed work, selected parts/materials and
+  their current state, completed result, current technical next step or
+  blocker, and current customer arrangement or follow-up point.
+- When a confirmed status arrives after intake or an earlier handoff, update
+  the description with a factual `**Текущий статус:**` block whenever the
+  existing text would otherwise omit or contradict it. Preserve useful prior
+  facts; consolidate them into the appropriate blocks instead of appending a
+  message-by-message history.
+- When the same status is shown in `board_summary`, update the description and
+  board summary in the same protected write. The summary may be shorter, but
+  it must be an accurate plain-language condensation of facts present in the
+  description, never a separate version of the case.
 - Preserve useful staff-entered facts. Consolidate repetition, but do not
   replace a meaningful history-derived handoff with only a generic task name.
 - Use CRM-supported Markdown only: `**bold**`, `*italic*`, `++underline++`.
@@ -37,9 +48,10 @@ that still affects the work.
 - Use *italic* only for a short secondary working note.
 - Use restrained emoji markers only when they improve scanning.
 - Keep only facts needed for the work: auto, complaint/request, checked
-  finding, agreed work, selected part/material and its state, OEM/catalog
-  number, oil/fluid capacity, spec, confirmed price, completed result, and
-  compact customer arrangement or follow-up point.
+  finding, current work status, agreed work, selected part/material and its
+  state, OEM/catalog number, oil/fluid capacity, spec, confirmed price,
+  completed result, current technical next step or blocker, and compact
+  customer arrangement or follow-up point.
 - Put phone, VIN, plate, mileage, engine, gearbox, and drivetrain into
   structured CRM fields/vehicle_profile when possible. Keep them in public
   description only when the owner explicitly wants them visible there or the
@@ -74,6 +86,8 @@ Use only the blocks that matter, but include all blocks needed for handoff:
 
 **Проверено:** <confirmed finding or diagnosis>.
 
+**Текущий статус:** <confirmed work now in progress>.
+
 **Согласовано:** <approved work scope>.
 
 **Запчасти:** **++<selected article/OEM/catalog number>++**, <quantity and current parts state>.
@@ -83,6 +97,8 @@ Use only the blocks that matter, but include all blocks needed for handoff:
 **Деньги:** **++<sum/agreement>++**.
 
 **Результат:** <completed confirmed result>.
+
+**Следующий шаг/блокер:** <confirmed technical next step or blocker>.
 
 **Договорённость:** <current customer arrangement or follow-up point>.
 ```
@@ -141,7 +157,10 @@ For a genuinely tiny card, 2-4 lines are enough:
 preview, not a substitute for the complete working handoff. Keep it plain
 text, without rich formatting, emoji decoration, source lists, phone, full
 client identity, raw VIN, or long issue lists. Do not delete useful description
-facts merely because a shorter version exists in `board_summary`.
+facts merely because a shorter version exists in `board_summary`. For an active
+card, its current-status fact must be present in the description as well; the
+summary is a shorter factual rendering of that same status, not an independent
+story.
 
 ## Write Flow
 
