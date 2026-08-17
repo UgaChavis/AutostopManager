@@ -46,6 +46,8 @@ def test_codex_native_startup_files_are_present_and_safe():
         "annotations-audit",
         "skills-audit",
         "cleanup-audit",
+        "Store work is paused",
+        "raw CRM/Store/Gmail/Telegram exports",
     ]:
         assert expected in agents
 
@@ -75,8 +77,15 @@ def test_codex_native_startup_files_are_present_and_safe():
 
     assert "`AGENTS.md` - canonical compact startup instruction for Codex." in readme
     assert "Manager startup" in shelves
+    assert "| Telegram | `telegram_operations`" in shelves
     assert "agent.md" not in readme
     assert "agent.md" not in shelves
+
+    voice_brief = (ROOT / "docs" / "agent" / "voice_agent_brief.md").read_text(encoding="utf-8")
+    assert "дополнение к `AGENTS.md`, а не копия" in voice_brief
+    assert "Выполни один" in voice_brief
+    assert "`agent-brief` для фактической первой команды" in voice_brief
+    assert "подготовительный вызов не нужен" in voice_brief
 
 
 def test_home_pc_remote_access_is_documented_as_current_capability():

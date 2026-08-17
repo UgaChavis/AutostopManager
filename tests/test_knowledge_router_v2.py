@@ -96,7 +96,19 @@ def test_telegram_photo_send_routes_to_private_bridge_workflow():
 
     assert route is not None
     assert route["command_id"] == "telegram_owner_operations"
-    assert route["write_domains"] == ["telegram_message_or_photo_only_when_explicitly_authorized"]
+    assert route["write_domains"] == [
+        "telegram_message_or_photo_only_when_explicitly_authorized",
+        "temporary_exact_telegram_attachment_only_when_task_required",
+    ]
+
+
+def test_telegram_voice_and_attachment_queries_route_to_private_bridge_workflow():
+    for query in ("расшифруй голосовое сообщение", "скачай вложение из Telegram"):
+        route = find_command_route(query)
+
+        assert route is not None
+        assert route["command_id"] == "telegram_owner_operations"
+        assert "verified transient cleanup" in " ".join(route["required_reads"])
 
 
 def test_public_camera_address_and_landmark_queries_do_not_route_to_parts(tmp_path):

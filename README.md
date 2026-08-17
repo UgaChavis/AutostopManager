@@ -8,6 +8,8 @@ technical control logic.
 ## Start Here
 
 - `AGENTS.md` - canonical compact startup instruction for Codex.
+- `docs/agent/voice_agent_brief.md` - voice-only behavior delta loaded by
+  `AGENTS.md`; it does not duplicate common safety or routing rules.
 - `docs/agent/knowledge_shelves.md` - human route and deletion policy.
 - `docs/agent/knowledge_map.json` - machine route cards.
 - `docs/agent/command_routes.json` - standing owner commands.

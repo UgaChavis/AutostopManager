@@ -18,9 +18,9 @@ Keep docs compact.
   attachments and sent/archive history.
 - Telegram is the source of truth for its dialogs, messages, groups, channels,
   contacts and account authorization. Keep its private content transient.
-- Never persist raw CRM/Store/Gmail exports, customer or vehicle identifier
-  tables, ledgers, credentials, OAuth state or secrets in docs, Git, memory,
-  workflow state or chat summaries.
+- Never persist raw CRM/Store/Gmail/Telegram exports, customer or vehicle
+  identifier tables, ledgers, credentials, OAuth state or secrets in docs,
+  Git, memory, workflow state or chat summaries.
 - Never dump `.env`, Docker `.Config.Env` or process environments. Inspect an
   explicit non-secret allowlist and report only presence or validation booleans.
 
@@ -49,12 +49,11 @@ Keep docs compact.
   Broad control uses named `agent_board_workflow` operations. The only guarded
   raw new-card exception is documented in
   `docs/agent/crm_manager_data_playbook.md`.
-- Store: open `docs/agent/store_management_playbook.md`. Bootstrap is one
-  stateless snapshot; owner-visible changes use `store_digest`. Never read the
-  Store DB or side-effecting legacy GET routes. Common writes use
-  `agent_inventory_workflow`; other employee operations require the live
-  OpenAPI, reserved `store:owner` principal and guarded `store_owner_api`.
-  A customer order is never a supplier purchase.
+- Store: AutoStop App remains authoritative, but Store work is paused while it
+  is under development. Do not inspect, diagnose or change it until the owner
+  explicitly reauthorizes Store work. After reauthorization, open
+  `docs/agent/store_management_playbook.md`; never read the Store DB or treat a
+  customer order as a supplier purchase.
 - Gmail: open `docs/agent/gmail_workflow_playbook.md`; search/read before a
   mailbox mutation and keep only refs in the workflow ledger.
 - Telegram: open `docs/agent/telegram_workflow_playbook.md`; use the private
@@ -122,12 +121,14 @@ bearer is internal compatibility only.
   `docs/agent/crm_vin_oem_parts_lookup_playbook.md`.
 - Business documents ->
   `docs/agent/business_document_quality_playbook.md`.
-- Store state and operations -> `docs/agent/store_management_playbook.md`;
-  Store analytics -> `docs/agent/store_analytics_playbook.md` and aggregate
+- After explicit Store reauthorization: state and operations ->
+  `docs/agent/store_management_playbook.md`; analytics ->
+  `docs/agent/store_analytics_playbook.md` and aggregate
   `get_store_analytics_report`.
 - Public repair research -> `docs/agent/automotive_repair_source_playbook.md`;
   use Gateway search/excerpt/browser routes without bypassing access controls.
-- Telegram messages, contacts, groups, QR login or connection checks ->
+- Telegram messages, contacts, groups, attachments, voice messages, QR login
+  or connection checks ->
   `.agents/skills/manage-owner-telegram/SKILL.md` and
   `docs/agent/telegram_workflow_playbook.md`.
 - public Krasnoyarsk camera / street / address / landmark -> resolve the strict

@@ -15,8 +15,9 @@ Store or web access when the question does not need them.
 | Knowledge operations | `knowledge_intake` | `docs/agent/knowledge_shelves.md` |
 | Board cleanup | `board_cleanup_autopilot` | `docs/agent/board_cleanup_autopilot_playbook.md` |
 | Service management | `service_management` | `docs/agent/krasnoyarsk_service_management_playbook.md` |
-| Store/analytics | `store_management`, `store_analytics_reporting` | `docs/agent/store_management_playbook.md` |
+| Store/analytics *(paused until explicit reauthorization)* | `store_management`, `store_analytics_reporting` | `docs/agent/store_management_playbook.md` |
 | Gmail | `gmail_operations` | `docs/agent/gmail_workflow_playbook.md` |
+| Telegram | `telegram_operations` | `.agents/skills/manage-owner-telegram/SKILL.md` |
 | Business identity/documents | `business_identity`, `business_documents` | `docs/agent/business_document_quality_playbook.md` |
 | CRM VIN/OEM writeback | `crm_vin_oem_parts_lookup` | `docs/agent/crm_vin_oem_parts_lookup_playbook.md` |
 | Vehicle/OEM and parts | `vehicle_identity_and_oem`, `parts_sourcing` | `docs/agent/vehicle_identity_playbook.md` |
