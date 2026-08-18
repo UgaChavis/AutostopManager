@@ -916,7 +916,8 @@ def register_manager_memory_tools(  # noqa: C901
         name="manager_journal",
         description=(
             "Append a bounded generic manager event or create, read, update, inspect, and prune the structured director journal. "
-            "Director entries are de-identified, size-limited, retention-limited, and never replace live CRM history."
+            "Director entries may hold concrete operational meaning, actor role, planned event, next review, and a safe hash-link; "
+            "they remain size/retention limited and never copy CRM records, correspondence, private identifiers, or money data."
         ),
     )
     def manager_journal(

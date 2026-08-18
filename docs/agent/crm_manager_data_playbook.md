@@ -60,10 +60,11 @@ summaries:
    file results without copying private rows into chat.
 5. `agent_entity_context` - read one exact client, card, order, cashbox,
    inventory item, or file when detail is required.
-6. Return a compact report in chat or a Gateway v2 workflow checkpoint. For a
-   result useful beyond one workflow, use the structured director operations of
-   `manager_journal` exactly as defined in `service_director_manifest.md`; never
-   put a live CRM record or board snapshot in that journal.
+6. Return a compact report in chat or a Gateway v2 workflow checkpoint. In
+   director mode use the single structured `manager_journal` exactly as defined
+   in `service_director_manifest.md` for active waits and durable decisions.
+   Store a safe hash-link and operational meaning, never a live CRM record,
+   board snapshot or private identifier.
 
 For exact client/card/order work, read back the live target with
 `agent_entity_context`.

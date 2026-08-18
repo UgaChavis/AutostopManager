@@ -40,10 +40,10 @@ Keep docs compact.
 4. When the owner starts `режим директора`, `директор автосервиса`, or a
    recurring director goal, load `.agents/skills/run-autostop-director/SKILL.md`
    and `docs/agent/service_director_manifest.md` before live reads.
-   Read `today_context` and at most 10 active structured director-journal entries
-   before the live board scan. The journal is de-identified runtime Manager
-   context, never a CRM history substitute; follow the manifest for write and
-   retention rules.
+   Read `today_context` and the active unified director-journal entries before
+   the live board scan. Reconcile pending decisions, questions and scheduled
+   reviews with live CRM before selecting new work; follow the manifest for
+   context, privacy, write and retention rules.
 5. For multi-step work use the Gateway v2 workflow ledger with compact,
    state-versioned checkpoints. Raw discovery is only for a capability not
    covered by a named workflow; a raw write requires its exact literal name,

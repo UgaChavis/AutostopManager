@@ -201,8 +201,10 @@ def test_service_director_mode_has_one_canonical_route_and_guarded_autonomy():
     command_routes = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
     rules = json.loads((ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8"))
 
-    assert "Полный управленческий обзор" in manifest
-    assert "workflow_wait_for_external" in manifest
+    assert "Повышать прибыльность и производительность AutoStop" in manifest
+    assert "жесткому шаблону" in manifest
+    assert "next_review_at" in manifest
+    assert "повторно не спрашивать" in manifest
     assert "get_card_log" in manifest
     assert "Циклическую директорскую цель завершать только по команде владельца" in manifest
     director_domain = knowledge_map["domains"]["service_director"]
@@ -458,19 +460,20 @@ def test_director_journal_contract_is_documented_and_bounded():
     manager_catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
     manager_rules = json.loads((ROOT / "docs/agent/manager_rules.json").read_text(encoding="utf-8"))
 
-    assert "at most 10 active structured director-journal entries" in agents
-    assert 'manager_journal(operation="director_read", status="active", limit=10)' in skill
-    assert "## Директорский журнал" in manifest
+    assert "active unified director-journal entries" in agents
+    assert "до 50 активных записей" in skill
+    assert "## Единый директорский журнал" in manifest
     assert "data/autostop_manager.sqlite3" in manifest
-    assert "не более 50 активных" in manifest
-    assert "не более 400 записей всего" in manifest
+    assert "50" in manifest and "400" in manifest
     assert "не более 180 дней" in manifest
     assert "не более 600 символов" in manifest
-    assert 'operation="director_create"' in manifest
+    assert "director_create" in manifest
     assert "expected_updated_at" in manifest
+    assert "workflow_ref_hash" in manifest
+    assert "до `next_review_at` повторно не спрашивать" in manifest
     assert "service_director_manifest.md" in crm_playbook
     director_route = next(item for item in routes["routes"] if item["command_id"] == "service_director_cycle")
-    assert any("10 active structured director-journal" in item for item in director_route["required_reads"])
+    assert any("all active unified director-journal" in item for item in director_route["required_reads"])
     assert "capped at 400 total and 50 active records" in manager_catalog["tool_contracts"]["manager_journal"]
     director_rule = next(item for item in manager_rules["rules"] if item["id"] == "service-director-autonomy")
     assert "400-total, 50-active, 180-day" in director_rule["rule"]

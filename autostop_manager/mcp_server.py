@@ -16,7 +16,7 @@ def build_server() -> FastMCP:
             "Gmail and Telegram remain separate connectors: store only message/thread/file result references through complete_external_step, never bodies or chat text. "
             "AutoStop App remains the store source of truth: use only its pure-read agent API, keep raw store payload out of Manager state, and expose store access through existing Gateway tools. "
             "Use these tools only for durable non-CRM/store memory, routing rules, technical cursors/compact refs, knowledge navigation, and knowledge intake. "
-            "Director journal entries must use the structured manager_journal director operations, remain de-identified, and obey automatic size and retention limits. "
+            "Director journal entries use structured manager_journal operations for context-bearing active waits and durable decisions; keep only safe hash-links, never copied CRM records, correspondence, private identifiers, or money data, and obey size and retention limits. "
             "Probe the knowledge base first, then open the returned source-of-truth route before broad file reads when the task involves diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge. "
             "When new files are supplied, extract durable conclusions and update the relevant playbooks or catalogs; do not store raw dumps. "
             "Use the existing AutoStop CRM MCP tools for cards, clients, vehicles, repair orders, cashboxes, and board state."
