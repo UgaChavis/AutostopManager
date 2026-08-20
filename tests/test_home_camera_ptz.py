@@ -249,8 +249,15 @@ def test_temporary_forward_always_terminates_process(monkeypatch):
     assert process.terminated is True
 
 
-def test_exclusive_lock_rejects_a_second_controller(tmp_path):
+def test_exclusive_lock_rejects_a_second_controller(monkeypatch, tmp_path):
     lock_path = tmp_path / "ptz.lock"
+    real_fstat = home_camera_ptz.os.fstat
+
+    def root_owned_fstat(fd):
+        info = real_fstat(fd)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+
+    monkeypatch.setattr(home_camera_ptz.os, "fstat", root_owned_fstat)
 
     with home_camera_ptz._exclusive_ptz_lock(lock_path):
         with pytest.raises(HomeCameraPTZError, match="ptz_busy"):
@@ -317,6 +324,76 @@ def test_http_response_without_length_is_still_bounded(monkeypatch):
 
     with pytest.raises(HomeCameraPTZError, match="ptz_response_too_large"):
         PTZController(_config(), 45554)._call("/onvif/device_service", "<body/>")
+
+
+@pytest.mark.parametrize(
+    "status,content_length,raw,request_error,error",
+    [
+        (200, "invalid", b"<Envelope/>", None, "ptz_response_invalid"),
+        (200, str(home_camera_ptz._MAX_RESPONSE_BYTES + 1), b"", None, "ptz_response_too_large"),
+        (500, None, b"<Envelope/>", None, "ptz_request_failed"),
+        (200, None, b"not-xml", None, "ptz_response_invalid"),
+        (200, None, b"<Envelope><Fault/></Envelope>", None, "ptz_request_failed"),
+        (200, None, b"", TimeoutError(), "ptz_timeout"),
+        (200, None, b"", OSError(), "ptz_connection_failed"),
+    ],
+)
+def test_http_transport_and_response_failures_are_safe(monkeypatch, status, content_length, raw, request_error, error):
+    class Response:
+        def getheader(self, _name):
+            return content_length
+
+        def read(self, _size):
+            return raw
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            if request_error is not None:
+                raise request_error
+
+        def getresponse(self):
+            response = Response()
+            response.status = status
+            return response
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(home_camera_ptz.http.client, "HTTPConnection", Connection)
+
+    with pytest.raises(HomeCameraPTZError, match=error):
+        PTZController(_config(), 45554)._call("/onvif/device_service", "<body/>")
+
+
+def test_http_call_accepts_bounded_fault_free_xml(monkeypatch):
+    class Response:
+        status = 200
+
+        def getheader(self, _name):
+            return "34"
+
+        def read(self, _size):
+            return b"<Envelope><Body/></Envelope>"
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            return None
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(home_camera_ptz.http.client, "HTTPConnection", Connection)
+
+    assert home_camera_ptz._local_name(PTZController(_config(), 45554)._call("/onvif/read", "<Get/>")) == "Envelope"
 
 
 def test_idempotent_read_retries_one_transient_timeout(monkeypatch):

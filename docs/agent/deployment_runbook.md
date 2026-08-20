@@ -80,12 +80,13 @@ cd /opt/autostopcrm
 git status --short --branch
 git fetch origin autostopcrm-v1
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/autostopcrm-v1)"
-# Only inside a separately approved release contract:
-AUTOSTOP_INSTALL_WATCHDOG=0 ./deploy.sh
+# Watchdog installation is disabled by default; do not opt in here.
+./deploy.sh
 ```
 
-A bare `./deploy.sh` is forbidden because it enables the disabled watchdog by default. Approved releases
-use the command above, verify the timer is `disabled`/`inactive`, and keep the CRM checkout clean.
+A bare `./deploy.sh` no longer installs the production watchdog. Approved releases
+must verify that the watchdog timer and service remain absent, and keep the CRM checkout clean.
+Do not set `AUTOSTOP_INSTALL_WATCHDOG=1` without a separate exact owner authorization.
 They create rollback data and a Manager snapshot, preserve `.env`/uploads/PostgreSQL volumes, and replace only CRM in the bounded window.
 They must pass internal/public smoke. No Git-sync bypass.
 

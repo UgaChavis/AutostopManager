@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -43,7 +44,29 @@ def _write_config(path: Path, *, mode: int = 0o600) -> None:
     path.chmod(mode)
 
 
-def test_load_config_requires_root_only_permissions(tmp_path):
+@pytest.fixture
+def root_owned_camera_paths(monkeypatch):
+    """Model production root ownership while retaining real type/mode checks."""
+    real_fstat = home_camera.os.fstat
+    real_stat = home_camera.os.stat
+
+    def root_owned(info):
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+
+    def root_owned_fstat(fd):
+        return root_owned(real_fstat(fd))
+
+    def root_owned_dir_entry(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if kwargs.get("dir_fd") is not None:
+            return root_owned(info)
+        return info
+
+    monkeypatch.setattr(home_camera.os, "fstat", root_owned_fstat)
+    monkeypatch.setattr(home_camera.os, "stat", root_owned_dir_entry)
+
+
+def test_load_config_requires_root_only_permissions(tmp_path, root_owned_camera_paths):
     config_path = tmp_path / "private" / "camera.json"
     _write_config(config_path, mode=0o644)
 
@@ -51,7 +74,7 @@ def test_load_config_requires_root_only_permissions(tmp_path):
         home_camera.load_config(config_path)
 
 
-def test_load_config_accepts_valid_root_only_file(tmp_path):
+def test_load_config_accepts_valid_root_only_file(tmp_path, root_owned_camera_paths):
     config_path = tmp_path / "private" / "camera.json"
     _write_config(config_path)
 
@@ -61,7 +84,7 @@ def test_load_config_accepts_valid_root_only_file(tmp_path):
     assert result.rtsp_port == 554
 
 
-def test_load_config_rejects_symlink_leaf(tmp_path):
+def test_load_config_rejects_symlink_leaf(tmp_path, root_owned_camera_paths):
     real_config = tmp_path / "real" / "camera.json"
     _write_config(real_config)
     private_dir = tmp_path / "private"
@@ -71,6 +94,35 @@ def test_load_config_rejects_symlink_leaf(tmp_path):
 
     with pytest.raises(HomeCameraError, match="config_file_missing"):
         home_camera.load_config(config_path)
+
+
+def test_root_only_stat_contract_rejects_wrong_types_and_owner():
+    with pytest.raises(HomeCameraError, match="config_directory_not_directory"):
+        home_camera._check_root_only_stat(
+            SimpleNamespace(st_mode=stat.S_IFREG | 0o700, st_uid=0), 0o700, "config_directory"
+        )
+    with pytest.raises(HomeCameraError, match="config_file_not_regular"):
+        home_camera._check_root_only_stat(SimpleNamespace(st_mode=stat.S_IFDIR | 0o600, st_uid=0), 0o600, "config_file")
+    with pytest.raises(HomeCameraError, match="config_file_not_root_owned"):
+        home_camera._check_root_only_stat(
+            SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1000), 0o600, "config_file"
+        )
+
+
+@pytest.mark.parametrize("payload", [[], {}, "not-json"])
+def test_load_config_rejects_invalid_payloads(tmp_path, root_owned_camera_paths, payload):
+    config_path = tmp_path / "private" / "camera.json"
+    config_path.parent.mkdir(mode=0o700)
+    config_path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+    config_path.chmod(0o600)
+
+    with pytest.raises(HomeCameraError, match=r"config_(invalid|unreadable)"):
+        home_camera.load_config(config_path)
+
+
+def test_load_config_rejects_invalid_leaf_name():
+    with pytest.raises(HomeCameraError, match="config_file_missing"):
+        home_camera.load_config(Path("."))
 
 
 @pytest.mark.parametrize("camera_ip", ["8.8.8.8", "2001:db8::1", "not-an-ip"])
@@ -149,6 +201,7 @@ def test_ssh_forward_is_local_and_strict():
         (b"rtsp://secret:secret@127.0.0.1:1: Server returned 401 Unauthorized", "camera_authentication_failed"),
         (b"Connection refused", "camera_connection_refused"),
         (b"Network is unreachable", "camera_network_unreachable"),
+        (b"Backend timed out", "camera_timeout"),
         (b"rtsp://secret:secret@127.0.0.1:1: unknown failure", "camera_capture_failed"),
     ],
 )
@@ -164,7 +217,7 @@ def test_camera_backend_timeout_flag_is_safe():
     assert home_camera.classify_camera_backend_error("secret", timed_out=True) == "camera_timeout"
 
 
-def test_capture_retries_low_once_on_technical_error_and_cleans_up(monkeypatch, tmp_path):
+def test_capture_retries_low_once_on_technical_error_and_cleans_up(monkeypatch, tmp_path, root_owned_camera_paths):
     calls: list[str] = []
 
     @contextmanager
@@ -190,7 +243,7 @@ def test_capture_retries_low_once_on_technical_error_and_cleans_up(monkeypatch, 
     assert stat_mode(output) == 0o600
 
 
-def test_capture_does_not_retry_authentication_and_removes_partial(monkeypatch, tmp_path):
+def test_capture_does_not_retry_authentication_and_removes_partial(monkeypatch, tmp_path, root_owned_camera_paths):
     calls = 0
 
     @contextmanager
@@ -215,7 +268,7 @@ def test_capture_does_not_retry_authentication_and_removes_partial(monkeypatch, 
     assert not output.exists()
 
 
-def test_capture_refuses_overwrite_before_starting_tunnel(monkeypatch, tmp_path):
+def test_capture_refuses_overwrite_before_starting_tunnel(monkeypatch, tmp_path, root_owned_camera_paths):
     output = tmp_path / "frame.jpg"
     output.write_bytes(b"keep")
     monkeypatch.setattr(home_camera, "load_config", lambda _path: _config())
@@ -252,7 +305,7 @@ def test_reserve_output_requires_private_real_parent(tmp_path):
         home_camera._reserve_output(parent_link / "frame.jpg", overwrite=False)
 
 
-def test_reserve_output_creates_private_staging_file(tmp_path):
+def test_reserve_output_creates_private_staging_file(tmp_path, root_owned_camera_paths):
     reservation = home_camera._reserve_output(tmp_path / "frame.jpg", overwrite=False)
     try:
         assert reservation.staging_path.exists()
@@ -262,7 +315,7 @@ def test_reserve_output_creates_private_staging_file(tmp_path):
         os.close(reservation.directory_fd)
 
 
-def test_capture_overwrite_replaces_symlink_without_changing_its_target(monkeypatch, tmp_path):
+def test_capture_overwrite_replaces_symlink_without_changing_its_target(monkeypatch, tmp_path, root_owned_camera_paths):
     @contextmanager
     def fake_forward(_config):
         yield 45554
@@ -288,7 +341,7 @@ def test_capture_overwrite_replaces_symlink_without_changing_its_target(monkeypa
     assert stat_mode(output) == 0o600
 
 
-def test_capture_overwrite_replaces_hardlink_without_changing_sibling(monkeypatch, tmp_path):
+def test_capture_overwrite_replaces_hardlink_without_changing_sibling(monkeypatch, tmp_path, root_owned_camera_paths):
     @contextmanager
     def fake_forward(_config):
         yield 45554
@@ -312,7 +365,9 @@ def test_capture_overwrite_replaces_hardlink_without_changing_sibling(monkeypatc
     assert stat_mode(output) == 0o600
 
 
-def test_capture_failure_preserves_existing_output_and_cleans_only_staging(monkeypatch, tmp_path):
+def test_capture_failure_preserves_existing_output_and_cleans_only_staging(
+    monkeypatch, tmp_path, root_owned_camera_paths
+):
     @contextmanager
     def fake_forward(_config):
         yield 45554
@@ -334,7 +389,7 @@ def test_capture_failure_preserves_existing_output_and_cleans_only_staging(monke
     assert not list(tmp_path.glob(".autostop-camera-*.partial"))
 
 
-def test_capture_refuses_existing_symlink_before_starting_tunnel(monkeypatch, tmp_path):
+def test_capture_refuses_existing_symlink_before_starting_tunnel(monkeypatch, tmp_path, root_owned_camera_paths):
     target = tmp_path / "target"
     target.write_bytes(b"keep")
     output = tmp_path / "frame.jpg"
@@ -384,6 +439,20 @@ def test_wait_for_forward_reports_early_process_failure():
 
     with pytest.raises(HomeCameraError, match="ssh_forward_failed"):
         home_camera._wait_for_forward(process, 45554, timeout=1)
+
+
+def test_wait_for_forward_retries_then_times_out(monkeypatch):
+    ticks = iter([0.0, 0.1, 2.0])
+    monkeypatch.setattr(home_camera.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(home_camera.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        home_camera.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("not ready")),
+    )
+
+    with pytest.raises(HomeCameraError, match="ssh_forward_timeout"):
+        home_camera._wait_for_forward(SimpleNamespace(poll=lambda: None), 45554, timeout=1)
 
 
 class _FakePacket:
