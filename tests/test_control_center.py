@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from autostop_manager import control_center as control_center_module
 from autostop_manager.control_center import (
     REQUIRED_CORE_TOOLS,
@@ -184,3 +186,110 @@ def test_missing_external_provider_access_is_not_server_open_risk():
     )
 
     assert result == {"score": 0, "level": "green", "items": []}
+
+
+def _production_ops_with_watchdog(monkeypatch, tmp_path, *, timer, service):
+    compose_path = tmp_path / "docker-compose.yml"
+    monkeypatch.setattr(control_center_module, "_first_existing", lambda _paths: compose_path)
+    monkeypatch.setattr(
+        control_center_module,
+        "_run",
+        lambda _command, **_kwargs: {"returncode": 0, "stdout": "ok\n", "stderr": ""},
+    )
+    monkeypatch.setattr(
+        control_center_module,
+        "_container_status",
+        lambda _name, **_kwargs: {"ok": True, "state": "running", "health": "healthy"},
+    )
+    statuses = {
+        "autostopcrm-watchdog.timer": timer,
+        "autostopcrm-watchdog.service": service,
+    }
+    monkeypatch.setattr(
+        control_center_module,
+        "_systemd_unit_status",
+        lambda unit, **_kwargs: statuses[unit],
+    )
+    return control_center_module._production_ops(tmp_path)
+
+
+def test_production_ops_accepts_absent_watchdog_units(monkeypatch, tmp_path):
+    absent = {"ok": False, "load_state": "not-found", "active_state": "inactive"}
+
+    production_ops = _production_ops_with_watchdog(
+        monkeypatch,
+        tmp_path,
+        timer=absent,
+        service=absent,
+    )
+    production_health = control_center_module._production_health(Path(tmp_path), production_ops=production_ops)
+
+    assert production_ops["ok"] is True
+    assert production_ops["watchdog"]["policy"] == {
+        "ok": True,
+        "desired_state": "absent",
+        "state": "absent",
+        "absent_units": ["service", "timer"],
+        "installed_units": [],
+        "active_units": [],
+    }
+    assert production_ops["warnings"] == []
+    assert production_health["watchdog_timer_active"] is False
+    assert production_health["watchdog_policy_ok"] is True
+    assert production_health["watchdog_policy_state"] == "absent"
+    assert "watchdog installation or enablement" in production_ops["forbidden_without_explicit_owner_command"]
+    assert all("watchdog" not in gate["operation"] for gate in production_ops["safe_operation_gates"])
+
+
+def test_production_ops_rejects_active_watchdog_and_adds_risk(monkeypatch, tmp_path):
+    production_ops = _production_ops_with_watchdog(
+        monkeypatch,
+        tmp_path,
+        timer={"ok": True, "load_state": "loaded", "active_state": "active"},
+        service={"ok": True, "load_state": "loaded", "active_state": "inactive"},
+    )
+
+    assert production_ops["ok"] is False
+    assert production_ops["watchdog"]["policy"]["state"] == "active"
+    assert production_ops["watchdog"]["policy"]["active_units"] == ["timer"]
+    assert production_ops["warnings"] == [
+        "autostopcrm_watchdog_unit_active",
+        "autostopcrm_watchdog_legacy_units_present",
+    ]
+
+    risk = control_center_module._open_risk_score(
+        git={"dirty": False},
+        providers={"ok": True},
+        server_environment={"ok": True, "ports": {"review_public_count": 0}},
+        codex_readiness={"ok": True},
+        runtime_readiness={"ok": True},
+        production_ops=production_ops,
+        ports={"ok": True},
+    )
+    assert risk == {
+        "score": 15,
+        "level": "yellow",
+        "items": [
+            {
+                "points": 15,
+                "category": "production_ops",
+                "reason": "production compose/nginx/watchdog/container readiness needs attention",
+            }
+        ],
+    }
+
+
+def test_production_ops_rejects_inactive_legacy_watchdog_units(monkeypatch, tmp_path):
+    legacy_inactive = {"ok": True, "load_state": "loaded", "active_state": "inactive"}
+
+    production_ops = _production_ops_with_watchdog(
+        monkeypatch,
+        tmp_path,
+        timer=legacy_inactive,
+        service=legacy_inactive,
+    )
+
+    assert production_ops["ok"] is False
+    assert production_ops["watchdog"]["policy"]["state"] == "legacy_units_present"
+    assert production_ops["watchdog"]["policy"]["active_units"] == []
+    assert production_ops["warnings"] == ["autostopcrm_watchdog_legacy_units_present"]
