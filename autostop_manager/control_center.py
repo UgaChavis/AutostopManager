@@ -241,6 +241,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
             f"- Compose config: `{((production_ops.get('compose') or {}).get('config') or {}).get('ok', False)}`",
             f"- Nginx config: `{((production_ops.get('nginx') or {}).get('config') or {}).get('ok', False)}`",
             f"- Watchdog timer: `{(((production_ops.get('watchdog') or {}).get('timer') or {}).get('active_state', 'unknown'))}`",
+            f"- Watchdog policy: `{(((production_ops.get('watchdog') or {}).get('policy') or {}).get('state', 'unknown'))}`",
             f"- Container health: `{(((production_ops.get('container') or {}).get('autostopcrm') or {}).get('health', 'unknown'))}`",
         ]
     )
@@ -639,16 +640,21 @@ def _production_health(root: Path, *, production_ops: dict[str, Any] | None = No
     ]
     compose_files = [str(path) for path in compose_candidates if path.exists()]
     ops = production_ops or {}
+    watchdog = ops.get("watchdog") or {}
+    watchdog_policy = watchdog.get("policy") or {}
     return {
         "mode": "read_only_summary",
         "compose_files": compose_files,
         "compose_config_present": bool(compose_files),
         "compose_config_ok": bool(((ops.get("compose") or {}).get("config") or {}).get("ok")),
         "nginx_config_ok": bool(((ops.get("nginx") or {}).get("config") or {}).get("ok")),
-        "watchdog_timer_active": ((ops.get("watchdog") or {}).get("timer") or {}).get("active_state") == "active",
+        "watchdog_timer_active": (watchdog.get("timer") or {}).get("active_state") == "active",
+        "watchdog_policy_ok": bool(watchdog_policy.get("ok")),
+        "watchdog_policy_state": watchdog_policy.get("state", "unknown"),
         "container_health": ((ops.get("container") or {}).get("autostopcrm") or {}).get("health", "unknown"),
         "notes": [
             "Production checks remain read-only in ControlReportV1.",
+            "The production watchdog policy requires both legacy systemd units to be absent.",
             "Run docker compose health/smoke separately before any production-changing action.",
         ],
     }
@@ -679,9 +685,12 @@ def _production_ops(root: Path) -> dict[str, Any]:
 
     nginx_result = _run(["nginx", "-t"], cwd=root, timeout=8.0)
     container = _container_status("autostopcrm", cwd=root)
+    watchdog_timer = _systemd_unit_status("autostopcrm-watchdog.timer", cwd=root)
+    watchdog_service = _systemd_unit_status("autostopcrm-watchdog.service", cwd=root)
     watchdog = {
-        "timer": _systemd_unit_status("autostopcrm-watchdog.timer", cwd=root),
-        "service": _systemd_unit_status("autostopcrm-watchdog.service", cwd=root),
+        "timer": watchdog_timer,
+        "service": watchdog_service,
+        "policy": _watchdog_policy_status(timer=watchdog_timer, service=watchdog_service),
     }
     safe_operation_gates = [
         {
@@ -700,11 +709,6 @@ def _production_ops(root: Path) -> dict[str, Any]:
                 "smoke baseline captured",
             ],
         },
-        {
-            "operation": "watchdog_restart_or_reinstall",
-            "allowed_command": "systemctl restart autostopcrm-watchdog.service",
-            "required_gates": ["dirty state recorded", "watchdog unit present", "production smoke baseline captured"],
-        },
     ]
     ok = (
         bool(compose_path)
@@ -712,7 +716,7 @@ def _production_ops(root: Path) -> dict[str, Any]:
         and nginx_result["returncode"] == 0
         and container.get("state") == "running"
         and container.get("health") in {"healthy", "none", "unknown"}
-        and (watchdog["timer"].get("active_state") == "active")
+        and watchdog["policy"].get("ok")
     )
     warnings: list[str] = []
     if not compose_config.get("ok"):
@@ -721,8 +725,12 @@ def _production_ops(root: Path) -> dict[str, Any]:
         warnings.append("nginx_config_not_ok")
     if container.get("state") != "running":
         warnings.append("autostopcrm_container_not_running")
-    if watchdog["timer"].get("active_state") != "active":
-        warnings.append("autostopcrm_watchdog_timer_not_active")
+    if watchdog["policy"].get("active_units"):
+        warnings.append("autostopcrm_watchdog_unit_active")
+    if watchdog["policy"].get("installed_units"):
+        warnings.append("autostopcrm_watchdog_legacy_units_present")
+    if watchdog["policy"].get("state") == "unknown":
+        warnings.append("autostopcrm_watchdog_policy_unknown")
     return {
         "ok": bool(ok),
         "mode": "read_only_ops_readiness",
@@ -753,6 +761,7 @@ def _production_ops(root: Path) -> dict[str, Any]:
             "supplier basket actions",
             "email sends",
             "destructive cleanup",
+            "watchdog installation or enablement",
         ],
         "warnings": warnings,
     }
@@ -1085,6 +1094,32 @@ def _systemd_unit_status(unit: str, *, cwd: Path) -> dict[str, Any]:
         "active_state": fields.get("ActiveState", "unknown"),
         "sub_state": fields.get("SubState", "unknown"),
         "unit_file_state": fields.get("UnitFileState", "unknown"),
+    }
+
+
+def _watchdog_policy_status(*, timer: dict[str, Any], service: dict[str, Any]) -> dict[str, Any]:
+    units = {"timer": timer, "service": service}
+    installed_units = sorted(name for name, status in units.items() if status.get("load_state") == "loaded")
+    active_units = sorted(name for name, status in units.items() if status.get("active_state") == "active")
+    absent_units = sorted(name for name, status in units.items() if status.get("load_state") == "not-found")
+
+    policy_ok = len(absent_units) == len(units)
+    if policy_ok:
+        state = "absent"
+    elif active_units:
+        state = "active"
+    elif installed_units:
+        state = "legacy_units_present"
+    else:
+        state = "unknown"
+
+    return {
+        "ok": policy_ok,
+        "desired_state": "absent",
+        "state": state,
+        "absent_units": absent_units,
+        "installed_units": installed_units,
+        "active_units": active_units,
     }
 
 
