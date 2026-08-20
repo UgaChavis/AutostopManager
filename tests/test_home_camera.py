@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -95,6 +96,35 @@ def test_load_config_rejects_symlink_leaf(tmp_path, root_owned_camera_paths):
         home_camera.load_config(config_path)
 
 
+def test_root_only_stat_contract_rejects_wrong_types_and_owner():
+    with pytest.raises(HomeCameraError, match="config_directory_not_directory"):
+        home_camera._check_root_only_stat(
+            SimpleNamespace(st_mode=stat.S_IFREG | 0o700, st_uid=0), 0o700, "config_directory"
+        )
+    with pytest.raises(HomeCameraError, match="config_file_not_regular"):
+        home_camera._check_root_only_stat(SimpleNamespace(st_mode=stat.S_IFDIR | 0o600, st_uid=0), 0o600, "config_file")
+    with pytest.raises(HomeCameraError, match="config_file_not_root_owned"):
+        home_camera._check_root_only_stat(
+            SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1000), 0o600, "config_file"
+        )
+
+
+@pytest.mark.parametrize("payload", [[], {}, "not-json"])
+def test_load_config_rejects_invalid_payloads(tmp_path, root_owned_camera_paths, payload):
+    config_path = tmp_path / "private" / "camera.json"
+    config_path.parent.mkdir(mode=0o700)
+    config_path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+    config_path.chmod(0o600)
+
+    with pytest.raises(HomeCameraError, match=r"config_(invalid|unreadable)"):
+        home_camera.load_config(config_path)
+
+
+def test_load_config_rejects_invalid_leaf_name():
+    with pytest.raises(HomeCameraError, match="config_file_missing"):
+        home_camera.load_config(Path("."))
+
+
 @pytest.mark.parametrize("camera_ip", ["8.8.8.8", "2001:db8::1", "not-an-ip"])
 def test_validate_config_rejects_non_private_ipv4(camera_ip):
     config = _config()
@@ -171,6 +201,7 @@ def test_ssh_forward_is_local_and_strict():
         (b"rtsp://secret:secret@127.0.0.1:1: Server returned 401 Unauthorized", "camera_authentication_failed"),
         (b"Connection refused", "camera_connection_refused"),
         (b"Network is unreachable", "camera_network_unreachable"),
+        (b"Backend timed out", "camera_timeout"),
         (b"rtsp://secret:secret@127.0.0.1:1: unknown failure", "camera_capture_failed"),
     ],
 )
@@ -408,6 +439,20 @@ def test_wait_for_forward_reports_early_process_failure():
 
     with pytest.raises(HomeCameraError, match="ssh_forward_failed"):
         home_camera._wait_for_forward(process, 45554, timeout=1)
+
+
+def test_wait_for_forward_retries_then_times_out(monkeypatch):
+    ticks = iter([0.0, 0.1, 2.0])
+    monkeypatch.setattr(home_camera.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(home_camera.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        home_camera.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("not ready")),
+    )
+
+    with pytest.raises(HomeCameraError, match="ssh_forward_timeout"):
+        home_camera._wait_for_forward(SimpleNamespace(poll=lambda: None), 45554, timeout=1)
 
 
 class _FakePacket:
