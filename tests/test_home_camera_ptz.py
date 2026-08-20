@@ -249,8 +249,15 @@ def test_temporary_forward_always_terminates_process(monkeypatch):
     assert process.terminated is True
 
 
-def test_exclusive_lock_rejects_a_second_controller(tmp_path):
+def test_exclusive_lock_rejects_a_second_controller(monkeypatch, tmp_path):
     lock_path = tmp_path / "ptz.lock"
+    real_fstat = home_camera_ptz.os.fstat
+
+    def root_owned_fstat(fd):
+        info = real_fstat(fd)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+
+    monkeypatch.setattr(home_camera_ptz.os, "fstat", root_owned_fstat)
 
     with home_camera_ptz._exclusive_ptz_lock(lock_path):
         with pytest.raises(HomeCameraPTZError, match="ptz_busy"):

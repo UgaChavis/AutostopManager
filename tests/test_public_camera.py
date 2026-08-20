@@ -3,12 +3,37 @@ from __future__ import annotations
 import os
 import json
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 
 import pytest
 
 from autostop_manager import home_camera, public_camera, public_camera_worker
 from autostop_manager.public_camera import CAMERA_TITLE, PublicCameraError, extract_public_player_url
+
+
+@pytest.fixture
+def root_camera_controller(monkeypatch):
+    """Model the root controller while preserving runner-file ownership checks."""
+    real_fstat = home_camera.os.fstat
+    real_stat = home_camera.os.stat
+
+    def root_owned(info):
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+
+    def root_owned_directories(fd):
+        info = real_fstat(fd)
+        return root_owned(info) if stat.S_ISDIR(info.st_mode) else info
+
+    def root_owned_dir_entry(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if kwargs.get("dir_fd") is not None:
+            return root_owned(info)
+        return info
+
+    monkeypatch.setattr(public_camera.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(home_camera.os, "fstat", root_owned_directories)
+    monkeypatch.setattr(home_camera.os, "stat", root_owned_dir_entry)
 
 
 def test_extract_public_player_url_accepts_expected_public_player():
@@ -290,7 +315,7 @@ def test_public_camera_cli_lists_resolves_and_captures(monkeypatch, tmp_path, ca
     assert captured["camera_key"] == "semafornaya-185"
 
 
-def test_controller_rejects_service_owned_symlink_output(tmp_path):
+def test_controller_rejects_service_owned_symlink_output(tmp_path, root_camera_controller):
     target = tmp_path / "target"
     target.write_bytes(b"keep")
     runner_output = tmp_path / "runner-output.png"
@@ -307,7 +332,7 @@ def test_controller_rejects_service_owned_symlink_output(tmp_path):
     assert target.read_bytes() == b"keep"
 
 
-def test_runner_failure_preserves_existing_public_output(monkeypatch, tmp_path):
+def test_runner_failure_preserves_existing_public_output(monkeypatch, tmp_path, root_camera_controller):
     output = tmp_path / "frame.png"
     output.write_bytes(b"keep")
     account = public_camera._RunnerAccount(uid=os.getuid(), gid=os.getgid())
@@ -326,7 +351,7 @@ def test_runner_failure_preserves_existing_public_output(monkeypatch, tmp_path):
     assert not list(tmp_path.glob(".autostop-camera-*.partial"))
 
 
-def test_runner_output_creation_failure_discards_reserved_staging(monkeypatch, tmp_path):
+def test_runner_output_creation_failure_discards_reserved_staging(monkeypatch, tmp_path, root_camera_controller):
     output = tmp_path / "frame.png"
     account = public_camera._RunnerAccount(uid=os.getuid(), gid=os.getgid())
     monkeypatch.setattr(public_camera, "_runner_account", lambda: account)
@@ -343,7 +368,7 @@ def test_runner_output_creation_failure_discards_reserved_staging(monkeypatch, t
     assert not list(tmp_path.glob(".autostop-camera-*.partial"))
 
 
-def test_controller_atomically_publishes_verified_runner_png(monkeypatch, tmp_path):
+def test_controller_atomically_publishes_verified_runner_png(monkeypatch, tmp_path, root_camera_controller):
     victim = tmp_path / "victim"
     victim.write_bytes(b"keep")
     output = tmp_path / "frame.png"
