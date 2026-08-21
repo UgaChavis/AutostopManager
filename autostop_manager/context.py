@@ -410,6 +410,12 @@ def build_agent_brief(
             else False,
             "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
             "confidence": knowledge.get("confidence"),
+            "selection_mode": "explicit" if command_route else "suggested" if has_actionable_knowledge else "explore",
+            "candidates": [
+                {key: candidate.get(key) for key in ("domain", "open_first", "confidence", "matching_terms")}
+                for candidate in knowledge.get("routes", [])[:3]
+                if candidate.get("score", 0) > 0
+            ],
             "required_reads": command_route.get("required_reads", []),
             "write_domains": command_route.get("write_domains", []),
             "external_connectors": command_route.get("external_connectors", []),

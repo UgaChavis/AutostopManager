@@ -283,11 +283,15 @@ def test_automotive_vehicle_and_store_context_are_selected_only_when_present(tmp
         "В карточке CRM по VIN найди OEM фильтра и запиши в карточку",
         limit=5,
     )
+    ambiguous = build_agent_brief(store, "Найди запчасти по VIN для BMW N63", limit=5)
 
     assert generic_vin["best_domain"] == "vehicle_identity_and_oem"
     assert generic_vin["command_route"] is None
     assert internal_store["best_domain"] == "store_management"
     assert crm_writeback["best_domain"] == "crm_vin_oem_parts_lookup"
+    assert ambiguous["route"]["selection_mode"] == "suggested"
+    assert len(ambiguous["route"]["candidates"]) >= 2
+    assert ambiguous["next_actions"] == ["compare_route_candidates"]
 
 
 def test_model_specific_automotive_routes_need_explicit_vehicle_markers(tmp_path):
@@ -313,6 +317,8 @@ def test_low_confidence_generic_interrogative_does_not_activate_store_analytics_
     assert result["has_knowledge"] is False
     assert brief["route"]["domain"] is None
     assert brief["route"]["open_first"] is None
+    assert brief["route"]["selection_mode"] == "explore"
+    assert brief["route"]["candidates"] == []
 
 
 def test_store_owner_phrases_route_to_store_playbook_without_parts_or_labor_misrouting(tmp_path):
@@ -372,9 +378,18 @@ def test_explicit_store_opt_out_excludes_store_routes_and_agent_brief(tmp_path):
     result = probe_knowledge_base(store, query, limit=5)
     brief = build_agent_brief(store, query, limit=5)
 
-    assert result["best_domain"] not in {"store_management", "store_analytics_reporting"}
-    assert all(route["domain"] not in {"store_management", "store_analytics_reporting"} for route in result["routes"])
-    assert brief["route"]["domain"] not in {"store_management", "store_analytics_reporting"}
+    excluded = {"store_management", "store_analytics_reporting", "ecosystem_capability_parity"}
+    assert result["best_domain"] not in excluded
+    assert all(route["domain"] not in excluded for route in result["routes"])
+    assert brief["route"]["domain"] not in excluded
+
+    broad_query = "Проведи полную проверку инфраструктуры: серверы, CRM, резервные копии и камера у AutoStop"
+    assert (find_command_route(broad_query) or {}).get("domain") != "public_camera"
+    assert probe_knowledge_base(store, broad_query, limit=5)["best_domain"] == "remote_codex_access"
+
+    scoped_result = probe_knowledge_base(store, "Проверь серверы и резервные копии, без камер и без CRM", limit=5)
+    domains = {route["domain"] for route in scoped_result["routes"]}
+    assert domains == {"remote_codex_access"}
 
 
 def test_store_write_phrases_route_to_allowlisted_management_workflow():

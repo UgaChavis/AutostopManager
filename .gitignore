@@ -2,6 +2,7 @@
 .env
 .env.local
 .codex-remote-attachments/
+.local/
 __pycache__/
 .pytest_cache/
 .coverage

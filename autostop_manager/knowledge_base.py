@@ -61,33 +61,23 @@ STOPWORDS = {
     "without",
 }
 
-PROJECT_ENGINEERING_CONTEXT_TERMS = (
-    "autostopmanager",
-    "autostop manager",
-    "автостоп менеджер",
-    "архитектур",
-    "исходный код",
-    "кодовая баз",
-    "проект",
-    "репозитор",
+_PROJECT_ENGINEERING_RE = re.compile(
+    r"autostop\s*manager|автостоп\s*менеджер|архитектур|исходн\w*\s+код|кодовая\s+баз|проект|репозитор"
+    r"|agent-brief|knowledge-probe|gateway\s+v2|action\s+contract|prepare_action_contract|workflow\s+metadata"
+    r"|dry_run\s+metadata|маршрутизац",
+    re.IGNORECASE,
 )
-PROJECT_ENGINEERING_ACTION_TERMS = (
-    "аудит",
-    "баг",
-    "дефект",
-    "отлад",
-    "рефактор",
-    "тестирован",
-    "pytest",
-    "test suite",
-    "unit test",
+_PROJECT_ENGINEERING_ACTION_RE = re.compile(
+    r"аудит|баг|дефект|отлад|оптимиз|рефактор|тест|улучш|исправ|почин|маршрутизац|документац|обнов",
+    re.IGNORECASE,
 )
 
-_STORE_ROUTE_DOMAINS = frozenset({"store_management", "store_analytics_reporting"})
-_STORE_SCOPE_EXCLUSION_RE = re.compile(
-    r"(?:\b(?:без|without)\s+(?:работы\s+с\s+|the\s+)?(?:store|магазин\w*)\b"
-    r"|\b(?:store|магазин\w*)\s+(?:(?:пока\s+)?не\s+(?:трог\w*|заним\w*)|на\s+паузе|в\s+разработке)\b"
-    r"|\b(?:не\s+(?:трог\w*|заним\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))\s+(?:the\s+)?(?:store|магазин\w*)\b)"
+_SCOPE_EXCLUSION_RE = re.compile(
+    r"\b(?:без\s+работы\s+с|without)\s+(?:the\s+)?(?P<after>[\w-]+)"
+    r"|\bбез\s+(?P<bare>store|магазин\w*|crm|telegram|телеграм\w*|gmail|почт\w*|vpn|впн|камер\w*|сервер\w*)"
+    r"|\b(?P<before>(?!(?:но|but)\b)[\w-]+)\s+(?:(?:пока\s+)?не\s+(?:трог\w*|заним\w*)|на\s+паузе|в\s+разработке)"
+    r"|\b(?:не\s+(?:трог\w*|заним\w*|использ\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))"
+    r"\s+(?:the\s+)?(?P<action>[\w-]+)"
 )
 
 
@@ -327,15 +317,19 @@ def probe_knowledge_base(
     if _route_card_count(memory) == 0:
         sync_knowledge_base(memory)
 
-    tokens = _tokens(query)
+    excluded_scopes = _scope_exclusions(query)
+    tokens = [
+        token
+        for token in _tokens(query)
+        if not any(_term_count(token, scope) or _term_count(scope, token) for scope in excluded_scopes)
+    ]
     command_route = find_command_route(query)
     domain_hints = _domain_hints(query)
-    excluded_domains = _STORE_ROUTE_DOMAINS if _store_scope_excluded(query) else frozenset()
     route_definitions = (_load_knowledge_map().get("domains") or {}) if KNOWLEDGE_MAP_PATH.exists() else {}
     if command_route:
         domain_hints[str(command_route.get("domain") or "")] = max(
             domain_hints.get(str(command_route.get("domain") or ""), 0),
-            int(command_route.get("score") or 0),
+            100,
         )
     with memory.connect() as conn:
         rows = conn.execute(
@@ -371,7 +365,7 @@ def probe_knowledge_base(
     routes: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        if str(item.get("domain") or "").casefold() in excluded_domains:
+        if _route_excluded(item, excluded_scopes):
             continue
         item["annotation_text"] = "\n".join(
             str(annotation.get("search_text") or "")
@@ -412,9 +406,19 @@ def probe_knowledge_base(
 
     routes.sort(key=lambda value: (value["score"], len(value["matching_terms"])), reverse=True)
     routes = routes[:limit]
+    if routes and routes[0]["score"] >= 12:
+        routes = [route for route in routes if route["score"] >= 12]
+    if routes:
+        top_score = max(int(routes[0]["score"]), 1)
+        for route in routes:
+            route["confidence"] = round(min(route["confidence"], 0.95 * int(route["score"]) / top_score), 2)
     best = routes[0] if routes else None
     confidence = float(best["confidence"]) if best else 0.0
+    if best and len(routes) > 1:
+        margin = (int(best["score"]) - int(routes[1]["score"])) / max(int(best["score"]), 1)
+        confidence = round(min(confidence, 0.55 + 0.4 * margin), 2)
     has_knowledge = bool(best and best["score"] >= 12 and confidence >= 0.45)
+    ambiguous = bool(best and len(routes) > 1 and routes[1]["score"] >= best["score"] * 0.75)
 
     return {
         "ok": True,
@@ -432,7 +436,12 @@ def probe_knowledge_base(
         "optional_runtime_note": best["optional_runtime_note"] if best else "",
         "command_route": command_route,
         "routes": routes,
-        "next_action": "open_source_of_truth" if has_knowledge else "route_external_sources",
+        "ambiguous": ambiguous,
+        "next_action": "compare_route_candidates"
+        if has_knowledge and ambiguous
+        else "open_source_of_truth"
+        if has_knowledge
+        else "route_external_sources",
         "needs_broad_search": not has_knowledge,
         "probed_at": _now(),
     }
@@ -954,16 +963,27 @@ def _load_command_routes() -> dict[str, Any]:
     }
 
 
-def _store_scope_excluded(query: str) -> bool:
-    return bool(_STORE_SCOPE_EXCLUSION_RE.search((query or "").casefold()))
+def _scope_exclusions(query: str) -> set[str]:
+    return {
+        next(value for value in match.groups() if value).casefold()
+        for match in _SCOPE_EXCLUSION_RE.finditer((query or "").casefold())
+    }
+
+
+def _route_excluded(route: dict[str, Any], scopes: set[str]) -> bool:
+    scope_text = " ".join(
+        str(route.get(key) or "")
+        for key in ("domain", "title", "use_when_json", "aliases_json", "keywords_json", "aliases", "keywords")
+    ).casefold()
+    return any(_term_count(scope_text, scope) for scope in scopes)
 
 
 def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
     lowered = (query or "").casefold()
     normalized_intent = (intent or "").casefold()
     routes = [dict(route) for route in _load_command_routes().get("routes", [])]
-    if _store_scope_excluded(query):
-        routes = [route for route in routes if str(route.get("domain") or "").casefold() not in _STORE_ROUTE_DOMAINS]
+    excluded_scopes = _scope_exclusions(query)
+    routes = [route for route in routes if not _route_excluded(route, excluded_scopes)]
     if normalized_intent:
         exact_intent_routes = [
             route for route in routes if normalized_intent == str(route.get("intent") or "").casefold()
@@ -994,11 +1014,11 @@ def find_command_route(query: str, *, intent: str | None = None) -> dict[str, An
                 score += 100
                 matching_terms.append(str(alias))
             elif text in lowered:
-                score += 70
+                score += 70 if len(text) * 4 >= len(lowered) else round(70 * len(text) / max(len(lowered), 1))
                 matching_terms.append(str(alias))
         for keyword in _string_list(route.get("keywords")):
             text = str(keyword).casefold()
-            if text and text in lowered:
+            if text and _term_count(lowered, text):
                 score += 15
                 matching_terms.append(str(keyword))
         priority = int(route.get("priority") or 0)
@@ -1700,6 +1720,12 @@ def _knowledge_fts_query(tokens: list[str]) -> str:
     return " OR ".join(escaped)
 
 
+def _term_count(text: str, term: str) -> int:
+    if len(term) <= 3:
+        return len(re.findall(rf"(?<![^\W_]){re.escape(term)}(?![^\W_])", text))
+    return text.count(term)
+
+
 def _domain_hints(query: str) -> dict[str, int]:
     lowered = query.lower()
     hints: dict[str, int] = {}
@@ -1761,6 +1787,8 @@ def _domain_hints(query: str) -> dict[str, int]:
     )
     if any(term in lowered for term in remote_access_terms):
         hints["remote_codex_access"] = 82
+    if any(term in lowered for term in ("инфраструктур", "сервер", "резервн", "backup", "backups")):
+        hints["remote_codex_access"] = max(hints.get("remote_codex_access", 0), 50)
     store_context_terms = (
         "магазин",
         "нашем каталоге",
@@ -1808,31 +1836,8 @@ def _domain_hints(query: str) -> dict[str, int]:
     )
     if any(term in lowered for term in store_context_terms) and any(term in lowered for term in store_subject_terms):
         hints["store_management"] = 80
-    if any(term in lowered for term in PROJECT_ENGINEERING_CONTEXT_TERMS) and any(
-        term in lowered for term in PROJECT_ENGINEERING_ACTION_TERMS
-    ):
-        hints["startup_and_identity"] = 55
-    gateway_engineering_terms = (
-        "gateway v2",
-        "action contract",
-        "prepare_action_contract",
-        "agent-brief",
-        "knowledge-probe",
-        "workflow metadata",
-        "dry_run metadata",
-    )
-    gateway_engineering_actions = (
-        "исправ",
-        "почин",
-        "маршрутизац",
-        "рефактор",
-        "документац",
-        "тест",
-    )
-    if any(term in lowered for term in gateway_engineering_terms) and any(
-        term in lowered for term in gateway_engineering_actions
-    ):
-        hints["startup_and_identity"] = max(hints.get("startup_and_identity", 0), 70)
+    if _PROJECT_ENGINEERING_RE.search(lowered) and _PROJECT_ENGINEERING_ACTION_RE.search(lowered):
+        hints["startup_and_identity"] = 70
     if any(word in lowered for word in ["масло", "моторное", "жидк", "заправ", " то "]):
         hints["fluids"] = 20
     technical_repair_terms = (
@@ -1895,7 +1900,8 @@ def _domain_hints(query: str) -> dict[str, int]:
         hints["crm_vin_oem_parts_lookup"] = max(hints.get("crm_vin_oem_parts_lookup", 0), 34)
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 12)
     if not any(word in lowered for word in identifier_terms) and any(
-        word in lowered for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
+        _term_count(lowered, word)
+        for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
     ):
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 40)
     internal_store_reference = any(
@@ -1947,7 +1953,7 @@ def _domain_hints(query: str) -> dict[str, int]:
             "bulk_set_deadline_if_below",
             "timer floor",
         ]
-    ) and not any(term in lowered for term in gateway_engineering_actions):
+    ) and not (_PROJECT_ENGINEERING_RE.search(lowered) and _PROJECT_ENGINEERING_ACTION_RE.search(lowered)):
         hints["service_management"] = max(hints.get("service_management", 0), 60)
     return hints
 
@@ -1976,19 +1982,19 @@ def _score_route_card(
 
     for token in tokens:
         token_score = 0
-        if token in domain:
+        if _term_count(domain, token):
             token_score += 8
-        if token in aliases:
+        if _term_count(aliases, token):
             token_score += 7
-        if token in keywords:
+        if _term_count(keywords, token):
             token_score += 5
-        if token in title:
+        if _term_count(title, token):
             token_score += 4
-        if token in source_paths:
+        if _term_count(source_paths, token):
             token_score += 3
-        if token in annotation_text:
+        if _term_count(annotation_text, token):
             token_score += 8
-        occurrences = haystack.count(token)
+        occurrences = _term_count(haystack, token)
         if occurrences:
             token_score += min(occurrences, 4)
         if token_score:
@@ -2001,7 +2007,7 @@ def _score_route_card(
 def _confidence(score: int) -> float:
     if score <= 0:
         return 0.0
-    return round(min(0.99, score / 35), 2)
+    return round(min(0.95, score / 35), 2)
 
 
 def _score(item: dict[str, Any], tokens: list[str], query: str, *, domain_hints: dict[str, int]) -> int:

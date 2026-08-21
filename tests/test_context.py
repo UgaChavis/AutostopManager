@@ -79,12 +79,14 @@ def test_agent_brief_routes_compact_project_engineering_query_to_startup(tmp_pat
 
     result = context.build_agent_brief(
         store,
-        "полный рефакторинг поиск багов отладка всего AutoStopManager",
+        "Улучшить agent-brief и knowledge-probe для широких неоднозначных запросов",
         limit=8,
     )
 
     assert result["route"]["domain"] == "startup_and_identity"
     assert result["route"]["open_first"] == "AGENTS.md"
+    assert result["route"]["selection_mode"] == "suggested"
+    assert all(candidate["domain"] != "parts_sourcing" for candidate in result["route"]["candidates"])
 
 
 def test_build_agent_brief_returns_compact_board_cleanup_start_package(tmp_path):
