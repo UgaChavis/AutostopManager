@@ -1099,7 +1099,7 @@ def test_crm_mcp_catalog_counts_are_current():
 
     assert catalog["source_branch"] == "autostopcrm-v1"
     assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
-    assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 95
+    assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 98
     assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 77
     assert "get_store_analytics_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
     assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
@@ -1108,6 +1108,11 @@ def test_crm_mcp_catalog_counts_are_current():
     assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
     assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
     assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
+    assert {
+        "get_repair_order_cycles",
+        "preview_repair_order_reopen",
+        "reopen_repair_order",
+    } <= set(catalog["tool_families"]["repair_order"])
     assert "start_card_timer" in catalog["tool_families"]["card_and_board_write"]
     assert "stop_card_timer" in catalog["tool_families"]["card_and_board_write"]
     assert len(catalog["production_tools_verified"]) == 24
