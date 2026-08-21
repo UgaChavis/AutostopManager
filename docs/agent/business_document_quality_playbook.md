@@ -30,6 +30,12 @@ state which render or audit gate was available:
    "Документ без карточки" use
    `agent_document_workflow(operation="create_document_without_card_pdf")`.
    Do not build independent PDF/HTML templates for these AutoStop documents.
+   Manual completion-act drafts use the same named workflow:
+   `save_completion_act_form` and destructive `reset_completion_act_form`.
+   Build `prepare_action_contract(domain="document")`, keep one correlation ID,
+   run `dry_run`, then apply with a new idempotency key and the bound proof.
+   Reset additionally carries a verified pre-reset snapshot in the contract for
+   compensation; the snapshot is not sent to the CRM reset route.
 3. Use `business_identity` for current AutoStop/IP реквизиты when company facts
    are needed. Do not copy private bank/contact facts into Git-tracked docs.
 4. For invoices, acts, КП, and accounting-like documents, verify:
@@ -62,6 +68,9 @@ state which render or audit gate was available:
 - The CRM print module owns PrintServiceProfile, template rendering, PDF render,
   preview, export, and print behavior. The manager agent must not replace it
   with a separate PDF/HTML generator for AutoStop documents.
+- Completion-act readback uses `draft.state=absent|active|reset_tombstone`,
+  `revision`, and `last_operation`. Treat legacy `exists/version` metadata after
+  reset as the latest mutation tombstone, not as an active draft.
 - Approved practical flow for ready CRM cars, including repeated "ВашАвто /
   Ваш Авто" requests: identify the live ready cards/repair orders in CRM, export
   the requested standard documents through the CRM print module, save runtime

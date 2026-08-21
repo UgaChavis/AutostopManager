@@ -11,6 +11,118 @@ from autostop_manager.action_contract import EXECUTOR_TOOLS, INVENTORY_EXECUTOR_
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _completion_act_form(*, basis: str = "") -> dict:
+    party = {
+        "legal_name": "",
+        "address": "",
+        "inn": "",
+        "kpp": "",
+        "ogrn": "",
+        "bank_name": "",
+        "bik": "",
+        "settlement_account": "",
+        "correspondent_account": "",
+        "signer_position": "",
+        "signer_name": "",
+    }
+    return {
+        "document_number": "18",
+        "document_date": "21.08.2026",
+        "basis": basis,
+        "performer": dict(party),
+        "customer": dict(party),
+        "items": [],
+        "acceptance_text": "",
+    }
+
+
+def test_completion_act_save_builds_named_dry_run_and_apply_contracts():
+    common = {
+        "domain": "document",
+        "action": "save_completion_act_form",
+        "target_id": "card-18",
+        "owner_intent": "Сохрани только тестовое основание акта",
+        "expected_revision": "4",
+    }
+    planned = {
+        "form": _completion_act_form(basis="ТЕСТ CODEX"),
+        "expected_source_fingerprint": "a" * 64,
+    }
+    preview = prepare_action_contract(
+        **common,
+        planned_changes=planned,
+        idempotency_key="completion-act-preview",
+        dry_run=True,
+    )
+    apply = prepare_action_contract(
+        **common,
+        planned_changes={
+            **planned,
+            "dry_run_proof": "b" * 64,
+            "dry_run_idempotency_key": "completion-act-preview",
+        },
+        idempotency_key="completion-act-apply",
+        dry_run=False,
+    )
+
+    assert preview["ok"] is True
+    assert apply["ok"] is True
+    assert preview["correlation_id"] == apply["correlation_id"]
+    assert preview["execution"]["tool"] == "agent_document_workflow"
+    assert preview["execution"]["operation"] == "save_completion_act_form"
+    assert preview["execution"]["gateway_arguments"]["mode"] == "dry_run"
+    assert apply["execution"]["gateway_arguments"]["mode"] == "apply"
+    assert apply["execution"]["gateway_arguments"]["payload"]["dry_run_proof"] == "b" * 64
+
+
+def test_completion_act_apply_requires_bound_proof_and_distinct_key():
+    changes = {
+        "form": _completion_act_form(),
+        "expected_source_fingerprint": "a" * 64,
+        "dry_run_proof": "b" * 64,
+        "dry_run_idempotency_key": "same-key",
+    }
+    result = prepare_action_contract(
+        domain="document",
+        action="save_completion_act_form",
+        target_id="card-18",
+        planned_changes=changes,
+        owner_intent="Сохрани черновик",
+        expected_revision="4",
+        idempotency_key="same-key",
+        dry_run=False,
+    )
+
+    assert result["ok"] is False
+    assert "apply_requires_new_idempotency_key" in result["preflight"]["blocking_reasons"]
+
+
+def test_completion_act_reset_is_destructive_and_restores_verified_snapshot():
+    result = prepare_action_contract(
+        domain="document",
+        action="reset_completion_act_form",
+        target_id="card-18",
+        planned_changes={
+            "expected_source_fingerprint": "a" * 64,
+            "verified_snapshot": {
+                "form": _completion_act_form(basis="verified"),
+                "version": 4,
+                "source_fingerprint": "a" * 64,
+            },
+        },
+        owner_intent="Сбрось тестовый черновик",
+        expected_revision="4",
+        idempotency_key="completion-act-reset-preview",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == "agent_document_workflow"
+    assert "verified_snapshot" not in result["execution"]["gateway_arguments"]["payload"]
+    assert result["compensation"]["required"] is True
+    assert result["compensation"]["strategy"].startswith("restore_completion_act")
+
+
 def test_payment_action_contract_requires_and_reconciles_financial_context():
     result = prepare_action_contract(
         domain="payment",

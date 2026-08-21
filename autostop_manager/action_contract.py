@@ -28,6 +28,8 @@ MUTATING_ACTIONS = {
     "adjust",
     "upload",
     "generate",
+    "save_completion_act_form",
+    "reset_completion_act_form",
     "send",
     "forward",
     "label",
@@ -118,6 +120,8 @@ EXECUTOR_TOOLS = {
     ("cashbox", "delete"): "delete_cashbox",
     ("cashbox", "cash_transaction"): "create_cash_transaction",
     ("document", "generate"): "create_document_without_card_pdf",
+    ("document", "save_completion_act_form"): "agent_document_workflow",
+    ("document", "reset_completion_act_form"): "agent_document_workflow",
     ("file", "upload"): "upload_shared_file",
     ("gmail", "send"): "gmail:_send_email",
     ("gmail", "forward"): "gmail:_forward_emails",
@@ -152,7 +156,7 @@ FINANCIAL_TRANSACTION_ACTIONS = {
     ("cashbox", "cash_transaction"),
     ("cashbox", "transfer"),
 }
-DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive"}
+DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive", "reset_completion_act_form"}
 TARGET_ONLY_ACTIONS = {"delete", "archive"}
 EXTERNAL_DOMAINS = {"gmail"}
 STORE_DOMAINS = {"store_quote_request", "store_batch", "store_order", "store_owner_api"}
@@ -169,6 +173,7 @@ STORE_OWNER_ACTIONS = {("store_owner_api", "execute_owner_api")}
 RAW_CRM_ACTIONS = frozenset({"create_client", "create_card", "link_card_to_client"})
 RAW_CRM_COLLECTION_CREATES = frozenset({"create_client", "create_card"})
 STORE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
+COMPLETION_ACT_ACTIONS = {"save_completion_act_form", "reset_completion_act_form"}
 MAX_MONEY_MINOR = 100_000_000_000_000
 MAX_MONEY_AMOUNT = MAX_MONEY_MINOR / 100
 DEADLINE_PART_MAXIMUMS = {
@@ -239,6 +244,17 @@ def prepare_action_contract(
     blockers.extend(_store_correlation_blockers(normalized_domain, requested_correlation_id))
 
     _validate_domain_changes(normalized_domain, normalized_action, changes, blockers, warnings)
+    blockers.extend(
+        _completion_act_contract_blockers(
+            domain=normalized_domain,
+            action=normalized_action,
+            changes=changes,
+            revision=revision,
+            requested_correlation_id=requested_correlation_id,
+            idempotency_key=key,
+            dry_run=dry_run,
+        )
+    )
     if normalized_action in DESTRUCTIVE_ACTIONS:
         warnings.append("destructive_action_requires_backup_or_compensation")
     if normalized_domain in EXTERNAL_DOMAINS:
@@ -285,6 +301,15 @@ def prepare_action_contract(
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
     if normalized_domain == "crm" and normalized_action in RAW_CRM_ACTIONS:
         preflight_checks.extend(["raw_capability_exact_name_checked", "raw_capability_schema_hash_checked"])
+    if normalized_domain == "document" and normalized_action in COMPLETION_ACT_ACTIONS:
+        preflight_checks.extend(
+            [
+                "completion_act_form_exact_reread",
+                "completion_act_source_fingerprint_matches",
+                "named_workflow_schema_checked",
+                "dry_run_proof_bound_to_correlation",
+            ]
+        )
     preflight_checks.extend(
         _store_preflight_checks(
             domain=normalized_domain,
@@ -408,7 +433,56 @@ def _gateway_execution(
             "idempotency_key": idempotency_key or None,
             "mode": mode,
         }
+    if domain == "document" and action in COMPLETION_ACT_ACTIONS:
+        try:
+            expected_version = int(str(revision or ""))
+        except ValueError:
+            expected_version = -1
+        completion_payload: dict[str, Any] = {
+            "card_id": target_id,
+            "expected_version": expected_version,
+            "expected_source_fingerprint": changes.get("expected_source_fingerprint"),
+            "correlation_id": correlation_id,
+        }
+        if action == "save_completion_act_form":
+            completion_payload["form"] = changes.get("form", changes.get("form_data"))
+        if not dry_run:
+            completion_payload["dry_run_proof"] = changes.get("dry_run_proof")
+            completion_payload["dry_run_idempotency_key"] = changes.get("dry_run_idempotency_key")
+        return action, {
+            "operation": action,
+            "payload": completion_payload,
+            "idempotency_key": idempotency_key or None,
+            "mode": mode,
+        }
     return (action if domain == "board" else None), None
+
+
+def _completion_act_contract_blockers(
+    *,
+    domain: str,
+    action: str,
+    changes: dict[str, Any],
+    revision: str | None,
+    requested_correlation_id: str,
+    idempotency_key: str,
+    dry_run: bool,
+) -> list[str]:
+    if domain != "document" or action not in COMPLETION_ACT_ACTIONS:
+        return []
+    blockers: list[str] = []
+    if revision is not None and re.fullmatch(r"\d+", revision) is None:
+        blockers.append("invalid_completion_act_expected_version")
+    if requested_correlation_id and STORE_CORRELATION_ID_RE.fullmatch(requested_correlation_id) is None:
+        blockers.append("invalid_completion_act_correlation_id")
+    if not dry_run:
+        proof = str(changes.get("dry_run_proof") or "")
+        dry_run_key = str(changes.get("dry_run_idempotency_key") or "")
+        if not proof or not dry_run_key:
+            blockers.append("completion_act_dry_run_proof_required")
+        elif dry_run_key == idempotency_key:
+            blockers.append("apply_requires_new_idempotency_key")
+    return blockers
 
 
 def _validate_domain_changes(
@@ -432,6 +506,8 @@ def _validate_domain_changes(
         _validate_gmail_changes(action, changes, blockers)
     if domain == "document" and action == "generate" and not str(changes.get("request_text") or "").strip():
         blockers.append("missing_request_text")
+    if domain == "document" and action in COMPLETION_ACT_ACTIONS:
+        _validate_completion_act_changes(action, changes, blockers)
     if domain == "file" and action == "upload":
         if not str(changes.get("file_name") or "").strip():
             blockers.append("missing_file_name")
@@ -439,6 +515,94 @@ def _validate_domain_changes(
             blockers.append("missing_content_base64")
     if domain in STORE_DOMAINS:
         _validate_store_changes(domain, action, changes, blockers, warnings)
+
+
+def _validate_completion_act_changes(
+    action: str,
+    changes: dict[str, Any],
+    blockers: list[str],
+) -> None:
+    common = {"expected_source_fingerprint", "dry_run_proof", "dry_run_idempotency_key"}
+    allowed = common | {"form", "form_data"} if action == "save_completion_act_form" else common | {"verified_snapshot"}
+    if set(changes).difference(allowed):
+        blockers.append("unsupported_completion_act_change_fields")
+    if re.fullmatch(r"[0-9a-f]{64}", str(changes.get("expected_source_fingerprint") or "")) is None:
+        blockers.append("invalid_completion_act_source_fingerprint")
+    proof = changes.get("dry_run_proof")
+    dry_run_key = changes.get("dry_run_idempotency_key")
+    if proof is not None and re.fullmatch(r"[0-9a-f]{64}", str(proof)) is None:
+        blockers.append("invalid_completion_act_dry_run_proof")
+    if dry_run_key is not None and (
+        not isinstance(dry_run_key, str) or not dry_run_key.strip() or len(dry_run_key) > 128
+    ):
+        blockers.append("invalid_completion_act_dry_run_idempotency_key")
+    if action == "save_completion_act_form":
+        form = changes.get("form")
+        alias = changes.get("form_data")
+        if (form is None) == (alias is None):
+            blockers.append("exactly_one_completion_act_form_required")
+        elif not _valid_completion_act_form(form if form is not None else alias):
+            blockers.append("invalid_completion_act_form")
+    else:
+        snapshot = changes.get("verified_snapshot")
+        if not isinstance(snapshot, dict) or not _valid_completion_act_form(snapshot.get("form")):
+            blockers.append("verified_completion_act_snapshot_required")
+        elif (
+            type(snapshot.get("version")) is not int
+            or snapshot["version"] < 0
+            or re.fullmatch(r"[0-9a-f]{64}", str(snapshot.get("source_fingerprint") or "")) is None
+        ):
+            blockers.append("invalid_completion_act_snapshot_revision")
+
+
+def _valid_completion_act_form(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    party_limits = {
+        "legal_name": 240,
+        "address": 320,
+        "inn": 32,
+        "kpp": 32,
+        "ogrn": 32,
+        "bank_name": 240,
+        "bik": 32,
+        "settlement_account": 64,
+        "correspondent_account": 64,
+        "signer_position": 120,
+        "signer_name": 160,
+    }
+    form_limits = {
+        "document_number": 80,
+        "document_date": 64,
+        "basis": 500,
+        "acceptance_text": 1000,
+    }
+    if set(value) != {*form_limits, "performer", "customer", "items"}:
+        return False
+    if any(not isinstance(value.get(field), str) or len(value[field]) > limit for field, limit in form_limits.items()):
+        return False
+    for party_name in ("performer", "customer"):
+        party = value.get(party_name)
+        if not isinstance(party, dict) or set(party) != set(party_limits):
+            return False
+        if any(
+            not isinstance(party.get(field), str) or len(party[field]) > limit for field, limit in party_limits.items()
+        ):
+            return False
+    items = value.get("items")
+    item_limits = {"id": 128, "name": 500, "unit": 24, "quantity": 48, "price": 48}
+    if not isinstance(items, list) or len(items) > 300:
+        return False
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {*item_limits, "section"}:
+            return False
+        if item.get("section") not in {"works", "materials", "manual"}:
+            return False
+        if any(
+            not isinstance(item.get(field), str) or len(item[field]) > limit for field, limit in item_limits.items()
+        ):
+            return False
+    return True
 
 
 def _validate_store_changes(
@@ -993,7 +1157,26 @@ def _verification_checks(
     if domain == "gmail":
         checks = ["connector_result_ref_present", "message_or_thread_id_present", "external_step_completed_once"]
     if domain == "document":
-        checks.extend(["file_exists", "render_gate_passed", "totals_match"])
+        if action in COMPLETION_ACT_ACTIONS:
+            checks = (
+                [
+                    "dry_run_response_ok",
+                    "completion_act_business_state_unchanged",
+                    "completion_act_version_and_source_validated",
+                    "changed_paths_exact",
+                    "dry_run_proof_recorded",
+                ]
+                if dry_run
+                else [
+                    "write_response_ok",
+                    "completion_act_exact_form_readback",
+                    "completion_act_version_advanced_or_idempotent_replay",
+                    "completion_act_source_fingerprint_current",
+                    "no_unplanned_fields",
+                ]
+            )
+        else:
+            checks.extend(["file_exists", "render_gate_passed", "totals_match"])
     if domain in STORE_DOMAINS:
         if dry_run:
             checks = [
@@ -1034,6 +1217,8 @@ def _executor_tool(domain: str, action: str, changes: dict[str, Any]) -> str | N
 
 
 def _compensation_strategy(domain: str, action: str) -> str | None:
+    if domain == "document" and action == "reset_completion_act_form":
+        return "restore_completion_act_from_verified_snapshot_with_new_version_and_proof"
     if domain == "gmail" and action == "archive":
         return "restore_inbox_label_on_exact_messages"
     if domain == "gmail" and action == "delete":
@@ -1121,6 +1306,26 @@ def _action_correlation_id(
     requested: str,
     contract_id: str,
 ) -> str:
+    if domain == "document" and action in COMPLETION_ACT_ACTIONS:
+        if requested and STORE_CORRELATION_ID_RE.fullmatch(requested) is not None:
+            return requested
+        proof_independent_changes = {
+            key: value for key, value in changes.items() if key not in {"dry_run_proof", "dry_run_idempotency_key"}
+        }
+        canonical = json.dumps(
+            {
+                "domain": domain,
+                "action": action,
+                "target_id": target_id,
+                "changes": proof_independent_changes,
+                "revision": revision,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return f"document_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:32]}"
     if domain not in STORE_DOMAINS:
         return requested or contract_id
     if requested and STORE_CORRELATION_ID_RE.fullmatch(requested) is not None:
