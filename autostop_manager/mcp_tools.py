@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Collection
 from typing import Any
 
 from mcp.types import ToolAnnotations
@@ -32,7 +33,6 @@ from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
-    audit_knowledge_annotations,
     audit_knowledge_base,
     probe_knowledge_base,
     search_knowledge_base,
@@ -106,7 +106,18 @@ def register_manager_memory_tools(  # noqa: C901
     server: Any,
     store: ManagerMemoryStore | None = None,
     store_client: StoreApiClient | None = None,
+    include_tools: Collection[str] | None = None,
 ) -> None:
+    original_tool = server.tool
+    if include_tools is not None:
+        selected_tools = frozenset(include_tools)
+
+        def filtered_tool(*args: Any, **kwargs: Any) -> Any:
+            if str(kwargs.get("name") or "") in selected_tools:
+                return original_tool(*args, **kwargs)
+            return lambda function: function
+
+        server.tool = filtered_tool
     memory = store or ManagerMemoryStore()
     store_adapter = StoreIntegration(
         client=store_client
@@ -1035,7 +1046,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="audit_knowledge_base",
         description=(
-            "Audit docs/agent/knowledge_map.json, compact route cards, mapped source files, and SQLite index counts. "
+            "Audit docs/agent/knowledge_map.json, mapped source files, and SQLite document index counts. "
             "Use after knowledge intake or when local knowledge routing looks stale."
         ),
     )
@@ -1047,7 +1058,7 @@ def register_manager_memory_tools(  # noqa: C901
         description="Compatibility audit for knowledge-map and source-document metadata.",
     )
     def audit_knowledge_annotations_tool() -> dict[str, Any]:
-        return audit_knowledge_annotations(memory)
+        return audit_knowledge_base(memory)
 
     @server.tool(
         name="audit_skill_registry",
@@ -2087,3 +2098,6 @@ def register_manager_memory_tools(  # noqa: C901
             target_playbook=target_playbook,
             limit=limit,
         )
+
+    if include_tools is not None:
+        server.tool = original_tool

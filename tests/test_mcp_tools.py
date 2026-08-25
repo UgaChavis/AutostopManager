@@ -563,6 +563,18 @@ def test_knowledge_base_tools_are_registered(tmp_path):
     assert not (ROOT / "docs/agent/knowledge_annotations.jsonl").exists()
 
 
+def test_selective_registration_keeps_only_requested_tools(tmp_path):
+    server = _FakeServer()
+
+    register_manager_memory_tools(
+        server,
+        ManagerMemoryStore(tmp_path / "memory.sqlite3"),
+        include_tools={"agent_bootstrap", "store_runtime_status"},
+    )
+
+    assert set(server.tools) == {"agent_bootstrap", "store_runtime_status"}
+
+
 def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
