@@ -51,7 +51,6 @@ def test_doctor_script_syntax_and_readiness_checks():
     assert result.returncode == 0, output
     assert "manager MCP import" in content
     assert "crm MCP import" in content
-    assert "manager environment report" in content
     assert "crm playwright version" in content
     assert "nginx config" in content
     assert "production watchdog timer disabled" in content

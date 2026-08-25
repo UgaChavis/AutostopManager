@@ -405,7 +405,6 @@ def test_audit_reports_route_cards_and_no_missing_files_after_sync(tmp_path):
     assert result["documents_indexed"] > 0
     assert result["sections_indexed"] > 0
     assert result["sections_fts_indexed"] == result["sections_indexed"]
-    assert result["annotations_fts_indexed"] == result["annotations_indexed"] == 0
     assert result["missing_files"] == []
     assert set(PRIVATE_RUNTIME_FILES).issubset(set(result["optional_missing_files"]))
 

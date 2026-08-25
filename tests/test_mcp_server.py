@@ -29,7 +29,7 @@ def test_build_server_uses_runtime_transport_config_and_registers_tools(monkeypa
     assert server.kwargs["streamable_http_path"] == "/manager-mcp"
     assert server.kwargs["json_response"] is True
     assert server.kwargs["stateless_http"] is True
-    assert "agent_bootstrap" in server.kwargs["instructions"]
+    assert "agent_brief" in server.kwargs["instructions"]
 
 
 def test_main_runs_streamable_http_server(monkeypatch):
