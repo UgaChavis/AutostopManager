@@ -146,6 +146,8 @@ def issue_send_contract(
     text: str,
     last_message_id: int,
     role: str | None = None,
+    reply_to_message_id: int = 0,
+    reply_message_sha256: str = "",
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -153,6 +155,8 @@ def issue_send_contract(
         "issued_at": issued_at,
         "last_message_id": int(last_message_id),
         "peer_id": int(peer_id),
+        "reply_message_sha256": reply_message_sha256,
+        "reply_to_message_id": int(reply_to_message_id),
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
     }
     if role is not None:
@@ -169,6 +173,8 @@ def verify_send_contract(
     peer_id: int,
     text: str,
     role: str | None = None,
+    reply_to_message_id: int = 0,
+    reply_message_sha256: str = "",
     now: int | None = None,
 ) -> dict[str, Any]:
     try:
@@ -196,6 +202,10 @@ def verify_send_contract(
         raise BridgeError("contract_role_changed")
     if payload.get("text_sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
         raise BridgeError("contract_text_changed")
+    if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
+        raise BridgeError("contract_reply_target_changed")
+    if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
     issued_at = payload.get("issued_at")
     if not isinstance(issued_at, int) or issued_at > current_time + 60:
         raise BridgeError("contract_invalid")
@@ -436,11 +446,18 @@ def validate_send_role_request(request: dict[str, Any]) -> tuple[str, str, str, 
     return role, text, mode, idempotency_key
 
 
-def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
+def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str, int]:
     peer = str(request.get("peer") or "").strip()
     text = str(request.get("text") or "")
     mode = str(request.get("mode") or "dry_run")
     idempotency_key = str(request.get("idempotency_key") or "").strip()
+    raw_reply_to_message_id = request.get("reply_to_message_id", 0)
+    if isinstance(raw_reply_to_message_id, bool):
+        raise BridgeError("reply_to_message_id_invalid")
+    try:
+        reply_to_message_id = int(raw_reply_to_message_id or 0)
+    except (TypeError, ValueError) as exc:
+        raise BridgeError("reply_to_message_id_invalid") from exc
     if not peer:
         raise BridgeError("peer_required")
     if not text or len(text) > MAX_MESSAGE_CHARS:
@@ -449,7 +466,9 @@ def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str]:
         raise BridgeError("mode_invalid")
     if mode == "apply" and not idempotency_key:
         raise BridgeError("idempotency_key_required")
-    return peer, text, mode, idempotency_key
+    if reply_to_message_id < 0:
+        raise BridgeError("reply_to_message_id_invalid")
+    return peer, text, mode, idempotency_key, reply_to_message_id
 
 
 def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
@@ -1052,6 +1071,30 @@ async def _last_message_id(client: Any, entity: Any) -> int:
     return int(messages[0].id) if messages else 0
 
 
+def _message_reply_to_id(message: Any) -> int:
+    direct = getattr(message, "reply_to_msg_id", None)
+    nested = getattr(getattr(message, "reply_to", None), "reply_to_msg_id", None)
+    try:
+        return int(direct or nested or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[str, Any] | None:
+    if message_id == 0:
+        return None
+    message = await client.get_messages(entity, ids=message_id)
+    if message is None or int(getattr(message, "id", 0) or 0) != message_id:
+        raise BridgeError("reply_source_not_found")
+    raw_text = str(getattr(message, "message", None) or "")
+    return {
+        "message_id": message_id,
+        "text_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "out": bool(getattr(message, "out", False)),
+        "date": message.date.isoformat() if getattr(message, "date", None) else None,
+    }
+
+
 async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
     peer, photo, caption, mode, idempotency_key = validate_photo_request(request)
     photo_path, photo_sha256, photo_bytes, photo_content = _load_validated_photo_file(
@@ -1254,7 +1297,10 @@ async def _handle_send_text_to_entity(
     mode: str,
     idempotency_key: str,
     role: str | None = None,
+    reply_to_message_id: int = 0,
 ) -> dict[str, Any]:
+    reply_source = await _load_reply_source(client, entity, reply_to_message_id)
+    reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -1267,12 +1313,15 @@ async def _handle_send_text_to_entity(
             "message_chars": len(text),
             "text_sha256": text_sha256,
             "last_message_id": last_message_id,
+            "reply_source": reply_source,
             "contract_token": issue_send_contract(
                 contract_key,
                 peer_id=target["id"],
                 text=text,
                 last_message_id=last_message_id,
                 role=role,
+                reply_to_message_id=reply_to_message_id,
+                reply_message_sha256=reply_message_sha256,
             ),
         }
 
@@ -1285,6 +1334,8 @@ async def _handle_send_text_to_entity(
         peer_id=target["id"],
         text=text,
         role=role,
+        reply_to_message_id=reply_to_message_id,
+        reply_message_sha256=reply_message_sha256,
     )
     if contract["last_message_id"] != last_message_id:
         raise BridgeError("conversation_changed_since_dry_run")
@@ -1298,6 +1349,8 @@ async def _handle_send_text_to_entity(
             or previous.get("peer_id") != target["id"]
             or previous.get("text_sha256") != text_sha256
             or previous.get("role") != role
+            or previous.get("reply_to_message_id", 0) != reply_to_message_id
+            or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
         return {
@@ -1306,19 +1359,26 @@ async def _handle_send_text_to_entity(
             "replayed": True,
             "target": response_target,
             "message_id": previous.get("message_id"),
+            "reply_to_message_id": reply_to_message_id or None,
+            "reply_verified": bool(reply_to_message_id),
         }
 
-    sent = await client.send_message(entity, text)
+    if reply_to_message_id:
+        sent = await client.send_message(entity, text, reply_to=reply_to_message_id)
+    else:
+        sent = await client.send_message(entity, text)
     idempotency[idempotency_key] = {
         "operation": "send_text",
         "message_id": int(sent.id),
         "peer_id": target["id"],
         "role": role,
+        "reply_message_sha256": reply_message_sha256,
+        "reply_to_message_id": reply_to_message_id,
         "text_sha256": text_sha256,
     }
     _save_idempotency(idempotency_path, idempotency)
     readback = await client.get_messages(entity, ids=int(sent.id))
-    if readback is None or str(readback.message or "") != text:
+    if readback is None or str(readback.message or "") != text or _message_reply_to_id(readback) != reply_to_message_id:
         raise BridgeError("send_readback_failed")
     return {
         "ok": True,
@@ -1326,6 +1386,8 @@ async def _handle_send_text_to_entity(
         "replayed": False,
         "target": response_target,
         "message_id": int(sent.id),
+        "reply_to_message_id": reply_to_message_id or None,
+        "reply_verified": bool(reply_to_message_id),
         "verified": True,
     }
 
@@ -1467,6 +1529,7 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
                     "id": int(message.id),
                     "date": message.date.isoformat() if message.date else None,
                     "out": bool(message.out),
+                    "reply_to_message_id": _message_reply_to_id(message) or None,
                     "text": text,
                     "sensitive_content_redacted": sensitive_content_redacted,
                     "media_type": type(message.media).__name__ if message.media is not None else None,
@@ -1492,6 +1555,7 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
                     "id": int(message.id),
                     "date": message.date.isoformat() if message.date else None,
                     "out": bool(message.out),
+                    "reply_to_message_id": _message_reply_to_id(message) or None,
                     "text": text,
                     "sensitive_content_redacted": sensitive_content_redacted,
                     "media_type": type(message.media).__name__ if message.media is not None else None,
@@ -1505,7 +1569,7 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
         return {"ok": True, "target": _safe_role_target(role, target), "messages": rows}
 
     if operation == "send":
-        peer, text, mode, idempotency_key = validate_send_request(request)
+        peer, text, mode, idempotency_key, reply_to_message_id = validate_send_request(request)
         entity, target = await _resolve_peer(client, peer)
         return await _handle_send_text_to_entity(
             client,
@@ -1516,6 +1580,7 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
             text=text,
             mode=mode,
             idempotency_key=idempotency_key,
+            reply_to_message_id=reply_to_message_id,
         )
 
     if operation == "send_role":
@@ -1727,6 +1792,7 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send.add_argument("--contract-token", default="")
     send.add_argument("--idempotency-key", default="")
+    send.add_argument("--reply-to-message-id", type=int, default=0)
     send_role = subparsers.add_parser("send-role")
     send_role.add_argument("--role", required=True, choices=sorted(DIRECTOR_ROLES))
     send_role.add_argument("--text", required=True)
@@ -1802,6 +1868,7 @@ def main(argv: list[str] | None = None) -> int:
                         "mode": args.mode,
                         "contract_token": args.contract_token,
                         "idempotency_key": args.idempotency_key,
+                        "reply_to_message_id": args.reply_to_message_id,
                     }
                 )
             elif args.command == "send-role":

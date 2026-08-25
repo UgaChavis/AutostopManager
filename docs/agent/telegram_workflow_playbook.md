@@ -55,6 +55,8 @@ Current write surface:
 
 - `send --peer ID --text TEXT --mode dry_run`
 - `send --peer ID --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
+- `send --peer ID --text TEXT --reply-to-message-id ID --mode dry_run`
+- `send --peer ID --text TEXT --reply-to-message-id ID --mode apply --contract-token TOKEN --idempotency-key KEY`
 - `send-role --role ROLE --text TEXT --mode dry_run`
 - `send-role --role ROLE --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
 - `bind-role --role ROLE --peer ID --mode dry_run`
@@ -201,6 +203,15 @@ the active request. An active director goal governed by
 `service_director_manifest.md` is standing delegation only for its allowlisted
 internal roles and operational questions; it is not permission for clients,
 suppliers, financial commitments or general outreach.
+
+For an owner-directed reply in a group, resolve the exact group and exact
+source message ID. Use `send --reply-to-message-id ID` in dry-run mode and
+require the source to exist in that group, `out=false`, and its text hash to be
+bound into the contract. Apply once with the unchanged peer, source message,
+text and contract plus a fresh idempotency key. The bridge re-reads the source
+before sending and verifies both the outgoing text and Telegram reply link.
+Independently `read` the exact group and match the outgoing message ID, text,
+and `reply_to_message_id`. Keep group, message and author identifiers transient.
 
 In director mode the allowlist contains exactly three opaque routes:
 

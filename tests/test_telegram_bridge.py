@@ -247,6 +247,52 @@ def test_send_contract_binds_target_text_and_expiry() -> None:
         verify_send_contract(token, secret, peer_id=10, text="hello", now=100 + 901)
 
 
+def test_send_contract_binds_reply_target_and_source() -> None:
+    secret = b"x" * 32
+    digest = "a" * 64
+    token = issue_send_contract(
+        secret,
+        peer_id=10,
+        text="hello",
+        last_message_id=7,
+        reply_to_message_id=5,
+        reply_message_sha256=digest,
+        now=100,
+    )
+
+    payload = verify_send_contract(
+        token,
+        secret,
+        peer_id=10,
+        text="hello",
+        reply_to_message_id=5,
+        reply_message_sha256=digest,
+        now=101,
+    )
+
+    assert payload["reply_to_message_id"] == 5
+    with pytest.raises(BridgeError, match="contract_reply_target_changed"):
+        verify_send_contract(
+            token,
+            secret,
+            peer_id=10,
+            text="hello",
+            reply_to_message_id=6,
+            reply_message_sha256=digest,
+            now=101,
+        )
+    with pytest.raises(BridgeError, match="contract_reply_source_changed"):
+        verify_send_contract(
+            token,
+            secret,
+            peer_id=10,
+            text="hello",
+            reply_to_message_id=5,
+            reply_message_sha256="b" * 64,
+            now=101,
+        )
+
+
 def test_role_send_contract_cannot_be_reused_as_direct_or_for_another_role() -> None:
     secret = b"x" * 32
     token = issue_send_contract(
@@ -489,6 +535,10 @@ def test_send_request_rejects_empty_or_oversized_text() -> None:
         validate_send_request({"peer": "@target", "text": "", "mode": "dry_run"})
     with pytest.raises(BridgeError, match="message_length_invalid"):
         validate_send_request({"peer": "@target", "text": "x" * 4097, "mode": "dry_run"})
+    with pytest.raises(BridgeError, match="reply_to_message_id_invalid"):
+        validate_send_request({"peer": "@target", "text": "hello", "mode": "dry_run", "reply_to_message_id": -1})
+    with pytest.raises(BridgeError, match="reply_to_message_id_invalid"):
+        validate_send_request({"peer": "@target", "text": "hello", "mode": "dry_run", "reply_to_message_id": True})
 
 
 def test_sensitive_telegram_and_vpn_uris_are_redacted() -> None:
@@ -1167,6 +1217,123 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
         )
 
 
+def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    target = {"id": 10, "title": "Target", "username": None, "kind": "supergroup"}
+
+    async def resolve(_client, _peer):
+        return entity, target
+
+    async def last_message(_client, _entity):
+        return 20
+
+    class Client:
+        def __init__(self):
+            self.source_text = "original question"
+            self.sent: list[tuple[str, int]] = []
+
+        async def send_message(self, _entity, text, *, reply_to):
+            self.sent.append((text, reply_to))
+            return SimpleNamespace(id=30)
+
+        async def get_messages(self, _entity, *, ids):
+            if ids == 5:
+                return SimpleNamespace(
+                    id=5,
+                    message=self.source_text,
+                    out=False,
+                    date=datetime(2026, 8, 25, tzinfo=UTC),
+                )
+            assert ids == 30
+            return SimpleNamespace(message=self.sent[-1][0], reply_to_msg_id=self.sent[-1][1])
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
+    client = Client()
+    dry = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "send",
+                "peer": "10",
+                "text": "answer",
+                "mode": "dry_run",
+                "reply_to_message_id": 5,
+            },
+        )
+    )
+    assert dry["reply_source"]["message_id"] == 5
+    assert dry["reply_source"]["out"] is False
+
+    applied = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "send",
+                "peer": "10",
+                "text": "answer",
+                "mode": "apply",
+                "reply_to_message_id": 5,
+                "contract_token": dry["contract_token"],
+                "idempotency_key": "reply-key",
+            },
+        )
+    )
+
+    assert client.sent == [("answer", 5)]
+    assert applied["verified"] is True
+    assert applied["reply_verified"] is True
+    assert applied["reply_to_message_id"] == 5
+
+
+def test_text_reply_rejects_source_changed_after_dry_run(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "supergroup"}
+
+    async def last_message(_client, _entity):
+        return 20
+
+    class Client:
+        source_text = "original question"
+
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 5
+            return SimpleNamespace(id=5, message=self.source_text, out=False, date=None)
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
+    client = Client()
+    request = {
+        "operation": "send",
+        "peer": "10",
+        "text": "answer",
+        "mode": "dry_run",
+        "reply_to_message_id": 5,
+    }
+    dry = asyncio.run(telegram_bridge._handle_operation(client, config, request))
+    client.source_text = "edited question"
+
+    with pytest.raises(BridgeError, match="contract_reply_source_changed"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                config,
+                request
+                | {
+                    "mode": "apply",
+                    "contract_token": dry["contract_token"],
+                    "idempotency_key": "reply-key",
+                },
+            )
+        )
+
+
 def test_local_request_transport_and_cli_mapping(monkeypatch, tmp_path, capsys) -> None:
     response_bytes = json.dumps({"ok": True, "authorized": True}).encode() + b"\n"
 
@@ -1206,6 +1373,24 @@ def test_local_request_transport_and_cli_mapping(monkeypatch, tmp_path, capsys) 
     monkeypatch.setattr(telegram_bridge, "send_local_request", local_request)
     assert telegram_bridge.main(["--socket", str(tmp_path / "bridge.sock"), "status"]) == 0
     assert json.loads(capsys.readouterr().out)["request_operation"] == "status"
+    assert (
+        telegram_bridge.main(
+            [
+                "--socket",
+                str(tmp_path / "bridge.sock"),
+                "send",
+                "--peer",
+                "10",
+                "--text",
+                "answer",
+                "--reply-to-message-id",
+                "5",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["request_operation"] == "send"
+    assert requests[-1]["reply_to_message_id"] == 5
     assert (
         telegram_bridge.main(
             [
