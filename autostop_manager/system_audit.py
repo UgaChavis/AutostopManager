@@ -9,7 +9,7 @@ from typing import Any
 
 from .cleanup_audit import build_cleanup_audit
 from .config import PROJECT_ROOT
-from .knowledge_base import audit_knowledge_annotations, audit_knowledge_base
+from .knowledge_base import audit_knowledge_base
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore, _now
 
@@ -30,7 +30,6 @@ def build_system_audit(
     memory.initialize()
 
     knowledge = audit_knowledge_base(memory)
-    annotations = audit_knowledge_annotations(memory)
     skills = audit_skill_registry()
     cleanup = build_cleanup_audit(project_root=project_root, store=memory)
     sqlite_stats = build_sqlite_stats(memory)
@@ -44,7 +43,6 @@ def build_system_audit(
     warnings = _collect_warnings(
         {
             "knowledge_audit": knowledge,
-            "annotations_audit": annotations,
             "skills_audit": skills,
             "cleanup_audit": cleanup,
             "manager_mcp_catalog": catalog,
@@ -52,7 +50,6 @@ def build_system_audit(
     )
     summary = {
         "knowledge_ok": bool(knowledge.get("ok")),
-        "annotations_ok": bool(annotations.get("ok")),
         "skills_ok": bool(skills.get("ok")),
         "cleanup_candidate_count": int((cleanup.get("summary") or {}).get("candidate_count") or 0),
         "local_sqlite_size_bytes": int(sqlite_stats.get("size_bytes") or 0),
@@ -63,7 +60,6 @@ def build_system_audit(
     ok = all(
         [
             summary["knowledge_ok"],
-            summary["annotations_ok"],
             summary["skills_ok"],
             bool(cleanup.get("ok")),
             summary["manager_mcp_catalog_ok"],
@@ -75,7 +71,6 @@ def build_system_audit(
         "summary": summary,
         "checks": {
             "knowledge_audit": knowledge,
-            "annotations_audit": annotations,
             "skills_audit": skills,
             "cleanup_audit": cleanup,
             "sqlite_stats": sqlite_stats,

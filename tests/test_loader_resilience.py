@@ -143,17 +143,14 @@ def test_command_routes_string_lists_are_normalized(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "COMMAND_ROUTES_PATH", command_routes_path)
-    module._load_command_routes.cache_clear()
 
-    route = module.find_command_route("demo alias")
+    route = module.plan_command_routes("demo alias")[0]
 
     assert route is not None
     assert route["knowledge_domains"] == ["demo_domain"]
     assert route["effects"] == ["crm_write"]
     assert route["dependencies"] == ["demo_dependency"]
     assert route["signals"]["phrases"] == ["demo alias"]
-
-    module._load_command_routes.cache_clear()
 
 
 def test_skill_registry_string_lists_are_normalized(tmp_path, monkeypatch):

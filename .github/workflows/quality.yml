@@ -31,7 +31,6 @@ jobs:
         run: |
           python -m autostop_manager.cli knowledge-sync
           python -m autostop_manager.cli knowledge-audit
-          python -m autostop_manager.cli annotations-audit
           python -m autostop_manager.cli skills-audit
           python -m autostop_manager.cli cleanup-audit
 

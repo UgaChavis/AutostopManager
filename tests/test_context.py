@@ -8,7 +8,6 @@ from autostop_manager.storage import ManagerMemoryStore
 
 def _store(tmp_path) -> ManagerMemoryStore:
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
     sync_knowledge_base(store)
     return store
 
@@ -40,7 +39,7 @@ def test_agent_brief_preserves_first_workflow_scalars_and_full_steps(tmp_path):
     assert result["format"] == "agent_brief_v1"
     assert result["route"]["workflow_id"] == "crm_record_workflow"
     assert result["route"]["write_domains"] == ["crm"]
-    assert result["route"]["external_connectors"] == []
+    assert result["route"]["external_connectors"] == ["gmail"]
     assert result["route"]["selected_workflows"] == [
         "crm_record_workflow",
         "business_document_workflow",
@@ -48,6 +47,21 @@ def test_agent_brief_preserves_first_workflow_scalars_and_full_steps(tmp_path):
     ]
     assert result["route"]["steps"][2]["effects"] == ["external_send"]
     assert any("monetary or tax mismatch" in item for item in result["forbidden_actions"])
+
+
+def test_agent_brief_does_not_update_memory_usage(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    created = store.remember("Reusable routing observation")
+    with store.connect() as conn:
+        before = conn.execute("SELECT last_used_at FROM notes WHERE id = ?", (created["id"],)).fetchone()[
+            "last_used_at"
+        ]
+
+    context.build_agent_brief(store, "CRM не работает")
+
+    with store.connect() as conn:
+        after = conn.execute("SELECT last_used_at FROM notes WHERE id = ?", (created["id"],)).fetchone()["last_used_at"]
+    assert before is None and after is None
 
 
 def test_agent_brief_policy_comes_from_effects_not_knowledge_domain(tmp_path):

@@ -25,5 +25,4 @@ Ownership is strict:
 Prefer updating an existing canonical file. Delete a tracked document only
 after unique rules are migrated, navigation is updated and `cleanup-audit`
 finds no dependency. Then run `knowledge-sync`, `knowledge-audit`,
-`annotations-audit` and `skills-audit`. The annotation command is a
-compatibility metadata audit, not a routing layer.
+`skills-audit` and `cleanup-audit`; navigation metadata has no second index.

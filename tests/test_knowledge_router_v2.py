@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import autostop_manager.knowledge_base as knowledge_base
 from autostop_manager.context import build_agent_brief
 from autostop_manager.knowledge_base import (
-    find_command_route,
     plan_command_routes,
     probe_knowledge_base,
     sync_knowledge_base,
@@ -53,7 +54,7 @@ def test_email_lookup_does_not_select_external_send():
 
 
 def test_repair_order_client_change_never_becomes_parts_sourcing():
-    route = find_command_route("Обнови клиента в заказ-наряде")
+    route = plan_command_routes("Обнови клиента в заказ-наряде")[0]
 
     assert route is not None
     assert route["workflow_id"] == "crm_record_workflow"
@@ -78,7 +79,7 @@ def test_real_parts_and_oem_requests_remain_distinct():
 
 
 def test_explicit_intent_is_deterministic():
-    route = find_command_route("письмо про оплату и документ", intent="crm_finance_operation")
+    route = plan_command_routes("письмо про оплату и документ", intent="crm_finance_operation")[0]
 
     assert route is not None
     assert route["workflow_id"] == "crm_finance_operation"
@@ -91,6 +92,78 @@ def test_explicit_store_opt_out_removes_store_routes():
 
     assert plan_command_routes(query) == []
     assert plan_command_routes(query, intent="store_read") == []
+
+
+def test_crm_failure_is_not_treated_as_negative_scope():
+    assert _workflows("CRM не работает") == ["crm_agent_integration_audit"]
+
+
+def test_command_routes_are_read_live_without_sync_or_restart(tmp_path, monkeypatch):
+    route_path = tmp_path / "command_routes.json"
+    monkeypatch.setattr(knowledge_base, "COMMAND_ROUTES_PATH", route_path)
+
+    def write_route(workflow_id: str) -> None:
+        route_path.write_text(
+            json.dumps(
+                {
+                    "routes": [
+                        {
+                            "workflow_id": workflow_id,
+                            "intent": workflow_id,
+                            "phase": 10,
+                            "priority": 1,
+                            "knowledge_domains": ["startup_and_identity"],
+                            "effects": [],
+                            "signals": {"phrases": ["live route"]},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_route("first")
+    assert _workflows("live route") == ["first"]
+    write_route("second")
+    assert _workflows("live route") == ["second"]
+
+
+def test_candidates_use_relevance_while_steps_use_phase(tmp_path, monkeypatch):
+    route_path = tmp_path / "command_routes.json"
+    monkeypatch.setattr(knowledge_base, "COMMAND_ROUTES_PATH", route_path)
+    route_path.write_text(
+        json.dumps(
+            {
+                "routes": [
+                    {
+                        "workflow_id": "first_step",
+                        "phase": 10,
+                        "priority": 1,
+                        "knowledge_domains": ["startup_and_identity"],
+                        "effects": [],
+                        "signals": {"all": [["exact"], ["route"]]},
+                    },
+                    {
+                        "workflow_id": "best_match",
+                        "phase": 30,
+                        "priority": 1,
+                        "knowledge_domains": ["startup_and_identity"],
+                        "effects": [],
+                        "signals": {"phrases": ["exact route"]},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    brief = build_agent_brief(ManagerMemoryStore(tmp_path / "memory.sqlite3"), "exact route")
+
+    assert brief["route"]["selected_workflows"] == ["first_step", "best_match"]
+    assert [item["workflow_id"] for item in brief["route"]["candidates"]] == [
+        "best_match",
+        "first_step",
+    ]
 
 
 def test_probe_is_document_only_and_never_returns_command_route(tmp_path):
@@ -110,7 +183,7 @@ def test_command_registry_and_knowledge_map_are_independent(tmp_path, monkeypatc
     original_routes = knowledge_base._load_command_routes
 
     monkeypatch.setattr(knowledge_base, "KNOWLEDGE_MAP_PATH", tmp_path / "missing-map.json")
-    assert find_command_route("Приберись")["workflow_id"] == "board_cleanup_autopilot"
+    assert plan_command_routes("Приберись")[0]["workflow_id"] == "board_cleanup_autopilot"
 
     monkeypatch.setattr(knowledge_base, "_load_command_routes", lambda: {"routes": []})
     monkeypatch.undo()
@@ -147,6 +220,6 @@ def test_full_flow_brief_exposes_ordered_steps_and_effect_policies(tmp_path):
     ]
     assert [step["phase"] for step in brief["route"]["steps"]] == [10, 20, 30]
     assert brief["route"]["write_domains"] == ["crm"]
-    assert brief["route"]["external_connectors"] == []
+    assert brief["route"]["external_connectors"] == ["gmail"]
     assert brief["route"]["steps"][2]["effects"] == ["external_send"]
     assert any("monetary or tax mismatch" in item for item in brief["forbidden_actions"])

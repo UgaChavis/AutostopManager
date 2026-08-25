@@ -7,7 +7,6 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +73,7 @@ _PROJECT_ENGINEERING_ACTION_RE = re.compile(
 _SCOPE_EXCLUSION_RE = re.compile(
     r"\b(?:без\s+работы\s+с|without)\s+(?:the\s+)?(?P<after>[\w-]+)"
     r"|\bбез\s+(?P<bare>store|магазин\w*|crm|telegram|телеграм\w*|gmail|почт\w*|vpn|впн|камер\w*|сервер\w*)"
-    r"|\b(?P<before>(?!(?:но|but)\b)[\w-]+)\s+(?:(?:пока\s+)?не\s+(?:трог\w*|заним\w*)|на\s+паузе|в\s+разработке)"
+    r"|\b(?P<before>(?!(?:но|but)\b)[\w-]+)\s+(?:(?:пока\s+)?не\s+(?:трог\w*|заним\w*|использ\w*|инспектир\w*|провер\w*|диагностир\w*|меня\w*|обнов\w*)|на\s+паузе|в\s+разработке)"
     r"|\b(?:не\s+(?:трог\w*|заним\w*|использ\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))"
     r"\s+(?:the\s+)?(?P<action>[\w-]+)"
 )
@@ -162,12 +161,11 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
     optional_missing: list[str] = []
     documents_indexed = 0
     sections_indexed = 0
-    route_cards_indexed = 0
+    route_cards_indexed = len(domains)
     with memory.connect() as conn:
         conn.execute("DELETE FROM knowledge_sections_fts")
         conn.execute("DELETE FROM knowledge_sections")
         conn.execute("DELETE FROM knowledge_documents")
-        conn.execute("DELETE FROM knowledge_route_cards")
 
         for domain, route in domains.items():
             use_when = _string_list(route.get("use_when"))
@@ -184,8 +182,6 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
             optional_missing.extend(optional_missing_for_domain)
             skill_path = str(route.get("skill_path") or "")
             route_card = _build_route_card(domain, route)
-            _insert_route_card(conn, route_card, indexed_at=now)
-            route_cards_indexed += 1
             route_path = f"knowledge_map:{domain}"
             optional_runtime_lines: list[str] = []
             if optional_runtime_files:
@@ -280,7 +276,6 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
         "route_cards_indexed": route_cards_indexed,
         "documents_indexed": documents_indexed,
         "sections_indexed": sections_indexed,
-        "annotations_indexed": 0,
         "domains": sorted(domains.keys()),
         "missing_files": _unique_strings(missing),
         "optional_missing_files": _unique_strings(optional_missing),
@@ -298,13 +293,9 @@ def probe_knowledge_base(
 ) -> dict[str, Any]:
     """Select local documents only; command routing is deliberately out of scope."""
 
-    memory = store or ManagerMemoryStore()
-    memory.initialize()
+    del store
     limit = max(1, min(limit, 20))
     query = (query or "").strip()
-    if _route_card_count(memory) == 0:
-        sync_knowledge_base(memory)
-
     excluded_scopes = _scope_exclusions(query)
     tokens = [
         token
@@ -314,43 +305,33 @@ def probe_knowledge_base(
     domain_hints = _domain_hints(query)
     for domain in _unique_strings(preferred_domains or []):
         domain_hints[domain] = max(domain_hints.get(domain, 0), 100)
-    route_definitions = (_load_knowledge_map().get("domains") or {}) if KNOWLEDGE_MAP_PATH.exists() else {}
-    with memory.connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                domain,
-                title,
-                use_when_json,
-                aliases_json,
-                keywords_json,
-                questions_json,
-                source_of_truth_json,
-                primary_files_json,
-                reference_files_json,
-                required_context_json,
-                search_text,
-                indexed_at
-            FROM knowledge_route_cards
-            """
-        ).fetchall()
-
+    route_definitions = _load_knowledge_map().get("domains") or {}
+    loaded_at = _now()
     routes: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
+    for domain, definition in route_definitions.items():
+        card = _build_route_card(str(domain), definition)
+        item = {
+            "domain": card.domain,
+            "title": card.title,
+            "use_when_json": _json_list(card.use_when),
+            "aliases_json": _json_list(card.aliases),
+            "keywords_json": _json_list(card.keywords),
+            "source_of_truth_json": _json_list(card.source_of_truth),
+            "search_text": card.search_text,
+        }
         if _route_excluded(item, excluded_scopes):
             continue
         score, matching_terms = _score_route_card(item, tokens, query, domain_hints=domain_hints)
         if tokens and score <= 0:
             continue
-        source_of_truth = json.loads(item["source_of_truth_json"] or "[]")
-        primary_files = json.loads(item["primary_files_json"] or "[]")
-        reference_files = json.loads(item["reference_files_json"] or "[]")
+        source_of_truth = card.source_of_truth
+        primary_files = card.primary_files
+        reference_files = card.reference_files
         open_first = (source_of_truth or primary_files or [""])[0]
-        runtime_status = _optional_runtime_status(route_definitions.get(str(item["domain"]), {}))
+        runtime_status = _optional_runtime_status(definition)
         route = {
-            "domain": item["domain"],
-            "title": item["title"],
+            "domain": card.domain,
+            "title": card.title,
             "score": score,
             "confidence": _confidence(score),
             "matching_terms": matching_terms,
@@ -363,9 +344,9 @@ def probe_knowledge_base(
             "optional_missing_files": runtime_status["missing_files"],
             "optional_runtime_available": runtime_status["all_available"],
             "optional_runtime_note": runtime_status["note"],
-            "required_context": json.loads(item["required_context_json"] or "[]"),
-            "use_when": json.loads(item["use_when_json"] or "[]"),
-            "indexed_at": item["indexed_at"],
+            "required_context": card.required_context,
+            "use_when": card.use_when,
+            "indexed_at": loaded_at,
         }
         routes.append(route)
 
@@ -454,12 +435,10 @@ def _audit_route_paths(
     )
 
 
-def _knowledge_index_counts(memory: ManagerMemoryStore) -> dict[str, int]:
+def _knowledge_index_counts(memory: ManagerMemoryStore, *, route_card_count: int) -> dict[str, int]:
     with memory.connect() as conn:
         return {
-            "route_cards": int(
-                conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()["count"] or 0
-            ),
+            "route_cards": route_card_count,
             "documents": int(
                 conn.execute("SELECT COUNT(*) AS count FROM knowledge_documents").fetchone()["count"] or 0
             ),
@@ -467,9 +446,6 @@ def _knowledge_index_counts(memory: ManagerMemoryStore) -> dict[str, int]:
             "sections_fts": int(
                 conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()["count"] or 0
             ),
-            # Compatibility counters for the removed annotation layer.
-            "annotations": 0,
-            "annotations_fts": 0,
         }
 
 
@@ -504,7 +480,7 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
             "optional_missing_files": [],
             "checked_at": _now(),
         }
-    if _route_card_count(memory) == 0 or _document_count(memory) == 0:
+    if _document_count(memory) == 0:
         sync_knowledge_base(memory)
 
     payload = _load_knowledge_map()
@@ -518,8 +494,6 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
             "documents_indexed": 0,
             "sections_indexed": 0,
             "sections_fts_indexed": 0,
-            "annotations_indexed": 0,
-            "annotations_fts_indexed": 0,
             "missing_files": [],
             "optional_missing_files": [],
             "missing_optional_files": [],
@@ -534,13 +508,11 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         domains_without_source_of_truth,
         domains_without_aliases,
     ) = _audit_route_paths(domains)
-    counts = _knowledge_index_counts(memory)
+    counts = _knowledge_index_counts(memory, route_card_count=len(domains))
     route_cards_indexed = counts["route_cards"]
     documents_indexed = counts["documents"]
     sections_indexed = counts["sections"]
     sections_fts_indexed = counts["sections_fts"]
-    annotations_indexed = counts["annotations"]
-    annotations_fts_indexed = counts["annotations_fts"]
     warnings = _knowledge_audit_warnings(
         domain_count=len(domains),
         counts=counts,
@@ -555,7 +527,6 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         and documents_indexed > 0
         and sections_indexed > 0
         and sections_fts_indexed == sections_indexed
-        and annotations_fts_indexed == annotations_indexed == 0
     )
     return {
         "ok": ok,
@@ -565,47 +536,11 @@ def audit_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, A
         "documents_indexed": documents_indexed,
         "sections_indexed": sections_indexed,
         "sections_fts_indexed": sections_fts_indexed,
-        "annotations_indexed": annotations_indexed,
-        "annotations_fts_indexed": annotations_fts_indexed,
         "missing_files": missing_files,
         "optional_missing_files": optional_missing_files,
         "missing_optional_files": optional_missing_files,
         "domains_without_source_of_truth": domains_without_source_of_truth,
         "domains_without_aliases": domains_without_aliases,
-        "warnings": warnings,
-        "checked_at": _now(),
-    }
-
-
-def audit_knowledge_annotations(store: ManagerMemoryStore | None = None) -> dict[str, Any]:
-    """Compatibility audit over navigation metadata after annotations removal."""
-
-    memory = store or ManagerMemoryStore()
-    memory.initialize()
-    payload = _load_knowledge_map()
-    domains = payload.get("domains") or {}
-    missing_domains = sorted(
-        domain
-        for domain, route in domains.items()
-        if not str(route.get("title") or "").strip() or not _string_list(route.get("primary_files"))
-    )
-    missing_files, _, _, _ = _audit_route_paths(domains)
-    warnings = ["some knowledge_map domains have incomplete navigation metadata"] if missing_domains else []
-    if missing_files:
-        warnings.append("some mapped source documents are missing")
-    by_domain = {
-        str(domain): len(_string_list(route.get("primary_files"))) for domain, route in sorted(domains.items())
-    }
-    return {
-        "ok": bool(domains) and not warnings,
-        "path": str(KNOWLEDGE_MAP_PATH),
-        "compatibility_mode": "knowledge_map_document_metadata",
-        "annotations_indexed": 0,
-        "documents_declared": sum(by_domain.values()),
-        "domains": by_domain,
-        "missing_domains": missing_domains,
-        "unknown_domains": [],
-        "missing_files": missing_files,
         "warnings": warnings,
         "checked_at": _now(),
     }
@@ -689,12 +624,6 @@ def _knowledge_sections_fts_count(memory: ManagerMemoryStore) -> int:
             row = conn.execute("SELECT COUNT(*) AS count FROM knowledge_sections_fts").fetchone()
     except sqlite3.OperationalError:
         return 0
-    return int(row["count"] or 0)
-
-
-def _route_card_count(memory: ManagerMemoryStore) -> int:
-    with memory.connect() as conn:
-        row = conn.execute("SELECT COUNT(*) AS count FROM knowledge_route_cards").fetchone()
     return int(row["count"] or 0)
 
 
@@ -790,7 +719,6 @@ def _load_knowledge_map() -> dict[str, Any]:
     return payload
 
 
-@lru_cache(maxsize=1)
 def _load_command_routes() -> dict[str, Any]:
     if not COMMAND_ROUTES_PATH.exists():
         return {"routes": []}
@@ -857,7 +785,7 @@ def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[s
 
     matches: list[dict[str, Any]] = []
     for route in available:
-        if normalized_intent == str(route.get("intent") or "").casefold():
+        if normalized_intent and normalized_intent == str(route.get("intent") or "").casefold():
             score, terms = 1000, [str(route.get("intent") or "")]
         else:
             score, terms = _score_command_signals(lowered, route.get("signals") or {})
@@ -865,6 +793,7 @@ def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[s
             continue
         route["score"] = score
         route["confidence"] = 1.0 if score >= 1000 else round(min(0.98, 0.55 + score / 250), 2)
+        route["uncertainty"] = round(1.0 - float(route["confidence"]), 2)
         route["matching_terms"] = terms
         route["domain"] = (route.get("knowledge_domains") or [None])[0]
         matches.append(route)
@@ -877,13 +806,6 @@ def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[s
         )
     )
     return matches
-
-
-def find_command_route(query: str, *, intent: str | None = None) -> dict[str, Any] | None:
-    """Compatibility projection of the first workflow in a composed plan."""
-
-    routes = plan_command_routes(query, intent=intent)
-    return routes[0] if routes else None
 
 
 def _score_command_signals(lowered: str, signals: dict[str, Any]) -> tuple[int, list[str]]:
@@ -1246,61 +1168,6 @@ def _csv_heading(row: dict[str, str], index: int) -> str:
         if len(parts) == 2:
             break
     return " - ".join(parts) if parts else f"CSV row {index + 1}"
-
-
-def _insert_route_card(conn: Any, card: _RouteCard, *, indexed_at: str) -> None:
-    digest_payload = {
-        "domain": card.domain,
-        "title": card.title,
-        "use_when": card.use_when,
-        "aliases": card.aliases,
-        "keywords": card.keywords,
-        "questions": card.questions,
-        "source_of_truth": card.source_of_truth,
-        "primary_files": card.primary_files,
-        "reference_files": card.reference_files,
-        "optional_runtime_files": card.optional_runtime_files,
-        "required_context": card.required_context,
-    }
-    digest = hashlib.sha256(
-        json.dumps(digest_payload, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="replace")
-    ).hexdigest()
-    conn.execute(
-        """
-        INSERT INTO knowledge_route_cards
-            (
-                domain,
-                title,
-                use_when_json,
-                aliases_json,
-                keywords_json,
-                questions_json,
-                source_of_truth_json,
-                primary_files_json,
-                reference_files_json,
-                required_context_json,
-                search_text,
-                content_hash,
-                indexed_at
-            )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            card.domain,
-            card.title,
-            _json_list(card.use_when),
-            _json_list(card.aliases),
-            _json_list(card.keywords),
-            _json_list(card.questions),
-            _json_list(card.source_of_truth),
-            _json_list(card.primary_files),
-            _json_list(card.reference_files),
-            _json_list(card.required_context),
-            card.search_text,
-            digest,
-            indexed_at,
-        ),
-    )
 
 
 def _insert_document(

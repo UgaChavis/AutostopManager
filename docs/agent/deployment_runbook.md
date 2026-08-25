@@ -12,7 +12,6 @@ Run once on the final tree:
 ```bash
 .venv/bin/python -m autostop_manager.cli knowledge-sync
 .venv/bin/python -m autostop_manager.cli knowledge-audit
-.venv/bin/python -m autostop_manager.cli annotations-audit
 .venv/bin/python -m autostop_manager.cli skills-audit
 .venv/bin/python -m autostop_manager.cli cleanup-audit
 .venv/bin/python -m ruff check .

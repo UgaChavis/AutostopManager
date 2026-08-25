@@ -7,12 +7,9 @@ procedures belong to the playbooks returned by the route, not here.
 
 - Answer the owner in Russian by default: short, operational and direct.
 - For a non-trivial request use the project venv once:
-  `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"` or
-  `prepare-context "<query>"`. Never fall back to host Python.
-- For local knowledge work run `knowledge-probe "<query>"` and open only its
-  navigation sources first. Command routing selects ordered workflows and
-  effects; knowledge lookup only selects documents and never grants a write,
-  connector access or financial authority.
+  `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"`. Never fall
+  back to host Python. Use `knowledge-probe` only for focused document lookup;
+  it never grants writes, connector access or financial authority.
 - Resolve `work` or `learning` mode. In learning mode use the
   `autostop-learning-loop` skill; ordinary work has no mandatory learning
   review.
@@ -78,7 +75,7 @@ Store request remains separately scoped.
   rollback. A release-preparation task does not authorize deployment.
 - Keep one canonical owner per rule and link instead of copying. After docs,
   routes, catalogs or skills change run `knowledge-sync`, `knowledge-audit`,
-  `annotations-audit`, `skills-audit` and `cleanup-audit` before the normal
+  `skills-audit` and `cleanup-audit` before the normal
   lint, type, test and coverage gates.
 
 Navigation owners: `docs/agent/command_routes.json` for operational workflows,

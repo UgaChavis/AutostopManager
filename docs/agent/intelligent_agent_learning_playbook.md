@@ -115,5 +115,5 @@ safety, torque, fluid, programming, or exact-fitment facts.
   reference.
 - Public CRM Gateway remains exactly 24 tools; new Manager capabilities remain
   hidden behind the Manager/raw route.
-- Run `knowledge-sync`, `knowledge-audit`, `annotations-audit`, `skills-audit`,
+- Run `knowledge-sync`, `knowledge-audit`, `skills-audit`,
   and `cleanup-audit` after durable documentation or skill changes.

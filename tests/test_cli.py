@@ -448,11 +448,6 @@ def test_cli_parser_has_core_commands():
     assert args.format == "markdown"
     assert args.output == "reports/control-report.md"
 
-    args = parser.parse_args(["environment-report", "--format", "json", "--output", "reports/environment-report.json"])
-    assert args.command == "environment-report"
-    assert args.format == "json"
-    assert args.output == "reports/environment-report.json"
-
     args = parser.parse_args(["memory-review"])
     assert args.command == "memory-review"
 
@@ -598,9 +593,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(["memory-gaps"])
     assert args.command == "memory-gaps"
-
-    args = parser.parse_args(["annotations-audit"])
-    assert args.command == "annotations-audit"
 
     args = parser.parse_args(["memory-audit"])
     assert args.command == "memory-audit"

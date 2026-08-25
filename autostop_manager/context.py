@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .knowledge_base import plan_command_routes, probe_knowledge_base
-from .storage import ManagerMemoryStore
+from .storage import ManagerMemoryStore, load_manager_rules
 
 
 DOMAIN_REQUIRED_CONTEXT_DEFAULTS: dict[str, list[str]] = {
@@ -20,12 +20,6 @@ DOMAIN_REQUIRED_CONTEXT_DEFAULTS: dict[str, list[str]] = {
     "store_management": [],
 }
 
-
-GENERAL_HOT_RULES = [
-    "CRM, AutoStop App and Gmail are the source of truth for their own business data; Manager stores only durable routing, rules and compact conclusions.",
-    "Never persist raw CRM/Store/Gmail payloads, client or vehicle identifiers, money ledgers, credentials or secrets in Manager memory or docs.",
-    "For any write: resolve the exact target, reread current state, use the guarded dry-run/apply path, then reread and verify.",
-]
 
 DEFAULT_POLICY: dict[str, list[str]] = {
     "hot_rules": [],
@@ -105,24 +99,6 @@ MEMORY_SOURCES = {
 }
 
 
-def _unique_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    best_by_key: dict[tuple[str, int], dict[str, Any]] = {}
-    for item in items:
-        key = (str(item.get("kind") or ""), int(item.get("id") or 0))
-        existing = best_by_key.get(key)
-        if existing is None or float(item.get("score") or 0) > float(existing.get("score") or 0):
-            best_by_key[key] = item
-    result = list(best_by_key.values())
-    result.sort(
-        key=lambda item: (
-            float(item.get("score") or 0),
-            item.get("updated_at") or item.get("created_at") or "",
-        ),
-        reverse=True,
-    )
-    return result
-
-
 def _query_has_context(query: str, context_name: str) -> bool:
     lowered = query.casefold()
     name = context_name.casefold()
@@ -177,8 +153,7 @@ def prepare_manager_context(
     intent: str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
-    memory = store or ManagerMemoryStore()
-    memory.initialize()
+    del store
     query = (query or "").strip()
     limit = max(1, min(limit, 50))
 
@@ -188,34 +163,24 @@ def prepare_manager_context(
         dict.fromkeys(domain for route in command_routes for domain in route.get("knowledge_domains", []) if domain)
     )
     knowledge = probe_knowledge_base(
-        memory,
+        None,
         query,
         limit=max(limit, min(len(preferred_domains) + 2, 20)),
         preferred_domains=preferred_domains,
     )
-    recall_queries = [
-        value for route in command_routes for value in (route.get("workflow_id"), route.get("intent")) if value
-    ]
-    if intent:
-        recall_queries.append(intent)
-
-    memory_context = memory.memory_context_for(query, limit=limit)
-    relevant: list[dict[str, Any]] = [
-        *memory_context.get("preferences_or_facts", []),
-        *memory_context.get("lessons", []),
-    ]
-    for recall_query in dict.fromkeys(item for item in recall_queries if item):
-        relevant.extend(memory.recall(recall_query, limit=limit).get("items", []))
-    relevant = _unique_items(relevant)[:limit]
-
-    first_domain = str((command_route or {}).get("domain") or knowledge.get("best_domain") or "")
-    required_context: list[str] = []
-    for route in knowledge.get("routes", []):
-        if route.get("domain") == first_domain:
-            required_context = list(route.get("required_context") or [])
-            break
-    if not required_context:
-        required_context = DOMAIN_REQUIRED_CONTEXT_DEFAULTS.get(first_domain, [])
+    selected_domains = list(dict.fromkeys([*preferred_domains, knowledge.get("best_domain")]))
+    navigation = {str(route.get("domain")): route for route in knowledge.get("routes", [])}
+    required_context = list(
+        dict.fromkeys(
+            item
+            for domain in selected_domains
+            if domain
+            for item in (
+                navigation.get(str(domain), {}).get("required_context")
+                or DOMAIN_REQUIRED_CONTEXT_DEFAULTS.get(str(domain), [])
+            )
+        )
+    )
     missing_context = [item for item in required_context if not _query_has_context(query, item)]
 
     return {
@@ -239,7 +204,7 @@ def prepare_manager_context(
             "optional_runtime_note": knowledge.get("optional_runtime_note", ""),
             "routes": knowledge.get("routes", []),
         },
-        "relevant_memory": relevant,
+        "relevant_memory": [],
         "required_context": required_context,
         "missing_context": missing_context,
         "next_actions": ["execute_workflow_plan"] if command_routes else ["safe_exploration"],
@@ -277,6 +242,7 @@ def _route_step(route: dict[str, Any], knowledge: dict[str, Any]) -> dict[str, A
         "open_first": navigation.get("open_first"),
         "source_of_truth": navigation.get("source_of_truth", []),
         "confidence": route.get("confidence"),
+        "uncertainty": route.get("uncertainty"),
         "matching_terms": list(route.get("matching_terms") or []),
     }
 
@@ -292,25 +258,45 @@ def build_agent_brief(
     knowledge = context.get("knowledge", {})
     command_routes = list(context.get("command_routes") or [])
     steps = [_route_step(route, knowledge) for route in command_routes]
-    first = steps[0] if steps else {}
+    first = _route_step(context.get("command_route") or {}, knowledge) if steps else {}
     domain = str(first.get("domain") or "")
     effects = list(dict.fromkeys(effect for step in steps for effect in step.get("effects", [])))
     policy = _policy_for_effects(effects)
-    first_effects = list(first.get("effects", []))
-    first_policy = _policy_for_effects(first_effects)
     read_order = list(policy["read_order"])
     allowed_actions = list(policy["allowed_actions"])
     forbidden_actions = list(policy["forbidden_actions"])
     verification = list(policy["verification"])
     next_actions = list(context.get("next_actions") or [])
     candidates = [
-        {key: candidate.get(key) for key in ("domain", "open_first", "confidence", "matching_terms")}
-        for candidate in knowledge.get("routes", [])[:3]
+        {
+            key: candidate.get(key)
+            for key in ("workflow_id", "domain", "open_first", "confidence", "uncertainty", "matching_terms")
+        }
+        for candidate in sorted(
+            command_routes or knowledge.get("routes", []),
+            key=lambda item: int(item.get("score") or 0),
+            reverse=True,
+        )[:3]
         if candidate.get("score", 0) > 0
     ]
     if not steps:
         for candidate in candidates:
             candidate["confidence"] = min(float(candidate.get("confidence") or 0), 0.49)
+            candidate["uncertainty"] = round(1.0 - float(candidate["confidence"]), 2)
+    source_of_truth = list(dict.fromkeys(source for step in steps for source in step.get("source_of_truth", [])))
+    route_domains = {str(value) for step in steps for value in step.get("knowledge_domains", [])}
+    external_connectors = [
+        connector
+        for connector, marker in (
+            ("gmail", "gmail"),
+            ("telegram", "telegram"),
+            ("store", "store"),
+            ("home_camera", "home_camera"),
+            ("public_camera", "public_camera"),
+        )
+        if any(marker in route_domain for route_domain in route_domains)
+    ]
+    canonical_rules = [str(item["rule"]) for item in load_manager_rules()]
 
     return {
         "ok": True,
@@ -328,7 +314,7 @@ def build_agent_brief(
             "steps": steps,
             "domain": domain or None,
             "open_first": first.get("open_first"),
-            "source_of_truth": first.get("source_of_truth", []),
+            "source_of_truth": source_of_truth,
             "reference_files": _route_navigation(knowledge, domain).get("reference_files", []) if steps else [],
             "optional_runtime_files": _route_navigation(knowledge, domain).get("optional_runtime_files", [])
             if steps
@@ -346,12 +332,15 @@ def build_agent_brief(
             if steps
             else "",
             "confidence": first.get("confidence") if steps else min(float(knowledge.get("confidence") or 0), 0.49),
-            "selection_mode": "explicit" if steps else "explore",
+            "uncertainty": first.get("uncertainty")
+            if steps
+            else round(1.0 - min(float(knowledge.get("confidence") or 0), 0.49), 2),
+            "selection_mode": "recommended" if steps else "explore",
             "candidates": candidates,
-            "required_reads": first.get("source_of_truth", []),
-            "write_domains": ["crm"] if "crm_write" in first_effects else [],
-            "external_connectors": ["gmail"] if "external_send" in first_effects else [],
-            "completion_checks": first_policy["verification"],
+            "required_reads": source_of_truth,
+            "write_domains": ["crm"] if "crm_write" in effects else [],
+            "external_connectors": external_connectors,
+            "completion_checks": verification,
             "read_entity_selection": {},
             "operation_selection": {},
             "selected_operation": None,
@@ -363,7 +352,7 @@ def build_agent_brief(
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
             "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },
-        "hot_rules": [*GENERAL_HOT_RULES, *policy.get("hot_rules", [])][: max(1, min(limit, 8))],
+        "hot_rules": [*canonical_rules, *policy.get("hot_rules", [])][: max(1, min(limit, 8))],
         "read_order": read_order,
         "allowed_actions": allowed_actions,
         "forbidden_actions": forbidden_actions,

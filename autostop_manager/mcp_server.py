@@ -10,16 +10,9 @@ def build_server() -> FastMCP:
     server = FastMCP(
         name="AutostopManager",
         instructions=(
-            "Headless Agent Gateway, manager memory, workflow ledger, and source-routing layer for AutoStop CRM and AutoStop App. "
-            "Start non-trivial CRM/store/Gmail work with agent_bootstrap, use the named workflow registry, "
-            "prepare ActionContractV2 before writes, and keep resumable progress in the workflow lifecycle tools. "
-            "Gmail and Telegram remain separate connectors: store only message/thread/file result references through complete_external_step, never bodies or chat text. "
-            "AutoStop App remains the store source of truth: use only its pure-read agent API, keep raw store payload out of Manager state, and expose store access through existing Gateway tools. "
-            "Use these tools only for durable non-CRM/store memory, routing rules, technical cursors/compact refs, knowledge navigation, and knowledge intake. "
-            "Director journal entries use structured manager_journal operations for context-bearing active waits and durable decisions; keep only safe hash-links, never copied CRM records, correspondence, private identifiers, or money data, and obey size and retention limits. "
-            "Probe the knowledge base first, then open the returned source-of-truth route before broad file reads when the task involves diagnostics, fluids, VIN/OEM, parts, CRM management, or model-specific knowledge. "
-            "When new files are supplied, extract durable conclusions and update the relevant playbooks or catalogs; do not store raw dumps. "
-            "Use the existing AutoStop CRM MCP tools for cards, clients, vehicles, repair orders, cashboxes, and board state."
+            "AutoStop routing, safe memory and workflow ledger. Start non-trivial work with agent_brief; "
+            "follow the canonical Manager rules and named Gateway workflows. CRM, Store, Gmail and Telegram "
+            "remain sources of truth for their own data; Manager keeps only safe rules, refs and compact lessons."
         ),
         host=get_mcp_host(),
         port=get_mcp_port(),

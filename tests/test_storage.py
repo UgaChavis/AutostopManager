@@ -58,7 +58,9 @@ def test_durable_memory_rejects_sensitive_values_before_persistence(tmp_path, me
     result = getattr(store, method)(**kwargs)
 
     assert result == {"ok": False, "error": "unsafe_durable_memory_value"}
-    assert store.recall()["items"] == []
+    assert store.recall(kind="note")["items"] == []
+    assert store.recall(kind="fact")["items"] == []
+    assert store.recall(kind="lesson")["items"] == []
 
 
 def test_recall_filters_and_scores_russian_memory(tmp_path):
@@ -84,7 +86,6 @@ def test_recall_filters_and_scores_russian_memory(tmp_path):
 
 def test_recall_query_requires_text_match_before_importance_boost(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
     store.remember(
         "Очень важная заметка про уборку карточек CRM и форматирование описания.",
         kind="note",
@@ -103,7 +104,6 @@ def test_recall_query_requires_text_match_before_importance_boost(tmp_path):
 
 def test_memory_context_uses_cross_system_rule_without_domain_procedure_noise(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
     store.remember(
         "Очень важная заметка про уборку карточек CRM и форматирование описания.",
         kind="note",
@@ -152,7 +152,6 @@ def test_memory_context_uses_cross_system_rule_without_domain_procedure_noise(tm
 
 def test_memory_context_keeps_board_cleanup_rules_for_explicit_cleanup_query(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
     store.remember(
         "При команде «Приберись» карточку нужно оформить кратко и сохранить важные факты.",
         kind="note",
@@ -195,7 +194,6 @@ def test_archived_lessons_are_not_recalled_or_used_for_context(tmp_path):
 
 def test_memory_context_keeps_command_knowledge_boundary_for_routing_query(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
 
     result = store.memory_context_for("command routing knowledge lookup write policy", limit=20)
 
@@ -383,80 +381,20 @@ def test_generic_journal_is_private_and_size_bounded(tmp_path, monkeypatch):
     ]
 
 
-def test_seed_default_rules_updates_existing_rule(tmp_path):
+def test_manager_rules_are_read_live_from_json(tmp_path, monkeypatch):
+    rules_path = tmp_path / "manager_rules.json"
+    monkeypatch.setattr(storage_module, "MANAGER_RULES_PATH", rules_path)
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
 
-    with store.connect() as conn:
-        conn.execute(
-            "UPDATE manager_rules SET rule = ?, priority = ? WHERE title = ?",
-            ("stale", 999, "source-boundaries"),
-        )
+    rules_path.write_text('{"rules":[{"id":"live","priority":10,"rule":"first"}]}', encoding="utf-8")
+    assert store.recall("first", kind="rule")["items"][0]["rule"] == "first"
 
-    result = store.seed_default_rules()
-
-    assert result["ok"] is True
-    assert result["updated"] >= 1
-    context = store.recall("source-boundaries")
-    rule = next(item for item in context["items"] if item["kind"] == "rule" and item["title"] == "source-boundaries")
-    assert rule["rule"] != "stale"
-    assert rule["priority"] == 10
+    rules_path.write_text('{"rules":[{"id":"live","priority":10,"rule":"second"}]}', encoding="utf-8")
+    assert store.today_context()["manager_rules"][0]["rule"] == "second"
 
 
-def test_seed_default_rules_removes_only_obsolete_docs_seeded_rules(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.seed_default_rules()
+def test_today_context_reports_unavailable_rule_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage_module, "MANAGER_RULES_PATH", tmp_path / "missing.json")
+    result = ManagerMemoryStore(tmp_path / "memory.sqlite3").today_context()
 
-    with store.connect() as conn:
-        now = "2026-07-14T00:00:00+00:00"
-        conn.execute(
-            """
-            INSERT INTO manager_rules (title, rule, scope, priority, source, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("obsolete-doc-rule", "stale", "general", 100, "docs/agent/manager_rules.json", now, now),
-        )
-        conn.execute(
-            """
-            INSERT INTO manager_rules (title, rule, scope, priority, source, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("custom-rule", "keep", "general", 100, "owner", now, now),
-        )
-
-    result = store.seed_default_rules()
-
-    assert result["removed"] == 1
-    with store.connect() as conn:
-        titles = {row["title"] for row in conn.execute("SELECT title FROM manager_rules")}
-    assert "obsolete-doc-rule" not in titles
-    assert "custom-rule" in titles
-
-
-def test_seed_default_rules_handles_invalid_manager_rules_payload(tmp_path, monkeypatch):
-    root = tmp_path / "repo"
-    rules_path = root / "docs" / "agent" / "manager_rules.json"
-    rules_path.parent.mkdir(parents=True, exist_ok=True)
-    rules_path.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(storage_module, "PROJECT_ROOT", root)
-
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    result = store.seed_default_rules()
-
-    assert result["ok"] is False
-    assert result["error"] == "manager_rules.json invalid_structure"
-    assert result["error_detail"] == "list"
-
-
-def test_today_context_reports_failed_default_rule_seed(tmp_path, monkeypatch):
-    root = tmp_path / "repo"
-    rules_path = root / "docs" / "agent" / "manager_rules.json"
-    rules_path.parent.mkdir(parents=True, exist_ok=True)
-    rules_path.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(storage_module, "PROJECT_ROOT", root)
-
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    result = store.today_context()
-
-    assert result["ok"] is True
-    assert result["warnings"] == ["manager_rules_seed_failed: manager_rules.json invalid_structure"]
+    assert result["warnings"] == ["manager_rules_unavailable"]

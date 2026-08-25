@@ -16,6 +16,7 @@ from typing import Any
 from .config import PROJECT_ROOT, get_db_path
 
 
+MANAGER_RULES_PATH = PROJECT_ROOT / "docs" / "agent" / "manager_rules.json"
 WORKFLOW_TERMINAL_STATES = {"completed", "failed", "cancelled"}
 WORKFLOW_TRANSITIONS = {
     "planned": {"executing", "failed", "cancelled"},
@@ -55,6 +56,43 @@ _VERIFICATION_FAILURE_STRINGS = {
     "not_passed",
     "rejected",
 }
+
+
+def load_manager_rules() -> list[dict[str, Any]]:
+    """Read the canonical runtime rules without copying them into SQLite."""
+
+    try:
+        payload = json.loads(MANAGER_RULES_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return []
+    raw_rules = payload.get("rules") if isinstance(payload, dict) else None
+    if not isinstance(raw_rules, list):
+        return []
+    rules: list[dict[str, Any]] = []
+    for index, raw_rule in enumerate(raw_rules):
+        if not isinstance(raw_rule, dict):
+            continue
+        title = str(raw_rule.get("id") or "").strip()
+        rule = str(raw_rule.get("rule") or "").strip()
+        if not title or not rule:
+            continue
+        priority = raw_rule.get("priority")
+        rules.append(
+            {
+                "id": index + 1,
+                "title": title,
+                "rule": rule,
+                "scope": str(raw_rule.get("scope") or "general"),
+                "priority": priority if isinstance(priority, int) else 100,
+                "source": "docs/agent/manager_rules.json",
+                "created_at": "",
+                "updated_at": "",
+                "kind": "rule",
+                "tags": [],
+            }
+        )
+    return sorted(rules, key=lambda item: (int(item["priority"]), str(item["title"])))
+
 
 EXTERNAL_REF_KEYS = {
     "message_id",
@@ -1809,9 +1847,6 @@ class ManagerMemoryStore:
         with self.connect() as conn:
             conn.executescript(
                 """
-                DROP TABLE IF EXISTS knowledge_annotations_fts;
-                DROP TABLE IF EXISTS knowledge_annotations;
-
                 CREATE TABLE IF NOT EXISTS notes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL DEFAULT '',
@@ -1912,17 +1947,6 @@ class ManagerMemoryStore:
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS manager_rules (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    rule TEXT NOT NULL,
-                    scope TEXT NOT NULL DEFAULT 'general',
-                    priority INTEGER NOT NULL DEFAULT 100,
-                    source TEXT NOT NULL DEFAULT 'system',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS knowledge_documents (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     domain TEXT NOT NULL,
@@ -1933,23 +1957,6 @@ class ManagerMemoryStore:
                     content_hash TEXT NOT NULL DEFAULT '',
                     indexed_at TEXT NOT NULL,
                     UNIQUE(domain, path)
-                );
-
-                CREATE TABLE IF NOT EXISTS knowledge_route_cards (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    domain TEXT NOT NULL UNIQUE,
-                    title TEXT NOT NULL DEFAULT '',
-                    use_when_json TEXT NOT NULL DEFAULT '[]',
-                    aliases_json TEXT NOT NULL DEFAULT '[]',
-                    keywords_json TEXT NOT NULL DEFAULT '[]',
-                    questions_json TEXT NOT NULL DEFAULT '[]',
-                    source_of_truth_json TEXT NOT NULL DEFAULT '[]',
-                    primary_files_json TEXT NOT NULL DEFAULT '[]',
-                    reference_files_json TEXT NOT NULL DEFAULT '[]',
-                    required_context_json TEXT NOT NULL DEFAULT '[]',
-                    search_text TEXT NOT NULL DEFAULT '',
-                    content_hash TEXT NOT NULL DEFAULT '',
-                    indexed_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS knowledge_sections (
@@ -1975,9 +1982,6 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_knowledge_sections_search
                     ON knowledge_sections(search_text);
-
-                CREATE INDEX IF NOT EXISTS idx_knowledge_route_cards_search
-                    ON knowledge_route_cards(search_text);
 
                 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_sections_fts
                 USING fts5(domain, path, heading, search_text);
@@ -2217,9 +2221,6 @@ class ManagerMemoryStore:
             "journal": {
                 "archived_at": "TEXT",
             },
-            "knowledge_route_cards": {
-                "reference_files_json": "TEXT NOT NULL DEFAULT '[]'",
-            },
             "manager_runs": {
                 "workflow_id": "TEXT NOT NULL DEFAULT ''",
                 "request_id": "TEXT NOT NULL DEFAULT ''",
@@ -2291,108 +2292,6 @@ class ManagerMemoryStore:
             WHERE archived_at IS NULL
             """
         )
-
-    def seed_default_rules(self) -> dict[str, Any]:
-        self.initialize()
-        rules_path = PROJECT_ROOT / "docs" / "agent" / "manager_rules.json"
-        if not rules_path.exists():
-            return {"ok": False, "error": "manager_rules.json not found", "inserted": 0}
-        try:
-            payload = json.loads(rules_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            return {
-                "ok": False,
-                "error": "manager_rules.json invalid_json",
-                "error_detail": str(exc),
-                "inserted": 0,
-                "updated": 0,
-            }
-        if not isinstance(payload, dict):
-            return {
-                "ok": False,
-                "error": "manager_rules.json invalid_structure",
-                "error_detail": type(payload).__name__,
-                "inserted": 0,
-                "updated": 0,
-            }
-        rules = payload.get("rules")
-        if not isinstance(rules, list):
-            return {
-                "ok": False,
-                "error": "manager_rules.json invalid_rules",
-                "error_detail": type(rules).__name__,
-                "inserted": 0,
-                "updated": 0,
-            }
-        inserted = 0
-        updated = 0
-        removed = 0
-        now = _now()
-        source = "docs/agent/manager_rules.json"
-        active_titles = {
-            str(rule.get("id") or "").strip()
-            for rule in rules
-            if isinstance(rule, dict) and str(rule.get("id") or "").strip() and str(rule.get("rule") or "").strip()
-        }
-        with self.connect() as conn:
-            stale_rows = conn.execute(
-                "SELECT id, title FROM manager_rules WHERE source = ?",
-                (source,),
-            ).fetchall()
-            stale_ids = [int(row["id"]) for row in stale_rows if str(row["title"]) not in active_titles]
-            if stale_ids:
-                conn.executemany(
-                    "DELETE FROM manager_rules WHERE id = ?",
-                    [(row_id,) for row_id in stale_ids],
-                )
-                removed = len(stale_ids)
-            for rule in rules:
-                if not isinstance(rule, dict):
-                    continue
-                title = str(rule.get("id") or "").strip()
-                text = str(rule.get("rule") or "").strip()
-                if not title or not text:
-                    continue
-                scope = str(rule.get("scope") or "general")
-                priority = int(rule.get("priority") or 100)
-                exists = conn.execute(
-                    "SELECT id, rule, scope, priority, source FROM manager_rules WHERE title = ? LIMIT 1",
-                    (title,),
-                ).fetchone()
-                if exists:
-                    if (
-                        exists["rule"] != text
-                        or exists["scope"] != scope
-                        or int(exists["priority"]) != priority
-                        or exists["source"] != source
-                    ):
-                        conn.execute(
-                            """
-                            UPDATE manager_rules
-                            SET rule = ?, scope = ?, priority = ?, source = ?, updated_at = ?
-                            WHERE id = ?
-                            """,
-                            (text, scope, priority, source, now, exists["id"]),
-                        )
-                        updated += 1
-                    continue
-                conn.execute(
-                    """
-                    INSERT INTO manager_rules (title, rule, scope, priority, source, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        title,
-                        text,
-                        scope,
-                        priority,
-                        source,
-                        now,
-                        now,
-                    ),
-                )
-                inserted += 1
-        return {"ok": True, "inserted": inserted, "updated": updated, "removed": removed}
 
     def remember(
         self,
@@ -2925,7 +2824,7 @@ class ManagerMemoryStore:
             "total_after": total_after,
         }
 
-    def recall(
+    def recall(  # noqa: C901
         self,
         query: str = "",
         *,
@@ -2939,6 +2838,16 @@ class ManagerMemoryStore:
         query = query.strip()
         query_tokens = _tokens(query)
         results: list[dict[str, Any]] = []
+        if not kind or kind == "rule":
+            for item in load_manager_rules():
+                if not _matches_filter(item.get("scope"), category):
+                    continue
+                score, matched_fields = self._score_memory_item(item, query, query_tokens)
+                if query_tokens and score <= 0:
+                    continue
+                item["score"] = score + max(0, 30 - int(item.get("priority") or 100)) // 2
+                item["matched_fields"] = matched_fields
+                results.append(item)
         with self.connect() as conn:
             for row_kind, table, order_column in [
                 ("note", "notes", "updated_at"),
@@ -2980,13 +2889,12 @@ class ManagerMemoryStore:
                 ("task", "tasks", "updated_at"),
                 ("reminder", "reminders", "updated_at"),
                 ("journal", "journal", "created_at"),
-                ("rule", "manager_rules", "updated_at"),
                 ("lesson", "lessons", "updated_at"),
             ]
             for row_kind, table, order_column in searches:
                 if kind and row_kind != kind:
                     continue
-                row_limit = 1000 if row_kind == "rule" else max(limit * 10, 100)
+                row_limit = max(limit * 10, 100)
                 where = "WHERE archived_at IS NULL" if row_kind in {"lesson", "journal"} else ""
                 rows = conn.execute(
                     f"""
@@ -3006,8 +2914,6 @@ class ManagerMemoryStore:
                     score, matched_fields = self._score_memory_item(item, query, query_tokens)
                     if query_tokens and score <= 0:
                         continue
-                    if row_kind == "rule":
-                        score += max(0, 30 - int(item.get("priority") or 100)) // 2
                     if row_kind == "lesson":
                         score += int(_clamp01(float(item.get("importance") or 0)) * 8)
                         score += int(_clamp01(float(item.get("confidence") or 0)) * 3)
@@ -3097,6 +3003,7 @@ class ManagerMemoryStore:
 
     def memory_map(self) -> dict[str, Any]:
         self.initialize()
+        rules = load_manager_rules()
         sections = {
             "notes": self._section_summary("notes", "updated_at"),
             "facts": self._section_summary("facts", "updated_at"),
@@ -3105,7 +3012,7 @@ class ManagerMemoryStore:
             "reminders": self._section_summary("reminders", "updated_at", where="status = 'open'"),
             "journal": self._section_summary("journal", "created_at", where="archived_at IS NULL"),
             "director_journal": self._section_summary("director_journal", "updated_at"),
-            "rules": self._section_summary("manager_rules", "updated_at"),
+            "rules": {"count": len(rules), "last_updated": None},
         }
         return {
             "ok": True,
@@ -3133,7 +3040,6 @@ class ManagerMemoryStore:
                 ("reminders", "reminder"),
                 ("journal", "journal"),
                 ("lessons", "lesson"),
-                ("manager_rules", "rule"),
             ]:
                 order_column = "created_at" if table == "journal" else "updated_at"
                 where = "WHERE archived_at IS NULL" if table in {"lessons", "journal"} else ""
@@ -3144,6 +3050,7 @@ class ManagerMemoryStore:
                         (kind,),
                     ).fetchall()
                 )
+            rows.extend(load_manager_rules())
         for item in rows:
             category = str(item.get("category") or item.get("applies_to") or item.get("scope") or "").strip()
             if category:
@@ -3241,7 +3148,7 @@ class ManagerMemoryStore:
             "reminders": self._count_rows("reminders", where="status = 'open'"),
             "journal": self._count_rows("journal", where="archived_at IS NULL"),
             "director_journal": self._count_rows("director_journal"),
-            "rules": self._count_rows("manager_rules"),
+            "rules": len(load_manager_rules()),
         }
         empty_sections = {name: count for name, count in sections.items() if count == 0}
         sparse_sections = {name: count for name, count in sections.items() if 0 < count < 2}
@@ -4113,11 +4020,8 @@ class ManagerMemoryStore:
 
     def today_context(self, *, limit: int = 20) -> dict[str, Any]:
         self.initialize()
-        warnings: list[str] = []
-        if self._manager_rule_count() == 0:
-            seed_result = self.seed_default_rules()
-            if not seed_result.get("ok", True):
-                warnings.append(f"manager_rules_seed_failed: {seed_result.get('error', 'unknown')}")
+        rules = load_manager_rules()
+        warnings = [] if rules else ["manager_rules_unavailable"]
         now = _now()
         limit = max(1, min(limit, 100))
         with self.connect() as conn:
@@ -4173,13 +4077,6 @@ class ManagerMemoryStore:
                     (min(limit, 10),),
                 ).fetchall()
             ]
-            rules = [
-                self._row_to_dict(row)
-                for row in conn.execute(
-                    "SELECT *, 'rule' AS kind FROM manager_rules ORDER BY priority ASC, updated_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-            ]
         return {
             "ok": True,
             "generated_at": now,
@@ -4190,7 +4087,7 @@ class ManagerMemoryStore:
                 "active_entries": director_journal_rows,
                 "limits": self._director_journal_limits(),
             },
-            "manager_rules": rules,
+            "manager_rules": rules[:limit],
             "crm_read_order": [
                 "agent_bootstrap",
                 "agent_board_digest",
@@ -5906,11 +5803,6 @@ class ManagerMemoryStore:
         if "dry_run" in item:
             item["dry_run"] = bool(item["dry_run"])
         return item
-
-    def _manager_rule_count(self) -> int:
-        with self.connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS count FROM manager_rules").fetchone()
-        return int(row["count"] or 0)
 
     def _count_rows(self, table: str, *, where: str | None = None) -> int:
         query = f"SELECT COUNT(*) AS count FROM {table}"

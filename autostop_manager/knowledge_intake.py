@@ -64,7 +64,6 @@ def build_knowledge_intake_plan(
         "required_follow_up": [
             "knowledge-sync",
             "knowledge-audit",
-            "annotations-audit",
         ],
         "privacy": {
             "raw_private_file_committed": False,

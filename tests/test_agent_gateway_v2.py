@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from autostop_manager.agent_gateway import build_agent_bootstrap, list_agent_workflows
-from autostop_manager.knowledge_base import find_command_route
+from autostop_manager.knowledge_base import plan_command_routes
 from autostop_manager.storage import ManagerMemoryStore
+
+
+def _route(query: str, *, intent: str | None = None):
+    routes = plan_command_routes(query, intent=intent)
+    return max(routes, key=lambda item: int(item.get("score") or 0), default=None)
 
 
 def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
@@ -24,16 +29,16 @@ def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
     }
 
     for query, workflow_id in cases.items():
-        route = find_command_route(query)
+        route = _route(query)
         assert route is not None
         assert route["workflow_id"] == workflow_id
 
-    store_orders = find_command_route("покажи заказы на сайте")
+    store_orders = _route("покажи заказы на сайте")
     assert store_orders is None or store_orders["workflow_id"] != "store_analytics_reporting"
 
 
 def test_explicit_intent_wins_deterministically_over_query_keywords():
-    route = find_command_route(
+    route = _route(
         "письмо про оплату и документ",
         intent="crm_finance_operation",
     )

@@ -46,7 +46,6 @@ def test_system_audit_returns_health_summary_and_sqlite_stats(tmp_path):
 
     assert result["ok"] is True
     assert result["summary"]["knowledge_ok"] is True
-    assert result["summary"]["annotations_ok"] is True
     assert result["summary"]["skills_ok"] is True
     assert result["summary"]["cleanup_candidate_count"] >= 0
     assert result["summary"]["local_sqlite_size_bytes"] > 0

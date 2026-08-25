@@ -4,7 +4,6 @@ import json
 
 import autostop_manager.knowledge_base as kb
 from autostop_manager.knowledge_base import (
-    audit_knowledge_annotations,
     probe_knowledge_base,
     search_knowledge_base,
     sync_knowledge_base,
@@ -122,13 +121,3 @@ def test_business_identity_indexes_existing_optional_runtime_file(tmp_path, monk
     assert sync_result["missing_files"] == []
     assert sync_result["optional_missing_files"] == []
     assert any(item["path"] == str(private_file) for item in result["items"])
-
-
-def test_annotation_audit_covers_business_identity_domain(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = audit_knowledge_annotations(store)
-
-    assert result["ok"] is True
-    assert result["domains"]["business_identity"] == 1

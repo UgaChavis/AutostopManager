@@ -505,7 +505,6 @@ def _sqlite_table_counts(db_path: Path) -> dict[str, int]:
             FROM sqlite_master
             WHERE type = 'table'
             AND name IN (
-                'manager_rules',
                 'knowledge_documents',
                 'knowledge_sections',
                 'notes',

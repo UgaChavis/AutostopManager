@@ -31,7 +31,6 @@ from .gateway_attestation import (
 )
 from .integration_audit import build_integration_audit
 from .knowledge_base import (
-    audit_knowledge_annotations,
     audit_knowledge_base,
     probe_knowledge_base,
     search_knowledge_base,
@@ -736,7 +735,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("init", help="Initialize SQLite storage")
-    sub.add_parser("seed-rules", help="Seed default manager rules from docs")
 
     store_checkpoint_status = sub.add_parser(
         "store-checkpoint-status",
@@ -797,7 +795,7 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_search.add_argument("--domain", default=None)
     knowledge_search.add_argument("--limit", type=int, default=10)
 
-    sub.add_parser("knowledge-audit", help="Audit the local knowledge map, route cards, files, and SQLite index")
+    sub.add_parser("knowledge-audit", help="Audit the live knowledge map, files, and document index")
 
     sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, and knowledge cleanup candidates")
 
@@ -843,19 +841,10 @@ def build_parser() -> argparse.ArgumentParser:
     control_report.add_argument("--format", choices=["json", "markdown"], default="json")
     control_report.add_argument("--output", default=None)
 
-    environment_report = sub.add_parser(
-        "environment-report",
-        help="Generate the deep server/Codex/Manager/CRM environment report as safe JSON or Markdown",
-    )
-    environment_report.add_argument("--format", choices=["json", "markdown"], default="json")
-    environment_report.add_argument("--output", default=None)
-
     crm_health = sub.add_parser("crm-health-plan", help="Build a read-only CRM health plan from saved JSON payloads")
     crm_health.add_argument("--board-context-json", default=None)
     crm_health.add_argument("--board-review-json", default=None)
     crm_health.add_argument("--today-json", default=None)
-
-    sub.add_parser("annotations-audit", help="Audit compact knowledge annotations used for fast routing")
 
     sub.add_parser("skills-audit", help="Audit local Codex skill files linked to knowledge routes")
 
@@ -882,8 +871,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
 
     if args.command == "init":
         store.initialize()
-        seed_result = store.seed_default_rules()
-        _print_json({"ok": True, "db_path": str(store.path), "seed_rules": seed_result})
+        _print_json({"ok": True, "db_path": str(store.path)})
     elif args.command == "store-checkpoint-status":
         return _print_checked_json(store.get_store_checkpoint(args.stream))
     elif args.command == "store-checkpoint-reset":
@@ -894,8 +882,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 reason=args.reason,
             )
         )
-    elif args.command == "seed-rules":
-        _print_json(store.seed_default_rules())
     elif args.command == "knowledge-sync":
         return _print_checked_json(sync_knowledge_base(store))
     elif args.command == "knowledge-intake":
@@ -937,7 +923,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 force=args.force,
             )
         )
-    elif args.command in {"control-report", "environment-report"}:
+    elif args.command == "control-report":
         report = build_control_report(store=store)
         if args.format == "markdown":
             rendered = format_control_report_markdown(report)
@@ -955,8 +941,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 today_context=_json_file(args.today_json, option_name="--today-json"),
             )
         )
-    elif args.command == "annotations-audit":
-        return _print_checked_json(audit_knowledge_annotations(store))
     elif args.command == "skills-audit":
         return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-audit":

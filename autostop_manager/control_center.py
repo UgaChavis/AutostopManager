@@ -13,7 +13,7 @@ from typing import Any
 
 from .catalog_adapters import catalog_provider_status
 from .config import PROJECT_ROOT
-from .knowledge_base import audit_knowledge_annotations, audit_knowledge_base
+from .knowledge_base import audit_knowledge_base
 from .memory_curator import audit_memory
 from .provider_smoke import build_provider_smoke_report
 from .storage import ManagerMemoryStore, _now
@@ -257,7 +257,6 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
             "",
             "## Commands",
             "- `python -m autostop_manager.cli control-report --format json`",
-            "- `python -m autostop_manager.cli environment-report --format markdown --output reports/environment-report.md`",
             "- `python -m autostop_manager.cli control-report --format markdown --output reports/control-report.md`",
             "- `python -m autostop_manager.cli doctor`",
             "- server/Unix only: `bash scripts/doctor.sh --full`",
@@ -268,18 +267,13 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
 
 def _knowledge_summary(memory: ManagerMemoryStore) -> dict[str, Any]:
     audit = audit_knowledge_base(memory)
-    annotations = audit_knowledge_annotations(memory)
     summary = audit.get("summary") or {}
-    annotation_summary = annotations.get("summary") or {}
     return {
-        "ok": bool(audit.get("ok")) and bool(annotations.get("ok")),
+        "ok": bool(audit.get("ok")),
         "domain_count": int(audit.get("domain_count") or summary.get("route_card_count") or 0),
         "documents_indexed": int(audit.get("documents_indexed") or summary.get("document_count") or 0),
         "section_count": int(audit.get("sections_indexed") or summary.get("section_count") or 0),
-        "annotation_count": int(
-            annotations.get("annotations_indexed") or annotation_summary.get("annotation_count") or 0
-        ),
-        "warnings": list(audit.get("warnings") or []) + list(annotations.get("warnings") or []),
+        "warnings": list(audit.get("warnings") or []),
     }
 
 
