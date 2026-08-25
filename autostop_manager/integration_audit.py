@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -46,9 +47,6 @@ EXPECTED_GATEWAY_TOOLS = frozenset(
         "workflow_transition",
         "workflow_wait_for_external",
     }
-)
-EXPECTED_WEB_CAPABILITIES = frozenset(
-    {"search_web_multi", "fetch_page_excerpt", "fetch_page_browser", "research_drive2_cases"}
 )
 EXPECTED_MANAGER_RAW_TOOL_COUNT = 77
 _GMAIL_REQUIRED_PROOF_CHECKS = frozenset(
@@ -199,32 +197,29 @@ def _run_capability_parity_check(
 
 
 def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
-    catalog_path = manager_root / "docs" / "agent" / "crm_mcp_catalog.json"
-    try:
-        payload = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return _failed_check("crm_mcp_catalog_unreadable")
-    tools = payload.get("production_tools_verified")
-    gateway = payload.get("agent_gateway_v2")
-    documented_web = gateway.get("web_research_capabilities") if isinstance(gateway, dict) else None
-    tool_counts = payload.get("tool_counts") if isinstance(payload.get("tool_counts"), dict) else {}
-    families = payload.get("tool_families") if isinstance(payload.get("tool_families"), dict) else {}
-    raw_tools = families.get("optional_manager_memory_and_routing")
-    tool_set = {str(item) for item in tools} if isinstance(tools, list) else set()
-    web_set = {str(item) for item in documented_web} if isinstance(documented_web, list) else set()
-    raw_tool_set = {str(item) for item in raw_tools} if isinstance(raw_tools, list) else set()
-    validations = {
-        "visible_tool_count_exactly_24": len(tool_set) == 24,
-        "visible_tool_names_exact": tool_set == EXPECTED_GATEWAY_TOOLS,
-        "web_capabilities_documented": web_set == EXPECTED_WEB_CAPABILITIES,
-        f"manager_raw_tool_count_exactly_{EXPECTED_MANAGER_RAW_TOOL_COUNT}": (
-            tool_counts.get("autostop_manager_tools_in_raw_registry") == EXPECTED_MANAGER_RAW_TOOL_COUNT
-        ),
-        "store_owner_raw_capabilities_documented": {
-            "store_owner_capabilities",
-            "store_owner_api",
-        }.issubset(raw_tool_set),
+    catalog_paths = {
+        "crm": manager_root / "docs" / "agent" / "crm_mcp_catalog.json",
+        "manager": manager_root / "docs" / "agent" / "manager_mcp_catalog.json",
     }
+    try:
+        catalogs = {name: json.loads(path.read_text(encoding="utf-8-sig")) for name, path in catalog_paths.items()}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return _failed_check("mcp_surface_manifest_unreadable")
+    tools = {
+        name: sorted({str(item) for item in payload.get("expected_tool_names") or []})
+        for name, payload in catalogs.items()
+    }
+    validations = {
+        "visible_tool_names_exact": set(tools["crm"]) == EXPECTED_GATEWAY_TOOLS,
+        f"manager_raw_tool_count_exactly_{EXPECTED_MANAGER_RAW_TOOL_COUNT}": len(tools["manager"])
+        == EXPECTED_MANAGER_RAW_TOOL_COUNT,
+    }
+    for name, payload in catalogs.items():
+        validations[f"{name}_manifest_valid"] = (
+            payload.get("format") == "mcp_surface_manifest_v1"
+            and payload.get("expected_tool_count") == len(tools[name])
+            and bool(re.fullmatch(r"[0-9a-f]{64}", str(payload.get("schema_fingerprint") or "")))
+        )
     return {
         "ok": all(validations.values()),
         "status": "healthy" if all(validations.values()) else "failed",

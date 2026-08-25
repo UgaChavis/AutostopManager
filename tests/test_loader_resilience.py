@@ -130,13 +130,12 @@ def test_command_routes_string_lists_are_normalized(tmp_path, monkeypatch):
                 "routes": [
                     {
                         "command_id": "demo_route",
+                        "workflow_id": "demo_route",
                         "intent": "demo_intent",
-                        "domain": "demo_domain",
-                        "open_first": "docs/agent/demo.md",
-                        "aliases": "demo alias",
-                        "keywords": "demo keyword",
-                        "memory_queries": "board cleanup",
-                        "next_actions": "open source",
+                        "knowledge_domains": "demo_domain",
+                        "effects": "crm_write",
+                        "dependencies": "demo_dependency",
+                        "signals": {"phrases": "demo alias"},
                     }
                 ]
             }
@@ -149,10 +148,10 @@ def test_command_routes_string_lists_are_normalized(tmp_path, monkeypatch):
     route = module.find_command_route("demo alias")
 
     assert route is not None
-    assert route["memory_queries"] == ["board cleanup"]
-    assert route["next_actions"] == ["open source"]
-    assert route["aliases"] == ["demo alias"]
-    assert route["keywords"] == ["demo keyword"]
+    assert route["knowledge_domains"] == ["demo_domain"]
+    assert route["effects"] == ["crm_write"]
+    assert route["dependencies"] == ["demo_dependency"]
+    assert route["signals"]["phrases"] == ["demo alias"]
 
     module._load_command_routes.cache_clear()
 
@@ -234,16 +233,13 @@ def test_knowledge_intake_string_lists_are_normalized(tmp_path, monkeypatch):
     module = importlib.import_module("autostop_manager.knowledge_intake")
     knowledge_map_path = tmp_path / "knowledge_map.json"
     source_path = tmp_path / "notes.md"
-    source_path.write_text("demo intake keyword", encoding="utf-8")
+    source_path.write_text("Demo Domain", encoding="utf-8")
     knowledge_map_path.write_text(
         json.dumps(
             {
                 "domains": {
                     "demo_domain": {
                         "title": "Demo Domain",
-                        "aliases": "demo intake",
-                        "keywords": "demo intake keyword",
-                        "source_of_truth_files": "docs/agent/demo.md",
                         "primary_files": "docs/agent/demo.md",
                     }
                 }
@@ -320,7 +316,6 @@ def test_cleanup_audit_string_route_lists_keep_referenced_docs(tmp_path):
     docs_agent.mkdir(parents=True)
     (docs_agent / "known.md").write_text("# Known\n", encoding="utf-8")
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
-    (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
     (docs_agent / "knowledge_map.json").write_text(
         json.dumps(
             {

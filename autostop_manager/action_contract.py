@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+from decimal import Decimal
 from typing import Any
 
 from .store_owner_api import is_safe_reversible_collection_create
@@ -114,7 +115,7 @@ EXECUTOR_TOOLS = {
     ("client", "update"): "update_client",
     ("vehicle", "create"): "upsert_client_vehicle",
     ("vehicle", "update"): "upsert_client_vehicle",
-    ("repair_order", "update"): "update_repair_order",
+    ("repair_order", "update"): "agent_finance_workflow",
     ("payment", "record_payment"): "agent_finance_workflow",
     ("cashbox", "create"): "create_cashbox",
     ("cashbox", "delete"): "delete_cashbox",
@@ -155,6 +156,10 @@ FINANCIAL_TRANSACTION_ACTIONS = {
     ("payment", "record_payment"),
     ("cashbox", "cash_transaction"),
     ("cashbox", "transfer"),
+}
+FINANCE_WORKFLOW_ACTIONS = {
+    ("repair_order", "update"),
+    ("payment", "record_payment"),
 }
 DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive", "reset_completion_act_form"}
 TARGET_ONLY_ACTIONS = {"delete", "archive"}
@@ -255,12 +260,21 @@ def prepare_action_contract(
             dry_run=dry_run,
         )
     )
+    blockers.extend(
+        _finance_workflow_contract_blockers(
+            domain=normalized_domain,
+            action=normalized_action,
+            changes=changes,
+            idempotency_key=key,
+            dry_run=dry_run,
+        )
+    )
     if normalized_action in DESTRUCTIVE_ACTIONS:
         warnings.append("destructive_action_requires_backup_or_compensation")
     if normalized_domain in EXTERNAL_DOMAINS:
         warnings.append("execute_through_external_connector_step")
 
-    executor_tool = _executor_tool(normalized_domain, normalized_action, changes)
+    executor_tool = _executor_tool(normalized_domain, normalized_action, changes, target_id=normalized_target)
     if not executor_tool:
         warnings.append("executor_tool_requires_capability_discovery")
 
@@ -299,6 +313,15 @@ def prepare_action_contract(
         preflight_checks.extend(["cashbox_exists", "amount_and_payment_method_valid", "debt_reconciled"])
     if normalized_domain == "gmail":
         preflight_checks.extend(["thread_or_recipients_reread", "active_connector_schema_checked"])
+        if _is_invoice_pdf_send(changes):
+            preflight_checks.extend(
+                [
+                    "verified_sender_checked",
+                    "attachment_sha256_checked",
+                    "document_qa_checked",
+                    "financial_and_tax_mismatch_checked",
+                ]
+            )
     if normalized_domain == "crm" and normalized_action in RAW_CRM_ACTIONS:
         preflight_checks.extend(["raw_capability_exact_name_checked", "raw_capability_schema_hash_checked"])
     if normalized_domain == "document" and normalized_action in COMPLETION_ACT_ACTIONS:
@@ -375,6 +398,7 @@ def prepare_action_contract(
             "events": ["planned_action", "preflight", "write", "verification"],
             "store_payload": False,
             "store_refs_only": normalized_domain in EXTERNAL_DOMAINS or normalized_domain in STORE_DOMAINS,
+            "retained_external_fields": ["refs", "sha256", "qa_passed", "mismatch_approved"],
         },
         "warnings": list(dict.fromkeys(warnings)),
     }
@@ -412,12 +436,46 @@ def _gateway_execution(
             "idempotency_key": idempotency_key or None,
             "requires_schema_discovery": True,
         }
-    if domain == "payment" and action == "record_payment":
-        return "record_repair_order_payment", {
-            "operation": "record_repair_order_payment",
-            "payload": {**changes, "expected_updated_at": revision},
+    if (domain, action) in FINANCE_WORKFLOW_ACTIONS:
+        operation = "update_repair_order" if domain == "repair_order" else "record_repair_order_payment"
+        if domain == "repair_order":
+            raw_patch = changes.get("repair_order")
+            repair_order = (
+                dict(raw_patch)
+                if isinstance(raw_patch, dict)
+                else {
+                    key: value
+                    for key, value in changes.items()
+                    if key
+                    not in {
+                        "card_id",
+                        "expected_updated_at",
+                        "repair_order",
+                        "dry_run_proof",
+                        "dry_run_idempotency_key",
+                    }
+                }
+            )
+            payload = {
+                "card_id": target_id,
+                "repair_order": repair_order,
+                "expected_updated_at": revision,
+            }
+        else:
+            payload = {
+                key: value for key, value in changes.items() if key not in {"dry_run_proof", "dry_run_idempotency_key"}
+            }
+            payload["expected_updated_at"] = revision
+        arguments: dict[str, Any] = {
+            "operation": operation,
+            "payload": payload,
             "idempotency_key": idempotency_key or None,
+            "mode": mode,
         }
+        if not dry_run:
+            arguments["dry_run_proof"] = changes.get("dry_run_proof")
+            arguments["dry_run_idempotency_key"] = changes.get("dry_run_idempotency_key")
+        return operation, arguments
     if (domain, action) in STORE_ACTIONS:
         return action, {
             "operation": action,
@@ -455,6 +513,11 @@ def _gateway_execution(
             "idempotency_key": idempotency_key or None,
             "mode": mode,
         }
+    if domain == "document" and action == "generate":
+        card_id = target_id or str(changes.get("card_id") or "").strip()
+        if card_id:
+            return None, {"card_id": card_id}
+        return None, changes
     return (action if domain == "board" else None), None
 
 
@@ -485,6 +548,26 @@ def _completion_act_contract_blockers(
     return blockers
 
 
+def _finance_workflow_contract_blockers(
+    *,
+    domain: str,
+    action: str,
+    changes: dict[str, Any],
+    idempotency_key: str,
+    dry_run: bool,
+) -> list[str]:
+    if (domain, action) not in FINANCE_WORKFLOW_ACTIONS or dry_run:
+        return []
+    proof = str(changes.get("dry_run_proof") or "")
+    dry_run_key = str(changes.get("dry_run_idempotency_key") or "")
+    blockers: list[str] = []
+    if re.fullmatch(r"[0-9a-f]{64}", proof) is None or not dry_run_key:
+        blockers.append("finance_dry_run_proof_required")
+    elif dry_run_key == idempotency_key:
+        blockers.append("apply_requires_new_idempotency_key")
+    return blockers
+
+
 def _validate_domain_changes(
     domain: str,
     action: str,
@@ -502,6 +585,16 @@ def _validate_domain_changes(
         _validate_card_changes(action, changes, blockers)
     if domain == "board":
         _validate_board_changes(action, changes, blockers)
+    if domain == "repair_order" and action == "update":
+        raw_patch = changes.get("repair_order")
+        if raw_patch is not None and not isinstance(raw_patch, dict):
+            blockers.append("invalid_repair_order_patch")
+        elif isinstance(raw_patch, dict) and not raw_patch:
+            blockers.append("missing_repair_order_patch")
+        elif raw_patch is None and not any(
+            key not in {"card_id", "expected_updated_at", "dry_run_proof", "dry_run_idempotency_key"} for key in changes
+        ):
+            blockers.append("missing_repair_order_patch")
     if domain == "gmail":
         _validate_gmail_changes(action, changes, blockers)
     if domain == "document" and action == "generate" and not str(changes.get("request_text") or "").strip():
@@ -1006,6 +1099,11 @@ def _finite_number(value: Any) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
+def _nonnegative_decimal_text(value: Any) -> Decimal | None:
+    text = value.strip() if isinstance(value, str) else ""
+    return Decimal(text) if re.fullmatch(r"\d+(?:\.\d+)?", text) else None
+
+
 def _validate_gmail_changes(action: str, changes: dict[str, Any], blockers: list[str]) -> None:
     if action in {"send", "create_draft"}:
         _validate_gmail_compose(changes, blockers)
@@ -1041,6 +1139,58 @@ def _validate_gmail_compose(changes: dict[str, Any], blockers: list[str]) -> Non
         blockers.append("missing_subject")
     if not any(_nonempty_string(changes.get(field)) for field in ("body_intent", "body", "body_file", "html_body")):
         blockers.append("missing_body_intent")
+    if _is_invoice_pdf_send(changes):
+        _validate_invoice_pdf_send(changes, blockers)
+
+
+def _is_invoice_pdf_send(changes: dict[str, Any]) -> bool:
+    if isinstance(changes.get("document_guard"), dict):
+        return True
+    text = " ".join(
+        str(changes.get(field) or "") for field in ("subject", "body_intent", "document_type", "attachment_kind")
+    ).casefold()
+    return bool(re.search(r"(?:^|\W)(?:сч[её]т|invoice)(?:$|\W)", text))
+
+
+def _validate_invoice_pdf_send(changes: dict[str, Any], blockers: list[str]) -> None:
+    raw_guard = changes.get("document_guard")
+    guard: dict[str, Any] = raw_guard if isinstance(raw_guard, dict) else {}
+    if not guard:
+        blockers.append("document_guard_required")
+    if not (_nonempty_string(changes.get("sender")) and changes.get("sender_verified") is True):
+        blockers.append("verified_sender_required")
+    if not _gmail_invoice_recipients_are_exact(changes):
+        blockers.append("exact_invoice_recipient_email_required")
+    if re.fullmatch(r"[0-9a-f]{64}", str(guard.get("attachment_sha256") or "")) is None:
+        blockers.append("valid_attachment_sha256_required")
+    for field in ("money_basis", "tax_status"):
+        if not _nonempty_string(guard.get(field)):
+            blockers.append(f"document_guard_{field}_required")
+    totals = {field: _nonnegative_decimal_text(guard.get(field)) for field in ("rendered_total", "repair_order_total")}
+    for field, total in totals.items():
+        if total is None:
+            blockers.append(f"document_guard_{field}_required")
+    if guard.get("qa_passed") is not True:
+        blockers.append("document_qa_required")
+    mismatch_keys = (
+        "financial_mismatch",
+        "tax_mismatch",
+        "financial_or_tax_mismatch",
+        "mismatch_with_current_repair_order",
+    )
+    if any(not isinstance(guard.get(field), bool) for field in mismatch_keys):
+        blockers.append("financial_or_tax_mismatch_status_required")
+        return
+    combined = guard["financial_mismatch"] or guard["tax_mismatch"]
+    financial_mismatch = totals["rendered_total"] != totals["repair_order_total"]
+    if (
+        guard["financial_mismatch"] != financial_mismatch
+        or guard["financial_or_tax_mismatch"] != combined
+        or guard["mismatch_with_current_repair_order"] != combined
+    ):
+        blockers.append("inconsistent_document_guard_mismatch_flags")
+    elif combined and changes.get("mismatch_approved") is not True:
+        blockers.append("financial_or_tax_mismatch_confirmation_required")
 
 
 def _validate_gmail_forward(changes: dict[str, Any], blockers: list[str]) -> None:
@@ -1092,6 +1242,32 @@ def _validate_gmail_update_draft(changes: dict[str, Any], blockers: list[str]) -
 
 def _gmail_recipients_are_exact(changes: dict[str, Any]) -> bool:
     return _nonempty_string_list(changes.get("recipients")) or _nonempty_string(changes.get("to"))
+
+
+def _gmail_invoice_recipients_are_exact(changes: dict[str, Any]) -> bool:
+    to_value = changes.get("to")
+    has_to = to_value is not None and to_value != ""
+    has_recipients = "recipients" in changes
+    if has_to == has_recipients:
+        return False
+    raw = changes.get("recipients") if has_recipients else changes.get("to")
+    recipients = raw if isinstance(raw, list) else [raw]
+    for field in ("cc", "bcc"):
+        copy_value = changes.get(field)
+        if copy_value is None or copy_value == "":
+            continue
+        if isinstance(copy_value, str):
+            recipients.append(copy_value)
+        elif isinstance(copy_value, list):
+            recipients.extend(copy_value)
+        else:
+            return False
+    return bool(recipients) and all(
+        isinstance(value, str)
+        and len(value.strip()) <= 254
+        and re.fullmatch(r"[^@\s,<>]+@[^@\s,<>]+\.[^@\s,<>]+", value.strip()) is not None
+        for value in recipients
+    )
 
 
 def _nonempty_string(value: Any) -> bool:
@@ -1156,6 +1332,15 @@ def _verification_checks(
         checks.extend(["cash_journal_entry_exists", "repair_order_balance_reconciled", "amount_exact"])
     if domain == "gmail":
         checks = ["connector_result_ref_present", "message_or_thread_id_present", "external_step_completed_once"]
+        if _is_invoice_pdf_send(changes or {}):
+            checks.extend(
+                [
+                    "exact_recipient_and_verified_sender_match",
+                    "attachment_sha256_matches_document_guard",
+                    "document_qa_passed",
+                    "financial_or_tax_mismatch_approved_or_absent",
+                ]
+            )
     if domain == "document":
         if action in COMPLETION_ACT_ACTIONS:
             checks = (
@@ -1209,10 +1394,22 @@ def _verification_checks(
     return checks
 
 
-def _executor_tool(domain: str, action: str, changes: dict[str, Any]) -> str | None:
+def _executor_tool(
+    domain: str,
+    action: str,
+    changes: dict[str, Any],
+    *,
+    target_id: str = "",
+) -> str | None:
     if domain == "inventory" and action == "adjust":
         movement_type = str(changes.get("movement_type") or "").strip().casefold().replace("-", "_")
         return INVENTORY_EXECUTOR_TOOLS.get(movement_type)
+    if domain == "document" and action == "generate":
+        return (
+            "download_repair_order_print_pdf"
+            if target_id or str(changes.get("card_id") or "").strip()
+            else "create_document_without_card_pdf"
+        )
     return EXECUTOR_TOOLS.get((domain, action))
 
 

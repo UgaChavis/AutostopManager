@@ -14,7 +14,6 @@ from .storage import ManagerMemoryStore, _now, _string_list
 
 PROTECTED_AGENT_DOCS = {
     "crm_mcp_catalog.json",
-    "knowledge_annotations.jsonl",
     "knowledge_map.json",
     "knowledge_shelves.md",
     "manager_mcp_catalog.json",
@@ -377,7 +376,7 @@ def _unreferenced_agent_doc_candidates(root: Path) -> list[CleanupCandidate]:
                 risk="medium",
                 recommended_action="link_to_knowledge_map",
                 requires_approval=True,
-                matched_by="not referenced by knowledge_map or knowledge_annotations",
+                matched_by="not referenced by knowledge_map",
             )
         )
     return candidates
@@ -453,28 +452,11 @@ def _referenced_agent_paths(root: Path) -> set[str]:
         for route in domains.values():
             if not isinstance(route, dict):
                 continue
-            for key in ["source_of_truth_files", "primary_files", "reference_files", "optional_runtime_files"]:
+            for key in ["primary_files", "reference_files", "optional_runtime_files"]:
                 for raw_path in _string_list(route.get(key)):
                     text = str(raw_path).replace("\\", "/")
                     if text.startswith("docs/agent/"):
                         referenced.add(text)
-    annotations_path = root / "docs" / "agent" / "knowledge_annotations.jsonl"
-    if annotations_path.exists():
-        try:
-            annotations_content = annotations_path.read_text(encoding="utf-8-sig")
-        except (OSError, UnicodeError):
-            annotations_content = ""
-        for raw_line in annotations_content.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            raw_path = str(payload.get("path") or "").replace("\\", "/")
-            if raw_path.startswith("docs/agent/"):
-                referenced.add(raw_path)
     return referenced
 
 
@@ -526,7 +508,6 @@ def _sqlite_table_counts(db_path: Path) -> dict[str, int]:
                 'manager_rules',
                 'knowledge_documents',
                 'knowledge_sections',
-                'knowledge_annotations',
                 'notes',
                 'facts',
                 'tasks',

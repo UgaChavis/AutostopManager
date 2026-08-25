@@ -18,14 +18,9 @@ UNSAFE_METADATA_FLAGS = {"outside_project", "private_path", "raw_crm_email_or_fi
 TERM_PATTERN = re.compile(r"[0-9a-zа-яё]+", re.IGNORECASE)
 
 _DOMAIN_LIST_FIELDS = (
-    "use_when",
-    "aliases",
-    "keywords",
-    "questions",
-    "source_of_truth_files",
     "primary_files",
     "reference_files",
-    "required_context",
+    "optional_runtime_files",
 )
 
 
@@ -81,16 +76,14 @@ def build_knowledge_intake_plan(
 
 def _classify_domain(path_text: str, sample: str) -> str:
     lower_path = path_text.casefold()
-    if "knowledge_map.json" in lower_path or "knowledge_annotations.jsonl" in lower_path:
+    if "knowledge_map.json" in lower_path:
         return "knowledge_intake"
     haystack = f"{path_text}\n{sample}".casefold()
     haystack_terms = _terms(haystack)
     best_domain = "knowledge_intake"
     best_score = 0
     for domain, route in _load_domains().items():
-        values = [domain, route.get("title", "")]
-        values.extend(_string_list(route.get("aliases")))
-        values.extend(_string_list(route.get("keywords")))
+        values = [domain, route.get("title", ""), *_string_list(route.get("primary_files"))]
         score = 0
         for value in values:
             token = str(value).casefold().strip()
@@ -138,33 +131,17 @@ def _target_updates(
                 "blocked": True,
                 "reason": reason,
                 "safety_flags": unsafe_flags,
-            },
-            {
-                "target": "docs/agent/knowledge_annotations.jsonl",
-                "domain": domain,
-                "operation": "blocked_pending_safety_review",
-                "review_required": True,
-                "blocked": True,
-                "reason": reason,
-                "source_type": source_type,
-                "safety_flags": unsafe_flags,
-            },
+            }
         ]
     return [
         {
             "target": "docs/agent/knowledge_map.json",
             "domain": domain,
-            "operation": "add_or_update_source_metadata",
+            "operation": "add_or_update_navigation_source",
             "review_required": True,
             "source_path": path_text,
-        },
-        {
-            "target": "docs/agent/knowledge_annotations.jsonl",
-            "domain": domain,
-            "operation": "add_compact_annotation",
-            "review_required": True,
             "source_type": source_type,
-        },
+        }
     ]
 
 

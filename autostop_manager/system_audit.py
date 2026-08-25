@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,7 @@ def build_system_audit(
     project_root: Path | str = PROJECT_ROOT,
     manager_mcp_catalog_path: Path | str = MANAGER_MCP_CATALOG_PATH,
     registered_tool_names: list[str] | None = None,
+    registered_tool_schemas: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     memory.initialize()
@@ -35,6 +38,7 @@ def build_system_audit(
     catalog = audit_manager_mcp_catalog(
         Path(manager_mcp_catalog_path),
         registered_tool_names=registered_tool_names,
+        registered_tool_schemas=registered_tool_schemas,
     )
 
     warnings = _collect_warnings(
@@ -108,6 +112,7 @@ def audit_manager_mcp_catalog(
     path: Path = MANAGER_MCP_CATALOG_PATH,
     *,
     registered_tool_names: list[str] | None = None,
+    registered_tool_schemas: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     warnings: list[str] = []
     if not path.exists():
@@ -131,17 +136,18 @@ def audit_manager_mcp_catalog(
             "warnings": ["manager_mcp_catalog_invalid_structure"],
         }
 
-    all_tools = [str(item) for item in payload.get("all_tools") or []]
-    declared_count = payload.get("tool_count")
+    all_tools = sorted({str(item) for item in payload.get("expected_tool_names") or []})
+    declared_count = payload.get("expected_tool_count")
+    if payload.get("format") != "mcp_surface_manifest_v1":
+        warnings.append("manager_mcp_catalog_format_mismatch")
     if declared_count != len(all_tools):
         warnings.append("manager_mcp_catalog_tool_count_mismatch")
-    declared_all_tools_count = payload.get("all_tools_count")
-    if declared_all_tools_count != len(all_tools):
-        warnings.append("manager_mcp_catalog_all_tools_count_mismatch")
-
-    tool_contracts = payload.get("tool_contracts") or {}
-    if not isinstance(tool_contracts, dict) or set(tool_contracts) != set(all_tools):
-        warnings.append("manager_mcp_catalog_tool_contracts_mismatch")
+    manifest_fingerprint = str(payload.get("schema_fingerprint") or "")
+    fingerprint = _mcp_schema_fingerprint(registered_tool_schemas) if registered_tool_schemas is not None else None
+    if re.fullmatch(r"[0-9a-f]{64}", manifest_fingerprint) is None or (
+        fingerprint is not None and manifest_fingerprint != fingerprint
+    ):
+        warnings.append("manager_mcp_catalog_fingerprint_mismatch")
 
     missing_required_tools = sorted(REQUIRED_HEALTH_TOOLS.difference(all_tools))
     if missing_required_tools:
@@ -164,15 +170,21 @@ def audit_manager_mcp_catalog(
         "ok": not warnings,
         "path": str(path),
         "tool_count": declared_count,
-        "declared_all_tools_count": declared_all_tools_count,
         "all_tools_count": len(all_tools),
-        "tool_contract_count": len(tool_contracts) if isinstance(tool_contracts, dict) else None,
+        "schema_fingerprint": manifest_fingerprint,
+        "registered_schema_fingerprint": fingerprint,
         "registered_tool_count": registered_count,
         "missing_required_tools": missing_required_tools,
         "missing_registered_tools": missing_registered_tools,
         "unknown_catalog_tools": unknown_catalog_tools,
         "warnings": warnings,
     }
+
+
+def _mcp_schema_fingerprint(tool_schemas: dict[str, Any]) -> str:
+    surface = [{"name": name, "inputSchema": tool_schemas[name]} for name in sorted(tool_schemas)]
+    canonical = json.dumps(surface, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _local_memory_sections(memory: ManagerMemoryStore) -> dict[str, int]:

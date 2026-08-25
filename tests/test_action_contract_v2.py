@@ -265,6 +265,91 @@ def test_gmail_action_contract_uses_external_connector_without_confirmation_stat
     assert result["ledger"]["store_refs_only"] is True
 
 
+def test_gmail_invoice_requires_document_guard_and_mismatch_confirmation():
+    common = {
+        "domain": "gmail",
+        "action": "send",
+        "owner_intent": "Отправь счёт клиенту",
+        "idempotency_key": "gmail-invoice-send-v1",
+    }
+    unsafe = prepare_action_contract(
+        **common,
+        planned_changes={"to": "client@example.com", "subject": "Счёт", "body_intent": "Счёт во вложении"},
+    )
+    safe = prepare_action_contract(
+        **common,
+        planned_changes={
+            "to": "client@example.com",
+            "sender": "service@example.com",
+            "sender_verified": True,
+            "subject": "Счёт",
+            "body_intent": "Счёт во вложении",
+            "document_guard": {
+                "attachment_sha256": "b" * 64,
+                "money_basis": "repair_order_current",
+                "rendered_total": "12500.00",
+                "repair_order_total": "12500.00",
+                "tax_status": "without_vat",
+                "financial_mismatch": False,
+                "tax_mismatch": False,
+                "financial_or_tax_mismatch": False,
+                "mismatch_with_current_repair_order": False,
+                "qa_passed": True,
+            },
+        },
+    )
+    mismatch_changes = {
+        **safe["planned_changes"],
+        "document_guard": {
+            **safe["planned_changes"]["document_guard"],
+            "repair_order_total": "12499.00",
+            "financial_mismatch": True,
+            "financial_or_tax_mismatch": True,
+            "mismatch_with_current_repair_order": True,
+        },
+    }
+    mismatch = prepare_action_contract(**common, planned_changes=mismatch_changes)
+    ambiguous_recipient = prepare_action_contract(
+        **common,
+        planned_changes={
+            **safe["planned_changes"],
+            "recipients": ["other@example.com"],
+        },
+    )
+    invalid_guard = {**safe["planned_changes"]["document_guard"], "financial_mismatch": True}
+    invalid_guard.pop("tax_status")
+    invalid = prepare_action_contract(
+        **common, planned_changes={**safe["planned_changes"], "document_guard": invalid_guard}
+    )
+    total_cases = (
+        ({"repair_order_total": None}, "document_guard_repair_order_total_required"),
+        ({"rendered_total": "NaN"}, "document_guard_rendered_total_required"),
+        ({"rendered_total": "-1"}, "document_guard_rendered_total_required"),
+        (
+            {"rendered_total": "9007199254740992.00", "repair_order_total": "9007199254740993.00"},
+            "inconsistent_document_guard_mismatch_flags",
+        ),
+    )
+
+    assert unsafe["ok"] is False
+    assert "verified_sender_required" in unsafe["preflight"]["blocking_reasons"]
+    assert safe["ok"] is True
+    assert "financial_or_tax_mismatch_confirmation_required" in mismatch["preflight"]["blocking_reasons"]
+    assert "exact_invoice_recipient_email_required" in ambiguous_recipient["preflight"]["blocking_reasons"]
+    assert "attachment_sha256_matches_document_guard" in safe["verification"]["checks"]
+    assert "document_guard_tax_status_required" in invalid["preflight"]["blocking_reasons"]
+    assert "inconsistent_document_guard_mismatch_flags" in invalid["preflight"]["blocking_reasons"]
+    for guard_patch, blocker in total_cases:
+        blocked = prepare_action_contract(
+            **common,
+            planned_changes={
+                **safe["planned_changes"],
+                "document_guard": {**safe["planned_changes"]["document_guard"], **guard_patch},
+            },
+        )
+        assert blocker in blocked["preflight"]["blocking_reasons"]
+
+
 def test_gmail_send_accepts_current_to_shape_and_rejects_non_string_values():
     current = prepare_action_contract(
         domain="gmail",
@@ -454,6 +539,72 @@ def test_document_contract_accepts_request_text_for_crm_type_inference():
     assert result["ok"] is True
     assert result["execution"]["tool"] == "create_document_without_card_pdf"
     assert result["execution"]["ready"] is True
+
+
+def test_card_document_uses_repair_order_print_pdf():
+    result = prepare_action_contract(
+        domain="document",
+        action="generate",
+        target_id="card-42",
+        planned_changes={"request_text": "Сформируй счёт из заказ-наряда"},
+        owner_intent="Сформируй счёт для карточки card-42",
+        idempotency_key="document-card-42-v1",
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == "download_repair_order_print_pdf"
+    assert result["execution"]["gateway_arguments"] == {"card_id": "card-42"}
+
+
+def test_repair_order_update_uses_proof_bound_finance_workflow():
+    common = {
+        "domain": "repair_order",
+        "action": "update",
+        "target_id": "card-42",
+        "owner_intent": "Поставь компанию Horizon клиентом в заказ-наряде карточки card-42",
+        "expected_revision": "2026-08-25T10:00:00Z",
+    }
+    preview = prepare_action_contract(
+        **common,
+        planned_changes={"client_id": "client-company"},
+        idempotency_key="ro-42-preview",
+    )
+    apply = prepare_action_contract(
+        **common,
+        planned_changes={
+            "client_id": "client-company",
+            "dry_run_proof": "a" * 64,
+            "dry_run_idempotency_key": "ro-42-preview",
+        },
+        idempotency_key="ro-42-apply",
+        dry_run=False,
+    )
+
+    assert preview["execution"]["tool"] == "agent_finance_workflow"
+    assert preview["execution"]["gateway_arguments"]["mode"] == "dry_run"
+    assert preview["execution"]["gateway_arguments"]["payload"] == {
+        "card_id": "card-42",
+        "repair_order": {"client_id": "client-company"},
+        "expected_updated_at": "2026-08-25T10:00:00Z",
+    }
+    assert apply["ok"] is True
+    assert apply["execution"]["operation"] == "update_repair_order"
+    assert apply["execution"]["gateway_arguments"]["dry_run_proof"] == "a" * 64
+
+
+def test_repair_order_update_target_cannot_be_overridden_by_changes():
+    result = prepare_action_contract(
+        domain="repair_order",
+        action="update",
+        target_id="card-42",
+        planned_changes={"card_id": "card-other", "repair_order": {"client_id": "client-company"}},
+        owner_intent="Обнови клиента заказ-наряда карточки card-42",
+        expected_revision="2026-08-25T10:00:00Z",
+        idempotency_key="ro-42-target-guard-preview",
+    )
+
+    assert result["execution"]["gateway_arguments"]["payload"]["card_id"] == "card-42"
+    assert result["execution"]["gateway_arguments"]["payload"]["repair_order"] == {"client_id": "client-company"}
 
 
 def test_document_contract_requires_type_or_request_text():
@@ -723,28 +874,14 @@ def test_store_action_contract_blocks_non_allowlisted_or_malformed_changes(domai
 
 def test_action_contract_executor_tools_exist_in_the_tracked_crm_catalog():
     catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
-
-    def strings(value):
-        if isinstance(value, str):
-            yield value
-        elif isinstance(value, dict):
-            for nested in value.values():
-                yield from strings(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                yield from strings(nested)
-
-    catalog_strings = set(strings(catalog))
-    configured = {
-        tool for tool in [*EXECUTOR_TOOLS.values(), *INVENTORY_EXECUTOR_TOOLS.values()] if not tool.startswith("gmail:")
+    gateway_tools = {
+        tool
+        for tool in [*EXECUTOR_TOOLS.values(), *INVENTORY_EXECUTOR_TOOLS.values()]
+        if tool.startswith("agent_") or tool in {"call_raw_capability"}
     }
 
-    assert configured.issubset(catalog_strings)
-    assert "record_repair_order_payment" not in configured
-    assert "transfer_between_cashboxes" not in configured
-    assert "adjust_inventory" not in configured
-    assert "upload_file" not in configured
-    assert "merge_clients" not in configured
+    assert gateway_tools.issubset(set(catalog["expected_tool_names"]))
+    assert EXECUTOR_TOOLS[("repair_order", "update")] == "agent_finance_workflow"
 
 
 def test_inventory_executor_is_selected_by_movement_type_and_unknown_transfer_requires_discovery():

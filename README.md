@@ -13,11 +13,11 @@ technical control logic.
 - `docs/agent/service_director_manifest.md` - autonomous recurring workshop
   director cycle, priorities and internal Telegram follow-up.
 - `docs/agent/knowledge_shelves.md` - human route and deletion policy.
-- `docs/agent/knowledge_map.json` - machine route cards.
-- `docs/agent/command_routes.json` - standing owner commands.
-- `docs/agent/manager_rules.json` - durable prioritized rules.
+- `docs/agent/knowledge_map.json` - domain-to-file navigation.
+- `docs/agent/command_routes.json` - operational command workflows.
+- `docs/agent/manager_rules.json` - cross-system runtime invariants.
 - `docs/agent/manager_mcp_catalog.json` and `crm_mcp_catalog.json` - verified
-  tool-surface mirrors.
+  tool-surface manifests; live registrations own complete schemas.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - managed Windows and legacy
   `home-pc` access.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
@@ -56,7 +56,7 @@ VIN/OEM, licensed service data, public communications or bounded research.
 
 The canonical verification, GitHub publication, deployment and rollback flow
 is `docs/agent/deployment_runbook.md`. Documentation keeps one owner per rule:
-procedures in playbooks, routes in `knowledge_map.json`, short search summaries
-in `knowledge_annotations.jsonl`, and source lists in structured catalogs.
-Delete fully migrated files after `cleanup-audit` and green knowledge audits;
-do not preserve obsolete plans as an active archive.
+procedures in playbooks, operational recognition in `command_routes.json`,
+navigation in `knowledge_map.json`, and complete tool schemas in live
+registration. Delete fully migrated files after `cleanup-audit` and green
+knowledge audits; do not preserve obsolete plans as an active archive.

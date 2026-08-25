@@ -581,23 +581,13 @@ def _read_catalog_counts(path: Path) -> dict[str, Any]:
         return {"ok": False, "path": str(path), "warnings": ["invalid_catalog_json"]}
     if not isinstance(payload, dict):
         return {"ok": False, "path": str(path), "warnings": ["invalid_catalog_structure"]}
-    family_tools = [
-        str(tool)
-        for tools in (payload.get("tool_families") or {}).values()
-        if isinstance(tools, list)
-        for tool in tools
-    ]
-    all_tools = payload.get("all_tools") or payload.get("tools") or family_tools
-    tool_counts = payload.get("tool_counts") or {}
+    all_tools = payload.get("expected_tool_names") or []
     return {
         "ok": True,
         "path": str(path),
-        "tool_count": payload.get("tool_count")
-        or payload.get("all_tools_count")
-        or tool_counts.get("crm_base_tools")
-        or len(all_tools),
+        "tool_count": payload.get("expected_tool_count") or len(all_tools),
         "all_tools_count": len(all_tools),
-        "version": payload.get("version"),
+        "version": payload.get("format"),
     }
 
 

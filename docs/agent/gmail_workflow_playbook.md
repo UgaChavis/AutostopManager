@@ -91,11 +91,8 @@ contain significant mail, or an external send has an ambiguous recipient.
   attachment/file IDs, timestamps, and status in manager SQLite. Never store
   the raw body, HTML, snippet, or full subject there.
 
-Attachment/body schema note: current exposed create/send metadata accepts
-`attachment_files` as an array of absolute local paths and also supports
-`body_file`, `html_body`, and `content_type`. Inspect the active schema
-immediately before sending, pass paths in its exact shape, and never pass base64
-content.
+Inspect the active connector schema immediately before sending; this playbook
+does not duplicate attachment or body field names.
 
 ## Query Patterns
 
@@ -156,7 +153,7 @@ Gmail.
 
 ## Verification Record
 
-This playbook was refreshed on 2026-07-19 from the current connector schemas.
+The active connector registration is the schema source of truth.
 The Manager ActionContract covers send, forward, label, archive, Trash,
 batch-modify, bulk-label, label creation, and draft create/update/send,
 including connector-style action aliases. A self-addressed live smoke verified

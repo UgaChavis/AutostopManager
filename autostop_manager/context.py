@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .knowledge_base import find_command_route, probe_knowledge_base
+from .knowledge_base import plan_command_routes, probe_knowledge_base
 from .storage import ManagerMemoryStore
 
 
@@ -47,122 +47,41 @@ DEFAULT_POLICY: dict[str, list[str]] = {
     ],
 }
 
-DOMAIN_POLICIES: dict[str, dict[str, list[str]]] = {
-    "board_cleanup_autopilot": {
-        "hot_rules": [
-            "For 'Приберись', inspect vehicle passport and client data first; phone is the primary client match key.",
-            "Follow docs/agent/crm_card_description_standard.md: revise description as a coherent evolving history and write board_summary as one or two natural plain-text sentences about the current state; update both together when that state changes.",
-            "Routine cleanup never moves or archives cards and never changes repair orders or payments without separate exact authorization.",
-        ],
-        "read_order": [
-            "agent_bootstrap and agent_board_digest",
-            "manager_board_scan dry_run, then focused agent_search and agent_entity_context",
-            "audit_client_links when client data is incomplete or ambiguous",
-        ],
-        "allowed_actions": [
-            "cleanup_card dry_run/apply for confirmed card, structured vehicle/client and board_summary deltas",
-            "execute a direct safe card task and write back its concise but complete supported result",
-        ],
-        "forbidden_actions": [
-            "move, archive, delete or merge records during routine cleanup",
-            "overwrite operator evidence or change payments, repair-order lines, totals, deadlines or indicators without exact authorization",
-            "leave phone, VIN, plate or raw diagnostics in public descriptions or board_summary",
-        ],
-        "verification": [
-            "reread every written card and verify board_summary_stale=false",
-            "verify touched client links and report moved, archived, repair-order and payment counts",
-        ],
+EFFECT_POLICIES: dict[str, dict[str, list[str]]] = {
+    "crm_write": {
+        "hot_rules": ["CRM writes require an exact target, current revision, idempotency and proof-bound apply."],
+        "read_order": ["reread the exact CRM target", "prepare action contract, dry-run, then apply"],
+        "allowed_actions": ["apply only the task-scoped CRM diff"],
+        "forbidden_actions": ["change unrelated CRM fields, totals, payments, deadlines or columns"],
+        "verification": ["reread the exact changed target and reconcile the planned diff"],
     },
-    "store_management": {
-        "hot_rules": [
-            "AutoStop App API is authoritative; general reads are redacted and exact full quotes are transient only.",
-            "Use stateless Store bootstrap for health and store_digest for owner-visible changes.",
-            "Named inventory workflows cover common writes; all other employee actions require guarded store_owner_api and the live schema.",
-        ],
-        "read_order": [
-            "agent_bootstrap for a stateless Store readiness snapshot or agent_board_digest(scope=store)",
-            "agent_search and agent_entity_context for exact store entities; full quotes use the dedicated quote credential transiently",
-            "prepare_action_contract, named workflow or store_owner_capabilities/store_owner_api for writes",
-        ],
-        "allowed_actions": [
-            "read bounded catalog, stock, quote, store_sourcing_offer, order, supplier, warehouse and marketplace state",
-            "append a note or perform another named Store operation when exactly authorized",
-            "apply exact authorized writes with revision, idempotency, dry-run and readback",
-        ],
-        "forbidden_actions": [
-            "read the Store database or use legacy side-effecting GET routes",
-            "persist raw Store payloads or perform writes outside a named workflow or guarded store_owner_api",
-        ],
-        "verification": [
-            "advance digest cursors only after the final page",
-            "keep unverified applies compensating and retain compact refs only",
-        ],
+    "document": {
+        "hot_rules": ["Generate from the current source and pass render, totals and attachment-hash QA."],
+        "read_order": ["reread the source record and current document schema"],
+        "allowed_actions": ["generate the requested document from verified source data"],
+        "forbidden_actions": ["send or retain a document that failed QA"],
+        "verification": ["verify document_guard, rendered totals and SHA-256"],
     },
-    "store_analytics_reporting": {
-        "hot_rules": [
-            "Use only the aggregate Store analytics report; raw visitor or event rows never enter agent context."
-        ],
-        "read_order": [
-            "open docs/agent/store_analytics_playbook.md",
-            "discover and call get_store_analytics_report for the requested period",
-        ],
-        "allowed_actions": ["report aggregate trends, rankings, funnel and previous-period comparison"],
-        "forbidden_actions": [
-            "request or persist raw analytics events, visitor/session identifiers or private form contents"
-        ],
-        "verification": ["verify store_analytics_report_v1, aggregatedOnly=true and rawEventsIncluded=false"],
+    "external_send": {
+        "hot_rules": ["External sends require the exact recipient, verified sender and immutable attachment hash."],
+        "read_order": ["reread recipient, sender and active connector schema"],
+        "allowed_actions": ["send once through an idempotent external step"],
+        "forbidden_actions": ["send when recipient, sender, QA or attachment identity is ambiguous"],
+        "verification": ["record connector refs and verify exactly one external result"],
     },
-    "knowledge_intake": {
-        "hot_rules": [
-            "Keep one canonical owner per rule; migrate unique active content before deleting obsolete text.",
-            "Run cleanup-audit before deletion and all knowledge audits after routing changes.",
-        ],
-        "read_order": [
-            "open docs/agent/knowledge_shelves.md and knowledge-probe results",
-            "inventory tracked files, references and runtime dependencies before cleanup-audit",
-        ],
-        "allowed_actions": ["update canonical docs/routes and remove proven obsolete or generated files"],
-        "forbidden_actions": [
-            "delete an active source-of-truth file or unique instruction",
-            "change CRM, Store, Gmail or remote-PC business state during documentation cleanup",
-        ],
-        "verification": ["run knowledge, annotation, skill, cleanup, test, lint and Git-diff checks"],
+    "finance": {
+        "hot_rules": ["Financial effects require direct task-specific owner intent and proof-bound apply."],
+        "read_order": ["reread current monetary and tax basis before preview"],
+        "allowed_actions": ["apply only the owner-authorized financial result"],
+        "forbidden_actions": ["apply a monetary or tax mismatch without separate confirmation"],
+        "verification": ["reconcile amount, tax status and current repair-order basis"],
     },
-    "remote_codex_access": {
-        "hot_rules": [
-            "Open docs/agent/codex_home_pc_reverse_ssh.md; for FST.KZ first read /root/.codex/CODEX_VPN_FST_ACCESS.md.",
-            "Resolve the exact host and stop on any SSH host-key mismatch.",
-        ],
-        "read_order": [
-            "open the target-specific route and run bounded identity/status checks",
-            "for managed-pc resolve the exact alias and run status before an operation",
-        ],
-        "allowed_actions": ["operate only the exact owner-authorized server or PC needed by the task"],
-        "forbidden_actions": [
-            "print private keys, passwords, secrets or VPN profiles; bypass host-key checks or mix route credentials",
-            "reboot, mass-delete or stop critical services without a separate exact instruction",
-        ],
-        "verification": ["report the exact route used and rerun its health/status check after changes"],
-    },
-    "automotive_repair": {
-        "hot_rules": [
-            "Choose CRM, Store, VIN/OEM, official, licensed and public sources adaptively for the exact question.",
-            "Forums are hypotheses; exact fitment, safety, procedure, torque, fluids and programming need appropriate vehicle-specific authority.",
-        ],
-        "read_order": [
-            "open docs/agent/automotive_repair_source_playbook.md",
-            "identify vehicle, unit and requested fact, then read only relevant sources",
-        ],
-        "allowed_actions": [
-            "read focused CRM or AutoStop App vehicle/store context only when the request requires it",
-            "combine applicable evidence and report confidence and missing context",
-        ],
-        "forbidden_actions": [
-            "bypass access controls or copy licensed manuals",
-            "present public recall metadata as VIN-specific status",
-            "write CRM, Store or Gmail unless separately requested",
-        ],
-        "verification": ["distinguish source types and verify exact vehicle/unit applicability"],
+    "destructive": {
+        "hot_rules": ["Resolve exact targets and recovery material before a destructive action."],
+        "read_order": ["inspect references, runtime dependencies and recovery path"],
+        "allowed_actions": ["perform only the explicitly scoped destructive change"],
+        "forbidden_actions": ["use broad targets, force-push, blind reset or unverified deletion"],
+        "verification": ["verify recovery remains possible and no extra target changed"],
     },
 }
 
@@ -263,31 +182,20 @@ def prepare_manager_context(
     query = (query or "").strip()
     limit = max(1, min(limit, 50))
 
-    command_route = find_command_route(query, intent=intent)
-    knowledge = probe_knowledge_base(memory, query, limit=limit)
-    recall_queries: list[str] = []
-    if command_route:
-        recall_queries.extend(command_route.get("memory_queries", []))
-        # Command routes are owner-intent level and should override broad domain open order.
-        knowledge["best_domain"] = command_route.get("domain") or knowledge.get("best_domain")
-        knowledge["open_first"] = command_route.get("open_first") or knowledge.get("open_first")
-        matched_route = next(
-            (route for route in knowledge.get("routes", []) if route.get("domain") == command_route.get("domain")),
-            None,
-        )
-        if matched_route:
-            for field in (
-                "source_of_truth",
-                "reference_files",
-                "optional_runtime_files",
-                "optional_available_files",
-                "optional_missing_files",
-                "optional_runtime_available",
-                "optional_runtime_note",
-            ):
-                knowledge[field] = matched_route.get(field, knowledge.get(field))
-        knowledge["has_knowledge"] = True
-        knowledge["command_route"] = command_route
+    command_routes = plan_command_routes(query, intent=intent)
+    command_route = command_routes[0] if command_routes else None
+    preferred_domains = list(
+        dict.fromkeys(domain for route in command_routes for domain in route.get("knowledge_domains", []) if domain)
+    )
+    knowledge = probe_knowledge_base(
+        memory,
+        query,
+        limit=max(limit, min(len(preferred_domains) + 2, 20)),
+        preferred_domains=preferred_domains,
+    )
+    recall_queries = [
+        value for route in command_routes for value in (route.get("workflow_id"), route.get("intent")) if value
+    ]
     if intent:
         recall_queries.append(intent)
 
@@ -300,13 +208,14 @@ def prepare_manager_context(
         relevant.extend(memory.recall(recall_query, limit=limit).get("items", []))
     relevant = _unique_items(relevant)[:limit]
 
-    required_context = []
+    first_domain = str((command_route or {}).get("domain") or knowledge.get("best_domain") or "")
+    required_context: list[str] = []
     for route in knowledge.get("routes", []):
-        if route.get("domain") == knowledge.get("best_domain"):
+        if route.get("domain") == first_domain:
             required_context = list(route.get("required_context") or [])
             break
     if not required_context:
-        required_context = DOMAIN_REQUIRED_CONTEXT_DEFAULTS.get(str(knowledge.get("best_domain") or ""), [])
+        required_context = DOMAIN_REQUIRED_CONTEXT_DEFAULTS.get(first_domain, [])
     missing_context = [item for item in required_context if not _query_has_context(query, item)]
 
     return {
@@ -314,6 +223,8 @@ def prepare_manager_context(
         "query": query,
         "intent": intent or (command_route or {}).get("intent"),
         "command_route": command_route,
+        "command_routes": command_routes,
+        "selected_workflows": [route.get("workflow_id") for route in command_routes],
         "knowledge": {
             "has_knowledge": knowledge.get("has_knowledge"),
             "best_domain": knowledge.get("best_domain"),
@@ -331,35 +242,43 @@ def prepare_manager_context(
         "relevant_memory": relevant,
         "required_context": required_context,
         "missing_context": missing_context,
-        "next_actions": list((command_route or {}).get("next_actions") or [knowledge.get("next_action")]),
+        "next_actions": ["execute_workflow_plan"] if command_routes else ["safe_exploration"],
     }
 
 
-def _compact_hot_rules(domain: str | None, limit: int) -> list[str]:
-    policy = DOMAIN_POLICIES.get(str(domain or ""), DEFAULT_POLICY)
-    rules = [*GENERAL_HOT_RULES, *policy.get("hot_rules", [])]
-    return rules[: max(1, min(limit, 8))]
+def _policy_for_effects(effects: list[str]) -> dict[str, list[str]]:
+    policy = {key: list(value) for key, value in DEFAULT_POLICY.items()}
+    for effect in effects:
+        extra = EFFECT_POLICIES.get(effect, {})
+        for key in policy:
+            policy[key].extend(extra.get(key, []))
+    return {key: list(dict.fromkeys(value)) for key, value in policy.items()}
 
 
-def _select_store_operation(query: str, selection: object) -> dict[str, object] | None:
-    if not isinstance(selection, dict):
-        return None
-    lowered = str(query or "").casefold()
-    matches: list[tuple[int, str, dict[str, object]]] = []
-    for operation, raw_contract in selection.items():
-        if not isinstance(operation, str) or not isinstance(raw_contract, dict):
-            continue
-        aliases = raw_contract.get("aliases")
-        if not isinstance(aliases, list):
-            continue
-        for alias in aliases:
-            normalized = str(alias or "").casefold()
-            if normalized and normalized in lowered:
-                matches.append((len(normalized), operation, raw_contract))
-    if not matches:
-        return None
-    _, operation, contract = max(matches, key=lambda item: (item[0], item[1]))
-    return {"operation": operation, **contract}
+def _route_navigation(knowledge: dict[str, Any], domain: str | None) -> dict[str, Any]:
+    return next(
+        (route for route in knowledge.get("routes", []) if route.get("domain") == domain),
+        {},
+    )
+
+
+def _route_step(route: dict[str, Any], knowledge: dict[str, Any]) -> dict[str, Any]:
+    domain = str(route.get("domain") or "") or None
+    navigation = _route_navigation(knowledge, domain)
+    return {
+        "command_id": route.get("command_id"),
+        "workflow_id": route.get("workflow_id") or route.get("command_id"),
+        "intent": route.get("intent"),
+        "phase": int(route.get("phase") or 0),
+        "dependencies": list(route.get("dependencies") or []),
+        "effects": list(route.get("effects") or []),
+        "knowledge_domains": list(route.get("knowledge_domains") or []),
+        "domain": domain,
+        "open_first": navigation.get("open_first"),
+        "source_of_truth": navigation.get("source_of_truth", []),
+        "confidence": route.get("confidence"),
+        "matching_terms": list(route.get("matching_terms") or []),
+    }
 
 
 def build_agent_brief(
@@ -371,18 +290,27 @@ def build_agent_brief(
 ) -> dict[str, Any]:
     context = prepare_manager_context(store, query, intent=intent, limit=limit)
     knowledge = context.get("knowledge", {})
-    command_route = context.get("command_route") or {}
-    has_actionable_knowledge = bool(knowledge.get("has_knowledge")) or bool(command_route)
-    domain = str(
-        (knowledge.get("best_domain") if has_actionable_knowledge else None) or command_route.get("domain") or ""
-    )
-
-    policy = DOMAIN_POLICIES.get(domain, DEFAULT_POLICY)
+    command_routes = list(context.get("command_routes") or [])
+    steps = [_route_step(route, knowledge) for route in command_routes]
+    first = steps[0] if steps else {}
+    domain = str(first.get("domain") or "")
+    effects = list(dict.fromkeys(effect for step in steps for effect in step.get("effects", [])))
+    policy = _policy_for_effects(effects)
+    first_effects = list(first.get("effects", []))
+    first_policy = _policy_for_effects(first_effects)
     read_order = list(policy["read_order"])
     allowed_actions = list(policy["allowed_actions"])
     forbidden_actions = list(policy["forbidden_actions"])
     verification = list(policy["verification"])
     next_actions = list(context.get("next_actions") or [])
+    candidates = [
+        {key: candidate.get(key) for key in ("domain", "open_first", "confidence", "matching_terms")}
+        for candidate in knowledge.get("routes", [])[:3]
+        if candidate.get("score", 0) > 0
+    ]
+    if not steps:
+        for candidate in candidates:
+            candidate["confidence"] = min(float(candidate.get("confidence") or 0), 0.49)
 
     return {
         "ok": True,
@@ -394,38 +322,39 @@ def build_agent_brief(
         "answer_style": "short, practical, direct",
         "memory_sources": MEMORY_SOURCES,
         "route": {
-            "command_id": command_route.get("command_id"),
-            "workflow_id": command_route.get("workflow_id") or command_route.get("command_id"),
+            "command_id": first.get("command_id"),
+            "workflow_id": first.get("workflow_id"),
+            "selected_workflows": [step.get("workflow_id") for step in steps],
+            "steps": steps,
             "domain": domain or None,
-            "open_first": knowledge.get("open_first") if has_actionable_knowledge else None,
-            "source_of_truth": knowledge.get("source_of_truth", []) if has_actionable_knowledge else [],
-            "reference_files": knowledge.get("reference_files", []) if has_actionable_knowledge else [],
-            "optional_runtime_files": knowledge.get("optional_runtime_files", []) if has_actionable_knowledge else [],
-            "optional_available_files": knowledge.get("optional_available_files", [])
-            if has_actionable_knowledge
+            "open_first": first.get("open_first"),
+            "source_of_truth": first.get("source_of_truth", []),
+            "reference_files": _route_navigation(knowledge, domain).get("reference_files", []) if steps else [],
+            "optional_runtime_files": _route_navigation(knowledge, domain).get("optional_runtime_files", [])
+            if steps
             else [],
-            "optional_missing_files": knowledge.get("optional_missing_files", []) if has_actionable_knowledge else [],
-            "optional_runtime_available": knowledge.get("optional_runtime_available", False)
-            if has_actionable_knowledge
+            "optional_available_files": _route_navigation(knowledge, domain).get("optional_available_files", [])
+            if steps
+            else [],
+            "optional_missing_files": _route_navigation(knowledge, domain).get("optional_missing_files", [])
+            if steps
+            else [],
+            "optional_runtime_available": _route_navigation(knowledge, domain).get("optional_runtime_available", False)
+            if steps
             else False,
-            "optional_runtime_note": knowledge.get("optional_runtime_note", "") if has_actionable_knowledge else "",
-            "confidence": knowledge.get("confidence"),
-            "selection_mode": "explicit" if command_route else "suggested" if has_actionable_knowledge else "explore",
-            "candidates": [
-                {key: candidate.get(key) for key in ("domain", "open_first", "confidence", "matching_terms")}
-                for candidate in knowledge.get("routes", [])[:3]
-                if candidate.get("score", 0) > 0
-            ],
-            "required_reads": command_route.get("required_reads", []),
-            "write_domains": command_route.get("write_domains", []),
-            "external_connectors": command_route.get("external_connectors", []),
-            "completion_checks": command_route.get("completion_checks", []),
-            "read_entity_selection": command_route.get("read_entity_selection", {}),
-            "operation_selection": command_route.get("operation_selection", {}),
-            "selected_operation": _select_store_operation(
-                str(context.get("query") or ""),
-                command_route.get("operation_selection", {}),
-            ),
+            "optional_runtime_note": _route_navigation(knowledge, domain).get("optional_runtime_note", "")
+            if steps
+            else "",
+            "confidence": first.get("confidence") if steps else min(float(knowledge.get("confidence") or 0), 0.49),
+            "selection_mode": "explicit" if steps else "explore",
+            "candidates": candidates,
+            "required_reads": first.get("source_of_truth", []),
+            "write_domains": ["crm"] if "crm_write" in first_effects else [],
+            "external_connectors": ["gmail"] if "external_send" in first_effects else [],
+            "completion_checks": first_policy["verification"],
+            "read_entity_selection": {},
+            "operation_selection": {},
+            "selected_operation": None,
         },
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
@@ -434,7 +363,7 @@ def build_agent_brief(
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
             "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },
-        "hot_rules": _compact_hot_rules(domain, limit),
+        "hot_rules": [*GENERAL_HOT_RULES, *policy.get("hot_rules", [])][: max(1, min(limit, 8))],
         "read_order": read_order,
         "allowed_actions": allowed_actions,
         "forbidden_actions": forbidden_actions,

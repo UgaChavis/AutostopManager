@@ -93,15 +93,15 @@ def test_recall_query_requires_text_match_before_importance_boost(tmp_path):
         importance=5.0,
     )
 
-    result = store.recall("VIN OEM фильтра", limit=5)
+    result = store.recall("source boundaries service records", limit=5)
 
     titles = [str(item.get("title") or "") for item in result["items"]]
-    assert "vin-oem-lookup-workflow" in titles
+    assert titles[0] == "source-boundaries"
     assert all(item["matched_fields"] for item in result["items"])
     assert not any(item.get("category") == "board_cleanup" for item in result["items"])
 
 
-def test_memory_context_uses_focused_vin_oem_query_before_generic_crm_noise(tmp_path):
+def test_memory_context_uses_cross_system_rule_without_domain_procedure_noise(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()
     store.remember(
@@ -139,7 +139,7 @@ def test_memory_context_uses_focused_vin_oem_query_before_generic_crm_noise(tmp_
 
     assert result["preferences_or_facts"]
     assert result["preferences_or_facts"][0]["kind"] == "rule"
-    assert result["preferences_or_facts"][0]["title"] == "vin-oem-lookup-workflow"
+    assert result["preferences_or_facts"][0]["title"] == "source-boundaries"
     context_text = "\n".join(
         str(item.get("title") or item.get("content") or item.get("rule") or "")
         for item in result["preferences_or_facts"]
@@ -147,8 +147,6 @@ def test_memory_context_uses_focused_vin_oem_query_before_generic_crm_noise(tmp_
     assert "board-cleanup" not in context_text
     assert "приберись" not in context_text
     assert "оформление описаний" not in context_text
-    assert "knowledge-catalog-sync" not in context_text
-    assert "github-publication-privacy" not in context_text
     assert "toyota gr yaris" not in context_text
 
 
@@ -195,17 +193,17 @@ def test_archived_lessons_are_not_recalled_or_used_for_context(tmp_path):
     assert "Старая инструкция" not in context_text
 
 
-def test_memory_context_keeps_admin_rules_for_explicit_knowledge_query(tmp_path):
+def test_memory_context_keeps_command_knowledge_boundary_for_routing_query(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     store.seed_default_rules()
 
-    result = store.memory_context_for("обнови базу знаний и синхронизируй catalog", limit=20)
+    result = store.memory_context_for("command routing knowledge lookup write policy", limit=20)
 
     context_text = "\n".join(
         str(item.get("title") or item.get("content") or item.get("rule") or "")
         for item in result["preferences_or_facts"]
     ).casefold()
-    assert "knowledge-catalog-sync" in context_text
+    assert "command-knowledge-separation" in context_text
 
 
 def test_learn_from_feedback_creates_searchable_lesson(tmp_path):
@@ -392,15 +390,15 @@ def test_seed_default_rules_updates_existing_rule(tmp_path):
     with store.connect() as conn:
         conn.execute(
             "UPDATE manager_rules SET rule = ?, priority = ? WHERE title = ?",
-            ("stale", 999, "crm-source-of-truth"),
+            ("stale", 999, "source-boundaries"),
         )
 
     result = store.seed_default_rules()
 
     assert result["ok"] is True
     assert result["updated"] >= 1
-    context = store.recall("crm-source-of-truth")
-    rule = next(item for item in context["items"] if item["kind"] == "rule" and item["title"] == "crm-source-of-truth")
+    context = store.recall("source-boundaries")
+    rule = next(item for item in context["items"] if item["kind"] == "rule" and item["title"] == "source-boundaries")
     assert rule["rule"] != "stale"
     assert rule["priority"] == 10
 

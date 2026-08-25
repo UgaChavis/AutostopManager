@@ -1809,6 +1809,9 @@ class ManagerMemoryStore:
         with self.connect() as conn:
             conn.executescript(
                 """
+                DROP TABLE IF EXISTS knowledge_annotations_fts;
+                DROP TABLE IF EXISTS knowledge_annotations;
+
                 CREATE TABLE IF NOT EXISTS notes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL DEFAULT '',
@@ -1964,25 +1967,6 @@ class ManagerMemoryStore:
                     FOREIGN KEY(document_id) REFERENCES knowledge_documents(id) ON DELETE CASCADE
                 );
 
-                CREATE TABLE IF NOT EXISTS knowledge_annotations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    annotation_id TEXT NOT NULL UNIQUE,
-                    domain TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    title TEXT NOT NULL DEFAULT '',
-                    summary TEXT NOT NULL DEFAULT '',
-                    use_when_json TEXT NOT NULL DEFAULT '[]',
-                    keywords_json TEXT NOT NULL DEFAULT '[]',
-                    questions_json TEXT NOT NULL DEFAULT '[]',
-                    source_type TEXT NOT NULL DEFAULT '',
-                    trust_level TEXT NOT NULL DEFAULT '',
-                    refresh_cadence TEXT NOT NULL DEFAULT '',
-                    safety_flags_json TEXT NOT NULL DEFAULT '[]',
-                    related_skills_json TEXT NOT NULL DEFAULT '[]',
-                    search_text TEXT NOT NULL DEFAULT '',
-                    indexed_at TEXT NOT NULL
-                );
-
                 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_domain
                     ON knowledge_documents(domain);
 
@@ -1995,17 +1979,8 @@ class ManagerMemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_knowledge_route_cards_search
                     ON knowledge_route_cards(search_text);
 
-                CREATE INDEX IF NOT EXISTS idx_knowledge_annotations_domain
-                    ON knowledge_annotations(domain);
-
-                CREATE INDEX IF NOT EXISTS idx_knowledge_annotations_search
-                    ON knowledge_annotations(search_text);
-
                 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_sections_fts
                 USING fts5(domain, path, heading, search_text);
-
-                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_annotations_fts
-                USING fts5(domain, path, title, search_text);
 
                 CREATE TABLE IF NOT EXISTS manager_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

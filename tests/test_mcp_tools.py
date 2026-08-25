@@ -6,8 +6,10 @@ from pathlib import Path
 
 from autostop_manager import config as manager_config
 import autostop_manager.mcp_tools as mcp_tools_module
+from autostop_manager.mcp_server import build_server
 from autostop_manager.mcp_tools import register_manager_memory_tools
 from autostop_manager.storage import ManagerMemoryStore
+from autostop_manager.system_audit import _mcp_schema_fingerprint
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -558,7 +560,7 @@ def test_knowledge_base_tools_are_registered(tmp_path):
     assert "audit_knowledge_annotations" in server.tools
     annotation_result = server.tools["audit_knowledge_annotations"]()
     assert annotation_result["ok"] is True
-    assert annotation_result["annotations_indexed"] > 0
+    assert not (ROOT / "docs/agent/knowledge_annotations.jsonl").exists()
 
 
 def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
@@ -568,10 +570,17 @@ def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     register_manager_memory_tools(server, store)
 
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    assert catalog["tool_count"] == len(server.tools)
-    assert catalog["all_tools_count"] == len(server.tools)
-    assert set(catalog["all_tools"]) == set(server.tools)
-    assert set(catalog["tool_contracts"]) == set(server.tools)
+    assert catalog["expected_tool_count"] == len(server.tools) == 77
+    assert set(catalog["expected_tool_names"]) == set(server.tools)
+
+
+def test_manager_mcp_catalog_fingerprint_matches_live_input_schemas():
+    server = build_server()
+    schemas = {name: tool.parameters for name, tool in server._tool_manager._tools.items()}
+    catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
+
+    assert len(schemas) == 77
+    assert catalog["schema_fingerprint"] == _mcp_schema_fingerprint(schemas)
 
 
 def test_manager_journal_supports_bounded_director_workflow(tmp_path):
@@ -620,7 +629,9 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     assert brief["ok"] is True
     assert brief["format"] == "agent_brief_v1"
     assert brief["route"]["domain"] == "board_cleanup_autopilot"
-    assert any("board_summary" in action for action in brief["allowed_actions"])
+    assert brief["route"]["selected_workflows"] == ["board_cleanup_autopilot"]
+    assert brief["route"]["steps"][0]["effects"] == ["crm_write"]
+    assert "crm_card_description_standard" in brief["route"]["steps"][0]["knowledge_domains"]
 
     assert "audit_skill_registry" in server.tools
     skills = server.tools["audit_skill_registry"]()
@@ -1097,49 +1108,11 @@ def test_learning_and_navigation_tools_are_registered(tmp_path):
 def test_crm_mcp_catalog_counts_are_current():
     catalog = json.loads((ROOT / "docs/agent/crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
-    assert catalog["source_branch"] == "autostopcrm-v1"
-    assert "AutoStopCRM-V1 repo" in catalog["source_documents_scope"]
-    assert catalog["tool_counts"]["crm_legacy_tools_hidden_by_gateway"] == 98
-    assert catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 77
-    assert "get_store_analytics_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
-    assert catalog["agent_gateway_v2"]["startup"] == "agent_bootstrap"
-    assert "call_raw_capability" in catalog["agent_gateway_v2"]["raw_escape"]
-    assert "manager_board_scan" in catalog["tool_families"]["manager_operations"]
-    assert "bulk_set_deadline_if_below" in catalog["tool_families"]["manager_operations"]
-    assert "apply_ready_unpaid_followups" in catalog["tool_families"]["manager_operations"]
-    assert "start_card_timer" in catalog["tool_families"]["card_and_board_write"]
-    assert "stop_card_timer" in catalog["tool_families"]["card_and_board_write"]
-    assert len(catalog["production_tools_verified"]) == 24
-    assert "create_document_without_card_pdf" in catalog["tool_families"]["repair_order"]
-    assert "agent_document_workflow" in catalog["production_tools_verified"]
-    assert "tax_label" in catalog["schema_notes"]["autostop_document_printing"]
-    assert "Без НДС" in catalog["schema_notes"]["autostop_document_printing"]
-    assert "prepare_action_contract" in catalog["production_tools_verified"]
-    assert "prepare_crm_card_action" not in catalog["production_tools_verified"]
-    assert catalog["pending_local_manager_tools"] == []
-    assert "estimate_repair_work_cost" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "decode_vehicle_identity" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "decode_vehicle_identities" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "catalog_provider_status" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "plan_oem_parts_providers" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "vin17_decode_vehicle" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "vin17_search_part_number_by_vin" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "partsapi_catalog_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "resolve_vin_oem_parts" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "search_partsapi_category_index" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "validate_partsapi_category_index" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "public_aftermarket_catalog_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "exist_price_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "plan_crm_vin_oem_parts_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "benchmark_vin_parts_lookup" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "build_vin_parts_work_order" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "control_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "memory_review" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "memory_review_apply" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "knowledge_intake_plan" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert "provider_smoke_report" in catalog["tool_families"]["optional_manager_memory_and_routing"]
-    assert any("decode_vehicle_identity" in note for note in catalog["operation_notes"])
-    assert any("plan_crm_vin_oem_parts_lookup" in note for note in catalog["operation_notes"])
-    assert any("estimate_repair_work_cost" in note for note in catalog["operation_notes"])
-    assert "cleanup_card_content" in catalog["not_mcp_runtime_tools"]
+    assert catalog["format"] == "mcp_surface_manifest_v1"
+    assert catalog["expected_tool_count"] == len(catalog["expected_tool_names"]) == 24
+    assert "agent_bootstrap" in catalog["expected_tool_names"]
+    assert "call_raw_capability" in catalog["expected_tool_names"]
+    assert "agent_document_workflow" in catalog["expected_tool_names"]
+    assert "agent_finance_workflow" in catalog["expected_tool_names"]
+    assert "prepare_action_contract" in catalog["expected_tool_names"]
+    assert "prepare_crm_card_action" not in catalog["expected_tool_names"]

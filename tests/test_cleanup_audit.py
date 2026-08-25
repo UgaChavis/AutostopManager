@@ -47,7 +47,6 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (docs_agent / "reference_only.md").write_text("# Reference\n", encoding="utf-8")
     (docs_agent / "partsapi_category_index.json").write_text('{"categories":[]}\n', encoding="utf-8")
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
-    (docs_agent / "knowledge_annotations.jsonl").write_text("", encoding="utf-8")
     (root / "autostopcrm-invoice-test.pdf").write_bytes(b"%PDF-1.4")
     (root / "Заказ-наряд 246 ВашАвто Mercedes E200.pdf").write_bytes(b"%PDF-1.4")
     workspace_pdf = root / "out" / "repair-orders" / "sample.pdf"
@@ -207,31 +206,3 @@ def test_cleanup_audit_counts_untracked_source_growth(tmp_path, monkeypatch):
     assert footprint["worktree_file_count"] == 1
     assert footprint["python_line_count"] == 2
     assert footprint["working_tree_diff"]["added_lines"] == 2
-
-
-def test_cleanup_audit_handles_unreadable_knowledge_annotations(tmp_path, monkeypatch):
-    root = tmp_path / "repo"
-    docs_agent = root / "docs" / "agent"
-    docs_agent.mkdir(parents=True)
-    (docs_agent / "knowledge_map.json").write_text(
-        '{"domains":{"startup":{"primary_files":["docs/agent/known.md"],"source_of_truth_files":["docs/agent/known.md"]}}}',
-        encoding="utf-8",
-    )
-    (docs_agent / "known.md").write_text("# Known\n", encoding="utf-8")
-    (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
-    annotations_path = docs_agent / "knowledge_annotations.jsonl"
-    annotations_path.write_text("{}", encoding="utf-8")
-
-    original_read_text = cleanup_audit_module.Path.read_text
-
-    def fake_read_text(self, *args, **kwargs):
-        if self == annotations_path:
-            raise OSError("permission denied")
-        return original_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(cleanup_audit_module.Path, "read_text", fake_read_text)
-
-    result = build_cleanup_audit(project_root=root, store=ManagerMemoryStore(root / "data.sqlite3"))
-
-    assert result["ok"] is True
-    assert any(item["path"] == "docs/agent/unused.md" for item in result["candidates"])

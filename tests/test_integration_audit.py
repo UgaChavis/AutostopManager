@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,6 @@ from pathlib import Path
 from autostop_manager.integration_audit import (
     DEFAULT_STORE_ROOT,
     EXPECTED_GATEWAY_TOOLS,
-    EXPECTED_WEB_CAPABILITIES,
     GMAIL_PROOF_FORMAT,
     audit_docs_runtime_contract,
     audit_gmail_connector,
@@ -21,24 +21,27 @@ def test_default_store_root_uses_current_publisher_checkout() -> None:
 
 
 def _write_catalog(root) -> None:
-    path = root / "docs" / "agent" / "crm_mcp_catalog.json"
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        json.dumps(
-            {
-                "production_tools_verified": sorted(EXPECTED_GATEWAY_TOOLS),
-                "agent_gateway_v2": {"web_research_capabilities": sorted(EXPECTED_WEB_CAPABILITIES)},
-                "tool_counts": {"autostop_manager_tools_in_raw_registry": 77},
-                "tool_families": {
-                    "optional_manager_memory_and_routing": [
-                        "store_owner_capabilities",
-                        "store_owner_api",
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    docs = root / "docs" / "agent"
+    docs.mkdir(parents=True)
+    manifests = {
+        "crm_mcp_catalog.json": sorted(EXPECTED_GATEWAY_TOOLS),
+        "manager_mcp_catalog.json": [f"manager_tool_{index:02d}" for index in range(77)],
+    }
+    for filename, names in manifests.items():
+        canonical = json.dumps(names, separators=(",", ":"))
+        (docs / filename).write_text(
+            json.dumps(
+                {
+                    "format": "mcp_surface_manifest_v1",
+                    "source": "test",
+                    "expected_tool_count": len(names),
+                    "expected_tool_names": names,
+                    "schema_fingerprint": hashlib.sha256(canonical.encode()).hexdigest(),
+                    "verified_at": "2026-08-25",
+                }
+            ),
+            encoding="utf-8",
+        )
 
 
 def _write_gmail_runtime(plugin_root, proof_path) -> None:
@@ -88,7 +91,7 @@ def _parity_payload(format_name: str) -> dict:
     }
 
 
-def test_docs_runtime_contract_requires_exact_tools_and_web_capabilities(tmp_path):
+def test_docs_runtime_contract_requires_exact_surface_manifests(tmp_path):
     _write_catalog(tmp_path)
 
     result = audit_docs_runtime_contract(tmp_path)

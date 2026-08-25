@@ -5,7 +5,7 @@ from typing import Any
 
 from .config import PROJECT_ROOT
 from .context import build_agent_brief
-from .knowledge_base import find_command_route
+from .knowledge_base import plan_command_routes
 from .storage import ManagerMemoryStore
 
 
@@ -44,14 +44,18 @@ def agent_envelope(
 
 def list_agent_workflows(*, query: str = "", intent: str | None = None, limit: int = 50) -> dict[str, Any]:
     workflows = _load_workflows()
-    selected = find_command_route(query, intent=intent) if query or intent else None
+    selected_routes = plan_command_routes(query, intent=intent) if query or intent else []
+    selected_workflows = [_compact_workflow(route) for route in selected_routes]
+    selected = selected_workflows[0] if selected_workflows else None
     limit = max(1, min(int(limit), 100))
     items = workflows[:limit]
     return agent_envelope(
         ok=True,
         status="completed",
         summary={
-            "selected_workflow_id": (selected or {}).get("workflow_id") or (selected or {}).get("command_id"),
+            "selected_workflow_id": (selected or {}).get("workflow_id"),
+            "selected": selected,
+            "selected_workflows": selected_workflows,
             "workflow_count": len(workflows),
             "items": items,
         },
@@ -71,10 +75,11 @@ def build_agent_bootstrap(
 ) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     brief = build_agent_brief(memory, query, intent=intent, limit=limit)
-    route = find_command_route(query, intent=intent)
+    routes = plan_command_routes(query, intent=intent)
     active = memory.list_active_manager_runs(limit=500).get("items", [])
     unfinished = [_compact_run(item) for item in active]
-    selected = _compact_workflow(route) if route else None
+    selected_workflows = [_compact_workflow(route) for route in routes]
+    selected = selected_workflows[0] if selected_workflows else None
     mode = memory.resolve_agent_mode(mode_override)
     if not mode.get("ok"):
         return agent_envelope(
@@ -129,6 +134,8 @@ def build_agent_bootstrap(
             "role": brief.get("role"),
             "intent": brief.get("intent"),
             "selected_workflow": selected,
+            "selected": selected,
+            "selected_workflows": selected_workflows,
             "source_boundaries": brief.get("source_boundaries", {}),
             "required_context": brief.get("required_context", []),
             "missing_context": brief.get("missing_context", []),
@@ -177,16 +184,16 @@ def _load_workflows() -> list[dict[str, Any]]:
 
 def _compact_workflow(route: dict[str, Any]) -> dict[str, Any]:
     workflow_id = str(route.get("workflow_id") or route.get("command_id") or "")
+    knowledge_domains = _string_list(route.get("knowledge_domains"))
     return {
         "workflow_id": workflow_id,
         "intent": route.get("intent"),
-        "domain": route.get("domain"),
+        "domain": route.get("domain") or (knowledge_domains[0] if knowledge_domains else None),
         "priority": int(route.get("priority") or 0),
-        "open_first": route.get("open_first"),
-        "required_reads": _string_list(route.get("required_reads")),
-        "write_domains": _string_list(route.get("write_domains")),
-        "external_connectors": _string_list(route.get("external_connectors")),
-        "completion_checks": _string_list(route.get("completion_checks")),
+        "phase": int(route.get("phase") or 0),
+        "knowledge_domains": knowledge_domains,
+        "effects": _string_list(route.get("effects")),
+        "dependencies": _string_list(route.get("dependencies")),
     }
 
 

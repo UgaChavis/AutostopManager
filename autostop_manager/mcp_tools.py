@@ -65,11 +65,26 @@ from .vin_lookup import lookup_original_parts
 from .work_pricing import estimate_repair_work_cost
 
 
-def _registered_tool_names(server: Any) -> list[str] | None:
+def _registered_tools(server: Any) -> dict[str, Any] | None:
     tools = getattr(server, "tools", None)
-    if isinstance(tools, dict):
-        return sorted(str(name) for name in tools)
-    return None
+    if not isinstance(tools, dict):
+        tools = getattr(getattr(server, "_tool_manager", None), "_tools", None)
+    return tools if isinstance(tools, dict) else None
+
+
+def _registered_tool_names(server: Any) -> list[str] | None:
+    tools = _registered_tools(server)
+    return sorted(str(name) for name in tools) if tools is not None else None
+
+
+def _registered_tool_schemas(server: Any) -> dict[str, Any] | None:
+    tools = _registered_tools(server)
+    schemas = {
+        str(name): tool.parameters
+        for name, tool in (tools or {}).items()
+        if isinstance(getattr(tool, "parameters", None), dict)
+    }
+    return schemas if tools and len(schemas) == len(tools) else None
 
 
 def _workflow_envelope(result: dict[str, Any], *, next_actions: list[str] | None = None) -> dict[str, Any]:
@@ -1029,7 +1044,7 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="audit_knowledge_annotations",
-        description="Audit compact knowledge annotations that improve fast routing before broad section reads.",
+        description="Compatibility audit for knowledge-map and source-document metadata.",
     )
     def audit_knowledge_annotations_tool() -> dict[str, Any]:
         return audit_knowledge_annotations(memory)
@@ -1053,7 +1068,11 @@ def register_manager_memory_tools(  # noqa: C901
         description="Run the canonical read-only AutoStop Manager health audit without running pytest or mutating CRM/files.",
     )
     def system_audit_tool() -> dict[str, Any]:
-        return build_system_audit(store=memory, registered_tool_names=_registered_tool_names(server))
+        return build_system_audit(
+            store=memory,
+            registered_tool_names=_registered_tool_names(server),
+            registered_tool_schemas=_registered_tool_schemas(server),
+        )
 
     @server.tool(
         name="control_report",

@@ -8,8 +8,6 @@ import subprocess
 import tomllib
 
 from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
-from autostop_manager.action_contract import STORE_ACTIONS
-from autostop_manager.store_api import STORE_ENTITIES, STORE_MANAGEMENT_OPERATIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,14 +31,13 @@ def test_codex_native_startup_files_are_present_and_safe():
         "AutostopManager stores only durable non-CRM memory",
         "agent_bootstrap",
         "agent_board_digest",
-        "dry-run",
+        "dry_run",
         "Gateway v2 workflow ledger",
         "Docker `.Config.Env`",
-        "Приберись",
-        "ready unpaid",
-        "Timer floor",
-        "crm_vin_oem_parts_lookup_playbook.md",
-        "business_document_quality_playbook.md",
+        "Command routing selects ordered workflows",
+        "knowledge lookup only selects documents",
+        "exactly 77 tools",
+        "24-tool Gateway v2 connector",
         "knowledge-sync",
         "knowledge-audit",
         "annotations-audit",
@@ -76,8 +73,8 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert not re.search(r"(api[_-]?key|token|secret|password|credential)", config_text)
 
     assert "`AGENTS.md` - canonical compact startup instruction for Codex." in readme
-    assert "Manager startup" in shelves
-    assert "| Telegram | `telegram_operations`" in shelves
+    assert "Startup and knowledge" in shelves
+    assert "`telegram_operations`" in shelves
     assert "agent.md" not in readme
     assert "agent.md" not in shelves
 
@@ -94,7 +91,6 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         ROOT / "README.md",
         ROOT / "docs" / "agent" / "knowledge_shelves.md",
         ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md",
-        ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
         ROOT / "docs" / "agent" / "knowledge_map.json",
         ROOT / "docs" / "agent" / "manager_rules.json",
     ]
@@ -102,7 +98,6 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
 
     for expected in [
         "home-pc",
-        "ssh home-pc",
         "DESKTOP-BUSO4I8",
         "127.0.0.1:22220",
         "codex-home-tunnel",
@@ -143,23 +138,68 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
         ROOT / "AGENTS.md",
         ROOT / "README.md",
         ROOT / "docs" / "agent" / "knowledge_shelves.md",
-        ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
 
     for expected in [
         "cleanup-audit",
         "knowledge-sync",
-        "Keep docs compact",
+        "Compact startup contract",
         "Prefer updating an existing canonical file",
-        "Delete a tracked doc only when all are true",
+        "Delete a tracked document only",
     ]:
         assert expected in combined
 
-    route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
-    knowledge_intake = route["domains"]["knowledge_intake"]
-    assert "cleanup-audit" in knowledge_intake["keywords"]
-    assert "удалить устаревшие инструкции" in knowledge_intake["keywords"]
+    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
+    allowed = {"title", "primary_files", "reference_files", "optional_runtime_files", "skill_path"}
+    assert knowledge_map["format"] == "knowledge_navigation_v1"
+    assert all(set(domain) <= allowed for domain in knowledge_map["domains"].values())
+    assert not (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").exists()
+
+
+def test_routing_instruction_footprint_stays_below_release_ceiling():
+    paths = [
+        ROOT / "AGENTS.md",
+        ROOT / "docs/agent/command_routes.json",
+        ROOT / "docs/agent/knowledge_map.json",
+        ROOT / "docs/agent/knowledge_annotations.jsonl",
+        ROOT / "docs/agent/manager_rules.json",
+        ROOT / "docs/agent/manager_mcp_catalog.json",
+        ROOT / "docs/agent/crm_mcp_catalog.json",
+        ROOT / "docs/agent/knowledge_shelves.md",
+    ]
+    sizes = {path.name: path.stat().st_size if path.exists() else 0 for path in paths}
+
+    assert sum(sizes.values()) <= 70_000
+    assert sizes["AGENTS.md"] <= 6_500
+    assert sizes["knowledge_map.json"] <= 19_000
+    assert sizes["manager_mcp_catalog.json"] + sizes["crm_mcp_catalog.json"] <= 5_000
+    assert sizes["manager_rules.json"] <= 4_500
+    assert sizes["knowledge_shelves.md"] <= 1_800
+    routing_index_paths = [
+        "autostop_manager/knowledge_base.py",
+        "autostop_manager/context.py",
+        "tests/test_knowledge_base.py",
+        "tests/test_knowledge_router_v2.py",
+        "tests/test_knowledge_annotations.py",
+        "tests/test_agent_rules_docs.py",
+    ]
+    assert sum(len((ROOT / path).read_text(encoding="utf-8").splitlines()) for path in routing_index_paths) <= 3_600
+
+
+def test_manager_rules_only_hold_cross_system_runtime_invariants():
+    payload = json.loads((ROOT / "docs/agent/manager_rules.json").read_text(encoding="utf-8"))
+
+    assert payload["format"] == "manager_runtime_invariants_v2"
+    assert {rule["id"] for rule in payload["rules"]} == {
+        "source-boundaries",
+        "command-knowledge-separation",
+        "store-owner-pause",
+        "guarded-write-lifecycle",
+        "financial-and-external-authority",
+        "workflow-recovery",
+        "release-boundary",
+    }
 
 
 def test_redundant_navigation_and_generated_source_maps_stay_removed():
@@ -176,30 +216,55 @@ def test_redundant_navigation_and_generated_source_maps_stay_removed():
         "docs/agent/automotive_sources/dsg_transmission_sources.json",
         "docs/agent/automotive_sources/model_source_overrides.json",
         "docs/agent/gmail_mcp_catalog.json",
+        "docs/agent/knowledge_annotations.jsonl",
     ]
 
     assert all(not (ROOT / path).exists() for path in removed)
 
 
-def test_every_command_route_has_gateway_v2_execution_contract():
+def test_command_registry_v3_contains_only_operational_routing_metadata():
     payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
 
-    assert payload["format"] == "agent_workflow_registry_v2"
+    assert payload["format"] == "agent_command_registry_v3"
     command_ids = [route["command_id"] for route in payload["routes"]]
     assert len(command_ids) == len(set(command_ids))
+    allowed = {
+        "command_id",
+        "workflow_id",
+        "intent",
+        "priority",
+        "phase",
+        "knowledge_domains",
+        "effects",
+        "dependencies",
+        "signals",
+    }
+    forbidden = {
+        "open_first",
+        "memory_queries",
+        "required_reads",
+        "write_domains",
+        "external_connectors",
+        "completion_checks",
+        "next_actions",
+        "read_entity_selection",
+        "operation_selection",
+        "aliases",
+        "keywords",
+    }
     for route in payload["routes"]:
-        assert (ROOT / route["open_first"]).is_file()
-        assert route["required_reads"]
-        assert isinstance(route["write_domains"], list)
-        assert isinstance(route["external_connectors"], list)
-        assert route["completion_checks"]
+        assert set(route) <= allowed
+        assert forbidden.isdisjoint(route)
+        assert isinstance(route["knowledge_domains"], list)
+        assert isinstance(route["effects"], list)
+        assert isinstance(route["dependencies"], list)
+        assert set(route["signals"]) <= {"phrases", "all", "any", "exclude"}
 
 
 def test_service_director_mode_has_one_canonical_route_and_guarded_autonomy():
     manifest = (ROOT / "docs" / "agent" / "service_director_manifest.md").read_text(encoding="utf-8")
     knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     command_routes = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
-    rules = json.loads((ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8"))
 
     assert "Повышать прибыльность и производительность AutoStop" in manifest
     assert "жесткому шаблону" in manifest
@@ -212,110 +277,51 @@ def test_service_director_mode_has_one_canonical_route_and_guarded_autonomy():
     director_route = next(
         route for route in command_routes["routes"] if route["command_id"] == "service_director_cycle"
     )
-    assert director_route["open_first"] == ".agents/skills/run-autostop-director/SKILL.md"
-    assert "owner Telegram bridge for bounded internal operational questions" in director_route["external_connectors"]
-    director_rule = next(rule for rule in rules["rules"] if rule["id"] == "service-director-autonomy")
-    assert "Financial actions" in director_rule["rule"]
+    assert director_route["workflow_id"] == "service_director_cycle"
+    assert "service_director" in director_route["knowledge_domains"]
 
 
-def test_store_integration_docs_catalogs_and_quality_workflow_are_consistent():
+def test_mcp_catalogs_are_minimal_verified_surface_manifests():
     manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
     crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
-    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
-    required_docs = [
-        ROOT / "AGENTS.md",
-        ROOT / "README.md",
-        ROOT / "docs" / "agent" / "store_management_playbook.md",
-        ROOT / "docs" / "agent" / "deployment_runbook.md",
-    ]
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in required_docs)
-
-    for expected in [
-        "AutoStop App is the source of truth",
-        "stateless",
-        "store_digest",
-        "physical",
-        "reserved",
-        "available",
-        "expected_updated_at",
-        "agent_inventory_workflow",
-        "AUTOSTOP_STORE_API_URL",
-        "AUTOSTOP_STORE_READ_TOKEN",
-        "AUTOSTOP_STORE_QUOTE_TOKEN",
-        "AUTOSTOP_STORE_MANAGE_TOKEN",
-        "AUTOSTOP_STORE_OWNER_TOKEN",
-        "raw store",
-    ]:
-        assert expected in combined
-
-    assert manager_catalog["tool_count"] == manager_catalog["all_tools_count"] == 77
-    assert set(manager_catalog["store_tools"]) == {
-        "store_runtime_status",
-        "store_digest",
-        "store_search",
-        "store_entity_context",
-        "download_store_quote_vin_photo",
-        "store_management_action",
-        "store_owner_capabilities",
-        "store_owner_api",
+    expected_keys = {
+        "format",
+        "source",
+        "expected_tool_count",
+        "expected_tool_names",
+        "schema_fingerprint",
+        "verified_at",
     }
-    assert crm_catalog["tool_counts"]["production_visible_agent_gateway_v2"] == 24
-    assert crm_catalog["tool_counts"]["autostop_manager_tools_in_raw_registry"] == 77
-    assert crm_catalog["agent_gateway_v2"]["store_extensions"]["public_tool_count_unchanged"] == 24
-    assert "dedicated quote credential" in crm_catalog["agent_gateway_v2"]["store_extensions"]["agent_entity_context"]
-    assert "dedicated quote credential" in manager_catalog["tool_contracts"]["store_entity_context"]
-    assert "no contact scope" not in json.dumps({"manager": manager_catalog, "crm": crm_catalog}, ensure_ascii=False)
-    assert "store_management" in knowledge_map["domains"]
-    for expected in ["append-only quote note", "private structured quote-offer draft"]:
-        assert expected in combined
+    for catalog, expected_count in ((manager_catalog, 77), (crm_catalog, 24)):
+        assert set(catalog) == expected_keys
+        assert catalog["format"] == "mcp_surface_manifest_v1"
+        names = catalog["expected_tool_names"]
+        assert names == sorted(set(names))
+        assert catalog["expected_tool_count"] == len(names) == expected_count
+        assert re.fullmatch(r"[0-9a-f]{64}", catalog["schema_fingerprint"])
+        assert "sha256(canonical sorted [{name,inputSchema}])" in catalog["source"]
+
+    assert "audit_knowledge_annotations" in manager_catalog["expected_tool_names"]
+    assert "agent_finance_workflow" in crm_catalog["expected_tool_names"]
 
 
-def test_store_command_reference_covers_live_entities_operations_and_strict_fields():
+def test_store_procedures_live_in_playbook_not_route_or_catalog():
     routes_payload = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
-    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
+    manager_catalog = (ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8")
     playbook = (ROOT / "docs" / "agent" / "store_management_playbook.md").read_text(encoding="utf-8")
     routes = {route["command_id"]: route for route in routes_payload["routes"]}
 
-    read_selection = routes["store_read_workflow"]["read_entity_selection"]
-    operation_selection = routes["store_management_workflow"]["operation_selection"]
-    catalog_search = manager_catalog["store_tool_schemas"]["store_search"]
-    catalog_actions = manager_catalog["store_tool_schemas"]["store_management_action"]
-
-    assert set(read_selection) == set(STORE_ENTITIES)
-    assert set(catalog_search["filters_by_entity"]) == set(STORE_ENTITIES)
-    assert set(operation_selection) == set(STORE_MANAGEMENT_OPERATIONS) | {"owner_api_fallback"}
-    assert set(catalog_actions["planned_changes_by_action"]) == set(STORE_MANAGEMENT_OPERATIONS)
-    assert {
-        (value["domain"], operation)
-        for operation, value in operation_selection.items()
-        if operation != "owner_api_fallback"
-    } == STORE_ACTIONS
-    assert operation_selection["owner_api_fallback"]["domain"] == "store_owner_api"
-    assert all(value["aliases"] for value in operation_selection.values())
-
-    strict_fields = {
-        "assign_quote_request": "assignee_id",
-        "set_quote_request_status": "status",
-        "update_quote_request_comment": "internal_comment",
-        "add_quote_request_note": "text",
-        "replace_quote_offer_drafts": "items",
-        "set_batch_storage_location": "storage_location",
-        "mark_order_ready": "status",
-    }
-    for operation, field in strict_fields.items():
-        assert operation in playbook
-        assert field in operation_selection[operation]["planned_changes"]
-        assert field in catalog_actions["planned_changes_by_action"][operation]
-
+    assert {"store_read_workflow", "store_management_workflow"} <= set(routes)
+    assert "store_management" in routes["store_management_workflow"]["knowledge_domains"]
+    assert "planned_changes_by_action" not in manager_catalog
     for required in [
         'agent_board_digest(scope="store")',
-        'status="FAILED"',
-        "no filters or cursor",
+        "assign_quote_request",
+        "assignee_id",
         "update_quote_request_comment",
-        "append-only `add_quote_request_note`",
-        "raw job messages",
-        "Retry and publication",
-        "not supported by the optimized named workflow",
+        "internal_comment",
+        "replace_quote_offer_drafts",
+        "storage_location",
         "store_owner_api",
     ]:
         assert required in playbook
@@ -368,15 +374,15 @@ def test_gmail_playbook_lists_current_documented_surface():
 
     assert len(tools) == len(set(tools)) == 21
     assert all(tool in playbook for tool in tools)
-    for expected in ["attachment_files", "body_file", "html_body", "content_type", "2026-07-19"]:
-        assert expected in playbook
+    assert "active connector registration is the schema source of truth" in playbook
+    for stale_field in ["attachment_files", "body_file", "html_body", "content_type"]:
+        assert stale_field not in playbook
 
 
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():
     checked_paths = [
         ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md",
         ROOT / "docs" / "agent" / "command_routes.json",
-        ROOT / "docs" / "agent" / "knowledge_annotations.jsonl",
         ROOT / "docs" / "agent" / "manager_mcp_catalog.json",
         ROOT / "docs" / "agent" / "manager_rules.json",
     ]
@@ -410,8 +416,6 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     playbook = (ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md").read_text(encoding="utf-8")
     description_standard = (ROOT / "docs" / "agent" / "crm_card_description_standard.md").read_text(encoding="utf-8")
     route = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
-    manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
 
     assert "This playbook is the only detailed source of truth" in playbook
     assert "crm_card_description_standard.md" in playbook
@@ -431,36 +435,16 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     assert "repair_orders_changed=0 and payments_changed=0" in playbook
 
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
-    route_text = "\n".join(cleanup_route["next_actions"])
-    assert "single text model" in route_text
-    assert "update description and board_summary together" in route_text
-    assert "leave description empty only when no useful supported content exists" in route_text
-    assert "tags rare with no more than three" in route_text
-    assert "move phone/VIN/plate/mileage/aggregates" in route_text
-
-    command = manager_catalog["natural_language_commands"]["Приберись"]
-    assert command["aliases"] == ["Приберись"]
-    assert any("no more than three operational tags" in item for item in command["allowed_actions"])
-    assert any("single canonical" in item for item in command["allowed_actions"])
-    assert any("invent unsupported filler" in item for item in command["forbidden_actions"])
-
-    assert "cleanup_card_content" in crm_catalog["not_mcp_runtime_tools"]
-    assert any(
-        "single canonical" in item and "description and board_summary" in item
-        for item in crm_catalog["operation_notes"]
-    )
+    assert {"board_cleanup_autopilot", "crm_card_description_standard"} <= set(cleanup_route["knowledge_domains"])
+    assert "crm_write" in cleanup_route["effects"]
 
 
 def test_director_journal_contract_is_documented_and_bounded():
-    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     skill = (ROOT / ".agents/skills/run-autostop-director/SKILL.md").read_text(encoding="utf-8")
     manifest = (ROOT / "docs/agent/service_director_manifest.md").read_text(encoding="utf-8")
     crm_playbook = (ROOT / "docs/agent/crm_manager_data_playbook.md").read_text(encoding="utf-8")
     routes = json.loads((ROOT / "docs/agent/command_routes.json").read_text(encoding="utf-8"))
-    manager_catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    manager_rules = json.loads((ROOT / "docs/agent/manager_rules.json").read_text(encoding="utf-8"))
 
-    assert "active unified director-journal entries" in agents
     assert "до 50 активных записей" in skill
     assert "## Единый директорский журнал" in manifest
     assert "data/autostop_manager.sqlite3" in manifest
@@ -473,42 +457,30 @@ def test_director_journal_contract_is_documented_and_bounded():
     assert "до `next_review_at` повторно не спрашивать" in manifest
     assert "service_director_manifest.md" in crm_playbook
     director_route = next(item for item in routes["routes"] if item["command_id"] == "service_director_cycle")
-    assert any("all active unified director-journal" in item for item in director_route["required_reads"])
-    assert "capped at 400 total and 50 active records" in manager_catalog["tool_contracts"]["manager_journal"]
-    director_rule = next(item for item in manager_rules["rules"] if item["id"] == "service-director-autonomy")
-    assert "400-total, 50-active, 180-day" in director_rule["rule"]
+    assert "service_director" in director_route["knowledge_domains"]
+    assert "crm_write" in director_route["effects"]
 
 
 def test_business_documents_route_requires_crm_print_module_for_autostop_documents():
     playbook = (ROOT / "docs" / "agent" / "business_document_quality_playbook.md").read_text(encoding="utf-8")
-    annotations = (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").read_text(encoding="utf-8")
-    manager_rules = json.loads((ROOT / "docs" / "agent" / "manager_rules.json").read_text(encoding="utf-8"))
-    crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
-    business_document_rule = next(
-        rule for rule in manager_rules["rules"] if rule["id"] == "business-document-quality-gate"
-    )["rule"]
+    routes = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
 
-    combined = "\n".join([playbook, annotations])
-    assert "CRM print module" in combined
-    assert "create_document_without_card_pdf" in combined
-    assert "download_repair_order_print_pdf" in combined
-    assert "standard AutoStop templates" in combined
-    assert "tax_label" in combined
-    assert "Без НДС" in combined
-    assert "do not build independent PDF/HTML templates" in combined
-    assert "Документ без карточки" in combined
-    assert "infer the standard document type" in combined
-    assert "CRM print module" in business_document_rule
-    assert "standard AutoStop templates" in business_document_rule
-    assert "create_document_without_card_pdf" in business_document_rule
-    assert "download_repair_order_print_pdf" in business_document_rule
-    assert "tax_label" in business_document_rule
-    assert "Без НДС" in business_document_rule
-    assert "Do not build independent PDF/HTML templates" in business_document_rule
-    assert "create_document_without_card_pdf" in crm_catalog["tool_families"]["repair_order"]
-    assert any("documents without CRM cards" in note for note in crm_catalog["operation_notes"])
-    assert "optional document_type" in crm_catalog["schema_notes"]["autostop_document_printing"]
-    assert "tax_label" in crm_catalog["schema_notes"]["autostop_document_printing"]
+    for expected in [
+        "CRM print module",
+        "create_document_without_card_pdf",
+        "download_repair_order_print_pdf",
+        "standard AutoStop template",
+        "tax_label",
+        "Без НДС",
+        "Do not build independent PDF/HTML templates",
+        "Документ без карточки",
+        "infer the standard document type",
+    ]:
+        assert expected in playbook
+
+    route = next(item for item in routes["routes"] if item["command_id"] == "business_document_workflow")
+    assert "business_documents" in route["knowledge_domains"]
+    assert "document" in route["effects"]
 
 
 def test_removed_second_brain_terms_are_not_tracked_anymore():

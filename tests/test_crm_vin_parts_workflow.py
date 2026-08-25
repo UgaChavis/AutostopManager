@@ -187,11 +187,10 @@ def test_pipeline_requires_v2_action_contract_before_card_writeback():
     assert any("prepare_action_contract" in rule for rule in result["pipeline"][write_index]["rules"])
 
 
-def test_rules_forbid_hallucinated_oem_and_require_price_separation():
-    rules = json.loads(_read("docs/agent/manager_rules.json"))
-    combined = "\n".join(rule["rule"].casefold() for rule in rules["rules"])
+def test_domain_playbook_forbids_hallucinated_oem_and_separates_prices():
+    combined = _read("docs/agent/crm_vin_oem_parts_lookup_playbook.md").casefold()
 
-    assert "never invent oem" in combined
+    assert "do not invent oem" in combined
     assert "high confidence" in combined
     assert "vin/frame-specific" in combined
     assert "oem reference" in combined
@@ -236,20 +235,17 @@ def test_provider_registries_name_required_catalog_cross_and_price_sources():
     assert all(step["status"] for step in price_sources["integration_next_steps"])
 
 
-def test_command_route_and_annotation_point_to_crm_vin_domain():
+def test_command_route_and_knowledge_map_point_to_crm_vin_domain():
     command_routes = json.loads(_read("docs/agent/command_routes.json"))
-    annotations = [
-        json.loads(line) for line in _read("docs/agent/knowledge_annotations.jsonl").splitlines() if line.strip()
-    ]
+    knowledge_map = json.loads(_read("docs/agent/knowledge_map.json"))
 
     route = next(route for route in command_routes["routes"] if route["command_id"] == "crm_vin_oem_parts_lookup")
-    annotation = next(item for item in annotations if item["domain"] == "crm_vin_oem_parts_lookup")
+    domain = knowledge_map["domains"]["crm_vin_oem_parts_lookup"]
 
-    assert route["domain"] == "crm_vin_oem_parts_lookup"
-    assert route["open_first"] == "docs/agent/crm_vin_oem_parts_lookup_playbook.md"
-    assert "writeback" in " ".join(route["keywords"]).casefold()
-    assert "do_not_invent_oem" in annotation["safety_flags"]
-    assert "separate_procurement_retail_client_price" in annotation["safety_flags"]
+    assert route["knowledge_domains"][0] == "crm_vin_oem_parts_lookup"
+    assert route["effects"] == ["crm_write"]
+    assert "writeback" in str(route["signals"]).casefold()
+    assert domain["primary_files"][0] == "docs/agent/crm_vin_oem_parts_lookup_playbook.md"
 
 
 def test_pipeline_reports_invalid_source_registry_payloads(tmp_path, monkeypatch):
