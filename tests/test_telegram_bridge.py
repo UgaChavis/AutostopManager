@@ -939,6 +939,119 @@ def test_telegram_voice_over_ten_minutes_is_not_downloadable(monkeypatch, tmp_pa
         )
 
 
+def test_telegram_short_mp4_video_is_downloadable(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    content = b"\x00\x00\x00\x18ftypisom" + b"video-data"
+    VideoAttribute = type("DocumentAttributeVideo", (), {})
+    video_attribute = VideoAttribute()
+    video_attribute.duration = 45
+    video_attribute.w = 1920
+    video_attribute.h = 1080
+    message = SimpleNamespace(
+        id=48,
+        media=SimpleNamespace(),
+        file=SimpleNamespace(name="clip.mp4", mime_type="video/mp4", size=len(content)),
+        document=SimpleNamespace(attributes=[video_attribute]),
+    )
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    class Client:
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 48
+            return message
+
+        async def download_media(self, exact_message, *, file):
+            assert exact_message is message
+            assert file is bytes
+            return content
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    client = Client()
+    dry = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {"operation": "download", "peer": "10", "message_id": 48, "mode": "dry_run"},
+        )
+    )
+
+    assert dry["media"] == {
+        "downloadable": True,
+        "duration_seconds": 45,
+        "file_name": "clip.mp4",
+        "height": 1080,
+        "media_type": "SimpleNamespace",
+        "mime_type": "video/mp4",
+        "size_bytes": len(content),
+        "suffix": ".mp4",
+        "video": True,
+        "voice": False,
+        "width": 1920,
+    }
+    applied = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "download",
+                "peer": "10",
+                "message_id": 48,
+                "mode": "apply",
+                "contract_token": dry["contract_token"],
+                "idempotency_key": "video-download-test-key",
+            },
+        )
+    )
+    assert applied["verified"] is True
+    assert Path(applied["saved_path"]).suffix == ".mp4"
+
+
+@pytest.mark.parametrize("duration", [0, 121])
+def test_telegram_mp4_video_requires_bounded_duration(monkeypatch, tmp_path, duration) -> None:
+    config = _runtime_config(tmp_path)
+    VideoAttribute = type("DocumentAttributeVideo", (), {})
+    video_attribute = VideoAttribute()
+    video_attribute.duration = duration
+    video_attribute.w = 1280
+    video_attribute.h = 720
+    message = SimpleNamespace(
+        id=49,
+        media=SimpleNamespace(),
+        file=SimpleNamespace(name="clip.mp4", mime_type="video/mp4", size=100),
+        document=SimpleNamespace(attributes=[video_attribute]),
+    )
+
+    async def resolve(_client, _peer):
+        return object(), {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    class Client:
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 49
+            return message
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    with pytest.raises(BridgeError, match="media_not_downloadable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                Client(),
+                config,
+                {"operation": "download", "peer": "10", "message_id": 49, "mode": "dry_run"},
+            )
+        )
+
+
+def test_video_mp4_download_rejects_invalid_container_signature() -> None:
+    with pytest.raises(BridgeError, match="download_content_invalid"):
+        telegram_bridge._validate_download_content(
+            b"not-an-mp4-container",
+            mime_type="video/mp4",
+            suffix=".mp4",
+        )
+
+
 def test_download_rejects_unsupported_or_oversized_media(monkeypatch, tmp_path) -> None:
     config = _runtime_config(tmp_path)
     entity = object()

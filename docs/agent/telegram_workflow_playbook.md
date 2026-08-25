@@ -97,9 +97,10 @@ a supported attachment. It never accepts a destination path from the caller.
 The service writes only to its mode-0700 `/run/autostop-telegram/inbox`
 directory and creates mode-0600 files named from the message ID and content
 hash. Current limit is 25 MiB. Supported formats are JPEG, PNG, WebP, PDF,
-DOCX, XLSX, UTF-8 TXT, UTF-8 CSV, Telegram Voice OGG/Opus, MP3 and M4A.
-Audio is limited to 10 minutes. Archives, executables, scripts, videos and
-unknown MIME types fail closed.
+DOCX, XLSX, UTF-8 TXT, UTF-8 CSV, Telegram Voice OGG/Opus, MP3, M4A and MP4.
+Audio is limited to 10 minutes. MP4 is limited to 2 minutes, 25 MiB, and valid
+Telegram video metadata. Archives, executables, scripts, other video formats,
+oversized/long videos and unknown MIME types fail closed.
 
 1. Check `status`, resolve the exact peer and run a bounded `read`.
 2. Select one exact message ID whose `media.downloadable` is true.
@@ -117,6 +118,8 @@ unknown MIME types fail closed.
      headless conversion; never enable macros.
    - TXT/CSV: read bounded UTF-8 content.
    - Telegram Voice/audio: run the private local transcription workflow below.
+   - MP4: run the private local video-preview workflow below and inspect only
+     its eight-frame storyboard; never open it in an external service.
 6. Use only task-relevant facts. Do not paste full private documents into chat,
    CRM descriptions, docs, Git, memory or workflow state.
 7. Run `discard-download --file <exact returned path>` after the task. Confirm
@@ -157,6 +160,38 @@ state.
 7. `--delete-after` removes the exact audio file after success or failure. If
    the command is interrupted before cleanup, use `discard-download` on the
    exact returned path and verify `removed=true`.
+
+## Video Preview Workflow
+
+Video inspection is local, visual-only, explicit and one file at a time. The
+bridge accepts only `video/mp4` with a Telegram `DocumentAttributeVideo`, a
+duration of 1-120 seconds, positive dimensions and a maximum size of 25 MiB.
+Downloaded bytes must also contain a valid MP4 `ftyp` signature.
+
+1. Resolve the exact peer and bounded dialog window, then select one exact
+   message whose media metadata has `video=true` and `downloadable=true`.
+2. Run the normal `download` dry-run/apply flow and verify the exact peer,
+   message, MIME, duration, size, dimensions, SHA-256 and private saved path.
+3. Run as the service account:
+
+   ```bash
+   sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
+     /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_video_preview \
+     --file /run/autostop-telegram/inbox/EXACT_FILE.mp4 --delete-after
+   ```
+
+4. The helper requires a mode-0600 service-owned MP4 in the private inbox,
+   probes it with `/usr/bin/ffprobe`, permits one H.264/HEVC/MPEG-4 video stream
+   plus at most one audio stream, rejects other streams and resolutions above
+   4096x2160-equivalent pixels, and enforces the same 2-minute limit.
+5. It runs `/usr/bin/ffmpeg` with network protocols closed, one worker thread,
+   a 30-second timeout, audio/subtitle/data disabled, and emits exactly one
+   mode-0600 JPEG storyboard containing eight evenly sampled frames. It does
+   not transcribe or play the audio track automatically.
+6. Inspect the storyboard as an image, use only task-relevant facts, then call
+   `discard-download` for the exact returned preview path. Require removal of
+   both the original MP4 and storyboard. On any failure, discard whichever
+   exact path remains before reporting.
 
 ## Send Workflow
 

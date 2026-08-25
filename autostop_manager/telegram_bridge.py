@@ -32,6 +32,7 @@ CONTRACT_TTL_SECONDS = 15 * 60
 DEFAULT_OUTBOX_DIR = Path("/run/autostop-telegram/outbox")
 DEFAULT_INBOX_DIR = Path("/run/autostop-telegram/inbox")
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+MAX_VIDEO_DURATION_SECONDS = 2 * 60
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -45,6 +46,7 @@ DOWNLOAD_MIME_SUFFIXES = {
     "image/webp": ".webp",
     "text/csv": ".csv",
     "text/plain": ".txt",
+    "video/mp4": ".mp4",
 }
 SENSITIVE_URI_PATTERN = re.compile(r"(?i)\b(?:tg|vpn)://[^\s]+")
 DIRECTOR_ROLES = frozenset(
@@ -502,17 +504,33 @@ def _message_media_metadata(message: Any) -> dict[str, Any]:
             suffix = supplied_suffix
     duration_seconds = 0
     voice = False
+    video = False
+    width = 0
+    height = 0
     document = getattr(message, "document", None)
     for attribute in getattr(document, "attributes", None) or []:
-        if type(attribute).__name__ != "DocumentAttributeAudio":
-            continue
-        try:
-            duration_seconds = int(getattr(attribute, "duration", None) or 0)
-        except (TypeError, ValueError):
-            duration_seconds = 0
-        voice = bool(getattr(attribute, "voice", False))
-        break
+        attribute_type = type(attribute).__name__
+        if attribute_type == "DocumentAttributeAudio":
+            try:
+                duration_seconds = int(getattr(attribute, "duration", None) or 0)
+            except (TypeError, ValueError):
+                duration_seconds = 0
+            voice = bool(getattr(attribute, "voice", False))
+        elif attribute_type == "DocumentAttributeVideo":
+            try:
+                duration_seconds = int(getattr(attribute, "duration", None) or 0)
+                width = int(getattr(attribute, "w", None) or 0)
+                height = int(getattr(attribute, "h", None) or 0)
+            except (TypeError, ValueError):
+                duration_seconds = 0
+                width = 0
+                height = 0
+            video = True
     if mime_type.startswith("audio/") and not 0 < duration_seconds <= 10 * 60:
+        suffix = ""
+    if mime_type == "video/mp4" and (
+        not video or not 0 < duration_seconds <= MAX_VIDEO_DURATION_SECONDS or width <= 0 or height <= 0
+    ):
         suffix = ""
     downloadable = media is not None and bool(suffix) and 0 < size_bytes <= MAX_DOWNLOAD_BYTES
     fingerprint_payload = {
@@ -523,6 +541,9 @@ def _message_media_metadata(message: Any) -> dict[str, Any]:
         "suffix": suffix,
         "duration_seconds": duration_seconds or None,
         "voice": voice,
+        "video": video,
+        "width": width or None,
+        "height": height or None,
     }
     return {
         **fingerprint_payload,
@@ -548,6 +569,8 @@ def _validate_download_content(content: bytes, *, mime_type: str, suffix: str) -
     elif mime_type == "audio/mpeg":
         valid = content.startswith(b"ID3") or (len(content) >= 2 and content[0] == 0xFF and content[1] & 0xE0 == 0xE0)
     elif mime_type == "audio/mp4":
+        valid = len(content) >= 12 and content[4:8] == b"ftyp"
+    elif mime_type == "video/mp4":
         valid = len(content) >= 12 and content[4:8] == b"ftyp"
     elif suffix in {".docx", ".xlsx"}:
         valid = content.startswith(b"PK\x03\x04")
