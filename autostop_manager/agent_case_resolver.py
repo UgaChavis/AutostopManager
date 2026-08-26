@@ -232,7 +232,6 @@ def _resolution_payload(resolution: Any) -> dict[str, Any]:
 
 def agent_case_resolver(
     operation: str,
-    *,
     case_id: str,
     claims: list[dict[str, Any]],
     sources: list[dict[str, Any]] | None = None,
