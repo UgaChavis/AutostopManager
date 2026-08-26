@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
 import re
 import sqlite3
@@ -920,8 +918,6 @@ def _document_type(path: Path) -> str:
         return "markdown"
     if suffix == ".json":
         return "json"
-    if suffix == ".jsonl":
-        return "jsonl"
     return suffix.lstrip(".") or "file"
 
 
@@ -970,10 +966,6 @@ def _parse_sections(content: str, *, document_type: str) -> list[_Section]:
         return _parse_markdown_sections(content)
     if document_type == "json":
         return _parse_json_sections(content)
-    if document_type == "jsonl":
-        return _parse_jsonl_sections(content)
-    if document_type == "csv":
-        return _parse_csv_sections(content)
     return [_Section("Document", 1, _clip(content), 0)]
 
 
@@ -1007,101 +999,6 @@ def _parse_json_sections(content: str) -> list[_Section]:
         return sections or [_Section("JSON Document", 1, "{}", 0)]
     dumped = json.dumps(payload, ensure_ascii=False, indent=2)
     return [_Section("JSON Document", 1, _clip(dumped), 0)]
-
-
-def _parse_jsonl_sections(content: str) -> list[_Section]:
-    sections: list[_Section] = []
-    for index, line in enumerate(content.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            sections.append(_Section(f"JSONL row {index + 1}", 1, _clip(line), index))
-            continue
-        if isinstance(payload, dict):
-            heading = _jsonl_heading(payload, index)
-            dumped = json.dumps(payload, ensure_ascii=False, indent=2)
-            sections.append(_Section(heading, 1, _clip(dumped), index))
-            continue
-        dumped = json.dumps(payload, ensure_ascii=False, indent=2)
-        sections.append(_Section(f"JSONL row {index + 1}", 1, _clip(dumped), index))
-    return sections or [_Section("JSONL Document", 1, "", 0)]
-
-
-def _parse_csv_sections(content: str) -> list[_Section]:
-    try:
-        reader = csv.DictReader(io.StringIO(content))
-        rows = list(reader)
-    except csv.Error:
-        return [_Section("CSV Document", 1, _clip(content), 0)]
-    if not reader.fieldnames or not rows:
-        return [_Section("CSV Document", 1, _clip(content), 0)]
-
-    sections: list[_Section] = []
-    for index, row in enumerate(rows):
-        normalized = {str(key or "").strip(): str(value or "").strip() for key, value in row.items() if key}
-        if not any(normalized.values()):
-            continue
-        heading = _csv_heading(normalized, index)
-        dumped = json.dumps(normalized, ensure_ascii=False, indent=2)
-        sections.append(_Section(heading, 1, _clip(dumped), index))
-    return sections or [_Section("CSV Document", 1, _clip(content), 0)]
-
-
-def _jsonl_heading(payload: dict[str, Any], index: int) -> str:
-    preferred_keys = [
-        "code",
-        "scenario_id",
-        "risk_id",
-        "source_id",
-        "engine",
-        "symptom",
-        "symptom_ru",
-        "effect",
-        "system",
-        "abbreviation",
-        "abbr",
-        "term",
-        "transmission",
-        "chassis",
-        "body_code",
-        "publisher",
-        "title",
-    ]
-    parts: list[str] = []
-    for key in preferred_keys:
-        value = str(payload.get(key) or "").strip()
-        if value:
-            parts.append(value)
-        if len(parts) == 2:
-            break
-    return " - ".join(parts) if parts else f"JSONL row {index + 1}"
-
-
-def _csv_heading(row: dict[str, str], index: int) -> str:
-    preferred_keys = [
-        "module",
-        "extension",
-        "sid",
-        "code",
-        "item",
-        "title",
-        "source_id",
-        "name",
-        "service",
-        "domain",
-        "full_name",
-    ]
-    parts: list[str] = []
-    for key in preferred_keys:
-        value = str(row.get(key) or "").strip()
-        if value:
-            parts.append(value)
-        if len(parts) == 2:
-            break
-    return " - ".join(parts) if parts else f"CSV row {index + 1}"
 
 
 def _insert_document(

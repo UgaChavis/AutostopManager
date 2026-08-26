@@ -82,6 +82,51 @@ def test_doctor_returns_zero_when_audit_passes(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["ok"] is True
 
 
+def test_cli_dispatches_safe_commands_and_writes_requested_reports(tmp_path, monkeypatch, capsys):
+    store = object()
+    monkeypatch.setattr(cli, "ManagerMemoryStore", lambda: store)
+    monkeypatch.setattr(cli, "sync_knowledge_base", lambda current: {"ok": current is store})
+    monkeypatch.setattr(cli, "probe_knowledge_base", lambda current, query, limit: {"ok": True, "query": query})
+    monkeypatch.setattr(cli, "audit_knowledge_base", lambda current: {"ok": current is store})
+    monkeypatch.setattr(cli, "build_cleanup_audit", lambda **_kwargs: {"ok": True})
+    monkeypatch.setattr(cli, "build_system_audit", lambda **_kwargs: {"ok": True})
+    monkeypatch.setattr(cli, "audit_skill_registry", lambda: {"ok": True})
+    monkeypatch.setattr(cli, "audit_memory", lambda current: {"ok": current is store})
+    monkeypatch.setattr(cli, "build_agent_brief", lambda current, query, **_kwargs: {"ok": True, "query": query})
+    monkeypatch.setattr(
+        cli,
+        "build_integration_audit",
+        lambda **kwargs: {"ok": True, "full": kwargs["full"]},
+    )
+    monkeypatch.setattr(cli, "build_control_report", lambda **_kwargs: {"ok": True, "summary": "ready"})
+    monkeypatch.setattr(cli, "format_control_report_markdown", lambda _report: "# Ready\n")
+
+    for argv in (
+        ["knowledge-sync"],
+        ["knowledge-probe", "clutch", "--limit", "2"],
+        ["knowledge-audit"],
+        ["cleanup-audit"],
+        ["doctor"],
+        ["skills-audit"],
+        ["memory-review"],
+        ["agent-brief", "prepare", "--intent", "maintenance", "--limit", "2"],
+        ["integration-audit"],
+    ):
+        assert cli.main(argv) == 0
+
+    integration_path = tmp_path / "integration.json"
+    json_path = tmp_path / "control.json"
+    markdown_path = tmp_path / "control.md"
+    assert cli.main(["integration-audit", "--full", "--output", str(integration_path)]) == 0
+    assert cli.main(["control-report", "--output", str(json_path)]) == 0
+    assert cli.main(["control-report", "--format", "markdown", "--output", str(markdown_path)]) == 0
+
+    assert json.loads(integration_path.read_text(encoding="utf-8"))["full"] is True
+    assert json.loads(json_path.read_text(encoding="utf-8"))["summary"] == "ready"
+    assert markdown_path.read_text(encoding="utf-8") == "# Ready\n"
+    assert capsys.readouterr().out
+
+
 def test_every_top_level_cli_command_has_working_help(capsys):
     parser = cli.build_parser()
     command_action = next(action for action in parser._actions if action.dest == "command")
