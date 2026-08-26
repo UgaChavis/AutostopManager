@@ -33,7 +33,6 @@ from .knowledge_base import (
     search_knowledge_base,
     sync_knowledge_base,
 )
-from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
@@ -1048,15 +1047,10 @@ def register_manager_memory_tools(  # noqa: C901
         description="Compatibility name for canonical memory curation; apply=true archives duplicate copies without deletion.",
     )(curate_memory_tool)
 
-    @server.tool(
+    server.tool(
         name="knowledge_intake_plan",
-        description=(
-            "Classify a source file into KnowledgeIntakeDraft with safety flags and target metadata updates. "
-            "Apply mode is review-gated and does not commit raw private files."
-        ),
-    )
-    def knowledge_intake_plan_tool(path: str, apply: bool = False) -> dict[str, Any]:
-        return build_knowledge_intake_plan(path, apply=apply)
+        description="Compatibility name for the canonical knowledge-map and local-index audit.",
+    )(audit_knowledge_base_tool)
 
     server.tool(
         name="provider_smoke_report",

@@ -33,12 +33,6 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["memory-review"])
     assert args.command == "memory-review"
 
-    args = parser.parse_args(["knowledge-intake", "--path", "docs/agent/knowledge_map.json", "--dry-run"])
-    assert args.command == "knowledge-intake"
-    assert args.path == "docs/agent/knowledge_map.json"
-    assert args.dry_run is True
-    assert args.apply is False
-
     args = parser.parse_args(["knowledge-sync"])
     assert args.command == "knowledge-sync"
 

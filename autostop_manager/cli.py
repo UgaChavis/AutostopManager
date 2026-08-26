@@ -15,7 +15,6 @@ from .knowledge_base import (
     probe_knowledge_base,
     sync_knowledge_base,
 )
-from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
@@ -99,15 +98,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("knowledge-sync", help="Index the local knowledge map into SQLite")
 
-    knowledge_intake = sub.add_parser(
-        "knowledge-intake",
-        help="Classify a source file and plan safe knowledge metadata updates",
-    )
-    knowledge_intake.add_argument("--path", required=True)
-    knowledge_intake_mode = knowledge_intake.add_mutually_exclusive_group()
-    knowledge_intake_mode.add_argument("--dry-run", action="store_true")
-    knowledge_intake_mode.add_argument("--apply", action="store_true")
-
     knowledge_probe = sub.add_parser(
         "knowledge-probe",
         help="Quickly check whether local knowledge exists and return the first source-of-truth route",
@@ -163,9 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "knowledge-sync":
         return _print_checked_json(sync_knowledge_base(store))
-    if args.command == "knowledge-intake":
-        _print_json(build_knowledge_intake_plan(args.path, apply=args.apply))
-    elif args.command == "knowledge-probe":
+    if args.command == "knowledge-probe":
         _print_json(probe_knowledge_base(store, args.query, limit=args.limit))
     elif args.command == "knowledge-audit":
         return _print_checked_json(audit_knowledge_base(store))

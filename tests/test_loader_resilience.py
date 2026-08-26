@@ -28,7 +28,6 @@ CASES = [
         "REGISTRY_PATH",
         {"version": 0, "purpose": "missing", "sources": []},
     ),
-    ("autostop_manager.knowledge_intake", "_load_domains", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_knowledge_map", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_command_routes", "COMMAND_ROUTES_PATH", {"routes": []}),
 ]
@@ -172,32 +171,6 @@ def test_skill_registry_string_lists_are_normalized(tmp_path, monkeypatch):
     assert registry["skills"]
     assert registry["skills"][0]["skill_id"] == "demo"
     assert registry["skills"][0]["path"] == str(skill_path)
-
-
-def test_knowledge_intake_string_lists_are_normalized(tmp_path, monkeypatch):
-    module = importlib.import_module("autostop_manager.knowledge_intake")
-    knowledge_map_path = tmp_path / "knowledge_map.json"
-    source_path = tmp_path / "notes.md"
-    source_path.write_text("Demo Domain", encoding="utf-8")
-    knowledge_map_path.write_text(
-        json.dumps(
-            {
-                "domains": {
-                    "demo_domain": {
-                        "title": "Demo Domain",
-                        "primary_files": "docs/agent/demo.md",
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(module, "KNOWLEDGE_MAP_PATH", knowledge_map_path)
-
-    plan = module.build_knowledge_intake_plan(source_path, project_root=tmp_path)
-
-    assert plan["ok"] is True
-    assert plan["domain"] == "demo_domain"
 
 
 def test_vin_sources_inputs_are_normalized(tmp_path, monkeypatch):

@@ -1618,7 +1618,7 @@ def _memory_context_queries(task: str) -> list[str]:
     if any(term in lowered for term in ["рейк", "контракт", "красноярск", "закуп", "наличие", "дром", "zzap", "ззап"]):
         queries.append("parts_sourcing закупочная цена запчастей Красноярск selected part")
     if any(term in lowered for term in ["база знаний", "базу знаний", "knowledge", "индексац", "аннотац"]):
-        queries.append("knowledge-intake-boundary knowledge-annotation-index memory-mcp-sync")
+        queries.append("knowledge-map knowledge-sync knowledge-audit")
     queries.append(task)
     return list(dict.fromkeys(query for query in queries if query.strip()))
 

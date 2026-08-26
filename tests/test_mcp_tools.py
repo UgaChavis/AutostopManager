@@ -114,6 +114,7 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     for alias, canonical in (
         ("memory_review", "audit_memory"),
         ("memory_review_apply", "curate_memory"),
+        ("knowledge_intake_plan", "audit_knowledge_base"),
         ("provider_smoke_report", "catalog_provider_status"),
     ):
         assert server.tools[alias] is server.tools[canonical]
@@ -122,10 +123,8 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     live_tools = build_server()._tool_manager._tools
     assert live_tools["memory_review"].parameters == live_tools["audit_memory"].parameters
     assert live_tools["memory_review_apply"].parameters == live_tools["curate_memory"].parameters
+    assert live_tools["knowledge_intake_plan"].parameters == live_tools["audit_knowledge_base"].parameters
     assert live_tools["provider_smoke_report"].parameters == live_tools["catalog_provider_status"].parameters
-
-    intake = server.tools["knowledge_intake_plan"]("docs/agent/knowledge_map.json")
-    assert intake["schema"] == "KnowledgeIntakeDraft"
 
 
 def test_oem_lookup_compatibility_names_use_canonical_resolver(tmp_path):
