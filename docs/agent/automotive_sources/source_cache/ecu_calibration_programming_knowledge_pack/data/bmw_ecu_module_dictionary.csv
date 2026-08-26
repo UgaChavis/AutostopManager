@@ -1,7 +1,0 @@
-module,domain,ru_name,repair_context
-DME,engine,бензиновый двигатель,"programming,coding,adaptation"
-DDE,engine,дизельный двигатель,"programming,emissions diagnostics"
-EGS,transmission,АКПП,"software compatibility,adaptation"
-BDC,body,контроллер домена кузова,"gateway,coding,access"
-CAS/EWS,access,доступ/иммобилайзер,"official synchronization and coding"
-KOMBI,body,комбинация приборов,"instrument cluster,coding,needle sweep"

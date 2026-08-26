@@ -234,7 +234,7 @@ def test_knowledge_base_tools_are_registered(tmp_path):
     assert probe_result["ok"] is True
     assert probe_result["best_domain"] == "transmission"
 
-    search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="bmw_f15_n63", limit=5)
+    search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="automotive_repair", limit=5)
     assert search_result["ok"] is True
     assert search_result["items"]
 

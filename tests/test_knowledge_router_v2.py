@@ -200,7 +200,7 @@ def test_command_registry_and_knowledge_map_are_independent(tmp_path, monkeypatc
     monkeypatch.undo()
     monkeypatch.setattr(knowledge_base, "_load_command_routes", lambda: {"routes": []})
     result = probe_knowledge_base(store, "BMW F15 N63", limit=5)
-    assert result["best_domain"] == "bmw_f15_n63"
+    assert result["best_domain"] == "automotive_repair"
     monkeypatch.setattr(knowledge_base, "_load_command_routes", original_routes)
 
 

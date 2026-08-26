@@ -26,7 +26,7 @@ def test_prepare_context_flags_vehicle_specific_missing_context(tmp_path):
     result = prepare_manager_context(_store(tmp_path), "BMW F15 N63 BDC fault", limit=5)
 
     assert result["command_routes"] == []
-    assert result["knowledge"]["best_domain"] == "bmw_f15_n63"
+    assert result["knowledge"]["best_domain"] == "automotive_repair"
     assert "VIN or chassis" in result["missing_context"]
 
 

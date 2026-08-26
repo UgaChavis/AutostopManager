@@ -594,20 +594,10 @@ def test_every_tracked_agent_data_line_is_structurally_readable():
     assert failures == []
 
 
-def test_compacted_source_pack_manifests_match_retained_files():
+def test_retained_offline_source_pack_has_no_obsolete_files():
     cache_root = ROOT / "docs" / "agent" / "automotive_sources" / "source_cache"
-    bmw_root = cache_root / "bmw_repair_knowledge_pack"
-    bmw_manifest = json.loads((bmw_root / "manifest.json").read_text(encoding="utf-8"))
-    bmw_files = sorted(
-        path.relative_to(bmw_root).as_posix()
-        for path in bmw_root.rglob("*")
-        if path.is_file() and path.name != "manifest.json"
-    )
-
     offline_root = cache_root / "offline_parts_catalogs_knowledge_pack"
 
-    assert bmw_manifest["file_count_excluding_manifest"] == len(bmw_files)
-    assert bmw_manifest["files"] == bmw_files
     assert not (cache_root / "ai_parts_krasnoyarsk_project_pack").exists()
     assert not (offline_root / "sources" / "citations.md").exists()
     assert (offline_root / "sources" / "offline_parts_catalog_sources.json").is_file()
@@ -631,39 +621,6 @@ def test_every_tracked_agent_document_has_a_knowledge_map_route():
     existing = {raw_path for raw_path in tracked if (ROOT / raw_path).is_file()}
 
     assert existing <= routed
-
-
-def test_source_pack_playbook_navigation_uses_repo_relative_paths():
-    checked_paths = [
-        ROOT / "docs" / "agent" / "bmw_repair_playbook.md",
-        ROOT / "docs" / "agent" / "ecu_calibration_programming_playbook.md",
-    ]
-    ambiguous_prefixes = ("`data/", "`md/", "`markdown/", "`sources/")
-    offenders: list[str] = []
-    for path in checked_paths:
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if any(prefix in line for prefix in ambiguous_prefixes):
-                offenders.append(f"{path.relative_to(ROOT)}:{line_number}")
-
-    assert offenders == []
-
-
-def test_bmw_jsonl_indexes_keep_canonical_lookup_fields():
-    data_root = ROOT / "docs" / "agent" / "automotive_sources" / "source_cache" / "bmw_repair_knowledge_pack" / "data"
-    required = {
-        "bmw_chassis_codes.jsonl": ("chassis", "body_code"),
-        "bmw_control_units_glossary.jsonl": ("abbreviation", "system", "meaning"),
-        "bmw_transmission_families.jsonl": ("transmission", "system", "notes_ru"),
-    }
-
-    for filename, fields in required.items():
-        rows = [
-            json.loads(line) for line in (data_root / filename).read_text(encoding="utf-8").splitlines() if line.strip()
-        ]
-        missing = [
-            (index, field) for index, row in enumerate(rows, 1) for field in fields if row.get(field) in (None, "")
-        ]
-        assert missing == []
 
 
 def test_partsapi_contract_points_to_live_adapter_registry():

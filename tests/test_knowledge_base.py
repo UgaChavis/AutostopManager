@@ -26,7 +26,7 @@ def test_sync_indexes_domains_documents_and_sections(tmp_path):
     assert result["ok"] is True
     assert result["documents_indexed"] > 0
     assert result["sections_indexed"] > 0
-    assert "bmw_f15_n63" in result["domains"]
+    assert "automotive_repair" in result["domains"]
     assert result["missing_files"] == []
     assert set(PRIVATE_RUNTIME_FILES).issubset(set(result["optional_missing_files"]))
 
@@ -157,16 +157,16 @@ def test_audit_reports_broken_fast_knowledge_fts_indexes(tmp_path):
     assert "knowledge_sections_fts_count_mismatch" in result["warnings"]
 
 
-def test_search_finds_model_specific_route_after_sync(tmp_path):
+def test_probe_routes_bmw_to_general_automotive_repair(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = search_knowledge_base(store, "BMW F15 N63 BDC", limit=5)
+    result = probe_knowledge_base(store, "BMW F15 N63 BDC", limit=5)
 
     assert result["ok"] is True
-    assert result["items"]
-    assert result["items"][0]["domain"] == "bmw_f15_n63"
-    assert result["items"][0]["path"] == "docs/agent/bmw_repair_playbook.md"
+    assert result["has_knowledge"] is True
+    assert result["best_domain"] == "automotive_repair"
+    assert result["open_first"] == "docs/agent/automotive_repair_source_playbook.md"
 
 
 def test_search_can_filter_by_domain(tmp_path):
@@ -218,7 +218,7 @@ def test_search_finds_dsg_mechatronic_software_update_guidance(tmp_path):
     assert any("transmission_playbook" in item["path"] for item in result["items"])
 
 
-def test_probe_routes_cluster_needle_coding_to_ecu_programming_pack(tmp_path):
+def test_probe_routes_cluster_coding_to_general_automotive_repair(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
@@ -226,35 +226,8 @@ def test_probe_routes_cluster_needle_coding_to_ecu_programming_pack(tmp_path):
 
     assert result["ok"] is True
     assert result["has_knowledge"] is True
-    assert result["best_domain"] == "ecu_calibration_programming"
-    assert any("ecu_calibration_programming_knowledge_pack" in path for path in result["reference_files"])
-
-
-def test_search_finds_ecu_programming_pack_kombi_content(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = search_knowledge_base(
-        store, "KOMBI coding комбинация приборов", domain="ecu_calibration_programming", limit=5
-    )
-
-    assert result["ok"] is True
-    assert result["items"]
-    assert result["items"][0]["domain"] == "ecu_calibration_programming"
-    assert any("ecu_calibration_programming_knowledge_pack" in item["path"] for item in result["items"])
-
-
-def test_probe_routes_bmw_f15_n63_even_with_owner_body_code_typo(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = probe_knowledge_base(store, "BMW X5 кузов E15 мотор N63 электрика")
-
-    assert result["ok"] is True
-    assert result["has_knowledge"] is True
-    assert result["best_domain"] == "bmw_f15_n63"
-    assert result["routes"][0]["open_first"]
-    assert any("bmw_repair" in path.replace("\\", "/") for path in result["routes"][0]["source_of_truth"])
+    assert result["best_domain"] == "automotive_repair"
+    assert result["open_first"] == "docs/agent/automotive_repair_source_playbook.md"
 
 
 def test_probe_routes_priberis_to_board_cleanup_autopilot(tmp_path):
@@ -409,26 +382,3 @@ def test_reference_files_are_audited_but_not_fully_indexed(tmp_path):
     assert audit["ok"] is True
     assert audit["missing_files"] == []
     assert not any(item["path"].endswith("automotive_repair_sources_catalog.json") for item in result["items"])
-
-
-def test_ecu_reference_glossary_stays_linked_without_hiding_format_docs(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    probe = probe_knowledge_base(store, "A2L ODX DCM glossary ECU")
-    glossary_result = search_knowledge_base(
-        store, "glossary_ecu_programming", domain="ecu_calibration_programming", limit=20
-    )
-    format_result = search_knowledge_base(
-        store, "A2L DCM ODX calibration format", domain="ecu_calibration_programming", limit=10
-    )
-
-    assert probe["best_domain"] == "ecu_calibration_programming"
-    assert any(item.endswith("glossary_ecu_programming.jsonl") for item in probe["reference_files"])
-    assert not any(item["path"].endswith("glossary_ecu_programming.jsonl") for item in glossary_result["items"])
-    assert format_result["items"][0]["domain"] == "ecu_calibration_programming"
-    assert any(
-        item["path"].endswith("ecu_calibration_programming_playbook.md")
-        or item["path"].endswith("data/file_format_index.csv")
-        for item in format_result["items"]
-    )

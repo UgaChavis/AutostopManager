@@ -1519,9 +1519,7 @@ def _domain_hints(query: str) -> dict[str, int]:
     ):
         hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 36)
     if any(word in lowered for word in ["bmw", "бмв", "n63", "n63tu", "f15", "e15", "g05"]):
-        hints["bmw_repair"] = max(hints.get("bmw_repair", 0), 60)
-    if any(word in lowered for word in ["f15", "e15"]):
-        hints["bmw_f15_n63"] = max(hints.get("bmw_f15_n63", 0), 68)
+        hints["automotive_repair"] = max(hints.get("automotive_repair", 0), 60)
     if any(word in lowered for word in ["приберись", "board_cleanup_autopilot"]):
         hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)
     elif "cleanup" in lowered and any(term in lowered for term in ("crm", "board", "карточк", "клиент", "автомобил")):
@@ -1546,7 +1544,7 @@ def _focused_navigation_hints(lowered: str) -> dict[str, int]:
         for domain, score, terms in (
             ("startup_and_identity", 70, ("подготовь менеджера", "manager startup", "менеджера к работе")),
             ("transmission", 70, ("dsg", "dq200", "dq250", "мехатроник", "odis", "svm")),
-            ("ecu_calibration_programming", 78, ("kombi", "приборк", "coding", "кодирован", "a2l", "odx", "dcm")),
+            ("automotive_repair", 78, ("kombi", "приборк", "coding", "кодирован", "a2l", "odx", "dcm")),
         )
         if any(term in lowered for term in terms)
     }

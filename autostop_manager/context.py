@@ -7,7 +7,13 @@ from .storage import ManagerMemoryStore, load_manager_rules
 
 
 DOMAIN_REQUIRED_CONTEXT_DEFAULTS: dict[str, list[str]] = {
-    "bmw_f15_n63": ["VIN or chassis", "production date", "market", "BMW fault memory with module names"],
+    "automotive_repair": [
+        "VIN or chassis",
+        "market",
+        "engine code",
+        "transmission code",
+        "module and DTC or scan data",
+    ],
     "service_management": ["live CRM board state"],
     "crm_vin_oem_parts_lookup": [
         "live CRM card id",
