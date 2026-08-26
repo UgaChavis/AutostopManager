@@ -28,8 +28,7 @@ from .service_labor_experience import (
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
-from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
-from .vin_parts_benchmark import benchmark_vin_parts_lookup
+from .vehicle_identity import decode_vehicle_identity
 from .work_pricing import estimate_repair_work_cost
 
 
@@ -58,16 +57,6 @@ def _write_output(raw_path: str | None, payload: str) -> None:
     path = Path(raw_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8")
-
-
-def _json_value(raw: str | None, *, option_name: str) -> Any:
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        message = f"{option_name} must be valid JSON: {exc}"
-        raise SystemExit(message) from exc
 
 
 def _json_file(raw_path: str | None, *, option_name: str) -> Any:
@@ -118,38 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
     vehicle_identity.add_argument("--source-confidence", type=float, default=None)
     vehicle_identity.add_argument("--no-live-vpic", action="store_true")
 
-    vehicle_identities = sub.add_parser(
-        "decode-vehicles",
-        help="Batch decode vehicle identity dossiers from a JSON array of VIN/frame items",
-    )
-    vehicle_identities.add_argument("--items-json", required=True)
-    vehicle_identities.add_argument("--no-live-vpic", action="store_true")
-    vehicle_identities.add_argument("--no-vpic-batch", action="store_true")
-
     provider_smoke = sub.add_parser(
         "provider-smoke",
         help="Run safe provider readiness smoke checks without supplier orders, baskets, or CRM writeback",
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    vin_parts_benchmark = sub.add_parser(
-        "vin-parts-benchmark",
-        help="Benchmark a JSON batch of VIN/frame items for identity, part-intent, OEM/provider, and dry-run catalog readiness",
-    )
-    vin_parts_benchmark.add_argument("--items-json", required=True)
-    vin_parts_benchmark.add_argument("--part", dest="requested_part", required=True)
-    vin_parts_benchmark.add_argument("--city", default="Красноярск")
-    vin_parts_benchmark.add_argument("--no-live-vpic", action="store_true")
-    vin_parts_benchmark.add_argument("--no-vpic-batch", action="store_true")
-    vin_parts_benchmark.add_argument("--skip-partsapi-dry-run", action="store_true")
-    vin_parts_benchmark.add_argument("--skip-vin17-dry-run", action="store_true")
-    vin_parts_benchmark.add_argument("--live-partsapi-identity", action="store_true")
-    vin_parts_benchmark.add_argument("--live-partsapi-oem", action="store_true")
-    vin_parts_benchmark.add_argument("--resolve-oem", action="store_true")
-    vin_parts_benchmark.add_argument("--max-live-calls", type=int, default=3)
-    vin_parts_benchmark.add_argument("--max-candidates", type=int, default=3)
-    vin_parts_benchmark.add_argument("--partsapi-category-index", default=None)
 
     maintenance_fluids = sub.add_parser(
         "maintenance-fluids",
@@ -386,38 +349,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 live_vpic=not args.no_live_vpic,
             )
         )
-    elif args.command == "decode-vehicles":
-        items = _json_value(args.items_json, option_name="--items-json")
-        if not isinstance(items, list):
-            message = "--items-json must be a JSON array"
-            raise SystemExit(message)
-        _print_json(
-            decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch)
-        )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "vin-parts-benchmark":
-        items = _json_value(args.items_json, option_name="--items-json")
-        if not isinstance(items, list):
-            message = "--items-json must be a JSON array"
-            raise SystemExit(message)
-        _print_json(
-            benchmark_vin_parts_lookup(
-                items,
-                requested_part=args.requested_part,
-                city=args.city,
-                live_vpic=not args.no_live_vpic,
-                use_vpic_batch=not args.no_vpic_batch,
-                include_partsapi_dry_run=not args.skip_partsapi_dry_run,
-                include_vin17_dry_run=not args.skip_vin17_dry_run,
-                live_partsapi_identity=args.live_partsapi_identity,
-                live_partsapi_oem=args.live_partsapi_oem,
-                resolve_oem=args.resolve_oem,
-                max_live_calls=args.max_live_calls,
-                max_candidates=args.max_candidates,
-                partsapi_category_index=args.partsapi_category_index,
-            )
-        )
     elif args.command == "maintenance-fluids":
         _print_json(
             build_fluid_maintenance_plan(

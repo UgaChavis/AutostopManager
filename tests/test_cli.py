@@ -43,45 +43,10 @@ def test_cli_parser_has_core_commands():
     assert args.make == "Suzuki"
     assert args.no_live_vpic is True
 
-    args = parser.parse_args(["decode-vehicles", "--items-json", "[]", "--no-live-vpic", "--no-vpic-batch"])
-    assert args.command == "decode-vehicles"
-    assert args.items_json == "[]"
-    assert args.no_live_vpic is True
-    assert args.no_vpic_batch is True
-
     args = parser.parse_args(["provider-smoke", "--provider", "all", "--mode", "dry-run"])
     assert args.command == "provider-smoke"
     assert args.provider == "all"
     assert args.mode == "dry-run"
-
-    args = parser.parse_args(
-        [
-            "vin-parts-benchmark",
-            "--items-json",
-            "[]",
-            "--part",
-            "передние колодки",
-            "--no-live-vpic",
-            "--no-vpic-batch",
-            "--skip-partsapi-dry-run",
-            "--live-partsapi-identity",
-            "--live-partsapi-oem",
-            "--resolve-oem",
-            "--max-live-calls",
-            "2",
-            "--max-candidates",
-            "1",
-        ]
-    )
-    assert args.command == "vin-parts-benchmark"
-    assert args.items_json == "[]"
-    assert args.requested_part == "передние колодки"
-    assert args.no_live_vpic is True
-    assert args.skip_partsapi_dry_run is True
-    assert args.live_partsapi_identity is True
-    assert args.live_partsapi_oem is True
-    assert args.resolve_oem is True
-    assert args.max_candidates == 1
 
     args = parser.parse_args(
         [

@@ -19,11 +19,10 @@ looks ROW/JDM, or has weak/partial vPIC output.
 Use `catalog_provider_status` to verify live catalog/API readiness before
 claiming that PartsAPI, 17VIN, AUTOPOISK, partslink24, or supplier APIs are
 available.
-For board-wide checks, use the batch decoder path (`decode_vehicle_identities`
-or `decode-vehicles`); it calls public vPIC batch for ISO VINs, then applies
-local WMI/platform rules and CRM context.
+For board-wide checks, use `decode_vehicle_identities`; it calls public vPIC
+batch for ISO VINs, then applies local WMI/platform rules and CRM context.
 For parts-search quality checks across a 10-card batch, use
-`benchmark_vin_parts_lookup` / `vin-parts-benchmark` after the batch decoder.
+`benchmark_vin_parts_lookup` after the batch decoder.
 It reports identity coverage, requested-part recognition, safe public query
 coverage, PartsAPI/17VIN dry-run readiness, and missing live catalog/supplier
 credentials without echoing raw customer identifiers.
