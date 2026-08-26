@@ -158,8 +158,7 @@ Classify before decoding.
 - If `data/offline_parts_catalogs/catalog_index.json` exists, check the local
   offline cache before broad web searching:
   `rg -n "<OEM-or-article-or-engine-code>" data/offline_parts_catalogs/text`.
-  Use the matching `catalog_id` and source record from
-  `docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/`.
+  Use the matching `catalog_id` and source record from that local index.
   This is a cross/applicability layer only; MAN OEM references still require
   MAN webMANTIS/PartsBase/partslink24, a dealer, supplier, or configured EPC/API
   evidence.

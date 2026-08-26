@@ -197,10 +197,13 @@ def test_redundant_navigation_and_generated_source_maps_stay_removed():
         "docs/agent/manager_identity.json",
         "docs/agent/memory_policy.json",
         "docs/agent/phone_flow.json",
+        "docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack",
         "docs/agent/automotive_sources/brand_source_map.json",
         "docs/agent/automotive_sources/data_type_source_map.json",
         "docs/agent/automotive_sources/dsg_transmission_sources.json",
         "docs/agent/automotive_sources/model_source_overrides.json",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md",
+        "docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json",
         "docs/agent/gmail_mcp_catalog.json",
         "docs/agent/knowledge_annotations.jsonl",
     ]
@@ -592,15 +595,6 @@ def test_every_tracked_agent_data_line_is_structurally_readable():
             failures.append(f"{raw_path}:{exc}")
 
     assert failures == []
-
-
-def test_retained_offline_source_pack_has_no_obsolete_files():
-    cache_root = ROOT / "docs" / "agent" / "automotive_sources" / "source_cache"
-    offline_root = cache_root / "offline_parts_catalogs_knowledge_pack"
-
-    assert not (cache_root / "ai_parts_krasnoyarsk_project_pack").exists()
-    assert not (offline_root / "sources" / "citations.md").exists()
-    assert (offline_root / "sources" / "offline_parts_catalog_sources.json").is_file()
 
 
 def test_every_tracked_agent_document_has_a_knowledge_map_route():
