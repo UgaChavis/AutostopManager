@@ -48,7 +48,7 @@ EXPECTED_GATEWAY_TOOLS = frozenset(
         "workflow_wait_for_external",
     }
 )
-EXPECTED_MANAGER_RAW_TOOL_COUNT = 77
+EXPECTED_MANAGER_REGISTRY_TOOL_COUNT = 77
 _GMAIL_REQUIRED_PROOF_CHECKS = frozenset(
     {"profile_read", "labels_read", "search_read", "self_delivery_readback", "self_delivery_cleanup"}
 )
@@ -65,6 +65,7 @@ def build_integration_audit(
     gmail_plugin_root: Path | str = DEFAULT_GMAIL_PLUGIN_ROOT,
     gmail_proof_path: Path | str = DEFAULT_GMAIL_PROOF_PATH,
     gmail_proof_max_age_days: int = 30,
+    include_store: bool = False,
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, Any]:
     started = time.monotonic()
@@ -85,11 +86,12 @@ def build_integration_audit(
         script_name="crm_capability_parity.py",
         command_runner=command_runner,
     )
-    checks["store_capability_parity"] = _run_capability_parity_check(
-        repo_path=store_path,
-        script_name="store_capability_parity.py",
-        command_runner=command_runner,
-    )
+    if include_store:
+        checks["store_capability_parity"] = _run_capability_parity_check(
+            repo_path=store_path,
+            script_name="store_capability_parity.py",
+            command_runner=command_runner,
+        )
 
     token = _read_env_value(crm_path / ".env", "MINIMAL_KANBAN_MCP_BEARER_TOKEN")
     if not token:
@@ -100,6 +102,7 @@ def build_integration_audit(
             mcp_url=local_mcp_url,
             token=token,
             exhaustive=full,
+            include_store=include_store,
             command_runner=command_runner,
         )
         if full:
@@ -108,6 +111,7 @@ def build_integration_audit(
                 mcp_url=public_mcp_url,
                 token=token,
                 exhaustive=True,
+                include_store=include_store,
                 command_runner=command_runner,
             )
 
@@ -117,6 +121,7 @@ def build_integration_audit(
         "format": INTEGRATION_AUDIT_FORMAT,
         "generated_at": datetime.now(UTC).isoformat(),
         "mode": "full" if full else "quick",
+        "scope": {"crm": True, "gmail": True, "store": include_store},
         "summary": {
             "checks_total": len(checks),
             "checks_passed": len(checks) - len(failed),
@@ -211,8 +216,8 @@ def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
     }
     validations = {
         "visible_tool_names_exact": set(tools["crm"]) == EXPECTED_GATEWAY_TOOLS,
-        f"manager_raw_tool_count_exactly_{EXPECTED_MANAGER_RAW_TOOL_COUNT}": len(tools["manager"])
-        == EXPECTED_MANAGER_RAW_TOOL_COUNT,
+        f"manager_registry_tool_count_exactly_{EXPECTED_MANAGER_REGISTRY_TOOL_COUNT}": len(tools["manager"])
+        == EXPECTED_MANAGER_REGISTRY_TOOL_COUNT,
     }
     for name, payload in catalogs.items():
         validations[f"{name}_manifest_valid"] = (
@@ -315,6 +320,7 @@ def _run_gateway_check(
     mcp_url: str,
     token: str,
     exhaustive: bool,
+    include_store: bool,
     command_runner: Callable[..., subprocess.CompletedProcess[str]],
 ) -> dict[str, Any]:
     python = crm_path / ".venv" / "bin" / "python"
@@ -326,9 +332,10 @@ def _run_gateway_check(
         str(script),
         "--mcp-url",
         mcp_url,
-        "--require-store",
         "--require-web",
     ]
+    if include_store:
+        command.append("--require-store")
     if exhaustive:
         command.append("--exhaustive")
     environment = os.environ.copy()

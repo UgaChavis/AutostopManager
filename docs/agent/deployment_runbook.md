@@ -54,6 +54,9 @@ URLs.
 - CRM container API/MCP: `127.0.0.1:41731` /
   `http://127.0.0.1:41831/mcp`.
 - Public MCP: `https://crm.autostopcrm.ru/mcp`.
+- External Codex surface: the 24-tool CRM Gateway only. The standalone 77-tool
+  Manager registry is internal inventory; production imports only its required
+  Gateway subset and does not install it as a separate account App.
 - Store: `/opt/autostop-app`, public site `https://autostop24.shop`.
 - Immutable Manager releases: `/opt/autostop-manager-releases/`; `current`
   points atomically to the active read-only snapshot while SQLite is overlaid
@@ -88,18 +91,20 @@ Do not set `AUTOSTOP_INSTALL_WATCHDOG=1` without a separate exact owner authoriz
 They create rollback data and a Manager snapshot, preserve `.env`/uploads/PostgreSQL volumes, and replace only CRM in the bounded window.
 They must pass internal/public smoke. No Git-sync bypass.
 
-For a Store-affecting release, use backup -> Store API/auth/migration -> pure
-read/service-scope checks -> internal network -> Manager snapshot -> CRM
-Gateway. Store failure must degrade only Store. Never create a customer order
-as smoke or perform supplier procurement without a separate exact command.
+For an explicitly reauthorized Store-affecting release, additionally run
+`integration-audit --full --include-store`, then use backup -> Store
+API/auth/migration -> pure read/service-scope checks -> internal network ->
+Manager snapshot -> CRM Gateway. Store failure must degrade only Store. Never
+create a customer order as smoke or perform supplier procurement without a
+separate exact command.
 
 ## Post-Deploy Verification
 
 ```bash
-docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 cd /opt/autostopcrm
+docker compose ps autostopcrm
 docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
-  --mcp-url http://127.0.0.1:41831/mcp --exhaustive --require-store --require-web
+  --mcp-url http://127.0.0.1:41831/mcp --exhaustive --require-web
 docker compose exec -T autostopcrm python scripts/check_live_connector.py \
   --strict --site-url https://crm.autostopcrm.ru --expect-https \
   --local-api-url http://127.0.0.1:41731 --expect-admin
@@ -115,20 +120,20 @@ cd /opt/autostop-manager-releases/current
 
 Confirm:
 
-- exactly 24 public Gateway v2 tools and 77 Manager raw tools;
+- exactly 24 public Gateway v2 tools and 77 internal Manager registry tools;
 - protected OAuth/PKCE/refresh behavior and both internal/public smoke;
 - knowledge/system audits and capability matrices have no gaps;
-- CRM reads survive Store degradation and Store GETs are mutation-free;
 - no raw payloads or secrets appear in logs;
-- CRM, public Gateway, AutoStop App/site, VPN, nginx and required systemd units
-  remain healthy;
+- CRM, public Gateway, VPN, nginx and required systemd units remain healthy;
 - the deployed Manager revision equals GitHub and rollback refs exist.
 - the public-camera non-root sandbox launches its pinned browser with networking
   disabled for the self-test; this check captures no camera frame.
 
-Production Store management smoke stays dry-run unless an explicitly approved,
-safe and reversible synthetic object exists. Record only compact ids, counts,
-versions, health booleans and rollback refs.
+Only after separate Store reauthorization, additionally confirm AutoStop
+App/site health, that CRM reads survive Store degradation, and that Store GETs
+are mutation-free. Production Store management smoke stays dry-run unless an
+explicitly approved, safe and reversible synthetic object exists. Record only
+compact ids, counts, versions, health booleans and rollback refs.
 
 ## Telegram-Only Release
 

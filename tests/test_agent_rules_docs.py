@@ -32,8 +32,9 @@ def test_codex_native_startup_files_are_present_and_safe():
         "Docker `.Config.Env`",
         "Use `knowledge-probe` only for focused document lookup",
         "it never grants writes, connector access or financial authority",
-        "exactly 77 tools",
+        "77-tool Manager registry is internal",
         "24-tool Gateway v2 connector",
+        "codex_apps/autostopcrm.*",
         "knowledge-sync",
         "knowledge-audit",
         "skills-audit",
@@ -49,6 +50,8 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert config["mcp_servers"]["autostopcrm"]["url"] == "https://crm.autostopcrm.ru/mcp"
     assert config["mcp_servers"]["autostopcrm"]["enabled"] is True
     assert config["mcp_servers"]["autostopcrm"]["tool_timeout_sec"] == 90
+    assert set(config["mcp_servers"]) == {"autostopcrm"}
+    assert {"apps", "connectors", "plugins"}.isdisjoint(config)
 
     forbidden_config_keys = {
         "approval_policy",
@@ -119,6 +122,10 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
     assert knowledge_map["format"] == "knowledge_navigation_v1"
     assert all(set(domain) <= allowed for domain in knowledge_map["domains"].values())
     assert not (ROOT / "docs" / "agent" / "knowledge_annotations.jsonl").exists()
+    startup_files = knowledge_map["domains"]["startup_and_identity"]["primary_files"]
+    assert ".codex/config.toml" in startup_files
+    assert "docs/agent/crm_mcp_catalog.json" in startup_files
+    assert "docs/agent/voice_agent_brief.md" not in startup_files
 
 
 def test_routing_instruction_footprint_stays_below_release_ceiling():
@@ -161,6 +168,8 @@ def test_manager_rules_only_hold_cross_system_runtime_invariants():
         "workflow-recovery",
         "release-boundary",
     }
+    separation = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "command-knowledge-separation")
+    assert "codex_apps/autostopcrm.*" in separation
 
 
 def test_redundant_navigation_and_generated_source_maps_stay_removed():
@@ -223,6 +232,11 @@ def test_command_registry_v3_contains_only_operational_routing_metadata():
         assert isinstance(route["effects"], list)
         assert isinstance(route["dependencies"], list)
         assert set(route["signals"]) <= {"phrases", "all", "any", "exclude"}
+
+    integration_route = next(
+        route for route in payload["routes"] if route["workflow_id"] == "crm_agent_integration_audit"
+    )
+    assert "apps" not in integration_route["signals"]["any"]
 
 
 def test_service_director_mode_has_one_canonical_route_and_guarded_autonomy():

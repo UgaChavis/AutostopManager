@@ -64,7 +64,8 @@ _PROJECT_ENGINEERING_RE = re.compile(
     re.IGNORECASE,
 )
 _PROJECT_ENGINEERING_ACTION_RE = re.compile(
-    r"аудит|баг|дефект|отлад|оптимиз|рефактор|тест|улучш|исправ|почин|маршрутизац|документац|обнов",
+    r"аудит|баг|дефект|отлад|оптимиз|рефактор|тест|test|smoke|провер|работоспособ|улучш|исправ|почин"
+    r"|маршрутизац|документац|обнов",
     re.IGNORECASE,
 )
 
@@ -1256,6 +1257,10 @@ def _domain_hints(query: str) -> dict[str, int]:
         "managed-pc",
         "autostop_remote",
         "reverse ssh",
+        "autostop-vpn-fst",
+        "fst.kz",
+        "удаленный сервер",
+        "удалённый сервер",
         "удаленный компьютер",
         "удалённый компьютер",
         "удаленного компьютера",
@@ -1267,7 +1272,8 @@ def _domain_hints(query: str) -> dict[str, int]:
     )
     if any(term in lowered for term in remote_access_terms):
         hints["remote_codex_access"] = 82
-    if any(term in lowered for term in ("инфраструктур", "сервер", "резервн", "backup", "backups")):
+    generic_server = "сервер" in lowered and "mcp" not in lowered
+    if generic_server or any(term in lowered for term in ("инфраструктур", "резервн", "backup", "backups")):
         hints["remote_codex_access"] = max(hints.get("remote_codex_access", 0), 50)
     store_context_terms = (
         "магазин",

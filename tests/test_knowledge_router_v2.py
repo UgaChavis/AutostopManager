@@ -109,6 +109,79 @@ def test_crm_failure_is_not_treated_as_negative_scope():
     assert _workflows("CRM не работает") == ["crm_agent_integration_audit"]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Проверь работоспособность AutoStopManager",
+        "Коротко протестируй Автостоп Менеджер",
+        "Сделай smoke-test AutoStopManager",
+        "Проверь интеграции AutoStopManager",
+    ],
+)
+def test_manager_health_routes_without_requiring_mcp_keyword(query):
+    assert _workflows(query) == ["crm_agent_integration_audit"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Короткий read-only smoke-test AutoStopManager: проверить Gmail, Telegram, CRM, команды и MCP-серверы; без Store",
+        "Протестируй Автостоп Менеджер: работают ли Gmail, Телеграм, CRM, все команды и MCP сервера",
+        "Коротко протестируй Автостоп Менеджера: Gmail, Telegram, CRM, чтение карточек, все команды и MCP-серверы подключены и работоспособны",
+    ],
+)
+def test_manager_smoke_routes_to_integration_audit_without_remote_access(query):
+    routes = plan_command_routes(query)
+
+    assert [route["workflow_id"] for route in routes] == [
+        "crm_agent_integration_audit",
+        "telegram_connector_health",
+    ]
+    assert all(not route["effects"] for route in routes)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Проверь Telegram",
+        "Проверь подключение telegram_bridge",
+        "Проверь авторизацию telegram_bridge",
+    ],
+)
+def test_explicit_telegram_health_is_read_only(query):
+    routes = plan_command_routes(query)
+
+    assert [route["workflow_id"] for route in routes] == ["telegram_connector_health"]
+    assert routes[0]["effects"] == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Напиши в Телеграм администратору",
+        "Найди контакт в Telegram",
+        "Прочитай Telegram",
+        "Авторизуй Telegram",
+        "Найди контакт через telegram_bridge",
+        "Прочитай telegram_bridge",
+        "Авторизуй telegram_bridge",
+    ],
+)
+def test_explicit_telegram_operations_keep_their_route(query):
+    assert _workflows(query) == ["telegram_owner_operations"]
+
+
+def test_explicit_telegram_send_composes_with_integration_audit():
+    assert _workflows("Проверь MCP и отправь отчёт в Telegram") == [
+        "crm_agent_integration_audit",
+        "telegram_owner_operations",
+    ]
+
+
+def test_explicit_remote_server_still_uses_remote_access_route():
+    assert _workflows("Проверь подключение к удалённому серверу по SSH") == ["remote_codex_access"]
+
+
 def test_command_routes_are_read_live_without_sync_or_restart(tmp_path, monkeypatch):
     route_path = tmp_path / "command_routes.json"
     monkeypatch.setattr(knowledge_base, "COMMAND_ROUTES_PATH", route_path)
@@ -186,6 +259,20 @@ def test_probe_is_document_only_and_never_returns_command_route(tmp_path):
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "board_cleanup_autopilot"
     assert result["command_route"] is None
+
+
+def test_manager_smoke_probe_does_not_open_remote_access_docs(tmp_path):
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    sync_knowledge_base(store)
+
+    result = probe_knowledge_base(
+        store,
+        "Короткий smoke-test AutoStopManager: проверить Gmail, Telegram, CRM и MCP-серверы без Store",
+        limit=5,
+    )
+
+    assert result["best_domain"] == "startup_and_identity"
+    assert "remote_codex_access" not in {route["domain"] for route in result["routes"]}
 
 
 def test_command_registry_and_knowledge_map_are_independent(tmp_path, monkeypatch):

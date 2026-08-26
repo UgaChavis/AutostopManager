@@ -43,9 +43,13 @@ Store request remains separately scoped.
 
 ## Live Work And Write Gates
 
-- CRM uses the 24-tool Gateway v2 connector. Start broad CRM orientation with
-  `agent_bootstrap` and `agent_board_digest`, then use focused search and exact
-  entity context. The Manager public surface remains exactly 77 tools.
+- CRM's only external Codex surface is the configured 24-tool Gateway v2 connector.
+  Start with `agent_bootstrap` and `agent_board_digest`, then use focused search
+  and exact entity context. The standalone 77-tool Manager registry is internal
+  project/runtime inventory, not another configured Codex or App surface;
+  production imports only the Manager subset required by the 24-tool Gateway.
+  Treat `codex_apps/autostopcrm.*` and any unconfigured account App namespace as
+  legacy, outside project health checks and execution paths.
 - A direct owner task authorizes only the necessary in-scope non-financial
   changes. Do not expand it into unrelated cleanup, Store work or deployment.
 - Every mutation follows: focused exact reread -> `prepare_action_contract` ->

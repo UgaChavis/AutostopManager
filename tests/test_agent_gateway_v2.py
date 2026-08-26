@@ -13,6 +13,7 @@ def _route(query: str, *, intent: str | None = None):
 def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
     cases = {
         "проанализируй связь Codex с Автостоп CRM, MCP команды, тестовый профиль и перегруженные ответы": "crm_agent_integration_audit",
+        "Коротко протестируй AutoStopManager: работают ли Gmail, Telegram, CRM и MCP серверы": "crm_agent_integration_audit",
         "проведи оплату в CRM": "crm_finance_operation",
         "проведи оплату по заказ-наряду": "crm_finance_operation",
         "создай документ в CRM": "business_document_workflow",

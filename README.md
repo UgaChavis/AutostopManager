@@ -15,7 +15,8 @@ technical control logic.
 - `docs/agent/knowledge_map.json` - domain-to-file navigation.
 - `docs/agent/command_routes.json` - operational command workflows.
 - `docs/agent/manager_rules.json` - cross-system runtime invariants.
-- `docs/agent/*_mcp_catalog.json` - verified tool-surface manifests.
+- `docs/agent/crm_mcp_catalog.json` - the 24-tool external Gateway manifest;
+  `manager_mcp_catalog.json` - the 77-tool internal Manager registry manifest.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - managed Windows and legacy
   `home-pc` access.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
@@ -34,6 +35,9 @@ and private documents never enter Git or durable prompts.
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
 .venv/bin/python -m autostop_manager.cli integration-audit --full
 ```
+
+Integration audits exclude Store by default. `--include-store` is allowed only
+after a separate explicit Store reauthorization.
 
 Runtime boundaries and write gates live in `AGENTS.md`; detailed procedures
 live in the playbook selected by `agent-brief`.
