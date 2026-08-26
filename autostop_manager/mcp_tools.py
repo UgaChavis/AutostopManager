@@ -35,7 +35,6 @@ from .knowledge_base import (
 )
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory, curate_memory
-from .memory_review import apply_memory_review_item, build_memory_review
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
     search_partsapi_category_index,
@@ -1040,21 +1039,15 @@ def register_manager_memory_tools(  # noqa: C901
     def curate_memory_tool(apply: bool = False) -> dict[str, Any]:
         return curate_memory(memory, apply=apply)
 
-    @server.tool(
+    server.tool(
         name="memory_review",
-        description="Generate rule-based MemoryReviewItem proposals without copying raw CRM, email, or secret content.",
-    )
-    def memory_review_tool() -> dict[str, Any]:
-        return build_memory_review(memory)
+        description="Compatibility name for the canonical privacy-safe long-term memory audit.",
+    )(audit_memory_tool)
 
-    @server.tool(
+    server.tool(
         name="memory_review_apply",
-        description=(
-            "Apply a MemoryReviewItem decision. Supports accept, reject, or archive_duplicate; never deletes source memory records."
-        ),
-    )
-    def memory_review_apply_tool(item_id: str, action: str) -> dict[str, Any]:
-        return apply_memory_review_item(item_id, action, store=memory)
+        description="Compatibility name for canonical memory curation; apply=true archives duplicate copies without deletion.",
+    )(curate_memory_tool)
 
     @server.tool(
         name="knowledge_intake_plan",

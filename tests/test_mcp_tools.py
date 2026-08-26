@@ -111,8 +111,13 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     assert "production_ops" in control
     assert control["provider_readiness"]["safety"]["orders_blocked"] is True
 
-    review = server.tools["memory_review"]()
-    assert review["schema"] == "MemoryReviewItem"
+    for alias, canonical in (("memory_review", "audit_memory"), ("memory_review_apply", "curate_memory")):
+        assert server.tools[alias] is server.tools[canonical]
+        assert inspect.signature(server.tools[alias]) == inspect.signature(server.tools[canonical])
+
+    live_tools = build_server()._tool_manager._tools
+    assert live_tools["memory_review"].parameters == live_tools["audit_memory"].parameters
+    assert live_tools["memory_review_apply"].parameters == live_tools["curate_memory"].parameters
 
     intake = server.tools["knowledge_intake_plan"]("docs/agent/knowledge_map.json")
     assert intake["schema"] == "KnowledgeIntakeDraft"

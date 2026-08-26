@@ -17,7 +17,7 @@ from .knowledge_base import (
     sync_knowledge_base,
 )
 from .knowledge_intake import build_knowledge_intake_plan
-from .memory_review import build_memory_review
+from .memory_curator import audit_memory
 from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
@@ -232,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     elif args.command == "skills-audit":
         return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-review":
-        _print_json(build_memory_review(store))
+        _print_json(audit_memory(store))
     elif args.command == "agent-mode":
         if args.agent_mode_action == "status":
             _print_json(store.get_agent_mode())

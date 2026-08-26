@@ -2032,18 +2032,6 @@ class ManagerMemoryStore:
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS memory_review_items (
-                    id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    source_ref TEXT NOT NULL DEFAULT '',
-                    proposal_json TEXT NOT NULL DEFAULT '{}',
-                    reason TEXT NOT NULL DEFAULT '',
-                    risk TEXT NOT NULL DEFAULT 'low',
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    created_at TEXT NOT NULL,
-                    decided_at TEXT
-                );
-
                 -- Learning telemetry deliberately contains only technical hashes,
                 -- status codes, and compact references. It never stores prompts,
                 -- tool arguments/results, CRM/Store rows, or Gmail content.
@@ -2123,9 +2111,6 @@ class ManagerMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_store_checkpoints_status
                     ON store_checkpoints(last_attempt_status, updated_at);
-
-                CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
-                    ON memory_review_items(status, created_at);
 
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_external_turn_id
                     ON agent_turns(external_turn_id) WHERE external_turn_id <> '';
