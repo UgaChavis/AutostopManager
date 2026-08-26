@@ -31,7 +31,6 @@ and private documents never enter Git or durable prompts.
 ```bash
 .venv/bin/python -m autostop_manager.cli agent-brief "Приберись" --intent board_cleanup
 .venv/bin/python -m autostop_manager.cli knowledge-probe "проверить документацию"
-.venv/bin/python -m autostop_manager.cli knowledge-search "счет НДС PDF" --domain business_documents
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
 .venv/bin/python -m autostop_manager.cli integration-audit --full
 ```

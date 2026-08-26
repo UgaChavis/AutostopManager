@@ -13,9 +13,8 @@ Before decoding, ask:
 - Do I need a vehicle profile or a parts-compatibility profile?
 
 Do not force every identifier into the same 17-character VIN path.
-Use the local `decode_vehicle_identity` tool / `python -m autostop_manager.cli
-decode-vehicle` before OEM or parts lookup when the input comes from CRM,
-looks ROW/JDM, or has weak/partial vPIC output.
+Use `decode_vehicle_identity` before OEM or parts lookup when the input comes
+from CRM, looks ROW/JDM, or has weak/partial vPIC output.
 Use `catalog_provider_status` to verify live catalog/API readiness before
 claiming that PartsAPI, 17VIN, AUTOPOISK, partslink24, or supplier APIs are
 available.

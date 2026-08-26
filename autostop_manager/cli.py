@@ -13,7 +13,6 @@ from .integration_audit import build_integration_audit
 from .knowledge_base import (
     audit_knowledge_base,
     probe_knowledge_base,
-    search_knowledge_base,
     sync_knowledge_base,
 )
 from .knowledge_intake import build_knowledge_intake_plan
@@ -22,7 +21,6 @@ from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
-from .vehicle_identity import decode_vehicle_identity
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -56,15 +54,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-manager", description="AutoStop manager memory CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    agent_mode = sub.add_parser("agent-mode", help="Read or change the durable AgentExecutionMode")
-    agent_mode_sub = agent_mode.add_subparsers(dest="agent_mode_action", required=True)
-    agent_mode_sub.add_parser("status", help="Show global work/learning mode")
-    agent_mode_set = agent_mode_sub.add_parser("set", help="Set global work/learning mode")
-    agent_mode_set.add_argument("mode", choices=["work", "learning"])
-    agent_mode_set.add_argument("--expected-state-version", type=int, default=None)
-    agent_mode_resolve = agent_mode_sub.add_parser("resolve", help="Resolve a one-turn mode override")
-    agent_mode_resolve.add_argument("--mode-override", choices=["work", "learning"], default=None)
-
     agent_brief = sub.add_parser(
         "agent-brief",
         help="Return a compact startup package for an agent before broad document reads",
@@ -72,22 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
     agent_brief.add_argument("query")
     agent_brief.add_argument("--intent", default=None)
     agent_brief.add_argument("--limit", type=int, default=8)
-
-    vehicle_identity = sub.add_parser(
-        "decode-vehicle",
-        help="Build a source-aware vehicle identity dossier from a VIN/frame/body number and optional CRM context",
-    )
-    vehicle_identity.add_argument("identifier")
-    vehicle_identity.add_argument("--vehicle", default=None)
-    vehicle_identity.add_argument("--make", default=None)
-    vehicle_identity.add_argument("--model", default=None)
-    vehicle_identity.add_argument("--model-year", type=int, default=None)
-    vehicle_identity.add_argument("--engine", default=None)
-    vehicle_identity.add_argument("--transmission", default=None)
-    vehicle_identity.add_argument("--drivetrain", default=None)
-    vehicle_identity.add_argument("--market", default=None)
-    vehicle_identity.add_argument("--source-confidence", type=float, default=None)
-    vehicle_identity.add_argument("--no-live-vpic", action="store_true")
 
     provider_smoke = sub.add_parser(
         "provider-smoke",
@@ -150,11 +123,6 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_probe.add_argument("query")
     knowledge_probe.add_argument("--limit", type=int, default=5)
 
-    knowledge_search = sub.add_parser("knowledge-search", help="Search indexed local knowledge routes and sections")
-    knowledge_search.add_argument("query")
-    knowledge_search.add_argument("--domain", default=None)
-    knowledge_search.add_argument("--limit", type=int, default=10)
-
     sub.add_parser("knowledge-audit", help="Audit the live knowledge map, files, and document index")
 
     sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, and knowledge cleanup candidates")
@@ -187,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # This intentionally flat dispatcher mirrors argparse commands; domain logic lives in focused modules above.
-def main(argv: list[str] | None = None) -> int:  # noqa: C901
+def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     store = ManagerMemoryStore()
 
@@ -207,8 +175,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _print_json(build_knowledge_intake_plan(args.path, apply=args.apply))
     elif args.command == "knowledge-probe":
         _print_json(probe_knowledge_base(store, args.query, limit=args.limit))
-    elif args.command == "knowledge-search":
-        _print_json(search_knowledge_base(store, args.query, domain=args.domain, limit=args.limit))
     elif args.command == "knowledge-audit":
         return _print_checked_json(audit_knowledge_base(store))
     elif args.command == "cleanup-audit":
@@ -233,35 +199,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-review":
         _print_json(audit_memory(store))
-    elif args.command == "agent-mode":
-        if args.agent_mode_action == "status":
-            _print_json(store.get_agent_mode())
-        elif args.agent_mode_action == "set":
-            _print_json(store.set_agent_mode(args.mode, expected_state_version=args.expected_state_version))
-        else:
-            _print_json(store.resolve_agent_mode(args.mode_override))
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
-    elif args.command == "decode-vehicle":
-        _print_json(
-            decode_vehicle_identity(
-                args.identifier,
-                crm_context={
-                    "vehicle": args.vehicle,
-                    "make": args.make,
-                    "model": args.model,
-                    "model_year": args.model_year,
-                    "engine": args.engine,
-                    "transmission": args.transmission,
-                    "drivetrain": args.drivetrain,
-                    "market": args.market,
-                    "source_confidence": args.source_confidence,
-                },
-                model_year=args.model_year,
-                make_hint=args.make,
-                live_vpic=not args.no_live_vpic,
-            )
-        )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
     return 0

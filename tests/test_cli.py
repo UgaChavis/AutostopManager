@@ -25,24 +25,6 @@ def test_cli_parser_has_core_commands():
     assert args.gmail_proof == "/tmp/proof.json"
     assert args.output == "/tmp/report.json"
 
-    args = parser.parse_args(
-        [
-            "decode-vehicle",
-            "MR41S123456",
-            "--make",
-            "Suzuki",
-            "--model",
-            "Hustler",
-            "--model-year",
-            "2018",
-            "--no-live-vpic",
-        ]
-    )
-    assert args.command == "decode-vehicle"
-    assert args.identifier == "MR41S123456"
-    assert args.make == "Suzuki"
-    assert args.no_live_vpic is True
-
     args = parser.parse_args(["provider-smoke", "--provider", "all", "--mode", "dry-run"])
     assert args.command == "provider-smoke"
     assert args.provider == "all"
@@ -64,12 +46,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(["knowledge-sync"])
     assert args.command == "knowledge-sync"
-
-    args = parser.parse_args(["knowledge-search", "BMW F15 N63", "--domain", "automotive_repair", "--limit", "5"])
-    assert args.command == "knowledge-search"
-    assert args.query == "BMW F15 N63"
-    assert args.domain == "automotive_repair"
-    assert args.limit == 5
 
     args = parser.parse_args(["knowledge-probe", "clutch gearbox", "--limit", "3"])
     assert args.command == "knowledge-probe"

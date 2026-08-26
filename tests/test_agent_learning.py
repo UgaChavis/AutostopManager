@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-import json
 
-from autostop_manager import cli
 from autostop_manager.agent_gateway import build_agent_bootstrap
 from autostop_manager.mcp_tools import register_manager_memory_tools
 from autostop_manager.storage import ManagerMemoryStore, _normalize_learning_identifier
@@ -272,7 +270,7 @@ def test_learning_repair_refuses_high_risk_and_provider_candidates(tmp_path):
     )
 
 
-def test_learning_mcp_tools_and_cli_switch_use_safe_storage(tmp_path, monkeypatch, capsys):
+def test_learning_mcp_tools_use_safe_storage(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     server = _FakeServer()
     register_manager_memory_tools(server, store)
@@ -280,10 +278,3 @@ def test_learning_mcp_tools_and_cli_switch_use_safe_storage(tmp_path, monkeypatc
     assert {"agent_mode", "post_run_review", "agent_learning_workflow"}.issubset(server.tools)
     assert server.tools["agent_mode"]("set", mode="learning")["global_mode"] == "learning"
     assert server.tools["agent_mode"]("resolve", mode_override="work")["effective_mode"] == "work"
-
-    monkeypatch.setattr(cli, "ManagerMemoryStore", lambda: store)
-    assert cli.main(["agent-mode", "set", "work"]) == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["global_mode"] == "work"
-    assert cli.main(["agent-mode", "status"]) == 0
-    assert json.loads(capsys.readouterr().out)["global_mode"] == "work"
