@@ -11,7 +11,6 @@ from .catalog_clients import (
     emex_price_lookup,
     exist_price_lookup,
     lookup_oem_catalog_candidates,
-    partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
     vin17_decode_vehicle,
     vin17_search_part_number_by_vin,
@@ -19,9 +18,7 @@ from .catalog_clients import (
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
-from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
-from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .gateway_attestation import (
     DEFAULT_MCP_URL as DEFAULT_GATEWAY_ATTESTATION_MCP_URL,
@@ -48,7 +45,6 @@ from .partsapi_category_index import (
 )
 from .provider_smoke import build_provider_smoke_report
 from .public_automotive_evidence import lookup_public_automotive_evidence
-from .service_management import build_service_management_plan
 from .service_labor_experience import (
     build_service_labor_experience_from_state_file,
     save_service_labor_artifacts,
@@ -63,7 +59,6 @@ from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_oem_resolver import resolve_vin_oem_parts
-from .vin_lookup import lookup_original_parts
 from .work_pricing import estimate_repair_work_cost
 
 
@@ -256,33 +251,6 @@ def build_parser() -> argparse.ArgumentParser:
     agent_brief.add_argument("--intent", default=None)
     agent_brief.add_argument("--limit", type=int, default=8)
 
-    prepare_card_action = sub.add_parser(
-        "prepare-card-action",
-        help="Build a dry-run CRM card update contract without writing CRM",
-    )
-    prepare_card_action.add_argument("--card-id", required=True)
-    prepare_card_action.add_argument("--expected-updated-at", default=None)
-    prepare_card_action.add_argument("--description", default=None)
-    prepare_card_action.add_argument("--vehicle-profile-json", default=None)
-    prepare_card_action.add_argument("--board-summary", default=None)
-    prepare_card_action.add_argument("--target-fields", default="")
-    prepare_card_action.add_argument("--current-card-json", default=None)
-    prepare_card_action.add_argument("--intent", default="board_cleanup")
-
-    lookup = sub.add_parser("lookup-oem", help="Build a VIN/frame OEM lookup dossier for original catalog numbers")
-    lookup.add_argument("identifier")
-    lookup.add_argument("--model-year", type=int, default=None)
-    lookup.add_argument("--make", default=None)
-    lookup.add_argument("--part-name", default=None)
-    lookup.add_argument("--part-group", default=None)
-    lookup.add_argument("--side", default=None)
-    lookup.add_argument("--position", default=None)
-    lookup.add_argument("--old-part-number", default=None)
-    lookup.add_argument("--captured-oem", default=None)
-    lookup.add_argument("--captured-source", default=None)
-    lookup.add_argument("--captured-supersedes", default=None)
-    lookup.add_argument("--captured-note", default=None)
-
     vehicle_identity = sub.add_parser(
         "decode-vehicle",
         help="Build a source-aware vehicle identity dossier from a VIN/frame/body number and optional CRM context",
@@ -344,64 +312,6 @@ def build_parser() -> argparse.ArgumentParser:
     vin17_part.add_argument("--part-number", required=True)
     vin17_part.add_argument("--match-type", default="exact", choices=["exact", "inexact"])
     vin17_part.add_argument("--dry-run", action="store_true")
-
-    partsapi = sub.add_parser(
-        "partsapi-lookup",
-        help="Call or dry-run PartsAPI VIN/plate/OE/applicability/cross/part-name lookup using PARTSAPI_KEY/PARTSAPI_BASE_URL",
-    )
-    partsapi.add_argument(
-        "--operation",
-        required=True,
-        choices=[
-            "vin_decode",
-            "vin_decode_oe",
-            "plate_to_vin",
-            "parts_by_vin",
-            "oe_applicability",
-            "crosses",
-            "crosses_with_brand",
-            "crosses_title",
-            "part_name_by_brand_number",
-            "article_crosses",
-            "search_articles",
-            "engine_info",
-            "search_tree",
-            "articles",
-            "article",
-            "article_criteria",
-            "norms_makes",
-            "norms_models",
-            "norms_motors",
-            "norms_times",
-            "fill_volumes",
-        ],
-    )
-    partsapi.add_argument("--identifier", default=None)
-    partsapi.add_argument(
-        "--registration-number", default=None, help="Russian vehicle registration number for plate_to_vin"
-    )
-    partsapi.add_argument("--part-number", default=None)
-    partsapi.add_argument("--article-id", default=None)
-    partsapi.add_argument("--brand", default=None)
-    partsapi.add_argument(
-        "--part-type",
-        default=None,
-        help="PartsAPI type parameter; default is oem for parts_by_vin, use omit/non-oem to skip type.",
-    )
-    partsapi.add_argument("--category", default=None)
-    partsapi.add_argument("--vehicle-type", default=None)
-    partsapi.add_argument("--type-id", default=None)
-    partsapi.add_argument("--lang", default=None)
-    partsapi.add_argument("--lang-id", type=int, default=None)
-    partsapi.add_argument("--make-name-seo", default=None)
-    partsapi.add_argument("--model-id", default=None)
-    partsapi.add_argument("--motor-id", default=None)
-    partsapi.add_argument("--top-category-id", default=None)
-    partsapi.add_argument("--sub-category-id", default=None)
-    partsapi.add_argument("--car-id", default=None)
-    partsapi.add_argument("--timeout", type=float, default=20.0)
-    partsapi.add_argument("--max-attempts", type=int, default=1)
-    partsapi.add_argument("--dry-run", action="store_true")
 
     category_index = sub.add_parser("partsapi-category-index", help="Inspect the local PartsAPI numeric category index")
     category_index_sub = category_index.add_subparsers(dest="category_index_command", required=True)
@@ -634,40 +544,6 @@ def build_parser() -> argparse.ArgumentParser:
     public_automotive_evidence.add_argument("--limit", type=int, default=10)
     public_automotive_evidence.add_argument("--timeout", type=float, default=12.0)
 
-    service_plan = sub.add_parser(
-        "service-plan",
-        help="Build a Krasnoyarsk workshop-management action plan for parts, repair, staff, client, finance, or knowledge work",
-    )
-    service_plan.add_argument("--area", default=None)
-    service_plan.add_argument("--city", default="Красноярск")
-    service_plan.add_argument("--vehicle", default=None)
-    service_plan.add_argument("--vin", default=None)
-    service_plan.add_argument("--chassis", default=None)
-    service_plan.add_argument("--part-number", default=None)
-    service_plan.add_argument("--part-name", default=None)
-    service_plan.add_argument("--urgency", default=None)
-    service_plan.add_argument("--role", default=None)
-    service_plan.add_argument("--complaint", default=None)
-    service_plan.add_argument("--dtc-or-scan", default=None)
-    service_plan.add_argument("--engine", default=None)
-    service_plan.add_argument("--transmission", default=None)
-    service_plan.add_argument("--mileage", default=None)
-    service_plan.add_argument("--current-load", default=None)
-    service_plan.add_argument("--output-or-hours", default=None)
-    service_plan.add_argument("--quality-signal", default=None)
-    service_plan.add_argument("--card-id", default=None)
-    service_plan.add_argument("--client-contact", default=None)
-    service_plan.add_argument("--next-action", default=None)
-    service_plan.add_argument("--approval-status", default=None)
-    service_plan.add_argument("--repair-orders", default=None)
-    service_plan.add_argument("--cashbox", default=None)
-    service_plan.add_argument("--payment-status", default=None)
-    service_plan.add_argument("--file-path", default=None)
-    service_plan.add_argument("--source-type", default=None)
-    service_plan.add_argument("--license-status", default=None)
-    service_plan.add_argument("--target-playbook", default=None)
-    service_plan.add_argument("--limit", type=int, default=10)
-
     estimate_work = sub.add_parser(
         "estimate-work",
         help="Build a read-only multi-source labor estimate from internal experience, market, and labor time",
@@ -823,11 +699,6 @@ def build_parser() -> argparse.ArgumentParser:
     control_report.add_argument("--format", choices=["json", "markdown"], default="json")
     control_report.add_argument("--output", default=None)
 
-    crm_health = sub.add_parser("crm-health-plan", help="Build a read-only CRM health plan from saved JSON payloads")
-    crm_health.add_argument("--board-context-json", default=None)
-    crm_health.add_argument("--board-review-json", default=None)
-    crm_health.add_argument("--today-json", default=None)
-
     sub.add_parser("skills-audit", help="Audit local Codex skill files linked to knowledge routes")
 
     sub.add_parser("memory-audit", help="Audit long-term memory for duplicates, expired items, and superseded items")
@@ -915,14 +786,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             rendered = json.dumps(report, ensure_ascii=False, indent=2)
             _write_output(args.output, rendered + "\n")
             _print_json(report)
-    elif args.command == "crm-health-plan":
-        _print_json(
-            build_crm_health_plan(
-                board_context=_json_file(args.board_context_json, option_name="--board-context-json"),
-                board_review=_json_file(args.board_review_json, option_name="--board-review-json"),
-                today_context=_json_file(args.today_json, option_name="--today-json"),
-            )
-        )
     elif args.command == "skills-audit":
         return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-audit":
@@ -1065,37 +928,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _print_json(store.today_context(limit=args.limit))
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
-    elif args.command == "prepare-card-action":
-        _print_json(
-            prepare_crm_card_action(
-                card_id=args.card_id,
-                expected_updated_at=args.expected_updated_at,
-                description=args.description,
-                vehicle_profile=_json_dict_arg(args.vehicle_profile_json, option_name="--vehicle-profile-json"),
-                board_summary=args.board_summary,
-                target_fields=_tags(args.target_fields),
-                current_card=_json_dict_arg(args.current_card_json, option_name="--current-card-json"),
-                intent=args.intent,
-                dry_run=True,
-            )
-        )
-    elif args.command == "lookup-oem":
-        _print_json(
-            lookup_original_parts(
-                args.identifier,
-                model_year=args.model_year,
-                make_hint=args.make,
-                part_name=args.part_name,
-                part_group=args.part_group,
-                side=args.side,
-                position=args.position,
-                old_part_number=args.old_part_number,
-                captured_oem_number=args.captured_oem,
-                captured_source=args.captured_source,
-                captured_supersedes=args.captured_supersedes,
-                captured_note=args.captured_note,
-            )
-        )
     elif args.command == "decode-vehicle":
         _print_json(
             decode_vehicle_identity(
@@ -1147,32 +979,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 identifier=args.identifier,
                 query_part_number=args.part_number,
                 query_match_type=args.match_type,
-                dry_run=args.dry_run,
-            )
-        )
-    elif args.command == "partsapi-lookup":
-        _print_json(
-            partsapi_catalog_lookup(
-                operation=args.operation,
-                identifier=args.identifier,
-                part_number=args.part_number,
-                article_id=args.article_id,
-                brand=args.brand,
-                part_type=args.part_type,
-                category=args.category,
-                vehicle_type=args.vehicle_type,
-                type_id=args.type_id,
-                lang=args.lang,
-                lang_id=args.lang_id,
-                registration_number=args.registration_number,
-                make_name_seo=args.make_name_seo,
-                model_id=args.model_id,
-                motor_id=args.motor_id,
-                top_category_id=args.top_category_id,
-                sub_category_id=args.sub_category_id,
-                car_id=args.car_id,
-                timeout=args.timeout,
-                max_attempts=args.max_attempts,
                 dry_run=args.dry_run,
             )
         )
@@ -1438,40 +1244,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 include_tsb=args.include_tsb,
                 limit=args.limit,
                 timeout=args.timeout,
-            )
-        )
-    elif args.command == "service-plan":
-        _print_json(
-            build_service_management_plan(
-                area=args.area,
-                city=args.city,
-                vehicle=args.vehicle,
-                vin=args.vin,
-                chassis=args.chassis,
-                part_number=args.part_number,
-                part_name=args.part_name,
-                urgency=args.urgency,
-                role=args.role,
-                complaint=args.complaint,
-                dtc_or_scan=args.dtc_or_scan,
-                engine=args.engine,
-                transmission=args.transmission,
-                mileage=args.mileage,
-                current_load=args.current_load,
-                output_or_hours=args.output_or_hours,
-                quality_signal=args.quality_signal,
-                card_id=args.card_id,
-                client_contact=args.client_contact,
-                next_action=args.next_action,
-                approval_status=args.approval_status,
-                repair_orders=args.repair_orders,
-                cashbox=args.cashbox,
-                payment_status=args.payment_status,
-                file_path=args.file_path,
-                source_type=args.source_type,
-                license_status=args.license_status,
-                target_playbook=args.target_playbook,
-                limit=args.limit,
             )
         )
     elif args.command == "estimate-work":

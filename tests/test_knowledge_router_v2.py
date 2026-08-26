@@ -39,7 +39,7 @@ def _workflows(query: str, *, intent: str | None = None) -> list[str]:
             ["crm_vin_oem_parts_lookup", "crm_record_workflow"],
         ),
         ("Приберись", ["board_cleanup_autopilot"]),
-        ("Устрани техдолг в проекте Автостоп Менеджер", ["ecosystem_capability_parity"]),
+        ("Устрани техдолг в проекте AutoStopManager", ["ecosystem_capability_parity"]),
         (
             "Сократи код и почисти документацию проекта Автостоп Менеджер",
             ["ecosystem_capability_parity", "manager_documentation_hygiene"],

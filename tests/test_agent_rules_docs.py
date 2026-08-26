@@ -433,7 +433,7 @@ def test_director_journal_contract_is_documented_and_bounded():
     crm_playbook = (ROOT / "docs/agent/crm_manager_data_playbook.md").read_text(encoding="utf-8")
     routes = json.loads((ROOT / "docs/agent/command_routes.json").read_text(encoding="utf-8"))
 
-    assert "до 50 активных записей" in skill
+    assert "service_director_manifest.md" in skill
     assert "## Единый директорский журнал" in manifest
     assert "data/autostop_manager.sqlite3" in manifest
     assert "50" in manifest and "400" in manifest

@@ -15,21 +15,16 @@ technical control logic.
 - `docs/agent/knowledge_map.json` - domain-to-file navigation.
 - `docs/agent/command_routes.json` - operational command workflows.
 - `docs/agent/manager_rules.json` - cross-system runtime invariants.
-- `docs/agent/manager_mcp_catalog.json` and `crm_mcp_catalog.json` - verified
-  tool-surface manifests; live registrations own complete schemas.
+- `docs/agent/*_mcp_catalog.json` - verified tool-surface manifests.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - managed Windows and legacy
   `home-pc` access.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
 
 For non-trivial work run `agent-brief`, then open the returned canonical route.
-The Manager chooses only the live systems and
-evidence needed by the question. `work` is the default mode; `learning` adds
-the review in `intelligent_agent_learning_playbook.md`.
+`work` is the default; `learning` invokes the `autostop-learning-loop` skill.
 
-CRM owns service cards, clients, vehicles, orders and money; AutoStop App owns
-store catalog, stock, suppliers and marketplace state; Gmail owns mail. Raw
-records, contacts, VIN/plate tables, ledgers, credentials, OAuth state, SQLite
-data and generated private documents never enter Git or durable prompts.
+Live systems own business data. Raw records, identifiers, ledgers, credentials
+and private documents never enter Git or durable prompts.
 
 ## Common Commands
 
@@ -41,15 +36,8 @@ data and generated private documents never enter Git or durable prompts.
 .venv/bin/python -m autostop_manager.cli integration-audit --full
 ```
 
-Public CRM exposes exactly 24 Gateway v2 tools. Reads use bootstrap/digest and
-focused context; writes require ActionContractV2, dry-run where supported,
-idempotent apply and exact reread. Hidden capabilities require literal-name,
-schema-bound raw discovery when no named workflow exists.
-
-Store safety, cursors and guarded owner parity live only in
-`docs/agent/store_management_playbook.md`. Automotive source choice is
-adaptive: vehicle identity and the requested fact decide whether to use CRM,
-VIN/OEM, licensed service data, public communications or bounded research.
+Runtime boundaries and write gates live in `AGENTS.md`; detailed procedures
+live in the playbook selected by `agent-brief`.
 
 ## Quality And Documentation
 

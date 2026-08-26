@@ -57,11 +57,6 @@ def test_cli_parser_has_core_commands():
     assert args.operation == "create"
     assert args.category == "operations"
 
-    args = parser.parse_args(["lookup-oem", "JH4DA9350LS000000"])
-    assert args.command == "lookup-oem"
-    assert args.identifier == "JH4DA9350LS000000"
-    assert args.make is None
-
     args = parser.parse_args(
         [
             "decode-vehicle",
@@ -111,121 +106,6 @@ def test_cli_parser_has_core_commands():
     assert args.command == "vin17-search-part"
     assert args.epc == "toyota"
     assert args.part_number == "091140G010"
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "crosses_with_brand",
-            "--part-number",
-            "04465-60280",
-            "--brand",
-            "Toyota",
-            "--timeout",
-            "7",
-            "--max-attempts",
-            "2",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "partsapi-lookup"
-    assert args.operation == "crosses_with_brand"
-    assert args.part_number == "04465-60280"
-    assert args.timeout == 7
-    assert args.max_attempts == 2
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "crosses_title",
-            "--part-number",
-            "06D109244E",
-            "--lang",
-            "en",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "partsapi-lookup"
-    assert args.operation == "crosses_title"
-    assert args.part_number == "06D109244E"
-    assert args.lang == "en"
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "plate_to_vin",
-            "--registration-number",
-            "A564AA99",
-            "--dry-run",
-        ]
-    )
-    assert args.operation == "plate_to_vin"
-    assert args.registration_number == "A564AA99"
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "part_name_by_brand_number",
-            "--brand",
-            "MAHLE",
-            "--part-number",
-            "OC1038",
-            "--dry-run",
-        ]
-    )
-    assert args.operation == "part_name_by_brand_number"
-    assert args.brand == "MAHLE"
-    assert args.part_number == "OC1038"
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "article_crosses",
-            "--article-id",
-            "1878343",
-            "--lang-id",
-            "16",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "partsapi-lookup"
-    assert args.operation == "article_crosses"
-    assert args.article_id == "1878343"
-    assert args.lang_id == 16
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "engine_info",
-            "--type-id",
-            "1404",
-            "--vehicle-type",
-            "PC",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "partsapi-lookup"
-    assert args.operation == "engine_info"
-    assert args.type_id == "1404"
-    assert args.vehicle_type == "PC"
-
-    args = parser.parse_args(
-        [
-            "partsapi-lookup",
-            "--operation",
-            "search_tree",
-            "--type-id",
-            "1404",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "partsapi-lookup"
-    assert args.operation == "search_tree"
 
     args = parser.parse_args(
         ["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"]
@@ -380,31 +260,6 @@ def test_cli_parser_has_core_commands():
     assert args.live_partsapi_identity is True
     assert args.resolve_oem is True
 
-    args = parser.parse_args(
-        [
-            "lookup-oem",
-            "WBA00000000000000",
-            "--part-name",
-            "рулевая рейка",
-            "--side",
-            "left",
-            "--position",
-            "front",
-            "--old-part-number",
-            "7852 123 456",
-            "--captured-oem",
-            "32 10 6 888 999",
-            "--captured-source",
-            "BMW AIR/ETK via AOS",
-        ]
-    )
-    assert args.part_name == "рулевая рейка"
-    assert args.side == "left"
-    assert args.position == "front"
-    assert args.old_part_number == "7852 123 456"
-    assert args.captured_oem == "32 10 6 888 999"
-    assert args.captured_source == "BMW AIR/ETK via AOS"
-
     args = parser.parse_args(["source-route", "--brand", "Toyota", "--data-type", "repair_manuals"])
     assert args.command == "source-route"
     assert args.brand == "Toyota"
@@ -461,23 +316,6 @@ def test_cli_parser_has_core_commands():
     assert args.path == "docs/agent/knowledge_map.json"
     assert args.dry_run is True
     assert args.apply is False
-
-    args = parser.parse_args(
-        [
-            "service-plan",
-            "--area",
-            "parts",
-            "--city",
-            "Красноярск",
-            "--vehicle",
-            "Lexus RX200T",
-            "--part-number",
-            "90311-89014",
-        ]
-    )
-    assert args.command == "service-plan"
-    assert args.area == "parts"
-    assert args.part_number == "90311-89014"
 
     args = parser.parse_args(
         [
@@ -541,19 +379,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
-            "crm-health-plan",
-            "--board-review-json",
-            "board_review.json",
-            "--today-json",
-            "today_context.json",
-        ]
-    )
-    assert args.command == "crm-health-plan"
-    assert args.board_review_json == "board_review.json"
-    assert args.today_json == "today_context.json"
-
-    args = parser.parse_args(
-        [
             "learn",
             "Писать живее",
             "--applies-to",
@@ -606,29 +431,6 @@ def test_cli_parser_has_core_commands():
     assert args.query == "Приберись"
     assert args.intent == "board_cleanup"
     assert args.limit == 5
-
-    args = parser.parse_args(
-        [
-            "prepare-card-action",
-            "--card-id",
-            "card_123",
-            "--expected-updated-at",
-            "2026-06-08T10:00:00+07:00",
-            "--description",
-            "**Важно:** проверить течь",
-            "--vehicle-profile-json",
-            '{"engine_model":"N63TU","source_summary":"Из описания карточки"}',
-            "--board-summary",
-            "Проверить течь",
-            "--target-fields",
-            "description,vehicle_profile,board_summary",
-            "--intent",
-            "board_cleanup",
-        ]
-    )
-    assert args.command == "prepare-card-action"
-    assert args.card_id == "card_123"
-    assert args.target_fields == "description,vehicle_profile,board_summary"
 
     args = parser.parse_args(["skills-audit"])
     assert args.command == "skills-audit"
@@ -695,38 +497,6 @@ def test_service_labor_refresh_cli_writes_private_artifacts(tmp_path, capsys):
     assert artifact_output.exists()
 
 
-def test_prepare_card_action_cli_outputs_dry_run_contract(capsys):
-    exit_code = cli.main(
-        [
-            "prepare-card-action",
-            "--card-id",
-            "card_123",
-            "--expected-updated-at",
-            "2026-06-08T10:00:00+07:00",
-            "--description",
-            "**Важно:** проверить течь",
-            "--vehicle-profile-json",
-            '{"engine_model":"N63TU","autofilled_fields":["engine_model"],"source_summary":"Из описания карточки"}',
-            "--current-card-json",
-            '{"updated_at":"2026-06-08T10:00:00+07:00","vehicle_profile":{"manual_fields":["vin"]}}',
-            "--board-summary",
-            "Проверить течь",
-            "--target-fields",
-            "description,vehicle_profile,board_summary",
-        ]
-    )
-
-    assert exit_code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["ok"] is True
-    assert payload["format"] == "crm_card_action_v1"
-    assert payload["dry_run"] is True
-    assert payload["write_contract"]["tool"] == "update_card"
-    assert payload["write_contract"]["expected_updated_at"] == "2026-06-08T10:00:00+07:00"
-    assert payload["summary_contract"]["required"] is True
-    assert payload["target_fields"] == ["description", "vehicle_profile", "board_summary"]
-
-
 @pytest.mark.parametrize("command", ["system-audit", "doctor"])
 def test_system_audit_commands_return_nonzero_when_audit_fails(command, monkeypatch, capsys):
     monkeypatch.setattr(cli, "build_system_audit", lambda **_kwargs: {"ok": False, "warnings": ["broken"]})
@@ -770,14 +540,6 @@ def test_every_top_level_cli_command_has_working_help(capsys):
         assert exc_info.value.code == 0, command
 
     assert "usage:" in capsys.readouterr().out
-
-
-def test_cli_rejects_invalid_json_file_input(tmp_path):
-    board_context = tmp_path / "board_context.json"
-    board_context.write_text("not-json", encoding="utf-8")
-
-    with pytest.raises(SystemExit, match="--board-context-json"):
-        cli.main(["crm-health-plan", "--board-context-json", str(board_context)])
 
 
 def test_cli_rejects_invalid_vehicle_identity_json():
