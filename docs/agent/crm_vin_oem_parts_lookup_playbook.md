@@ -109,9 +109,8 @@ Classify before decoding.
    - for MAN trucks, buses, vans, and industrial engines: MAN Service
      Portal/webMANTIS or MAN partslink24 with authorized access; do not treat
      third-party MANTIS downloads as official evidence;
-   - `lookup_oem_catalog_candidates` / `oem-catalog-lookup` when
-     the 17VIN `epc` is known, to collect OEM candidates from PartsAPI and
-     17VIN in one read-only result;
+   - `resolve_vin_oem_parts` for the canonical read-only identity, part-intent,
+     PartsAPI candidate, enrichment, readiness, and manual-action result;
    - PartsAPI `partsapi_catalog_lookup` for the normalized method set in
      `partsapi_method_contracts.md` (`PARTSAPI_KEY` + `PARTSAPI_BASE_URL`, or
      dry-run adapter check first);

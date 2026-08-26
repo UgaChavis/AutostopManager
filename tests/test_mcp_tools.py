@@ -122,14 +122,14 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     assert smoke["summary"]["no_order_guarantee"] is True
 
 
-def test_lookup_oem_catalog_candidates_tool_forwards_custom_category_index(tmp_path, monkeypatch):
+def test_lookup_oem_catalog_candidates_name_uses_canonical_resolver(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_lookup_oem_catalog_candidates(**kwargs):
+    def fake_resolve_vin_oem_parts(**kwargs):
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setattr(mcp_tools_module, "lookup_oem_catalog_candidates", fake_lookup_oem_catalog_candidates)
+    monkeypatch.setattr(mcp_tools_module, "resolve_vin_oem_parts", fake_resolve_vin_oem_parts)
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
@@ -137,12 +137,12 @@ def test_lookup_oem_catalog_candidates_tool_forwards_custom_category_index(tmp_p
     result = server.tools["lookup_oem_catalog_candidates"](
         identifier="JTEBU3FJX05027767",
         requested_part="передние колодки",
-        partsapi_category_index_path="data/custom_partsapi_index.json",
+        partsapi_category_index="data/custom_partsapi_index.json",
         dry_run=True,
     )
 
     assert result["ok"] is True
-    assert captured["partsapi_category_index_path"] == "data/custom_partsapi_index.json"
+    assert captured["partsapi_category_index"] == "data/custom_partsapi_index.json"
     assert captured["dry_run"] is True
 
 
@@ -170,7 +170,7 @@ def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     assert "MR41S-123456" not in rendered
 
 
-def test_benchmark_vin_parts_lookup_tool_forwards_dry_run_controls(tmp_path, monkeypatch):
+def test_benchmark_vin_parts_lookup_tool_forwards_timeout(tmp_path, monkeypatch):
     captured = {}
 
     def fake_benchmark_vin_parts_lookup(items, **kwargs):
@@ -186,12 +186,10 @@ def test_benchmark_vin_parts_lookup_tool_forwards_dry_run_controls(tmp_path, mon
     result = server.tools["benchmark_vin_parts_lookup"](
         [{"identifier": "MR41S123456"}],
         requested_part="передние колодки",
-        include_oem_catalog_dry_run=False,
         partsapi_timeout=7.5,
     )
 
     assert result["ok"] is True
-    assert captured["include_oem_catalog_dry_run"] is False
     assert captured["partsapi_timeout"] == 7.5
 
 

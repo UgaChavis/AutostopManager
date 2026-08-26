@@ -183,7 +183,6 @@ def test_vin_parts_benchmark_allows_read_only_lookup_after_partsapi_oe_agreement
         live_vpic=False,
         use_vpic_batch=False,
         include_vin17_dry_run=False,
-        include_oem_catalog_dry_run=False,
         live_partsapi_identity=True,
     )
 
@@ -246,7 +245,6 @@ def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(
         live_vpic=False,
         use_vpic_batch=False,
         include_vin17_dry_run=False,
-        include_oem_catalog_dry_run=False,
         live_partsapi_identity=True,
     )
 
@@ -254,40 +252,6 @@ def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(
     assert identity["ready_for_oem_candidate_lookup"] is False
     assert identity["cross_source_agreement"]["status"] == "conflict"
     assert "partsapi_oe_identity_conflict" in identity["blocking_reasons"]
-
-
-def test_vin_parts_benchmark_prepares_oem_smoke_call(monkeypatch):
-    _clear_partsapi_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "partsapi-secret")
-    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example/api")
-    monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
-    monkeypatch.setenv("VIN17_SECRET", "vin17-secret")
-
-    result = benchmark_vin_parts_lookup(
-        [
-            {
-                "identifier": "JTEBU3FJX05027767",
-                "make": "Toyota",
-                "model": "Land Cruiser Prado 150",
-                "model_year": 2012,
-                "engine": "1GR-FE",
-                "epc": "toyota",
-            }
-        ],
-        requested_part="передние колодки",
-        live_vpic=False,
-        use_vpic_batch=False,
-    )
-
-    smoke = result["items"][0]["prepared_calls"]["oem_catalog_lookup"]
-    rendered = json.dumps(result, ensure_ascii=False)
-
-    assert result["summary"]["oem_catalog_request_shape_count"] == 1
-    assert smoke["provider"] == "multi_oem_catalog_lookup"
-    assert smoke["provider_count"] == 2
-    assert smoke["ok"] is True
-    assert smoke["blockers"] == []
-    assert "JTEBU3FJX05027767" not in rendered
 
 
 def test_vin_parts_benchmark_can_attach_oem_resolution(monkeypatch):
@@ -317,7 +281,6 @@ def test_vin_parts_benchmark_can_attach_oem_resolution(monkeypatch):
         live_vpic=False,
         use_vpic_batch=False,
         include_vin17_dry_run=False,
-        include_oem_catalog_dry_run=False,
         resolve_oem=True,
     )
 
@@ -397,7 +360,6 @@ def test_vin_parts_benchmark_counts_raw_identifier_queries_and_canonical_blocker
         use_vpic_batch=False,
         include_partsapi_dry_run=False,
         include_vin17_dry_run=False,
-        include_oem_catalog_dry_run=False,
     )
 
     assert result["summary"]["manual_public_search_count"] == 2

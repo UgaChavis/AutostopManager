@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
-from .catalog_clients import lookup_oem_catalog_candidates, partsapi_catalog_lookup, vin17_decode_vehicle
+from .catalog_clients import partsapi_catalog_lookup, vin17_decode_vehicle
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import decode_vehicle_identities
 from .vin_oem_resolver import resolve_vin_oem_parts
@@ -378,69 +378,6 @@ def _vin17_dry_run_call(identifier: str) -> dict[str, Any]:
     }
 
 
-def _oem_catalog_smoke_digest(call: dict[str, Any]) -> dict[str, Any]:
-    blockers = []
-    missing_env_names: set[str] = set()
-    for blocker in call.get("blockers", []):
-        missing_env_names.update(blocker.get("missing_env_names") or [])
-        blockers.append(
-            {
-                "provider": blocker.get("provider"),
-                "operation": blocker.get("operation"),
-                "missing_env_names": blocker.get("missing_env_names") or [],
-                "missing_params": blocker.get("missing_params") or [],
-                "error": blocker.get("error"),
-            }
-        )
-    provider_results = []
-    for result in call.get("provider_results", []):
-        provider_results.append(
-            {
-                "provider": result.get("provider"),
-                "operation": result.get("operation"),
-                "ok": bool(result.get("ok")),
-                "dry_run": bool(result.get("dry_run")),
-                "candidate_count": int(result.get("candidate_count") or 0),
-                "missing_env_names": result.get("missing_env_names") or [],
-                "missing_params": result.get("missing_params") or [],
-            }
-        )
-        missing_env_names.update(result.get("missing_env_names") or [])
-    return {
-        "provider": call.get("provider"),
-        "ok": bool(call.get("ok")),
-        "status": call.get("status"),
-        "has_successful_provider": bool(call.get("has_successful_provider")),
-        "dry_run": True,
-        "provider_count": int(call.get("provider_count") or 0),
-        "candidate_count": int(call.get("candidate_count") or 0),
-        "providers": provider_results,
-        "blockers": blockers,
-        "missing_env_names": sorted(missing_env_names),
-        "privacy": {"raw_identifier_redacted_from_benchmark": True, "secret_exposed": False},
-    }
-
-
-def _oem_catalog_lookup_call(
-    identifier: str, item: dict[str, Any], requested_part: str, *, dry_run: bool = True, timeout: float = 20.0
-) -> dict[str, Any]:
-    context = _merged_item_context(item)
-    call = lookup_oem_catalog_candidates(
-        identifier=identifier,
-        requested_part=requested_part,
-        epc=_compact(item.get("epc") or context.get("epc")),
-        partsapi_category=_compact(
-            item.get("partsapi_category")
-            or context.get("partsapi_category")
-            or item.get("partsapi_cat")
-            or context.get("partsapi_cat")
-        ),
-        timeout=timeout,
-        dry_run=dry_run,
-    )
-    return _oem_catalog_smoke_digest(call)
-
-
 def _missing_env_from_plan(plan: dict[str, Any]) -> list[str]:
     names = set()
     for blocker in plan.get("blockers", []):
@@ -501,7 +438,6 @@ def benchmark_vin_parts_lookup(
     use_vpic_batch: bool = True,
     include_partsapi_dry_run: bool = True,
     include_vin17_dry_run: bool = True,
-    include_oem_catalog_dry_run: bool = True,
     live_partsapi_identity: bool = False,
     live_partsapi_oem: bool = False,
     resolve_oem: bool = False,
@@ -581,25 +517,12 @@ def benchmark_vin_parts_lookup(
             else []
         )
         vin17_call = _vin17_dry_run_call(identifier) if include_vin17_dry_run else None
-        oem_catalog_call = (
-            _oem_catalog_lookup_call(
-                identifier,
-                item,
-                item_requested_part,
-                dry_run=not live_partsapi_oem,
-                timeout=partsapi_timeout,
-            )
-            if include_oem_catalog_dry_run
-            else None
-        )
 
         missing_env_names.update(_missing_env_from_plan(provider_plan))
         for call in partsapi_calls:
             missing_env_names.update(call.get("missing_env_names") or [])
         if vin17_call:
             missing_env_names.update(vin17_call.get("missing_env_names") or [])
-        if oem_catalog_call:
-            missing_env_names.update(oem_catalog_call.get("missing_env_names") or [])
         if oem_resolution:
             for call in oem_resolution.get("calls", []):
                 missing_env_names.update(call.get("missing_env_names") or [])
@@ -636,7 +559,6 @@ def benchmark_vin_parts_lookup(
                 "prepared_calls": {
                     "partsapi": partsapi_calls,
                     "vin17": vin17_call,
-                    "oem_catalog_lookup": oem_catalog_call,
                 },
                 "oem_resolution": oem_resolution,
                 "manual_public_search": {
@@ -687,9 +609,6 @@ def benchmark_vin_parts_lookup(
         ),
         "partsapi_request_shape_count": sum(len(item["prepared_calls"]["partsapi"]) for item in benchmark_items),
         "vin17_request_shape_count": sum(1 for item in benchmark_items if item["prepared_calls"]["vin17"] is not None),
-        "oem_catalog_request_shape_count": sum(
-            1 for item in benchmark_items if item["prepared_calls"]["oem_catalog_lookup"] is not None
-        ),
         "oem_resolution_count": sum(1 for item in benchmark_items if item.get("oem_resolution")),
         "oem_candidate_count": sum(
             int((item.get("oem_resolution") or {}).get("candidate_count") or 0) for item in benchmark_items

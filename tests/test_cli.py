@@ -108,23 +108,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
-            "oem-catalog-lookup",
-            "JTEBU3FJX05027767",
-            "--part",
-            "передние колодки",
-            "--epc",
-            "toyota",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "oem-catalog-lookup"
-    assert args.identifier == "JTEBU3FJX05027767"
-    assert args.requested_part == "передние колодки"
-    assert args.epc == "toyota"
-    assert args.dry_run is True
-
-    args = parser.parse_args(
-        [
             "crm-vin-parts-plan",
             "--card-id",
             "card_123",

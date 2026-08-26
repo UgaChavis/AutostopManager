@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .catalog_clients import exist_price_lookup, lookup_oem_catalog_candidates
+from .catalog_clients import exist_price_lookup
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
@@ -261,19 +261,6 @@ def build_parser() -> argparse.ArgumentParser:
     exist_lookup.add_argument("--include-more-offers", action="store_true")
     exist_lookup.add_argument("--timeout", type=float, default=20.0)
     exist_lookup.add_argument("--dry-run", action="store_true")
-
-    oem_catalog_lookup = sub.add_parser(
-        "oem-catalog-lookup",
-        help="Call or dry-run the PartsAPI and 17VIN OEM catalog lookup",
-    )
-    oem_catalog_lookup.add_argument("identifier")
-    oem_catalog_lookup.add_argument("--part", dest="requested_part", required=True)
-    oem_catalog_lookup.add_argument("--epc", default=None)
-    oem_catalog_lookup.add_argument("--partsapi-part-type", default="oem")
-    oem_catalog_lookup.add_argument("--partsapi-category", default=None)
-    oem_catalog_lookup.add_argument("--timeout", type=float, default=20.0)
-    oem_catalog_lookup.add_argument("--max-attempts", type=int, default=1)
-    oem_catalog_lookup.add_argument("--dry-run", action="store_true")
 
     partsapi_vin_smoke = sub.add_parser(
         "partsapi-vin-smoke",
@@ -764,19 +751,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 max_offers=args.max_offers,
                 include_more_offers=args.include_more_offers,
                 timeout=args.timeout,
-                dry_run=args.dry_run,
-            )
-        )
-    elif args.command == "oem-catalog-lookup":
-        _print_json(
-            lookup_oem_catalog_candidates(
-                identifier=args.identifier,
-                requested_part=args.requested_part,
-                epc=args.epc,
-                partsapi_part_type=args.partsapi_part_type,
-                partsapi_category=args.partsapi_category,
-                timeout=args.timeout,
-                max_attempts=args.max_attempts,
                 dry_run=args.dry_run,
             )
         )

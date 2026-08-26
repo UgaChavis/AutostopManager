@@ -12,7 +12,6 @@ from .agent_gateway import agent_envelope, build_agent_bootstrap, list_agent_wor
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
     exist_price_lookup,
-    lookup_oem_catalog_candidates,
     partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
     vin17_decode_vehicle,
@@ -1591,15 +1590,15 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="lookup_oem_catalog_candidates",
         description=(
-            "Call or dry-run the OEM candidate lookup for one VIN/frame and requested part. "
-            "Combines PartsAPI and 17VIN when their credentials and routing ids are available; no CRM writes or orders are created."
+            "Resolve one VIN/frame and requested part through the canonical identity, part-intent, PartsAPI candidate, "
+            "enrichment, readiness, and manual-action flow; no writes or orders."
         ),
         annotations=ToolAnnotations(
             title="OEM Catalog Candidates",
             readOnlyHint=True,
             destructiveHint=False,
         ),
-    )(lookup_oem_catalog_candidates)
+    )(resolve_vin_oem_parts)
 
     server.tool(
         name="resolve_vin_oem_parts",
