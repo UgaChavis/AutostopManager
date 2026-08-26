@@ -27,7 +27,6 @@ from .config import (
 )
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
-from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
@@ -851,11 +850,10 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="prepare_crm_card_action",
         description=(
-            "Build a dry-run CRM card edit contract for AutoStopManager: exact description patch, vehicle_profile patch "
-            "with manual_fields preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, "
-            "risk flags, and strict reread verification spec. This tool never writes CRM."
+            "Compatibility name for the canonical connector-neutral ActionContractV2 preflight. "
+            "Requires its current domain/action schema and never performs the write."
         ),
-    )(prepare_crm_card_action)
+    )(prepare_action_contract)
 
     @server.tool(
         name="manager_journal",

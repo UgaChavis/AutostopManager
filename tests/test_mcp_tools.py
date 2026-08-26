@@ -669,67 +669,16 @@ def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_pat
         assert "expected_state_version" in inspect.signature(server.tools[tool_name]).parameters
 
 
-def test_prepare_crm_card_action_returns_strict_write_and_verification_contract(tmp_path):
+def test_prepare_crm_card_action_is_canonical_action_contract_alias(tmp_path):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
 
-    register_manager_memory_tools(server, store)
-
-    assert "prepare_crm_card_action" in server.tools
-    result = server.tools["prepare_crm_card_action"](
-        card_id="card-123",
-        expected_updated_at="2026-06-08T10:00:00+07:00",
-        description="  **Важно:** проверить течь\n\n✅ Машина ждет диагностику  ",
-        vehicle_profile={
-            "engine_model": "N63TU",
-            "autofilled_fields": ["engine_model"],
-            "tentative_fields": ["engine_model"],
-            "field_sources": {"engine_model": "card_description"},
-            "source_summary": "Из описания карточки",
-            "source_confidence": "medium",
-        },
-        board_summary="Проверить течь\nЖдет диагностику",
-        current_card={
-            "id": "card-123",
-            "updated_at": "2026-06-08T10:00:00+07:00",
-            "description": "старое описание",
-            "vehicle_profile": {"vin": "WBAN63TEST0000001", "manual_fields": ["vin"]},
-        },
-        intent="board_cleanup",
-        dry_run=True,
+    assert server.tools["prepare_crm_card_action"] is server.tools["prepare_action_contract"]
+    assert inspect.signature(server.tools["prepare_crm_card_action"]) == inspect.signature(
+        server.tools["prepare_action_contract"]
     )
-
-    assert result["ok"] is True
-    assert result["format"] == "crm_card_action_v1"
-    assert result["card_id"] == "card-123"
-    assert result["write_contract"]["tool"] == "update_card"
-    assert result["write_contract"]["expected_updated_at"] == "2026-06-08T10:00:00+07:00"
-    assert result["write_contract"]["response_mode"] == "compact"
-    assert result["planned_patch"]["description"] == "  **Важно:** проверить течь\n\n✅ Машина ждет диагностику  "
-    assert result["planned_patch"]["vehicle_profile"]["manual_fields"] == ["vin"]
-    assert "description_exact" in result["verification_spec"]["checks"]
-    assert "description_visible_text" in result["verification_spec"]["checks"]
-    assert "vehicle_profile_field_level" in result["verification_spec"]["checks"]
-    assert "board_summary_stale_false" in result["verification_spec"]["checks"]
-    assert result["ledger_event_schema"] == [
-        "pre_state_ref",
-        "planned_patch",
-        "write_result",
-        "post_state",
-        "diff",
-        "verification_checks",
-        "warnings",
-    ]
-    assert result["tool_sequence"] == [
-        "agent_bootstrap",
-        "agent_search",
-        "agent_entity_context",
-        "prepare_action_contract",
-        "agent_board_workflow(cleanup_card, mode=dry_run)",
-        "agent_board_workflow(cleanup_card, mode=apply)",
-        "agent_entity_context",
-        "workflow_status",
-    ]
+    live_tools = build_server()._tool_manager._tools
+    assert live_tools["prepare_crm_card_action"].parameters == live_tools["prepare_action_contract"].parameters
 
 
 def test_memory_curator_tools_are_registered(tmp_path):
