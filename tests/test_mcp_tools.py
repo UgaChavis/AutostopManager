@@ -232,7 +232,7 @@ def test_knowledge_base_tools_are_registered(tmp_path):
 
     probe_result = server.tools["probe_knowledge_base"]("clutch gearbox", limit=3)
     assert probe_result["ok"] is True
-    assert probe_result["best_domain"] == "transmission"
+    assert probe_result["best_domain"] == "automotive_repair"
 
     search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="automotive_repair", limit=5)
     assert search_result["ok"] is True

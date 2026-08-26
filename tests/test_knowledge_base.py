@@ -191,33 +191,6 @@ def test_search_routes_russian_oil_query_to_fluids(tmp_path):
     assert result["items"][0]["domain"] == "fluids"
 
 
-def test_probe_routes_dsg_software_update_to_transmission(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = probe_knowledge_base(store, "DSG DQ250 обновление ПО мехатроник адаптация ODIS SVM", limit=5)
-
-    assert result["ok"] is True
-    assert result["has_knowledge"] is True
-    assert result["best_domain"] == "transmission"
-    assert any("transmission_playbook" in path for path in result["source_of_truth"])
-
-
-def test_search_finds_dsg_mechatronic_software_update_guidance(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = search_knowledge_base(
-        store,
-        "DQ200 мехатроник basic settings software update SVM ODIS",
-        domain="transmission",
-        limit=8,
-    )
-
-    assert result["ok"] is True
-    assert any("transmission_playbook" in item["path"] for item in result["items"])
-
-
 def test_probe_routes_cluster_coding_to_general_automotive_repair(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
@@ -240,18 +213,6 @@ def test_probe_routes_priberis_to_board_cleanup_autopilot(tmp_path):
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "board_cleanup_autopilot"
     assert result["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
-
-
-def test_probe_routes_clutch_to_transmission(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = probe_knowledge_base(store, "подобрать сцепление для механической коробки")
-
-    assert result["ok"] is True
-    assert result["has_knowledge"] is True
-    assert result["best_domain"] == "transmission"
-    assert any("transmission" in path.lower() for path in result["routes"][0]["source_of_truth"])
 
 
 def test_probe_routes_procurement_pricing_to_parts_sourcing(tmp_path):
@@ -377,7 +338,7 @@ def test_reference_files_are_audited_but_not_fully_indexed(tmp_path):
     sync_knowledge_base(store)
 
     audit = audit_knowledge_base(store)
-    result = search_knowledge_base(store, "automotive_repair_sources_catalog", domain="transmission", limit=20)
+    result = search_knowledge_base(store, "automotive_repair_sources_catalog", domain="fluids", limit=20)
 
     assert audit["ok"] is True
     assert audit["missing_files"] == []

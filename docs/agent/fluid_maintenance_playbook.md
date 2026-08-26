@@ -21,10 +21,6 @@ maintenance interval, or any fill capacity.
 6. If source-backed data is unavailable, say:
    `Требуется проверка по OEM-сервисной информации для конкретного VIN.`
 
-For AT, CVT, DCT, AMT, and heavy-duty gearbox fluids, also consult
-`docs/agent/transmission_playbook.md` before confirming the exact fluid,
-capacity, or level-check procedure.
-
 ## Required Distinctions
 
 Do not collapse these values into one number:

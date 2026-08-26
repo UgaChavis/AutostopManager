@@ -1543,13 +1543,13 @@ def _focused_navigation_hints(lowered: str) -> dict[str, int]:
         domain: score
         for domain, score, terms in (
             ("startup_and_identity", 70, ("подготовь менеджера", "manager startup", "менеджера к работе")),
-            ("transmission", 70, ("dsg", "dq200", "dq250", "мехатроник", "odis", "svm")),
+            ("automotive_repair", 70, ("dsg", "dq200", "dq250", "мехатроник", "odis", "svm")),
             ("automotive_repair", 78, ("kombi", "приборк", "coding", "кодирован", "a2l", "odx", "dcm")),
         )
         if any(term in lowered for term in terms)
     }
     if any(term in lowered for term in ("сцеплен", "clutch", "коробк", "gearbox", "трансмисс")):
-        hints["transmission"] = 70
+        hints["automotive_repair"] = 70
     if any(term in lowered for term in ("счет", "счёт", "invoice", "акт", "коммерческ")) and any(
         term in lowered for term in ("созд", "сформир", "выстав", "шаблон", "pdf")
     ):

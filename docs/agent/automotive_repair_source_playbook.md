@@ -50,9 +50,6 @@ For timing/GRM work, identify the exact engine and drive first. Confirm the
 applicable procedure, timing marks, torque-plus-angle values, special tools,
 and crank/cam locking; never transfer them between variants.
 
-For gearbox, clutch, adaptation, or transmission-fluid work, use
-`docs/agent/transmission_playbook.md` and the exact transmission family/code.
-
 ## Public Research
 
 Use the local catalog first, then resolve `search_web_multi` through the normal
