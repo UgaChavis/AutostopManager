@@ -178,67 +178,7 @@ def sync_knowledge_base(store: ManagerMemoryStore | None = None) -> dict[str, An
             optional_missing_for_domain = [
                 raw_path for raw_path, is_present in optional_status.items() if not is_present
             ]
-            optional_present_for_domain = [raw_path for raw_path, is_present in optional_status.items() if is_present]
             optional_missing.extend(optional_missing_for_domain)
-            skill_path = str(route.get("skill_path") or "")
-            route_card = _build_route_card(domain, route)
-            route_path = f"knowledge_map:{domain}"
-            optional_runtime_lines: list[str] = []
-            if optional_runtime_files:
-                optional_runtime_lines = [
-                    "Optional runtime files:",
-                    *[f"- {item}" for item in optional_runtime_files],
-                    "Optional runtime status:",
-                    *[f"- indexed locally: {item}" for item in optional_present_for_domain],
-                    *[f"- missing locally: {item}" for item in optional_missing_for_domain],
-                ]
-                if optional_missing_for_domain:
-                    optional_runtime_lines.append(
-                        "Current private facts are unavailable until these local runtime files exist."
-                    )
-            route_content = "\n".join(
-                [
-                    f"Domain: {domain}",
-                    f"Title: {route_card.title}",
-                    "Use when:",
-                    *[f"- {item}" for item in route_card.use_when],
-                    "Aliases:",
-                    *[f"- {item}" for item in route_card.aliases],
-                    "Keywords:",
-                    *[f"- {item}" for item in route_card.keywords],
-                    "Questions:",
-                    *[f"- {item}" for item in route_card.questions],
-                    "Source of truth:",
-                    *[f"- {item}" for item in route_card.source_of_truth],
-                    "Primary files:",
-                    *[f"- {item}" for item in route_card.primary_files],
-                    "Reference files:",
-                    *[f"- {item}" for item in route_card.reference_files],
-                    "Required context:",
-                    *[f"- {item}" for item in route_card.required_context],
-                    *optional_runtime_lines,
-                    f"Skill path: {skill_path}" if skill_path else "",
-                ]
-            ).strip()
-            document_id = _insert_document(
-                conn,
-                domain=domain,
-                path=route_path,
-                title=f"{domain} route",
-                document_type="domain_route",
-                use_when=use_when,
-                content=route_content,
-                indexed_at=now,
-            )
-            documents_indexed += 1
-            sections_indexed += _insert_sections(
-                conn,
-                document_id=document_id,
-                domain=domain,
-                path=route_path,
-                sections=[_Section("Domain Route", 1, route_content, 0)],
-                indexed_at=now,
-            )
 
             indexed_paths: set[str] = set()
             for raw_path in primary_files:
@@ -590,18 +530,12 @@ def search_knowledge_base(
                 "level": item["level"],
                 "preview": item["preview"],
                 "use_when": use_when,
-                "score": score + _document_type_boost(item["document_type"], item["domain"], domain_hints),
+                "score": score,
                 "indexed_at": item["indexed_at"],
             }
         )
 
-    ranked.sort(
-        key=lambda value: (
-            value["score"],
-            1 if value["document_type"] == "domain_route" else 0,
-        ),
-        reverse=True,
-    )
+    ranked.sort(key=lambda value: value["score"], reverse=True)
     return {
         "ok": True,
         "query": query,
@@ -1694,15 +1628,4 @@ def _score(item: dict[str, Any], tokens: list[str], query: str, *, domain_hints:
             score += 3
         if token in path:
             score += 2
-    if item.get("document_type") == "domain_route" and (score > 0 or not tokens):
-        score += 3
     return score
-
-
-def _document_type_boost(document_type: str, domain: str, domain_hints: dict[str, int]) -> int:
-    if document_type != "domain_route":
-        return 0
-    boost = 4
-    if domain_hints.get(str(domain or "").lower(), 0) >= 15:
-        boost += 12
-    return boost

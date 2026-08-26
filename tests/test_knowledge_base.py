@@ -166,7 +166,7 @@ def test_search_finds_model_specific_route_after_sync(tmp_path):
     assert result["ok"] is True
     assert result["items"]
     assert result["items"][0]["domain"] == "bmw_f15_n63"
-    assert result["items"][0]["path"] == "knowledge_map:bmw_f15_n63"
+    assert result["items"][0]["path"] == "docs/agent/bmw_repair_playbook.md"
 
 
 def test_search_can_filter_by_domain(tmp_path):

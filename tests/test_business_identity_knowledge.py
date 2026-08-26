@@ -39,12 +39,7 @@ def test_business_identity_search_returns_public_route_when_private_runtime_file
 
     assert result["ok"] is True
     assert result["items"]
-    assert any(
-        item["path"] == "knowledge_map:business_identity"
-        or "business_identity_playbook.md" in item["path"]
-        or item["document_type"] == "annotation"
-        for item in result["items"]
-    )
+    assert any("business_identity_playbook.md" in item["path"] for item in result["items"])
 
 
 def test_business_identity_reports_missing_private_runtime_files_as_optional(tmp_path):
