@@ -1591,8 +1591,8 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="lookup_oem_catalog_candidates",
         description=(
-            "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part. "
-            "Combines Parts-Catalogs, PartsAPI, and 17VIN when their credentials and routing ids are available; no CRM writes or orders are created."
+            "Call or dry-run the OEM candidate lookup for one VIN/frame and requested part. "
+            "Combines PartsAPI and 17VIN when their credentials and routing ids are available; no CRM writes or orders are created."
         ),
         annotations=ToolAnnotations(
             title="OEM Catalog Candidates",

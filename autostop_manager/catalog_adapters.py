@@ -134,18 +134,6 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         docs_url="https://www.denso-am.eu/catalog/vin",
     ),
     CatalogProvider(
-        source_id="parts_catalogs_api",
-        name="Parts-Catalogs API",
-        stage="oem_catalog",
-        access_mode="api_key",
-        env_names=("PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL"),
-        capabilities=("car_info_by_vin_frame", "catalog_groups", "oem_parts", "diagrams", "schema_parts"),
-        priority="high",
-        role="Primary OEM catalog candidate for exact vehicle profile and OEM group/part lookup.",
-        limits="Commercial subscription; brand/market coverage must be validated on AutoStop test VIN/frame set.",
-        docs_url="https://www.parts-catalogs.com/doc/us/introduction.htm",
-    ),
-    CatalogProvider(
         source_id="vin17_api",
         name="17VIN API",
         stage="oem_catalog",
@@ -490,7 +478,7 @@ def build_oem_parts_provider_plan(
     procurement_providers = _pick_configured(_providers_for_stage("procurement_price"))
     market_providers = _pick_configured(_providers_for_stage("market_price"))
 
-    oem_capable_source_ids = {"parts_catalogs_api", "vin17_api", "partsapi_ru"}
+    oem_capable_source_ids = {"vin17_api", "partsapi_ru"}
     live_oem = [
         provider
         for provider in oem_providers + cross_providers

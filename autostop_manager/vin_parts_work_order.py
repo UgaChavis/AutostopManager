@@ -83,14 +83,6 @@ ASIAN_BRAND_ROUTES = {
 
 COMMON_OEM_ROUTES = [
     {
-        "source_id": "parts_catalogs_api",
-        "name": "Parts-Catalogs API",
-        "role": "Automated VIN/frame -> vehicle -> group -> OEM candidate route.",
-        "access": "api_key",
-        "env_names": ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL"],
-        "acceptance": "Returns VIN/frame-specific vehicle and requested part group with production/option evidence.",
-    },
-    {
         "source_id": "vin17_api",
         "name": "17VIN API",
         "role": "Automated second-source VIN -> EPC/profile -> common parts / part search route.",

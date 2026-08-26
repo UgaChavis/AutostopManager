@@ -24,7 +24,7 @@ def _clear_partsapi_env(monkeypatch):
 
 def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
     _clear_partsapi_env(monkeypatch)
-    for name in ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
+    for name in ["ROSSKO_KEY1", "ROSSKO_KEY2"]:
         monkeypatch.delenv(name, raising=False)
 
     status = catalog_provider_status()
@@ -140,7 +140,7 @@ def test_catalog_provider_status_marks_euroauto_public_catalog_as_manual():
 
 def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeypatch):
     _clear_partsapi_env(monkeypatch)
-    for name in ["PARTS_CATALOGS_API_KEY", "PARTS_CATALOGS_BASE_URL", "ROSSKO_KEY1", "ROSSKO_KEY2"]:
+    for name in ["ROSSKO_KEY1", "ROSSKO_KEY2"]:
         monkeypatch.delenv(name, raising=False)
 
     identity = decode_vehicle_identity(

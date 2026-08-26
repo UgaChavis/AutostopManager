@@ -72,17 +72,15 @@ Classify before decoding.
 - Validate 17 characters and no `I`, `O`, `Q`.
 - Use vPIC or a market-appropriate VIN decoder for base identity.
 - For OEM part lookup, vPIC alone is not enough: hand off to a VIN-capable EPC,
-  Parts-Catalogs, PartsAPI VINdecodeOE/getPartsbyVIN, 17VIN, dealer catalog,
-  or brand catalog.
+  PartsAPI VINdecodeOE/getPartsbyVIN, 17VIN, dealer catalog, or brand catalog.
 
 ### Japanese Frame / Body Number
 
 - Treat the frame/chassis/body number as the primary key for JDM vehicles.
 - Keep the hyphenated form when the source expects it, e.g. `GXE10-0088644`.
 - Do not invent a global 17-character VIN.
-- Use manufacturer/Japan recall routes, Parts-Catalogs VIN/FRAME, epc-data,
-  PartSouq/Amayama-style catalog, or brand EPC to identify the exact catalog
-  vehicle.
+- Use manufacturer/Japan recall routes, epc-data, PartSouq/Amayama-style
+  catalog, or brand EPC to identify the exact catalog vehicle.
 - Require model code, production date/month, engine, transmission, drive, and
   grade when the catalog splits parts by production range or option.
 
@@ -111,11 +109,9 @@ Classify before decoding.
    - for MAN trucks, buses, vans, and industrial engines: MAN Service
      Portal/webMANTIS or MAN partslink24 with authorized access; do not treat
      third-party MANTIS downloads as official evidence;
-   - Parts-Catalogs API/widget for VIN/FRAME and catalog groups;
    - `lookup_oem_catalog_candidates` / `oem-catalog-lookup` when
-     Parts-Catalogs `catalog_id/car_id/group_id` and 17VIN `epc` are known,
-     to collect OEM candidates from Parts-Catalogs, PartsAPI, and 17VIN in one
-     read-only result;
+     the 17VIN `epc` is known, to collect OEM candidates from PartsAPI and
+     17VIN in one read-only result;
    - PartsAPI `partsapi_catalog_lookup` for the normalized method set in
      `partsapi_method_contracts.md` (`PARTSAPI_KEY` + `PARTSAPI_BASE_URL`, or
      dry-run adapter check first);
@@ -148,7 +144,7 @@ Classify before decoding.
 - If the card is a MAN vehicle and the request is for ТО filters, belts,
   brake wear parts, sensors, or engine service kits, first obtain the MAN
   vehicle identity and genuine reference through MAN webMANTIS/partslink24,
-  Parts-Catalogs, PartsAPI, 17VIN, or a dealer/supplier quote.
+  PartsAPI, 17VIN, or a dealer/supplier quote.
 - After the MAN/OEM reference is stable, use official manufacturer aftermarket
   catalogs for analog selection: MANN-FILTER, MAHLE/Knecht, Hengst, Bosch,
   Donaldson, Fleetguard, NGK/NTK, ZF Aftermarket, or TecDoc-backed catalogs.

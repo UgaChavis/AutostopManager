@@ -451,7 +451,6 @@ def build_crm_vin_parts_lookup_pipeline(
                 "step": "find_oem_for_requested_part",
                 "sources": [
                     "official EPC/dealer",
-                    "Parts-Catalogs",
                     "PartsAPI",
                     "17VIN",
                     "AUTOPOISK",

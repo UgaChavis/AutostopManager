@@ -17,8 +17,8 @@ Use the local `decode_vehicle_identity` tool / `python -m autostop_manager.cli
 decode-vehicle` before OEM or parts lookup when the input comes from CRM,
 looks ROW/JDM, or has weak/partial vPIC output.
 Use `catalog_provider_status` to verify live catalog/API readiness before
-claiming that PartsAPI, Parts-Catalogs, 17VIN, AUTOPOISK, partslink24, or
-supplier APIs are available.
+claiming that PartsAPI, 17VIN, AUTOPOISK, partslink24, or supplier APIs are
+available.
 For board-wide checks, use the batch decoder path (`decode_vehicle_identities`
 or `decode-vehicles`); it calls public vPIC batch for ISO VINs, then applies
 local WMI/platform rules and CRM context.
@@ -180,10 +180,9 @@ Also include:
 - field-level evidence and conflicts
 - source limitations
 - required next source for high confidence
-- adapter status for PartsAPI, Parts-Catalogs, 17VIN, AUTOPOISK, and brand EPC
+- adapter status for PartsAPI, 17VIN, AUTOPOISK, and brand EPC
 - missing live credentials such as `PARTSAPI_KEY`, `PARTSAPI_BASE_URL`,
-  `PARTS_CATALOGS_API_KEY`, `PARTS_CATALOGS_BASE_URL`, `VIN17_ACCOUNT`, and
-  `VIN17_SECRET`
+  `VIN17_ACCOUNT`, and `VIN17_SECRET`
 
 ## Error Handling
 
@@ -226,7 +225,6 @@ Keep only durable conclusions in memory:
 - [NHTSA vPIC API](https://vpic.nhtsa.dot.gov/api/)
 - [PartsAPI docs](https://partsapi.ru/docs)
 - [17VIN API docs](https://en.17vin.com/doc.html)
-- [Parts-Catalogs API docs](https://www.parts-catalogs.com/doc/us/introduction.htm)
 - [AUTOPOISK](https://autopoisk.su/en)
 - [partslink24](https://www.partslink24.com/en)
 - [Toyota Japan recall search](https://www.toyota.co.jp/recall-search/dc/en/search)

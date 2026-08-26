@@ -54,7 +54,7 @@ def test_decode_vehicle_identity_handles_jdm_frame_without_pretending_it_is_iso_
     assert result["vehicle_profile"]["make"] == "Suzuki"
     assert result["vehicle_profile"]["model"] == "Hustler"
     assert result["vehicle_profile"]["platform"] == "MR41S"
-    assert any(source["source_id"] == "parts_catalogs_api" for source in result["required_next_sources"])
+    assert any(source["source_id"] == "partsapi_ru" for source in result["required_next_sources"])
     assert any("not treat it as a 17-character ISO VIN" in warning for warning in result["warnings"])
 
 

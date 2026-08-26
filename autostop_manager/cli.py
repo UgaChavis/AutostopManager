@@ -264,13 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     oem_catalog_lookup = sub.add_parser(
         "oem-catalog-lookup",
-        help="Call or dry-run the three-provider OEM catalog lookup: Parts-Catalogs, PartsAPI, and 17VIN",
+        help="Call or dry-run the PartsAPI and 17VIN OEM catalog lookup",
     )
     oem_catalog_lookup.add_argument("identifier")
     oem_catalog_lookup.add_argument("--part", dest="requested_part", required=True)
-    oem_catalog_lookup.add_argument("--catalog-id", default=None)
-    oem_catalog_lookup.add_argument("--car-id", default=None)
-    oem_catalog_lookup.add_argument("--group-id", default=None)
     oem_catalog_lookup.add_argument("--epc", default=None)
     oem_catalog_lookup.add_argument("--partsapi-part-type", default="oem")
     oem_catalog_lookup.add_argument("--partsapi-category", default=None)
@@ -775,9 +772,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             lookup_oem_catalog_candidates(
                 identifier=args.identifier,
                 requested_part=args.requested_part,
-                catalog_id=args.catalog_id,
-                car_id=args.car_id,
-                group_id=args.group_id,
                 epc=args.epc,
                 partsapi_part_type=args.partsapi_part_type,
                 partsapi_category=args.partsapi_category,

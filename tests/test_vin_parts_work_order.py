@@ -26,8 +26,6 @@ def _clear_partsapi_env(monkeypatch):
 def test_vin_parts_work_order_builds_actionable_routes_without_raw_identifier(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     for name in [
-        "PARTS_CATALOGS_API_KEY",
-        "PARTS_CATALOGS_BASE_URL",
         "VIN17_ACCOUNT",
         "VIN17_SECRET",
         "ROSSKO_KEY1",

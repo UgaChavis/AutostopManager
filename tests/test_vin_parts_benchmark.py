@@ -36,8 +36,6 @@ def _clear_partsapi_env(monkeypatch):
 def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     for name in [
-        "PARTS_CATALOGS_API_KEY",
-        "PARTS_CATALOGS_BASE_URL",
         "VIN17_ACCOUNT",
         "VIN17_SECRET",
         "ROSSKO_KEY1",
@@ -95,8 +93,6 @@ def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch
 
 def test_vin_parts_benchmark_status_tracks_identity_ready_but_missing_live_sources(monkeypatch):
     _clear_partsapi_env(monkeypatch)
-    monkeypatch.delenv("PARTS_CATALOGS_API_KEY", raising=False)
-    monkeypatch.delenv("PARTS_CATALOGS_BASE_URL", raising=False)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
 
@@ -260,10 +256,8 @@ def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(
     assert "partsapi_oe_identity_conflict" in identity["blocking_reasons"]
 
 
-def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
+def test_vin_parts_benchmark_prepares_oem_smoke_call(monkeypatch):
     _clear_partsapi_env(monkeypatch)
-    monkeypatch.setenv("PARTS_CATALOGS_API_KEY", "pc-secret")
-    monkeypatch.setenv("PARTS_CATALOGS_BASE_URL", "https://api.parts-catalogs.example/v1")
     monkeypatch.setenv("PARTSAPI_KEY", "partsapi-secret")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example/api")
     monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
@@ -277,9 +271,6 @@ def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
                 "model": "Land Cruiser Prado 150",
                 "model_year": 2012,
                 "engine": "1GR-FE",
-                "catalog_id": "toyota",
-                "car_id": "car-1",
-                "group_id": "front-brake",
                 "epc": "toyota",
             }
         ],
@@ -293,7 +284,7 @@ def test_vin_parts_benchmark_prepares_three_catalog_oem_smoke_call(monkeypatch):
 
     assert result["summary"]["oem_catalog_request_shape_count"] == 1
     assert smoke["provider"] == "multi_oem_catalog_lookup"
-    assert smoke["provider_count"] == 3
+    assert smoke["provider_count"] == 2
     assert smoke["ok"] is True
     assert smoke["blockers"] == []
     assert "JTEBU3FJX05027767" not in rendered

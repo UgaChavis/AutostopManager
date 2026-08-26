@@ -17,7 +17,6 @@ from .vin_lookup import normalize_vin
 
 
 VIN17_BASE_URL = "http://api.17vin.com:8080"
-PARTS_CATALOGS_DOCS_URL = "https://www.parts-catalogs.com/us/api"
 MANN_FILTER_GRAPHQL_ENDPOINT = "https://www.mann-filter.com/api/graphql/catalog-prod"
 MANN_FILTER_STORE = "pcat_mf_us_store_en"
 DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"
@@ -241,24 +240,6 @@ PARTSAPI_METHOD_KEY_ENV_NAMES = {
 }
 
 PARTSAPI_OMIT_PART_TYPE_VALUES = {"omit", "none", "non-oem", "non_oem", "nonoriginal", "non-original", "aftermarket"}
-
-PARTS_CATALOGS_OPERATIONS: dict[str, dict[str, Any]] = {
-    "car_info": {
-        "path": "/car/info",
-        "required": ("identifier",),
-        "role": "Vehicle profile lookup by VIN/frame before catalog group selection.",
-    },
-    "groups": {
-        "path": "/catalogs/{catalog_id}/groups2",
-        "required": ("catalog_id", "car_id"),
-        "role": "Catalog group tree for a resolved Parts-Catalogs vehicle id.",
-    },
-    "parts": {
-        "path": "/catalogs/{catalog_id}/parts2",
-        "required": ("catalog_id", "car_id", "group_id"),
-        "role": "OEM catalog parts in a selected vehicle catalog group.",
-    },
-}
 
 _OEM_PART_NUMBER_KEYS = (
     "number",
@@ -1386,18 +1367,6 @@ def _partsapi_method_key(method: str) -> tuple[str, str | None]:
     return (os.getenv(env_name) or "", env_name) if env_name else ("", None)
 
 
-def _parts_catalogs_credentials() -> dict[str, Any]:
-    load_runtime_env()
-    key = os.getenv("PARTS_CATALOGS_API_KEY") or ""
-    base_url = os.getenv("PARTS_CATALOGS_BASE_URL") or ""
-    missing = [
-        name
-        for name, value in {"PARTS_CATALOGS_API_KEY": key, "PARTS_CATALOGS_BASE_URL": base_url}.items()
-        if not value
-    ]
-    return {"configured": not missing, "key": key, "base_url": base_url, "missing_env_names": missing}
-
-
 def _redact_account(value: str) -> str:
     clean = str(value or "").strip()
     if not clean:
@@ -1860,156 +1829,6 @@ def extract_partsapi_article_candidates(
             }
         )
     return candidates
-
-
-def build_parts_catalogs_request(
-    *,
-    operation: str,
-    params: dict[str, Any],
-    api_key: str | None = None,
-    base_url: str | None = None,
-    catalog_id: str | None = None,
-) -> dict[str, Any]:
-    credentials = _parts_catalogs_credentials()
-    actual_key = api_key if api_key is not None else credentials["key"]
-    actual_base_url = (base_url if base_url is not None else credentials["base_url"]).rstrip("/")
-    missing_env = []
-    if not actual_key:
-        missing_env.append("PARTS_CATALOGS_API_KEY")
-    if not actual_base_url:
-        missing_env.append("PARTS_CATALOGS_BASE_URL")
-
-    if operation not in PARTS_CATALOGS_OPERATIONS:
-        return {
-            "ok": False,
-            "provider": "parts_catalogs_api",
-            "operation": operation,
-            "error": "Unknown Parts-Catalogs operation.",
-            "available_operations": sorted(PARTS_CATALOGS_OPERATIONS),
-            "missing_env_names": missing_env,
-            "secret_exposed": False,
-        }
-
-    spec = PARTS_CATALOGS_OPERATIONS[operation]
-    clean_catalog_id = str(catalog_id or "").strip("/")
-    path = spec["path"].format(catalog_id=quote(clean_catalog_id)) if "{catalog_id}" in spec["path"] else spec["path"]
-    query_params = {key: value for key, value in params.items() if value not in (None, "")}
-    query = urlencode(query_params)
-    url = (
-        f"{actual_base_url}{path}?{query}"
-        if actual_base_url and query
-        else f"{actual_base_url}{path}"
-        if actual_base_url
-        else None
-    )
-    headers = {"Authorization": actual_key} if actual_key else {}
-    return {
-        "ok": not missing_env,
-        "provider": "parts_catalogs_api",
-        "operation": operation,
-        "configured": not missing_env,
-        "method": "GET",
-        "path": path,
-        "params": query_params,
-        "base_url_configured": bool(actual_base_url),
-        "missing_env_names": missing_env,
-        "headers": headers,
-        "redacted_headers": {"Authorization": "***"} if actual_key else {},
-        "url": url if not missing_env else None,
-        "redacted_url": _redact_sensitive_query_text(url) if url else None,
-        "secret_exposed": False,
-    }
-
-
-def _parts_catalogs_lookup_params(
-    *,
-    operation: str,
-    identifier: str | None,
-    car_id: str | None,
-    group_id: str | None,
-) -> dict[str, Any]:
-    if operation == "car_info":
-        clean_identifier = "".join(str(identifier or "").split()).upper()
-        return {"vin": clean_identifier}
-    if operation == "groups":
-        return {"carId": car_id}
-    if operation == "parts":
-        return {"carId": car_id, "groupId": group_id}
-    return {}
-
-
-def parts_catalogs_lookup(
-    *,
-    operation: str,
-    identifier: str | None = None,
-    catalog_id: str | None = None,
-    car_id: str | None = None,
-    group_id: str | None = None,
-    timeout: float = 20.0,
-    dry_run: bool = False,
-) -> dict[str, Any]:
-    if operation not in PARTS_CATALOGS_OPERATIONS:
-        return {
-            "ok": False,
-            "provider": "parts_catalogs_api",
-            "operation": operation,
-            "error": "Unknown Parts-Catalogs operation.",
-            "available_operations": sorted(PARTS_CATALOGS_OPERATIONS),
-        }
-
-    spec = PARTS_CATALOGS_OPERATIONS[operation]
-    input_values = {
-        "identifier": identifier,
-        "catalog_id": catalog_id,
-        "car_id": car_id,
-        "group_id": group_id,
-    }
-    missing_params = [name for name in spec["required"] if input_values.get(name) in (None, "")]
-    params = _parts_catalogs_lookup_params(operation=operation, identifier=identifier, car_id=car_id, group_id=group_id)
-    request_plan = build_parts_catalogs_request(operation=operation, params=params, catalog_id=catalog_id)
-    safe_request_plan = _safe_request_plan(request_plan, omit={"url", "headers"})
-    base = {
-        "provider": "parts_catalogs_api",
-        "operation": operation,
-        "docs_url": PARTS_CATALOGS_DOCS_URL,
-        "role": spec["role"],
-        "request_plan": safe_request_plan,
-        "redacted_identifier": _redact_identifier(identifier or "") if identifier else None,
-        "privacy": {"raw_identifier_is_sensitive": bool(identifier), "secret_exposed": False},
-    }
-    if missing_params:
-        return {
-            **base,
-            "ok": False,
-            "missing_params": missing_params,
-            "error": "Required Parts-Catalogs parameters are missing.",
-        }
-    if not request_plan["configured"]:
-        return {
-            **base,
-            "ok": False,
-            "missing_env_names": request_plan["missing_env_names"],
-            "error": "PARTS_CATALOGS_API_KEY and PARTS_CATALOGS_BASE_URL are required for live Parts-Catalogs requests.",
-        }
-    if dry_run:
-        return {**base, "ok": True, "dry_run": True}
-
-    request = Request(
-        request_plan["url"],
-        headers={"User-Agent": "AutostopManager/0.1", "Accept": "application/json", **request_plan["headers"]},
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        return {**base, "ok": False, "error": str(exc)}
-
-    return {
-        **base,
-        "ok": True,
-        "payload": payload,
-        "oem_candidates": extract_oem_candidates(provider="parts_catalogs_api", payload=payload, operation=operation),
-    }
 
 
 def build_partsapi_request(
@@ -2598,9 +2417,6 @@ def lookup_oem_catalog_candidates(
     *,
     identifier: str,
     requested_part: str,
-    catalog_id: str | None = None,
-    car_id: str | None = None,
-    group_id: str | None = None,
     epc: str | None = None,
     partsapi_part_type: str = "oem",
     partsapi_category: str | None = None,
@@ -2623,31 +2439,6 @@ def lookup_oem_catalog_candidates(
     provider_results: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
     oem_candidates: list[dict[str, Any]] = []
-
-    if catalog_id and car_id and group_id:
-        provider_results.append(
-            parts_catalogs_lookup(
-                operation="parts",
-                catalog_id=catalog_id,
-                car_id=car_id,
-                group_id=group_id,
-                timeout=timeout,
-                dry_run=dry_run,
-            )
-        )
-    else:
-        blockers.append(
-            {
-                "provider": "parts_catalogs_api",
-                "operation": "parts",
-                "missing_params": [
-                    name
-                    for name, value in {"catalog_id": catalog_id, "car_id": car_id, "group_id": group_id}.items()
-                    if value in (None, "")
-                ],
-                "error": "Parts-Catalogs OEM parts lookup requires catalog_id, car_id, and group_id.",
-            }
-        )
 
     if category and (
         dry_run

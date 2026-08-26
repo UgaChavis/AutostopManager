@@ -472,9 +472,7 @@ def resolve_vin_oem_parts(
         )
     elif readiness["ready_for_oem_candidate_lookup"] and live_partsapi_oem:
         manual_actions.append(
-            _manual_action(
-                "manual_epc_fallback", "OEM-кандидаты не найдены: проверить брендовый EPC/Parts-Catalogs/17VIN вручную."
-            )
+            _manual_action("manual_epc_fallback", "OEM-кандидаты не найдены: проверить брендовый EPC/17VIN вручную.")
         )
     elif readiness["ready_for_oem_candidate_lookup"]:
         manual_actions.append(

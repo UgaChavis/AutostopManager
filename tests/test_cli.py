@@ -112,12 +112,6 @@ def test_cli_parser_has_core_commands():
             "JTEBU3FJX05027767",
             "--part",
             "передние колодки",
-            "--catalog-id",
-            "toyota",
-            "--car-id",
-            "car-1",
-            "--group-id",
-            "front-brake",
             "--epc",
             "toyota",
             "--dry-run",
@@ -126,7 +120,6 @@ def test_cli_parser_has_core_commands():
     assert args.command == "oem-catalog-lookup"
     assert args.identifier == "JTEBU3FJX05027767"
     assert args.requested_part == "передние колодки"
-    assert args.catalog_id == "toyota"
     assert args.epc == "toyota"
     assert args.dry_run is True
 

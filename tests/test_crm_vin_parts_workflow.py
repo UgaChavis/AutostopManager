@@ -207,7 +207,6 @@ def test_provider_registries_name_required_catalog_cross_and_price_sources():
     catalog_rows = [item for item in vin_sources["sources"] if item.get("mvp_priority")]
     catalog_ids = {item["source_id"] for item in catalog_rows}
     assert {
-        "parts_catalogs_api",
         "partsapi_ru",
         "vin17_api",
         "autopoisk",

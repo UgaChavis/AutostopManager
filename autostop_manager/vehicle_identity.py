@@ -487,13 +487,6 @@ def _matching_platform_rule(identifier: str) -> PlatformRule | None:
 def _source_requirements(identifier_kind: str, profile: dict[str, Any]) -> list[dict[str, str]]:
     make = _compact(profile.get("make")).lower()
     requirements: list[dict[str, str]] = []
-    if identifier_kind in {"frame_number", "market_code"} or make in {"suzuki", "honda", "toyota", "mitsubishi"}:
-        requirements.append(
-            {
-                "source_id": "parts_catalogs_api",
-                "reason": "Needs VIN/FRAME-capable EPC to confirm production date, grade/options, exact model code, and OEM groups.",
-            }
-        )
     requirements.append(
         {
             "source_id": "partsapi_ru",

@@ -31,7 +31,7 @@ def test_high_risk_oem_evidence_beats_multiple_forum_hypotheses():
             EvidenceRecord(
                 evidence_id="epc_1",
                 claim_id="oem_part",
-                source_id="parts_catalogs_api",
+                source_id="brand_epc",
                 source_kind=SourceKind.OEM,
                 value="A1234567890",
                 observed_at=NOW,
@@ -60,7 +60,7 @@ def test_high_risk_oem_evidence_beats_multiple_forum_hypotheses():
 
     assert result.status is ResolutionStatus.RESOLVED
     assert result.value == "A1234567890"
-    assert result.source_ids == ("parts_catalogs_api",)
+    assert result.source_ids == ("brand_epc",)
 
 
 def test_independent_current_price_sources_produce_a_conflict_not_a_blended_price():
@@ -185,7 +185,7 @@ def test_dependent_claim_is_not_returned_when_identity_evidence_is_unavailable()
             EvidenceRecord(
                 evidence_id="epc_part",
                 claim_id="oem_part",
-                source_id="parts_catalogs_api",
+                source_id="brand_epc",
                 source_kind=SourceKind.OEM,
                 value="A1678350400",
                 observed_at=NOW,

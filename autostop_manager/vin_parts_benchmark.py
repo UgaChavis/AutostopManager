@@ -428,9 +428,6 @@ def _oem_catalog_lookup_call(
     call = lookup_oem_catalog_candidates(
         identifier=identifier,
         requested_part=requested_part,
-        catalog_id=_compact(item.get("catalog_id") or context.get("catalog_id")),
-        car_id=_compact(item.get("car_id") or context.get("car_id")),
-        group_id=_compact(item.get("group_id") or context.get("group_id")),
         epc=_compact(item.get("epc") or context.get("epc")),
         partsapi_category=_compact(
             item.get("partsapi_category")
@@ -731,10 +728,8 @@ def benchmark_vin_parts_lookup(
             {
                 "priority": 1,
                 "need": "VIN/frame-specific OEM catalog coverage for production date, options, OEM groups, and exact applicability.",
-                "candidate_sources": ["Parts-Catalogs API", "17VIN API", "partslink24/brand EPC", "AUTOPOISK"],
+                "candidate_sources": ["17VIN API", "partslink24/brand EPC", "AUTOPOISK"],
                 "env_names": [
-                    "PARTS_CATALOGS_API_KEY",
-                    "PARTS_CATALOGS_BASE_URL",
                     "VIN17_ACCOUNT",
                     "VIN17_SECRET",
                     "AUTOPOISK_TOKEN",
