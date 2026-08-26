@@ -34,7 +34,6 @@ from .service_labor_experience import (
     save_service_labor_artifacts,
     summarize_service_labor_snapshot,
 )
-from .service_labor_report import build_service_labor_report_artifact, save_service_labor_report_artifact
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
@@ -419,11 +418,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--report-output",
         default="data/private_knowledge/reports/service_labor_analysis.md",
     )
-    labor_refresh.add_argument(
-        "--artifact-output",
-        default="data/private_knowledge/reports/service_labor_analysis.artifact.json",
-    )
-
     sub.add_parser("init", help="Initialize SQLite storage")
 
     store_checkpoint_status = sub.add_parser(
@@ -960,15 +954,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             executor_output_path=args.executor_output,
             report_output_path=args.report_output,
         )
-        artifact_output_path = save_service_labor_report_artifact(
-            build_service_labor_report_artifact(snapshot),
-            args.artifact_output,
-        )
         _print_json(
             {
                 "ok": True,
                 **paths,
-                "artifact_output_path": str(artifact_output_path),
                 **summarize_service_labor_snapshot(snapshot),
                 "executor_report": {
                     "restricted": True,

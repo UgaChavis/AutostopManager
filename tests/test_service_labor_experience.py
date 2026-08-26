@@ -11,7 +11,6 @@ from autostop_manager.service_labor_experience import (
     canonicalize_labor_name,
     save_service_labor_artifacts,
 )
-from autostop_manager.service_labor_report import build_service_labor_report_artifact
 from autostop_manager.work_pricing import estimate_repair_work_cost
 
 
@@ -178,30 +177,6 @@ def test_estimator_accepts_full_labor_snapshot_as_internal_anchor():
     assert operation["internal_experience"]["available"] is True
     assert operation["recommendation_basis"] == "internal_experience_provisional"
     assert estimate["pricing_basis"]["internal_experience_schema_version"] == LABOR_SNAPSHOT_SCHEMA_VERSION
-
-
-def test_report_artifact_is_labor_only_bounded_and_has_executive_structure():
-    state = {
-        "cards": [
-            _card(f"0{day}.07.2026 10:00", works=[_work("Диагностика подвески", price=price)])
-            for day, price in [(1, "1000"), (2, "1000"), (3, "1200")]
-        ]
-    }
-    snapshot, _ = build_service_labor_experience(state)
-
-    artifact = build_service_labor_report_artifact(snapshot)
-
-    manifest = artifact["manifest"]
-    assert artifact["surface"] == "report"
-    assert manifest["blocks"][0]["body"] == f"# {manifest['title']}"
-    assert manifest["blocks"][1]["body"].startswith("## Executive Summary")
-    assert any(block["type"] == "chart" for block in manifest["blocks"])
-    assert all(source["query"]["sql"].startswith("SELECT ") for source in manifest["sources"])
-    assert artifact["snapshot"]["status"] == "ready"
-    serialized = json.dumps(artifact, ensure_ascii=False)
-    assert "Мастер Один" not in serialized
-    assert "PRIVATE-SALARY" not in serialized
-    assert "materials" not in artifact["snapshot"]["datasets"]
 
 
 def test_private_artifacts_are_atomic_restricted_and_backed_up(tmp_path: Path):

@@ -372,7 +372,6 @@ def test_service_labor_refresh_cli_writes_private_artifacts(tmp_path, capsys):
     output = tmp_path / "private" / "labor.json"
     executor_output = tmp_path / "private" / "restricted" / "executors.json"
     report_output = tmp_path / "private" / "reports" / "labor.md"
-    artifact_output = tmp_path / "private" / "reports" / "labor.artifact.json"
 
     exit_code = cli.main(
         [
@@ -385,8 +384,6 @@ def test_service_labor_refresh_cli_writes_private_artifacts(tmp_path, capsys):
             str(executor_output),
             "--report-output",
             str(report_output),
-            "--artifact-output",
-            str(artifact_output),
         ]
     )
 
@@ -397,7 +394,6 @@ def test_service_labor_refresh_cli_writes_private_artifacts(tmp_path, capsys):
     assert output.exists()
     assert executor_output.exists()
     assert report_output.exists()
-    assert artifact_output.exists()
 
 
 def test_doctor_returns_nonzero_when_audit_fails(monkeypatch, capsys):
