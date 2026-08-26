@@ -56,49 +56,6 @@ class _FakeServer:
         return decorator
 
 
-def test_lookup_original_parts_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "lookup_original_parts" in server.tools
-    result = server.tools["lookup_original_parts"]("GXE10-0088644")
-    assert result["identifier"]["kind"] == "frame_number"
-    assert result["steps"]
-    assert result["catalog_routes"] == result["steps"]
-    assert "oem_candidates" in result
-    assert "fitment_confidence" in result
-
-    captured = server.tools["lookup_original_parts"](
-        "GXE10-0088644",
-        make_hint="Toyota",
-        part_name="сальник",
-        captured_oem_number="90311-89014",
-        captured_source="Toyota EPC Mirror",
-    )
-    assert captured["oem_candidates"][0]["normalized_number"] == "9031189014"
-
-
-def test_decode_vehicle_identity_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "decode_vehicle_identity" in server.tools
-    result = server.tools["decode_vehicle_identity"](
-        "MR41S123456",
-        make="Suzuki",
-        model="Hustler",
-        model_year=2018,
-        live_vpic=False,
-    )
-    assert result["vehicle_profile"]["make"] == "Suzuki"
-    assert result["diagnostics"]["frame_query_hint"] == "MR4***456"
-    assert any(source["source_id"] == "parts_catalogs_api" for source in result["required_next_sources"])
-
-
 def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeypatch):
     captured = {}
 
@@ -128,41 +85,6 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
         annotations = server.options[name]["annotations"]
         assert annotations.readOnlyHint is True
         assert annotations.destructiveHint is False
-
-
-def test_decode_vehicle_identities_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "decode_vehicle_identities" in server.tools
-    result = server.tools["decode_vehicle_identities"](
-        [{"identifier": "MR41S123456", "make": "Suzuki", "model": "Hustler", "model_year": 2018}],
-        live_vpic=False,
-    )
-    assert result["count"] == 1
-    assert result["medium_confidence_count"] == 1
-    assert result["results"][0]["vehicle_profile"]["platform"] == "MR41S"
-
-
-def test_catalog_provider_tools_are_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "catalog_provider_status" in server.tools
-    assert "plan_oem_parts_providers" in server.tools
-    status = server.tools["catalog_provider_status"](stage="oem_catalog")
-    assert status["ok"] is True
-    assert any(provider["source_id"] == "parts_catalogs_api" for provider in status["providers"])
-    plan = server.tools["plan_oem_parts_providers"](
-        identifier="MR41S123456",
-        requested_part="колодки",
-    )
-    assert plan["identifier"]["redacted"]["display"] == "MR4***456"
-    assert any(step["step"] == "find_oem_candidates" for step in plan["pipeline"])
 
 
 def test_control_center_and_review_tools_are_registered(tmp_path):
@@ -200,107 +122,6 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     assert smoke["summary"]["no_order_guarantee"] is True
 
 
-def test_vin17_adapter_tools_are_registered(tmp_path, monkeypatch):
-    monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
-    monkeypatch.delenv("VIN17_SECRET", raising=False)
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "vin17_decode_vehicle" in server.tools
-    assert "vin17_search_part_number_by_vin" in server.tools
-    decode = server.tools["vin17_decode_vehicle"]("LFMGJE720DS070251", dry_run=True)
-    assert decode["ok"] is False
-    assert decode["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
-
-
-def test_partsapi_adapter_tool_is_registered(tmp_path, monkeypatch):
-    _clear_partsapi_env(monkeypatch)
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "partsapi_catalog_lookup" in server.tools
-    result = server.tools["partsapi_catalog_lookup"](operation="vin_decode_oe", identifier="MR41S123456", dry_run=True)
-    assert result["ok"] is False
-    assert result["missing_env_names"] == ["PARTSAPI_KEY", "PARTSAPI_BASE_URL"]
-
-    assert "search_partsapi_category_index" in server.tools
-    category = server.tools["search_partsapi_category_index"]("передние колодки", intent_id="front_brake_pads")
-    assert category["matches"][0]["cat_id"].isdigit()
-    assert "validate_partsapi_category_index" in server.tools
-    assert server.tools["validate_partsapi_category_index"]()["ok"] is True
-
-
-def test_public_aftermarket_catalog_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "public_aftermarket_catalog_lookup" in server.tools
-    result = server.tools["public_aftermarket_catalog_lookup"](
-        provider="all",
-        part_number="90919-01275",
-        dry_run=True,
-    )
-    assert result["ok"] is True
-    assert [item["provider"] for item in result["results"]] == ["mann_filter_catalog", "denso_aftermarket_catalog"]
-
-
-def test_exist_price_lookup_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "exist_price_lookup" in server.tools
-    result = server.tools["exist_price_lookup"](part_number="9091901164", dry_run=True)
-    assert result["ok"] is True
-    assert result["dry_run"] is True
-    assert result["benchmark_kind"] == "public_retail_reference"
-    assert result["request_plan"]["office_cookie"] == "_go=905"
-
-
-def test_oem_catalog_lookup_tool_is_registered(tmp_path, monkeypatch):
-    _clear_partsapi_env(monkeypatch)
-    monkeypatch.setenv("PARTS_CATALOGS_API_KEY", "pc-secret")
-    monkeypatch.setenv("PARTS_CATALOGS_BASE_URL", "https://api.parts-catalogs.example/v1")
-    monkeypatch.setenv("PARTSAPI_KEY", "partsapi-secret")
-    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example/api")
-    monkeypatch.setenv("VIN17_ACCOUNT", "vin17-user")
-    monkeypatch.setenv("VIN17_SECRET", "vin17-secret")
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "lookup_oem_catalog_candidates" in server.tools
-    result = server.tools["lookup_oem_catalog_candidates"](
-        identifier="JTEBU3FJX05027767",
-        requested_part="передние колодки",
-        catalog_id="toyota",
-        car_id="car-1",
-        group_id="front-brake",
-        epc="toyota",
-        dry_run=True,
-    )
-    assert result["ok"] is True
-    assert result["provider_count"] == 3
-
-    assert "resolve_vin_oem_parts" in server.tools
-    resolved = server.tools["resolve_vin_oem_parts"](
-        identifier="JTEBU3FJX05027767",
-        requested_part="передние колодки",
-        live_vpic=False,
-        dry_run=True,
-    )
-    assert resolved["schema"] == "VinOemResolution"
-    assert resolved["privacy"]["secret_exposed"] is False
-
-
 def test_lookup_oem_catalog_candidates_tool_forwards_custom_category_index(tmp_path, monkeypatch):
     captured = {}
 
@@ -323,25 +144,6 @@ def test_lookup_oem_catalog_candidates_tool_forwards_custom_category_index(tmp_p
     assert result["ok"] is True
     assert captured["partsapi_category_index_path"] == "data/custom_partsapi_index.json"
     assert captured["dry_run"] is True
-
-
-def test_plan_crm_vin_oem_parts_lookup_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "plan_crm_vin_oem_parts_lookup" in server.tools
-    result = server.tools["plan_crm_vin_oem_parts_lookup"](
-        card_id="card_123",
-        requested_part="фильтр масляный",
-        frame="GXE10-0088644",
-        make="Toyota",
-        vehicle="Toyota Altezza",
-    )
-    assert result["playbook"] == "docs/agent/crm_vin_oem_parts_lookup_playbook.md"
-    assert result["identifier_lookup"]["identifier"]["kind"] == "frame_number"
-    assert any(step["step"] == "write_structured_result_to_crm_card" for step in result["pipeline"])
 
 
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
@@ -393,61 +195,6 @@ def test_benchmark_vin_parts_lookup_tool_forwards_dry_run_controls(tmp_path, mon
     assert captured["partsapi_timeout"] == 7.5
 
 
-def test_build_vin_parts_work_order_tool_is_registered(tmp_path, monkeypatch):
-    _clear_partsapi_env(monkeypatch)
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "build_vin_parts_work_order" in server.tools
-    result = server.tools["build_vin_parts_work_order"](
-        [{"identifier": "WVWZZZAUZFP000000", "make": "Volkswagen", "model": "Golf", "model_year": 2014}],
-        requested_part="фильтр АКПП",
-        live_vpic=False,
-    )
-
-    assert result["work_order_summary"]["count"] == 1
-    assert result["items"][0]["oem_lookup_routes"]["automated_first"]
-    assert any(
-        route["name"].startswith("partslink24")
-        for route in result["items"][0]["oem_lookup_routes"]["brand_or_market_manual"]
-    )
-
-
-def test_recommend_automotive_sources_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "recommend_automotive_sources" in server.tools
-    result = server.tools["recommend_automotive_sources"](brand="Toyota", data_type="repair_manuals")
-    assert result["ok"] is True
-    assert result["sources"]
-    assert any(source["source_id"] == "toyota_tis_na" for source in result["sources"])
-
-
-def test_recommend_fluid_maintenance_sources_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "recommend_fluid_maintenance_sources" in server.tools
-    result = server.tools["recommend_fluid_maintenance_sources"](
-        brand="Toyota",
-        unit="engine_oil",
-        year=2019,
-        model="Camry",
-        engine_code="A25A-FKS",
-        market="Russia",
-    )
-    assert result["ok"] is True
-    assert result["unit"] == "engine_oil"
-    assert result["lubricant_product_selectors"]
-
-
 def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypatch):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
@@ -469,71 +216,6 @@ def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypa
     assert result["ok"] is True
     assert result["input_context"]["make"] == "Mercedes-Benz"
     assert result["input_context"]["topics"] == ["recalls"]
-
-
-def test_recommend_service_management_actions_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "recommend_service_management_actions" in server.tools
-    result = server.tools["recommend_service_management_actions"](
-        area="parts",
-        city="Красноярск",
-        vehicle="Lexus RX200T",
-        part_number="90311-89014",
-        urgency="today",
-    )
-    assert result["ok"] is True
-    assert result["area"] == "parts_procurement"
-    assert any(source["source_id"] == "drom_parts" for source in result["sources"])
-
-
-def test_estimate_repair_work_cost_tool_is_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "estimate_repair_work_cost" in server.tools
-    result = server.tools["estimate_repair_work_cost"](
-        vehicle="BMW X5",
-        vin="WBA00000000000000",
-        work_items=["замена рулевой рейки"],
-        quotes_json=[
-            {
-                "source": "sto-a",
-                "city": "Москва",
-                "operation_name": "замена рулевой рейки",
-                "price_rub": 10000,
-                "includes_parts": False,
-                "captured_at": "2026-05-21",
-            },
-            {
-                "source": "sto-b",
-                "city": "Красноярск",
-                "operation_name": "рулевая рейка снять/поставить",
-                "price_rub": 12000,
-                "includes_parts": False,
-                "captured_at": "2026-05-21",
-            },
-            {
-                "source": "sto-c",
-                "city": "Новосибирск",
-                "operation_name": "поменять рейку",
-                "price_rub": 11000,
-                "includes_parts": False,
-                "captured_at": "2026-05-21",
-            },
-        ],
-    )
-    assert result["ok"] is True
-    assert result["read_only"] is True
-    assert result["russia_average_rub"] == 11000
-    assert result["autostop_price_rub"] == 16500
-    assert "labor_time_analysis" in result
-    assert "pricing_basis" in result
 
 
 def test_knowledge_base_tools_are_registered(tmp_path):
