@@ -25,38 +25,6 @@ def test_cli_parser_has_core_commands():
     assert args.gmail_proof == "/tmp/proof.json"
     assert args.output == "/tmp/report.json"
 
-    args = parser.parse_args(["remember", "test note", "--kind", "fact", "--confidence", "0.7"])
-    assert args.command == "remember"
-    assert args.kind == "fact"
-    assert args.confidence == 0.7
-
-    args = parser.parse_args(
-        ["recall", "живой стиль", "--kind", "fact", "--category", "style", "--tags", "карточки,стиль"]
-    )
-    assert args.command == "recall"
-    assert args.kind == "fact"
-    assert args.category == "style"
-    assert args.tags == "карточки,стиль"
-
-    args = parser.parse_args(["today"])
-    assert args.command == "today"
-
-    args = parser.parse_args(
-        [
-            "director-journal",
-            "create",
-            "--event",
-            "обезличенный сигнал",
-            "--category",
-            "operations",
-            "--status",
-            "open",
-        ]
-    )
-    assert args.command == "director-journal"
-    assert args.operation == "create"
-    assert args.category == "operations"
-
     args = parser.parse_args(
         [
             "decode-vehicle",
@@ -255,35 +223,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(["doctor"])
     assert args.command == "doctor"
-
-    args = parser.parse_args(
-        [
-            "learn",
-            "Писать живее",
-            "--applies-to",
-            "crm_cleanup",
-            "--signal",
-            "owner_correction",
-            "--recommendation",
-            "Одна короткая строка",
-            "--avoid",
-            "Длинный шаблон",
-            "--importance",
-            "0.8",
-            "--confidence",
-            "1.0",
-            "--tags",
-            "карточки,стиль",
-        ]
-    )
-    assert args.command == "learn"
-    assert args.applies_to == "crm_cleanup"
-    assert args.importance == 0.8
-
-    args = parser.parse_args(["lessons", "карточки", "--applies-to", "crm_cleanup", "--tags", "стиль"])
-    assert args.command == "lessons"
-    assert args.applies_to == "crm_cleanup"
-    assert args.tags == "стиль"
 
     args = parser.parse_args(["agent-brief", "Приберись", "--intent", "board_cleanup", "--limit", "5"])
     assert args.command == "agent-brief"

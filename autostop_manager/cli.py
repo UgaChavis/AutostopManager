@@ -35,12 +35,6 @@ from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .work_pricing import estimate_repair_work_cost
 
 
-def _tags(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    return [part.strip() for part in raw.split(",") if part.strip()]
-
-
 def _print_json(payload: dict[str, Any]) -> None:
     stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
     if stdout_reconfigure is not None:
@@ -107,47 +101,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-manager", description="AutoStop manager memory CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    remember = sub.add_parser("remember", help="Store a note or fact")
-    remember.add_argument("content")
-    remember.add_argument("--kind", choices=["note", "fact"], default="note")
-    remember.add_argument("--title", default="")
-    remember.add_argument("--category", default="general")
-    remember.add_argument("--source", default="codex")
-    remember.add_argument("--tags", default="")
-    remember.add_argument("--importance", type=float, default=0.5)
-    remember.add_argument("--confidence", type=float, default=1.0)
-    remember.add_argument("--expires-at", default=None)
-    remember.add_argument("--supersedes-id", type=int, default=None)
-    remember.add_argument("--sensitivity", default="normal")
-
-    recall = sub.add_parser("recall", help="Search manager memory")
-    recall.add_argument("query", nargs="?", default="")
-    recall.add_argument("--limit", type=int, default=20)
-    recall.add_argument(
-        "--kind", choices=["note", "fact", "lesson", "task", "reminder", "journal", "rule"], default=None
-    )
-    recall.add_argument("--category", default=None)
-    recall.add_argument("--tags", default="")
-
-    learn = sub.add_parser("learn", help="Store a reusable lesson from feedback, praise, failure, or success")
-    learn.add_argument("content")
-    learn.add_argument("--title", default="")
-    learn.add_argument("--applies-to", dest="applies_to", default="general")
-    learn.add_argument("--signal", default="manager_observation")
-    learn.add_argument("--recommendation", default="")
-    learn.add_argument("--avoid", default="")
-    learn.add_argument("--importance", type=float, default=0.5)
-    learn.add_argument("--confidence", type=float, default=0.7)
-    learn.add_argument("--source", default="codex")
-    learn.add_argument("--tags", default="")
-
-    lessons = sub.add_parser("lessons", help="Search reusable manager lessons")
-    lessons.add_argument("query", nargs="?", default="")
-    lessons.add_argument("--limit", type=int, default=20)
-    lessons.add_argument("--applies-to", dest="applies_to", default=None)
-    lessons.add_argument("--signal", default=None)
-    lessons.add_argument("--tags", default="")
-
     agent_mode = sub.add_parser("agent-mode", help="Read or change the durable AgentExecutionMode")
     agent_mode_sub = agent_mode.add_subparsers(dest="agent_mode_action", required=True)
     agent_mode_sub.add_parser("status", help="Show global work/learning mode")
@@ -156,50 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
     agent_mode_set.add_argument("--expected-state-version", type=int, default=None)
     agent_mode_resolve = agent_mode_sub.add_parser("resolve", help="Resolve a one-turn mode override")
     agent_mode_resolve.add_argument("--mode-override", choices=["work", "learning"], default=None)
-
-    task = sub.add_parser("task", help="Add a manager task")
-    task.add_argument("title")
-    task.add_argument("--details", default="")
-    task.add_argument("--due", default=None)
-    task.add_argument("--source", default="codex")
-    task.add_argument("--tags", default="")
-
-    remind = sub.add_parser("remind", help="Add a reminder")
-    remind.add_argument("title")
-    remind.add_argument("--due", required=True)
-    remind.add_argument("--details", default="")
-    remind.add_argument("--source", default="codex")
-    remind.add_argument("--tags", default="")
-
-    journal = sub.add_parser("journal", help="Add a journal event")
-    journal.add_argument("event")
-    journal.add_argument("--source", default="codex")
-    journal.add_argument("--tags", default="")
-
-    director_journal = sub.add_parser(
-        "director-journal",
-        help="Create, read, update, inspect, or prune the bounded de-identified director journal",
-    )
-    director_journal.add_argument(
-        "operation",
-        choices=["create", "read", "update", "stats", "prune"],
-    )
-    director_journal.add_argument("--event", default="")
-    director_journal.add_argument("--entry-id", type=int, default=None)
-    director_journal.add_argument("--category", default="")
-    director_journal.add_argument("--decision", default="")
-    director_journal.add_argument("--result", default="")
-    director_journal.add_argument("--status", default="")
-    director_journal.add_argument("--next-review-at", default=None)
-    director_journal.add_argument("--expected-updated-at", default="")
-    director_journal.add_argument("--workflow-ref-hash", default="")
-    director_journal.add_argument("--source", default="director")
-    director_journal.add_argument("--tags", default="")
-    director_journal.add_argument("--limit", type=int, default=10)
-    director_journal.add_argument("--apply", action="store_true")
-
-    today = sub.add_parser("today", help="Return today's manager context")
-    today.add_argument("--limit", type=int, default=20)
 
     agent_brief = sub.add_parser(
         "agent-brief",
@@ -503,57 +412,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-review":
         _print_json(build_memory_review(store))
-    elif args.command == "remember":
-        _print_json(
-            store.remember(
-                args.content,
-                kind=args.kind,
-                title=args.title,
-                category=args.category,
-                source=args.source,
-                tags=_tags(args.tags),
-                importance=args.importance,
-                confidence=args.confidence,
-                expires_at=args.expires_at,
-                supersedes_id=args.supersedes_id,
-                sensitivity=args.sensitivity,
-            )
-        )
-    elif args.command == "recall":
-        _print_json(
-            store.recall(
-                args.query,
-                limit=args.limit,
-                kind=args.kind,
-                category=args.category,
-                tags=_tags(args.tags),
-            )
-        )
-    elif args.command == "learn":
-        _print_json(
-            store.learn_from_feedback(
-                args.content,
-                title=args.title,
-                applies_to=args.applies_to,
-                signal=args.signal,
-                recommendation=args.recommendation,
-                avoid=args.avoid,
-                importance=args.importance,
-                confidence=args.confidence,
-                source=args.source,
-                tags=_tags(args.tags),
-            )
-        )
-    elif args.command == "lessons":
-        _print_json(
-            store.recall_lessons(
-                args.query,
-                limit=args.limit,
-                applies_to=args.applies_to,
-                signal=args.signal,
-                tags=_tags(args.tags),
-            )
-        )
     elif args.command == "agent-mode":
         if args.agent_mode_action == "status":
             _print_json(store.get_agent_mode())
@@ -561,68 +419,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_json(store.set_agent_mode(args.mode, expected_state_version=args.expected_state_version))
         else:
             _print_json(store.resolve_agent_mode(args.mode_override))
-    elif args.command == "task":
-        _print_json(
-            store.add_task(
-                args.title,
-                details=args.details,
-                due_at=args.due,
-                source=args.source,
-                tags=_tags(args.tags),
-            )
-        )
-    elif args.command == "remind":
-        _print_json(
-            store.add_reminder(
-                args.title,
-                remind_at=args.due,
-                details=args.details,
-                source=args.source,
-                tags=_tags(args.tags),
-            )
-        )
-    elif args.command == "journal":
-        _print_json(store.journal(args.event, source=args.source, tags=_tags(args.tags)))
-    elif args.command == "director-journal":
-        if args.operation == "create":
-            return _print_checked_json(
-                store.create_director_journal_entry(
-                    args.event,
-                    category=args.category or "operations",
-                    decision=args.decision,
-                    result=args.result,
-                    status=args.status or "open",
-                    next_review_at=args.next_review_at,
-                    workflow_ref_hash=args.workflow_ref_hash,
-                    source=args.source,
-                    tags=_tags(args.tags),
-                )
-            )
-        if args.operation == "read":
-            return _print_checked_json(
-                store.read_director_journal(
-                    status=args.status or "active",
-                    category=args.category,
-                    limit=args.limit,
-                )
-            )
-        if args.operation == "update":
-            if args.entry_id is None:
-                return _print_checked_json({"ok": False, "error": "entry_id_required"})
-            return _print_checked_json(
-                store.update_director_journal_entry(
-                    args.entry_id,
-                    status=args.status,
-                    result=args.result,
-                    next_review_at=args.next_review_at,
-                    expected_updated_at=args.expected_updated_at,
-                )
-            )
-        if args.operation == "stats":
-            return _print_checked_json(store.director_journal_stats())
-        return _print_checked_json(store.maintain_director_journal(apply=args.apply))
-    elif args.command == "today":
-        _print_json(store.today_context(limit=args.limit))
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "decode-vehicle":
