@@ -260,6 +260,5 @@ def build_service_management_plan(
             "raw_sensitive_context_redacted": bool(redacted_context_fields),
             "redacted_context_fields": redacted_context_fields,
         },
-        "playbook": "docs/agent/krasnoyarsk_service_management_playbook.md",
         "source_catalog": "docs/agent/service_management_sources.json",
     }
