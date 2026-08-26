@@ -22,6 +22,19 @@ def _clear_partsapi_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def test_catalog_provider_status_includes_stage_matrix():
+    status = catalog_provider_status()
+
+    assert {row["stage"] for row in status["stage_matrix"]} >= {
+        "identity",
+        "oem_catalog",
+        "catalog_cross",
+        "aftermarket_catalog",
+        "procurement_price",
+        "market_price",
+    }
+
+
 def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     for name in ["ROSSKO_KEY1", "ROSSKO_KEY2"]:

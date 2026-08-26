@@ -17,7 +17,6 @@ from .knowledge_base import (
 )
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_curator import audit_memory
-from .provider_smoke import build_provider_smoke_report
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
@@ -61,13 +60,6 @@ def build_parser() -> argparse.ArgumentParser:
     agent_brief.add_argument("query")
     agent_brief.add_argument("--intent", default=None)
     agent_brief.add_argument("--limit", type=int, default=8)
-
-    provider_smoke = sub.add_parser(
-        "provider-smoke",
-        help="Run safe provider readiness smoke checks without supplier orders, baskets, or CRM writeback",
-    )
-    provider_smoke.add_argument("--provider", default="all")
-    provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
 
     store_checkpoint_status = sub.add_parser(
         "store-checkpoint-status",
@@ -201,8 +193,6 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(audit_memory(store))
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
-    elif args.command == "provider-smoke":
-        _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
     return 0
 
 

@@ -40,7 +40,6 @@ from .partsapi_category_index import (
     search_partsapi_category_index,
     validate_partsapi_category_index,
 )
-from .provider_smoke import build_provider_smoke_report
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .skill_registry import audit_skill_registry
 from .source_catalog import recommend_automotive_sources
@@ -1061,11 +1060,8 @@ def register_manager_memory_tools(  # noqa: C901
 
     server.tool(
         name="provider_smoke_report",
-        description=(
-            "Run safe ProviderSmokeResult readiness checks for one provider or all providers. "
-            "Dry-run and live-readonly modes never call order, basket, or CRM writeback endpoints."
-        ),
-    )(build_provider_smoke_report)
+        description="Compatibility name for canonical provider configuration and callable-status reporting.",
+    )(catalog_provider_status)
 
     @server.tool(
         name="start_workflow",

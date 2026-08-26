@@ -25,11 +25,6 @@ def test_cli_parser_has_core_commands():
     assert args.gmail_proof == "/tmp/proof.json"
     assert args.output == "/tmp/report.json"
 
-    args = parser.parse_args(["provider-smoke", "--provider", "all", "--mode", "dry-run"])
-    assert args.command == "provider-smoke"
-    assert args.provider == "all"
-    assert args.mode == "dry-run"
-
     args = parser.parse_args(["control-report", "--format", "markdown", "--output", "reports/control-report.md"])
     assert args.command == "control-report"
     assert args.format == "markdown"
