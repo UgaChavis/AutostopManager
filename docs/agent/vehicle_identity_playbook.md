@@ -1,231 +1,57 @@
 # Vehicle Identity Playbook
 
-Purpose: help the AutoStop manager identify vehicles correctly across
-different markets before any parts search, recall check, or compatibility
-decision.
+Compact guardrail for identifying a vehicle before parts, recall, or
+compatibility work. Runtime behavior belongs to the code below; this document
+does not duplicate market tables, provider schemas, or source lists.
 
-## Core Question
+## Canonical Owners
 
-Before decoding, ask:
+- Identifier classification, normalization, and redaction:
+  `autostop_manager/vin_lookup.py`.
+- WMI/frame hints, CRM reconciliation, confidence, conflicts, and batch decode:
+  `autostop_manager/vehicle_identity.py`.
+- Source metadata and brand routing: `autostop_manager/vin_sources.py` and
+  `docs/agent/vin_oem_sources.json`.
+- Provider readiness: `autostop_manager/catalog_adapters.py`.
+- VIN/frame-specific OEM resolution: `autostop_manager/vin_oem_resolver.py`.
+- Parts sourcing after identity: `docs/agent/parts_search_playbook.md`.
 
-- What kind of identifier is this?
-- Which market does it belong to?
-- Do I need a vehicle profile or a parts-compatibility profile?
+## Guardrails
 
-Do not force every identifier into the same 17-character VIN path.
-Use `decode_vehicle_identity` before OEM or parts lookup when the input comes
-from CRM, looks ROW/JDM, or has weak/partial vPIC output.
-Use `catalog_provider_status` to verify live catalog/API readiness before
-claiming that PartsAPI, 17VIN, AUTOPOISK, partslink24, or supplier APIs are
-available.
-For board-wide checks, use `decode_vehicle_identities`; it calls public vPIC
-batch for ISO VINs, then applies local WMI/platform rules and CRM context.
-For parts-search quality checks across a 10-card batch, use
-`benchmark_vin_parts_lookup` after the batch decoder.
-It reports identity coverage, requested-part recognition, safe public query
-coverage, PartsAPI/17VIN dry-run readiness, and missing live catalog/supplier
-credentials without echoing raw customer identifiers.
-When the input comes from AutoStop CRM, pass the compact vehicle profile
-(`make_display`, `model_display`, `production_year`, engine/transmission,
-drivetrain, and source confidence) into the decoder; the local tool normalizes
-common CRM typos such as `Volkskwagen` before routing.
+- Classify the input as ISO VIN, partial VIN, frame/body number, market code,
+  plate-derived lead, or unknown before decoding it.
+- Never invent or pad a 17-character VIN. JDM frame numbers remain frame
+  numbers and may need both compact and hyphenated query forms.
+- Keep raw VIN, frame, plate, and document contents transient. Responses,
+  durable memory, docs, and broad logs use only redacted identity.
+- vPIC is an official baseline decoder, not an EPC or parts-fitment proof.
+- Preserve conflicts, source limits, confidence, and unknown fields explicitly;
+  an empty provider response is inconclusive.
 
-## Identifier Types
+## Workflow
 
-### ISO VIN
+1. Call `decode_vehicle_identity` with the identifier and compact CRM vehicle
+   profile. Use `decode_vehicle_identities` for a batch.
+2. Call `catalog_provider_status` before claiming that a paid catalog or API is
+   available.
+3. For an exact requested part, call `resolve_vin_oem_parts`; require the
+   production/build split and configuration fields it reports as missing.
+4. Hand a stable, redacted identity and unresolved caveats to the parts-search
+   workflow. Do not write an unconfirmed part as confirmed CRM data.
 
-Use the standard VIN route when the input is a 17-character VIN.
+A registration plate may only produce an identity lead through the configured
+plate-to-VIN provider route. Compare any returned VIN with the physical vehicle
+and exact live CRM context; never overwrite an existing VIN from that hit alone.
 
-Typical checks:
+## Escalation And Output
 
-- 17 characters
-- no `I`, `O`, or `Q`
-- check digit validation when the market uses it
-- WMI, VDS, VIS split
+If identity is ambiguous or sources conflict, request the vehicle plate or
+registration/inspection document and the relevant engine, transmission, market,
+or production code. Prefer physical documents and manufacturer/EPC evidence over
+generic decoders and marketplace guesses.
 
-Important limitation: NHTSA vPIC is a useful official baseline, but it is not
-an EPC. It may decode North-American VINs cleanly while returning partial or
-conflicting data for Europe/ROW/Russia/CIS/Japan/China identifiers. Treat vPIC
-as one evidence source, not as final parts applicability.
-
-### Japan-Market Chassis / Frame Number
-
-Treat Japanese chassis numbers as primary identifiers for Japan-market cars.
-They may appear as:
-
-- `frame number`
-- `chassis number`
-- `車台番号`
-- model/frame number variants used by the manufacturer
-
-Typical traits:
-
-- may be shorter than a global VIN
-- may require hyphen removal or split-field entry
-- recall and service portals often ask for the chassis number from the
-  inspection certificate
-- model code, engine code, and market code are often needed to finish the
-  decode
-
-The number may be entered without a hyphen in CRM, for example `MR41S123456`.
-Normalize this into both raw and catalog-query forms (`MR41S123456` and
-`MR41S-123456`) and use Suzuki/Honda/Toyota/Nissan/Mitsubishi-compatible EPC
-routes. Do not invent a 17-character VIN.
-
-### Korea-Market VIN
-
-Most Korea-market cars still use standard VIN decoding, but the useful output
-is often a market-specific vehicle profile rather than a full trim dump.
-
-Typical checks:
-
-- validate the VIN format
-- confirm market and model family
-- cross-check trim, engine, transmission, and plant against the manufacturer
-  or EPC source
-
-### Russian Registration Number
-
-Use a Russian registration number only as a read-only route to an identity
-lead. If the PartsAPI method-specific access is configured, call
-`partsapi_catalog_lookup(operation="plate_to_vin", registration_number=...)`;
-it maps to `gosnomer2vin`.
-
-- Normalize spaces and use the Latin letters/digits format required by the
-  provider. Do not place the plate in docs, durable memory, Git, or broad logs.
-- An empty response means only that this provider did not return a VIN. It is
-  not evidence that the car/VIN does not exist.
-- A returned VIN must be compared with the vehicle plate, make/model/year and
-  exact live CRM context before it becomes a vehicle identity or is written to
-  CRM. Never overwrite an existing VIN from a plate-only hit.
-- If the plate route is unavailable, empty, or conflicts with the vehicle,
-  request a photo of the registration certificate/vehicle plate or use the
-  existing VIN/frame route instead.
-
-### Other Market-Specific Codes
-
-Some vehicles expose extra internal identifiers:
-
-- body number
-- model code
-- engine code
-- transmission code
-- trim code
-- production or plant code
-
-Treat these as supplements, not as replacements for the main identifier.
-
-## Routing Rules
-
-### Europe and Russia
-
-1. Validate the VIN.
-2. Decode the base structure.
-3. Confirm vehicle family, engine, transmission, and market.
-4. If parts are needed, hand off to the parts-search playbook.
-
-For `WDD`, `XW8`, `WVW`, `WAU`, BMW, Mercedes, VAG, and Skoda VINs, expect
-vPIC to be incomplete. A high-confidence decode usually needs brand EPC,
-partslink24, erWin/ETKA/EPC, dealer catalog, or a commercial VIN/OE API.
-
-### Japan
-
-1. Classify the input as a chassis/frame number first.
-2. Normalize the number exactly as shown on the inspection certificate or
-   plate.
-3. Use manufacturer recall or owner portals that accept chassis number input.
-4. Pull model code, engine code, trim, and build clues from official sources
-   or EPC data.
-5. Do not invent a full VIN-style decode when the market does not provide one.
-
-Useful official patterns:
-
-- Toyota Japan recall search uses chassis number input.
-- Nissan, Mazda, Subaru, and Honda recall portals also use chassis / vehicle
-  number style searches.
-- Japanese inspection documents commonly expose `車台番号` as the stable key.
-
-### Korea
-
-1. Validate the VIN.
-2. Decode the core VIN structure.
-3. Cross-check the result against the manufacturer, service portal, or EPC.
-4. Mark option packages and trim details as confirmed only if the source
-   explicitly supports them.
-
-## Output Shape
-
-Return a compact vehicle identity card:
-
-- identifier type
-- raw identifier
-- market
-- make / model / generation
-- year or build window
-- engine
-- transmission
-- drive / body / chassis family
-- plant or origin if confirmed
-- compatibility notes
-- confidence and unknowns
-
-Also include:
-
-- check digit and model-year diagnostics
-- field-level evidence and conflicts
-- source limitations
-- required next source for high confidence
-- adapter status for PartsAPI, 17VIN, AUTOPOISK, and brand EPC
-- missing live credentials such as `PARTSAPI_KEY`, `PARTSAPI_BASE_URL`,
-  `VIN17_ACCOUNT`, and `VIN17_SECRET`
-
-## Error Handling
-
-If the identifier is ambiguous:
-
-- ask for a photo of the plate
-- ask for the registration or inspection document
-- ask for engine or transmission code if the market needs it
-- do not guess unsupported trim details
-
-If sources disagree:
-
-- prefer the document or plate over a generic decoder
-- prefer manufacturer or EPC data over marketplace guesses
-- mark the conflict explicitly
-
-## Handoff To Parts
-
-Once the vehicle identity is stable, pass the result to:
-
-- `docs/agent/parts_search_playbook.md`
-
-Before writing to CRM materials, identity should be at least `high` for the
-vehicle and the selected part still needs VIN/frame-specific EPC or supplier
-confirmation. If identity is only `medium`, keep the uncertainty and required
-confirmation in the internal quote matrix/owner report; public CRM card text
-follows `crm_card_description_standard.md`, and unconfirmed parts are not
-written as confirmed.
-
-Keep only durable conclusions in memory:
-
-- which identifier type worked
-- which market path worked
-- which source was authoritative
-- which compatibility caveat must be reused later
-
-## Sources
-
-- [NHTSA vPIC API](https://vpic.nhtsa.dot.gov/api/)
-- [PartsAPI docs](https://partsapi.ru/docs)
-- [17VIN API docs](https://en.17vin.com/doc.html)
-- [AUTOPOISK](https://autopoisk.su/en)
-- [partslink24](https://www.partslink24.com/en)
-- [Toyota Japan recall search](https://www.toyota.co.jp/recall-search/dc/en/search)
-- [Nissan recall search](https://www.nissan.co.jp/RECALL/search_en.html)
-- [Mazda recall search](https://www2.mazda.co.jp/service/recall/)
-- [Subaru recall search](https://recall.subaru.co.jp/lqsb/)
-- [Honda recall page](https://www.honda.co.jp/recall/)
-- [MLIT vehicle inspection certificate](https://www.jidoushatouroku-portal.mlit.go.jp/jidousha/kensatoroku/about/inspect/certificate/index.html)
-- [Kia VIN overview](https://www.kia.com/nmc/en/discover-kia/ask/what-is-a-vin.html)
-- [Hyundai Australia VIN FAQ](https://www.hyundai.com/au/en/owning/myhyundaicare/faq)
+Return only a compact redacted vehicle profile, identifier type, market/build
+clues, evidence-backed fields, conflicts, confidence, missing context, provider
+status, and the next authoritative source. High-confidence identity still does
+not prove fitment; the selected part needs VIN/frame-specific EPC or supplier
+confirmation.
