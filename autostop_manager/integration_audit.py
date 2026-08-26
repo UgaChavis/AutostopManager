@@ -237,9 +237,11 @@ def audit_gmail_connector(
 ) -> dict[str, Any]:
     install_metadata = plugin_root / ".codex-remote-plugin-install.json"
     skill_files = sorted(plugin_root.glob("*/skills/gmail/SKILL.md"))
+    skill_present = any(path.is_file() for path in skill_files)
+    app_connector_present = _gmail_app_connector_present(plugin_root)
     checks = {
         "plugin_install_metadata_present": install_metadata.is_file(),
-        "gmail_skill_present": any(path.is_file() for path in skill_files),
+        "gmail_connector_contract_present": skill_present or app_connector_present,
     }
     warnings: list[str] = []
     proof_summary = {"required": require_live_proof, "present": proof_path.is_file()}
@@ -257,9 +259,30 @@ def audit_gmail_connector(
         "ok": ok,
         "status": "healthy" if ok else "failed",
         "checks": checks,
+        "plugin_layout": "skill" if skill_present else "app" if app_connector_present else "missing",
         "proof": proof_summary,
         "warnings": warnings,
     }
+
+
+def _gmail_app_connector_present(plugin_root: Path) -> bool:
+    for manifest_path in sorted(plugin_root.glob("*/.codex-plugin/plugin.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            if manifest.get("name") != "gmail" or manifest.get("apps") != "./.app.json":
+                continue
+            app_config = json.loads((manifest_path.parents[1] / ".app.json").read_text(encoding="utf-8-sig"))
+            gmail_app = app_config.get("apps", {}).get("gmail")
+        except (AttributeError, OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(gmail_app, dict)
+            and isinstance(gmail_app.get("id"), str)
+            and bool(gmail_app["id"].strip())
+            and gmail_app.get("required") is True
+        ):
+            return True
+    return False
 
 
 def _read_gmail_proof(path: Path, *, max_age: timedelta) -> dict[str, Any]:

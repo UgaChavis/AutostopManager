@@ -70,6 +70,22 @@ def _write_gmail_runtime(plugin_root, proof_path) -> None:
     )
 
 
+def _write_gmail_app_runtime(plugin_root, proof_path) -> None:
+    _write_gmail_runtime(plugin_root, proof_path)
+    skill = plugin_root / "1.0.0" / "skills" / "gmail" / "SKILL.md"
+    skill.unlink()
+    manifest = plugin_root / "1.0.0" / ".codex-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps({"name": "gmail", "version": "1.0.0", "apps": "./.app.json"}),
+        encoding="utf-8",
+    )
+    (plugin_root / "1.0.0" / ".app.json").write_text(
+        json.dumps({"apps": {"gmail": {"id": "connector-test", "required": True}}}),
+        encoding="utf-8",
+    )
+
+
 def _write_parity_checker(root, name) -> None:
     script = root / "scripts" / name
     script.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +130,44 @@ def test_gmail_connector_full_mode_requires_fresh_ref_only_proof(tmp_path):
 
     assert result["ok"] is True
     assert result["proof"]["required_checks_passed"] is True
+
+
+def test_gmail_connector_accepts_current_app_only_plugin_contract(tmp_path):
+    plugin_root = tmp_path / "gmail"
+    proof_path = tmp_path / "gmail-proof.json"
+    _write_gmail_app_runtime(plugin_root, proof_path)
+
+    result = audit_gmail_connector(
+        plugin_root=plugin_root,
+        proof_path=proof_path,
+        require_live_proof=True,
+        max_age=timedelta(days=30),
+    )
+
+    assert result["ok"] is True
+    assert result["plugin_layout"] == "app"
+    assert result["checks"]["gmail_connector_contract_present"] is True
+
+
+def test_gmail_connector_rejects_incomplete_app_only_plugin_contract(tmp_path):
+    plugin_root = tmp_path / "gmail"
+    proof_path = tmp_path / "gmail-proof.json"
+    _write_gmail_app_runtime(plugin_root, proof_path)
+    (plugin_root / "1.0.0" / ".app.json").write_text(
+        json.dumps({"apps": {"gmail": {"id": "", "required": True}}}),
+        encoding="utf-8",
+    )
+
+    result = audit_gmail_connector(
+        plugin_root=plugin_root,
+        proof_path=proof_path,
+        require_live_proof=True,
+        max_age=timedelta(days=30),
+    )
+
+    assert result["ok"] is False
+    assert result["plugin_layout"] == "missing"
+    assert result["checks"]["gmail_connector_contract_present"] is False
 
 
 def test_full_integration_audit_runs_local_and_public_without_exposing_token(tmp_path):
