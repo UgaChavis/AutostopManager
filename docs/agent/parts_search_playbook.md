@@ -8,8 +8,7 @@ offers, and keeping procurement, retail and client prices distinct.
 Collect vehicle/VIN or frame, market, year, engine, transmission, part name,
 side/axis/position, quantity, condition, city, urgency and any old article or
 label photo. Decode market-specific identifiers through
-`vehicle_identity_playbook.md`. For CRM VIN-to-OEM writeback use
-`crm_vin_oem_parts_lookup_playbook.md`.
+`vehicle_identity_playbook.md`.
 
 Keep these identities separate:
 
