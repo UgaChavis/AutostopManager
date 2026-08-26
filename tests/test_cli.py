@@ -56,23 +56,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
-            "crm-vin-parts-plan",
-            "--card-id",
-            "card_123",
-            "--vin",
-            "JH4DA9350LS000000",
-            "--part",
-            "свечи",
-            "--make",
-            "Honda",
-        ]
-    )
-    assert args.command == "crm-vin-parts-plan"
-    assert args.card_id == "card_123"
-    assert args.requested_part == "свечи"
-
-    args = parser.parse_args(
-        [
             "vin-parts-benchmark",
             "--items-json",
             "[]",

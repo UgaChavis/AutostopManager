@@ -122,28 +122,18 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     assert smoke["summary"]["no_order_guarantee"] is True
 
 
-def test_lookup_oem_catalog_candidates_name_uses_canonical_resolver(tmp_path, monkeypatch):
-    captured = {}
-
-    def fake_resolve_vin_oem_parts(**kwargs):
-        captured.update(kwargs)
-        return {"ok": True}
-
-    monkeypatch.setattr(mcp_tools_module, "resolve_vin_oem_parts", fake_resolve_vin_oem_parts)
+def test_oem_lookup_compatibility_names_use_canonical_resolver(tmp_path):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
 
-    register_manager_memory_tools(server, store)
-    result = server.tools["lookup_oem_catalog_candidates"](
-        identifier="JTEBU3FJX05027767",
-        requested_part="передние колодки",
-        partsapi_category_index="data/custom_partsapi_index.json",
-        dry_run=True,
-    )
+    canonical = server.tools["resolve_vin_oem_parts"]
+    for name in ("lookup_oem_catalog_candidates", "plan_crm_vin_oem_parts_lookup"):
+        assert server.tools[name] is canonical
+        assert inspect.signature(server.tools[name]) == inspect.signature(canonical)
 
-    assert result["ok"] is True
-    assert captured["partsapi_category_index"] == "data/custom_partsapi_index.json"
-    assert captured["dry_run"] is True
+    live_tools = build_server()._tool_manager._tools
+    for name in ("lookup_oem_catalog_candidates", "plan_crm_vin_oem_parts_lookup"):
+        assert live_tools[name].parameters == live_tools["resolve_vin_oem_parts"].parameters
 
 
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):

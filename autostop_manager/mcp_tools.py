@@ -27,7 +27,6 @@ from .config import (
 )
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
-from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
     audit_knowledge_base,
@@ -1599,10 +1598,10 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="plan_crm_vin_oem_parts_lookup",
         description=(
-            "Build the CRM card workflow for VIN/frame/body-number OEM lookup, replacements/crosses, "
-            "procurement/RF market pricing, structured CRM writeback, and verification."
+            "Compatibility name for the canonical read-only VIN/frame/body-number OEM resolver: "
+            "identity, part intent, candidates, readiness gates, manual actions, and CRM gate."
         ),
-    )(build_crm_vin_parts_lookup_pipeline)
+    )(resolve_vin_oem_parts)
 
     server.tool(
         name="benchmark_vin_parts_lookup",

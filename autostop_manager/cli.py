@@ -9,7 +9,6 @@ from typing import Any
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
-from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .integration_audit import build_integration_audit
 from .knowledge_base import (
@@ -82,20 +81,6 @@ def _json_file(raw_path: str | None, *, option_name: str) -> Any:
         raise SystemExit(message) from exc
 
 
-def _json_dict_arg(raw: str | None, *, option_name: str) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        message = f"{option_name} must be valid JSON: {exc}"
-        raise SystemExit(message) from exc
-    if not isinstance(value, dict):
-        message = f"{option_name} must be a JSON object"
-        raise SystemExit(message)
-    return value
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-manager", description="AutoStop manager memory CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -147,31 +132,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    crm_vin_parts = sub.add_parser(
-        "crm-vin-parts-plan",
-        help="Build the CRM VIN/frame -> OEM -> crosses -> quote -> writeback pipeline for one requested part",
-    )
-    crm_vin_parts.add_argument("--card-id", default=None)
-    crm_vin_parts.add_argument("--part", dest="requested_part", required=True)
-    crm_vin_parts.add_argument("--vin", default=None)
-    crm_vin_parts.add_argument("--frame", default=None)
-    crm_vin_parts.add_argument("--body-number", default=None)
-    crm_vin_parts.add_argument("--vehicle", default=None)
-    crm_vin_parts.add_argument("--make", default=None)
-    crm_vin_parts.add_argument("--model", default=None)
-    crm_vin_parts.add_argument("--model-year", type=int, default=None)
-    crm_vin_parts.add_argument("--market", default=None)
-    crm_vin_parts.add_argument("--engine", default=None)
-    crm_vin_parts.add_argument("--transmission", default=None)
-    crm_vin_parts.add_argument("--drivetrain", default=None)
-    crm_vin_parts.add_argument("--side", default=None)
-    crm_vin_parts.add_argument("--axle", default=None)
-    crm_vin_parts.add_argument("--position", default=None)
-    crm_vin_parts.add_argument("--urgency", default=None)
-    crm_vin_parts.add_argument("--city", default="Красноярск")
-    crm_vin_parts.add_argument("--limit", type=int, default=10)
-    crm_vin_parts.add_argument("--vin-oem-resolution-json", default=None)
 
     vin_parts_benchmark = sub.add_parser(
         "vin-parts-benchmark",
@@ -436,32 +396,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "crm-vin-parts-plan":
-        vin_oem_resolution = _json_dict_arg(args.vin_oem_resolution_json, option_name="--vin-oem-resolution-json")
-        _print_json(
-            build_crm_vin_parts_lookup_pipeline(
-                card_id=args.card_id,
-                requested_part=args.requested_part,
-                vin=args.vin,
-                frame=args.frame,
-                body_number=args.body_number,
-                vehicle=args.vehicle,
-                make=args.make,
-                model=args.model,
-                model_year=args.model_year,
-                market=args.market,
-                engine=args.engine,
-                transmission=args.transmission,
-                drivetrain=args.drivetrain,
-                side=args.side,
-                axle=args.axle,
-                position=args.position,
-                urgency=args.urgency,
-                city=args.city,
-                limit=args.limit,
-                vin_oem_resolution=vin_oem_resolution,
-            )
-        )
     elif args.command == "vin-parts-benchmark":
         items = _json_value(args.items_json, option_name="--items-json")
         if not isinstance(items, list):

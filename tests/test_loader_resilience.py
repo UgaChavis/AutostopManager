@@ -201,9 +201,8 @@ def test_knowledge_intake_string_lists_are_normalized(tmp_path, monkeypatch):
     assert plan["domain"] == "demo_domain"
 
 
-def test_vin_sources_inputs_and_backlogs_are_normalized(tmp_path, monkeypatch):
+def test_vin_sources_inputs_are_normalized(tmp_path, monkeypatch):
     vin_module = importlib.import_module("autostop_manager.vin_sources")
-    crm_module = importlib.import_module("autostop_manager.crm_vin_parts")
 
     registry_path = tmp_path / "vin_oem_sources.json"
     registry_path.write_text(
@@ -219,41 +218,13 @@ def test_vin_sources_inputs_and_backlogs_are_normalized(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    procurement_path = tmp_path / "procurement_price_sources.json"
-    procurement_path.write_text(
-        json.dumps(
-            {
-                "sources": [
-                    {
-                        "source_id": "demo",
-                        "name": "Demo Procurement Source",
-                        "mvp_priority": "high",
-                    }
-                ],
-                "integration_next_steps": [{"step": 1, "task": "demo", "status": "planned"}],
-            }
-        ),
-        encoding="utf-8",
-    )
     monkeypatch.setattr(vin_module, "REGISTRY_PATH", registry_path)
-    monkeypatch.setattr(crm_module, "VIN_OEM_SOURCES_PATH", registry_path)
-    monkeypatch.setattr(crm_module, "PROCUREMENT_SOURCES_PATH", procurement_path)
     vin_module.load_source_registry.cache_clear()
-    crm_module._load_vin_oem_sources.cache_clear()
-    crm_module._load_procurement_sources.cache_clear()
 
     assert len(vin_module.sources_for_inputs("vin")) == 1
     assert vin_module.sources_for_inputs("vin")[0]["name"] == "Demo VIN Source"
 
-    vin_oem_registry = crm_module._load_vin_oem_sources()
-    procurement_registry = crm_module._load_procurement_sources()
-
-    assert "integration_backlog" not in vin_oem_registry
-    assert procurement_registry["integration_next_steps"] == [{"step": 1, "task": "demo", "status": "planned"}]
-
     vin_module.load_source_registry.cache_clear()
-    crm_module._load_vin_oem_sources.cache_clear()
-    crm_module._load_procurement_sources.cache_clear()
 
 
 def test_cleanup_audit_string_route_lists_keep_referenced_docs(tmp_path):
