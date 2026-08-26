@@ -177,7 +177,7 @@ def test_classify_ports_treats_known_autostop_listeners_as_expected():
 def test_missing_external_provider_access_is_not_server_open_risk():
     result = control_center_module._open_risk_score(
         git={"dirty": False},
-        providers={"ok": True, "missing_provider_ids": ["vin17_api", "emex"]},
+        providers={"ok": True, "missing_provider_ids": ["vin17_api"]},
         server_environment={"ok": True, "ports": {"review_public_count": 0}},
         codex_readiness={"ok": True},
         runtime_readiness={"ok": True},

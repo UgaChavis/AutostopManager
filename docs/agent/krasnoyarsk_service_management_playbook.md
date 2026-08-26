@@ -62,7 +62,7 @@ Urgency routing:
 
 - Same day: Drom Krasnoyarsk, Avito Krasnoyarsk, local supplier phone checks,
   then ZZap only if pickup/delivery is confirmed.
-- 1-3 days: exact OEM in ZZap, Emex, Exist, Autodoc, plus local suppliers.
+- 1-3 days: exact OEM in ZZap, Exist, Autodoc, plus local suppliers.
 - Rare/contract parts: Drom, Avito, Автопоставка, donor-vehicle verification,
   seller photo proof, and written return terms.
 

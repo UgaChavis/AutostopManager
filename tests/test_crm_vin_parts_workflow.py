@@ -217,7 +217,7 @@ def test_provider_registries_name_required_catalog_cross_and_price_sources():
 
     price_rows = [item for item in price_sources["sources"] if item.get("integration_priority")]
     price_ids = {item["source_id"] for item in price_rows}
-    assert {"rossko", "autoeuro_api", "zzap", "armtek", "autopiter", "emex", "exist", "autodoc"}.issubset(price_ids)
+    assert {"rossko", "autoeuro_api", "zzap", "armtek", "autopiter", "exist", "autodoc"}.issubset(price_ids)
 
     for row in catalog_rows:
         assert row["role"]

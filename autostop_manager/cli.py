@@ -6,11 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .catalog_clients import (
-    emex_price_lookup,
-    exist_price_lookup,
-    lookup_oem_catalog_candidates,
-)
+from .catalog_clients import exist_price_lookup, lookup_oem_catalog_candidates
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
@@ -252,28 +248,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    emex_lookup = sub.add_parser(
-        "emex-price-lookup",
-        help="Call or dry-run official Emex SOAP FindDetailAdv5 price/stock lookup using EMEX_LOGIN/EMEX_PASSWORD",
-    )
-    emex_lookup.add_argument("--part-number", required=True)
-    emex_lookup.add_argument("--brand", default=None, help="Emex makeLogo/brand code, optional")
-    emex_lookup.add_argument("--subst-level", default="All", choices=["All", "OriginalOnly"])
-    emex_lookup.add_argument(
-        "--subst-filter",
-        default="None",
-        choices=["None", "FilterOriginalAndReplacements", "FilterOriginalAndAnalogs"],
-    )
-    emex_lookup.add_argument("--delivery-region-type", default="PRI", choices=["PRI", "ALT"])
-    emex_lookup.add_argument("--min-delivery-percent", type=int, default=None)
-    emex_lookup.add_argument("--max-delivery-days", type=int, default=None)
-    emex_lookup.add_argument("--min-quantity", type=int, default=None)
-    emex_lookup.add_argument("--max-result-price", type=float, default=None)
-    emex_lookup.add_argument("--max-one-detail-offers-count", type=int, default=10)
-    emex_lookup.add_argument("--detail-nums-to-load", default="")
-    emex_lookup.add_argument("--timeout", type=float, default=20.0)
-    emex_lookup.add_argument("--dry-run", action="store_true")
 
     exist_lookup = sub.add_parser(
         "exist-price-lookup",
@@ -788,24 +762,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "emex-price-lookup":
-        _print_json(
-            emex_price_lookup(
-                part_number=args.part_number,
-                brand=args.brand,
-                subst_level=args.subst_level,
-                subst_filter=args.subst_filter,
-                delivery_region_type=args.delivery_region_type,
-                min_delivery_percent=args.min_delivery_percent,
-                max_delivery_days=args.max_delivery_days,
-                min_quantity=args.min_quantity,
-                max_result_price=args.max_result_price,
-                max_one_detail_offers_count=args.max_one_detail_offers_count,
-                detail_nums_to_load=_tags(args.detail_nums_to_load),
-                timeout=args.timeout,
-                dry_run=args.dry_run,
-            )
-        )
     elif args.command == "exist-price-lookup":
         _print_json(
             exist_price_lookup(

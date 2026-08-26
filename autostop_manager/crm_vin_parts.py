@@ -480,7 +480,6 @@ def build_crm_vin_parts_lookup_pipeline(
                     "AutoEuro",
                     "Armtek",
                     "Autopiter",
-                    "Emex",
                     "Exist",
                     "Autodoc",
                     "ZZap",
@@ -489,7 +488,7 @@ def build_crm_vin_parts_lookup_pipeline(
                     "Avito",
                 ],
                 "source_roles": {
-                    "procurement_first": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter", "Emex"],
+                    "procurement_first": ["ROSSKO", "AutoEuro", "Armtek", "Autopiter"],
                     "public_retail_reference": ["Exist", "Autodoc", "ZZap", "Drom", "EuroAuto", "Avito"],
                 },
                 "checks": [

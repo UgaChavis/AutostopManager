@@ -206,7 +206,7 @@ Use `docs/agent/parts_search_playbook.md` before writing prices.
    - package/kit/quantity basis;
    - confidence and confirmation status.
 3. Procurement source order:
-   - ROSSKO, AutoEuro, Armtek, Autopiter, Emex, Exist, Autodoc, local
+   - ROSSKO, AutoEuro, Armtek, Autopiter, Exist, Autodoc, local
      Krasnoyarsk suppliers when account/cabinet/API/export is available;
    - Drom/Avito/FarPost for used/contract/local urgent parts;
    - ZZap for market benchmark, replacement visibility, and average/stat price

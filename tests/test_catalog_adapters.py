@@ -97,19 +97,6 @@ def test_catalog_provider_status_detects_configured_17vin_account(monkeypatch):
     assert vin17["present_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
 
 
-def test_catalog_provider_status_detects_emex_account(monkeypatch):
-    monkeypatch.setenv("EMEX_LOGIN", "test-user")
-    monkeypatch.setenv("EMEX_PASSWORD", "test-secret")
-
-    status = catalog_provider_status(stage="procurement_price")
-    emex = next(provider for provider in status["providers"] if provider["source_id"] == "emex")
-
-    assert emex["configured"] is True
-    assert emex["live_callable_now"] is True
-    assert emex["present_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD"]
-    assert "whitelist" in emex["limits"]
-
-
 def test_catalog_provider_status_accepts_rossko_app_key_aliases(monkeypatch):
     monkeypatch.delenv("ROSSKO_KEY1", raising=False)
     monkeypatch.delenv("ROSSKO_KEY2", raising=False)

@@ -5,12 +5,10 @@ from autostop_manager.catalog_clients import (
     build_17vin_signed_request,
     build_17vin_token,
     build_denso_aftermarket_search_request,
-    build_emex_find_detail_request,
     build_exist_price_lookup_request,
     build_mann_filter_catalog_request,
     build_partsapi_request,
     denso_aftermarket_catalog_lookup,
-    emex_price_lookup,
     exist_price_lookup,
     extract_partsapi_article_candidates,
     extract_partsapi_autonorms_rows,
@@ -19,7 +17,6 @@ from autostop_manager.catalog_clients import (
     extract_partsapi_parts_by_vin_candidates,
     extract_partsapi_vehicle_profiles,
     mann_filter_catalog_lookup,
-    parse_emex_find_detail_response,
     parse_exist_catalog_candidates,
     parse_exist_price_page,
     partsapi_catalog_lookup,
@@ -514,111 +511,6 @@ def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
             "power_hp_from": "150",
         }
     ]
-
-
-def test_emex_lookup_reports_missing_credentials(monkeypatch):
-    monkeypatch.delenv("EMEX_LOGIN", raising=False)
-    monkeypatch.delenv("EMEX_PASSWORD", raising=False)
-
-    result = emex_price_lookup(part_number="9091901164", dry_run=True)
-
-    assert result["ok"] is False
-    assert result["missing_env_names"] == ["EMEX_LOGIN", "EMEX_PASSWORD"]
-    assert result["request_plan"]["secret_exposed"] is False
-
-
-def test_emex_request_redacts_credentials(monkeypatch):
-    monkeypatch.setenv("EMEX_LOGIN", "client-login")
-    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
-
-    request = build_emex_find_detail_request(part_number="9091901164", brand="TY")
-
-    assert request["ok"] is True
-    assert request["secret_exposed"] is False
-    assert request["params"]["login"] == "cl***in"
-    assert request["params"]["password"] == "***"
-    assert "client-password" in request["body"]
-    assert "client-password" not in request["body_sha256"]
-
-
-def test_emex_lookup_dry_run_with_configured_env(monkeypatch):
-    monkeypatch.setenv("EMEX_LOGIN", "client-login")
-    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
-
-    result = emex_price_lookup(part_number="9091901164", dry_run=True)
-
-    assert result["ok"] is True
-    assert result["dry_run"] is True
-    assert result["emex_method"] == "FindDetailAdv5"
-    assert result["request_plan"]["params"]["password"] == "***"
-
-
-def test_parse_emex_find_detail_response_extracts_detail_items():
-    parsed = parse_emex_find_detail_response(
-        """<?xml version="1.0" encoding="utf-8"?>
-        <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-          <soap:Body>
-            <FindDetailAdv5Response xmlns="http://tempuri.org/">
-              <FindDetailAdv5Result>
-                <IsSuccess>true</IsSuccess>
-                <ErrorMessage />
-                <Details>
-                  <DetailItem>
-                    <PriceGroup>Original</PriceGroup>
-                    <MakeLogo>TY</MakeLogo>
-                    <MakeName>Toyota</MakeName>
-                    <DetailNum>9091901164</DetailNum>
-                    <DetailNameRus>Свеча зажигания</DetailNameRus>
-                    <Quantity>5</Quantity>
-                    <ADDays>2</ADDays>
-                    <DDPercent>90.0</DDPercent>
-                    <ResultPrice>437.2300</ResultPrice>
-                    <DeliveryRegionType>PRI</DeliveryRegionType>
-                  </DetailItem>
-                </Details>
-              </FindDetailAdv5Result>
-            </FindDetailAdv5Response>
-          </soap:Body>
-        </soap:Envelope>"""
-    )
-
-    assert parsed["is_success"] is True
-    assert parsed["details"][0]["brand"] == "Toyota"
-    assert parsed["details"][0]["part_number"] == "9091901164"
-    assert parsed["details"][0]["quantity"] == 5
-    assert parsed["details"][0]["price_rub"] == 437.23
-
-
-def test_emex_lookup_rejects_xml_entities_without_crashing(monkeypatch):
-    monkeypatch.setenv("EMEX_LOGIN", "client-login")
-    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
-    malicious_xml = """<?xml version="1.0"?>
-    <!DOCTYPE response [<!ENTITY payload "unexpected">]>
-    <FindDetailAdv5Result><ErrorMessage>&payload;</ErrorMessage></FindDetailAdv5Result>
-    """
-    monkeypatch.setattr(
-        "autostop_manager.catalog_clients.urlopen",
-        lambda request, timeout=20.0: _FakeRawResponse(malicious_xml),
-    )
-
-    result = emex_price_lookup(part_number="9091901164")
-
-    assert result["ok"] is False
-    assert "EntitiesForbidden" in result["error"]
-
-
-def test_emex_lookup_rejects_oversized_xml_response(monkeypatch):
-    monkeypatch.setenv("EMEX_LOGIN", "client-login")
-    monkeypatch.setenv("EMEX_PASSWORD", "client-password")
-    monkeypatch.setattr(
-        "autostop_manager.catalog_clients.urlopen",
-        lambda request, timeout=20.0: _FakeRawResponse(b"x" * 2_000_001),
-    )
-
-    result = emex_price_lookup(part_number="9091901164")
-
-    assert result["ok"] is False
-    assert result["error"] == "xml_response_too_large"
 
 
 def test_exist_request_builds_public_read_only_dry_run_plan():
