@@ -62,40 +62,6 @@ def test_cli_parser_has_core_commands():
     assert args.dry_run is True
     assert args.apply is False
 
-    args = parser.parse_args(
-        [
-            "estimate-work",
-            "--vehicle",
-            "BMW X5",
-            "--work",
-            "замена рулевой рейки",
-            "--quotes-json",
-            "quotes.json",
-            "--no-auto-research",
-            "--labor-time-policy",
-            "public_only",
-        ]
-    )
-    assert args.command == "estimate-work"
-    assert args.vehicle == "BMW X5"
-    assert args.work_items == ["замена рулевой рейки"]
-    assert args.quotes_json == "quotes.json"
-    assert args.auto_research is False
-    assert args.labor_time_policy == "public_only"
-
-    args = parser.parse_args(
-        [
-            "service-labor-refresh",
-            "--state-json",
-            "/opt/autostopcrm/data/state.json",
-            "--half-life-days",
-            "90",
-        ]
-    )
-    assert args.command == "service-labor-refresh"
-    assert args.state_json == "/opt/autostopcrm/data/state.json"
-    assert args.half_life_days == 90
-
     args = parser.parse_args(["knowledge-sync"])
     assert args.command == "knowledge-sync"
 
@@ -131,59 +97,6 @@ def test_cli_parser_has_core_commands():
     command_action = next(action for action in parser._actions if action.dest == "command")
     for retired_command in {"run-start", "run-event", "run-finish", "run-list"}:
         assert retired_command not in command_action.choices
-
-
-def test_service_labor_refresh_cli_writes_private_artifacts(tmp_path, capsys):
-    state_path = tmp_path / "state.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "cards": [
-                    {
-                        "repair_order": {
-                            "status": "closed",
-                            "closed_at": "25.07.2026 10:00",
-                            "vehicle": "Toyota Camry",
-                            "works": [
-                                {
-                                    "name": "Замена масла в ДВС",
-                                    "quantity": "1",
-                                    "price": "1500",
-                                    "total": "1500",
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    output = tmp_path / "private" / "labor.json"
-    executor_output = tmp_path / "private" / "restricted" / "executors.json"
-    report_output = tmp_path / "private" / "reports" / "labor.md"
-
-    exit_code = cli.main(
-        [
-            "service-labor-refresh",
-            "--state-json",
-            str(state_path),
-            "--output",
-            str(output),
-            "--executor-output",
-            str(executor_output),
-            "--report-output",
-            str(report_output),
-        ]
-    )
-
-    payload = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert payload["scope"]["selected_closed_orders"] == 1
-    assert payload["scope"]["valid_work_rows"] == 1
-    assert output.exists()
-    assert executor_output.exists()
-    assert report_output.exists()
 
 
 def test_doctor_returns_nonzero_when_audit_fails(monkeypatch, capsys):

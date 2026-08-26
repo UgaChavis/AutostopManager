@@ -19,16 +19,10 @@ from .knowledge_base import (
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_review import build_memory_review
 from .provider_smoke import build_provider_smoke_report
-from .service_labor_experience import (
-    build_service_labor_experience_from_state_file,
-    save_service_labor_artifacts,
-    summarize_service_labor_snapshot,
-)
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identity
-from .work_pricing import estimate_repair_work_cost
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -56,17 +50,6 @@ def _write_output(raw_path: str | None, payload: str) -> None:
     path = Path(raw_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8")
-
-
-def _json_file(raw_path: str | None, *, option_name: str) -> Any:
-    if not raw_path:
-        return None
-    path = Path(raw_path)
-    try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        message = f"{option_name} must point to a valid JSON file: {exc}"
-        raise SystemExit(message) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,51 +95,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    estimate_work = sub.add_parser(
-        "estimate-work",
-        help="Build a read-only multi-source labor estimate from internal experience, market, and labor time",
-    )
-    estimate_work.add_argument("--vehicle", default=None)
-    estimate_work.add_argument("--vin", default=None)
-    estimate_work.add_argument("--chassis", default=None)
-    estimate_work.add_argument("--make", default=None)
-    estimate_work.add_argument("--model", default=None)
-    estimate_work.add_argument("--year", type=int, default=None)
-    estimate_work.add_argument("--engine", default=None)
-    estimate_work.add_argument("--transmission", default=None)
-    estimate_work.add_argument("--work", action="append", dest="work_items", default=[])
-    estimate_work.add_argument("--complaint", default=None)
-    estimate_work.add_argument("--city", default="Красноярск")
-    estimate_work.add_argument("--quotes-json", default=None)
-    estimate_work.add_argument("--auto-research", action=argparse.BooleanOptionalAction, default=True)
-    estimate_work.add_argument("--labor-time-policy", choices=["public_only"], default="public_only")
-    estimate_work.add_argument(
-        "--internal-experience",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use the aggregate-only local closed-order experience snapshot",
-    )
-
-    labor_refresh = sub.add_parser(
-        "service-labor-refresh",
-        help="Refresh labor-only aggregate experience from all closed CRM repair orders",
-    )
-    labor_refresh.add_argument("--state-json", required=True)
-    labor_refresh.add_argument("--half-life-days", type=int, default=90)
-    labor_refresh.add_argument(
-        "--output",
-        default="data/private_knowledge/service_labor_experience.json",
-    )
-    labor_refresh.add_argument(
-        "--executor-output",
-        default="data/private_knowledge/restricted/service_labor_executor_report.json",
-    )
-    labor_refresh.add_argument(
-        "--report-output",
-        default="data/private_knowledge/reports/service_labor_analysis.md",
-    )
-    sub.add_parser("init", help="Initialize SQLite storage")
 
     store_checkpoint_status = sub.add_parser(
         "store-checkpoint-status",
@@ -253,12 +191,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     args = build_parser().parse_args(argv)
     store = ManagerMemoryStore()
 
-    if args.command == "init":
-        store.initialize()
-        _print_json({"ok": True, "db_path": str(store.path)})
-    elif args.command == "store-checkpoint-status":
+    if args.command == "store-checkpoint-status":
         return _print_checked_json(store.get_store_checkpoint(args.stream))
-    elif args.command == "store-checkpoint-reset":
+    if args.command == "store-checkpoint-reset":
         return _print_checked_json(
             store.reset_store_checkpoint_for_rebaseline(
                 stream=args.stream,
@@ -266,9 +201,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 reason=args.reason,
             )
         )
-    elif args.command == "knowledge-sync":
+    if args.command == "knowledge-sync":
         return _print_checked_json(sync_knowledge_base(store))
-    elif args.command == "knowledge-intake":
+    if args.command == "knowledge-intake":
         _print_json(build_knowledge_intake_plan(args.path, apply=args.apply))
     elif args.command == "knowledge-probe":
         _print_json(probe_knowledge_base(store, args.query, limit=args.limit))
@@ -329,50 +264,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "estimate-work":
-        _print_json(
-            estimate_repair_work_cost(
-                vehicle=args.vehicle,
-                vin=args.vin,
-                chassis=args.chassis,
-                make=args.make,
-                model=args.model,
-                year=args.year,
-                engine=args.engine,
-                transmission=args.transmission,
-                work_items=args.work_items,
-                complaint=args.complaint,
-                city=args.city,
-                quotes_json=_json_file(args.quotes_json, option_name="--quotes-json"),
-                auto_research=args.auto_research,
-                labor_time_policy=args.labor_time_policy,
-                use_internal_experience=args.internal_experience,
-            )
-        )
-    elif args.command == "service-labor-refresh":
-        snapshot, executor_report = build_service_labor_experience_from_state_file(
-            args.state_json,
-            recency_half_life_days=args.half_life_days,
-        )
-        paths = save_service_labor_artifacts(
-            snapshot,
-            executor_report,
-            output_path=args.output,
-            executor_output_path=args.executor_output,
-            report_output_path=args.report_output,
-        )
-        _print_json(
-            {
-                "ok": True,
-                **paths,
-                **summarize_service_labor_snapshot(snapshot),
-                "executor_report": {
-                    "restricted": True,
-                    "executor_count": len(executor_report.get("executors") or []),
-                    "must_not_feed_customer_pricing": True,
-                },
-            }
-        )
     return 0
 
 
