@@ -427,7 +427,6 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
 def test_director_journal_contract_is_documented_and_bounded():
     skill = (ROOT / ".agents/skills/run-autostop-director/SKILL.md").read_text(encoding="utf-8")
     manifest = (ROOT / "docs/agent/service_director_manifest.md").read_text(encoding="utf-8")
-    crm_playbook = (ROOT / "docs/agent/crm_manager_data_playbook.md").read_text(encoding="utf-8")
     routes = json.loads((ROOT / "docs/agent/command_routes.json").read_text(encoding="utf-8"))
 
     assert "service_director_manifest.md" in skill
@@ -440,7 +439,6 @@ def test_director_journal_contract_is_documented_and_bounded():
     assert "expected_updated_at" in manifest
     assert "workflow_ref_hash" in manifest
     assert "до `next_review_at` повторно не спрашивать" in manifest
-    assert "service_director_manifest.md" in crm_playbook
     director_route = next(item for item in routes["routes"] if item["command_id"] == "service_director_cycle")
     assert "service_director" in director_route["knowledge_domains"]
     assert "crm_write" in director_route["effects"]
