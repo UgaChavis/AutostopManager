@@ -347,14 +347,11 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     assert cleanup["mode"] == "dry_run"
     system = server.tools["system_audit"]()
     assert system["ok"] is True
-    crm_health = server.tools["crm_health_plan"](
-        board_review={
-            "by_column": [{"column_id": "column_2", "label": "Запись на ремонт", "count": 10}],
-            "recent_events": [{"actor_name": "Codex MCP QA", "type": "test"}],
-        }
-    )
-    assert crm_health["mode"] == "read_only"
-    assert crm_health["verification"]["cards_moved"] == 0
+    crm_health = server.tools["crm_health_plan"]
+    assert crm_health is server.tools["agent_bootstrap"]
+    assert inspect.signature(crm_health) == inspect.signature(server.tools["agent_bootstrap"])
+    live_tools = build_server()._tool_manager._tools
+    assert live_tools["crm_health_plan"].parameters == live_tools["agent_bootstrap"].parameters
 
     for retired_tool in {
         "start_manager_run",

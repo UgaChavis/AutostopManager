@@ -28,7 +28,6 @@ from .config import (
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
-from .crm_health import build_crm_health_plan
 from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
     audit_knowledge_base,
@@ -1021,20 +1020,13 @@ def register_manager_memory_tools(  # noqa: C901
             }
         return report
 
-    @server.tool(
+    server.tool(
         name="crm_health_plan",
-        description="Build a read-only CRM health plan from already fetched board_context, board_review, and today_context payloads.",
-    )
-    def crm_health_plan_tool(
-        board_context: dict[str, Any] | None = None,
-        board_review: dict[str, Any] | None = None,
-        today_context: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return build_crm_health_plan(
-            board_context=board_context,
-            board_review=board_review,
-            today_context=today_context,
-        )
+        description=(
+            "Compatibility name for the Agent Gateway v2 bootstrap. Use its route to read current CRM health "
+            "through the live agent_board_digest connector tool."
+        ),
+    )(agent_bootstrap_tool)
 
     @server.tool(
         name="audit_memory",
