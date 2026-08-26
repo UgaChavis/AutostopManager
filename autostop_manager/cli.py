@@ -12,12 +12,6 @@ from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .fluid_maintenance import build_fluid_maintenance_plan
-from .gateway_attestation import (
-    DEFAULT_MCP_URL as DEFAULT_GATEWAY_ATTESTATION_MCP_URL,
-    DEFAULT_OUTPUT_ROOT as DEFAULT_GATEWAY_ATTESTATION_OUTPUT_ROOT,
-    default_gateway_attestation_run_id,
-    run_gateway_attestation,
-)
 from .integration_audit import build_integration_audit
 from .knowledge_base import (
     audit_knowledge_base,
@@ -27,7 +21,6 @@ from .knowledge_base import (
 )
 from .knowledge_intake import build_knowledge_intake_plan
 from .memory_review import build_memory_review
-from .partsapi_smoke import build_partsapi_vin_smoke_report, select_crm_partsapi_smoke_case
 from .provider_smoke import build_provider_smoke_report
 from .service_labor_experience import (
     build_service_labor_experience_from_state_file,
@@ -262,23 +255,6 @@ def build_parser() -> argparse.ArgumentParser:
     exist_lookup.add_argument("--timeout", type=float, default=20.0)
     exist_lookup.add_argument("--dry-run", action="store_true")
 
-    partsapi_vin_smoke = sub.add_parser(
-        "partsapi-vin-smoke",
-        help="Run a bounded read-only PartsAPI VIN/OEM smoke report for one CRM-like item",
-    )
-    partsapi_vin_smoke.add_argument("--item-json", default=None)
-    partsapi_vin_smoke.add_argument("--repair-orders-json", default=None)
-    partsapi_vin_smoke.add_argument("--identifier", default=None)
-    partsapi_vin_smoke.add_argument("--vehicle", default=None)
-    partsapi_vin_smoke.add_argument("--requested-part", default=None)
-    partsapi_vin_smoke.add_argument("--partsapi-category", default=None)
-    partsapi_vin_smoke.add_argument("--part-type", default="oem")
-    partsapi_vin_smoke.add_argument("--max-candidates", type=int, default=3)
-    partsapi_vin_smoke.add_argument("--timeout", type=float, default=20.0)
-    partsapi_vin_smoke.add_argument("--random-seed", type=int, default=0)
-    partsapi_vin_smoke.add_argument("--no-live-vpic", action="store_true")
-    partsapi_vin_smoke.add_argument("--dry-run", action="store_true")
-
     crm_vin_parts = sub.add_parser(
         "crm-vin-parts-plan",
         help="Build the CRM VIN/frame -> OEM -> crosses -> quote -> writeback pipeline for one requested part",
@@ -480,27 +456,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     integration_audit.add_argument("--output", default=None)
 
-    gateway_attestation = sub.add_parser(
-        "crm-gateway-attest",
-        help="Run one stop-the-line AutoStop CRM Gateway v2 attestation step",
-    )
-    gateway_attestation.add_argument(
-        "action",
-        choices=["inventory", "next", "resume", "case", "retry", "cleanup", "summary"],
-    )
-    gateway_attestation.add_argument("--run-id", default="")
-    gateway_attestation.add_argument("--case-id", default="")
-    gateway_attestation.add_argument("--apply-synthetic", action="store_true")
-    gateway_attestation.add_argument("--force", action="store_true")
-    gateway_attestation.add_argument(
-        "--mcp-url",
-        default=DEFAULT_GATEWAY_ATTESTATION_MCP_URL,
-    )
-    gateway_attestation.add_argument(
-        "--output-root",
-        default=str(DEFAULT_GATEWAY_ATTESTATION_OUTPUT_ROOT),
-    )
-
     control_report = sub.add_parser(
         "control-report",
         help="Generate the Control Center V1 report as safe JSON or Markdown",
@@ -551,29 +506,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         report = build_integration_audit(full=args.full, gmail_proof_path=args.gmail_proof)
         _write_output(args.output, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         return _print_checked_json(report)
-    elif args.command == "crm-gateway-attest":
-        run_id = args.run_id or (default_gateway_attestation_run_id() if args.action == "inventory" else "")
-        if not run_id:
-            raise SystemExit("--run-id is required after inventory")
-        if args.force and args.action not in {"inventory", "case"}:
-            raise SystemExit("--force is valid only for inventory or case")
-        if args.apply_synthetic and args.action in {
-            "inventory",
-            "cleanup",
-            "summary",
-        }:
-            raise SystemExit("--apply-synthetic is valid only for next, resume, case, or retry")
-        return _print_checked_json(
-            run_gateway_attestation(
-                action=args.action,
-                run_id=run_id,
-                mcp_url=args.mcp_url,
-                output_root=args.output_root,
-                case_id=args.case_id,
-                apply_synthetic=args.apply_synthetic,
-                force=args.force,
-            )
-        )
     elif args.command == "control-report":
         report = build_control_report(store=store)
         if args.format == "markdown":
@@ -751,53 +683,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 max_offers=args.max_offers,
                 include_more_offers=args.include_more_offers,
                 timeout=args.timeout,
-                dry_run=args.dry_run,
-            )
-        )
-    elif args.command == "partsapi-vin-smoke":
-        item: dict[str, Any]
-        if args.repair_orders_json:
-            raw_orders = _json_value(args.repair_orders_json, option_name="--repair-orders-json")
-            if isinstance(raw_orders, dict):
-                raw_orders = (
-                    (raw_orders.get("data") or {}).get("repair_orders") or raw_orders.get("repair_orders") or []
-                )
-            if not isinstance(raw_orders, list):
-                message = "--repair-orders-json must be a JSON array or connector response object"
-                raise SystemExit(message)
-            selected = select_crm_partsapi_smoke_case(
-                raw_orders, random_seed=args.random_seed, include_raw_identifier=True
-            )
-            if not selected.get("ok"):
-                return _print_checked_json(selected)
-            selected_item = selected["selected"]
-            item = {
-                key: value
-                for key, value in selected_item.items()
-                if key not in {"identifier", "raw_identifier", "raw_identifier_is_sensitive"}
-            }
-            item["identifier"] = selected_item.get("raw_identifier")
-        elif args.item_json:
-            parsed_item = _json_dict_arg(args.item_json, option_name="--item-json")
-            if not isinstance(parsed_item, dict):
-                message = "--item-json must be a JSON object"
-                raise SystemExit(message)
-            item = parsed_item
-        else:
-            item = {
-                "identifier": args.identifier,
-                "vehicle": args.vehicle,
-                "requested_part": args.requested_part,
-            }
-        _print_json(
-            build_partsapi_vin_smoke_report(
-                item,
-                requested_part=args.requested_part,
-                partsapi_category=args.partsapi_category,
-                part_type=args.part_type,
-                max_candidates=args.max_candidates,
-                timeout=args.timeout,
-                live_vpic=not args.no_live_vpic,
                 dry_run=args.dry_run,
             )
         )

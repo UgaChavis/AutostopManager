@@ -256,10 +256,10 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["knowledge-sync"])
     assert args.command == "knowledge-sync"
 
-    args = parser.parse_args(["knowledge-search", "BMW F15 N63", "--domain", "bmw_f15_n63", "--limit", "5"])
+    args = parser.parse_args(["knowledge-search", "BMW F15 N63", "--domain", "automotive_repair", "--limit", "5"])
     assert args.command == "knowledge-search"
     assert args.query == "BMW F15 N63"
-    assert args.domain == "bmw_f15_n63"
+    assert args.domain == "automotive_repair"
     assert args.limit == 5
 
     args = parser.parse_args(["knowledge-probe", "clutch gearbox", "--limit", "3"])
@@ -388,20 +388,6 @@ def test_doctor_returns_zero_when_audit_passes(monkeypatch, capsys):
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
-
-
-def test_partsapi_vin_smoke_returns_nonzero_when_no_case_can_be_selected(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_json_value", lambda *_args, **_kwargs: {"data": {"repair_orders": []}})
-    monkeypatch.setattr(
-        cli,
-        "select_crm_partsapi_smoke_case",
-        lambda *_args, **_kwargs: {"ok": False, "error": "no_eligible_case"},
-    )
-
-    exit_code = cli.main(["partsapi-vin-smoke", "--repair-orders-json", "orders.json"])
-
-    assert exit_code == 1
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "no_eligible_case"}
 
 
 def test_every_top_level_cli_command_has_working_help(capsys):
