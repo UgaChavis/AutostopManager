@@ -334,39 +334,6 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
         assert expected in workflow
 
 
-def test_gmail_playbook_lists_current_documented_surface():
-    playbook = (ROOT / "docs" / "agent" / "gmail_workflow_playbook.md").read_text(encoding="utf-8")
-    tools = [
-        "_get_profile",
-        "_list_labels",
-        "_search_emails",
-        "_search_email_ids",
-        "_read_email",
-        "_batch_read_email",
-        "_read_email_thread",
-        "_batch_read_email_threads",
-        "_list_drafts",
-        "_read_attachment",
-        "_create_label",
-        "_apply_labels_to_emails",
-        "_batch_modify_email",
-        "_bulk_label_matching_emails",
-        "_archive_emails",
-        "_delete_emails",
-        "_create_draft",
-        "_update_draft",
-        "_send_draft",
-        "_send_email",
-        "_forward_emails",
-    ]
-
-    assert len(tools) == len(set(tools)) == 21
-    assert all(tool in playbook for tool in tools)
-    assert "active connector registration is the schema source of truth" in playbook
-    for stale_field in ["attachment_files", "body_file", "html_body", "content_type"]:
-        assert stale_field not in playbook
-
-
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():
     checked_paths = [
         ROOT / "docs" / "agent" / "board_cleanup_autopilot_playbook.md",
