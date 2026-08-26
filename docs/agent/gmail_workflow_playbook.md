@@ -155,9 +155,9 @@ Gmail.
 
 The active connector registration is the schema source of truth.
 The Manager ActionContract covers send, forward, label, archive, Trash,
-batch-modify, bulk-label, label creation, and draft create/update/send,
-including connector-style action aliases. A self-addressed live smoke verified
-profile/labels/search, draft create/update/send, message readback, label
-add/remove, archive, and Trash cleanup. Only booleans and freshness are retained
-in the root-only Gmail proof; no subject, body, address, or message/thread ID is
-stored in project files or Manager memory.
+batch-modify, bulk-label, label creation, and draft create/update/send. A
+self-addressed live smoke verified profile/labels/search, draft
+create/update/send, message readback, label add/remove, archive, and Trash
+cleanup. Only booleans and freshness are retained in the root-only Gmail proof;
+no subject, body, address, or message/thread ID is stored in project files or
+Manager memory.

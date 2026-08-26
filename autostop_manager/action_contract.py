@@ -73,16 +73,6 @@ COLLECTION_TARGET_ACTIONS = {
     ("board", "bulk_set_deadline_if_below"),
 }
 
-GMAIL_ACTION_ALIASES = {
-    "send_email": "send",
-    "forward_emails": "forward",
-    "apply_labels_to_emails": "label",
-    "archive_emails": "archive",
-    "delete_emails": "delete",
-    "batch_modify_email": "batch_modify",
-    "bulk_label_matching_emails": "bulk_label",
-}
-
 DOMAIN_ALIASES = {
     "cards": "card",
     "clients": "client",
@@ -207,7 +197,7 @@ def prepare_action_contract(
     """Build a write-safe, connector-neutral action contract without executing it."""
 
     normalized_domain = DOMAIN_ALIASES.get(str(domain or "").strip().casefold(), str(domain or "").strip().casefold())
-    normalized_action = _normalize_action(normalized_domain, action)
+    normalized_action = str(action or "").strip().casefold()
     normalized_target = str(target_id or "").strip()
     changes = dict(planned_changes) if isinstance(planned_changes, dict) else {}
     changes = _normalize_store_planned_changes(normalized_action, changes)
@@ -1127,11 +1117,6 @@ def _validate_gmail_changes(action: str, changes: dict[str, Any], blockers: list
         blockers.append("missing_exact_draft_id")
 
 
-def _normalize_action(domain: str, action: str) -> str:
-    normalized = str(action or "").strip().casefold()
-    return GMAIL_ACTION_ALIASES.get(normalized, normalized) if domain == "gmail" else normalized
-
-
 def _validate_gmail_compose(changes: dict[str, Any], blockers: list[str]) -> None:
     if not _gmail_recipients_are_exact(changes):
         blockers.append("missing_exact_recipients")
@@ -1241,17 +1226,12 @@ def _validate_gmail_update_draft(changes: dict[str, Any], blockers: list[str]) -
 
 
 def _gmail_recipients_are_exact(changes: dict[str, Any]) -> bool:
-    return _nonempty_string_list(changes.get("recipients")) or _nonempty_string(changes.get("to"))
+    return _nonempty_string(changes.get("to"))
 
 
 def _gmail_invoice_recipients_are_exact(changes: dict[str, Any]) -> bool:
-    to_value = changes.get("to")
-    has_to = to_value is not None and to_value != ""
-    has_recipients = "recipients" in changes
-    if has_to == has_recipients:
-        return False
-    raw = changes.get("recipients") if has_recipients else changes.get("to")
-    recipients = raw if isinstance(raw, list) else [raw]
+    raw = changes.get("to")
+    recipients = list(raw) if isinstance(raw, list) else [raw]
     for field in ("cc", "bcc"):
         copy_value = changes.get(field)
         if copy_value is None or copy_value == "":

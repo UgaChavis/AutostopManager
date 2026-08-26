@@ -244,27 +244,6 @@ def test_payment_action_contract_rejects_non_finite_or_boolean_outstanding_amoun
     assert "missing_outstanding_amount" in result["preflight"]["blocking_reasons"]
 
 
-def test_gmail_action_contract_uses_external_connector_without_confirmation_state():
-    result = prepare_action_contract(
-        domain="gmail",
-        action="send",
-        planned_changes={
-            "recipients": ["client@example.com"],
-            "subject": "Документы по автомобилю",
-            "body_intent": "Отправить проверенный PDF заказ-наряда",
-            "attachment_ids": ["crm-file-7"],
-        },
-        owner_intent="Отправь клиенту заказ-наряд из карточки C-7",
-        idempotency_key="gmail-send-c7-ro-v1",
-    )
-
-    assert result["ok"] is True
-    assert result["execution"]["external_connector"] == "gmail"
-    assert result["execution"]["tool"] == "gmail:_send_email"
-    assert "owner_confirmation" not in str(result).casefold()
-    assert result["ledger"]["store_refs_only"] is True
-
-
 def test_gmail_invoice_requires_document_guard_and_mismatch_confirmation():
     common = {
         "domain": "gmail",
@@ -309,13 +288,6 @@ def test_gmail_invoice_requires_document_guard_and_mismatch_confirmation():
         },
     }
     mismatch = prepare_action_contract(**common, planned_changes=mismatch_changes)
-    ambiguous_recipient = prepare_action_contract(
-        **common,
-        planned_changes={
-            **safe["planned_changes"],
-            "recipients": ["other@example.com"],
-        },
-    )
     invalid_guard = {**safe["planned_changes"]["document_guard"], "financial_mismatch": True}
     invalid_guard.pop("tax_status")
     invalid = prepare_action_contract(
@@ -335,7 +307,6 @@ def test_gmail_invoice_requires_document_guard_and_mismatch_confirmation():
     assert "verified_sender_required" in unsafe["preflight"]["blocking_reasons"]
     assert safe["ok"] is True
     assert "financial_or_tax_mismatch_confirmation_required" in mismatch["preflight"]["blocking_reasons"]
-    assert "exact_invoice_recipient_email_required" in ambiguous_recipient["preflight"]["blocking_reasons"]
     assert "attachment_sha256_matches_document_guard" in safe["verification"]["checks"]
     assert "document_guard_tax_status_required" in invalid["preflight"]["blocking_reasons"]
     assert "inconsistent_document_guard_mismatch_flags" in invalid["preflight"]["blocking_reasons"]
@@ -350,120 +321,43 @@ def test_gmail_invoice_requires_document_guard_and_mismatch_confirmation():
         assert blocker in blocked["preflight"]["blocking_reasons"]
 
 
-def test_gmail_send_accepts_current_to_shape_and_rejects_non_string_values():
-    current = prepare_action_contract(
-        domain="gmail",
-        action="send",
-        planned_changes={
-            "to": "client@example.com",
-            "subject": "Документы по автомобилю",
-            "body_intent": "Отправить проверенный PDF заказ-наряда",
-        },
-        owner_intent="Отправь клиенту заказ-наряд",
-        idempotency_key="gmail-send-current-shape-v1",
-    )
-    unsafe = prepare_action_contract(
-        domain="gmail",
-        action="send",
-        planned_changes={"recipients": [123], "subject": 456, "body_intent": 789},
-        owner_intent="Отправь письмо клиенту",
-        idempotency_key="gmail-send-invalid-types-v1",
-    )
-
-    assert current["ok"] is True
-    assert current["execution"]["ready"] is True
-    assert unsafe["ok"] is False
-    assert {
-        "missing_exact_recipients",
-        "missing_subject",
-        "missing_body_intent",
-    }.issubset(unsafe["preflight"]["blocking_reasons"])
-
-
-def test_gmail_forward_accepts_current_message_ids_and_to_shape():
-    result = prepare_action_contract(
-        domain="gmail",
-        action="forward",
-        planned_changes={
-            "message_ids": ["message-1", "message-2"],
-            "to": "manager@example.com",
-            "note": "Для ознакомления",
-        },
-        owner_intent="Перешли два выбранных письма руководителю",
-        idempotency_key="gmail-forward-current-shape-v1",
-    )
-
-    assert result["ok"] is True
-    assert result["execution"]["tool"] == "gmail:_forward_emails"
-    assert result["execution"]["ready"] is True
-
-
-def test_gmail_label_uses_exact_message_ids_and_current_label_name_shape():
-    result = prepare_action_contract(
-        domain="gmail",
-        action="label",
-        planned_changes={
-            "message_ids": ["message-1", "message-2"],
-            "add_label_names": ["Заказ-наряды"],
-            "remove_label_names": ["Входящие на разбор"],
-            "create_missing_labels": False,
-        },
-        owner_intent="Переметь два выбранных письма как заказ-наряды",
-        idempotency_key="gmail-label-selected-v1",
-    )
-
-    assert result["ok"] is True
-    assert result["concurrency"]["required"] is False
-    assert result["target"]["id"] is None
-    assert result["execution"]["tool"] == "gmail:_apply_labels_to_emails"
-    assert result["execution"]["ready"] is True
-
-
-def test_gmail_label_rejects_legacy_ambiguous_or_malformed_targets():
-    cases = (
-        {"message_ids": "message-1", "add_label_names": ["Заказ-наряды"]},
-        {"message_ids": [123], "add_label_names": ["Заказ-наряды"]},
-        {"message_ids": ["message-1"], "add_label_names": [""]},
-        {"message_ids": ["message-1"], "label_ids": ["Label_1"]},
-    )
-    for index, planned_changes in enumerate(cases):
-        result = prepare_action_contract(
-            domain="gmail",
-            action="label",
-            planned_changes=planned_changes,
-            owner_intent="Переметь выбранное письмо",
-            idempotency_key=f"gmail-label-invalid-target-{index}",
-        )
-
-        assert result["ok"] is False
-        assert "missing_message_or_label_ids" in result["preflight"]["blocking_reasons"]
-
-    invalid_flag = prepare_action_contract(
-        domain="gmail",
-        action="label",
-        planned_changes={
-            "message_ids": ["message-1"],
-            "add_label_names": ["Заказ-наряды"],
-            "create_missing_labels": "false",
-        },
-        owner_intent="Переметь выбранное письмо",
-        idempotency_key="gmail-label-invalid-create-flag-v1",
-    )
-    assert "invalid_create_missing_labels_flag" in invalid_flag["preflight"]["blocking_reasons"]
-
-
 @pytest.mark.parametrize(
     ("action", "planned_changes", "tool"),
     [
-        ("archive_emails", {"message_ids": ["message-1"]}, "gmail:_archive_emails"),
-        ("delete_emails", {"message_ids": ["message-1"]}, "gmail:_delete_emails"),
         (
-            "batch_modify_email",
+            "send",
+            {
+                "to": "client@example.com",
+                "subject": "Документы по автомобилю",
+                "body_intent": "Отправить проверенный PDF заказ-наряда",
+                "attachment_ids": ["crm-file-7"],
+            },
+            "gmail:_send_email",
+        ),
+        (
+            "forward",
+            {"message_ids": ["message-1", "message-2"], "to": "manager@example.com", "note": "Для ознакомления"},
+            "gmail:_forward_emails",
+        ),
+        (
+            "label",
+            {
+                "message_ids": ["message-1", "message-2"],
+                "add_label_names": ["Заказ-наряды"],
+                "remove_label_names": ["Входящие на разбор"],
+                "create_missing_labels": False,
+            },
+            "gmail:_apply_labels_to_emails",
+        ),
+        ("archive", {"message_ids": ["message-1"]}, "gmail:_archive_emails"),
+        ("delete", {"message_ids": ["message-1"]}, "gmail:_delete_emails"),
+        (
+            "batch_modify",
             {"message_ids": ["message-1"], "add_labels": ["Label_1"]},
             "gmail:_batch_modify_email",
         ),
         (
-            "bulk_label_matching_emails",
+            "bulk_label",
             {
                 "query": "from:supplier@example.com older_than:1y",
                 "label_name": "Архив поставщика",
@@ -486,7 +380,7 @@ def test_gmail_label_rejects_legacy_ambiguous_or_malformed_targets():
         ("send_draft", {"draft_id": "draft-1"}, "gmail:_send_draft"),
     ],
 )
-def test_gmail_current_mutation_surface_and_aliases(action, planned_changes, tool):
+def test_gmail_current_mutation_surface(action, planned_changes, tool):
     result = prepare_action_contract(
         domain="gmail",
         action=action,
@@ -496,25 +390,55 @@ def test_gmail_current_mutation_surface_and_aliases(action, planned_changes, too
     )
 
     assert result["ok"] is True
+    assert result["execution"]["external_connector"] == "gmail"
     assert result["execution"]["tool"] == tool
     assert result["execution"]["ready"] is True
+    assert result["concurrency"]["required"] is False
+    assert result["target"]["id"] is None
+    assert "owner_confirmation" not in str(result).casefold()
     assert result["ledger"]["store_refs_only"] is True
 
 
 @pytest.mark.parametrize(
-    ("action", "planned_changes", "blocker"),
+    ("action", "planned_changes", "blockers"),
     [
-        ("archive", {"message_ids": []}, "missing_exact_message_ids"),
-        ("delete", {"message_ids": "message-1"}, "missing_exact_message_ids"),
-        ("batch_modify", {"message_ids": ["message-1"]}, "missing_label_ids"),
-        ("bulk_label", {"query": "in:inbox"}, "missing_label_name"),
-        ("create_label", {"name": ""}, "missing_label_name"),
-        ("create_draft", {"to": "me", "subject": "x"}, "missing_body_intent"),
-        ("update_draft", {"draft_id": "draft-1"}, "missing_draft_changes"),
-        ("send_draft", {"draft_id": ""}, "missing_exact_draft_id"),
+        (
+            "send",
+            {"to": 123, "subject": 456, "body_intent": 789},
+            {"missing_exact_recipients", "missing_subject", "missing_body_intent"},
+        ),
+        (
+            "send",
+            {"recipients": ["client@example.com"], "subject": "Проверка", "body": "Текст"},
+            {"missing_exact_recipients"},
+        ),
+        ("send_email", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("forward_emails", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("apply_labels_to_emails", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("archive_emails", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("delete_emails", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("batch_modify_email", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("bulk_label_matching_emails", {"legacy": True}, {"unsupported_mutating_action"}),
+        ("label", {"message_ids": "message-1", "add_label_names": ["Заказ-наряды"]}, {"missing_message_or_label_ids"}),
+        ("label", {"message_ids": [123], "add_label_names": ["Заказ-наряды"]}, {"missing_message_or_label_ids"}),
+        ("label", {"message_ids": ["message-1"], "add_label_names": [""]}, {"missing_message_or_label_ids"}),
+        ("label", {"message_ids": ["message-1"], "label_ids": ["Label_1"]}, {"missing_message_or_label_ids"}),
+        (
+            "label",
+            {"message_ids": ["message-1"], "add_label_names": ["Заказ-наряды"], "create_missing_labels": "false"},
+            {"invalid_create_missing_labels_flag"},
+        ),
+        ("archive", {"message_ids": []}, {"missing_exact_message_ids"}),
+        ("delete", {"message_ids": "message-1"}, {"missing_exact_message_ids"}),
+        ("batch_modify", {"message_ids": ["message-1"]}, {"missing_label_ids"}),
+        ("bulk_label", {"query": "in:inbox"}, {"missing_label_name"}),
+        ("create_label", {"name": ""}, {"missing_label_name"}),
+        ("create_draft", {"to": "me", "subject": "x"}, {"missing_body_intent"}),
+        ("update_draft", {"draft_id": "draft-1"}, {"missing_draft_changes"}),
+        ("send_draft", {"draft_id": ""}, {"missing_exact_draft_id"}),
     ],
 )
-def test_gmail_expanded_mutations_fail_closed_on_ambiguous_inputs(action, planned_changes, blocker):
+def test_gmail_mutations_fail_closed_on_invalid_inputs(action, planned_changes, blockers):
     result = prepare_action_contract(
         domain="gmail",
         action=action,
@@ -524,7 +448,7 @@ def test_gmail_expanded_mutations_fail_closed_on_ambiguous_inputs(action, planne
     )
 
     assert result["ok"] is False
-    assert blocker in result["preflight"]["blocking_reasons"]
+    assert blockers.issubset(result["preflight"]["blocking_reasons"])
 
 
 def test_document_contract_accepts_request_text_for_crm_type_inference():
