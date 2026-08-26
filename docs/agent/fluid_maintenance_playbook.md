@@ -59,10 +59,7 @@ the vehicle and aggregate context required above.
 
 ## Tooling
 
-On production Gateway v2, use raw capability discovery, schema lookup, and
-`call_raw_capability` for `recommend_fluid_maintenance_sources`. For local
-manager use:
-
-```powershell
-python -m autostop_manager.cli maintenance-fluids --brand Toyota --unit engine_oil --year 2019 --model Camry --engine A25A-FKS --market Russia
-```
+Use raw capability discovery, schema lookup, and `call_raw_capability` for
+`recommend_automotive_sources` with `data_type="fluids"`. The compatibility
+name `recommend_fluid_maintenance_sources` is a direct alias and does not set
+`data_type` automatically.

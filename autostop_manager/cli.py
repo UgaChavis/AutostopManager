@@ -9,7 +9,6 @@ from typing import Any
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
-from .fluid_maintenance import build_fluid_maintenance_plan
 from .integration_audit import build_integration_audit
 from .knowledge_base import (
     audit_knowledge_base,
@@ -113,27 +112,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    maintenance_fluids = sub.add_parser(
-        "maintenance-fluids",
-        help="Recommend source routes for oils, fluids, capacities, and maintenance fill checks",
-    )
-    maintenance_fluids.add_argument("--brand", default=None)
-    maintenance_fluids.add_argument("--unit", default=None)
-    maintenance_fluids.add_argument("--vin", default=None)
-    maintenance_fluids.add_argument("--chassis", default=None)
-    maintenance_fluids.add_argument("--model", default=None)
-    maintenance_fluids.add_argument("--year", type=int, default=None)
-    maintenance_fluids.add_argument("--engine", dest="engine_code", default=None)
-    maintenance_fluids.add_argument("--transmission", dest="transmission_code", default=None)
-    maintenance_fluids.add_argument("--drivetrain", default=None)
-    maintenance_fluids.add_argument("--market", default=None)
-    maintenance_fluids.add_argument("--service-operation", default=None)
-    maintenance_fluids.add_argument("--unit-variant", default=None)
-    maintenance_fluids.add_argument("--fluid-spec", default=None)
-    maintenance_fluids.add_argument("--level-check-procedure", default=None)
-    maintenance_fluids.add_argument("--open-only", action="store_true")
-    maintenance_fluids.add_argument("--limit", type=int, default=10)
 
     estimate_work = sub.add_parser(
         "estimate-work",
@@ -351,27 +329,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "maintenance-fluids":
-        _print_json(
-            build_fluid_maintenance_plan(
-                brand=args.brand,
-                unit=args.unit,
-                vin=args.vin,
-                chassis=args.chassis,
-                model=args.model,
-                year=args.year,
-                engine_code=args.engine_code,
-                transmission_code=args.transmission_code,
-                drivetrain=args.drivetrain,
-                market=args.market,
-                service_operation=args.service_operation,
-                unit_variant=args.unit_variant,
-                fluid_spec=args.fluid_spec,
-                level_check_procedure=args.level_check_procedure,
-                include_licensed=not args.open_only,
-                limit=args.limit,
-            )
-        )
     elif args.command == "estimate-work":
         _print_json(
             estimate_repair_work_cost(

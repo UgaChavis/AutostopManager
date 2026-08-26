@@ -27,7 +27,6 @@ from .config import (
 )
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief, prepare_manager_context
-from .fluid_maintenance import build_fluid_maintenance_plan
 from .knowledge_base import (
     audit_knowledge_base,
     probe_knowledge_base,
@@ -1630,10 +1629,10 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="recommend_fluid_maintenance_sources",
         description=(
-            "Build a source-backed plan for oils, operating fluids, fill capacities, and ТО fluid service by vehicle unit. "
-            "Use before giving engine, transmission, differential, transfer case, brake, coolant, or steering fluid facts."
+            "Compatibility name for the general automotive source router. Pass data_type='fluids' explicitly; "
+            "this direct alias does not select a fluid route by default."
         ),
-    )(build_fluid_maintenance_plan)
+    )(recommend_automotive_sources)
 
     server.tool(
         name="lookup_public_automotive_evidence",

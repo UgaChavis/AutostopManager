@@ -28,7 +28,6 @@ CASES = [
         "REGISTRY_PATH",
         {"version": 0, "purpose": "missing", "sources": []},
     ),
-    ("autostop_manager.fluid_maintenance", "load_fluid_source_catalog", "FLUID_SOURCE_PATH", {}),
     ("autostop_manager.knowledge_intake", "_load_domains", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_knowledge_map", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_command_routes", "COMMAND_ROUTES_PATH", {"routes": []}),

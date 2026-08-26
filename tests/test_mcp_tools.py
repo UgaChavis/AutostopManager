@@ -136,6 +136,22 @@ def test_oem_lookup_compatibility_names_use_canonical_resolver(tmp_path):
         assert live_tools[name].parameters == live_tools["resolve_vin_oem_parts"].parameters
 
 
+def test_fluid_source_name_is_general_source_router_alias(tmp_path):
+    server = _FakeServer()
+    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    alias = server.tools["recommend_fluid_maintenance_sources"]
+    canonical = server.tools["recommend_automotive_sources"]
+    assert alias is canonical
+    assert inspect.signature(alias) == inspect.signature(canonical)
+    assert inspect.signature(alias).parameters["data_type"].default is None
+    live_tools = build_server()._tool_manager._tools
+    assert (
+        live_tools["recommend_fluid_maintenance_sources"].parameters
+        == live_tools["recommend_automotive_sources"].parameters
+    )
+
+
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)

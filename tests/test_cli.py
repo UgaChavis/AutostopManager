@@ -48,39 +48,6 @@ def test_cli_parser_has_core_commands():
     assert args.provider == "all"
     assert args.mode == "dry-run"
 
-    args = parser.parse_args(
-        [
-            "maintenance-fluids",
-            "--brand",
-            "Toyota",
-            "--unit",
-            "engine_oil",
-            "--year",
-            "2019",
-            "--model",
-            "Camry",
-            "--engine",
-            "A25A-FKS",
-            "--market",
-            "Russia",
-            "--service-operation",
-            "oil and filter change",
-            "--unit-variant",
-            "A25A-FKS engine",
-            "--fluid-spec",
-            "Toyota 0W-16 approval",
-            "--level-check-procedure",
-            "warm level check",
-        ]
-    )
-    assert args.command == "maintenance-fluids"
-    assert args.unit == "engine_oil"
-    assert args.engine_code == "A25A-FKS"
-    assert args.service_operation == "oil and filter change"
-    assert args.unit_variant == "A25A-FKS engine"
-    assert args.fluid_spec == "Toyota 0W-16 approval"
-    assert args.level_check_procedure == "warm level check"
-
     args = parser.parse_args(["control-report", "--format", "markdown", "--output", "reports/control-report.md"])
     assert args.command == "control-report"
     assert args.format == "markdown"
