@@ -413,7 +413,7 @@ def register_manager_memory_tools(  # noqa: C901
             applies_to=applies_to,
         )
 
-    @server.tool(
+    server.tool(
         name="agent_case_resolver",
         description=(
             "READ_ONLY RAW_CAPABILITY: Build a connector-neutral Case Resolver read plan or reconcile compact scalar "
@@ -428,44 +428,14 @@ def register_manager_memory_tools(  # noqa: C901
             idempotentHint=True,
             openWorldHint=False,
         ),
-    )
-    def agent_case_resolver_tool(
-        operation: str,
-        case_id: str,
-        claims: list[dict[str, Any]],
-        sources: list[dict[str, Any]] | None = None,
-        evidence: list[dict[str, Any]] | None = None,
-        brand: str | None = None,
-        data_type: str | None = None,
-        include_licensed: bool = True,
-        include_forums: bool = False,
-        max_sources_per_claim: int = 3,
-    ) -> dict[str, Any]:
-        return agent_case_resolver(
-            operation,
-            case_id=case_id,
-            claims=claims,
-            sources=sources,
-            evidence=evidence,
-            brand=brand,
-            data_type=data_type,
-            include_licensed=include_licensed,
-            include_forums=include_forums,
-            max_sources_per_claim=max_sources_per_claim,
-        )
+    )(agent_case_resolver)
 
-    @server.tool(
+    server.tool(
         name="list_agent_workflows",
         description=(
             "List the compact named Codex workflow registry and resolve a query/intent without exposing raw CRM or Gmail data."
         ),
-    )
-    def list_agent_workflows_tool(
-        query: str = "",
-        intent: str | None = None,
-        limit: int = 50,
-    ) -> dict[str, Any]:
-        return list_agent_workflows(query=query, intent=intent, limit=limit)
+    )(list_agent_workflows)
 
     @server.tool(
         name="get_store_analytics_report",
@@ -872,71 +842,23 @@ def register_manager_memory_tools(  # noqa: C901
             mode=mode,
         )
 
-    @server.tool(
+    server.tool(
         name="prepare_action_contract",
         description=(
             "Build a connector-neutral ActionContractV2 for CRM, AutoStop App store, finance, inventory, documents, files, or Gmail writes. "
             "Requires task intent, exact target where applicable, idempotency, concurrency, automatic preflight, compensation, "
             "and readback verification; never performs the write."
         ),
-    )
-    def prepare_action_contract_tool(
-        domain: str,
-        action: str,
-        target_id: str = "",
-        planned_changes: dict[str, Any] | None = None,
-        owner_intent: str = "",
-        expected_revision: str | None = None,
-        idempotency_key: str = "",
-        correlation_id: str = "",
-        run_id: int | None = None,
-        actor: str = "codex-owner-agent",
-        dry_run: bool = True,
-    ) -> dict[str, Any]:
-        return prepare_action_contract(
-            domain=domain,
-            action=action,
-            target_id=target_id,
-            planned_changes=planned_changes,
-            owner_intent=owner_intent,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-            correlation_id=correlation_id,
-            run_id=run_id,
-            actor=actor,
-            dry_run=dry_run,
-        )
+    )(prepare_action_contract)
 
-    @server.tool(
+    server.tool(
         name="prepare_crm_card_action",
         description=(
             "Build a dry-run CRM card edit contract for AutoStopManager: exact description patch, vehicle_profile patch "
             "with manual_fields preservation, board_summary target, expected_updated_at, tool sequence, ledger schema, "
             "risk flags, and strict reread verification spec. This tool never writes CRM."
         ),
-    )
-    def prepare_crm_card_action_tool(
-        card_id: str,
-        expected_updated_at: str | None = None,
-        description: str | None = None,
-        vehicle_profile: dict[str, Any] | None = None,
-        board_summary: str | None = None,
-        target_fields: list[str] | None = None,
-        current_card: dict[str, Any] | None = None,
-        intent: str = "board_cleanup",
-        dry_run: bool = True,
-    ) -> dict[str, Any]:
-        return prepare_crm_card_action(
-            card_id=card_id,
-            expected_updated_at=expected_updated_at,
-            description=description,
-            vehicle_profile=vehicle_profile,
-            board_summary=board_summary,
-            target_fields=target_fields,
-            current_card=current_card,
-            intent=intent,
-            dry_run=dry_run,
-        )
+    )(prepare_crm_card_action)
 
     @server.tool(
         name="manager_journal",
@@ -1159,15 +1081,13 @@ def register_manager_memory_tools(  # noqa: C901
     def knowledge_intake_plan_tool(path: str, apply: bool = False) -> dict[str, Any]:
         return build_knowledge_intake_plan(path, apply=apply)
 
-    @server.tool(
+    server.tool(
         name="provider_smoke_report",
         description=(
             "Run safe ProviderSmokeResult readiness checks for one provider or all providers. "
             "Dry-run and live-readonly modes never call order, basket, or CRM writeback endpoints."
         ),
-    )
-    def provider_smoke_report_tool(provider: str = "all", mode: str = "dry-run") -> dict[str, Any]:
-        return build_provider_smoke_report(provider=provider, mode=mode)
+    )(build_provider_smoke_report)
 
     @server.tool(
         name="start_workflow",
@@ -1483,49 +1403,29 @@ def register_manager_memory_tools(  # noqa: C901
             live_wmi=live_wmi,
         )
 
-    @server.tool(
+    server.tool(
         name="decode_vehicle_identities",
         description=(
             "Batch vehicle identity dossiers for VIN/frame/body-number lists. "
             "Returns per-identifier confidence, conflicts, adapter status, and required next EPC/API sources."
         ),
-    )
-    def decode_vehicle_identities_tool(
-        items: list[dict[str, Any]],
-        live_vpic: bool = True,
-        use_vpic_batch: bool = True,
-    ) -> dict[str, Any]:
-        return decode_vehicle_identities(items, live_vpic=live_vpic, use_vpic_batch=use_vpic_batch)
+    )(decode_vehicle_identities)
 
-    @server.tool(
+    server.tool(
         name="catalog_provider_status",
         description=(
             "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
             "Use before claiming live catalog or supplier API access."
         ),
-    )
-    def catalog_provider_status_tool(stage: str | None = None) -> dict[str, Any]:
-        return catalog_provider_status(stage=stage)
+    )(catalog_provider_status)
 
-    @server.tool(
+    server.tool(
         name="plan_oem_parts_providers",
         description=(
             "Build provider readiness and blocker plan for VIN/frame -> OEM candidates -> crosses/applicability "
             "-> procurement/RF market price. Does not call suppliers or write CRM."
         ),
-    )
-    def plan_oem_parts_providers_tool(
-        identifier: str,
-        requested_part: str,
-        vehicle_identity: dict[str, Any] | None = None,
-        city: str = "Красноярск",
-    ) -> dict[str, Any]:
-        return build_oem_parts_provider_plan(
-            identifier=identifier,
-            requested_part=requested_part,
-            vehicle_identity=vehicle_identity,
-            city=city,
-        )
+    )(build_oem_parts_provider_plan)
 
     @server.tool(
         name="vin17_decode_vehicle",
@@ -1621,35 +1521,20 @@ def register_manager_memory_tools(  # noqa: C901
             dry_run=dry_run,
         )
 
-    @server.tool(
+    server.tool(
         name="search_partsapi_category_index",
         description="Search the local PartsAPI numeric category index by query/intent without live calls or secrets.",
-    )
-    def search_partsapi_category_index_tool(
-        query: str,
-        intent_id: str | None = None,
-        path: str | None = None,
-        limit: int = 8,
-    ) -> dict[str, Any]:
-        return search_partsapi_category_index(query, intent_id=intent_id, path=path, limit=limit)
+    )(search_partsapi_category_index)
 
-    @server.tool(
+    server.tool(
         name="explain_partsapi_category_for_intent",
         description="Explain why a PartsAPI numeric category was selected for a part intent.",
-    )
-    def explain_partsapi_category_for_intent_tool(
-        intent_id: str,
-        query: str | None = None,
-        path: str | None = None,
-    ) -> dict[str, Any]:
-        return explain_partsapi_category_for_intent(intent_id, query=query, path=path)
+    )(explain_partsapi_category_for_intent)
 
-    @server.tool(
+    server.tool(
         name="validate_partsapi_category_index",
         description="Validate the tracked local PartsAPI category index fixture without exposing secrets or identifiers.",
-    )
-    def validate_partsapi_category_index_tool(path: str | None = None) -> dict[str, Any]:
-        return validate_partsapi_category_index(path=path)
+    )(validate_partsapi_category_index)
 
     @server.tool(
         name="public_aftermarket_catalog_lookup",
@@ -1703,7 +1588,7 @@ def register_manager_memory_tools(  # noqa: C901
             dry_run=dry_run,
         )
 
-    @server.tool(
+    server.tool(
         name="lookup_oem_catalog_candidates",
         description=(
             "Call or dry-run the multi-provider OEM candidate lookup for one VIN/frame and requested part. "
@@ -1714,284 +1599,58 @@ def register_manager_memory_tools(  # noqa: C901
             readOnlyHint=True,
             destructiveHint=False,
         ),
-    )
-    def lookup_oem_catalog_candidates_tool(
-        identifier: str,
-        requested_part: str,
-        catalog_id: str | None = None,
-        car_id: str | None = None,
-        group_id: str | None = None,
-        epc: str | None = None,
-        partsapi_part_type: str = "oem",
-        partsapi_category: str | None = None,
-        partsapi_category_index_path: str | None = None,
-        timeout: float = 20.0,
-        max_attempts: int = 1,
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        return lookup_oem_catalog_candidates(
-            identifier=identifier,
-            requested_part=requested_part,
-            catalog_id=catalog_id,
-            car_id=car_id,
-            group_id=group_id,
-            epc=epc,
-            partsapi_part_type=partsapi_part_type,
-            partsapi_category=partsapi_category,
-            partsapi_category_index_path=partsapi_category_index_path,
-            timeout=timeout,
-            max_attempts=max_attempts,
-            dry_run=dry_run,
-        )
+    )(lookup_oem_catalog_candidates)
 
-    @server.tool(
+    server.tool(
         name="resolve_vin_oem_parts",
         description=(
             "Resolve one VIN/frame/body-number and requested part into a read-only VinOemResolution: "
             "identity, part intent, PartsAPI category, OEM candidates, enrichment, readiness gates, manual actions, and CRM gate."
         ),
-    )
-    def resolve_vin_oem_parts_tool(
-        identifier: str,
-        requested_part: str,
-        make: str | None = None,
-        model: str | None = None,
-        model_year: int | None = None,
-        engine: str | None = None,
-        transmission: str | None = None,
-        market: str | None = None,
-        drivetrain: str | None = None,
-        axle: str | None = None,
-        side: str | None = None,
-        position: str | None = None,
-        live_vpic: bool = True,
-        live_partsapi_identity: bool = False,
-        live_partsapi_oem: bool = False,
-        max_live_calls: int = 3,
-        max_candidates: int = 3,
-        timeout: float = 20.0,
-        max_attempts: int = 1,
-        partsapi_category_index: str | None = None,
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        return resolve_vin_oem_parts(
-            identifier=identifier,
-            requested_part=requested_part,
-            make=make,
-            model=model,
-            model_year=model_year,
-            engine=engine,
-            transmission=transmission,
-            market=market,
-            drivetrain=drivetrain,
-            axle=axle,
-            side=side,
-            position=position,
-            live_vpic=live_vpic,
-            live_partsapi_identity=live_partsapi_identity,
-            live_partsapi_oem=live_partsapi_oem,
-            max_live_calls=max_live_calls,
-            max_candidates=max_candidates,
-            timeout=timeout,
-            max_attempts=max_attempts,
-            partsapi_category_index=partsapi_category_index,
-            dry_run=dry_run,
-        )
+    )(resolve_vin_oem_parts)
 
-    @server.tool(
+    server.tool(
         name="plan_crm_vin_oem_parts_lookup",
         description=(
             "Build the CRM card workflow for VIN/frame/body-number OEM lookup, replacements/crosses, "
             "procurement/RF market pricing, structured CRM writeback, and verification."
         ),
-    )
-    def plan_crm_vin_oem_parts_lookup_tool(
-        card_id: str | None = None,
-        requested_part: str | None = None,
-        vin: str | None = None,
-        frame: str | None = None,
-        body_number: str | None = None,
-        vehicle: str | None = None,
-        make: str | None = None,
-        model: str | None = None,
-        model_year: int | None = None,
-        market: str | None = None,
-        engine: str | None = None,
-        transmission: str | None = None,
-        drivetrain: str | None = None,
-        side: str | None = None,
-        axle: str | None = None,
-        position: str | None = None,
-        urgency: str | None = None,
-        city: str = "Красноярск",
-        limit: int = 10,
-        vin_oem_resolution: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return build_crm_vin_parts_lookup_pipeline(
-            card_id=card_id,
-            requested_part=requested_part,
-            vin=vin,
-            frame=frame,
-            body_number=body_number,
-            vehicle=vehicle,
-            make=make,
-            model=model,
-            model_year=model_year,
-            market=market,
-            engine=engine,
-            transmission=transmission,
-            drivetrain=drivetrain,
-            side=side,
-            axle=axle,
-            position=position,
-            urgency=urgency,
-            city=city,
-            limit=limit,
-            vin_oem_resolution=vin_oem_resolution,
-        )
+    )(build_crm_vin_parts_lookup_pipeline)
 
-    @server.tool(
+    server.tool(
         name="benchmark_vin_parts_lookup",
         description=(
             "Read-only benchmark for a batch of CRM VIN/frame/body-number items: identity confidence, part-intent recognition, "
             "safe public search templates, provider blockers, and PartsAPI/17VIN dry-run readiness. Raw identifiers are redacted from output."
         ),
-    )
-    def benchmark_vin_parts_lookup_tool(
-        items: list[dict[str, Any]],
-        requested_part: str,
-        city: str = "Красноярск",
-        live_vpic: bool = True,
-        use_vpic_batch: bool = True,
-        include_partsapi_dry_run: bool = True,
-        include_vin17_dry_run: bool = True,
-        include_oem_catalog_dry_run: bool = True,
-        live_partsapi_identity: bool = False,
-        live_partsapi_oem: bool = False,
-        resolve_oem: bool = False,
-        max_live_calls: int = 3,
-        max_candidates: int = 3,
-        partsapi_category_index: str | None = None,
-        partsapi_timeout: float = 20.0,
-    ) -> dict[str, Any]:
-        return benchmark_vin_parts_lookup(
-            items,
-            requested_part=requested_part,
-            city=city,
-            live_vpic=live_vpic,
-            use_vpic_batch=use_vpic_batch,
-            include_partsapi_dry_run=include_partsapi_dry_run,
-            include_vin17_dry_run=include_vin17_dry_run,
-            include_oem_catalog_dry_run=include_oem_catalog_dry_run,
-            live_partsapi_identity=live_partsapi_identity,
-            live_partsapi_oem=live_partsapi_oem,
-            resolve_oem=resolve_oem,
-            max_live_calls=max_live_calls,
-            max_candidates=max_candidates,
-            partsapi_category_index=partsapi_category_index,
-            partsapi_timeout=partsapi_timeout,
-        )
+    )(benchmark_vin_parts_lookup)
 
-    @server.tool(
+    server.tool(
         name="build_vin_parts_work_order",
         description=(
             "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, "
             "cross/applicability steps, supplier routes, CRM writeback gates, blockers, and acceptance checklists. "
             "Raw identifiers are redacted from output."
         ),
-    )
-    def build_vin_parts_work_order_tool(
-        items: list[dict[str, Any]],
-        requested_part: str,
-        city: str = "Красноярск",
-        live_vpic: bool = True,
-        use_vpic_batch: bool = True,
-        live_partsapi_identity: bool = False,
-        live_partsapi_oem: bool = False,
-        resolve_oem: bool = False,
-        max_live_calls: int = 3,
-        max_candidates: int = 3,
-        partsapi_category_index: str | None = None,
-    ) -> dict[str, Any]:
-        return build_vin_parts_work_order(
-            items,
-            requested_part=requested_part,
-            city=city,
-            live_vpic=live_vpic,
-            use_vpic_batch=use_vpic_batch,
-            live_partsapi_identity=live_partsapi_identity,
-            live_partsapi_oem=live_partsapi_oem,
-            resolve_oem=resolve_oem,
-            max_live_calls=max_live_calls,
-            max_candidates=max_candidates,
-            partsapi_category_index=partsapi_category_index,
-        )
+    )(build_vin_parts_work_order)
 
-    @server.tool(
+    server.tool(
         name="recommend_automotive_sources",
         description=(
             "Recommend authoritative repair, TSB, recall, diagnostic, wiring, labor, fluid, torque, or OEM source routes "
             "by brand and data type without copying licensed source content."
         ),
-    )
-    def recommend_automotive_sources_tool(
-        brand: str | None = None,
-        data_type: str | None = None,
-        include_licensed: bool = True,
-        limit: int = 10,
-    ) -> dict[str, Any]:
-        return recommend_automotive_sources(
-            brand=brand,
-            data_type=data_type,
-            include_licensed=include_licensed,
-            limit=limit,
-        )
+    )(recommend_automotive_sources)
 
-    @server.tool(
+    server.tool(
         name="recommend_fluid_maintenance_sources",
         description=(
             "Build a source-backed plan for oils, operating fluids, fill capacities, and ТО fluid service by vehicle unit. "
             "Use before giving engine, transmission, differential, transfer case, brake, coolant, or steering fluid facts."
         ),
-    )
-    def recommend_fluid_maintenance_sources_tool(
-        brand: str | None = None,
-        unit: str | None = None,
-        vin: str | None = None,
-        chassis: str | None = None,
-        model: str | None = None,
-        year: int | None = None,
-        engine_code: str | None = None,
-        transmission_code: str | None = None,
-        drivetrain: str | None = None,
-        market: str | None = None,
-        service_operation: str | None = None,
-        unit_variant: str | None = None,
-        fluid_spec: str | None = None,
-        level_check_procedure: str | None = None,
-        include_licensed: bool = True,
-        limit: int = 10,
-    ) -> dict[str, Any]:
-        return build_fluid_maintenance_plan(
-            brand=brand,
-            unit=unit,
-            vin=vin,
-            chassis=chassis,
-            model=model,
-            year=year,
-            engine_code=engine_code,
-            transmission_code=transmission_code,
-            drivetrain=drivetrain,
-            market=market,
-            service_operation=service_operation,
-            unit_variant=unit_variant,
-            fluid_spec=fluid_spec,
-            level_check_procedure=level_check_procedure,
-            include_licensed=include_licensed,
-            limit=limit,
-        )
+    )(build_fluid_maintenance_plan)
 
-    @server.tool(
+    server.tool(
         name="lookup_public_automotive_evidence",
         description=(
             "Read compact official public automotive evidence: NHTSA model-level recalls, optional manufacturer-"
@@ -2005,99 +1664,15 @@ def register_manager_memory_tools(  # noqa: C901
             idempotentHint=True,
             openWorldHint=True,
         ),
-    )
-    def lookup_public_automotive_evidence_tool(
-        vin: str | None = None,
-        make: str | None = None,
-        model: str | None = None,
-        model_year: int | None = None,
-        topics: str | list[str] | None = None,
-        system: str | None = None,
-        include_tsb: bool = False,
-        limit: int = 10,
-        timeout: float = 12.0,
-    ) -> dict[str, Any]:
-        return lookup_public_automotive_evidence(
-            vin=vin,
-            make=make,
-            model=model,
-            model_year=model_year,
-            topics=topics,
-            system=system,
-            include_tsb=include_tsb,
-            limit=limit,
-            timeout=timeout,
-        )
+    )(lookup_public_automotive_evidence)
 
-    @server.tool(
+    server.tool(
         name="recommend_service_management_actions",
         description=(
             "Build a Krasnoyarsk AutoStop/Автоспорт workshop-management action plan for parts procurement, "
             "repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake."
         ),
-    )
-    def recommend_service_management_actions_tool(
-        area: str | None = None,
-        city: str = "Красноярск",
-        vehicle: str | None = None,
-        vin: str | None = None,
-        chassis: str | None = None,
-        part_number: str | None = None,
-        part_name: str | None = None,
-        urgency: str | None = None,
-        role: str | None = None,
-        complaint: str | None = None,
-        dtc_or_scan: str | None = None,
-        engine: str | None = None,
-        transmission: str | None = None,
-        mileage: str | None = None,
-        current_load: str | None = None,
-        output_or_hours: str | None = None,
-        quality_signal: str | None = None,
-        card_id: str | None = None,
-        client_contact: str | None = None,
-        next_action: str | None = None,
-        approval_status: str | None = None,
-        repair_orders: str | None = None,
-        cashbox: str | None = None,
-        payment_status: str | None = None,
-        file_path: str | None = None,
-        source_type: str | None = None,
-        license_status: str | None = None,
-        target_playbook: str | None = None,
-        limit: int = 10,
-    ) -> dict[str, Any]:
-        return build_service_management_plan(
-            area=area,
-            city=city,
-            vehicle=vehicle,
-            vin=vin,
-            chassis=chassis,
-            part_number=part_number,
-            part_name=part_name,
-            urgency=urgency,
-            role=role,
-            complaint=complaint,
-            dtc_or_scan=dtc_or_scan,
-            engine=engine,
-            transmission=transmission,
-            mileage=mileage,
-            current_load=current_load,
-            output_or_hours=output_or_hours,
-            quality_signal=quality_signal,
-            card_id=card_id,
-            client_contact=client_contact,
-            next_action=next_action,
-            approval_status=approval_status,
-            repair_orders=repair_orders,
-            cashbox=cashbox,
-            payment_status=payment_status,
-            file_path=file_path,
-            source_type=source_type,
-            license_status=license_status,
-            target_playbook=target_playbook,
-            limit=limit,
-        )
+    )(build_service_management_plan)
 
     if include_tools is not None:
         server.tool = original_tool

@@ -157,7 +157,10 @@ def test_catalog_provider_tools_are_registered(tmp_path):
     status = server.tools["catalog_provider_status"](stage="oem_catalog")
     assert status["ok"] is True
     assert any(provider["source_id"] == "parts_catalogs_api" for provider in status["providers"])
-    plan = server.tools["plan_oem_parts_providers"]("MR41S123456", "колодки")
+    plan = server.tools["plan_oem_parts_providers"](
+        identifier="MR41S123456",
+        requested_part="колодки",
+    )
     assert plan["identifier"]["redacted"]["display"] == "MR4***456"
     assert any(step["step"] == "find_oem_candidates" for step in plan["pipeline"])
 

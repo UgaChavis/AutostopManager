@@ -104,7 +104,7 @@ Classify before decoding.
    common name, catalog group, side/axis/position, quantity/unit, repair
    operation, old part markings, photo evidence.
    Use the local part-intent profile from `crm-vin-parts-plan` /
-   `oem-parts-provider-plan` to expand phrases such as `передние колодки` into
+   `build_oem_parts_provider_plan` to expand phrases such as `передние колодки` into
    catalog search terms, critical fitment fields, quantity basis, and caveats.
 3. Search OEM in source order:
    - official dealer/OEM EPC if available;

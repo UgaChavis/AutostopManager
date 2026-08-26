@@ -6,14 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
     emex_price_lookup,
     exist_price_lookup,
     lookup_oem_catalog_candidates,
-    public_aftermarket_catalog_lookup,
-    vin17_decode_vehicle,
-    vin17_search_part_number_by_vin,
 )
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
@@ -34,17 +30,9 @@ from .knowledge_base import (
     sync_knowledge_base,
 )
 from .knowledge_intake import build_knowledge_intake_plan
-from .memory_curator import audit_memory, curate_memory
-from .memory_review import apply_memory_review_item, build_memory_review
+from .memory_review import build_memory_review
 from .partsapi_smoke import build_partsapi_vin_smoke_report, select_crm_partsapi_smoke_case
-from .partsapi_category_index import (
-    build_partsapi_category_index_plan,
-    explain_partsapi_category_for_intent,
-    search_partsapi_category_index,
-    validate_partsapi_category_index,
-)
 from .provider_smoke import build_provider_smoke_report
-from .public_automotive_evidence import lookup_public_automotive_evidence
 from .service_labor_experience import (
     build_service_labor_experience_from_state_file,
     save_service_labor_artifacts,
@@ -52,13 +40,11 @@ from .service_labor_experience import (
 )
 from .service_labor_report import build_service_labor_report_artifact, save_service_labor_report_artifact
 from .skill_registry import audit_skill_registry
-from .source_catalog import recommend_automotive_sources
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_parts_work_order import build_vin_parts_work_order
-from .vin_oem_resolver import resolve_vin_oem_parts
 from .work_pricing import estimate_repair_work_cost
 
 
@@ -175,16 +161,6 @@ def build_parser() -> argparse.ArgumentParser:
     lessons.add_argument("--signal", default=None)
     lessons.add_argument("--tags", default="")
 
-    sub.add_parser("memory-map", help="Show memory sections and counts")
-    memory_topics = sub.add_parser("memory-topics", help="Show memory categories and tags")
-    memory_topics.add_argument("--examples-limit", type=int, default=3)
-
-    memory_context = sub.add_parser("memory-context", help="Build compact memory context for a task")
-    memory_context.add_argument("task")
-    memory_context.add_argument("--limit", type=int, default=5)
-
-    sub.add_parser("memory-gaps", help="Show sparse or empty memory areas")
-
     agent_mode = sub.add_parser("agent-mode", help="Read or change the durable AgentExecutionMode")
     agent_mode_sub = agent_mode.add_subparsers(dest="agent_mode_action", required=True)
     agent_mode_sub.add_parser("status", help="Show global work/learning mode")
@@ -193,11 +169,6 @@ def build_parser() -> argparse.ArgumentParser:
     agent_mode_set.add_argument("--expected-state-version", type=int, default=None)
     agent_mode_resolve = agent_mode_sub.add_parser("resolve", help="Resolve a one-turn mode override")
     agent_mode_resolve.add_argument("--mode-override", choices=["work", "learning"], default=None)
-
-    learning_summary = sub.add_parser(
-        "learning-summary", help="Show privacy-safe learning turn and improvement summary"
-    )
-    learning_summary.add_argument("--limit", type=int, default=20)
 
     task = sub.add_parser("task", help="Add a manager task")
     task.add_argument("title")
@@ -275,79 +246,12 @@ def build_parser() -> argparse.ArgumentParser:
     vehicle_identities.add_argument("--no-live-vpic", action="store_true")
     vehicle_identities.add_argument("--no-vpic-batch", action="store_true")
 
-    catalog_status = sub.add_parser(
-        "catalog-status", help="Show configured VIN/OEM/cross/procurement provider readiness"
-    )
-    catalog_status.add_argument("--stage", default=None)
-
     provider_smoke = sub.add_parser(
         "provider-smoke",
         help="Run safe provider readiness smoke checks without supplier orders, baskets, or CRM writeback",
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    oem_parts_provider_plan = sub.add_parser(
-        "oem-parts-provider-plan",
-        help="Build provider readiness plan for VIN/frame -> OEM -> crosses -> procurement price",
-    )
-    oem_parts_provider_plan.add_argument("identifier")
-    oem_parts_provider_plan.add_argument("--part", dest="requested_part", required=True)
-    oem_parts_provider_plan.add_argument("--vehicle-identity-json", default=None)
-    oem_parts_provider_plan.add_argument("--city", default="Красноярск")
-
-    vin17_decode = sub.add_parser(
-        "vin17-decode",
-        help="Call or dry-run the 17VIN VIN decoder adapter using VIN17_ACCOUNT/VIN17_SECRET",
-    )
-    vin17_decode.add_argument("identifier")
-    vin17_decode.add_argument("--dry-run", action="store_true")
-
-    vin17_part = sub.add_parser(
-        "vin17-search-part",
-        help="Call or dry-run 17VIN part-number-by-VIN search after the 3001 decode returns an EPC code",
-    )
-    vin17_part.add_argument("identifier")
-    vin17_part.add_argument("--epc", required=True)
-    vin17_part.add_argument("--part-number", required=True)
-    vin17_part.add_argument("--match-type", default="exact", choices=["exact", "inexact"])
-    vin17_part.add_argument("--dry-run", action="store_true")
-
-    category_index = sub.add_parser("partsapi-category-index", help="Inspect the local PartsAPI numeric category index")
-    category_index_sub = category_index.add_subparsers(dest="category_index_command", required=True)
-    category_build = category_index_sub.add_parser("build", help="Return the read-only PartsAPI search_tree build plan")
-    category_build.add_argument("--live", action="store_true")
-    category_build.add_argument("--vehicle-type", default="PC")
-    category_build.add_argument("--type-id", default=None)
-    category_build.add_argument("--lang-id", type=int, default=16)
-    category_build.add_argument("--timeout", type=float, default=20.0)
-    category_build.add_argument("--max-attempts", type=int, default=1)
-    category_search = category_index_sub.add_parser("search", help="Search the local category index by text")
-    category_search.add_argument("--query", required=True)
-    category_search.add_argument("--intent", dest="intent_id", default=None)
-    category_search.add_argument("--path", default=None)
-    category_search.add_argument("--limit", type=int, default=8)
-    category_explain = category_index_sub.add_parser("explain", help="Explain category routing for one intent")
-    category_explain.add_argument("--intent", dest="intent_id", required=True)
-    category_explain.add_argument("--query", default=None)
-    category_explain.add_argument("--path", default=None)
-    category_validate = category_index_sub.add_parser("validate", help="Validate the tracked category index fixture")
-    category_validate.add_argument("--path", default=None)
-
-    public_catalog = sub.add_parser(
-        "public-catalog-lookup",
-        help="Call public aftermarket catalogs such as MANN-FILTER and DENSO by part/OE number",
-    )
-    public_catalog.add_argument(
-        "--provider",
-        required=True,
-        choices=["mann_filter_catalog", "denso_aftermarket_catalog", "mann", "denso", "all"],
-    )
-    public_catalog.add_argument("--part-number", required=True)
-    public_catalog.add_argument("--page-size", type=int, default=5)
-    public_catalog.add_argument("--country", default="europe")
-    public_catalog.add_argument("--no-detail", action="store_true")
-    public_catalog.add_argument("--dry-run", action="store_true")
 
     emex_lookup = sub.add_parser(
         "emex-price-lookup",
@@ -443,32 +347,6 @@ def build_parser() -> argparse.ArgumentParser:
     crm_vin_parts.add_argument("--limit", type=int, default=10)
     crm_vin_parts.add_argument("--vin-oem-resolution-json", default=None)
 
-    resolve_oem_parts = sub.add_parser(
-        "resolve-vin-oem-parts",
-        help="Resolve one VIN/frame and requested part into read-only OEM candidates, enrichment, gates, and manual actions",
-    )
-    resolve_oem_parts.add_argument("identifier")
-    resolve_oem_parts.add_argument("--part", dest="requested_part", required=True)
-    resolve_oem_parts.add_argument("--make", default=None)
-    resolve_oem_parts.add_argument("--model", default=None)
-    resolve_oem_parts.add_argument("--model-year", type=int, default=None)
-    resolve_oem_parts.add_argument("--engine", default=None)
-    resolve_oem_parts.add_argument("--transmission", default=None)
-    resolve_oem_parts.add_argument("--market", default=None)
-    resolve_oem_parts.add_argument("--drivetrain", default=None)
-    resolve_oem_parts.add_argument("--axle", default=None)
-    resolve_oem_parts.add_argument("--side", default=None)
-    resolve_oem_parts.add_argument("--position", default=None)
-    resolve_oem_parts.add_argument("--no-live-vpic", action="store_true")
-    resolve_oem_parts.add_argument("--live-partsapi-identity", action="store_true")
-    resolve_oem_parts.add_argument("--live-partsapi-oem", action="store_true")
-    resolve_oem_parts.add_argument("--max-live-calls", type=int, default=3)
-    resolve_oem_parts.add_argument("--max-candidates", type=int, default=3)
-    resolve_oem_parts.add_argument("--timeout", type=float, default=20.0)
-    resolve_oem_parts.add_argument("--max-attempts", type=int, default=1)
-    resolve_oem_parts.add_argument("--partsapi-category-index", default=None)
-    resolve_oem_parts.add_argument("--dry-run", action="store_true")
-
     vin_parts_benchmark = sub.add_parser(
         "vin-parts-benchmark",
         help="Benchmark a JSON batch of VIN/frame items for identity, part-intent, OEM/provider, and dry-run catalog readiness",
@@ -503,12 +381,6 @@ def build_parser() -> argparse.ArgumentParser:
     vin_parts_work_order.add_argument("--max-candidates", type=int, default=3)
     vin_parts_work_order.add_argument("--partsapi-category-index", default=None)
 
-    source_route = sub.add_parser("source-route", help="Recommend authoritative automotive repair sources")
-    source_route.add_argument("--brand", default=None)
-    source_route.add_argument("--data-type", default=None)
-    source_route.add_argument("--open-only", action="store_true")
-    source_route.add_argument("--limit", type=int, default=10)
-
     maintenance_fluids = sub.add_parser(
         "maintenance-fluids",
         help="Recommend source routes for oils, fluids, capacities, and maintenance fill checks",
@@ -529,20 +401,6 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_fluids.add_argument("--level-check-procedure", default=None)
     maintenance_fluids.add_argument("--open-only", action="store_true")
     maintenance_fluids.add_argument("--limit", type=int, default=10)
-
-    public_automotive_evidence = sub.add_parser(
-        "public-automotive-evidence",
-        help="Read official public recall, manufacturer-communication, and fluid-reference evidence without writes",
-    )
-    public_automotive_evidence.add_argument("--vin", default=None)
-    public_automotive_evidence.add_argument("--make", default=None)
-    public_automotive_evidence.add_argument("--model", default=None)
-    public_automotive_evidence.add_argument("--year", dest="model_year", type=int, default=None)
-    public_automotive_evidence.add_argument("--topic", dest="topics", action="append", default=[])
-    public_automotive_evidence.add_argument("--system", default=None)
-    public_automotive_evidence.add_argument("--include-tsb", action="store_true")
-    public_automotive_evidence.add_argument("--limit", type=int, default=10)
-    public_automotive_evidence.add_argument("--timeout", type=float, default=12.0)
 
     estimate_work = sub.add_parser(
         "estimate-work",
@@ -657,8 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, and knowledge cleanup candidates")
 
-    sub.add_parser("system-audit", help="Run the read-only AutoStop Manager health audit")
-    sub.add_parser("doctor", help="Alias for system-audit")
+    sub.add_parser("doctor", help="Run the read-only AutoStop Manager health audit")
 
     integration_audit = sub.add_parser(
         "integration-audit",
@@ -701,18 +558,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("skills-audit", help="Audit local Codex skill files linked to knowledge routes")
 
-    sub.add_parser("memory-audit", help="Audit long-term memory for duplicates, expired items, and superseded items")
-
-    memory_curate = sub.add_parser("memory-curate", help="Curate long-term memory without deleting source records")
-    memory_curate.add_argument("--apply", action="store_true")
-
     sub.add_parser("memory-review", help="Generate rule-based, non-destructive memory review proposals")
-
-    memory_review_apply = sub.add_parser(
-        "memory-review-apply", help="Accept, reject, or archive duplicate memory review items"
-    )
-    memory_review_apply.add_argument("--id", required=True)
-    memory_review_apply.add_argument("--action", required=True, choices=["accept", "reject", "archive_duplicate"])
 
     return parser
 
@@ -747,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return _print_checked_json(audit_knowledge_base(store))
     elif args.command == "cleanup-audit":
         return _print_checked_json(build_cleanup_audit(store=store))
-    elif args.command in {"system-audit", "doctor"}:
+    elif args.command == "doctor":
         return _print_checked_json(build_system_audit(store=store))
     elif args.command == "integration-audit":
         report = build_integration_audit(full=args.full, gmail_proof_path=args.gmail_proof)
@@ -788,14 +634,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_json(report)
     elif args.command == "skills-audit":
         return _print_checked_json(audit_skill_registry())
-    elif args.command == "memory-audit":
-        return _print_checked_json(audit_memory(store))
-    elif args.command == "memory-curate":
-        _print_json(curate_memory(store, apply=args.apply))
     elif args.command == "memory-review":
         _print_json(build_memory_review(store))
-    elif args.command == "memory-review-apply":
-        _print_json(apply_memory_review_item(args.id, args.action, store=store))
     elif args.command == "remember":
         _print_json(
             store.remember(
@@ -847,14 +687,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 tags=_tags(args.tags),
             )
         )
-    elif args.command == "memory-map":
-        _print_json(store.memory_map())
-    elif args.command == "memory-topics":
-        _print_json(store.memory_topics(examples_limit=args.examples_limit))
-    elif args.command == "memory-context":
-        _print_json(store.memory_context_for(args.task, limit=args.limit))
-    elif args.command == "memory-gaps":
-        _print_json(store.memory_gaps())
     elif args.command == "agent-mode":
         if args.agent_mode_action == "status":
             _print_json(store.get_agent_mode())
@@ -862,8 +694,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_json(store.set_agent_mode(args.mode, expected_state_version=args.expected_state_version))
         else:
             _print_json(store.resolve_agent_mode(args.mode_override))
-    elif args.command == "learning-summary":
-        _print_json(store.get_agent_learning_summary(limit=args.limit))
     elif args.command == "task":
         _print_json(
             store.add_task(
@@ -956,63 +786,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         _print_json(
             decode_vehicle_identities(items, live_vpic=not args.no_live_vpic, use_vpic_batch=not args.no_vpic_batch)
         )
-    elif args.command == "catalog-status":
-        _print_json(catalog_provider_status(stage=args.stage))
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "oem-parts-provider-plan":
-        identity = _json_dict_arg(args.vehicle_identity_json, option_name="--vehicle-identity-json")
-        _print_json(
-            build_oem_parts_provider_plan(
-                identifier=args.identifier,
-                requested_part=args.requested_part,
-                vehicle_identity=identity,
-                city=args.city,
-            )
-        )
-    elif args.command == "vin17-decode":
-        _print_json(vin17_decode_vehicle(args.identifier, dry_run=args.dry_run))
-    elif args.command == "vin17-search-part":
-        _print_json(
-            vin17_search_part_number_by_vin(
-                epc=args.epc,
-                identifier=args.identifier,
-                query_part_number=args.part_number,
-                query_match_type=args.match_type,
-                dry_run=args.dry_run,
-            )
-        )
-    elif args.command == "partsapi-category-index":
-        if args.category_index_command == "build":
-            _print_json(
-                build_partsapi_category_index_plan(
-                    live=args.live,
-                    vehicle_type=args.vehicle_type,
-                    type_id=args.type_id,
-                    lang_id=args.lang_id,
-                    timeout=args.timeout,
-                    max_attempts=args.max_attempts,
-                )
-            )
-        elif args.category_index_command == "search":
-            _print_json(
-                search_partsapi_category_index(args.query, intent_id=args.intent_id, path=args.path, limit=args.limit)
-            )
-        elif args.category_index_command == "explain":
-            _print_json(explain_partsapi_category_for_intent(args.intent_id, query=args.query, path=args.path))
-        elif args.category_index_command == "validate":
-            _print_json(validate_partsapi_category_index(path=args.path))
-    elif args.command == "public-catalog-lookup":
-        _print_json(
-            public_aftermarket_catalog_lookup(
-                provider=args.provider,
-                part_number=args.part_number,
-                page_size=args.page_size,
-                country=args.country,
-                include_detail=not args.no_detail,
-                dry_run=args.dry_run,
-            )
-        )
     elif args.command == "emex-price-lookup":
         _print_json(
             emex_price_lookup(
@@ -1134,32 +909,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 vin_oem_resolution=vin_oem_resolution,
             )
         )
-    elif args.command == "resolve-vin-oem-parts":
-        _print_json(
-            resolve_vin_oem_parts(
-                identifier=args.identifier,
-                requested_part=args.requested_part,
-                make=args.make,
-                model=args.model,
-                model_year=args.model_year,
-                engine=args.engine,
-                transmission=args.transmission,
-                market=args.market,
-                drivetrain=args.drivetrain,
-                axle=args.axle,
-                side=args.side,
-                position=args.position,
-                live_vpic=not args.no_live_vpic,
-                live_partsapi_identity=args.live_partsapi_identity,
-                live_partsapi_oem=args.live_partsapi_oem,
-                max_live_calls=args.max_live_calls,
-                max_candidates=args.max_candidates,
-                timeout=args.timeout,
-                max_attempts=args.max_attempts,
-                partsapi_category_index=args.partsapi_category_index,
-                dry_run=args.dry_run,
-            )
-        )
     elif args.command == "vin-parts-benchmark":
         items = _json_value(args.items_json, option_name="--items-json")
         if not isinstance(items, list):
@@ -1202,15 +951,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 partsapi_category_index=args.partsapi_category_index,
             )
         )
-    elif args.command == "source-route":
-        _print_json(
-            recommend_automotive_sources(
-                brand=args.brand,
-                data_type=args.data_type,
-                include_licensed=not args.open_only,
-                limit=args.limit,
-            )
-        )
     elif args.command == "maintenance-fluids":
         _print_json(
             build_fluid_maintenance_plan(
@@ -1230,20 +970,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 level_check_procedure=args.level_check_procedure,
                 include_licensed=not args.open_only,
                 limit=args.limit,
-            )
-        )
-    elif args.command == "public-automotive-evidence":
-        _print_json(
-            lookup_public_automotive_evidence(
-                vin=args.vin,
-                make=args.make,
-                model=args.model,
-                model_year=args.model_year,
-                topics=args.topics,
-                system=args.system,
-                include_tsb=args.include_tsb,
-                limit=args.limit,
-                timeout=args.timeout,
             )
         )
     elif args.command == "estimate-work":

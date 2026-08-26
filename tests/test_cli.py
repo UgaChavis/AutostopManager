@@ -81,57 +81,10 @@ def test_cli_parser_has_core_commands():
     assert args.no_live_vpic is True
     assert args.no_vpic_batch is True
 
-    args = parser.parse_args(["catalog-status", "--stage", "oem_catalog"])
-    assert args.command == "catalog-status"
-    assert args.stage == "oem_catalog"
-
     args = parser.parse_args(["provider-smoke", "--provider", "all", "--mode", "dry-run"])
     assert args.command == "provider-smoke"
     assert args.provider == "all"
     assert args.mode == "dry-run"
-
-    args = parser.parse_args(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки"])
-    assert args.command == "oem-parts-provider-plan"
-    assert args.identifier == "MR41S123456"
-    assert args.requested_part == "колодки"
-
-    args = parser.parse_args(["vin17-decode", "LFMGJE720DS070251", "--dry-run"])
-    assert args.command == "vin17-decode"
-    assert args.identifier == "LFMGJE720DS070251"
-    assert args.dry_run is True
-
-    args = parser.parse_args(
-        ["vin17-search-part", "LFMGJE720DS070251", "--epc", "toyota", "--part-number", "091140G010", "--dry-run"]
-    )
-    assert args.command == "vin17-search-part"
-    assert args.epc == "toyota"
-    assert args.part_number == "091140G010"
-
-    args = parser.parse_args(
-        ["partsapi-category-index", "explain", "--intent", "front_brake_pads", "--query", "колодки"]
-    )
-    assert args.command == "partsapi-category-index"
-    assert args.category_index_command == "explain"
-    assert args.intent_id == "front_brake_pads"
-
-    args = parser.parse_args(
-        [
-            "public-catalog-lookup",
-            "--provider",
-            "all",
-            "--part-number",
-            "90919-01275",
-            "--page-size",
-            "2",
-            "--no-detail",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "public-catalog-lookup"
-    assert args.provider == "all"
-    assert args.part_number == "90919-01275"
-    assert args.page_size == 2
-    assert args.no_detail is True
 
     args = parser.parse_args(
         [
@@ -196,23 +149,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
-            "resolve-vin-oem-parts",
-            "1HGCM82633A004352",
-            "--part",
-            "передние колодки",
-            "--live-partsapi-identity",
-            "--max-live-calls",
-            "2",
-            "--partsapi-category-index",
-            "docs/agent/partsapi_category_index.json",
-        ]
-    )
-    assert args.command == "resolve-vin-oem-parts"
-    assert args.requested_part == "передние колодки"
-    assert args.max_live_calls == 2
-
-    args = parser.parse_args(
-        [
             "vin-parts-benchmark",
             "--items-json",
             "[]",
@@ -260,11 +196,6 @@ def test_cli_parser_has_core_commands():
     assert args.live_partsapi_identity is True
     assert args.resolve_oem is True
 
-    args = parser.parse_args(["source-route", "--brand", "Toyota", "--data-type", "repair_manuals"])
-    assert args.command == "source-route"
-    assert args.brand == "Toyota"
-    assert args.data_type == "repair_manuals"
-
     args = parser.parse_args(
         [
             "maintenance-fluids",
@@ -305,11 +236,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(["memory-review"])
     assert args.command == "memory-review"
-
-    args = parser.parse_args(["memory-review-apply", "--id", "duplicate:note:1-2", "--action", "archive_duplicate"])
-    assert args.command == "memory-review-apply"
-    assert args.id == "duplicate:note:1-2"
-    assert args.action == "archive_duplicate"
 
     args = parser.parse_args(["knowledge-intake", "--path", "docs/agent/knowledge_map.json", "--dry-run"])
     assert args.command == "knowledge-intake"
@@ -371,9 +297,6 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["cleanup-audit"])
     assert args.command == "cleanup-audit"
 
-    args = parser.parse_args(["system-audit"])
-    assert args.command == "system-audit"
-
     args = parser.parse_args(["doctor"])
     assert args.command == "doctor"
 
@@ -405,26 +328,6 @@ def test_cli_parser_has_core_commands():
     assert args.command == "lessons"
     assert args.applies_to == "crm_cleanup"
     assert args.tags == "стиль"
-
-    args = parser.parse_args(["memory-map"])
-    assert args.command == "memory-map"
-
-    args = parser.parse_args(["memory-topics"])
-    assert args.command == "memory-topics"
-
-    args = parser.parse_args(["memory-context", "crm карточки"])
-    assert args.command == "memory-context"
-    assert args.task == "crm карточки"
-
-    args = parser.parse_args(["memory-gaps"])
-    assert args.command == "memory-gaps"
-
-    args = parser.parse_args(["memory-audit"])
-    assert args.command == "memory-audit"
-
-    args = parser.parse_args(["memory-curate", "--apply"])
-    assert args.command == "memory-curate"
-    assert args.apply is True
 
     args = parser.parse_args(["agent-brief", "Приберись", "--intent", "board_cleanup", "--limit", "5"])
     assert args.command == "agent-brief"
@@ -497,20 +400,19 @@ def test_service_labor_refresh_cli_writes_private_artifacts(tmp_path, capsys):
     assert artifact_output.exists()
 
 
-@pytest.mark.parametrize("command", ["system-audit", "doctor"])
-def test_system_audit_commands_return_nonzero_when_audit_fails(command, monkeypatch, capsys):
+def test_doctor_returns_nonzero_when_audit_fails(monkeypatch, capsys):
     monkeypatch.setattr(cli, "build_system_audit", lambda **_kwargs: {"ok": False, "warnings": ["broken"]})
 
-    exit_code = cli.main([command])
+    exit_code = cli.main(["doctor"])
 
     assert exit_code == 1
     assert json.loads(capsys.readouterr().out)["ok"] is False
 
 
-def test_system_audit_command_returns_zero_when_audit_passes(monkeypatch, capsys):
+def test_doctor_returns_zero_when_audit_passes(monkeypatch, capsys):
     monkeypatch.setattr(cli, "build_system_audit", lambda **_kwargs: {"ok": True, "warnings": []})
 
-    exit_code = cli.main(["system-audit"])
+    exit_code = cli.main(["doctor"])
 
     assert exit_code == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
@@ -540,43 +442,3 @@ def test_every_top_level_cli_command_has_working_help(capsys):
         assert exc_info.value.code == 0, command
 
     assert "usage:" in capsys.readouterr().out
-
-
-def test_cli_rejects_invalid_vehicle_identity_json():
-    with pytest.raises(SystemExit, match="--vehicle-identity-json"):
-        cli.main(["oem-parts-provider-plan", "MR41S123456", "--part", "колодки", "--vehicle-identity-json", "[]"])
-
-
-def test_public_automotive_evidence_cli_parses_and_calls_read_only_lookup(monkeypatch, capsys):
-    received = {}
-    monkeypatch.setattr(
-        cli,
-        "lookup_public_automotive_evidence",
-        lambda **kwargs: received.setdefault("payload", {"ok": True, "input_context": kwargs}),
-    )
-
-    exit_code = cli.main(
-        [
-            "public-automotive-evidence",
-            "--vin",
-            "WDD00000000000000",
-            "--make",
-            "Mercedes-Benz",
-            "--model",
-            "C-Class",
-            "--year",
-            "2020",
-            "--topic",
-            "recalls",
-            "--topic",
-            "fluids",
-            "--system",
-            "automatic transmission",
-            "--include-tsb",
-        ]
-    )
-
-    assert exit_code == 0
-    assert received["payload"]["input_context"]["topics"] == ["recalls", "fluids"]
-    assert received["payload"]["input_context"]["include_tsb"] is True
-    assert json.loads(capsys.readouterr().out)["ok"] is True

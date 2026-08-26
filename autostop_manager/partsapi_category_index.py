@@ -211,32 +211,3 @@ def validate_partsapi_category_index(path: str | Path | None = None) -> dict[str
         "errors": errors,
         "privacy": {"secret_exposed": False, "raw_identifier_is_sensitive": False},
     }
-
-
-def build_partsapi_category_index_plan(
-    *,
-    live: bool = False,
-    vehicle_type: str = "PC",
-    type_id: str | None = None,
-    lang_id: int = 16,
-    timeout: float = 20.0,
-    max_attempts: int = 1,
-) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "schema": "PartsApiCategoryIndexBuildPlanV1",
-        "mode": "live_readonly" if live else "dry_run",
-        "target_path": str(DEFAULT_CATEGORY_INDEX_PATH),
-        "required_partsapi_operation": "search_tree",
-        "request": {
-            "operation": "search_tree",
-            "vehicle_type": vehicle_type,
-            "type_id": type_id,
-            "lang_id": lang_id,
-            "timeout": timeout,
-            "max_attempts": max_attempts,
-            "dry_run": not live,
-        },
-        "write_policy": "This command reports the read-only source call plan; updating the tracked fixture must be an explicit code change.",
-        "privacy": {"secret_exposed": False, "raw_identifier_is_sensitive": False},
-    }
