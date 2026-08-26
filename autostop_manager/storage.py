@@ -1875,18 +1875,6 @@ class ManagerMemoryStore:
                     updated_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS reminders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    remind_at TEXT NOT NULL,
-                    details TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'open',
-                    source TEXT NOT NULL DEFAULT 'codex',
-                    tags_json TEXT NOT NULL DEFAULT '[]',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS journal (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event TEXT NOT NULL,
@@ -2421,27 +2409,6 @@ class ManagerMemoryStore:
             )
         return {"ok": True, "id": cursor.lastrowid, "created_at": now}
 
-    def add_reminder(
-        self,
-        title: str,
-        *,
-        remind_at: str,
-        details: str = "",
-        source: str = "codex",
-        tags: list[str] | None = None,
-    ) -> dict[str, Any]:
-        self.initialize()
-        now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO reminders (title, remind_at, details, source, tags_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (title, remind_at, details, source, _json_list(tags), now, now),
-            )
-        return {"ok": True, "id": cursor.lastrowid, "created_at": now}
-
     def journal(self, event: str, *, source: str = "codex", tags: list[str] | None = None) -> dict[str, Any]:
         self.initialize()
         normalized_event = _validate_durable_memory_text(event)
@@ -2836,7 +2803,6 @@ class ManagerMemoryStore:
 
             searches = [
                 ("task", "tasks", "updated_at"),
-                ("reminder", "reminders", "updated_at"),
                 ("journal", "journal", "created_at"),
                 ("lesson", "lessons", "updated_at"),
             ]
@@ -2958,7 +2924,6 @@ class ManagerMemoryStore:
             "facts": self._section_summary("facts", "updated_at"),
             "lessons": self._section_summary("lessons", "updated_at", where="archived_at IS NULL"),
             "tasks": self._section_summary("tasks", "updated_at", where="status = 'open'"),
-            "reminders": self._section_summary("reminders", "updated_at", where="status = 'open'"),
             "journal": self._section_summary("journal", "created_at", where="archived_at IS NULL"),
             "director_journal": self._section_summary("director_journal", "updated_at"),
             "rules": {"count": len(rules), "last_updated": None},
@@ -2986,7 +2951,6 @@ class ManagerMemoryStore:
                 ("notes", "note"),
                 ("facts", "fact"),
                 ("tasks", "task"),
-                ("reminders", "reminder"),
                 ("journal", "journal"),
                 ("lessons", "lesson"),
             ]:
@@ -3094,7 +3058,6 @@ class ManagerMemoryStore:
             "facts": self._count_rows("facts"),
             "lessons": self._count_rows("lessons", where="archived_at IS NULL"),
             "tasks": self._count_rows("tasks", where="status = 'open'"),
-            "reminders": self._count_rows("reminders", where="status = 'open'"),
             "journal": self._count_rows("journal", where="archived_at IS NULL"),
             "director_journal": self._count_rows("director_journal"),
             "rules": len(load_manager_rules()),
@@ -3975,18 +3938,6 @@ class ManagerMemoryStore:
                     (now, limit),
                 ).fetchall()
             ]
-            reminders = [
-                self._row_to_dict(row)
-                for row in conn.execute(
-                    """
-                    SELECT *, 'reminder' AS kind FROM reminders
-                    WHERE status = 'open' AND remind_at <= ?
-                    ORDER BY remind_at ASC
-                    LIMIT ?
-                    """,
-                    (now, limit),
-                ).fetchall()
-            ]
             journal_rows = [
                 self._row_to_dict(row)
                 for row in conn.execute(
@@ -4019,7 +3970,6 @@ class ManagerMemoryStore:
             "ok": True,
             "generated_at": now,
             "tasks": tasks,
-            "reminders": reminders,
             "recent_journal": journal_rows,
             "director_journal": {
                 "active_entries": director_journal_rows,
@@ -5787,7 +5737,7 @@ class ManagerMemoryStore:
                 "source": str(item.get("source") or ""),
                 "tags": tags,
             }
-        if kind in {"task", "reminder"}:
+        if kind == "task":
             return {
                 "title": str(item.get("title") or ""),
                 "details": str(item.get("details") or ""),

@@ -259,21 +259,19 @@ def test_memory_navigation_map_topics_context_and_gaps(tmp_path):
     assert context["source_boundaries"]
 
     gaps = store.memory_gaps()
-    assert gaps["empty_sections"]["reminders"] >= 0
     assert "conflicts" in gaps
 
 
-def test_today_context_returns_due_items(tmp_path):
+def test_today_context_returns_due_tasks_and_journal(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 
     store.add_task("Check overdue CRM cards")
-    store.add_reminder("Call landlord", remind_at="2000-01-01T00:00:00+00:00")
     store.journal("Started manager memory")
 
     context = store.today_context()
     assert context["ok"] is True
     assert context["tasks"][0]["title"] == "Check overdue CRM cards"
-    assert context["reminders"][0]["title"] == "Call landlord"
+    assert "reminders" not in context
     assert context["recent_journal"][0]["event"] == "Started manager memory"
     assert context["manager_rules"]
     assert context["memory_use_order"][0] == "today_context"

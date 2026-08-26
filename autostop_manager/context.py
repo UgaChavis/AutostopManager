@@ -354,7 +354,7 @@ def build_agent_brief(
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
             "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state",
-            "manager_memory": "durable non-CRM context, rules, lessons, tasks, reminders, and short conclusions",
+            "manager_memory": "durable non-CRM context, rules, lessons, tasks, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
             "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },

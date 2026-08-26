@@ -268,7 +268,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="today_context",
         description=(
-            "Return manager memory context for today's work: due tasks, due reminders, recent generic journal, "
+            "Return manager memory context for today's work: due tasks, recent generic journal, "
             "up to ten active structured director-journal entries, rules, and reusable routing context."
         ),
     )
