@@ -286,9 +286,9 @@ def test_cli_parser_has_core_commands():
     assert args.domain == "bmw_f15_n63"
     assert args.limit == 5
 
-    args = parser.parse_args(["knowledge-probe", "Toyota Yaris GR clutch", "--limit", "3"])
+    args = parser.parse_args(["knowledge-probe", "clutch gearbox", "--limit", "3"])
     assert args.command == "knowledge-probe"
-    assert args.query == "Toyota Yaris GR clutch"
+    assert args.query == "clutch gearbox"
     assert args.limit == 3
 
     args = parser.parse_args(["knowledge-audit"])

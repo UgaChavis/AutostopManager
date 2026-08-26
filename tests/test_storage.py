@@ -127,11 +127,11 @@ def test_memory_context_uses_cross_system_rule_without_domain_procedure_noise(tm
         importance=5.0,
     )
     store.remember(
-        "For Toyota GR Yaris tasks, verify VIN, market, grade, and OEM part conclusions.",
+        "For BMW F15 N63 tasks, verify VIN, market, grade, and OEM part conclusions.",
         kind="note",
-        title="Toyota GR Yaris knowledge route",
+        title="BMW F15 N63 knowledge route",
         category="automotive_repair",
-        tags=["toyota", "vin", "oem"],
+        tags=["bmw", "vin", "oem"],
         importance=5.0,
     )
 
@@ -147,7 +147,7 @@ def test_memory_context_uses_cross_system_rule_without_domain_procedure_noise(tm
     assert "board-cleanup" not in context_text
     assert "приберись" not in context_text
     assert "оформление описаний" not in context_text
-    assert "toyota gr yaris" not in context_text
+    assert "bmw f15 n63" not in context_text
 
 
 def test_memory_context_keeps_board_cleanup_rules_for_explicit_cleanup_query(tmp_path):

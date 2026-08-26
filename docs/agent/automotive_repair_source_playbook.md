@@ -147,19 +147,6 @@ Prefer the exact OEM service document, then transmission-manufacturer
 documentation, then component-supplier documentation. For transmission work,
 generic AT / CVT / DCT / MT labels are not enough to confirm applicability.
 
-## Model-Specific Overrides
-
-Use model-specific playbooks before broad brand routing when one exists:
-
-- Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS:
-  `docs/agent/toyota_gr_yaris_playbook.md`
-
-For Toyota GR Yaris, official Toyota-Tech/TIS/Toyota Manuals AU/dealer EPC
-routes take priority for repair procedures, TSBs, wiring, torque specs,
-calibrations, and final OEM part fitment. Public Toyota owner manuals can be
-used for owner-level maintenance data, but VIN/frame, market, production date,
-transmission, LSD, and grade still control final applicability.
-
 ## Do Not Invent
 
 Never invent:

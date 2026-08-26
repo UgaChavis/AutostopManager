@@ -1762,7 +1762,6 @@ def _is_context_noise(
         return True
     if suppress_admin_context:
         vehicle_families = [
-            (["toyota gr yaris", "yaris gr", "gxpa16", "g16e-gts"], ["toyota", "yaris", "gxpa16", "g16e"]),
             (["bmw f15", "n63"], ["bmw", "f15", "n63", "x5"]),
         ]
         for item_markers, task_markers in vehicle_families:

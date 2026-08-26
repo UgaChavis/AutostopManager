@@ -25,10 +25,6 @@ For AT, CVT, DCT, AMT, and heavy-duty gearbox fluids, also consult
 `docs/agent/transmission_playbook.md` before confirming the exact fluid,
 capacity, or level-check procedure.
 
-For Toyota GR Yaris / Yaris GR / GXPA16 / G16E-GTS, also consult
-`docs/agent/toyota_gr_yaris_playbook.md`; final data still requires the exact
-market, production date, unit, and option package.
-
 ## Required Distinctions
 
 Do not collapse these values into one number:

@@ -181,16 +181,6 @@ def test_search_can_filter_by_domain(tmp_path):
     assert all(item["domain"] == "fluids" for item in result["items"])
 
 
-def test_search_returns_route_suggestions_when_no_section_matches(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    result = search_knowledge_base(store, "GR Yaris G16E", limit=5)
-
-    assert result["ok"] is True
-    assert any(item["domain"] == "toyota_gr_yaris" for item in result["items"])
-
-
 def test_search_routes_russian_oil_query_to_fluids(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
@@ -279,16 +269,16 @@ def test_probe_routes_priberis_to_board_cleanup_autopilot(tmp_path):
     assert result["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
 
 
-def test_probe_routes_toyota_gr_yaris_clutch_to_model_skill(tmp_path):
+def test_probe_routes_clutch_to_transmission(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     sync_knowledge_base(store)
 
-    result = probe_knowledge_base(store, "подобрать сцепление Toyota Yaris GR G16E")
+    result = probe_knowledge_base(store, "подобрать сцепление для механической коробки")
 
     assert result["ok"] is True
     assert result["has_knowledge"] is True
-    assert result["best_domain"] == "toyota_gr_yaris"
-    assert any("toyota" in path.lower() for path in result["routes"][0]["source_of_truth"])
+    assert result["best_domain"] == "transmission"
+    assert any("transmission" in path.lower() for path in result["routes"][0]["source_of_truth"])
 
 
 def test_probe_routes_procurement_pricing_to_parts_sourcing(tmp_path):

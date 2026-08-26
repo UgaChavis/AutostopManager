@@ -550,9 +550,9 @@ def test_knowledge_base_tools_are_registered(tmp_path):
     sync_result = server.tools["sync_knowledge_base"]()
     assert sync_result["ok"] is True
 
-    probe_result = server.tools["probe_knowledge_base"]("Toyota Yaris GR clutch", limit=3)
+    probe_result = server.tools["probe_knowledge_base"]("clutch gearbox", limit=3)
     assert probe_result["ok"] is True
-    assert probe_result["best_domain"] == "toyota_gr_yaris"
+    assert probe_result["best_domain"] == "transmission"
 
     search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="bmw_f15_n63", limit=5)
     assert search_result["ok"] is True
