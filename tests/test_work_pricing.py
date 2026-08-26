@@ -74,6 +74,32 @@ def test_less_than_three_prices_returns_low_confidence_without_confident_price()
     assert "at_least_3_comparable_labor_only_public_prices" in result["missing_context"]
 
 
+def test_internal_labor_snapshot_remains_a_provisional_anchor():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["диагностика ходовой"],
+        auto_research=False,
+        internal_experience_json={
+            "schema_version": "autostop_service_labor_experience_v1",
+            "labor_baselines": [
+                {
+                    "operation_key": "диагностика_подвески",
+                    "operation_name": "диагностика подвески",
+                    "category": "diagnostics",
+                    "sample_count": 3,
+                    "p25_rub": 900,
+                    "p75_rub": 1100,
+                    "recommended_anchor_rub": 1000,
+                }
+            ],
+        },
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["internal_experience"]["available"] is True
+    assert operation["recommendation_basis"] == "internal_experience_provisional"
+
+
 def test_quotes_with_parts_are_excluded_from_labor_only_sample():
     result = estimate_repair_work_cost(
         vehicle="Lexus RX",

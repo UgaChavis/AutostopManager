@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from statistics import median
 from typing import Any
 
-from .service_labor_experience import find_labor_experience, load_service_labor_experience
+from .config import PROJECT_ROOT
 from .work_pricing_research import collect_public_work_pricing_research
 
 ROUNDING_STEP_RUB = 100
 AUTOSTOP_MARKUP = 1.50
 MIN_CONFIDENT_QUOTES = 3
+LABOR_EXPERIENCE_SCHEMA = "autostop_service_labor_experience_v1"
+LABOR_EXPERIENCE_PATH = PROJECT_ROOT / "data" / "private_knowledge" / "service_labor_experience.json"
 
 COMMON_OPERATION_WORDS = {
     "замена",
@@ -183,6 +187,51 @@ def _operations_match(operation_name: str, quote_operation_name: str) -> bool:
         return False
     overlap = _significant_tokens(op) & _significant_tokens(quote_op)
     return len(overlap) >= 1
+
+
+def _load_labor_experience(path: Path = LABOR_EXPERIENCE_PATH) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != LABOR_EXPERIENCE_SCHEMA:
+        return None
+    return payload
+
+
+def _find_labor_experience(
+    operation_name: str,
+    snapshot: dict[str, Any] | None,
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    if not snapshot:
+        return []
+    canonical = _canonical_operation(operation_name)
+    operation_key = _normalize_key(canonical)
+    query_tokens = _significant_tokens(canonical)
+    matches: list[tuple[float, dict[str, Any]]] = []
+    for row in snapshot.get("labor_baselines") or []:
+        if not isinstance(row, dict):
+            continue
+        row_name = str(row.get("operation_name") or "")
+        row_canonical = _canonical_operation(row_name)
+        if row.get("operation_key") == operation_key or row_canonical == canonical:
+            score = 1.0
+        else:
+            row_tokens = _significant_tokens(row_canonical)
+            union = query_tokens | row_tokens
+            score = len(query_tokens & row_tokens) / len(union) if union else 0.0
+            if row.get("category") == _operation_category(canonical):
+                score += 0.1
+        if score >= 0.45:
+            match = dict(row)
+            match["match_score"] = round(min(score, 1.0), 3)
+            matches.append((score, match))
+    matches.sort(key=lambda item: (-item[0], -int(item[1].get("sample_count") or 0)))
+    return [row for _, row in matches[: max(0, limit)]]
 
 
 def _parse_bool(value: Any) -> bool | None:
@@ -606,7 +655,7 @@ def _attach_internal_experience(
     experience_snapshot: dict[str, Any] | None,
 ) -> None:
     operation_name = str(operation.get("normalized_name") or operation.get("input") or "")
-    matches = find_labor_experience(operation_name, snapshot=experience_snapshot, limit=3)
+    matches = _find_labor_experience(operation_name, experience_snapshot, limit=3)
     exact = matches[0] if matches and float(matches[0].get("match_score") or 0) >= 0.8 else None
     estimate["internal_experience"] = {
         "available": exact is not None,
@@ -941,7 +990,7 @@ def estimate_repair_work_cost(
     if isinstance(internal_experience_json, dict):
         experience_snapshot = internal_experience_json
     elif use_internal_experience:
-        experience_snapshot = load_service_labor_experience()
+        experience_snapshot = _load_labor_experience()
     else:
         experience_snapshot = None
     research = collect_public_work_pricing_research(
