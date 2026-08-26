@@ -56,26 +56,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
-            "exist-price-lookup",
-            "--part-number",
-            "9091901164",
-            "--brand",
-            "Toyota",
-            "--office-id",
-            "905",
-            "--include-more-offers",
-            "--dry-run",
-        ]
-    )
-    assert args.command == "exist-price-lookup"
-    assert args.part_number == "9091901164"
-    assert args.brand == "Toyota"
-    assert args.office_id == 905
-    assert args.include_more_offers is True
-    assert args.dry_run is True
-
-    args = parser.parse_args(
-        [
             "crm-vin-parts-plan",
             "--card-id",
             "card_123",

@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .catalog_clients import exist_price_lookup
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
 from .context import build_agent_brief
@@ -148,20 +147,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     provider_smoke.add_argument("--provider", default="all")
     provider_smoke.add_argument("--mode", choices=["dry-run", "live-readonly"], default="dry-run")
-
-    exist_lookup = sub.add_parser(
-        "exist-price-lookup",
-        help="Call or dry-run public read-only Exist article price/catalog lookup for retail benchmark",
-    )
-    exist_lookup.add_argument("--part-number", required=True)
-    exist_lookup.add_argument("--brand", default=None)
-    exist_lookup.add_argument("--pid", default=None)
-    exist_lookup.add_argument("--office-id", type=int, default=905)
-    exist_lookup.add_argument("--max-candidates", type=int, default=5)
-    exist_lookup.add_argument("--max-offers", type=int, default=10)
-    exist_lookup.add_argument("--include-more-offers", action="store_true")
-    exist_lookup.add_argument("--timeout", type=float, default=20.0)
-    exist_lookup.add_argument("--dry-run", action="store_true")
 
     crm_vin_parts = sub.add_parser(
         "crm-vin-parts-plan",
@@ -451,20 +436,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         )
     elif args.command == "provider-smoke":
         _print_json(build_provider_smoke_report(provider=args.provider, mode=args.mode))
-    elif args.command == "exist-price-lookup":
-        _print_json(
-            exist_price_lookup(
-                part_number=args.part_number,
-                brand=args.brand,
-                pid=args.pid,
-                office_id=args.office_id,
-                max_candidates=args.max_candidates,
-                max_offers=args.max_offers,
-                include_more_offers=args.include_more_offers,
-                timeout=args.timeout,
-                dry_run=args.dry_run,
-            )
-        )
     elif args.command == "crm-vin-parts-plan":
         vin_oem_resolution = _json_dict_arg(args.vin_oem_resolution_json, option_name="--vin-oem-resolution-json")
         _print_json(
