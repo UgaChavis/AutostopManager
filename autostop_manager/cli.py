@@ -32,7 +32,6 @@ from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
-from .vin_parts_work_order import build_vin_parts_work_order
 from .work_pricing import estimate_repair_work_cost
 
 
@@ -297,22 +296,6 @@ def build_parser() -> argparse.ArgumentParser:
     vin_parts_benchmark.add_argument("--max-live-calls", type=int, default=3)
     vin_parts_benchmark.add_argument("--max-candidates", type=int, default=3)
     vin_parts_benchmark.add_argument("--partsapi-category-index", default=None)
-
-    vin_parts_work_order = sub.add_parser(
-        "vin-parts-work-order",
-        help="Build per-card VIN/frame parts lookup work orders with OEM, cross, supplier, CRM writeback gates, and blockers",
-    )
-    vin_parts_work_order.add_argument("--items-json", required=True)
-    vin_parts_work_order.add_argument("--part", dest="requested_part", required=True)
-    vin_parts_work_order.add_argument("--city", default="Красноярск")
-    vin_parts_work_order.add_argument("--no-live-vpic", action="store_true")
-    vin_parts_work_order.add_argument("--no-vpic-batch", action="store_true")
-    vin_parts_work_order.add_argument("--live-partsapi-identity", action="store_true")
-    vin_parts_work_order.add_argument("--live-partsapi-oem", action="store_true")
-    vin_parts_work_order.add_argument("--resolve-oem", action="store_true")
-    vin_parts_work_order.add_argument("--max-live-calls", type=int, default=3)
-    vin_parts_work_order.add_argument("--max-candidates", type=int, default=3)
-    vin_parts_work_order.add_argument("--partsapi-category-index", default=None)
 
     maintenance_fluids = sub.add_parser(
         "maintenance-fluids",
@@ -726,26 +709,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 use_vpic_batch=not args.no_vpic_batch,
                 include_partsapi_dry_run=not args.skip_partsapi_dry_run,
                 include_vin17_dry_run=not args.skip_vin17_dry_run,
-                live_partsapi_identity=args.live_partsapi_identity,
-                live_partsapi_oem=args.live_partsapi_oem,
-                resolve_oem=args.resolve_oem,
-                max_live_calls=args.max_live_calls,
-                max_candidates=args.max_candidates,
-                partsapi_category_index=args.partsapi_category_index,
-            )
-        )
-    elif args.command == "vin-parts-work-order":
-        items = _json_value(args.items_json, option_name="--items-json")
-        if not isinstance(items, list):
-            message = "--items-json must be a JSON array"
-            raise SystemExit(message)
-        _print_json(
-            build_vin_parts_work_order(
-                items,
-                requested_part=args.requested_part,
-                city=args.city,
-                live_vpic=not args.no_live_vpic,
-                use_vpic_batch=not args.no_vpic_batch,
                 live_partsapi_identity=args.live_partsapi_identity,
                 live_partsapi_oem=args.live_partsapi_oem,
                 resolve_oem=args.resolve_oem,

@@ -154,26 +154,6 @@ def test_cli_parser_has_core_commands():
 
     args = parser.parse_args(
         [
-            "vin-parts-work-order",
-            "--items-json",
-            "[]",
-            "--part",
-            "передние колодки",
-            "--no-live-vpic",
-            "--no-vpic-batch",
-            "--live-partsapi-identity",
-            "--resolve-oem",
-        ]
-    )
-    assert args.command == "vin-parts-work-order"
-    assert args.items_json == "[]"
-    assert args.requested_part == "передние колодки"
-    assert args.no_live_vpic is True
-    assert args.live_partsapi_identity is True
-    assert args.resolve_oem is True
-
-    args = parser.parse_args(
-        [
             "maintenance-fluids",
             "--brand",
             "Toyota",

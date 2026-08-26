@@ -27,9 +27,6 @@ For parts-search quality checks across a 10-card batch, use
 It reports identity coverage, requested-part recognition, safe public query
 coverage, PartsAPI/17VIN dry-run readiness, and missing live catalog/supplier
 credentials without echoing raw customer identifiers.
-When the benchmark shows identity and part intent are ready, use
-`build_vin_parts_work_order` / `vin-parts-work-order` to produce the exact
-per-card EPC/API/supplier work order and CRM writeback gates.
 When the input comes from AutoStop CRM, pass the compact vehicle profile
 (`make_display`, `model_display`, `production_year`, engine/transmission,
 drivetrain, and source confidence) into the decoder; the local tool normalizes

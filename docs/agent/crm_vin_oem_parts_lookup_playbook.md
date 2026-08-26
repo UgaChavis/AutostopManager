@@ -180,11 +180,6 @@ part-intent recognition, safe public-query coverage, PartsAPI/17VIN dry-run
 readiness, and the exact missing live catalog/supplier credentials while
 redacting raw identifiers from output. Pass `requested_part` per item when each
 card asks for a different part; use the global part only as a fallback.
-After a benchmark, run `build_vin_parts_work_order` / `vin-parts-work-order`
-when the next step is actual lookup execution. It turns each card into a
-search work order: OEM/EPC routes, prepared PartsAPI/17VIN checks,
-cross/applicability steps, supplier sequence, CRM writeback gates, and
-acceptance checklist.
 
 ## Price Flow
 
@@ -295,11 +290,11 @@ Provider readiness and not-yet-implemented adapters live only in:
 - `docs/agent/procurement_price_sources.json` for procurement, stock, and RF
   market price sources.
 
-Use `catalog_provider_status`, `plan_oem_parts_providers`, and
-`build_vin_parts_work_order` through the Gateway v2 raw-capability route when a
-named workflow does not cover the task. For broad quality checks, use
-`benchmark_vin_parts_lookup`. Missing adapter or environment readiness is a
-blocker, not evidence that a lookup succeeded.
+Use `catalog_provider_status` and `plan_oem_parts_providers` through the Gateway
+v2 raw-capability route when a named workflow does not cover the task. Use
+`resolve_vin_oem_parts` for exact read-only lookup and
+`benchmark_vin_parts_lookup` for broad quality checks. Missing adapter or
+environment readiness is a blocker, not evidence that a lookup succeeded.
 
 No adapter may place supplier orders or change financial CRM records without a
 separate explicit owner command.

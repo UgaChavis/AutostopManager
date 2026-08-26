@@ -58,7 +58,6 @@ from .store_owner_api import StoreOwnerApiClient
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
-from .vin_parts_work_order import build_vin_parts_work_order
 from .vin_oem_resolver import resolve_vin_oem_parts
 from .vin_lookup import lookup_original_parts
 from .work_pricing import estimate_repair_work_cost
@@ -1627,11 +1626,10 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="build_vin_parts_work_order",
         description=(
-            "Build read-only per-card VIN/frame parts lookup work orders: exact OEM/EPC routes, prepared API checks, "
-            "cross/applicability steps, supplier routes, CRM writeback gates, blockers, and acceptance checklists. "
-            "Raw identifiers are redacted from output."
+            "Compatibility name for the read-only VIN/frame parts benchmark: identity confidence, part-intent recognition, "
+            "provider blockers, safe search templates, and prepared lookup calls. Raw identifiers are redacted from output."
         ),
-    )(build_vin_parts_work_order)
+    )(benchmark_vin_parts_lookup)
 
     server.tool(
         name="recommend_automotive_sources",
