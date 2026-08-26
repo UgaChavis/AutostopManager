@@ -69,6 +69,14 @@ internal agent network; neither Manager nor CRM receives Store DB access.
 
 ## Deploy
 
+The current `/opt/autostopcrm/deploy.sh` is a coupled CRM + Manager release,
+not a Manager-only deploy path. It validates live Store health and replaces the
+CRM container even when only the Manager revision changed. While the Store
+pause is active, stop before this section. Run it only after the owner
+explicitly authorizes both the read-only Store release gates and advancing the
+CRM checkout/restarting CRM to the exact remote revision. That authorization
+does not permit Store writes.
+
 Preflight the live checkouts and rollback state:
 
 ```bash
@@ -99,6 +107,12 @@ create a customer order as smoke or perform supplier procurement without a
 separate exact command.
 
 ## Post-Deploy Verification
+
+The Store-aware checks below are part of the same explicitly authorized coupled
+release. Gateway `--exhaustive`, `check_live_connector.py` without `--skip-mcp`
+and `integration-audit --full` call `get_runtime_status`, which performs a live
+Store health read. `check_mcp_oauth.py` does not read Store, but it creates,
+refreshes and revokes OAuth state, so it is not a read-only maintenance check.
 
 ```bash
 cd /opt/autostopcrm
@@ -134,6 +148,30 @@ App/site health, that CRM reads survive Store degradation, and that Store GETs
 are mutation-free. Production Store management smoke stays dry-run unless an
 explicitly approved, safe and reversible synthetic object exists. Record only
 compact ids, counts, versions, health booleans and rollback refs.
+
+For maintenance while Store remains paused, do not deploy and do not use
+`integration-audit --full`, Gateway `--exhaustive`, `--require-store` or
+`check_live_connector.py` as Store-free gates. Do not use
+`check_mcp_oauth.py` as a read-only gate. Use only quick Manager audits,
+container/nginx/HTTPS health, and the quick internal/public Gateway check:
+
+```bash
+cd /opt/AutostopManager
+.venv/bin/python -m autostop_manager.cli doctor
+.venv/bin/python -m autostop_manager.cli control-report --format json
+.venv/bin/python -m autostop_manager.cli integration-audit
+
+cd /opt/autostopcrm
+docker compose config --quiet
+docker compose ps autostopcrm
+docker compose exec -T autostopcrm python scripts/container_healthcheck.py
+docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
+  --mcp-url http://127.0.0.1:41831/mcp
+docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
+  --mcp-url https://crm.autostopcrm.ru/mcp
+nginx -t
+curl -fsS --max-time 8 -o /dev/null https://crm.autostopcrm.ru/
+```
 
 ## Telegram-Only Release
 
