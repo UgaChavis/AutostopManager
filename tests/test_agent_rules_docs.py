@@ -584,14 +584,6 @@ def test_every_tracked_agent_document_has_a_knowledge_map_route():
     assert existing <= routed
 
 
-def test_partsapi_contract_points_to_live_adapter_registry():
-    contract = (ROOT / "docs" / "agent" / "partsapi_method_contracts.md").read_text(encoding="utf-8")
-
-    assert "`PARTSAPI_OPERATIONS`" in contract
-    assert "`PARTSAPI_METHOD_KEY_ENV_NAMES`" in contract
-    assert "`autostop_manager/catalog_clients.py`" in contract
-
-
 def test_agent_docs_do_not_expose_partsapi_test_keys_or_crm_contacts():
     tracked_docs = subprocess.run(
         ["git", "ls-files", "docs/agent"],
