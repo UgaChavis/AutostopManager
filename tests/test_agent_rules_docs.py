@@ -17,7 +17,6 @@ def test_codex_native_startup_files_are_present_and_safe():
     agents_path = ROOT / "AGENTS.md"
     config_path = ROOT / ".codex" / "config.toml"
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    shelves = (ROOT / "docs" / "agent" / "knowledge_shelves.md").read_text(encoding="utf-8")
 
     assert not (ROOT / "agent.md").exists()
     assert agents_path.is_file()
@@ -72,10 +71,7 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert not re.search(r"(api[_-]?key|token|secret|password|credential)", config_text)
 
     assert "`AGENTS.md` - canonical compact startup instruction for Codex." in readme
-    assert "Startup and knowledge" in shelves
-    assert "`telegram_operations`" in shelves
     assert "agent.md" not in readme
-    assert "agent.md" not in shelves
 
     voice_brief = (ROOT / "docs" / "agent" / "voice_agent_brief.md").read_text(encoding="utf-8")
     assert "дополнение к `AGENTS.md`, а не копия" in voice_brief
@@ -88,7 +84,6 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
     checked_paths = [
         ROOT / "AGENTS.md",
         ROOT / "README.md",
-        ROOT / "docs" / "agent" / "knowledge_shelves.md",
         ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md",
         ROOT / "docs" / "agent" / "knowledge_map.json",
         ROOT / "docs" / "agent" / "manager_rules.json",
@@ -136,7 +131,6 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
     checked_paths = [
         ROOT / "AGENTS.md",
         ROOT / "README.md",
-        ROOT / "docs" / "agent" / "knowledge_shelves.md",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
 
@@ -144,8 +138,7 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
         "cleanup-audit",
         "knowledge-sync",
         "Compact startup contract",
-        "Prefer updating an existing canonical file",
-        "Delete a tracked document only",
+        "Keep one canonical owner per rule",
     ]:
         assert expected in combined
 
@@ -165,7 +158,6 @@ def test_routing_instruction_footprint_stays_below_release_ceiling():
         ROOT / "docs/agent/manager_rules.json",
         ROOT / "docs/agent/manager_mcp_catalog.json",
         ROOT / "docs/agent/crm_mcp_catalog.json",
-        ROOT / "docs/agent/knowledge_shelves.md",
     ]
     sizes = {path.name: path.stat().st_size if path.exists() else 0 for path in paths}
 
@@ -174,7 +166,6 @@ def test_routing_instruction_footprint_stays_below_release_ceiling():
     assert sizes["knowledge_map.json"] <= 19_000
     assert sizes["manager_mcp_catalog.json"] + sizes["crm_mcp_catalog.json"] <= 5_000
     assert sizes["manager_rules.json"] <= 4_500
-    assert sizes["knowledge_shelves.md"] <= 1_800
     routing_index_paths = [
         "autostop_manager/knowledge_base.py",
         "autostop_manager/context.py",

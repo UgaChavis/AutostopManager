@@ -40,9 +40,6 @@ jobs:
           python -m ruff format --check autostop_manager tests
           python -m mypy autostop_manager
 
-      - name: Run tests
-        run: python -m pytest -q
-
       - name: Enforce branch coverage gate
         run: |
           python -m coverage run -m pytest -q

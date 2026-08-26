@@ -79,7 +79,11 @@ def test_extract_public_player_url_rejects_unexpected_payload(payload, reason):
 
 def test_public_controller_rejects_custom_browser_path(tmp_path):
     with pytest.raises(PublicCameraError, match="browser_path_not_supported"):
-        public_camera.capture_semafornaya_185(tmp_path / "frame.png", browser_path="/tmp/browser")
+        public_camera.capture_public_camera(
+            "semafornaya-185",
+            tmp_path / "frame.png",
+            browser_path="/tmp/browser",
+        )
 
 
 def test_registry_contains_existing_camera_plus_ten_new_allowlisted_points():
@@ -723,7 +727,7 @@ def test_runner_failure_preserves_existing_public_output(monkeypatch, tmp_path, 
     monkeypatch.setattr(public_camera, "_run_worker", fail)
 
     with pytest.raises(PublicCameraError, match="public_camera_runner_failed"):
-        public_camera.capture_semafornaya_185(output, overwrite=True)
+        public_camera.capture_public_camera("semafornaya-185", output, overwrite=True)
 
     assert output.read_bytes() == b"keep"
     assert not list(tmp_path.glob(".autostop-camera-*.partial"))
@@ -740,7 +744,7 @@ def test_runner_output_creation_failure_discards_reserved_staging(monkeypatch, t
     )
 
     with pytest.raises(PublicCameraError, match="public_camera_runner_output_unavailable"):
-        public_camera.capture_semafornaya_185(output)
+        public_camera.capture_public_camera("semafornaya-185", output)
 
     assert not output.exists()
     assert not list(tmp_path.glob(".autostop-camera-*.partial"))
@@ -765,7 +769,7 @@ def test_controller_atomically_publishes_verified_runner_png(monkeypatch, tmp_pa
 
     monkeypatch.setattr(public_camera, "_run_worker", fake_worker)
 
-    result = public_camera.capture_semafornaya_185(output, overwrite=True)
+    result = public_camera.capture_public_camera("semafornaya-185", output, overwrite=True)
 
     assert result.screenshot == str(output)
     assert victim.read_bytes() == b"keep"

@@ -17,7 +17,6 @@ Run once on the final tree:
 .venv/bin/python -m ruff check .
 .venv/bin/python -m ruff format --check autostop_manager tests
 .venv/bin/python -m mypy autostop_manager
-.venv/bin/python -m pytest -q
 .venv/bin/python -m coverage run -m pytest -q
 .venv/bin/python -m coverage report --fail-under=82
 git diff --check

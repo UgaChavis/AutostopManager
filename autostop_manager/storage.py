@@ -131,7 +131,6 @@ EXTERNAL_BODY_KEYS = {
 
 ACTIVE_WORKFLOW_STATES = {"planned", "executing", "external_wait", "verifying", "compensating", "running"}
 AGENT_EXECUTION_MODES = frozenset({"work", "learning"})
-AGENT_TURN_STATUSES = frozenset({"active", "reviewed", "deferred"})
 AGENT_REVIEW_OUTCOMES = frozenset({"confirmed", "partial", "failed", "deferred"})
 AGENT_IMPROVEMENT_KINDS = frozenset(
     {
@@ -3679,17 +3678,6 @@ class ManagerMemoryStore:
 
     def has_completed_experience_review_by_external_id(self, external_turn_id: str) -> dict[str, Any]:
         return self.has_completed_experience_review(external_turn_id)
-
-    def defer_experience_review(self, turn_id: str, *, reason_code: str) -> dict[str, Any]:
-        normalized_reason = _normalize_learning_identifier(reason_code, field="reason_code", allow_empty=False)
-        if not normalized_reason:
-            return {"ok": False, "error": "invalid_agent_review_reason"}
-        return self.post_run_review(
-            turn_id,
-            outcome="deferred",
-            failure_class=normalized_reason,
-            metadata={"review_status": "deferred"},
-        )
 
     def get_agent_turn(self, turn_id: str, *, include_events: bool = True) -> dict[str, Any]:
         self.initialize()

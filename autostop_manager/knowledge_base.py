@@ -71,7 +71,7 @@ _PROJECT_ENGINEERING_ACTION_RE = re.compile(
 )
 
 _SCOPE_EXCLUSION_RE = re.compile(
-    r"\b(?:без\s+работы\s+с|without)\s+(?:the\s+)?(?P<after>[\w-]+)"
+    r"\b(?:без\s+работы\s+с(?:о)?|without)\s+(?:the\s+)?(?P<after>[\w-]+)"
     r"|\bбез\s+(?P<bare>store|магазин\w*|crm|telegram|телеграм\w*|gmail|почт\w*|vpn|впн|камер\w*|сервер\w*)"
     r"|\b(?P<before>(?!(?:но|but)\b)[\w-]+)\s+(?:(?:пока\s+)?не\s+(?:трог\w*|заним\w*|использ\w*|инспектир\w*|провер\w*|диагностир\w*|меня\w*|обнов\w*)|на\s+паузе|в\s+разработке)"
     r"|\b(?:не\s+(?:трог\w*|заним\w*|использ\w*)|(?:do\s+not|don't)\s+(?:touch|use|work\s+on))"
@@ -1578,7 +1578,6 @@ def _domain_hints(query: str) -> dict[str, int]:
             "авито",
             "контракт",
             "разбор",
-            "наличие",
             "поставщик",
             "рулев",
             "рейк",

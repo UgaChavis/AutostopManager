@@ -312,7 +312,7 @@ def test_probe_routes_knowledge_organization_request_to_shelf_guide(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "knowledge_intake"
-    assert any("knowledge_shelves.md" in path for path in result["source_of_truth"])
+    assert "AGENTS.md" in result["source_of_truth"]
 
 
 def test_probe_routes_prepare_for_work_to_agent_entrypoint(tmp_path):
@@ -337,7 +337,7 @@ def test_probe_routes_pdf_catalog_knowledge_update_to_intake(tmp_path):
     assert result["ok"] is True
     assert result["has_knowledge"] is True
     assert result["best_domain"] == "knowledge_intake"
-    assert result["open_first"] == "docs/agent/knowledge_shelves.md"
+    assert result["open_first"] == "AGENTS.md"
     assert result["command_route"] is None
 
 

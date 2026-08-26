@@ -601,12 +601,6 @@ def test_cli_parser_has_core_commands():
     assert args.command == "memory-curate"
     assert args.apply is True
 
-    args = parser.parse_args(["prepare-context", "Приберись", "--intent", "board_cleanup", "--limit", "5"])
-    assert args.command == "prepare-context"
-    assert args.query == "Приберись"
-    assert args.intent == "board_cleanup"
-    assert args.limit == 5
-
     args = parser.parse_args(["agent-brief", "Приберись", "--intent", "board_cleanup", "--limit", "5"])
     assert args.command == "agent-brief"
     assert args.query == "Приберись"

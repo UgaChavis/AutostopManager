@@ -15,7 +15,6 @@ from .storage import ManagerMemoryStore, _now, _string_list
 PROTECTED_AGENT_DOCS = {
     "crm_mcp_catalog.json",
     "knowledge_map.json",
-    "knowledge_shelves.md",
     "manager_mcp_catalog.json",
 }
 IGNORED_CACHE_SCAN_ROOTS = {

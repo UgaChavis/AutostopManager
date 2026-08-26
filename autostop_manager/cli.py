@@ -18,7 +18,7 @@ from .catalog_clients import (
 )
 from .cleanup_audit import build_cleanup_audit
 from .control_center import build_control_report, format_control_report_markdown
-from .context import build_agent_brief, prepare_manager_context
+from .context import build_agent_brief
 from .crm_card_action import prepare_crm_card_action
 from .crm_vin_parts import build_crm_vin_parts_lookup_pipeline
 from .crm_health import build_crm_health_plan
@@ -98,16 +98,6 @@ def _write_output(raw_path: str | None, payload: str) -> None:
     path = Path(raw_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8")
-
-
-def _json_object(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"raw": raw}
-    return value if isinstance(value, dict) else {"value": value}
 
 
 def _json_value(raw: str | None, *, option_name: str) -> Any:
@@ -257,14 +247,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     today = sub.add_parser("today", help="Return today's manager context")
     today.add_argument("--limit", type=int, default=20)
-
-    prepare_context = sub.add_parser(
-        "prepare-context",
-        help="Prepare task-specific manager context from memory, rules, command routes, and knowledge base",
-    )
-    prepare_context.add_argument("query")
-    prepare_context.add_argument("--intent", default=None)
-    prepare_context.add_argument("--limit", type=int, default=10)
 
     agent_brief = sub.add_parser(
         "agent-brief",
@@ -1081,8 +1063,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return _print_checked_json(store.maintain_director_journal(apply=args.apply))
     elif args.command == "today":
         _print_json(store.today_context(limit=args.limit))
-    elif args.command == "prepare-context":
-        _print_json(prepare_manager_context(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
     elif args.command == "prepare-card-action":

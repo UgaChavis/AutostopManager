@@ -21,6 +21,7 @@ from .evidence_bundle import (
     RiskLevel,
     SourceDescriptor,
     SourceKind,
+    claims_in_dependency_order,
     compact_identifier,
     default_authority,
 )
@@ -195,51 +196,6 @@ def _source_selection_score(source: SourceDescriptor, claim: Claim) -> float:
     return min(1.0, source.effective_authority * risk_fit * 0.90 + preferred + tag_bonus + source.priority * 0.005)
 
 
-def _validate_claim_graph(claims: tuple[Claim, ...]) -> None:
-    by_id = {claim.claim_id: claim for claim in claims}
-    if len(by_id) != len(claims):
-        raise ValueError("claim_id values must be unique")
-    for claim in claims:
-        unknown = set(claim.depends_on).difference(by_id)
-        if unknown:
-            raise ValueError(f"unknown claim dependencies: {', '.join(sorted(unknown))}")
-
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(claim_id: str) -> None:
-        if claim_id in visited:
-            return
-        if claim_id in visiting:
-            raise ValueError("claim dependencies must be acyclic")
-        visiting.add(claim_id)
-        for dependency in by_id[claim_id].depends_on:
-            visit(dependency)
-        visiting.remove(claim_id)
-        visited.add(claim_id)
-
-    for claim in claims:
-        visit(claim.claim_id)
-
-
-def _claims_in_dependency_order(claims: tuple[Claim, ...]) -> tuple[Claim, ...]:
-    by_id = {claim.claim_id: claim for claim in claims}
-    ordered: list[Claim] = []
-    visited: set[str] = set()
-
-    def visit(claim_id: str) -> None:
-        if claim_id in visited:
-            return
-        for dependency in by_id[claim_id].depends_on:
-            visit(dependency)
-        visited.add(claim_id)
-        ordered.append(by_id[claim_id])
-
-    for claim in claims:
-        visit(claim.claim_id)
-    return tuple(ordered)
-
-
 def _merged_sources(request: CaseRequest) -> tuple[tuple[SourceDescriptor, ...], tuple[str, ...]]:
     if request.brand or request.data_type:
         catalog_sources, catalog_warnings = catalog_source_descriptors(
@@ -264,14 +220,13 @@ def build_read_only_plan(request: CaseRequest) -> ReadPlan:
     sources wait for the claim's primary source, which lets an executor avoid
     unnecessary public/API work while keeping a defined fallback path.
     """
-    _validate_claim_graph(request.claims)
     sources, catalog_warnings = _merged_sources(request)
     steps: list[ReadStep] = []
     primary_by_claim: dict[str, str] = {}
     selected_by_claim: dict[str, tuple[SourceDescriptor, ...]] = {}
     warnings: list[str] = []
 
-    for claim in _claims_in_dependency_order(request.claims):
+    for claim in claims_in_dependency_order(request.claims):
         unavailable_dependencies = [dependency for dependency in claim.depends_on if dependency not in primary_by_claim]
         if unavailable_dependencies:
             selected_by_claim[claim.claim_id] = ()

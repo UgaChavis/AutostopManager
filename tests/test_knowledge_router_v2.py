@@ -39,6 +39,11 @@ def _workflows(query: str, *, intent: str | None = None) -> list[str]:
             ["crm_vin_oem_parts_lookup", "crm_record_workflow"],
         ),
         ("Приберись", ["board_cleanup_autopilot"]),
+        ("Устрани техдолг в проекте Автостоп Менеджер", ["ecosystem_capability_parity"]),
+        (
+            "Сократи код и почисти документацию проекта Автостоп Менеджер",
+            ["ecosystem_capability_parity", "manager_documentation_hygiene"],
+        ),
         ("Покажи состояние склада", ["store_read_workflow"]),
     ],
 )
@@ -92,6 +97,12 @@ def test_explicit_store_opt_out_removes_store_routes():
 
     assert plan_command_routes(query) == []
     assert plan_command_routes(query, intent="store_read") == []
+
+
+def test_project_maintenance_respects_store_opt_out():
+    routes = plan_command_routes("Устрани техдолг Автостоп Менеджера без работы со Store")
+
+    assert [route["workflow_id"] for route in routes] == ["ecosystem_capability_parity"]
 
 
 def test_crm_failure_is_not_treated_as_negative_scope():

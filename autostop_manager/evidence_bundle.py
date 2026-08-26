@@ -33,6 +33,7 @@ __all__ = [
     "RiskLevel",
     "SourceDescriptor",
     "SourceKind",
+    "claims_in_dependency_order",
     "compact_identifier",
     "default_authority",
     "default_freshness_window",
@@ -611,9 +612,8 @@ class EvidenceBundle:
     def reconcile(self, claims: Iterable[Claim], *, now: datetime | None = None) -> BundleResolution:
         moment = _aware(now, "now") if now is not None else datetime.now(UTC)
         claim_rows = tuple(claims)
-        _validate_claims(claim_rows)
         resolved_by_id: dict[str, ResolvedClaim] = {}
-        for claim in _claims_in_dependency_order(claim_rows):
+        for claim in claims_in_dependency_order(claim_rows):
             resolved = _reconcile_claim(claim, self.for_claim(claim.claim_id), moment)
             blocked_by = tuple(
                 dependency
@@ -639,20 +639,13 @@ class EvidenceBundle:
         )
 
 
-def _validate_claims(claims: tuple[Claim, ...]) -> None:
-    claim_ids = [claim.claim_id for claim in claims]
-    if len(claim_ids) != len(set(claim_ids)):
-        raise ValueError("claim_id values must be unique")
-    known_claim_ids = set(claim_ids)
-    unknown_dependencies = {
-        dependency for claim in claims for dependency in claim.depends_on if dependency not in known_claim_ids
-    }
-    if unknown_dependencies:
-        raise ValueError(f"unknown claim dependencies: {', '.join(sorted(unknown_dependencies))}")
-
-
-def _claims_in_dependency_order(claims: tuple[Claim, ...]) -> tuple[Claim, ...]:
+def claims_in_dependency_order(claims: tuple[Claim, ...]) -> tuple[Claim, ...]:
     by_id = {claim.claim_id: claim for claim in claims}
+    if len(by_id) != len(claims):
+        raise ValueError("claim_id values must be unique")
+    unknown = {dependency for claim in claims for dependency in claim.depends_on if dependency not in by_id}
+    if unknown:
+        raise ValueError(f"unknown claim dependencies: {', '.join(sorted(unknown))}")
     ordered: list[Claim] = []
     visiting: set[str] = set()
     visited: set[str] = set()

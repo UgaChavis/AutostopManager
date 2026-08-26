@@ -12,7 +12,6 @@ technical control logic.
   `AGENTS.md`; it does not duplicate common safety or routing rules.
 - `docs/agent/service_director_manifest.md` - autonomous recurring workshop
   director cycle, priorities and internal Telegram follow-up.
-- `docs/agent/knowledge_shelves.md` - human route and deletion policy.
 - `docs/agent/knowledge_map.json` - domain-to-file navigation.
 - `docs/agent/command_routes.json` - operational command workflows.
 - `docs/agent/manager_rules.json` - cross-system runtime invariants.
@@ -22,8 +21,8 @@ technical control logic.
   `home-pc` access.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
 
-For non-trivial work run `agent-brief` or `prepare-context`, then open the
-returned canonical route. The Manager chooses only the live systems and
+For non-trivial work run `agent-brief`, then open the returned canonical route.
+The Manager chooses only the live systems and
 evidence needed by the question. `work` is the default mode; `learning` adds
 the review in `intelligent_agent_learning_playbook.md`.
 

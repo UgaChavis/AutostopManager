@@ -17,10 +17,8 @@ from typing import Any
 import unicodedata
 from urllib.parse import urlparse
 
-CAMERA_ID = "c_6171"
 CAMERA_TITLE = "Семафорная 185"
 CAMERA_PAGE_URL = "https://24oko.ru/city"
-CAMERA_PLAYER_PATH = f"/request/camera/url/{CAMERA_ID}"
 _CAMERA_REGISTRY_PATH = Path(__file__).resolve().parents[1] / "docs/agent/public_camera_registry.json"
 _PLAYER_HOST = re.compile(r"^fl-[0-9]+\.telecoma\.tv$", re.IGNORECASE)
 _CAMERA_KEY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -507,24 +505,7 @@ def capture_public_camera(
     )
 
 
-def capture_semafornaya_185(
-    output_path: Path,
-    *,
-    overwrite: bool = False,
-    wait_ms: int = 8_000,
-    browser_path: str | None = None,
-) -> CameraCapture:
-    """Compatibility entrypoint for the AutoStop Semafornaya 185 camera."""
-    return capture_public_camera(
-        "semafornaya-185",
-        output_path,
-        overwrite=overwrite,
-        wait_ms=wait_ms,
-        browser_path=browser_path,
-    )
-
-
-def main(argv: list[str] | None = None, *, default_camera_key: str | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="List, resolve, or capture one allowlisted public camera.")
@@ -571,9 +552,9 @@ def main(argv: list[str] | None = None, *, default_camera_key: str | None = None
             )
             return 0
 
-        camera_key = args.camera or default_camera_key
+        camera_key = args.camera
         if args.query:
-            if args.camera or default_camera_key:
+            if args.camera:
                 parser.error("--query cannot be combined with an exact camera")
             camera_key = resolve_public_camera(args.query).key
         if camera_key is None or args.output is None:

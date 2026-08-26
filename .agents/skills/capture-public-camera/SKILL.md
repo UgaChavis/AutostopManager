@@ -12,7 +12,7 @@ description: Получать один текущий снимок с прове
 
 ## Рабочий процесс
 
-1. Открыть `docs/agent/krasnoyarsk_service_management_playbook.md` и реестр.
+1. Открыть `docs/agent/public_camera_registry.json`.
 2. Разрешить формулировку владельца без захвата:
 
    ```bash
@@ -51,8 +51,6 @@ description: Получать один текущий снимок с прове
   .venv/bin/python scripts/capture_public_camera.py --list
   ```
 
-- Для Семафорной 185 сохранить совместимость через
-  `scripts/capture_semafornaya_185.py`.
 - При ошибке публичной страницы или кадра вернуть недоступность и остановиться.
   Не подставлять другой URL, номер камеры, browser path, заголовки доступа или
   прямую динамическую ссылку проигрывателя.

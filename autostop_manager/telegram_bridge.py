@@ -22,7 +22,6 @@ DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
 DEFAULT_SESSION_PATH = Path("/var/lib/autostop-telegram/account")
 DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
 DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
-DEFAULT_2FA_PASSWORD_PATH = Path("/run/autostop-telegram/2fa-password.once")
 DEFAULT_ROLE_BINDINGS_PATH = Path("/var/lib/autostop-telegram/director_roles.json")
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_MESSAGE_CHARS = 4096
