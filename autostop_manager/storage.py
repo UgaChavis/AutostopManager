@@ -2131,7 +2131,6 @@ class ManagerMemoryStore:
                 """,
                 (_now(),),
             )
-            self._ensure_memory_fts(conn)
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
         desired = {
@@ -2197,39 +2196,6 @@ class ManagerMemoryStore:
                 if column not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-    def _ensure_memory_fts(self, conn: sqlite3.Connection) -> None:
-        try:
-            conn.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts
-                USING fts5(title, content, category, source, tags)
-                """
-            )
-            conn.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts
-                USING fts5(content, category, source, tags)
-                """
-            )
-        except sqlite3.OperationalError:
-            return
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO notes_fts(rowid, title, content, category, source, tags)
-            SELECT id, title, content, category, source, tags_json
-            FROM notes
-            WHERE archived_at IS NULL
-            """
-        )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO facts_fts(rowid, content, category, source, tags)
-            SELECT id, content, category, source, tags_json
-            FROM facts
-            WHERE archived_at IS NULL
-            """
-        )
-
     def remember(
         self,
         content: str,
@@ -2284,7 +2250,6 @@ class ManagerMemoryStore:
                     ),
                 )
                 row_id = _required_lastrowid(cursor)
-                self._upsert_memory_fts(conn, table, row_id)
             else:
                 cursor = conn.execute(
                     """
@@ -2307,7 +2272,6 @@ class ManagerMemoryStore:
                     ),
                 )
                 row_id = _required_lastrowid(cursor)
-                self._upsert_memory_fts(conn, table, row_id)
         result = {"ok": True, "kind": table[:-1], "id": row_id, "created_at": now}
         if table == "facts":
             result["confidence"] = float(confidence)
@@ -3893,31 +3857,6 @@ class ManagerMemoryStore:
             "improvement": self._row_to_dict(row),
             "deduplicated": deduplicated,
         }
-
-    def _upsert_memory_fts(self, conn: sqlite3.Connection, table: str, row_id: int) -> None:
-        try:
-            if table == "notes":
-                row = conn.execute("SELECT * FROM notes WHERE id = ? LIMIT 1", (row_id,)).fetchone()
-                if row:
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO notes_fts(rowid, title, content, category, source, tags)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (row["id"], row["title"], row["content"], row["category"], row["source"], row["tags_json"]),
-                    )
-            elif table == "facts":
-                row = conn.execute("SELECT * FROM facts WHERE id = ? LIMIT 1", (row_id,)).fetchone()
-                if row:
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO facts_fts(rowid, content, category, source, tags)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (row["id"], row["content"], row["category"], row["source"], row["tags_json"]),
-                    )
-        except sqlite3.OperationalError:
-            return
 
     def today_context(self, *, limit: int = 20) -> dict[str, Any]:
         self.initialize()
