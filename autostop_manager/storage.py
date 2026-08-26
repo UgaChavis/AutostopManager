@@ -1784,40 +1784,6 @@ def _unique_memory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def _score_memory_item(item: dict[str, Any], query: str, tokens: list[str]) -> float:
-    title = str(item.get("title") or "")
-    content = str(item.get("content") or item.get("event") or item.get("rule") or item.get("details") or "")
-    category = str(item.get("category") or item.get("scope") or "")
-    source = str(item.get("source") or "")
-    status = str(item.get("status") or "")
-    tags = " ".join(str(tag) for tag in item.get("tags", []))
-    haystack = " ".join([title, content, category, source, status, tags]).casefold()
-    query_lower = query.casefold()
-    score = float(item.get("fts_score") or 0)
-    if query_lower and query_lower in haystack:
-        score += 20
-    for token in tokens:
-        token_score = 0.0
-        if token in title.casefold():
-            token_score += 8
-        if token in tags.casefold():
-            token_score += 10
-        if token in content.casefold():
-            token_score += 4
-        if token in category.casefold() or token in source.casefold() or token in status.casefold():
-            token_score += 2
-        if token_score:
-            score += token_score
-    if item.get("kind") in {"note", "fact"}:
-        score += float(item.get("importance") or 0.5) * 8
-    if item.get("kind") == "fact":
-        score += float(item.get("confidence") or 0.0) * 3
-    if item.get("kind") == "rule":
-        priority = int(item.get("priority") or 100)
-        score += max(0, 30 - priority) / 2
-    return score
-
-
 @dataclass(frozen=True)
 class ManagerMemoryStore:
     db_path: Path | None = None
@@ -4751,28 +4717,6 @@ class ManagerMemoryStore:
             item["checkpoint"] = _safe_bootstrap_checkpoint(_decode_json(item.pop("checkpoint_json"), {}))
             items.append(item)
         return {"ok": True, "items": items, "total_returned": len(items)}
-
-    def start_manager_run(
-        self,
-        *,
-        intent: str,
-        query: str = "",
-        dry_run: bool = False,
-        source: str = "codex",
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        self.initialize()
-        now = _now()
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO manager_runs
-                    (intent, query, status, dry_run, source, metadata_json, started_at, updated_at)
-                VALUES (?, ?, 'running', ?, ?, ?, ?, ?)
-                """,
-                (intent, query, 1 if dry_run else 0, source, json.dumps(metadata or {}, ensure_ascii=False), now, now),
-            )
-        return {"ok": True, "id": cursor.lastrowid, "started_at": now, "status": "running"}
 
     def start_workflow_run(
         self,

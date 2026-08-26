@@ -96,8 +96,30 @@ def test_agent_bootstrap_queries_all_active_runs_instead_of_recent_history_windo
         },
     )
     for index in range(30):
-        run = store.start_manager_run(intent="completed-history", query=str(index))
-        store.finish_manager_run(run["id"], status="completed", summary="done")
+        run = store.start_workflow_run(
+            workflow_id="completed_history",
+            intent="completed_history",
+            query=str(index),
+            idempotency_key=f"completed-history-{index}",
+        )
+        executing = store.transition_workflow_run(
+            run["id"],
+            status="executing",
+            expected_state_version=run["state_version"],
+        )
+        verifying = store.transition_workflow_run(
+            run["id"],
+            status="verifying",
+            expected_state_version=executing["state_version"],
+        )
+        completed = store.transition_workflow_run(
+            run["id"],
+            status="completed",
+            summary="done",
+            verification={"executor_ok": True, "verification_passed": True},
+            expected_state_version=verifying["state_version"],
+        )
+        assert completed["ok"] is True
 
     result = build_agent_bootstrap(store, query="проведи оплату в CRM", intent="crm_finance_operation")
     unfinished = result["summary"]["unfinished_runs"]
