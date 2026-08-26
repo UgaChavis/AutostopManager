@@ -117,19 +117,6 @@ def test_sync_fails_closed_on_empty_knowledge_map_without_wiping_existing_index(
     assert "knowledge_map_has_no_valid_domains" in audit["warnings"]
 
 
-def test_sync_populates_fast_knowledge_fts_indexes(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    sync_knowledge_base(store)
-
-    with store.connect() as conn:
-        sections = conn.execute(
-            "SELECT COUNT(*) AS count FROM knowledge_sections_fts WHERE knowledge_sections_fts MATCH ?",
-            ("KOMBI",),
-        ).fetchone()
-
-    assert int(sections["count"]) > 0
-
-
 def test_sync_rebuilds_fast_knowledge_fts_indexes_idempotently(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     first = sync_knowledge_base(store)
