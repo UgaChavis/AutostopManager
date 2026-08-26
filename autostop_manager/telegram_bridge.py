@@ -32,6 +32,7 @@ DEFAULT_OUTBOX_DIR = Path("/run/autostop-telegram/outbox")
 DEFAULT_INBOX_DIR = Path("/run/autostop-telegram/inbox")
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
+PHONE_RESOLVE_INTERVAL_SECONDS = 3.0
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -57,6 +58,7 @@ DIRECTOR_ROLES = frozenset(
 )
 MAX_ROLE_BINDINGS_BYTES = 4096
 _MUTATION_LOCK = asyncio.Lock()
+_PHONE_RESOLVE_LAST_AT = 0.0
 
 
 class BridgeError(RuntimeError):
@@ -413,6 +415,18 @@ def validate_role_request(request: dict[str, Any]) -> str:
     return _validate_role(str(request.get("role") or ""))
 
 
+def normalize_phone(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 32 or re.fullmatch(r"[+\d\s().-]+", raw) is None:
+        raise BridgeError("phone_invalid")
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if not 8 <= len(digits) <= 15 or digits.startswith("0"):
+        raise BridgeError("phone_invalid")
+    return f"+{digits}"
+
+
 def validate_bind_role_request(request: dict[str, Any]) -> tuple[str, str, str, str, bool]:
     role = validate_role_request(request)
     peer = str(request.get("peer") or "").strip()
@@ -760,6 +774,14 @@ def _load_telethon() -> tuple[Any, Any, Any]:
     return TelegramClient, utils, SessionPasswordNeededError
 
 
+def _load_telegram_functions() -> tuple[Any, Any]:
+    try:
+        from telethon import functions, utils
+    except ImportError as exc:
+        raise BridgeError("telethon_not_installed") from exc
+    return functions, utils
+
+
 def _load_qrcode() -> Any:
     try:
         import qrcode
@@ -986,10 +1008,7 @@ def _target_from_entity(entity: Any, utils: Any) -> dict[str, Any]:
 
 
 async def _search_entities(client: Any, query: str, limit: int) -> list[tuple[Any, dict[str, Any]]]:
-    try:
-        from telethon import functions, utils
-    except ImportError as exc:
-        raise BridgeError("telethon_not_installed") from exc
+    functions, utils = _load_telegram_functions()
 
     result = await client(functions.contacts.SearchRequest(q=query, limit=limit))
     normalized = query.casefold()
@@ -1017,6 +1036,32 @@ async def _search_entities(client: Any, query: str, limit: int) -> list[tuple[An
         )
     )
     return matches[:limit]
+
+
+async def _resolve_phone(client: Any, raw_phone: str) -> tuple[Any, dict[str, Any]]:
+    global _PHONE_RESOLVE_LAST_AT
+
+    phone = normalize_phone(raw_phone)
+    current_time = time.monotonic()
+    if current_time - _PHONE_RESOLVE_LAST_AT < PHONE_RESOLVE_INTERVAL_SECONDS:
+        raise BridgeError("phone_resolve_rate_limited")
+    _PHONE_RESOLVE_LAST_AT = current_time
+    functions, utils = _load_telegram_functions()
+    try:
+        result = await client(functions.contacts.ResolvePhoneRequest(phone=phone))
+    except Exception as exc:
+        if type(exc).__name__ == "PhoneNotOccupiedError":
+            raise BridgeError("phone_not_resolved") from exc
+        raise
+    user_id = int(getattr(getattr(result, "peer", None), "user_id", 0) or 0)
+    users = [user for user in getattr(result, "users", []) if int(getattr(user, "id", 0) or 0) == user_id]
+    if user_id <= 0 or len(users) != 1:
+        raise BridgeError("phone_not_resolved")
+    entity = users[0]
+    target = _target_from_entity(entity, utils)
+    if target["kind"] != "private":
+        raise BridgeError("phone_not_resolved")
+    return entity, target
 
 
 async def _resolve_peer(client: Any, raw_peer: str) -> tuple[Any, dict[str, Any]]:
@@ -1510,6 +1555,18 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
         matches = await _search_entities(client, query, limit)
         return {"ok": True, "query": query, "matches": [target for _, target in matches]}
 
+    if operation == "resolve_phone":
+        _entity, target = await _resolve_phone(client, str(request.get("phone") or ""))
+        return {
+            "ok": True,
+            "resolved": True,
+            "target": {
+                "id": target["id"],
+                "kind": target["kind"],
+                "is_contact": target["is_contact"],
+            },
+        }
+
     if operation == "roles":
         return await _handle_roles(client, config)
 
@@ -1778,6 +1835,8 @@ def build_parser() -> argparse.ArgumentParser:
     search = subparsers.add_parser("search")
     search.add_argument("--query", required=True)
     search.add_argument("--limit", type=int, default=20)
+    resolve_phone = subparsers.add_parser("resolve-phone")
+    resolve_phone.add_argument("--phone", required=True)
     subparsers.add_parser("roles")
     read = subparsers.add_parser("read")
     read.add_argument("--peer", required=True)
@@ -1853,6 +1912,8 @@ def main(argv: list[str] | None = None) -> int:
                 request["limit"] = args.limit
             elif args.command == "search":
                 request.update({"query": args.query, "limit": args.limit})
+            elif args.command == "resolve-phone":
+                request.update({"operation": "resolve_phone", "phone": args.phone})
             elif args.command == "roles":
                 pass
             elif args.command == "read":

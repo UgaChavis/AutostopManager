@@ -23,6 +23,7 @@ from autostop_manager.telegram_bridge import (
     issue_download_contract,
     issue_send_contract,
     issue_photo_contract,
+    normalize_phone,
     redact_sensitive_message_text,
     validate_download_request,
     validate_photo_file,
@@ -230,6 +231,13 @@ def test_parser_accepts_isolated_second_account_paths(tmp_path) -> None:
     assert args.command == "daemon"
     assert args.session == state_dir / "account"
     assert args.state_dir == state_dir
+
+
+def test_phone_normalization_is_strict_and_handles_russian_trunk_prefix() -> None:
+    assert normalize_phone("+7 (999) 111-22-33") == "+79991112233"
+    assert normalize_phone("8 999 111 22 33") == "+79991112233"
+    with pytest.raises(BridgeError, match="phone_invalid"):
+        normalize_phone("client@example.com")
 
 
 def test_send_contract_binds_target_text_and_expiry() -> None:
@@ -695,6 +703,65 @@ def test_read_only_bridge_operations_are_bounded_and_redacted(monkeypatch, tmp_p
     assert search_result["matches"][0]["id"] == 20
     assert read["messages"][1]["text"] == "[redacted_sensitive_uri]"
     assert read["messages"][1]["sensitive_content_redacted"] is True
+
+
+def test_resolve_phone_returns_only_a_verified_private_target(monkeypatch, tmp_path) -> None:
+    User = type("User", (), {})
+    entity = User()
+    entity.id, entity.first_name, entity.last_name = 20, "Exact", "Target"
+    entity.username, entity.bot, entity.contact = "private_name", False, False
+
+    class Client:
+        async def __call__(self, request):
+            assert request.phone == "+79991112233"
+            return SimpleNamespace(peer=SimpleNamespace(user_id=20), users=[entity])
+
+    class Utils:
+        @staticmethod
+        def get_peer_id(value):
+            return value.id
+
+    functions = SimpleNamespace(
+        contacts=SimpleNamespace(ResolvePhoneRequest=lambda *, phone: SimpleNamespace(phone=phone))
+    )
+    monkeypatch.setattr(telegram_bridge, "_PHONE_RESOLVE_LAST_AT", 0.0)
+    monkeypatch.setattr(telegram_bridge, "_load_telegram_functions", lambda: (functions, Utils))
+    result = asyncio.run(
+        telegram_bridge._handle_operation(
+            Client(),
+            _runtime_config(tmp_path),
+            {"operation": "resolve_phone", "phone": "+7 (999) 111-22-33"},
+        )
+    )
+
+    assert result == {
+        "ok": True,
+        "resolved": True,
+        "target": {"id": 20, "kind": "private", "is_contact": False},
+    }
+    assert "phone" not in json.dumps(result)
+    assert "private_name" not in json.dumps(result)
+
+
+def test_resolve_phone_fails_closed_and_rate_limits(monkeypatch, tmp_path) -> None:
+    class PhoneNotOccupiedError(Exception):
+        pass
+
+    class Client:
+        async def __call__(self, _request):
+            raise PhoneNotOccupiedError
+
+    functions = SimpleNamespace(
+        contacts=SimpleNamespace(ResolvePhoneRequest=lambda *, phone: SimpleNamespace(phone=phone))
+    )
+    monkeypatch.setattr(telegram_bridge, "_PHONE_RESOLVE_LAST_AT", 0.0)
+    monkeypatch.setattr(telegram_bridge, "_load_telegram_functions", lambda: (functions, object()))
+    monkeypatch.setattr(telegram_bridge.time, "monotonic", lambda: 10.0)
+    request = {"operation": "resolve_phone", "phone": "+79991112233"}
+    with pytest.raises(BridgeError, match="phone_not_resolved"):
+        asyncio.run(telegram_bridge._handle_operation(Client(), _runtime_config(tmp_path), request))
+    with pytest.raises(BridgeError, match="phone_resolve_rate_limited"):
+        asyncio.run(telegram_bridge._handle_operation(Client(), _runtime_config(tmp_path), request))
 
 
 def test_role_binding_and_role_send_are_exact_and_do_not_disclose_identity(monkeypatch, tmp_path) -> None:
@@ -1373,6 +1440,20 @@ def test_local_request_transport_and_cli_mapping(monkeypatch, tmp_path, capsys) 
     monkeypatch.setattr(telegram_bridge, "send_local_request", local_request)
     assert telegram_bridge.main(["--socket", str(tmp_path / "bridge.sock"), "status"]) == 0
     assert json.loads(capsys.readouterr().out)["request_operation"] == "status"
+    assert (
+        telegram_bridge.main(
+            [
+                "--socket",
+                str(tmp_path / "bridge.sock"),
+                "resolve-phone",
+                "--phone",
+                "+79991112233",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert requests[-1] == {"operation": "resolve_phone", "phone": "+79991112233"}
     assert (
         telegram_bridge.main(
             [
