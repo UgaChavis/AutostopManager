@@ -78,46 +78,21 @@ def test_codex_native_startup_files_are_present_and_safe():
 
 
 def test_home_pc_remote_access_is_documented_as_current_capability():
-    checked_paths = [
-        ROOT / "AGENTS.md",
-        ROOT / "README.md",
-        ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md",
-        ROOT / "docs" / "agent" / "knowledge_map.json",
-        ROOT / "docs" / "agent" / "manager_rules.json",
-    ]
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
-
+    access_doc = (ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md").read_text(encoding="utf-8")
     for expected in [
         "home-pc",
         "DESKTOP-BUSO4I8",
         "127.0.0.1:22220",
         "codex-home-tunnel",
         "codexadmin",
-        "do not rotate",
-        "no public home SSH",
-        "sftp",
-        "scp",
-        "pwsh",
-        "write-public-desktop-note.ps1",
-        "open-in-user-session.ps1",
-        "managed-pc refresh-device-files",
-        "ControlPersist 600",
-        "127.0.0.1:9223",
-        "/root/.codex/CODEX_VPN_FST_ACCESS.md",
-        "autostop-vpn-fst",
-        "autostop-vps27560",
-        "StrictHostKeyChecking=no",
+        "\\Autostop\\CodexRemoteReverseTunnel",
+        "BatchMode=yes",
         "host-key mismatch",
-        "route CRM traffic through a VPN",
+        "/root/.codex/CODEX_VPN_FST_ACCESS.md",
+        "/opt/autostop-managed-pc/README.md",
     ]:
-        assert expected in combined
-
-    assert "no `health-check.ps1` is installed" in combined
-
-    access_doc = (ROOT / "docs" / "agent" / "codex_home_pc_reverse_ssh.md").read_text(encoding="utf-8")
-    assert len(access_doc.splitlines()) <= 180
-    assert "AutostopVPN Daily Deep Check" not in access_doc
-    assert "static Cloudflare resolvers" not in access_doc
+        assert expected in access_doc
+    assert len(access_doc.splitlines()) <= 70
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]

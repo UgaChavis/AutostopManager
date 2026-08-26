@@ -1,126 +1,46 @@
 # Server and Remote Windows Access
 
-Canonical compact route for AutoStop servers and owner-authorized Windows PCs.
-Runtime reachability is never durable documentation: resolve the live target and
-verify its identity before every operation.
+Compact recovery route for owner-authorized servers and Windows PCs. Resolve
+live reachability and verify the exact target before every operation.
 
-## Sources Of Truth
+## Canonical Owners
 
-- Live SSH aliases and host-key policy: `/root/.ssh/config` and its configured
-  `UserKnownHostsFile`.
-- FST.KZ VPN access: `/root/.codex/CODEX_VPN_FST_ACCESS.md`; read it first for
-  every FST.KZ task and use `autostop-vpn-fst`.
-- Managed Windows fleet: `/opt/autostop-managed-pc/README.md`, runtime CLI
-  `managed-pc`, and `/var/lib/autostop-managed-pc`.
+- SSH aliases and host keys: `/root/.ssh/config` and its `UserKnownHostsFile`.
+- FST.KZ: `/root/.codex/CODEX_VPN_FST_ACCESS.md` and `AGENTS.md`; use
+  `autostop-vpn-fst` only after reading them.
+- Managed fleet and reception printing: `/opt/autostop-managed-pc/README.md`
+  and the `managed-pc` CLI.
 - Legacy home-PC setup/repair: `scripts/codex_home_pc_bootstrap.ps1`.
 
-Never copy private keys, passwords, tokens, VPN URLs, client profiles, USB
-credentials, or protected runtime state into docs, Git, commands, or reports.
-
-## Known Routes
-
-| Target | Route | Live identity check |
-| --- | --- | --- |
-| Manager/CRM VPS | local shell | `hostname; id -un` |
-| FST.KZ VPN server | `autostop-vpn-fst` | documented BatchMode check below |
-| Legacy VPS endpoints | `autostop-vps27560`, `autostop-vps27560-alt` | BatchMode only; strict host-key verification |
-| AutoStop reception PC | `managed-pc` alias `desktop-e0e84lt` | `DESKTOP-E0E84LT` |
-| AutoStop mechanics PC | `managed-pc` alias `Компьютер механиков` | `WIN-CRINTQ55M38` |
-| Owner home PC | `home-pc` | `DESKTOP-BUSO4I8`, user `codexadmin` |
-
-`github.com-autostopcrm` is a Git transport alias, not an administrative server
-shell. VPN peers are clients, not remote-administration targets.
+Never copy credentials, keys, VPN profiles, protected runtime state, or full
+remote output into Git, docs, reports, or Manager memory.
 
 ## Universal Workflow
 
-1. Read the target-specific source above.
-2. Start with a bounded read-only identity/status check using `BatchMode=yes`.
-3. Stop on an unexpected hostname, user, target id, or SSH host key. Never use
-   `StrictHostKeyChecking=no`, accept a new key, or edit `known_hosts` without
-   independent owner-approved verification.
-4. Perform only the exact owner-authorized operation. Reboot, shutdown,
-   destructive changes, key rotation, network changes, and critical-service
-   stops need a separate exact instruction.
+1. Read the target-specific owner above.
+2. Start with a bounded identity/status check using `BatchMode=yes`.
+3. Stop on an unexpected hostname, user, target ID, or host-key mismatch. Never
+   bypass verification, accept an unverified key, or edit `known_hosts` blindly.
+4. Perform only the exact authorized operation. Reboot, shutdown, destructive
+   changes, key rotation, network changes, and critical-service stops require a
+   separate exact instruction.
 5. Reread the exact target and report the affected machine and result.
 
-Do not route CRM traffic through a VPN or change CRM networking during VPN
-work. Keep all server, managed-PC, and legacy home-PC credentials independent.
+Do not route CRM traffic through a VPN or mix credentials between servers,
+managed PCs, and the legacy home PC.
 
-## FST.KZ VPN Server
+## Managed And VPN Routes
 
-Read `/root/.codex/CODEX_VPN_FST_ACCESS.md` first; it owns the current server
-identity, restrictions, and revocation procedure. The normal read-only check is:
-
-```bash
-ssh -o BatchMode=yes autostop-vpn-fst \
-  'hostname; id -un; docker inspect -f "{{.State.Status}}" amnezia-awg2'
-```
-
-Do not duplicate its IP, port, VPN parameters, backup paths, or secret-material
-locations here. Do not change the FST server or VPN container unless the owner
-asks for that exact change and the external instruction's safeguards pass.
-
-## Legacy VPS Aliases
-
-Alias presence is not proof of access. Treat both legacy aliases as unverified
-until the pinned host key and remote identity pass:
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=8 autostop-vps27560 \
-  'hostname; id -un'
-ssh -o BatchMode=yes -o ConnectTimeout=8 autostop-vps27560-alt \
-  'hostname; id -un'
-```
-
-On host-key mismatch, stop and report it. Do not bypass the check or infer that
-the two addresses still belong to the historical server.
-
-## Managed Windows Fleet
-
-The fleet uses outbound reverse SSH; Windows exposes no public or LAN SSH.
-Each device has independent keys, a loopback listener, and a pinned host key.
-
-```bash
-managed-pc doctor
-managed-pc list
-managed-pc status <exact-alias>
-```
-
-Require `tunnel_up=true`, `ssh_ok=true`, and the expected hostname before using
-`shell`, `run`, `powershell`, `copy-to`, `copy-from`, `codex-status`, or another
-exact-device command. Use `/opt/autostop-managed-pc/README.md` for enrollment,
-repair, revoke, credential rotation, deployment, and rollback details.
-
-If a PC is asleep, powered off, or disconnected, do not re-enroll it or rotate
-keys. Wake it on site and start `\Autostop\AutostopCodexRemoteTunnel`, then
-repeat `managed-pc status`. After a control-plane upgrade run
-`managed-pc refresh-device-files` and recheck each affected device.
-
-Root-only SSH control sessions use `ControlPersist 600`. The Windows
-maintenance account may forward only to `127.0.0.1:9223` for the dedicated CRM
-Chrome diagnostics profile.
-
-## Reception PDF Printing
-
-Print only by a direct owner instruction after resolving the exact local PDF,
-copy count, live alias `desktop-e0e84lt`, expected hostname and allowlisted
-`HUAWEI PixLab X1`. Require `tunnel_up=true` and `ssh_ok=true`, then use:
-
-```bash
-managed-pc print-pdf desktop-e0e84lt --file /absolute/path/document.pdf \
-  --printer "HUAWEI PixLab X1" --copies 1
-```
-
-The route is independent of FST.KZ VPN. Report filename, device, printer,
-copies, pages and Windows spool acceptance; do not claim physical delivery or
-repeat an ambiguous job without a new instruction.
+For FST.KZ, the external access document owns identity, commands, restrictions,
+and recovery. For managed PCs, use `managed-pc doctor`, `list`, then `status` on
+the exact alias; the managed-PC README owns enrollment, recovery, file transfer,
+printing, deployment, and rollback. Do not copy those procedures here.
 
 ## Legacy Home PC
 
-`home-pc` is independent of the managed fleet. It reaches Windows OpenSSH
-through the loopback reverse listener `127.0.0.1:22220`; there is no public
-route (`no public home SSH`). The remote user is `codexadmin`, and the tunnel account is
-`codex-home-tunnel`.
+`home-pc` is independent of the managed fleet. It reaches `DESKTOP-BUSO4I8` as
+`codexadmin` through the loopback reverse listener `127.0.0.1:22220`; the tunnel
+account is `codex-home-tunnel`. There is no public home SSH route.
 
 ```bash
 ss -ltnp | rg '127\.0\.0\.1:22220'
@@ -131,18 +51,13 @@ ssh -o BatchMode=yes home-pc \
   'pwsh -NoLogo -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"'
 ```
 
-`ssh`, `scp`, `sftp`, and `pwsh` are supported. Visible-desktop helpers are
-`write-public-desktop-note.ps1` and `open-in-user-session.ps1`. For compact
-state, rerun the bounded probes above; no `health-check.ps1` is installed.
-
-If the listener is absent, the PC is not currently reachable. Wake it on site
-and start `\Autostop\CodexRemoteReverseTunnel`; do not rotate keys as an outage
-repair. Setup/repair uses the canonical bootstrap script in an elevated Windows
-session. Do not rotate or overwrite home-PC key material unless both ends are
-updated together.
+If the listener is absent, wake the PC on site and start the scheduled task
+`\Autostop\CodexRemoteReverseTunnel`, then repeat the probes. Do not rotate keys
+as an outage repair. Run the bootstrap only in an elevated Windows session, and
+do not rotate or overwrite home-PC key material unless both ends are updated
+together.
 
 ## Reporting
 
-Report configured access separately from currently verified access. Do not
-persist transient host state, peer lists, profiles, credentials, or full remote
-outputs in Manager memory or documentation.
+Report configured access separately from currently verified access. Keep
+transient host state and private remote output out of durable documentation.
