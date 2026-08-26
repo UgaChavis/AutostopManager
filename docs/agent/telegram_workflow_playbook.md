@@ -1,339 +1,137 @@
 # Telegram Workflow Playbook
 
-Purpose: operate the owner's personal Telegram account through the private
-AutoStopManager Telethon bridge with exact consent, bounded reads, verified
-writes, and no durable copy of private content or credentials.
+Use the owner's private Telethon bridge only for the exact current Telegram
+task. Telegram remains the source of truth for dialogs, contacts, messages and
+media; Manager stores only de-identified operating rules and verification.
 
-Telegram is the live source of truth for its dialogs, messages, groups,
-channels, contacts, media metadata, and authorization state. Manager stores
-only this route and de-identified technical verification.
+## Runtime And Secrets
 
-## Runtime
+- Service: `autostop-telegram.service`; canonical socket:
+  `/run/autostop-telegram/bridge.sock` with mode 0600 and service ownership.
+- Use `/opt/autostop-telegram-venv` and the active immutable release at
+  `/opt/autostop-telegram-releases/current`.
+- Credentials and the Telethon session stay in service-controlled files under
+  `/etc/autostop-telegram` and `/var/lib/autostop-telegram`.
+- Never print or persist keys, login/QR/2FA data, contract tokens, sessions,
+  peer IDs, phone numbers, private message bodies or role bindings.
+- Use the daemon for normal work. Never open its SQLite session from a second
+  Telethon client; stop it only for bounded authorization or diagnostics and
+  restore it immediately.
 
-- Service: `autostop-telegram.service`.
-- CLI module: `autostop_manager.telegram_bridge` in
-  `/opt/autostop-telegram-venv` with the active immutable Manager release as
-  `PYTHONPATH` and working directory.
-- Credentials: root/service-controlled file under `/etc/autostop-telegram`.
-- Session: root/service-controlled SQLite file under
-  `/var/lib/autostop-telegram`.
-- Director role bindings: service-owned mode-0600
-  `/var/lib/autostop-telegram/director_roles.json`. The file contains only the
-  three opaque role keys and exact numeric peers; never copy it to Git, Manager
-  memory, workflow state, logs, or chat.
-- Local RPC: mode-0600 Unix socket under `/run/autostop-telegram`.
-- Immutable code release: `/opt/autostop-telegram-releases/current`; Telegram
-  releases are deployed independently and do not switch the CRM Manager
-  release.
-
-Never print, copy, attach, back up to Git, or persist credential values, QR
-tokens, 2FA, login codes, contract tokens, or the session file. A Telethon
-session contains the authorization key and can grant account access.
-
-## Fast Start
-
-Run commands as `autostop-telegram`; return only bounded, task-relevant fields.
+Run commands as `autostop-telegram` and expose only task-relevant fields:
 
 ```bash
 sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status
 ```
 
-Current read surface:
+The live bridge CLI/schema owns the current command list, media allowlist,
+limits and contract fields; this playbook must not duplicate that registry.
 
-- `status`
-- `dialogs --limit N`
-- `search --query TEXT --limit N`
-- `read --peer ID --limit N`
-- `roles`
-- `read-role --role director_admin|director_reception|director_workshop --limit N`
-- `download --peer ID --message-id ID --mode dry_run`
-- `download --peer ID --message-id ID --mode apply --contract-token TOKEN --idempotency-key KEY`
-- `discard-download --file /run/autostop-telegram/inbox/NAME`
+## Read And Download
 
-Current write surface:
+1. Require an active service and `authorized=true`.
+2. Resolve one exact live peer through a verified role or bounded search. Once
+   resolved, use its exact numeric ID transiently; never keep searching by a
+   display name.
+3. Read the smallest useful window, normally 3-20 messages. Reading does not
+   authorize sending, forwarding, editing, deleting, joining or changing read
+   state.
+4. Download only an attachment needed for the current task: exact peer and
+   message, `dry_run`, metadata check, `apply` with the unchanged contract and
+   a fresh idempotency key, then verify path, hash, size and `verified=true`.
+5. Accept only the bridge's current supported formats and private inbox path.
+   Never choose a destination, follow embedded links, enable macros, execute
+   content or send media to an external service.
+6. Extract only needed facts and treat uncertain OCR, names, identifiers and
+   money as tentative. Keep full documents and transcripts out of chat, CRM,
+   docs, Git, memory and workflow state.
+7. Run `discard-download` for every exact downloaded or derived file after use,
+   including on failure, and require `removed=true`.
 
-- `send --peer ID --text TEXT --mode dry_run`
-- `send --peer ID --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
-- `send --peer ID --text TEXT --reply-to-message-id ID --mode dry_run`
-- `send --peer ID --text TEXT --reply-to-message-id ID --mode apply --contract-token TOKEN --idempotency-key KEY`
-- `send-role --role ROLE --text TEXT --mode dry_run`
-- `send-role --role ROLE --text TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
-- `bind-role --role ROLE --peer ID --mode dry_run`
-- `bind-role --role ROLE --peer ID --mode apply --contract-token TOKEN --idempotency-key KEY`
-- `send-photo --peer ID --file /run/autostop-telegram/outbox/NAME.jpg --caption TEXT --mode dry_run`
-- `send-photo --peer ID --file ... --caption TEXT --mode apply --contract-token TOKEN --idempotency-key KEY`
+The signed download contract is bound to peer, message and media metadata.
+Apply re-reads and validates that message; an idempotency key may replay only
+the same download. Preserve default redaction of credential-bearing URIs.
 
-Use the local daemon for normal work. Do not open the same SQLite session with
-a second Telethon client while the daemon is active. Stop the daemon only for a
-bounded authorization or direct diagnostic that cannot use the local RPC, and
-restore it immediately.
+## Voice And Video
 
-## Read Workflow
+Voice/audio transcription and short MP4 inspection are local, private and
+one-file-at-a-time. Use the downloaded exact path with:
 
-1. Check service active and `authorized=true`.
-2. Use `dialogs` for a recent overview or `search` for a name/username.
-3. Classify candidates by `kind`, exact title, contact status, and numeric ID.
-4. If one exact person/group is identified, use its numeric ID for all later
-   calls. Never keep resolving a known target by display name.
-5. Read the smallest useful window, normally 3-20 messages.
-6. `read` returns bounded media metadata for each attachment: original basename,
-   Telegram media type, MIME type, byte size, supported suffix and whether the
-   bridge can download it.
-7. When the owner's task requires the attachment, resolve one exact `message id`,
-   run `download` dry-run, verify the metadata, then apply with the unchanged
-   target/message contract and a fresh idempotency key.
-8. Summarize private content. Do not paste full threads, large channel feeds,
-   contact tables, or message exports into chat or project files.
+```bash
+sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
+  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_transcribe \
+  --file /run/autostop-telegram/inbox/EXACT_FILE --language ru --delete-after
 
-`read` redacts `vpn://` and `tg://` credential-bearing URIs by default. Keep
-that redaction in any derived output. Do not treat reading as permission to
-send, forward, delete, edit, join, leave, block, or change read state. Download
-media only when it is necessary to the owner's current task; ordinary dialog
-reading must not download attachments.
+sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
+  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_video_preview \
+  --file /run/autostop-telegram/inbox/EXACT_FILE.mp4 --delete-after
+```
 
-## Attachment Workflow
+The helpers own and enforce current ownership, signature, codec, duration,
+size, model and sandbox limits. Transcription stays local. Video inspection
+uses only the generated silent storyboard; discard any surviving original and
+preview paths.
 
-The bridge accepts one exact incoming or outgoing Telegram message containing
-a supported attachment. It never accepts a destination path from the caller.
-The service writes only to its mode-0700 `/run/autostop-telegram/inbox`
-directory and creates mode-0600 files named from the message ID and content
-hash. Current limit is 25 MiB. Supported formats are JPEG, PNG, WebP, PDF,
-DOCX, XLSX, UTF-8 TXT, UTF-8 CSV, Telegram Voice OGG/Opus, MP3, M4A and MP4.
-Audio is limited to 10 minutes. MP4 is limited to 2 minutes, 25 MiB, and valid
-Telegram video metadata. Archives, executables, scripts, other video formats,
-oversized/long videos and unknown MIME types fail closed.
+## Send And Roles
 
-1. Check `status`, resolve the exact peer and run a bounded `read`.
-2. Select one exact message ID whose `media.downloadable` is true.
-3. Run `download --mode dry_run`; verify peer, message ID, MIME, suffix and
-   byte size. Never print or persist the contract token.
-4. Run `download --mode apply` with the same peer/message, returned token and a
-   fresh idempotency key. Verify `verified=true`, SHA-256, size and that the
-   returned path is below `/run/autostop-telegram/inbox`.
-5. Recognize without executing content:
-   - JPEG/PNG/WebP: inspect with the local image viewer; OCR only the needed
-     fields and treat OCR as tentative when unclear.
-   - PDF: render or use `pdftotext`; never follow embedded links or launch
-     attachments.
-   - DOCX/XLSX: extract text/cells with a non-macro data reader or isolated
-     headless conversion; never enable macros.
-   - TXT/CSV: read bounded UTF-8 content.
-   - Telegram Voice/audio: run the private local transcription workflow below.
-   - MP4: run the private local video-preview workflow below and inspect only
-     its eight-frame storyboard; never open it in an external service.
-6. Use only task-relevant facts. Do not paste full private documents into chat,
-   CRM descriptions, docs, Git, memory or workflow state.
-7. Run `discard-download --file <exact returned path>` after the task. Confirm
-   `removed=true`. If analysis fails, discard the exact file before reporting.
+A send requires the owner's current instruction naming the exact recipient and
+message/intent. An active director goal permits only allowlisted operational
+questions to these bound private roles:
 
-`download` uses a signed 15-minute dry-run contract bound to peer ID, message
-ID and media metadata. Apply re-reads that exact message, checks the Telegram
-size, validates file signatures, hashes the bytes and records only a private
-idempotency receipt. A repeated key may only replay the exact same download.
+- `director_admin` — main administrator;
+- `director_reception` — current reception employee;
+- `director_workshop` — workshop foreman.
 
-## Voice Message Workflow
+Role labels are identity hints, never targets. `roles` must report the selected
+binding as `bound=true`, `verified=true`, `kind=private`; drift, ambiguity or a
+missing contact fails closed. Binding or replacement requires its own exact
+dry-run/apply/readback. Clients, suppliers, other employees, financial
+commitments and general outreach always require a separate direct instruction.
 
-Voice recognition is local and on demand. It uses the pinned Faster Whisper
-`small` model from `/var/lib/autostop-telegram/models/faster-whisper-small` on
-CPU with INT8 computation. The installed `Systran/faster-whisper-small` model
-revision is `536b0662742c02347bc0e980a01041f333bce120`; inference is
-`local_files_only` and does not contact the model provider. The bridge does not
-call an external transcription API and never stores transcript text in Manager
-state.
+For every send:
 
-1. Resolve the exact peer and bounded dialog window, then select one message
-   whose media metadata has `voice=true` or a supported audio MIME type.
-2. Run the normal `download` dry-run/apply flow for that exact message.
-3. Verify the returned path, MIME, SHA-256 and size.
-4. Run as the service account:
+1. Reread the exact peer/role and freeze the final text.
+2. Run `send`, `send-role` or `send-photo` in `dry_run`; verify exact target,
+   text, reply source when used, and the returned contract.
+3. Apply once with unchanged inputs, the contract token and a fresh
+   idempotency key.
+4. Require bridge verification, then independently reread the exact chat and
+   match outgoing message ID, text and reply link when applicable.
 
-   ```bash
-   sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
-     /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_transcribe \
-     --file /run/autostop-telegram/inbox/EXACT_FILE.ogg --language ru --delete-after
-   ```
+If apply times out or its response is lost, treat the outcome as unknown. Do
+not resend with a new key until an exact reread proves absence. For group
+replies, bind the contract to the exact incoming message and require it still
+exists, is incoming and belongs to that group.
 
-5. The transcriber verifies private ownership/mode, uses `ffprobe` to require
-   exactly one audio stream without video and rejects files above 10 minutes or
-   25 MiB. It loads the model only from the private local model directory.
-6. Summarize or act only on task-relevant facts. Treat unclear names, numbers,
-   plates, VINs, part numbers and money as tentative until confirmed.
-7. `--delete-after` removes the exact audio file after success or failure. If
-   the command is interrupted before cleanup, use `discard-download` on the
-   exact returned path and verify `removed=true`.
+Director follow-ups use a refs-only `workflow_wait_for_external` step: IDs,
+timestamps, safe purpose hash and next-check time only. Read a small later
+window, accept only a relevant newer reply and avoid polling; one reminder is
+the default maximum.
 
-## Video Preview Workflow
-
-Video inspection is local, visual-only, explicit and one file at a time. The
-bridge accepts only `video/mp4` with a Telegram `DocumentAttributeVideo`, a
-duration of 1-120 seconds, positive dimensions and a maximum size of 25 MiB.
-Downloaded bytes must also contain a valid MP4 `ftyp` signature.
-
-1. Resolve the exact peer and bounded dialog window, then select one exact
-   message whose media metadata has `video=true` and `downloadable=true`.
-2. Run the normal `download` dry-run/apply flow and verify the exact peer,
-   message, MIME, duration, size, dimensions, SHA-256 and private saved path.
-3. Run as the service account:
-
-   ```bash
-   sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
-     /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_video_preview \
-     --file /run/autostop-telegram/inbox/EXACT_FILE.mp4 --delete-after
-   ```
-
-4. The helper requires a mode-0600 service-owned MP4 in the private inbox,
-   probes it with `/usr/bin/ffprobe`, permits one H.264/HEVC/MPEG-4 video stream
-   plus at most one audio stream, rejects other streams and resolutions above
-   4096x2160-equivalent pixels, and enforces the same 2-minute limit.
-5. It runs `/usr/bin/ffmpeg` with network protocols closed, one worker thread,
-   a 30-second timeout, audio/subtitle/data disabled, and emits exactly one
-   mode-0600 JPEG storyboard containing eight evenly sampled frames. It does
-   not transcribe or play the audio track automatically.
-6. Inspect the storyboard as an image, use only task-relevant facts, then call
-   `discard-download` for the exact returned preview path. Require removal of
-   both the original MP4 and storyboard. On any failure, discard whichever
-   exact path remains before reporting.
-
-## Send Workflow
-
-A send is authorized only when the owner names the intended recipient and
-message text or clearly delegates recipient role, topic scope and wording in
-the active request. An active director goal governed by
-`service_director_manifest.md` is standing delegation only for its allowlisted
-internal roles and operational questions; it is not permission for clients,
-suppliers, financial commitments or general outreach.
-
-For an owner-directed reply in a group, resolve the exact group and exact
-source message ID. Use `send --reply-to-message-id ID` in dry-run mode and
-require the source to exist in that group, `out=false`, and its text hash to be
-bound into the contract. Apply once with the unchanged peer, source message,
-text and contract plus a fresh idempotency key. The bridge re-reads the source
-before sending and verifies both the outgoing text and Telegram reply link.
-Independently `read` the exact group and match the outgoing message ID, text,
-and `reply_to_message_id`. Keep group, message and author identifiers transient.
-
-In director mode the allowlist contains exactly three opaque routes:
-
-- `director_admin` -> owner-confirmed contact «Мария Администратор»;
-- `director_reception` -> owner-confirmed contact «Ресепшн Автостоп»;
-- `director_workshop` -> owner-confirmed contact «Сергей Немец».
-
-The display labels explain the route; they are never used as the send target.
-Codex chooses one role and phrases the operational question without per-message
-owner confirmation. Any client, supplier, other employee or other Telegram
-target requires a separate direct owner instruction naming the exact recipient
-and intent. Never fall back from an unresolved role to a similar name or role.
-Keep numeric peer IDs and phone numbers out of Git, Manager memory and workflow
-state.
-
-An owner-confirmed display-name spelling variant of an allowlisted role is a
-runtime identity lead, not durable contact data. Do not copy that variant, a
-peer ID, phone number, or screenshot into docs, Git, or Manager memory. If the
-canonical role name has no exact current match, use one narrow role/surname
-search and accept only one private-contact candidate that the owner has
-confirmed in the current task; reread that exact peer before each send. If the
-candidate changes, is absent, or is not unique, stop and ask the owner again.
-After owner confirmation bind it through `bind-role` dry-run/apply. A binding is
-accepted only for one exact private Telegram contact, is unique across roles,
-and must survive an exact private-file readback. Rebinding a role to another
-peer additionally requires `--replace`. Normal director work must not search by
-display name again.
-
-1. Run `roles` and require the selected role to have `bound=true`,
-   `verified=true`, `kind=private`. The bridge re-resolves the stored peer and
-   requires it still to be a Telegram contact; drift fails closed.
-2. Focused-read with `read-role --role ROLE`. The response exposes the opaque
-   role and bounded messages, not the stored peer ID, title, username or phone.
-3. Freeze the exact message text. Make agent authorship clear when relevant.
-4. Call `send-role` in `dry_run` mode. Check the role-safe target, message
-   length, conversation tail, and contract creation.
-5. Call `apply` once with unchanged target/text, the returned contract token,
-   and a fresh idempotency key.
-6. Require bridge readback, then independently use `read-role` and match the
-   outgoing message ID/text. A role contract cannot be replayed as a direct
-   peer send or for a different role.
-
-If the apply response times out or is lost, outcome is unknown. Do not issue a
-new key or resend. First read the exact target and reconcile the full outgoing
-text; resend only after confirmed absence. This rule prevents duplicates.
-
-For a director follow-up, register the verified outgoing message as a refs-only
-`workflow_wait_for_external` Telegram step. Keep only IDs, timestamps, a safe
-purpose tag/hash and next-check time; never store the text. On later goal
-continuations read a small window of the exact chat, accept only a relevant
-message newer than the question, and complete/resume the workflow after the
-fact is sufficient. Do not busy-poll or use a long blocking sleep. One reminder
-is the default maximum before role escalation or owner review.
-
-Photo sends follow the same exact-target, dry-run/apply, unchanged contract,
-fresh idempotency, and independent readback sequence. Stage only one JPEG in
-the service-owned mode-0700 `/run/autostop-telegram/outbox` directory; the file
-must be service-owned mode 0600, at most 10 MiB, and have an explicit caption.
-Do not accept a symlink, relative path, another directory, video, document, or
-arbitrary media type. After verified delivery, unlink that exact staged copy;
-on an unknown outcome, retain it only until the dialog is reconciled. Never
-use a real photo send as a health check.
+Photo sends use one service-owned mode-0600 JPEG in the private outbox, an
+explicit caption and the same contract/readback sequence. Remove the staged
+copy after verified delivery. Never use a real send as a health check.
 
 ## QR And 2FA Recovery
 
-Telegram QR login tokens usually expire in about 30 seconds. Generate a new
-token only after its server-provided `expires` time. Write the PNG atomically,
-show a unique snapshot path to avoid UI caching, and keep the waiting process
-alive before the phone scans it.
+- Stop the daemon for the bounded authorization session.
+- Supply a cloud password only through a hidden prompt or one-time mode-0600
+  file under `/run/autostop-telegram`; never use chat, argv, env, docs or logs.
+- Generate a fresh unique QR only after the previous token expires and keep the
+  waiting process alive while the owner accepts it in Telegram Devices.
+- After authorization, remove one-time files/expired QR images, restore the
+  daemon, verify status and a bounded read, restart once and verify again.
+- If compromise is suspected, stop the bridge and have the owner revoke the
+  session in an official Telegram client; never export or silently migrate it.
 
-For an account with cloud password enabled:
+## Privacy And Completion
 
-1. Receive the password only through a private owner-provided file or hidden
-   terminal prompt; never place it in chat, a command argument, environment,
-   docs, or logs.
-2. Copy it to a mode-0600 one-time file under `/run/autostop-telegram`.
-3. Start `qr-login --password-file ...`; verify the one-time copy disappears
-   immediately after reading.
-4. Show the current unique QR and let the owner accept it from Telegram
-   Settings -> Devices.
-5. After authorization, enable/start the daemon, verify status and a bounded
-   dialog read, restart once, and verify authorization again.
-6. Delete expired QR images. Do not delete the owner's source attachment
-   without separate authorization.
-
-If the session may be compromised, tell the owner to revoke it in an official
-Telegram client immediately. Stop the bridge while revocation is pending. Do
-not attempt silent session migration or export.
-
-## Privacy And Platform Rules
-
-- Work only with the owner's knowledge and request. Never perform background
-  outreach, mass collection, bulk export, scraping, training, or profiling.
-- Keep Telegram content transient. Durable Manager knowledge may contain only
-  safe operating rules, capability names, health booleans, and de-identified
-  lessons.
-- Never expose VPN profiles, authentication links/codes, session material,
-  private keys, passwords, phone numbers, or contact/message tables.
-- Do not implement ghost mode or tamper with Telegram read/online/self-destruct
-  semantics.
-- Do not route CRM traffic through a VPN or change default route/DNS/firewall
-  for Telegram. Diagnose only the existing Telegram-specific path. For work on
-  the FST.KZ server, first read `/root/.codex/CODEX_VPN_FST_ACCESS.md`.
-
-## Health And Completion
-
-Healthy means all of the following are true:
-
-- systemd service is enabled and active;
-- Unix socket exists with mode 0600 and service ownership;
-- session exists with mode 0600 and service ownership;
-- `status` returns `authorized=true`;
-- bounded `dialogs` and `search` return successfully;
-- no warning-or-higher service errors appear after restart.
-
-Never use a real send as a generic health check. A send requires its own exact
-owner instruction and target.
-
-## Official References
-
-- Telegram QR login: https://core.telegram.org/api/qr-login
-- Telegram user authorization: https://core.telegram.org/api/auth
-- Telegram API terms: https://core.telegram.org/api/terms
-- Telethon session security: https://docs.telethon.dev/en/stable/concepts/sessions.html
-- Telethon session reuse FAQ: https://docs.telethon.dev/en/stable/quick-references/faq.html
+- No background outreach, bulk reads/exports, scraping, profiling, ghost mode
+  or changes to Telegram presence/read semantics.
+- Do not change VPN, DNS, default route, firewall or CRM networking for
+  Telegram. FST.KZ work first follows `/root/.codex/CODEX_VPN_FST_ACCESS.md`.
+- Healthy means: enabled/active service, private socket and session, authorized
+  status, successful bounded read/search and no new warning-or-higher errors.
+- Completion requires the exact requested result plus independent readback;
+  service health alone never proves a send or download succeeded.
