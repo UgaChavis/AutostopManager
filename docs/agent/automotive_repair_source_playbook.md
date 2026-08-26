@@ -1,214 +1,98 @@
 # Automotive Repair Source Playbook
 
-Purpose: make AutostopManager stricter and more useful for repair diagnostics,
-technical recommendations, recalls, TSBs, OEM service information, and
-source-backed parts decisions.
+Use this route for diagnostics, repair procedures, recalls/TSBs, technical
+recommendations, and source-backed part applicability.
 
-## Source Catalog
-
-Use the local knowledge package in `docs/agent/automotive_sources/`:
+## Canonical Sources
 
 - `docs/agent/automotive_sources/automotive_repair_sources_catalog.json` is the
-  main source catalog.
-- Brand and data-type routes are derived from each catalog record's `brands`
-  and `data_types`; do not maintain duplicate projection files.
-- `docs/agent/automotive_sources/open_dataset_endpoints.json` lists legally
-  open datasets and endpoints.
+  source catalog; derive brand and data-type views from it instead of creating
+  projection files.
+- `docs/agent/automotive_sources/open_dataset_endpoints.json` owns public
+  dataset routes.
+- Never refresh `last_verified` during documentation cleanup. An old value
+  means recheck before use, not that the source remains current.
 
-Do not update `last_verified` fields in source catalogs during documentation
-hygiene unless the external source was actually checked in that pass.
-Treat an old `last_verified` value as a prompt to recheck the source before
-operational use, not as proof that the route is still current.
+## Vehicle And Question
 
-## Intelligent Source Selection
+Before a final recommendation, establish the smallest exact context needed:
 
-Start with the technical question and choose evidence adaptively rather than
-following a fixed sequence:
+- VIN or chassis/frame, market, year, make, model, and trim;
+- engine and transmission codes, drivetrain, and relevant options;
+- mileage, complaint, operating condition, DTCs, scan data, and history.
 
-- Use live CRM only when an identified card or its vehicle/repair-order context
-  answers part of the question. It is not a substitute for service literature.
-- Use AutoStop App only for internal catalog, stock, price, supplier, or quote
-  facts. It does not prove vehicle applicability or a repair procedure.
-- Use VIN/frame and OEM/EPC routes when identity, configuration, part
-  applicability, production split, engine, or transmission must be proven.
-- Use `lookup_public_automotive_evidence` for compact official public recall
-  signals and manufacturer-communication/TSB metadata. NHTSA results are
-  U.S. model-level evidence, not confirmation of an open campaign for a VIN.
-- Use public web search and profile forums to discover symptom patterns,
-  terminology, publications, and competing hypotheses. Keep the evidence
-  boundary below: a forum is not final authority for procedures or safety data.
-- Use OEM or legally licensed service information for final torque, timing,
-  repair steps, wiring, fluid approval/capacity, programming, ADAS, SRS, HV,
-  and exact-fitment conclusions.
+If identity or configuration is incomplete, lower confidence and name the
+missing facts.
 
-For timing/ГРМ questions, establish the exact engine and timing drive first,
-then seek the applicable procedure, timing marks/phases, torque-plus-angle
-values, special tools, and any crank/cam locking requirements. Never transfer
-values between engine variants or infer a procedure from a visual forum post.
+## Evidence Order And Boundaries
 
-## Web Research Tools
+Use evidence in this order:
 
-For public internet research, use the lightest route that works:
+1. Exact-VIN/market OEM service information and EPC.
+2. Official campaigns, recalls, and regulator data.
+3. Licensed professional databases.
+4. Standards and manufacturer/component-supplier literature.
+5. Confirmed internal service experience.
 
-1. source catalog / local knowledge route;
-2. resolve `search_web_multi` and page excerpt through
-   `discover_raw_capabilities` -> `get_raw_capability_schema` ->
-   `call_raw_capability`;
-3. resolve `fetch_page_browser` through the same route only for public
-   JS-heavy pages, forums, and marketplace pages that do not render useful text
-   through HTTP.
+CRM proves only its recorded vehicle and service context. AutoStop App proves
+only internal catalog, stock, quote, and supplier facts. Neither proves a
+procedure or fitment.
 
-`search_web_multi` tries configured providers in order:
-Brave Search API -> Tavily -> Google Custom Search JSON API -> DuckDuckGo HTML.
-Configure only secret env vars in runtime, never in docs or Git:
-`BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`,
-`GOOGLE_CUSTOM_SEARCH_API_KEY`, `GOOGLE_CUSTOM_SEARCH_CX`.
+`lookup_public_automotive_evidence` provides official public signals and TSB
+metadata. NHTSA results are U.S. model-level evidence, not proof that a VIN has
+an open campaign.
 
-Browser output is evidence collection, not authority. Do not bypass CAPTCHA,
-login walls, paywalls, IP blocks, robots restrictions, or private cabinets. If
-the browser result reports `captcha_required`, `login_required`, `ip_blocked`,
-`access_denied`, or similar flags, stop and report that manual or approved
-account access is required.
+Forums, marketplace pages, copied PDFs, and related-model material can suggest
+terms or hypotheses but cannot confirm torque, wiring, coding, safety steps,
+fluid data, labor time, or OEM fitment.
 
-## Drive2 Practical Repair Cases
+For timing/GRM work, identify the exact engine and drive first. Confirm the
+applicable procedure, timing marks, torque-plus-angle values, special tools,
+and crank/cam locking; never transfer them between variants.
 
-When the owner asks for real repair histories, recurring symptoms, or the
-practical sequence that led to a confirmed result, prefer the hidden read-only
-`research_drive2_cases` capability. Resolve it through
-`discover_raw_capabilities` -> `get_raw_capability_schema` ->
-`call_raw_capability`; never invoke it directly.
+For gearbox, clutch, adaptation, or transmission-fluid work, use
+`docs/agent/transmission_playbook.md` and the exact transmission family/code.
 
-Pass the actual complaint plus the smallest useful vehicle context: model,
-engine code, transmission, and DTCs when known. The route issues at most three
-public `site:drive2.ru/l/` searches, reads at most five candidate journals
-sequentially, deduplicates URLs, joins only compact case evidence, and keeps a
-bounded 15-minute in-process cache. It never uses an account, does not bypass
-login/CAPTCHA/IP restrictions, and does not persist raw journal pages.
+## Public Research
 
-Each returned case is a hypothesis card: title/URL, vehicle and date hints,
-short evidence excerpts, relevance score, and separate article/comment access
-status. `comments_limited=true` does not invalidate a public article; require a
-human only when the article itself cannot be read or a real access block is
-reported. Do not turn a Drive2 narrative into a confirmed diagnosis without
-matching vehicle/aggregate context and independent evidence.
+Use the local catalog first, then resolve `search_web_multi` through the normal
+raw-discovery contract. Use `fetch_page_browser` only when a public JS-heavy
+page does not yield useful text through HTTP. Browser output collects evidence;
+it does not make a source authoritative. Stop at CAPTCHA, login, paywall, IP,
+robots, or private-cabinet restrictions.
 
-## Required Vehicle Context
+For practical public repair histories, resolve the read-only
+`research_drive2_cases` capability through the same contract. Pass the complaint
+and only useful vehicle context. Keep raw pages transient, use no account or
+access bypass, and treat every result as a hypothesis requiring matching
+vehicle context and independent evidence.
 
-Before a technical recommendation, extract from CRM or ask for:
+## Safety And Non-Invention
 
-- VIN or chassis/frame number
-- year, make, model, trim
-- engine code, displacement, fuel type
-- transmission type and code
-- drivetrain
-- market or region
-- mileage
-- customer complaint
-- scan results and DTCs, if available
+For brakes, steering, suspension, SRS, ADAS, high voltage, fuel systems,
+immobilizers, keys, ECU programming, and security gateways, use only OEM or
+licensed professional instructions.
 
-If VIN or chassis number is missing, lower confidence and say what data is
-missing.
+Never invent torque, capacity, approval, pinout, wire color, calibration,
+programming/adaptation code, labor time, or original-part price. Do not provide
+immobilizer/security bypass, odometer change, emissions-delete, or safety-limit
+removal instructions.
 
-## Source Priority
-
-Use sources in this order:
-
-1. OEM service information for the exact VIN, market, engine, and procedure.
-2. Official recalls, campaigns, and government regulator datasets.
-3. Licensed professional databases such as Bosch ESI[tronic], Autodata,
-   ALLDATA, Mitchell ProDemand, MOTOR, Identifix, TecAlliance.
-4. SAE and ISO standards for terminology and architecture.
-5. Bosch/Springer books and training materials for theory.
-6. Internal confirmed service cases and CRM experience.
-
-Do not treat forums, pirated manuals, random PDFs, or unclear aggregators as
-technical sources.
-
-Forums can be useful for symptom patterns and next-check ideas only. They do
-not confirm torque, wiring, coding, SRS/ADAS/HV, immobilizer, programming,
-fluid capacity, OEM part applicability, labor time, or safety procedure facts.
-
-## Transmission-Specific Route
-
-For gearbox, clutch, or transmission-fluid questions, start with
-`docs/agent/transmission_playbook.md`.
-
-Required first-pass routing:
-
-1. exact VIN or chassis number
-2. market / region
-3. exact transmission code or family
-4. exact symptom and operating condition
-5. Gateway v2 raw discovery, schema lookup, then
-   `call_raw_capability` for `recommend_automotive_sources` with
-   `data_type="transmission"` (or the equivalent local CLI)
-
-Prefer the exact OEM service document, then transmission-manufacturer
-documentation, then component-supplier documentation. For transmission work,
-generic AT / CVT / DCT / MT labels are not enough to confirm applicability.
-
-## Do Not Invent
-
-Never invent:
-
-- torque specs
-- fluid capacities
-- oil approvals
-- connector pinouts
-- wire colors
-- ADAS calibration procedures
-- SRS procedures
-- HV procedures
-- adaptation or programming codes
-- labor times
-- original part prices
-
-When source-backed data is unavailable, use this phrase:
+When document-level proof is unavailable, say:
 
 `Требуется проверка по OEM-сервисной информации для конкретного VIN.`
 
-## Safety-Critical Areas
+## Evidence And Response
 
-For brakes, steering, suspension, SRS, ADAS, HV, fuel systems, immobilizer,
-keys, ECU programming, and security gateway work, only use OEM or licensed
-professional sources.
+Attach `source_id`, `document_id` or `source_url`, `document_type`, known
+publication/update date, and `license_status` to technical facts. If only a
+route is known, state that document-level verification remains open.
 
-Do not provide bypass instructions for immobilizers, security systems,
-odometer changes, emissions deletes, or removal of safety limits.
+Grade confidence:
 
-## Citation Rule
+- High: exact VIN plus OEM/licensed confirmation.
+- Medium: official evidence matches year/model/engine, but VIN is unconfirmed.
+- Low: evidence is generic or market/engine/transmission is unknown.
 
-Every technical fact from a database or source should carry:
-
-- `source_id`
-- `document_id` or `source_url`
-- `document_type`
-- publication or update date, if known
-- `license_status`
-
-If only a source route is known, say that the fact still needs document-level
-verification.
-
-## Confidence Rule
-
-- High: VIN matches and OEM/licensed source confirms the fact.
-- Medium: year/make/model/engine match and the source is official, but VIN is
-  not confirmed.
-- Low: only generic data is available, or market, engine, or transmission is
-  unknown.
-
-## Response Shape
-
-For manager-facing recommendations, include:
-
-- vehicle
-- symptoms
-- likely causes
-- first checks
-- missing data
-- safety risk
-- source route or citations
-- confidence
-
-Keep the answer operational. Use the source catalog to decide where to check
-next before giving technical details.
+Return a compact operational answer: vehicle, symptom, likely causes, first
+checks, missing data, safety risk, evidence route/citations, and confidence.
