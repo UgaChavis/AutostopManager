@@ -328,6 +328,13 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     assert brief["route"]["steps"][0]["effects"] == ["crm_write"]
     assert "crm_card_description_standard" in brief["route"]["steps"][0]["knowledge_domains"]
 
+    compatibility = server.tools["recommend_service_management_actions"]
+    assert compatibility is server.tools["agent_brief"]
+    assert inspect.signature(compatibility) == inspect.signature(server.tools["agent_brief"])
+    compatibility_brief = compatibility("Приберись", intent="board_cleanup", limit=5)
+    assert compatibility_brief["format"] == "agent_brief_v1"
+    assert compatibility_brief["route"]["selected_workflows"] == ["board_cleanup_autopilot"]
+
     assert "audit_skill_registry" in server.tools
     skills = server.tools["audit_skill_registry"]()
     assert skills["ok"] is True

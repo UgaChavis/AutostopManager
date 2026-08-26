@@ -45,7 +45,6 @@ from .partsapi_category_index import (
     search_partsapi_category_index,
     validate_partsapi_category_index,
 )
-from .service_management import build_service_management_plan
 from .provider_smoke import build_provider_smoke_report
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .skill_registry import audit_skill_registry
@@ -1666,10 +1665,10 @@ def register_manager_memory_tools(  # noqa: C901
     server.tool(
         name="recommend_service_management_actions",
         description=(
-            "Build a Krasnoyarsk AutoStop/Автоспорт workshop-management action plan for parts procurement, "
-            "repair triage, staff load, customer flow, finance control, daily CRM control, or knowledge intake."
+            "Compatibility alias for agent_brief. Return the canonical command route, knowledge sources, "
+            "safety policy, missing context, next actions, and verification for a workshop-management task."
         ),
-    )(build_service_management_plan)
+    )(agent_brief_tool)
 
     if include_tools is not None:
         server.tool = original_tool

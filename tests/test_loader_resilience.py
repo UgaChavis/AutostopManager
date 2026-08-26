@@ -6,7 +6,6 @@ import importlib
 import pytest
 
 from autostop_manager.cleanup_audit import build_cleanup_audit
-from autostop_manager.service_management import build_service_management_plan
 from autostop_manager.storage import ManagerMemoryStore
 
 
@@ -30,12 +29,6 @@ CASES = [
         {"version": 0, "purpose": "missing", "sources": []},
     ),
     ("autostop_manager.fluid_maintenance", "load_fluid_source_catalog", "FLUID_SOURCE_PATH", {}),
-    (
-        "autostop_manager.service_management",
-        "load_service_management_catalog",
-        "SERVICE_MANAGEMENT_SOURCE_PATH",
-        {"sources": [], "areas": {}},
-    ),
     ("autostop_manager.knowledge_intake", "_load_domains", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_knowledge_map", "KNOWLEDGE_MAP_PATH", {}),
     ("autostop_manager.knowledge_base", "_load_command_routes", "COMMAND_ROUTES_PATH", {"routes": []}),
@@ -180,50 +173,6 @@ def test_skill_registry_string_lists_are_normalized(tmp_path, monkeypatch):
     assert registry["skills"]
     assert registry["skills"][0]["skill_id"] == "demo"
     assert registry["skills"][0]["path"] == str(skill_path)
-
-
-def test_service_management_string_lists_are_normalized(tmp_path, monkeypatch):
-    module = importlib.import_module("autostop_manager.service_management")
-    catalog_path = tmp_path / "service_management_sources.json"
-    catalog_path.write_text(
-        json.dumps(
-            {
-                "sources": [
-                    {
-                        "source_id": "demo",
-                        "name": "Demo Source",
-                        "city_focus": "Красноярск",
-                    }
-                ],
-                "areas": {
-                    "daily_control": {
-                        "source_ids": "demo",
-                        "required_context": "crm_board_state",
-                        "actions": "check board",
-                        "crm_tools": "today_context",
-                        "kpis": "uptime",
-                        "memory_rules": "store rule",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(module, "SERVICE_MANAGEMENT_SOURCE_PATH", catalog_path)
-    monkeypatch.setattr(module, "PROCUREMENT_PRICE_SOURCE_PATH", tmp_path / "missing-procurement.json")
-    module.load_service_management_catalog.cache_clear()
-
-    result = build_service_management_plan(area="daily_control", city="Красноярск")
-
-    assert result["ok"] is True
-    assert result["required_context"] == ["crm_board_state"]
-    assert result["actions"] == ["check board"]
-    assert result["crm_tools"] == ["today_context"]
-    assert result["kpis"] == ["uptime"]
-    assert result["memory_rules"] == ["store rule"]
-    assert any(source["source_id"] == "demo" for source in result["sources"])
-
-    module.load_service_management_catalog.cache_clear()
 
 
 def test_knowledge_intake_string_lists_are_normalized(tmp_path, monkeypatch):
