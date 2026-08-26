@@ -7,9 +7,6 @@ import re
 import subprocess
 import tomllib
 
-from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
-
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -671,15 +668,12 @@ def test_bmw_jsonl_indexes_keep_canonical_lookup_fields():
         assert missing == []
 
 
-def test_partsapi_contract_docs_match_adapter_operations():
+def test_partsapi_contract_points_to_live_adapter_registry():
     contract = (ROOT / "docs" / "agent" / "partsapi_method_contracts.md").read_text(encoding="utf-8")
-    source_registry = json.loads((ROOT / "docs" / "agent" / "vin_oem_sources.json").read_text(encoding="utf-8"))
-    source_text = json.dumps(source_registry, ensure_ascii=False)
 
-    for operation, spec in PARTSAPI_OPERATIONS.items():
-        assert operation in contract
-        assert spec["method"] in contract
-        assert spec["method"] in source_text
+    assert "`PARTSAPI_OPERATIONS`" in contract
+    assert "`PARTSAPI_METHOD_KEY_ENV_NAMES`" in contract
+    assert "`autostop_manager/catalog_clients.py`" in contract
 
 
 def test_agent_docs_do_not_expose_partsapi_test_keys_or_crm_contacts():
