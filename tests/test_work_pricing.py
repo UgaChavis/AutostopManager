@@ -53,6 +53,8 @@ def test_exact_work_with_public_quotes_excludes_outlier_and_applies_markup():
     assert result["confidence"] == "medium"
     assert result["labor_time_confidence"] == "blocked"
     assert result["pricing_basis"]["secondary"] == "public_labor_time_plausibility_layer"
+    assert result["playbook"] == ".agents/skills/resolve-autostop-service-case/SKILL.md"
+    assert result["source_catalog"] == "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
 
 
 def test_less_than_three_prices_returns_low_confidence_without_confident_price():

@@ -1149,6 +1149,6 @@ def estimate_repair_work_cost(
             "search_queries": research.get("search_queries", {}),
             "warnings": research.get("warnings", []),
         },
-        "playbook": "docs/agent/work_labor_pricing_playbook.md",
-        "source_catalog": "docs/agent/labor_pricing_sources.json",
+        "playbook": ".agents/skills/resolve-autostop-service-case/SKILL.md",
+        "source_catalog": "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
     }
