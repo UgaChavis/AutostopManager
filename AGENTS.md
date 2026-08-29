@@ -34,6 +34,32 @@ procedures belong to the playbooks returned by the route, not here.
 - Never dump `.env`, Docker `.Config.Env` or process environments. Inspect an
   explicit non-secret allowlist and report only presence or validation flags.
 
+## Remote Vehicle Diagnostics
+
+- AutoStopManager now owns the operator workflow for supervised remote vehicle
+  diagnostics: it plans a run, controls the diagnostic tablet through the
+  isolated `/opt/autostop-remote-diagnostics-server` gateway, interprets
+  evidence, prepares owner-facing reports and improves the workflow from
+  verified experience.
+- Treat diagnostic interfaces as variable. Work adaptively from the current
+  screen, accessibility tree, optional visual evidence and observed effects;
+  prefer creative evidence-driven strategies over rigid click-by-click routes.
+  Optimize for speed, but verify that each dispatched action produced the
+  intended screen or diagnostic result.
+- The gateway and Android client remain separately versioned technical
+  components. Manager may improve its own operator playbooks and tools, and may
+  prepare precise evidence-backed handoff prompts for the server or Android
+  Codex agent when a client/protocol change is needed.
+- Raw screenshots, UI trees and diagnostic values never belong in Git, Manager
+  memory or workflow state. If retention is enabled by a separate owner
+  decision, Manager owns their lifecycle in protected private runtime storage
+  outside the repository; durable knowledge keeps only safe references,
+  metadata and verified reusable lessons.
+- Read-only identification, DTC, freeze-frame and parameter work may be composed
+  flexibly within the owner's live scope. Clearing DTCs, active tests, resets,
+  service functions, coding, adaptation, calibration, flashing and immobilizer
+  operations still require direct authorization for that exact operation.
+
 ## Store Pause
 
 Store work is paused while AutoStop App is under development. Do not inspect,
