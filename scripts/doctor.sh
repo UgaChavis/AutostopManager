@@ -96,7 +96,6 @@ for tool in python3 git docker curl ss pdftotext pdftoppm gs libreoffice 7z node
 done
 run "/tmp writable" bash -c 'tmp="$(mktemp /tmp/autostop-doctor.XXXXXX)" && rm -f "$tmp"'
 run "docker daemon" docker info
-run "gh auth status" gh auth status
 if system_chromium_version; then
   printf '[OK] system Chromium version\n'
 else

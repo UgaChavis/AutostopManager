@@ -33,7 +33,7 @@ and private documents never enter Git or durable prompts.
 .venv/bin/python -m autostop_manager.cli agent-brief "Приберись" --intent board_cleanup
 .venv/bin/python -m autostop_manager.cli knowledge-probe "проверить документацию"
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
-.venv/bin/python -m autostop_manager.cli integration-audit --full
+.venv/bin/python -m autostop_manager.cli integration-audit
 ```
 
 Integration audits exclude Store by default. `--include-store` is allowed only
