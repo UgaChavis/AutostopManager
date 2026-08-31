@@ -19,8 +19,11 @@ raw Intent, UIAutomator, queues or retries.
 - Do not call `device_status`, `observe`, `history` or any action until the
   owner explicitly starts the live session.
 - After the last reconnect wait for metrics-confirmed authenticated READY, then
-  a current cached status with CONTROL, unlocked screen, projection,
-  accessibility, `foregroundKind=launch` and `commandAvailable=true`.
+  obtain one current cached status where all of these hold together:
+  `connected=true`, `ready=true`, `mode=CONTROL`, `controlEnabled=true`,
+  `screenState=onUnlocked`, `mediaProjectionActive=true`,
+  `accessibilityEnabled=true`, `foregroundKind=launch` and
+  `commandAvailable=true`.
 - `foregroundKind=self` is a wait state: the owner opens Launch manually; do
   not use `open_launch`. This tool is deliberately not enabled.
 - Use only `fresh observe → at most one action → fresh observe`. Screenshot is

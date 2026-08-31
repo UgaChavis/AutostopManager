@@ -119,6 +119,23 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
     assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"]["primary_files"]
 
 
+def test_pad_vii_playbook_requires_the_complete_current_status_gate():
+    playbook = (ROOT / "docs" / "agent" / "remote_diagnostics_pad_vii_playbook.md").read_text(encoding="utf-8")
+
+    for status_field in (
+        "connected=true",
+        "ready=true",
+        "mode=CONTROL",
+        "controlEnabled=true",
+        "screenState=onUnlocked",
+        "mediaProjectionActive=true",
+        "accessibilityEnabled=true",
+        "foregroundKind=launch",
+        "commandAvailable=true",
+    ):
+        assert status_field in playbook
+
+
 def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
     checked_paths = [
         ROOT / "AGENTS.md",
