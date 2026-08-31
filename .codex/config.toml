@@ -5,3 +5,12 @@ project_doc_fallback_filenames = ["AGENTS.md", "README.md"]
 url = "https://crm.autostopcrm.ru/mcp"
 enabled = true
 tool_timeout_sec = 90
+
+[mcp_servers.autostop_remote_diagnostics]
+command = "/usr/local/libexec/autostop-remote-staging-mcp"
+enabled = true
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 15
+default_tools_approval_mode = "prompt"
+enabled_tools = ["device_status", "observe", "activate_node", "tap", "swipe", "back", "stop_session"]

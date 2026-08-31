@@ -182,6 +182,17 @@ def test_explicit_remote_server_still_uses_remote_access_route():
     assert _workflows("Проверь подключение к удалённому серверу по SSH") == ["remote_codex_access"]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Подготовь удаленную диагностику Launch PAD VII",
+        "Начни сессию AutoStop Remote на планшете Launch",
+    ],
+)
+def test_pad_vii_diagnostics_route_is_distinct_from_remote_access(query):
+    assert _workflows(query) == ["remote_diagnostics_pad_vii"]
+
+
 def test_command_routes_are_read_live_without_sync_or_restart(tmp_path, monkeypatch):
     route_path = tmp_path / "command_routes.json"
     monkeypatch.setattr(knowledge_base, "COMMAND_ROUTES_PATH", route_path)

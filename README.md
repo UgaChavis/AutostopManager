@@ -19,6 +19,8 @@ technical control logic.
   `manager_mcp_catalog.json` - the 77-tool internal Manager registry manifest.
 - `docs/agent/codex_home_pc_reverse_ssh.md` - managed Windows and legacy
   `home-pc` access.
+- `docs/agent/remote_diagnostics_pad_vii_playbook.md` - supervised PAD VII
+  diagnostic operator route and isolated MCP boundary.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
 
 For non-trivial work run `agent-brief`, then open the returned canonical route.

@@ -36,19 +36,17 @@ procedures belong to the playbooks returned by the route, not here.
 
 ## Remote Vehicle Diagnostics
 
-- Manager owns supervised remote diagnostics through the isolated
-  `/opt/autostop-remote-diagnostics-server` gateway: plan the run, control the
-  Android tablet, interpret evidence and report. Adapt to the current screen,
-  accessibility tree and visual evidence; verify every dispatched action.
-- Keep the gateway and Android client separately versioned. Manager may refine
-  its playbooks and prepare evidence-backed handoffs for protocol/client work.
-- Never persist raw screenshots, UI trees or diagnostic values in Git, Manager
-  memory or workflow state. Separately approved retention belongs in protected
-  private runtime storage; durable knowledge keeps safe references and lessons.
-- Read-only identification, DTC, freeze-frame and parameters may be combined
-  within live owner scope. Clearing DTCs, active tests, resets, service
-  functions, coding, adaptation, calibration, flashing and immobilizer work
-  require direct authorization for that exact operation.
+- Route PAD VII work through `remote_diagnostics_pad_vii`; the isolated gateway
+  owns tablet control, while Manager plans, interprets transient evidence and
+  reports. Do not copy its action tools into CRM or Manager MCP registrations.
+- Its project MCP entry invokes only the fixed root-owned local launcher; never
+  put a device ID, UDS path, pairing/TLS material or runtime environment in Git.
+- Before any live call read the local playbook and the server PAD VII contract.
+  No `status`, `observe`, `history` or action occurs before the owner explicitly
+  starts a session; verify every dispatch with the required fresh observation.
+- Never persist raw screenshots, UI trees, VINs or diagnostic values. Read-only
+  ID/DTC/freeze-frame/live data are in live scope; clears/tests/resets/coding,
+  calibration/flashing/immobilizer operations require exact new authorization.
 
 ## Store Pause
 

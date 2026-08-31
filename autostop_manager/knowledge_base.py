@@ -1210,6 +1210,22 @@ def _term_count(text: str, term: str) -> int:
 def _domain_hints(query: str) -> dict[str, int]:
     lowered = query.lower()
     hints: dict[str, int] = {}
+    remote_diagnostics_terms = (
+        "launch pad",
+        "launchpad",
+        "pad vii",
+        "autostop remote",
+        "remote diagnostics",
+        "удаленная диагностика",
+        "удалённая диагностика",
+        "диагностика с планшета",
+        "планшет launch",
+        "foregroundkind",
+        "commandavailable",
+        "observation history",
+    )
+    if any(term in lowered for term in remote_diagnostics_terms):
+        hints["remote_diagnostics_pad_vii"] = 95
     documentation_terms = (
         "документац",
         "инструкц",

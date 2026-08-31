@@ -69,6 +69,22 @@ EFFECT_POLICIES: dict[str, dict[str, list[str]]] = {
         "forbidden_actions": ["send when recipient, sender, QA or attachment identity is ambiguous"],
         "verification": ["record connector refs and verify exactly one external result"],
     },
+    "remote_diagnostics": {
+        "hot_rules": ["Tablet calls require an explicit live-session owner start and the PAD VII current status gate."],
+        "read_order": [
+            "read the Manager PAD VII playbook and server contract",
+            "wait for metrics-confirmed READY and current status gate",
+            "take a fresh screenshot-free observation before a single permitted action",
+        ],
+        "allowed_actions": ["use only the isolated typed diagnostics MCP under the one-observe/one-action contract"],
+        "forbidden_actions": [
+            "call tablet tools before live owner authority, reuse an observation, retry unknown outcomes or retain raw evidence",
+            "clear DTCs, run active tests, reset, code, adapt, calibrate, flash or perform immobilizer work without exact owner authority",
+        ],
+        "verification": [
+            "confirm every screen result by an explicit fresh observation and summarize only safe conclusions"
+        ],
+    },
     "finance": {
         "hot_rules": ["Financial effects require direct task-specific owner intent and proof-bound apply."],
         "read_order": ["reread current monetary and tax basis before preview"],
@@ -299,6 +315,7 @@ def build_agent_brief(
             ("store", "store"),
             ("home_camera", "home_camera"),
             ("public_camera", "public_camera"),
+            ("remote_diagnostics", "remote_diagnostics"),
         )
         if any(marker in route_domain for route_domain in route_domains)
     ]

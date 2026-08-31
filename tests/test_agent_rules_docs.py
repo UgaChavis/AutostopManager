@@ -50,7 +50,24 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert config["mcp_servers"]["autostopcrm"]["url"] == "https://crm.autostopcrm.ru/mcp"
     assert config["mcp_servers"]["autostopcrm"]["enabled"] is True
     assert config["mcp_servers"]["autostopcrm"]["tool_timeout_sec"] == 90
-    assert set(config["mcp_servers"]) == {"autostopcrm"}
+    diagnostics = config["mcp_servers"]["autostop_remote_diagnostics"]
+    assert diagnostics["command"] == "/usr/local/libexec/autostop-remote-staging-mcp"
+    assert diagnostics["enabled"] is True
+    assert diagnostics["required"] is False
+    assert diagnostics["default_tools_approval_mode"] == "prompt"
+    assert diagnostics["enabled_tools"] == [
+        "device_status",
+        "observe",
+        "activate_node",
+        "tap",
+        "swipe",
+        "back",
+        "stop_session",
+    ]
+    assert {"open_launch", "set_text"}.isdisjoint(diagnostics["enabled_tools"])
+    assert {"env", "env_vars"}.isdisjoint(diagnostics)
+    assert "tools" not in diagnostics
+    assert set(config["mcp_servers"]) == {"autostopcrm", "autostop_remote_diagnostics"}
     assert {"apps", "connectors", "plugins"}.isdisjoint(config)
 
     forbidden_config_keys = {
