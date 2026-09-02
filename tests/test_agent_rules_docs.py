@@ -283,26 +283,6 @@ def test_command_registry_v3_contains_only_operational_routing_metadata():
     assert "apps" not in integration_route["signals"]["any"]
 
 
-def test_service_director_mode_has_one_canonical_route_and_guarded_autonomy():
-    manifest = (ROOT / "docs" / "agent" / "service_director_manifest.md").read_text(encoding="utf-8")
-    knowledge_map = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
-    command_routes = json.loads((ROOT / "docs" / "agent" / "command_routes.json").read_text(encoding="utf-8"))
-
-    assert "Повышать прибыльность и производительность AutoStop" in manifest
-    assert "жесткому шаблону" in manifest
-    assert "next_review_at" in manifest
-    assert "повторно не спрашивать" in manifest
-    assert "get_card_log" in manifest
-    assert "Циклическую директорскую цель завершать только по команде владельца" in manifest
-    director_domain = knowledge_map["domains"]["service_director"]
-    assert director_domain["skill_path"] == ".agents/skills/run-autostop-director/SKILL.md"
-    director_route = next(
-        route for route in command_routes["routes"] if route["command_id"] == "service_director_cycle"
-    )
-    assert director_route["workflow_id"] == "service_director_cycle"
-    assert "service_director" in director_route["knowledge_domains"]
-
-
 def test_mcp_catalogs_are_minimal_verified_surface_manifests():
     manager_catalog = json.loads((ROOT / "docs" / "agent" / "manager_mcp_catalog.json").read_text(encoding="utf-8"))
     crm_catalog = json.loads((ROOT / "docs" / "agent" / "crm_mcp_catalog.json").read_text(encoding="utf-8"))
@@ -425,26 +405,6 @@ def test_board_cleanup_description_and_structured_field_contract_is_documented()
     cleanup_route = next(item for item in route["routes"] if item["command_id"] == "board_cleanup_autopilot")
     assert {"board_cleanup_autopilot", "crm_card_description_standard"} <= set(cleanup_route["knowledge_domains"])
     assert "crm_write" in cleanup_route["effects"]
-
-
-def test_director_journal_contract_is_documented_and_bounded():
-    skill = (ROOT / ".agents/skills/run-autostop-director/SKILL.md").read_text(encoding="utf-8")
-    manifest = (ROOT / "docs/agent/service_director_manifest.md").read_text(encoding="utf-8")
-    routes = json.loads((ROOT / "docs/agent/command_routes.json").read_text(encoding="utf-8"))
-
-    assert "service_director_manifest.md" in skill
-    assert "## Единый директорский журнал" in manifest
-    assert "data/autostop_manager.sqlite3" in manifest
-    assert "50" in manifest and "400" in manifest
-    assert "не более 180 дней" in manifest
-    assert "не более 600 символов" in manifest
-    assert "director_create" in manifest
-    assert "expected_updated_at" in manifest
-    assert "workflow_ref_hash" in manifest
-    assert "до `next_review_at` повторно не спрашивать" in manifest
-    director_route = next(item for item in routes["routes"] if item["command_id"] == "service_director_cycle")
-    assert "service_director" in director_route["knowledge_domains"]
-    assert "crm_write" in director_route["effects"]
 
 
 def test_business_documents_route_requires_crm_print_module_for_autostop_documents():

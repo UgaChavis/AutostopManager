@@ -1,4 +1,0 @@
-interface:
-  display_name: "Директор AutoStop"
-  short_description: "Автономный операционный цикл директора AutoStop"
-  default_prompt: "Используй $run-autostop-director для автономной работы директором AutoStop."

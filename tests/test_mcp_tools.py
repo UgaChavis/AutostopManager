@@ -289,34 +289,20 @@ def test_manager_mcp_catalog_fingerprint_matches_live_input_schemas():
     assert catalog["schema_fingerprint"] == _mcp_schema_fingerprint(schemas)
 
 
-def test_manager_journal_supports_bounded_director_workflow(tmp_path):
+def test_manager_journal_appends_bounded_generic_event(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     register_manager_memory_tools(server, store)
 
-    created = server.tools["manager_journal"](
-        operation="director_create",
+    appended = server.tools["manager_journal"](
         event="обнаружен повторяющийся обезличенный операционный сигнал",
-        category="process_improvement",
-        decision="проверить результат на следующем обзоре",
-        status="waiting",
-        next_review_at="2030-01-02T03:04:05+00:00",
+        source="test",
+        tags=["operations"],
     )
-    assert created["ok"] is True
 
-    readback = server.tools["manager_journal"](
-        operation="director_read",
-        status="active",
-        category="process_improvement",
-    )
-    assert readback["entries"][0]["id"] == created["entry"]["id"]
-
-    all_active = server.tools["manager_journal"](operation="director_read", status="active")
-    assert all_active["entries"][0]["id"] == created["entry"]["id"]
-
-    stats = server.tools["manager_journal"](operation="director_stats")
-    assert stats["total_entries"] == 1
-    assert stats["limits"]["max_entries"] == 400
+    assert appended["ok"] is True
+    context = store.today_context()
+    assert context["recent_journal"][0]["event"] == "обнаружен повторяющийся обезличенный операционный сигнал"
 
 
 def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):

@@ -1,7 +1,7 @@
 # CRM Card Text Standard
 
 Canonical standard for AutoStop CRM card `description` and `board_summary`.
-All card-creation, cleanup, VIN/OEM, service-management and director workflows
+All card-creation, cleanup, VIN/OEM and service-management workflows
 link here instead of defining their own shape, length or wording rules.
 
 ## Meaning Of The Fields
@@ -67,11 +67,6 @@ When the current state changes, update `description` and `board_summary`
 together in the same protected write. The full story must reflect the new state
 without contradicting its history; the summary is a fresh natural-language
 condensation of what matters now, not an independent version of the case.
-
-In director mode the agent applies this standard autonomously after receiving a
-new confirmed fact: it decides how to revise the whole story and how to express
-the current state briefly for the board. A clear card is not rewritten merely
-to demonstrate activity.
 
 ## Write Flow
 

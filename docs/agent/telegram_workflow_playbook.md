@@ -73,26 +73,16 @@ size, model and sandbox limits. Transcription stays local. Video inspection
 uses only the generated silent storyboard; discard any surviving original and
 preview paths.
 
-## Send And Roles
+## Send
 
 A send requires the owner's current instruction naming the exact recipient and
-message/intent. An active director goal permits only allowlisted operational
-questions to these bound private roles:
-
-- `director_admin` — main administrator;
-- `director_reception` — current reception employee;
-- `director_workshop` — workshop foreman.
-
-Role labels are identity hints, never targets. `roles` must report the selected
-binding as `bound=true`, `verified=true`, `kind=private`; drift, ambiguity or a
-missing contact fails closed. Binding or replacement requires its own exact
-dry-run/apply/readback. Clients, suppliers, other employees, financial
-commitments and general outreach always require a separate direct instruction.
+message/intent. Clients, suppliers, employees, financial commitments and general
+outreach always require a separate direct instruction.
 
 For every send:
 
-1. Reread the exact peer/role and freeze the final text.
-2. Run `send`, `send-role` or `send-photo` in `dry_run`; verify exact target,
+1. Reread the exact peer and freeze the final text.
+2. Run `send` or `send-photo` in `dry_run`; verify exact target,
    text, reply source when used, and the returned contract.
 3. Apply once with unchanged inputs, the contract token and a fresh
    idempotency key.
@@ -103,11 +93,6 @@ If apply times out or its response is lost, treat the outcome as unknown. Do
 not resend with a new key until an exact reread proves absence. For group
 replies, bind the contract to the exact incoming message and require it still
 exists, is incoming and belongs to that group.
-
-Director follow-ups use a refs-only `workflow_wait_for_external` step: IDs,
-timestamps, safe purpose hash and next-check time only. Read a small later
-window, accept only a relevant newer reply and avoid polling; one reminder is
-the default maximum.
 
 Photo sends use one service-owned mode-0600 JPEG in the private outbox, an
 explicit caption and the same contract/readback sequence. Remove the staged

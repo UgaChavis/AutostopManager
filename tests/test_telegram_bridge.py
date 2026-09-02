@@ -150,50 +150,6 @@ def test_runtime_paths_support_an_isolated_second_account(tmp_path) -> None:
     assert config.socket_path == socket_path
 
 
-def test_role_bindings_round_trip_only_in_private_runtime_file(tmp_path) -> None:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(mode=0o700)
-    bindings_path = state_dir / "director_roles.json"
-
-    telegram_bridge._save_role_bindings(
-        bindings_path,
-        {
-            "director_admin": 101,
-            "director_reception": 202,
-            "director_workshop": 303,
-        },
-    )
-
-    assert bindings_path.stat().st_mode & 0o777 == 0o600
-    assert telegram_bridge._load_role_bindings(bindings_path) == {
-        "director_admin": 101,
-        "director_reception": 202,
-        "director_workshop": 303,
-    }
-
-
-def test_role_bindings_fail_closed_for_open_file_symlink_and_duplicate_peer(tmp_path) -> None:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(mode=0o700)
-    bindings_path = state_dir / "director_roles.json"
-    bindings_path.write_text('{"roles":{"director_admin":101},"version":1}', encoding="utf-8")
-    bindings_path.chmod(0o640)
-    with pytest.raises(BridgeError, match="role_bindings_invalid"):
-        telegram_bridge._load_role_bindings(bindings_path)
-
-    bindings_path.chmod(0o600)
-    symlink_path = state_dir / "roles-link.json"
-    symlink_path.symlink_to(bindings_path.name)
-    with pytest.raises(BridgeError, match="role_bindings_unavailable"):
-        telegram_bridge._load_role_bindings(symlink_path)
-
-    with pytest.raises(BridgeError, match="role_bindings_invalid"):
-        telegram_bridge._save_role_bindings(
-            bindings_path,
-            {"director_admin": 101, "director_reception": 101},
-        )
-
-
 def test_runtime_paths_reject_relative_or_cross_account_session(tmp_path) -> None:
     credentials = tmp_path / "credentials"
     credentials.write_text(
@@ -297,38 +253,6 @@ def test_send_contract_binds_reply_target_and_source() -> None:
             text="hello",
             reply_to_message_id=5,
             reply_message_sha256="b" * 64,
-            now=101,
-        )
-
-
-def test_role_send_contract_cannot_be_reused_as_direct_or_for_another_role() -> None:
-    secret = b"x" * 32
-    token = issue_send_contract(
-        secret,
-        peer_id=10,
-        text="hello",
-        last_message_id=7,
-        role="director_admin",
-        now=100,
-    )
-
-    verify_send_contract(
-        token,
-        secret,
-        peer_id=10,
-        text="hello",
-        role="director_admin",
-        now=101,
-    )
-    with pytest.raises(BridgeError, match="contract_role_required"):
-        verify_send_contract(token, secret, peer_id=10, text="hello", now=101)
-    with pytest.raises(BridgeError, match="contract_role_changed"):
-        verify_send_contract(
-            token,
-            secret,
-            peer_id=10,
-            text="hello",
-            role="director_reception",
             now=101,
         )
 
@@ -614,7 +538,6 @@ def _runtime_config(tmp_path) -> TelegramConfig:
         session_path=state_dir / "account",
         state_dir=state_dir,
         socket_path=runtime_dir / "bridge.sock",
-        role_bindings_path=state_dir / "director_roles.json",
     )
 
 
@@ -762,144 +685,6 @@ def test_resolve_phone_fails_closed_and_rate_limits(monkeypatch, tmp_path) -> No
         asyncio.run(telegram_bridge._handle_operation(Client(), _runtime_config(tmp_path), request))
     with pytest.raises(BridgeError, match="phone_resolve_rate_limited"):
         asyncio.run(telegram_bridge._handle_operation(Client(), _runtime_config(tmp_path), request))
-
-
-def test_role_binding_and_role_send_are_exact_and_do_not_disclose_identity(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path)
-    config.state_dir.mkdir(mode=0o700)
-    entity = object()
-    exact_target = {
-        "id": 404,
-        "title": "Private identity",
-        "username": "private_identity",
-        "kind": "private",
-        "is_contact": True,
-    }
-
-    async def resolve(_client, peer):
-        assert peer in {"confirmed-contact", "404"}
-        return entity, exact_target
-
-    async def last_message_id(_client, resolved_entity):
-        assert resolved_entity is entity
-        return 9
-
-    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
-    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message_id)
-
-    dry_binding = asyncio.run(
-        telegram_bridge._handle_operation(
-            object(),
-            config,
-            {
-                "operation": "bind_role",
-                "role": "director_admin",
-                "peer": "confirmed-contact",
-                "mode": "dry_run",
-            },
-        )
-    )
-    applied_binding = asyncio.run(
-        telegram_bridge._handle_operation(
-            object(),
-            config,
-            {
-                "operation": "bind_role",
-                "role": "director_admin",
-                "peer": "confirmed-contact",
-                "mode": "apply",
-                "contract_token": dry_binding["contract_token"],
-                "idempotency_key": "bind-admin-once",
-            },
-        )
-    )
-
-    assert applied_binding == {
-        "ok": True,
-        "mode": "apply",
-        "replayed": False,
-        "role": "director_admin",
-        "verified": True,
-    }
-    assert dry_binding["target"] == {
-        "bound": True,
-        "is_contact": True,
-        "kind": "private",
-        "role": "director_admin",
-    }
-    assert "404" not in json.dumps(dry_binding)
-    assert "Private identity" not in json.dumps(dry_binding)
-    assert "private_identity" not in json.dumps(dry_binding)
-
-    roles = asyncio.run(telegram_bridge._handle_operation(object(), config, {"operation": "roles"}))
-    admin = next(row for row in roles["roles"] if row["role"] == "director_admin")
-    assert admin == {
-        "role": "director_admin",
-        "bound": True,
-        "verified": True,
-        "kind": "private",
-    }
-    assert "404" not in json.dumps(roles)
-
-    dry_send = asyncio.run(
-        telegram_bridge._handle_operation(
-            object(),
-            config,
-            {
-                "operation": "send_role",
-                "role": "director_admin",
-                "text": "bounded message",
-                "mode": "dry_run",
-            },
-        )
-    )
-    assert dry_send["target"] == dry_binding["target"]
-    assert "404" not in json.dumps(dry_send)
-
-
-def test_role_binding_rejects_non_contact_and_cross_role_duplicate(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path)
-    config.state_dir.mkdir(mode=0o700)
-    telegram_bridge._save_role_bindings(config.role_bindings_path, {"director_admin": 505})
-
-    async def resolve(_client, peer):
-        peer_id = int(peer) if peer.isdigit() else 505
-        return object(), {
-            "id": peer_id,
-            "title": "Candidate",
-            "username": None,
-            "kind": "private",
-            "is_contact": peer != "not-contact",
-        }
-
-    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
-
-    with pytest.raises(BridgeError, match="role_candidate_invalid"):
-        asyncio.run(
-            telegram_bridge._handle_operation(
-                object(),
-                config,
-                {
-                    "operation": "bind_role",
-                    "role": "director_reception",
-                    "peer": "not-contact",
-                    "mode": "dry_run",
-                },
-            )
-        )
-    with pytest.raises(BridgeError, match="peer_already_bound"):
-        asyncio.run(
-            telegram_bridge._handle_operation(
-                object(),
-                config,
-                {
-                    "operation": "bind_role",
-                    "role": "director_reception",
-                    "peer": "confirmed-contact",
-                    "mode": "dry_run",
-                },
-            )
-        )
 
 
 def test_download_media_requires_dry_run_and_saves_private_verified_file(monkeypatch, tmp_path) -> None:

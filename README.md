@@ -10,8 +10,6 @@ technical control logic.
 - `AGENTS.md` - canonical compact startup instruction for Codex.
 - `docs/agent/voice_agent_brief.md` - voice-only behavior delta loaded by
   `AGENTS.md`; it does not duplicate common safety or routing rules.
-- `docs/agent/service_director_manifest.md` - autonomous recurring workshop
-  director cycle, priorities and internal Telegram follow-up.
 - `docs/agent/knowledge_map.json` - domain-to-file navigation.
 - `docs/agent/command_routes.json` - operational command workflows.
 - `docs/agent/manager_rules.json` - cross-system runtime invariants.
