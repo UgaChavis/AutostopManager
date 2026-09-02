@@ -90,6 +90,19 @@ git fetch origin autostopcrm-v1
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/autostopcrm-v1)"
 # Watchdog installation is disabled by default; do not opt in here.
 ./deploy.sh
+
+# Sync the host-owned scheduled audit from the activated immutable Manager release.
+install -D -m 0644 \
+  /opt/autostop-manager-releases/current/deploy/systemd/autostop-integration-audit.service \
+  /etc/systemd/system/autostop-integration-audit.service
+install -D -m 0644 \
+  /opt/autostop-manager-releases/current/deploy/systemd/autostop-integration-audit.timer \
+  /etc/systemd/system/autostop-integration-audit.timer
+systemctl daemon-reload
+cmp --silent \
+  /opt/autostop-manager-releases/current/deploy/systemd/autostop-integration-audit.service \
+  /etc/systemd/system/autostop-integration-audit.service
+systemctl show --property=LoadState --value autostop-integration-audit.service | grep -Fx loaded
 ```
 
 A bare `./deploy.sh` no longer installs the production watchdog. Approved releases
