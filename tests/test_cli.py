@@ -14,7 +14,6 @@ def test_cli_parser_has_core_commands():
         [
             "integration-audit",
             "--full",
-            "--include-store",
             "--gmail-proof",
             "/tmp/proof.json",
             "--output",
@@ -23,7 +22,6 @@ def test_cli_parser_has_core_commands():
     )
     assert args.command == "integration-audit"
     assert args.full is True
-    assert args.include_store is True
     assert args.gmail_proof == "/tmp/proof.json"
     assert args.output == "/tmp/report.json"
 
@@ -98,7 +96,7 @@ def test_cli_dispatches_safe_commands_and_writes_requested_reports(tmp_path, mon
     monkeypatch.setattr(
         cli,
         "build_integration_audit",
-        lambda **kwargs: {"ok": True, "full": kwargs["full"], "include_store": kwargs["include_store"]},
+        lambda **kwargs: {"ok": True, "full": kwargs["full"], "scope": {"store": True}},
     )
     monkeypatch.setattr(cli, "build_control_report", lambda **_kwargs: {"ok": True, "summary": "ready"})
     monkeypatch.setattr(cli, "format_control_report_markdown", lambda _report: "# Ready\n")
@@ -124,7 +122,7 @@ def test_cli_dispatches_safe_commands_and_writes_requested_reports(tmp_path, mon
     assert cli.main(["control-report", "--format", "markdown", "--output", str(markdown_path)]) == 0
 
     assert json.loads(integration_path.read_text(encoding="utf-8"))["full"] is True
-    assert json.loads(integration_path.read_text(encoding="utf-8"))["include_store"] is False
+    assert json.loads(integration_path.read_text(encoding="utf-8"))["scope"]["store"] is True
     assert json.loads(json_path.read_text(encoding="utf-8"))["summary"] == "ready"
     assert markdown_path.read_text(encoding="utf-8") == "# Ready\n"
     assert capsys.readouterr().out

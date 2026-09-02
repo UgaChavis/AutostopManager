@@ -1,5 +1,5 @@
 [Unit]
-Description=AutoStop CRM, Gmail and web integration audit (Store excluded)
+Description=AutoStop CRM, Store, Gmail and web integration audit
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 

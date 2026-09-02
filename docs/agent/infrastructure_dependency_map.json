@@ -28,7 +28,7 @@
       "depends_on": ["manager_release", "crm_gateway", "gmail_connector"],
       "external_dependencies": ["main_vps_network", "docker"],
       "verification_surface": ["systemctl timer and service state", "root-only integration report"],
-      "boundary": "The scheduled quick audit excludes Store and is not an external alert channel."
+      "boundary": "The scheduled quick audit includes Store parity and read-only health checks; it is not an external alert channel."
     },
     {
       "id": "gmail_connector",

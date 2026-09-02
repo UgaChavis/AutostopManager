@@ -107,6 +107,14 @@ def test_agent_brief_store_route_has_no_embedded_operation_dsl(tmp_path):
     assert result["route"]["selected_operation"] is None
 
 
+def test_agent_brief_store_management_has_no_blanket_destructive_gate(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Назначь заявку на подбор в магазине")
+
+    assert result["route"]["workflow_id"] == "store_management_workflow"
+    assert result["route"]["steps"][0]["effects"] == []
+    assert not any("Resolve exact targets and recovery material" in rule for rule in result["hot_rules"])
+
+
 def test_agent_brief_exposes_optional_navigation_for_routed_vin_writeback(tmp_path):
     result = context.build_agent_brief(
         _store(tmp_path),

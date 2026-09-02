@@ -72,9 +72,9 @@ internal agent network; neither Manager nor CRM receives Store DB access.
 The current `/opt/autostopcrm/deploy.sh` is a coupled CRM + Manager release,
 not a Manager-only deploy path. It validates live Store health and replaces the
 CRM container even when only the Manager revision changed. Run it only after
-the owner explicitly authorizes both the read-only Store release gates and
-advancing the CRM checkout/restarting CRM to the exact remote revision. That
-release authorization does not permit Store writes.
+the owner explicitly authorizes advancing the CRM checkout/restarting CRM to
+the exact remote revision. Read-only Store health gates are part of every
+coupled release.
 
 Preflight the live checkouts and rollback state:
 
@@ -98,21 +98,19 @@ Do not set `AUTOSTOP_INSTALL_WATCHDOG=1` without a separate exact owner authoriz
 They create rollback data and a Manager snapshot, preserve `.env`/uploads/PostgreSQL volumes, and replace only CRM in the bounded window.
 They must pass internal/public smoke. No Git-sync bypass.
 
-For an owner-authorized Store-affecting release, additionally run
-`integration-audit --full --include-store`, then use backup -> Store
-API/auth/migration -> pure read/service-scope checks -> internal network ->
-Manager snapshot -> CRM Gateway. Store failure must degrade only Store. Never
-create a customer order as smoke or perform supplier procurement without a
-separate exact command.
+Every coupled release runs `integration-audit --full`, then uses backup ->
+Store API/auth/migration -> pure read/service-scope checks -> internal network
+-> Manager snapshot -> CRM Gateway. Store failure must degrade only Store.
+Never create a customer order as smoke or perform supplier procurement without
+a separate exact command.
 
 ## Post-Deploy Verification
 
-The Store-aware checks below are part of the same owner-authorized coupled
-release. Gateway `--exhaustive`, `check_live_connector.py` without `--skip-mcp`
-and `integration-audit --full --include-store` call `get_runtime_status`, which
-performs a live Store health read. `check_mcp_oauth.py` does not read Store, but
-it creates, refreshes and revokes OAuth state, so it is not a read-only
-maintenance check.
+The checks below are part of the coupled release. Gateway `--exhaustive`,
+`check_live_connector.py` without `--skip-mcp` and `integration-audit --full`
+call `get_runtime_status`, which performs a live Store health read.
+`check_mcp_oauth.py` does not read Store, but it creates, refreshes and revokes
+OAuth state, so it is not a read-only maintenance check.
 
 ```bash
 cd /opt/autostopcrm
@@ -126,7 +124,7 @@ docker compose exec -T autostopcrm python scripts/check_mcp_oauth.py \
   --mcp-url https://crm.autostopcrm.ru/mcp
 cd /opt/AutostopManager
 .venv/bin/python -m autostop_manager.cli control-report --format markdown
-.venv/bin/python -m autostop_manager.cli integration-audit --full --include-store
+.venv/bin/python -m autostop_manager.cli integration-audit --full
 ./scripts/doctor.sh --full
 cd /opt/autostop-manager-releases/current
 /opt/AutostopManager/.venv/bin/python scripts/capture_public_camera.py --verify-runner
@@ -144,16 +142,14 @@ Confirm:
   disabled for the self-test; this check captures no camera frame.
 
 Also confirm AutoStop App/site health, that CRM reads survive Store degradation,
-and that Store GETs are mutation-free. Production Store management smoke stays
-dry-run unless an explicitly approved, safe and reversible synthetic object
-exists. Record only compact ids, counts, versions, health booleans and rollback
-refs.
+and that Store GETs are mutation-free. Record only compact ids, counts,
+versions, health booleans and rollback refs.
 
-For Store-free maintenance, do not use `integration-audit --full`, Gateway
-`--exhaustive`, `--require-store` or `check_live_connector.py` as Store-free
-gates. Do not use
-`check_mcp_oauth.py` as a read-only gate. Use only quick Manager audits,
-container/nginx/HTTPS health, and the quick internal/public Gateway check:
+## Quick Maintenance
+
+For a quick read-only maintenance check, do not use the full Gateway,
+`check_live_connector.py` or `check_mcp_oauth.py`. Use the quick Manager,
+container/nginx/HTTPS and Store-aware Gateway checks:
 
 ```bash
 cd /opt/AutostopManager
@@ -166,9 +162,9 @@ docker compose config --quiet
 docker compose ps autostopcrm
 docker compose exec -T autostopcrm python scripts/container_healthcheck.py
 docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
-  --mcp-url http://127.0.0.1:41831/mcp
+  --mcp-url http://127.0.0.1:41831/mcp --require-store
 docker compose exec -T autostopcrm python scripts/check_agent_gateway_v2.py \
-  --mcp-url https://crm.autostopcrm.ru/mcp
+  --mcp-url https://crm.autostopcrm.ru/mcp --require-store
 nginx -t
 curl -fsS --max-time 8 -o /dev/null https://crm.autostopcrm.ru/
 ```

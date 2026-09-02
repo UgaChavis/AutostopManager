@@ -35,7 +35,8 @@ Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 - `get_runtime_status` for adapter and store health;
 - `agent_inventory_workflow` for seven optimized named writes;
 - guarded raw `store_owner_capabilities` and `store_owner_api` for every other
-  operation exposed to an authorized employee by the live Store OpenAPI.
+  operation available to the Manager service principal through the live Store
+  OpenAPI.
 
 Supported entities are `store_part`, `store_order`, `store_quote_request`,
 `store_supplier`, `store_batch`, `store_warehouse_operation`,
@@ -60,7 +61,7 @@ call a hidden Store tool directly:
 | one exact VIN-photo preview | `agent_document_workflow` | `operation="download_store_quote_vin_photo"`, exact quote id, current photo SHA-256, idempotency key, and `allow_large_output=true` |
 | adapter/API health | `get_runtime_status` | read-only |
 | one of the seven optimized writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
-| any other authorized employee operation | guarded raw discovery -> `store_owner_capabilities` / `store_owner_api` | exact `operation_id`, live `schema_hash`, target/revision, ActionContractV2, unique idempotency/correlation ids, `dry_run` proof, `apply`, exact reread |
+| any other available employee operation | guarded raw discovery -> `store_owner_capabilities` / `store_owner_api` | exact `operation_id`, live `schema_hash`, target/revision, ActionContractV2, unique idempotency/correlation ids, `dry_run` proof, `apply`, exact reread |
 
 ### Service materials and supplier purchases
 

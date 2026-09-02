@@ -48,14 +48,6 @@ procedures belong to the playbooks returned by the route, not here.
   ID/DTC/freeze-frame/live data are in live scope; clears/tests/resets/coding,
   calibration/flashing/immobilizer operations require exact new authorization.
 
-## Store Scope
-
-Store is active for explicit owner Store tasks. A Store task may inspect,
-diagnose or change AutoStop App within its stated scope; CRM bootstrap must not
-read Store automatically. Every Store write still follows the guarded lifecycle,
-and financial, supplier, destructive or release actions require the exact owner
-instruction.
-
 ## Live Work And Write Gates
 
 - CRM's only external Codex surface is the configured 24-tool Gateway v2 connector.
@@ -66,7 +58,7 @@ instruction.
   Treat `codex_apps/autostopcrm.*` and any unconfigured account App namespace as
   legacy, outside project health checks and execution paths.
 - A direct owner task authorizes only the necessary in-scope non-financial
-  changes. Do not expand it into unrelated cleanup, Store work or deployment.
+  changes. Do not expand it into unrelated cleanup or deployment.
 - Every mutation follows: focused exact reread -> `prepare_action_contract` ->
   named workflow `dry_run` -> `apply` with a different idempotency key ->
   independent exact reread. Use concurrency controls and a correlation id;

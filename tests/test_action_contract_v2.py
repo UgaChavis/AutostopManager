@@ -629,6 +629,7 @@ def test_store_action_contract_allowlist_uses_inventory_workflow_and_safe_transp
     assert result["compensation"]["required"] is True
     assert result["ledger"]["store_refs_only"] is True
     assert "store_target_reread" in result["preflight"]["checks"]
+    assert "store_scope_allowed" not in result["preflight"]["checks"]
     assert "store_revision_unchanged" in result["verification"]["checks"]
     assert "store_dry_run_receipt_recorded" in result["verification"]["checks"]
     assert "store_business_state_unchanged" in result["verification"]["checks"]

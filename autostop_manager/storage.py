@@ -3529,7 +3529,7 @@ class ManagerMemoryStore:
                 "agent_board_digest",
                 "agent_search",
                 "agent_entity_context",
-                "for AutoStop App use store scope/entities; bootstrap is one stateless snapshot and owner digest uses store_digest",
+                "for AutoStop App use Store entities; bootstrap is one stateless snapshot and owner digest uses store_digest",
                 "named domain workflow in dry_run before apply",
                 "discover_raw_capabilities only when no named workflow covers the task",
             ],

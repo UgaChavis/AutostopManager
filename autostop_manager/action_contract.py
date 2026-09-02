@@ -813,7 +813,7 @@ def _store_preflight_checks(
 ) -> list[str]:
     if domain not in STORE_DOMAINS:
         return []
-    checks = ["store_target_reread", "store_scope_allowed"]
+    checks = ["store_target_reread"]
     if revision:
         checks.append("store_expected_updated_at_matches")
     elif owner_collection_create:

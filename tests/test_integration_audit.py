@@ -170,7 +170,7 @@ def test_gmail_connector_rejects_incomplete_app_only_plugin_contract(tmp_path):
     assert result["checks"]["gmail_connector_contract_present"] is False
 
 
-def test_full_integration_audit_keeps_store_opt_in_and_never_exposes_token(tmp_path):
+def test_full_integration_audit_always_includes_store_and_never_exposes_token(tmp_path):
     manager_root = tmp_path / "manager"
     crm_root = tmp_path / "crm"
     store_root = tmp_path / "store"
@@ -216,32 +216,14 @@ def test_full_integration_audit_keeps_store_opt_in_and_never_exposes_token(tmp_p
     )
 
     assert result["ok"] is True
-    assert result["scope"]["store"] is False
-    assert len(calls) == 3
-    gateway_calls = [(command, kwargs) for command, kwargs in calls if "--mcp-url" in command]
-    assert len(gateway_calls) == 2
-    assert all("--require-store" not in command and "--require-web" in command for command, _ in gateway_calls)
-    assert all("--exhaustive" in command for command, _ in gateway_calls)
-    assert all(kwargs["env"]["MINIMAL_KANBAN_MCP_BEARER_TOKEN"] == "test-secret" for _, kwargs in gateway_calls)
-    assert "test-secret" not in json.dumps(result)
-
-    calls.clear()
-    result = build_integration_audit(
-        full=True,
-        include_store=True,
-        crm_root=crm_root,
-        store_root=store_root,
-        manager_root=manager_root,
-        gmail_plugin_root=plugin_root,
-        gmail_proof_path=proof_path,
-        command_runner=runner,
-    )
-
-    assert result["ok"] is True
     assert result["scope"]["store"] is True
     assert len(calls) == 4
     gateway_calls = [(command, kwargs) for command, kwargs in calls if "--mcp-url" in command]
+    assert len(gateway_calls) == 2
     assert all("--require-store" in command and "--require-web" in command for command, _ in gateway_calls)
+    assert all("--exhaustive" in command for command, _ in gateway_calls)
+    assert all(kwargs["env"]["MINIMAL_KANBAN_MCP_BEARER_TOKEN"] == "test-secret" for _, kwargs in gateway_calls)
+    assert "test-secret" not in json.dumps(result)
 
 
 def test_gateway_timeout_fails_closed_without_subprocess_details(tmp_path):
@@ -356,6 +338,7 @@ def test_systemd_monitor_is_hardened_and_hourly():
     assert "NoNewPrivileges=true" in service
     assert "ProtectSystem=strict" in service
     assert "--output /var/lib/autostop-manager/integration/latest.json" in service
+    assert "Store excluded" not in service
     assert "OnBootSec=5min" in timer
     assert "OnCalendar=hourly" in timer
     assert "Persistent=true" in timer

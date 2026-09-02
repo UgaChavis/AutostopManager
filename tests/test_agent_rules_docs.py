@@ -39,11 +39,12 @@ def test_codex_native_startup_files_are_present_and_safe():
         "knowledge-audit",
         "skills-audit",
         "cleanup-audit",
-        "Store is active for explicit owner Store tasks",
         "raw CRM/Store/Gmail/Telegram exports",
     ]:
         assert expected in agents
     assert "Store work is paused" not in agents
+    assert "Store Scope" not in agents
+    assert "explicit owner Store tasks" not in agents
 
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert config["project_doc_max_bytes"] == 65536
@@ -204,7 +205,6 @@ def test_manager_rules_only_hold_cross_system_runtime_invariants():
     assert {rule["id"] for rule in payload["rules"]} == {
         "source-boundaries",
         "command-knowledge-separation",
-        "store-scope-boundary",
         "guarded-write-lifecycle",
         "financial-and-external-authority",
         "workflow-recovery",
@@ -212,8 +212,6 @@ def test_manager_rules_only_hold_cross_system_runtime_invariants():
     }
     separation = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "command-knowledge-separation")
     assert "codex_apps/autostopcrm.*" in separation
-    store_scope = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "store-scope-boundary")
-    assert "Store is active for explicit owner Store tasks" in store_scope
 
 
 def test_redundant_navigation_and_generated_source_maps_stay_removed():
@@ -315,6 +313,7 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
 
     assert {"store_read_workflow", "store_management_workflow"} <= set(routes)
     assert "store_management" in routes["store_management_workflow"]["knowledge_domains"]
+    assert routes["store_management_workflow"]["effects"] == []
     assert "planned_changes_by_action" not in manager_catalog
     for required in [
         'agent_board_digest(scope="store")',

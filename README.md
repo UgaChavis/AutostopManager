@@ -38,8 +38,8 @@ and private documents never enter Git or durable prompts.
 .venv/bin/python -m autostop_manager.cli integration-audit
 ```
 
-Integration audits exclude Store by default. Use `--include-store` for an
-explicitly Store-scoped audit; it does not authorize a release or Store write.
+Integration audits include Store parity and read-only Store health checks by
+default.
 
 Runtime boundaries and write gates live in `AGENTS.md`; detailed procedures
 live in the playbook selected by `agent-brief`.

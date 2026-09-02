@@ -113,14 +113,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     integration_audit = sub.add_parser(
         "integration-audit",
-        help="Verify live CRM, web research, Gmail readiness, and docs/runtime contracts",
+        help="Verify live CRM, Store, web research, Gmail readiness, and docs/runtime contracts",
     )
     integration_audit.add_argument("--full", action="store_true")
-    integration_audit.add_argument(
-        "--include-store",
-        action="store_true",
-        help="Include Store parity for an explicitly Store-scoped audit",
-    )
     integration_audit.add_argument(
         "--gmail-proof",
         default="/var/lib/autostop-manager/integration/gmail-proof.json",
@@ -169,7 +164,6 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "integration-audit":
         report = build_integration_audit(
             full=args.full,
-            include_store=args.include_store,
             gmail_proof_path=args.gmail_proof,
         )
         _write_output(args.output, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
