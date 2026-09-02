@@ -185,6 +185,21 @@ def test_explicit_remote_server_still_uses_remote_access_route():
 @pytest.mark.parametrize(
     "query",
     [
+        "Перезапусти SSHD на удалённом сервере",
+        "Запусти bootstrap home-pc",
+    ],
+)
+def test_explicit_remote_change_uses_destructive_route(query):
+    routes = plan_command_routes(query)
+
+    assert [route["workflow_id"] for route in routes] == ["remote_codex_access_change"]
+    assert routes[0]["effects"] == ["destructive"]
+    assert routes[0]["dependencies"] == ["remote_codex_access"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением",
         "Проверь цифровую инфраструктуру AutoStop перед обновлением",
         "Проверь серверную инфраструктуру AutoStop перед обновлением",
