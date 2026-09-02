@@ -1290,10 +1290,11 @@ def _domain_hints(query: str) -> dict[str, int]:
     )
     if any(term in lowered for term in remote_access_terms):
         hints["remote_codex_access"] = 82
+    broad_infrastructure = "инфраструктур" in lowered
     generic_server = "сервер" in lowered and "mcp" not in lowered
-    if generic_server or "инфраструктур" in lowered:
+    if generic_server and not broad_infrastructure:
         hints["remote_codex_access"] = max(hints.get("remote_codex_access", 0), 50)
-    if any(term in lowered for term in ("резервн", "backup", "backups")):
+    if broad_infrastructure or any(term in lowered for term in ("резервн", "backup", "backups")):
         hints["deployment"] = max(hints.get("deployment", 0), 70)
     store_context_terms = (
         "магазин",

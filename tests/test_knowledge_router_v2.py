@@ -182,9 +182,15 @@ def test_explicit_remote_server_still_uses_remote_access_route():
     assert _workflows("Проверь подключение к удалённому серверу по SSH") == ["remote_codex_access"]
 
 
-def test_backup_audit_is_not_misrouted_to_remote_access():
-    query = "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением"
-
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением",
+        "Проверь цифровую инфраструктуру AutoStop перед обновлением",
+        "Проверь серверную инфраструктуру AutoStop перед обновлением",
+    ],
+)
+def test_release_readiness_audit_is_not_misrouted_to_remote_access(query):
     assert _workflows(query) == []
     result = probe_knowledge_base(None, query)
     assert result["best_domain"] == "deployment"

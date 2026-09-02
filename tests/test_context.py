@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import autostop_manager.context as context
 from autostop_manager.context import prepare_manager_context
 from autostop_manager.knowledge_base import sync_knowledge_base
@@ -30,10 +32,18 @@ def test_prepare_context_flags_vehicle_specific_missing_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
-def test_prepare_context_opens_deployment_docs_for_backup_audit(tmp_path):
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением",
+        "Проверь цифровую инфраструктуру AutoStop перед обновлением",
+        "Проверь серверную инфраструктуру AutoStop перед обновлением",
+    ],
+)
+def test_prepare_context_opens_deployment_docs_for_release_readiness_audit(tmp_path, query):
     result = prepare_manager_context(
         _store(tmp_path),
-        "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением",
+        query,
         limit=5,
     )
 
