@@ -3,7 +3,7 @@ Description=Run the AutoStop cross-system integration audit hourly
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=1h
+OnCalendar=hourly
 RandomizedDelaySec=2min
 AccuracySec=30s
 Persistent=true
@@ -11,4 +11,3 @@ Unit=autostop-integration-audit.service
 
 [Install]
 WantedBy=timers.target
-

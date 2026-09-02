@@ -356,7 +356,8 @@ def test_systemd_monitor_is_hardened_and_hourly():
     assert "NoNewPrivileges=true" in service
     assert "ProtectSystem=strict" in service
     assert "--output /var/lib/autostop-manager/integration/latest.json" in service
-    assert "OnUnitActiveSec=1h" in timer
+    assert "OnBootSec=5min" in timer
+    assert "OnCalendar=hourly" in timer
     assert "Persistent=true" in timer
     assert "systemctl enable --now autostop-integration-audit.timer" in installer
     assert "WorkingDirectory=/opt/autostop-manager-releases/current" in service
