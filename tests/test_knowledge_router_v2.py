@@ -182,6 +182,15 @@ def test_explicit_remote_server_still_uses_remote_access_route():
     assert _workflows("Проверь подключение к удалённому серверу по SSH") == ["remote_codex_access"]
 
 
+def test_backup_audit_is_not_misrouted_to_remote_access():
+    query = "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением"
+
+    assert _workflows(query) == []
+    result = probe_knowledge_base(None, query)
+    assert result["best_domain"] == "deployment"
+    assert "remote_codex_access" not in {route["domain"] for route in result["routes"]}
+
+
 @pytest.mark.parametrize("alias", ["autostop-vps27560", "autostop-vps27560-alt"])
 def test_configured_server_aliases_use_remote_access_route(alias):
     assert _workflows(f"Проверь {alias}") == ["remote_codex_access"]

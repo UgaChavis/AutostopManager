@@ -30,6 +30,18 @@ def test_prepare_context_flags_vehicle_specific_missing_context(tmp_path):
     assert "VIN or chassis" in result["missing_context"]
 
 
+def test_prepare_context_opens_deployment_docs_for_backup_audit(tmp_path):
+    result = prepare_manager_context(
+        _store(tmp_path),
+        "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением",
+        limit=5,
+    )
+
+    assert result["command_routes"] == []
+    assert result["knowledge"]["best_domain"] == "deployment"
+    assert result["knowledge"]["open_first"] == "docs/agent/deployment_runbook.md"
+
+
 def test_agent_brief_preserves_first_workflow_scalars_and_full_steps(tmp_path):
     result = context.build_agent_brief(
         _store(tmp_path),
