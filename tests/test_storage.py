@@ -18,6 +18,33 @@ def test_store_connect_context_closes_connection(tmp_path):
         conn.execute("SELECT 1")
 
 
+def test_initialize_removes_legacy_director_journal_artifacts(tmp_path):
+    db_path = tmp_path / "memory.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE director_journal (id INTEGER PRIMARY KEY, event TEXT NOT NULL);
+            CREATE INDEX idx_director_journal_event ON director_journal(event);
+            INSERT INTO director_journal (event) VALUES ('legacy');
+            """
+        )
+
+    store = ManagerMemoryStore(db_path)
+    store.initialize()
+    store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        legacy_artifacts = conn.execute(
+            "SELECT name FROM sqlite_master WHERE name LIKE 'director_journal%' OR name LIKE 'idx_director_journal%'"
+        ).fetchall()
+        journal_exists = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'journal'"
+        ).fetchone()[0]
+
+    assert legacy_artifacts == []
+    assert journal_exists == 1
+
+
 def test_remember_and_recall(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
 

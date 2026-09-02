@@ -2050,6 +2050,7 @@ class ManagerMemoryStore:
 
                 """
             )
+            conn.execute("DROP TABLE IF EXISTS director_journal")
             self._ensure_columns(conn)
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_runs_idempotency "
