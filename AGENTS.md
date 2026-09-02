@@ -48,12 +48,13 @@ procedures belong to the playbooks returned by the route, not here.
   ID/DTC/freeze-frame/live data are in live scope; clears/tests/resets/coding,
   calibration/flashing/immobilizer operations require exact new authorization.
 
-## Store Pause
+## Store Scope
 
-Store work is paused while AutoStop App is under development. Do not inspect,
-diagnose or change Store until the owner explicitly reauthorizes it. This pause
-does not permit an automatic Store read during CRM bootstrap; an explicit
-Store request remains separately scoped.
+Store is active for explicit owner Store tasks. A Store task may inspect,
+diagnose or change AutoStop App within its stated scope; CRM bootstrap must not
+read Store automatically. Every Store write still follows the guarded lifecycle,
+and financial, supplier, destructive or release actions require the exact owner
+instruction.
 
 ## Live Work And Write Gates
 

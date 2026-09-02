@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     integration_audit.add_argument(
         "--include-store",
         action="store_true",
-        help="Include Store parity only after explicit owner reauthorization",
+        help="Include Store parity for an explicitly Store-scoped audit",
     )
     integration_audit.add_argument(
         "--gmail-proof",
