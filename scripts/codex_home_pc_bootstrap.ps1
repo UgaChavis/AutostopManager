@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ServerHost = "46.8.254.243",
+    [string]$ServerHost = "46.8.254.189",
     [string]$ServerUser = "codex-home-tunnel",
     [int]$ServerSshPort = 22,
     [string]$RemoteListenHost = "127.0.0.1",

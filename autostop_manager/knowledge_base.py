@@ -1274,6 +1274,8 @@ def _domain_hints(query: str) -> dict[str, int]:
         "autostop_remote",
         "reverse ssh",
         "autostop-vpn-fst",
+        "autostop-vps27560",
+        "autostop-vps27560-alt",
         "fst.kz",
         "удаленный сервер",
         "удалённый сервер",

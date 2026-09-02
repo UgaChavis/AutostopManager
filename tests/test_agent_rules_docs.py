@@ -109,11 +109,18 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
         "\\Autostop\\CodexRemoteReverseTunnel",
         "BatchMode=yes",
         "host-key mismatch",
+        "ssh -G <alias>",
+        "autostop-vps27560",
+        "autostop-vps27560-alt",
         "/root/.codex/CODEX_VPN_FST_ACCESS.md",
         "/opt/autostop-managed-pc/README.md",
     ]:
         assert expected in access_doc
     assert len(access_doc.splitlines()) <= 70
+
+    bootstrap = (ROOT / "scripts" / "codex_home_pc_bootstrap.ps1").read_text(encoding="utf-8")
+    assert '[string]$ServerHost = "46.8.254.189"' in bootstrap
+    assert "46.8.254.243" not in bootstrap
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]

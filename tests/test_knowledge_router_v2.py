@@ -182,6 +182,11 @@ def test_explicit_remote_server_still_uses_remote_access_route():
     assert _workflows("Проверь подключение к удалённому серверу по SSH") == ["remote_codex_access"]
 
 
+@pytest.mark.parametrize("alias", ["autostop-vps27560", "autostop-vps27560-alt"])
+def test_configured_server_aliases_use_remote_access_route(alias):
+    assert _workflows(f"Проверь {alias}") == ["remote_codex_access"]
+
+
 @pytest.mark.parametrize(
     "query",
     [
