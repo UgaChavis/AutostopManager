@@ -22,6 +22,8 @@ technical control logic.
 - `docs/agent/remote_diagnostics_pad_vii_playbook.md` - supervised PAD VII
   diagnostic operator route and isolated MCP boundary.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
+- `docs/agent/infrastructure_dependency_map.json` - compact dependency index;
+  live state still requires the named readback.
 
 For non-trivial work run `agent-brief`, then open the returned canonical route.
 `work` is the default; `learning` invokes the `autostop-learning-loop` skill.
