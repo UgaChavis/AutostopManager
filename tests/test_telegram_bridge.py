@@ -103,6 +103,7 @@ def test_work_authorization_script_is_syntax_valid_and_has_no_message_operations
     assert "--account work code-login" in text
     assert "--account work probe" in text
     assert "umask 077" in text
+    assert "umask 077; exec" in text
     assert "verify_private_session_files" in text
     assert "restore_original_service_state" in text
     assert 'systemctl disable "${service_unit}"' in text
@@ -111,7 +112,12 @@ def test_work_authorization_script_is_syntax_valid_and_has_no_message_operations
     assert all(forbidden not in text for forbidden in (" dialogs", " send", " search", " read"))
 
 
-def _run_mocked_work_authorization(tmp_path: Path, *, scenario: str) -> tuple[subprocess.CompletedProcess[str], str]:
+def _run_mocked_work_authorization(
+    tmp_path: Path,
+    *,
+    scenario: str,
+    session_mode: str = "600",
+) -> tuple[subprocess.CompletedProcess[str], str]:
     release_link = tmp_path / "release"
     venv_python = tmp_path / "venv" / "bin" / "python"
     session_file = tmp_path / "state" / "account.session"
@@ -207,7 +213,7 @@ exit 2
     sudo.chmod(0o755)
 
     stat = fake_bin / "stat"
-    stat.write_text("#!/bin/sh\nprintf 'mock-service:mock-service:600\\n'\n", encoding="utf-8")
+    stat.write_text("#!/bin/sh\nprintf 'mock-service:mock-service:%s\\n' \"$FAKE_SESSION_MODE\"\n", encoding="utf-8")
     stat.chmod(0o755)
 
     active = tmp_path / "active"
@@ -225,6 +231,7 @@ exit 2
             "FAKE_ENABLED": str(enabled),
             "FAKE_PROBE_COUNT": str(probe_count),
             "FAKE_SCENARIO": scenario,
+            "FAKE_SESSION_MODE": session_mode,
             "FAKE_SYSTEMCTL_LOG": str(systemctl_log),
         }
     )
@@ -253,6 +260,14 @@ def test_work_authorization_recovers_an_existing_private_session(tmp_path) -> No
     assert completed.returncode == 0
     assert "work_telegram_already_authorized=true" in completed.stdout
     assert state == "active=1,enabled=1"
+
+
+def test_work_authorization_rejects_an_existing_open_session_before_login(tmp_path) -> None:
+    completed, state = _run_mocked_work_authorization(tmp_path, scenario="failure", session_mode="644")
+
+    assert completed.returncode == 1
+    assert "work_session_permissions_invalid=true" in completed.stderr
+    assert state == "active=0,enabled=0"
 
 
 def test_telegram_install_script_supports_an_isolated_work_account() -> None:
@@ -1599,6 +1614,46 @@ def test_code_login_keeps_phone_code_and_identity_out_of_result(monkeypatch, tmp
     assert "test-phone" not in json.dumps(result)
     assert "test-code" not in json.dumps(result)
     assert "private-account" not in json.dumps(result)
+
+
+def test_code_login_creates_session_with_private_permissions(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    session_file = config.session_path.with_suffix(".session")
+
+    class Utils:
+        @staticmethod
+        def parse_phone(_value):
+            return "79990001122"
+
+    class Client:
+        def __init__(self, _session, _api_id, _api_hash):
+            self.signed_in = False
+
+        async def connect(self):
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text("test", encoding="utf-8")
+
+        async def disconnect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return False
+
+        async def send_code_request(self, _phone):
+            return None
+
+        async def sign_in(self, **_kwargs):
+            self.signed_in = True
+
+        async def get_me(self):
+            return SimpleNamespace() if self.signed_in else None
+
+    values = iter(["test-phone", "test-code"])
+    monkeypatch.setattr(telegram_bridge, "_load_telethon", lambda: (Client, Utils, RuntimeError))
+
+    asyncio.run(telegram_bridge.run_code_login(config, read_secret=lambda _prompt: next(values)))
+
+    assert session_file.stat().st_mode & 0o777 == 0o600
 
 
 def test_code_login_handles_two_factor_with_hidden_prompt(monkeypatch, tmp_path) -> None:

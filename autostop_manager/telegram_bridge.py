@@ -1499,11 +1499,13 @@ async def run_code_login(
     """
 
     TelegramClient, utils, SessionPasswordNeededError = _load_telethon()
-    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
+    previous_umask = os.umask(0o077)
+    client: Any | None = None
     phone = ""
     code = ""
     password = ""
     try:
+        client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
         await client.connect()
         if await client.is_user_authorized():
             raise BridgeError("account_already_authorized")
@@ -1538,7 +1540,11 @@ async def run_code_login(
         phone = ""
         code = ""
         password = ""
-        await client.disconnect()
+        try:
+            if client is not None:
+                await client.disconnect()
+        finally:
+            os.umask(previous_umask)
 
 
 def send_local_request(socket_path: Path, request: dict[str, Any]) -> dict[str, Any]:

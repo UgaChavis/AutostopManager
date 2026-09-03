@@ -63,16 +63,26 @@ cleanup_failed_authorization() {
   fi
   return "${authorization_exit_code}"
 }
-trap cleanup_failed_authorization EXIT
+
+session_files=(
+  "${session_base}"
+  "${session_base}-journal"
+  "${session_base}-shm"
+  "${session_base}-wal"
+)
+
+session_state_present() {
+  local session_file
+  for session_file in "${session_files[@]}"; do
+    if [[ -e "${session_file}" || -L "${session_file}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 verify_private_session_files() {
   local session_file
-  local session_files=(
-    "${session_base}"
-    "${session_base}-journal"
-    "${session_base}-shm"
-    "${session_base}-wal"
-  )
   if [[ -L "${session_base}" || ! -f "${session_base}" ]]; then
     return 1
   fi
@@ -86,6 +96,15 @@ verify_private_session_files() {
     fi
   done
 }
+
+if session_state_present && ! verify_private_session_files; then
+  systemctl stop "${service_unit}" || true
+  systemctl disable "${service_unit}" || true
+  echo "work_session_permissions_invalid=true" >&2
+  exit 1
+fi
+
+trap cleanup_failed_authorization EXIT
 
 enable_and_verify_work_bridge() {
   systemctl enable --now "${service_unit}"
@@ -114,7 +133,8 @@ fi
 login_output=""
 login_status=0
 login_output="$(
-  sudo -u "${service_user}" env PYTHONPATH="${release_link}" \
+  sudo -u "${service_user}" sh -c 'umask 077; exec "$@"' sh \
+    env PYTHONPATH="${release_link}" \
     "${venv_python}" -m autostop_manager.telegram_bridge --account work code-login
 )" || login_status="$?"
 
