@@ -124,7 +124,10 @@ def test_home_pc_remote_access_is_documented_as_current_capability():
 
     route = json.loads((ROOT / "docs" / "agent" / "knowledge_map.json").read_text(encoding="utf-8"))
     assert "remote_codex_access" in route["domains"]
-    assert "docs/agent/codex_home_pc_reverse_ssh.md" in route["domains"]["remote_codex_access"]["primary_files"]
+    remote_v2 = route["domains"]["remote_codex_access"]
+    assert "docs/agent/autostop_remote_v2_playbook.md" in remote_v2["primary_files"]
+    assert ".agents/skills/manage-autostop-remote-v2/SKILL.md" in remote_v2["primary_files"]
+    assert "docs/agent/codex_home_pc_reverse_ssh.md" in remote_v2["reference_files"]
 
 
 def test_pad_vii_playbook_requires_the_complete_current_status_gate():

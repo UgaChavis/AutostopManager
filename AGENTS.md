@@ -48,6 +48,20 @@ procedures belong to the playbooks returned by the route, not here.
   ID/DTC/freeze-frame/live data are in live scope; clears/tests/resets/coding,
   calibration/flashing/immobilizer operations require exact new authorization.
 
+## AutoStop Remote v2 Fleet
+
+- For a managed Windows PC, read `docs/agent/autostop_remote_v2_playbook.md` and
+  its project skill. Manager guides only the root-owned local `managed-pc` CLI;
+  it never gains a new MCP, HTTP API, listener or direct SSH route.
+- First run `managed-pc list` and `managed-pc fleet-health`, resolve a returned
+  exact canonical alias, then run fresh `managed-pc status <alias>` immediately
+  before every non-read operation. Never select a PC by substring, Windows
+  hostname, guessed friendly label, device ID or listener port.
+- Never use `scripts/codex_home_pc_bootstrap.ps1`, change Windows system SSHD or
+  firewall, start a public service, use a raw-IP fallback or
+  `StrictHostKeyChecking=accept-new`. Stop on a host-key mismatch or stale or
+  non-online status; the local CLI independently enforces freshness and state.
+
 ## Live Work And Write Gates
 
 - CRM's only external Codex surface is the configured 24-tool Gateway v2 connector.
