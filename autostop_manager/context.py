@@ -55,6 +55,20 @@ EFFECT_POLICIES: dict[str, dict[str, list[str]]] = {
         "forbidden_actions": ["change unrelated CRM fields, totals, payments, deadlines or columns"],
         "verification": ["reread the exact changed target and reconcile the planned diff"],
     },
+    "store_write": {
+        "hot_rules": [
+            "Store writes require one exact live target, current revision, a reviewed operation contract, idempotency and proof-bound apply."
+        ],
+        "read_order": [
+            "reread the exact Store target and current operation schema",
+            "prepare action contract, dry-run, then apply",
+        ],
+        "allowed_actions": ["apply only the task-scoped Store diff"],
+        "forbidden_actions": [
+            "publish externally, procure, pay, discount, delete or change another Store target without the corresponding explicit effect"
+        ],
+        "verification": ["reread the exact Store target and reconcile every planned field"],
+    },
     "document": {
         "hot_rules": ["Generate from the current source and pass render, totals and attachment-hash QA."],
         "read_order": ["reread the source record and current document schema"],
@@ -70,6 +84,15 @@ EFFECT_POLICIES: dict[str, dict[str, list[str]]] = {
         "allowed_actions": ["publish or send once through a proof-bound idempotent operation"],
         "forbidden_actions": ["publish or send when target, channel, content, QA or attachment identity is ambiguous"],
         "verification": ["record compact refs and verify exactly one customer-visible or outbound result"],
+    },
+    "account_auth": {
+        "hot_rules": [
+            "Account authorization requires one explicitly selected account and interactive owner-controlled login without exposing credentials or session material."
+        ],
+        "read_order": ["check the exact selected account service and current authorization state"],
+        "allowed_actions": ["run only the selected account's reviewed interactive authorization flow"],
+        "forbidden_actions": ["send messages, copy sessions, expose login secrets or authorize a different account"],
+        "verification": ["probe the same account for authorized=true and require the expected session identity"],
     },
     "remote_diagnostics": {
         "hot_rules": ["Tablet calls require an explicit live-session owner start and the PAD VII current status gate."],
@@ -309,6 +332,11 @@ def build_agent_brief(
             candidate["uncertainty"] = round(1.0 - float(candidate["confidence"]), 2)
     source_of_truth = list(dict.fromkeys(source for step in steps for source in step.get("source_of_truth", [])))
     route_domains = {str(value) for step in steps for value in step.get("knowledge_domains", [])}
+    write_domains = []
+    if "crm_write" in effects:
+        write_domains.append("crm")
+    if "store_write" in effects:
+        write_domains.append("store")
     external_connectors = [
         connector
         for connector, marker in (
@@ -322,13 +350,15 @@ def build_agent_brief(
         if any(marker in route_domain for route_domain in route_domains)
     ]
     canonical_rules = [str(item["rule"]) for item in load_manager_rules()]
+    effect_hot_rules = list(policy.get("hot_rules", []))
+    hot_rules = [*effect_hot_rules, *canonical_rules[: max(0, 8 - len(effect_hot_rules))]]
 
     return {
         "ok": True,
         "format": "agent_brief_v1",
         "query": context.get("query"),
         "intent": context.get("intent"),
-        "role": "AutoStop CRM manager agent",
+        "role": "AutoStop operations director agent",
         "language": "ru",
         "answer_style": "short, practical, direct",
         "memory_sources": MEMORY_SOURCES,
@@ -363,7 +393,7 @@ def build_agent_brief(
             "selection_mode": "recommended" if steps else "explore",
             "candidates": candidates,
             "required_reads": source_of_truth,
-            "write_domains": ["crm"] if "crm_write" in effects else [],
+            "write_domains": write_domains,
             "external_connectors": external_connectors,
             "completion_checks": verification,
             "read_entity_selection": {},
@@ -373,11 +403,12 @@ def build_agent_brief(
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
             "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, supplier-sourcing evidence, quote requests, internet orders, warehouse operations, and marketplace state",
-            "manager_memory": "durable non-CRM context, rules, lessons, tasks, and short conclusions",
+            "manager_memory": "durable non-business context, rules, lessons, tasks, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
+            "telegram": "source of truth for raw dialogs, contacts, messages, and media",
             "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",
         },
-        "hot_rules": [*canonical_rules, *policy.get("hot_rules", [])][: max(1, min(limit, 8))],
+        "hot_rules": hot_rules,
         "read_order": read_order,
         "allowed_actions": allowed_actions,
         "forbidden_actions": forbidden_actions,

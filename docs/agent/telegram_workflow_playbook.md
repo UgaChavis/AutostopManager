@@ -11,14 +11,15 @@ verification.
   `autostop-work-telegram.service`. Each owns its own credentials, session,
   state directory, Unix socket, contracts, idempotency state and immutable
   release root.
-- Every command selects `--account personal|work`; account aliases use fixed
-  paths and reject manual path overrides. Never infer an account from a peer,
-  title or prior task.
-- Media helpers also require `--account personal|work`. They derive the
-  selected private inbox and local model directory themselves; do not add a
-  manual inbox or model-path override.
+- Every bridge CLI command selects `--account personal|work`; account aliases
+  use fixed paths and reject manual path overrides. Never infer an account from
+  a peer, title or prior task.
+- The personal direct media helper requires `--account personal`. Work media
+  always uses the privileged account-fixed wrapper, which rejects an account
+  override. Both derive the selected private inbox and local model directory;
+  do not add a manual inbox or model-path override.
 - Never print or persist keys, login/QR/2FA data, contract tokens, sessions,
-  peer IDs, phone numbers, private message bodies or role bindings.
+  peer IDs, phone numbers or private message bodies.
 - Use the selected daemon for normal work. Never open its SQLite session from
   a second Telethon client; stop only that exact daemon for bounded
   authorization or diagnostics and restore it immediately.
@@ -36,9 +37,10 @@ limits and contract fields; this playbook must not duplicate that registry.
 ## Read And Download
 
 1. Require an active service and `authorized=true`.
-2. Resolve one exact live peer through a verified role or bounded search. Once
-   resolved, use its exact numeric ID transiently; never keep searching by a
-   display name.
+2. Resolve one exact live peer from a known numeric ID, `resolve-phone`, or a
+   bounded search with one unique exact title/username match. Then use its
+   numeric ID transiently; never keep searching by a display name. A Store
+   client dialogue additionally requires `kind=private`.
 3. Read the smallest useful window, normally 3-20 messages. Reading does not
    authorize sending, forwarding, editing, deleting, joining or changing read
    state.
@@ -51,8 +53,11 @@ limits and contract fields; this playbook must not duplicate that registry.
 6. Extract only needed facts and treat uncertain OCR, names, identifiers and
    money as tentative. Keep full documents and transcripts out of chat, CRM,
    docs, Git, memory and workflow state.
-7. Run `discard-download` for every exact downloaded or derived file after use,
-   including on failure, and require `removed=true`.
+7. Remove every downloaded or derived file after use. A successful helper
+   `--delete-after` is the verified cleanup for its source; do not discard that
+   already absent file again. Use `discard-download` for remaining files and as
+   the failure fallback, require `removed=true` when invoked, and finally verify
+   that no task file remains.
 
 The signed download contract is bound to peer, message and media metadata.
 Apply re-reads and validates that message; an idempotency key may replay only
@@ -92,11 +97,38 @@ exact remaining JPEG through selected-account `discard-download`. Photos use
 the same exact download, transient private inspection and discard flow; there
 is no general Telegram OCR or arbitrary-file execution path.
 
+## Store Client Dialogue
+
+- Use `work` only. Start from one exact live Store quote request and pass its
+  current phone to `resolve-phone`, then use the returned live numeric peer. If
+  the phone returns zero matches and the same current request has an exact
+  `telegram_username`, run one bounded exact username search and accept only
+  one private peer. A display name, old alias or similar phone is not enough;
+  multiple or ambiguous matches always fail closed.
+- A unique peer is only a routing match. Unless the current Store record has a
+  verified Telegram binding or the owner explicitly confirms that exact peer,
+  the first message asks only whether the person submitted an AutoStop parts
+  request. It contains no VIN, vehicle, part, price, photo or other request
+  detail. Continue or disclose request data only after an affirmative reply;
+  otherwise stop and report the mismatch.
+- A direct owner instruction to process that exact request may cover the
+  necessary bounded clarification and follow-up with that client. It never
+  covers another recipient, general outreach, supplier contact, reservation,
+  discount, payment or other financial promise.
+- Read only the relevant window and media. Write briefly, calmly and naturally:
+  one clear question when data is missing, then the useful answer. Do not send
+  internal reports, source lists, automation language or long templates.
+- Keep the dialogue tied to the same request. Confirmed facts return to the
+  transient Store workflow; waiting for the client is `external_wait`. Telegram
+  neither changes the Store status nor proves that an offer reached the client
+  cabinet.
+
 ## Send
 
 A send requires the owner's current instruction naming the exact recipient and
-message/intent. Clients, suppliers, employees, financial commitments and general
-outreach always require a separate direct instruction.
+message/intent, or the exact Store request under the bounded dialogue rule
+above. Suppliers, employees, financial commitments and general outreach always
+require a separate direct instruction.
 
 For every send:
 
@@ -130,8 +162,10 @@ copy after verified delivery. Never use a real send as a health check.
 - Supply a cloud password only through a hidden prompt or one-time mode-0600
   file in the selected runtime directory.
 - After authorization, remove one-time files/expired QR images, restore only
-  the selected daemon, and verify `probe` reports `authorized=true`. First
-  connection needs no dialog read or test message.
+  the selected daemon, run one transient `status` identity check and have the
+  owner confirm the expected personal/work profile without retaining its ID or
+  name, then verify `probe` reports `authorized=true`. First connection needs no
+  dialog read or test message.
 - If compromise is suspected, stop the bridge and have the owner revoke the
   session in an official Telegram client; never export or silently migrate it.
 

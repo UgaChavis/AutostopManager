@@ -31,6 +31,9 @@ def test_skill_audit_does_not_require_retired_local_skills():
 
     assert result["ok"] is True
     assert all(not warning.startswith("missing skill file") for warning in result["warnings"])
+    skills = {item["skill_id"]: item for item in result["items"]}
+    assert skills["manage-autostop-store"]["exists"] is True
+    assert skills["manage-autostop-store"]["linked_domains"] == ["store_management"]
 
 
 def test_skill_registry_flags_invalid_knowledge_map(tmp_path, monkeypatch):

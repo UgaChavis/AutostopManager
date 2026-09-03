@@ -20,6 +20,7 @@ def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
         "обработай письмо и обнови CRM": "crm_gmail_workflow",
         "Покажи состояние склада": "store_read_workflow",
         "переведи заказ магазина в READY": "store_management_workflow",
+        "Обработай новую заявку магазина": "store_management_workflow",
         "сколько посетителей сегодня": "store_analytics_reporting",
         "какие товары смотрели за неделю": "store_analytics_reporting",
         "куда чаще нажимают": "store_analytics_reporting",

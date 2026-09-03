@@ -133,7 +133,9 @@ def test_agent_brief_store_management_has_no_blanket_destructive_gate(tmp_path):
     result = context.build_agent_brief(_store(tmp_path), "Назначь заявку на подбор в магазине")
 
     assert result["route"]["workflow_id"] == "store_management_workflow"
-    assert result["route"]["steps"][0]["effects"] == []
+    assert result["route"]["steps"][0]["effects"] == ["store_write"]
+    assert result["route"]["write_domains"] == ["store"]
+    assert "apply only the task-scoped Store diff" in result["allowed_actions"]
     assert not any("Resolve exact targets and recovery material" in rule for rule in result["hot_rules"])
 
 
@@ -142,21 +144,103 @@ def test_agent_brief_store_customer_response_publish_uses_external_visibility_po
 
     step = result["route"]["steps"][0]
     assert step["command_id"] == "store_customer_response_publish"
-    assert step["effects"] == ["external_send", "finance"]
+    assert step["effects"] == ["store_write", "external_send", "finance", "destructive"]
     assert any("exact destination or target" in rule for rule in result["hot_rules"])
     assert any("customer-visible or outbound result" in check for check in result["verification"])
     assert any("exact business target's monetary basis" in check for check in result["verification"])
     assert all("repair-order basis" not in check for check in result["verification"])
 
 
-def test_agent_brief_routes_site_parts_management_to_store(tmp_path):
+def test_agent_brief_effect_safety_rules_are_not_truncated_by_retrieval_limit(tmp_path):
+    result = context.build_agent_brief(
+        _store(tmp_path),
+        "Ответь клиенту по заявке магазина",
+        limit=1,
+    )
+
+    for marker in (
+        "Store writes require",
+        "exact destination or target",
+        "Financial effects require",
+        "before a destructive action",
+    ):
+        assert any(marker in rule for rule in result["hot_rules"])
+
+
+def test_agent_brief_store_quote_draft_has_store_and_finance_gates(tmp_path):
+    result = context.build_agent_brief(
+        _store(tmp_path),
+        "Подготовь ответ клиенту по заявке на проценку",
+    )
+
+    step = result["route"]["steps"][0]
+    assert step["command_id"] == "store_quote_draft"
+    assert step["effects"] == ["store_write", "finance", "destructive"]
+    assert result["route"]["write_domains"] == ["store"]
+    assert all("publish or send once" not in action for action in result["allowed_actions"])
+
+
+def test_agent_brief_store_ready_discloses_external_effect(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Переведи заказ магазина в ready")
+
+    step = result["route"]["steps"][0]
+    assert step["command_id"] == "store_order_ready"
+    assert step["effects"] == ["store_write", "external_send", "destructive"]
+    assert any("customer-visible or outbound result" in check for check in result["verification"])
+
+
+@pytest.mark.parametrize("query", ["Заказ магазина в READY?", "Какой заказ магазина в READY?"])
+def test_agent_brief_store_ready_question_is_read_only(tmp_path, query):
+    result = context.build_agent_brief(_store(tmp_path), query)
+
+    assert result["route"]["workflow_id"] == "store_read_workflow"
+    assert result["route"]["write_domains"] == []
+
+
+def test_agent_brief_store_quote_processing_loads_director_route(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Обработай новую заявку магазина")
+
+    assert result["role"] == "AutoStop operations director agent"
+    assert result["route"]["command_id"] == "store_customer_response_publish"
+    assert result["route"]["open_first"] == ".agents/skills/manage-autostop-store/SKILL.md"
+    assert result["route"]["write_domains"] == ["store"]
+    assert result["route"]["external_connectors"] == ["telegram", "store"]
+    assert result["source_boundaries"]["telegram"] == "source of truth for raw dialogs, contacts, messages, and media"
+
+
+def test_agent_brief_store_read_has_no_write_domain(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Посмотри новый запрос на проценку")
+
+    assert result["route"]["workflow_id"] == "store_read_workflow"
+    assert result["route"]["write_domains"] == []
+
+
+def test_agent_brief_telegram_read_does_not_authorize_send(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Прочитай рабочий Телеграм")
+
+    assert result["route"]["command_id"] == "telegram_read_operations"
+    assert result["route"]["steps"][0]["effects"] == []
+    assert all("publish or send once" not in action for action in result["allowed_actions"])
+
+
+def test_agent_brief_telegram_authorization_does_not_authorize_send(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Авторизуй рабочий Телеграм")
+
+    assert result["route"]["command_id"] == "telegram_authorization"
+    assert result["route"]["steps"][0]["effects"] == ["account_auth"]
+    assert any("interactive authorization flow" in action for action in result["allowed_actions"])
+    assert all("publish or send once" not in action for action in result["allowed_actions"])
+
+
+def test_agent_brief_routes_general_site_management_request_without_blanket_write(tmp_path):
     result = context.build_agent_brief(
         _store(tmp_path),
         "Получай полную информацию и управляй нашим сайтом автозапчастей",
     )
 
-    assert result["route"]["workflow_id"] == "store_management_workflow"
+    assert result["route"]["workflow_id"] == "store_read_workflow"
     assert result["route"]["domain"] == "store_management"
+    assert result["route"]["write_domains"] == []
 
 
 def test_agent_brief_remote_check_has_no_blanket_destructive_gate(tmp_path):

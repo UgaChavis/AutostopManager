@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 
+import pytest
+
 from autostop_manager.storage import ManagerMemoryStore
 from autostop_manager.store_integration import StoreIntegration, _merge_compact_refs
 
@@ -942,11 +944,73 @@ def test_management_readback_verifies_quote_note_by_exact_manager_origin(tmp_pat
     assert result["meta"]["readback_verified"] is True
 
 
+@pytest.mark.parametrize(
+    ("has_estimate_draft", "items_has_more", "expected_status", "expected_error"),
+    [
+        (None, False, "blocked", "store_estimate_draft_state_unavailable"),
+        (True, False, "conflict", "store_estimate_draft_conflict"),
+        (False, True, "blocked", "store_quote_items_incomplete"),
+    ],
+)
+def test_quote_draft_write_requires_safe_complete_estimate_projection(
+    tmp_path,
+    has_estimate_draft,
+    items_has_more,
+    expected_status,
+    expected_error,
+):
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "items": [{"item_id": "item-1", "offers": []}],
+        "items_has_more": items_has_more,
+        "updated_at": "version-1",
+    }
+    if has_estimate_draft is not None:
+        before["has_estimate_draft"] = has_estimate_draft
+    client = _ActionClient(before=before)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="replace_quote_offer_drafts",
+        target_id="quote-1",
+        planned_changes={
+            "items": [
+                {
+                    "item_id": "item-1",
+                    "drafts": [
+                        {
+                            "candidate_key": "rossko:abc",
+                            "part_name": "Фильтр",
+                            "sale_price": 1300,
+                            "source_kind": "ROSSKO",
+                            "price_basis": "CONFIRMED_PURCHASE",
+                        }
+                    ],
+                }
+            ]
+        },
+        owner_intent="Замени черновики предложений точной заявки quote-1",
+        expected_updated_at="version-1",
+        idempotency_key="quote-1-drafts-guard-v1",
+        correlation_id="contract:quote-1-drafts-guard-v1",
+        mode="apply",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == expected_status
+    assert result["summary"]["error_code"] == expected_error
+    assert client.action_calls == []
+
+
 def test_management_readback_handles_missing_offer_lists_as_failed_verification(tmp_path):
     before = {
         "entity": "store_quote_request",
         "id": "quote-1",
         "items": [{"item_id": "item-1", "offers": []}],
+        "items_has_more": False,
+        "has_estimate_draft": False,
         "updated_at": "version-1",
     }
     after = {
@@ -981,6 +1045,285 @@ def test_management_readback_handles_missing_offer_lists_as_failed_verification(
         expected_updated_at="version-1",
         idempotency_key="quote-1-drafts-v1",
         correlation_id="contract:quote-1-drafts-v1",
+        mode="apply",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "compensating"
+    assert result["summary"]["failed_fields"] == ["items"]
+
+
+@pytest.mark.parametrize(("observed_price", "verified"), [(1300, True), (1400, False)])
+def test_management_readback_verifies_quote_draft_fields(tmp_path, observed_price, verified):
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "items": [{"item_id": "item-1", "offers": []}],
+        "items_has_more": False,
+        "has_estimate_draft": False,
+        "updated_at": "version-1",
+    }
+    draft = {
+        "candidate_key": "rossko:abc",
+        "part_name": "Фильтр",
+        "part_sku": "HU-7008Z",
+        "brand": "MANN",
+        "purchase_price": 1000,
+        "sale_price": 1300,
+        "delivery_days": 2,
+        "comment": "В наличии у поставщика",
+        "source_kind": "ROSSKO",
+        "price_basis": "CONFIRMED_PURCHASE",
+        "is_recommended": True,
+    }
+    after = {
+        **before,
+        "items": [
+            {
+                "item_id": "item-1",
+                "offers": [
+                    {
+                        "supplier": None,
+                        "source_ref": None,
+                        "source_url": None,
+                        "availability": None,
+                        "fitment_confidence": "UNVERIFIED",
+                        "oem_reference": None,
+                        **draft,
+                        "sale_price": observed_price,
+                        "offer_id": "offer-1",
+                        "origin": "AUTOSTOP_MANAGER",
+                        "publication_status": "DRAFT",
+                        "is_selected": False,
+                    }
+                ],
+            }
+        ],
+        "items_has_more": False,
+        "updated_at": "version-2",
+    }
+    client = _ActionClient(before=before, after=after)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="replace_quote_offer_drafts",
+        target_id="quote-1",
+        planned_changes={"items": [{"item_id": "item-1", "drafts": [draft]}]},
+        owner_intent="Замени черновики предложений точной заявки quote-1",
+        expected_updated_at="version-1",
+        idempotency_key="quote-1-drafts-v1",
+        correlation_id="contract:quote-1-drafts-v1",
+        mode="apply",
+    )
+
+    assert result["meta"]["readback_verified"] is verified
+    assert result["summary"].get("failed_fields", []) == ([] if verified else ["items"])
+
+
+@pytest.mark.parametrize(
+    ("field", "unplanned_value"),
+    [
+        ("part_sku", "HU-7008Z"),
+        ("brand", "MANN"),
+        ("supplier", "ROSSKO"),
+        ("purchase_price", 1000),
+        ("delivery_days", 2),
+        ("comment", "Старый комментарий"),
+        ("source_ref", "rossko:abc"),
+        ("source_url", "https://supplier.invalid/offer"),
+        ("availability", "В наличии"),
+        ("fitment_confidence", "HIGH"),
+        ("oem_reference", "11428507683"),
+        ("is_recommended", True),
+    ],
+)
+def test_management_readback_rejects_unplanned_quote_draft_values(tmp_path, field, unplanned_value):
+    draft = {
+        "candidate_key": "rossko:abc",
+        "part_name": "Фильтр",
+        "sale_price": 1300,
+        "source_kind": "ROSSKO",
+        "price_basis": "PUBLIC_RETAIL",
+    }
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "items": [{"item_id": "item-1", "offers": []}],
+        "items_has_more": False,
+        "has_estimate_draft": False,
+        "updated_at": "version-1",
+    }
+    observed_draft = {
+        "part_sku": None,
+        "brand": None,
+        "supplier": None,
+        "purchase_price": None,
+        "delivery_days": None,
+        "comment": None,
+        "source_ref": None,
+        "source_url": None,
+        "availability": None,
+        "fitment_confidence": "UNVERIFIED",
+        "oem_reference": None,
+        "is_recommended": False,
+        **draft,
+        field: unplanned_value,
+        "offer_id": "offer-1",
+        "origin": "AUTOSTOP_MANAGER",
+        "publication_status": "DRAFT",
+        "is_selected": False,
+    }
+    after = {
+        **before,
+        "items": [{"item_id": "item-1", "offers": [observed_draft]}],
+        "updated_at": "version-2",
+    }
+    client = _ActionClient(before=before, after=after)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="replace_quote_offer_drafts",
+        target_id="quote-1",
+        planned_changes={"items": [{"item_id": "item-1", "drafts": [draft]}]},
+        owner_intent="Замени черновики предложений точной заявки quote-1",
+        expected_updated_at="version-1",
+        idempotency_key=f"quote-1-unplanned-{field}-v1",
+        correlation_id=f"contract:quote-1-unplanned-{field}-v1",
+        mode="apply",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "compensating"
+    assert result["summary"]["failed_fields"] == ["items"]
+    assert result["meta"]["readback_verified"] is False
+
+
+def test_management_readback_rejects_quote_draft_without_offer_id(tmp_path):
+    draft = {
+        "candidate_key": "rossko:abc",
+        "part_name": "Фильтр",
+        "sale_price": 1300,
+        "source_kind": "ROSSKO",
+        "price_basis": "PUBLIC_RETAIL",
+    }
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "items": [{"item_id": "item-1", "offers": []}],
+        "items_has_more": False,
+        "has_estimate_draft": False,
+        "updated_at": "version-1",
+    }
+    after = {
+        **before,
+        "items": [
+            {
+                "item_id": "item-1",
+                "offers": [
+                    {
+                        "part_sku": None,
+                        "brand": None,
+                        "supplier": None,
+                        "purchase_price": None,
+                        "delivery_days": None,
+                        "comment": None,
+                        "source_ref": None,
+                        "source_url": None,
+                        "availability": None,
+                        "fitment_confidence": "UNVERIFIED",
+                        "oem_reference": None,
+                        "is_recommended": False,
+                        **draft,
+                        "origin": "AUTOSTOP_MANAGER",
+                        "publication_status": "DRAFT",
+                        "is_selected": False,
+                    }
+                ],
+            }
+        ],
+        "updated_at": "version-2",
+    }
+    client = _ActionClient(before=before, after=after)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="replace_quote_offer_drafts",
+        target_id="quote-1",
+        planned_changes={"items": [{"item_id": "item-1", "drafts": [draft]}]},
+        owner_intent="Замени черновики предложений точной заявки quote-1",
+        expected_updated_at="version-1",
+        idempotency_key="quote-1-missing-offer-id-v1",
+        correlation_id="contract:quote-1-missing-offer-id-v1",
+        mode="apply",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "compensating"
+    assert result["summary"]["failed_fields"] == ["items"]
+    assert result["meta"]["readback_verified"] is False
+
+
+@pytest.mark.parametrize(
+    ("after_items", "items_has_more", "has_estimate_draft"),
+    [
+        (
+            [
+                {"item_id": "item-1", "offers": []},
+                {
+                    "item_id": "item-2",
+                    "offers": [
+                        {
+                            "candidate_key": "manager:unexpected",
+                            "origin": "AUTOSTOP_MANAGER",
+                            "publication_status": "DRAFT",
+                        }
+                    ],
+                },
+            ],
+            False,
+            False,
+        ),
+        ([], False, False),
+        ([{"item_id": "item-1", "offers": []}], True, False),
+        ([{"item_id": "item-1", "offers": []}], False, True),
+    ],
+)
+def test_management_readback_requires_complete_quote_draft_post_state(
+    tmp_path,
+    after_items,
+    items_has_more,
+    has_estimate_draft,
+):
+    before = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "items": [{"item_id": "item-1", "offers": []}],
+        "items_has_more": False,
+        "has_estimate_draft": False,
+        "updated_at": "version-1",
+    }
+    after = {
+        **before,
+        "items": after_items,
+        "items_has_more": items_has_more,
+        "has_estimate_draft": has_estimate_draft,
+        "updated_at": "version-2",
+    }
+    client = _ActionClient(before=before, after=after)
+    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+
+    result = integration.management_action(
+        domain="store_quote_request",
+        action="replace_quote_offer_drafts",
+        target_id="quote-1",
+        planned_changes={"items": [{"item_id": "item-1", "drafts": []}]},
+        owner_intent="Очисти черновики предложений точной заявки quote-1",
+        expected_updated_at="version-1",
+        idempotency_key="quote-1-clear-drafts-v1",
+        correlation_id="contract:quote-1-clear-drafts-v1",
         mode="apply",
     )
 

@@ -18,6 +18,16 @@ def _workflows(query: str, *, intent: str | None = None) -> list[str]:
     return [route["workflow_id"] for route in plan_command_routes(query, intent=intent)]
 
 
+def _queries(value: str) -> list[str]:
+    return [item.strip() for item in value.replace("\n", "|").split("|") if item.strip()]
+
+
+def _only_route(query: str) -> dict:
+    routes = plan_command_routes(query)
+    assert len(routes) == 1
+    return routes[0]
+
+
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
@@ -44,29 +54,108 @@ def _workflows(query: str, *, intent: str | None = None) -> list[str]:
             "Сократи код и почисти документацию проекта Автостоп Менеджер",
             ["ecosystem_capability_parity", "manager_documentation_hygiene"],
         ),
-        ("Покажи состояние склада", ["store_read_workflow"]),
-        (
-            "Получай полную информацию и управляй нашим сайтом автозапчастей",
-            ["store_management_workflow"],
-        ),
-        ("Покажи все каталоги запасных частей и наличие деталей", ["store_read_workflow"]),
-        ("Подготовь черновик ответа клиенту по заявке магазина", ["store_management_workflow"]),
-        ("Ответь клиенту по заявке магазина", ["store_management_workflow"]),
     ],
 )
 def test_command_route_regression_table(query, expected):
     assert _workflows(query) == expected
 
 
-def test_store_customer_response_publish_uses_narrow_effectful_route():
-    draft = plan_command_routes("Подготовь черновик ответа клиенту по заявке магазина")
-    publish = plan_command_routes("Ответь клиенту по заявке магазина")
+_STORE = "store_management_workflow"
+_DRAFT = ("store_write", "finance", "destructive")
+_PUBLISH = ("store_write", "external_send", "finance", "destructive")
+_EXACT_ROUTE_GROUPS = {
+    (
+        "store_read_workflow",
+        "store_read_workflow",
+        (),
+    ): "Покажи состояние склада|Получай полную информацию и управляй нашим сайтом автозапчастей|Покажи все каталоги запасных частей и наличие деталей|Посмотри новый запрос на проценку|Посмотри новую заявку на проценку|Разбери новую заявку на проценку|Заказ магазина в READY?|Какой заказ магазина в READY?|Проверь, переведена ли заявка в ждёт согласования?|Заявка уже переведена в ждёт согласования?|Покажи, переведена ли заявка в ждет согласования|Почему заявка переведена в ждёт согласования?|Покажи черновик ответа клиенту по заявке на проценку",
+    (
+        "store_quote_draft",
+        _STORE,
+        _DRAFT,
+    ): "Подготовь черновик ответа клиенту по заявке магазина|Подготовь ответ клиенту по заявке магазина|Подготовь ответ клиенту по заявке на проценку|Заполни позиции в заявке на проценку|Добавь предложение в запрос магазина|Добавь предложение в заявку на проценку|Добавь позицию в заявку на проценку|Измени предложение в заявке на проценку|Измени позицию в заявке на проценку|Обнови стоимость в заявке на проценку|Обнови стоимость позиции в заявке на проценку|Обнови срок в заявке на проценку|Обнови срок позиции в заявке на проценку|Добавь комментарий к предложению в заявке на проценку|Добавь комментарий к ответу по заявке на проценку",
+    (
+        "store_customer_response_publish",
+        _STORE,
+        _PUBLISH,
+    ): "Обработай новую заявку магазина|Обработай новую заявку на проценку|Переведи заявку в ждёт согласования|Ответь клиенту по заявке магазина|Ответь клиенту по заявке на проценку|Заполни позиции и переведи заявку в ждёт согласования",
+    ("store_management_workflow", _STORE, ("store_write",)): "Добавь комментарий в заявку на проценку",
+    (
+        "store_offer_visibility_step",
+        _STORE,
+        _PUBLISH,
+    ): "Опубликуй предложения по заявке на проценку|Опубликуй предложения в заявке на проценку|Опубликуй предложения заявки на проценку|Выбери предложение в заявке на проценку",
+    ("store_price_management", _STORE, _DRAFT): "Измени цену товара|Измени цену товара в магазине",
+    ("store_product_create", _STORE, _DRAFT): "Создай товар в магазине",
+    ("store_order_ready", _STORE, ("store_write", "external_send", "destructive")): "Переведи заказ магазина в ready",
+    (
+        "telegram_connector_health",
+        "telegram_connector_health",
+        (),
+    ): "Проверь Telegram|Проверь подключение telegram_bridge|Проверь авторизацию telegram_bridge",
+    ("telegram_owner_operations", "telegram_owner_operations", ("external_send",)): "Напиши в Телеграм администратору",
+    (
+        "telegram_authorization",
+        "telegram_owner_operations",
+        ("account_auth",),
+    ): "Авторизуй Telegram|Авторизуй telegram_bridge",
+    (
+        "telegram_read_operations",
+        "telegram_owner_operations",
+        (),
+    ): "Найди контакт в Telegram|Прочитай Telegram|Найди контакт через telegram_bridge|Прочитай telegram_bridge|Прочитай рабочий Телеграм|Посмотри сообщения в рабочем Телеграме|Скачай голосовое в рабочем Телеграме|Расшифруй аудио в Telegram|Послушай последнее голосовое в рабочем Телеграме",
+}
 
-    assert [route["command_id"] for route in draft] == ["store_management_workflow"]
-    assert draft[0]["effects"] == []
-    assert [route["command_id"] for route in publish] == ["store_customer_response_publish"]
-    assert publish[0]["workflow_id"] == "store_management_workflow"
-    assert publish[0]["effects"] == ["external_send", "finance"]
+
+@pytest.mark.parametrize(("expected", "query_text"), _EXACT_ROUTE_GROUPS.items())
+def test_store_and_telegram_exact_route_matrix(expected, query_text):
+    command_id, workflow_id, effects = expected
+    for query in _queries(query_text):
+        route = _only_route(query)
+        assert route["command_id"] == command_id
+        assert route["workflow_id"] == workflow_id
+        assert route["effects"] == list(effects)
+
+
+_COMPOSED_ROUTE_GROUPS = {
+    (
+        "store_customer_response_publish",
+        "telegram_owner_operations",
+    ): "Посмотри новый запрос на проценку, обработай его и ответь клиенту в рабочем Телеграме|Посмотри новый запрос, обработай его и ответь в Телеграмм клиенту",
+    (
+        "store_customer_response_publish",
+    ): "Обработай новую заявку на проценку, но в Telegram не отвечай|Обработай новую заявку на проценку без Telegram",
+    ("telegram_owner_operations",): "Ответь клиенту в Telegram по заявке на проценку, публикацию Store не делай",
+}
+
+
+@pytest.mark.parametrize(("expected", "query_text"), _COMPOSED_ROUTE_GROUPS.items())
+def test_store_and_work_telegram_composition_respects_partial_opt_outs(expected, query_text):
+    for query in _queries(query_text):
+        routes = plan_command_routes(query)
+        assert tuple(route["command_id"] for route in routes) == expected
+        if expected[0] == "store_customer_response_publish":
+            assert routes[0]["effects"] == list(_PUBLISH)
+            expected_domains = [
+                "store_management",
+                "vehicle_identity_and_oem",
+                "parts_sourcing",
+            ]
+            if len(expected) > 1:
+                expected_domains.append("telegram_operations")
+            assert routes[0]["knowledge_domains"] == expected_domains
+
+
+@pytest.mark.parametrize(
+    "query",
+    _queries(
+        "Обработай новый запрос|Обработай новый запрос на ремонт|Обработай новую заявку кандидата|Обработай новый запрос поставщика|Посмотри новую заявку кандидата|Разбери новую заявку кандидата|Ответь клиенту по заявке кандидата|Посмотри новый запрос в почте|Обработай заявку поставщика в магазине|Обработай запрос на возврат в магазине|Обработай запрос на закупку в магазине|Переведи запрос магазина в работу|Посмотри новый запрос|Прочитай новый запрос|Что за новый запрос"
+    ),
+)
+def test_ambiguous_new_request_never_routes_effectful_store(query):
+    routes = plan_command_routes(query)
+
+    assert all(route["command_id"] != "store_customer_response_publish" for route in routes)
 
 
 def test_email_lookup_does_not_select_external_send():
@@ -129,12 +218,9 @@ def test_crm_failure_is_not_treated_as_negative_scope():
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Проверь работоспособность AutoStopManager",
-        "Коротко протестируй Автостоп Менеджер",
-        "Сделай smoke-test AutoStopManager",
-        "Проверь интеграции AutoStopManager",
-    ],
+    _queries(
+        "Проверь работоспособность AutoStopManager|Коротко протестируй Автостоп Менеджер|Сделай smoke-test AutoStopManager|Проверь интеграции AutoStopManager"
+    ),
 )
 def test_manager_health_routes_without_requiring_mcp_keyword(query):
     assert _workflows(query) == ["crm_agent_integration_audit"]
@@ -142,11 +228,9 @@ def test_manager_health_routes_without_requiring_mcp_keyword(query):
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Короткий read-only smoke-test AutoStopManager: проверить Gmail, Telegram, CRM, команды и MCP-серверы; без Store",
-        "Протестируй Автостоп Менеджер: работают ли Gmail, Телеграм, CRM, все команды и MCP сервера",
-        "Коротко протестируй Автостоп Менеджера: Gmail, Telegram, CRM, чтение карточек, все команды и MCP-серверы подключены и работоспособны",
-    ],
+    _queries(
+        "Короткий read-only smoke-test AutoStopManager: проверить Gmail, Telegram, CRM, команды и MCP-серверы; без Store|Протестируй Автостоп Менеджер: работают ли Gmail, Телеграм, CRM, все команды и MCP сервера|Коротко протестируй Автостоп Менеджера: Gmail, Telegram, CRM, чтение карточек, все команды и MCP-серверы подключены и работоспособны"
+    ),
 )
 def test_manager_smoke_routes_to_integration_audit_without_remote_access(query):
     routes = plan_command_routes(query)
@@ -160,33 +244,28 @@ def test_manager_smoke_routes_to_integration_audit_without_remote_access(query):
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Проверь Telegram",
-        "Проверь подключение telegram_bridge",
-        "Проверь авторизацию telegram_bridge",
-    ],
+    _queries(
+        "Только не отправь это клиенту в рабочем Телеграме|Подготовлен ли черновик ответа клиенту по заявке магазина?|Как заполнить позиции в заявке на проценку?|Покажи заполненные позиции в заявке на проценку|Создан ли товар в магазине?|Можно ли создать товар в магазине?|Как создать товар в магазине?|Как изменить цену товара в магазине?|Как обработать заявку на проценку?|Покажи, как обработать заявку на проценку|Обсудим команду «Обработай заявку на проценку», пока ничего не меняй|Расскажи, как выполнить «Опубликуй предложения по заявке», сейчас ничего не делай|Потом создай товар в магазине, но сейчас пока ничего не делай|Давай обсудим, как ты заполни позиции; ничего не меняй|Что делает кнопка «Опубликуй предложения по заявке на проценку»?|Объясни команду «Измени цену товара в магазине»|Что значит «Обработай новую заявку магазина»?|Если написать «Ответь в Telegram клиенту», сообщение сразу уйдёт?|Как выполнить команду «Опубликуй предложения по заявке на проценку»?|Напиши инструкцию для команды «отправь в Telegram»|Покажи пример: заполни позиции в заявке на проценку|Проверь маршрут для фразы «обработай заявку на проценку»|Обработай новую заявку на проценку, но не отвечай клиенту|Посмотри заявку на проценку, ничего не записывай"
+    ),
 )
-def test_explicit_telegram_health_is_read_only(query):
-    routes = plan_command_routes(query)
-
-    assert [route["workflow_id"] for route in routes] == ["telegram_connector_health"]
-    assert routes[0]["effects"] == []
+def test_meta_questions_deferrals_and_negations_never_authorize_effects(query):
+    assert all(not route["effects"] for route in plan_command_routes(query))
 
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Напиши в Телеграм администратору",
-        "Найди контакт в Telegram",
-        "Прочитай Telegram",
-        "Авторизуй Telegram",
-        "Найди контакт через telegram_bridge",
-        "Прочитай telegram_bridge",
-        "Авторизуй telegram_bridge",
-    ],
+    _queries(
+        "Измени цену запчасти в заказ-наряде CRM|Подготовь ответ по заявке на проценку в CRM|Добавь позицию в заявку на проценку в CRM|Добавь комментарий в заявку на проценку CRM|Опубликуй предложение по заявке на проценку в CRM"
+    ),
 )
-def test_explicit_telegram_operations_keep_their_route(query):
-    assert _workflows(query) == ["telegram_owner_operations"]
+def test_crm_scoped_requests_never_authorize_store_writes(query):
+    assert all("store_write" not in route["effects"] for route in plan_command_routes(query))
+
+
+def test_no_live_review_request_does_not_route_to_telegram_runtime():
+    routes = plan_command_routes("Проверь diff инструкций Store и Telegram без live-вызовов")
+
+    assert all("telegram_operations" not in route["knowledge_domains"] for route in routes)
 
 
 def test_explicit_telegram_send_composes_with_integration_audit():
@@ -202,10 +281,7 @@ def test_explicit_remote_server_still_uses_remote_access_route():
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Перезапусти SSHD на удалённом сервере",
-        "Запусти bootstrap home-pc",
-    ],
+    _queries("Перезапусти SSHD на удалённом сервере|Запусти bootstrap home-pc"),
 )
 def test_explicit_remote_change_uses_destructive_route(query):
     routes = plan_command_routes(query)
@@ -217,11 +293,9 @@ def test_explicit_remote_change_uses_destructive_route(query):
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением",
-        "Проверь цифровую инфраструктуру AutoStop перед обновлением",
-        "Проверь серверную инфраструктуру AutoStop перед обновлением",
-    ],
+    _queries(
+        "Проверь свежесть и восстановимость резервных копий AutoStop перед обновлением|Проверь цифровую инфраструктуру AutoStop перед обновлением|Проверь серверную инфраструктуру AutoStop перед обновлением"
+    ),
 )
 def test_release_readiness_audit_is_not_misrouted_to_remote_access(query):
     assert _workflows(query) == []
@@ -237,10 +311,7 @@ def test_configured_server_aliases_use_remote_access_route(alias):
 
 @pytest.mark.parametrize(
     "query",
-    [
-        "Подготовь удаленную диагностику Launch PAD VII",
-        "Начни сессию AutoStop Remote на планшете Launch",
-    ],
+    _queries("Подготовь удаленную диагностику Launch PAD VII|Начни сессию AutoStop Remote на планшете Launch"),
 )
 def test_pad_vii_diagnostics_route_is_distinct_from_remote_access(query):
     assert _workflows(query) == ["remote_diagnostics_pad_vii"]

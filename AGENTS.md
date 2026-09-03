@@ -59,6 +59,14 @@ procedures belong to the playbooks returned by the route, not here.
   legacy, outside project health checks and execution paths.
 - A direct owner task authorizes only the necessary in-scope non-financial
   changes. Do not expand it into unrelated cleanup or deployment.
+- Route Store work through `$manage-autostop-store`. For one exact quote,
+  “посмотри” is read-only, “подготовь” is draft-only, and “обработай/ответь”
+  includes the normal customer-visible Store response plus only necessary
+  bounded dialogue through `work` Telegram. Quote writes additionally require
+  a complete live projection proving no hidden Admin V2 estimate; missing or
+  conflicting proof blocks publication until Store exposes it. Store remains
+  authoritative; procurement, discounts, payments and another recipient need
+  exact authority.
 - Every mutation follows: focused exact reread -> `prepare_action_contract` ->
   named workflow `dry_run` -> `apply` with a different idempotency key ->
   independent exact reread. Use concurrency controls and a correlation id;

@@ -22,6 +22,9 @@ technical control logic.
 - `docs/agent/deployment_runbook.md` - the only release checklist.
 - `docs/agent/infrastructure_dependency_map.json` - compact dependency index;
   live state still requires the named readback.
+- `.agents/skills/manage-autostop-store/SKILL.md` - guarded Store and quote
+  handling with explicit live-capability gates; the detailed API contract
+  remains in the Store playbook.
 
 For non-trivial work run `agent-brief`, then open the returned canonical route.
 `work` is the default; `learning` invokes the `autostop-learning-loop` skill.

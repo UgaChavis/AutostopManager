@@ -217,6 +217,7 @@ _ENTITY_FULL_FIELDS: dict[str, frozenset[str]] = {
             "published_customer_response",
             "customer_response_published_at",
             "customer_response_read_at",
+            "has_estimate_draft",
             "items",
             "notes",
             "items_has_more",
@@ -1311,6 +1312,36 @@ def _validate_quote_vin_photo(photo: Any, *, path: str) -> None:
         raise ValueError(f"{path} exceeds the allowed limits")
 
 
+def _validate_entity_scalar_types(item: dict[str, Any], *, path: str) -> None:
+    if "has_estimate_draft" in item and not isinstance(item["has_estimate_draft"], bool):
+        raise ValueError(f"{path}.has_estimate_draft must be boolean")
+
+
+def _validate_quote_full_collection_counts(item: dict[str, Any], *, path: str) -> None:
+    items_count = item.get("items_count")
+    items_has_more = item.get("items_has_more")
+    notes_count = item.get("notes_count")
+    if not isinstance(items_count, int) or isinstance(items_count, bool) or items_count < 0:
+        raise ValueError(f"{path}.items_count must be a non-negative integer")
+    if not isinstance(items_has_more, bool):
+        raise ValueError(f"{path}.items_has_more must be boolean")
+    if not isinstance(notes_count, int) or isinstance(notes_count, bool) or notes_count < 0:
+        raise ValueError(f"{path}.notes_count must be a non-negative integer")
+    items = _require_object_list(item.get("items"), path=f"{path}.items")
+    notes = _require_object_list(item.get("notes"), path=f"{path}.notes")
+    if items_has_more is False and len(items) != items_count:
+        raise ValueError(f"{path}.items is incomplete")
+    if items_has_more is True and len(items) >= items_count:
+        raise ValueError(f"{path}.items_has_more is inconsistent")
+    if len(notes) != notes_count:
+        raise ValueError(f"{path}.notes is incomplete")
+
+
+def _validate_entity_full_collections(item: dict[str, Any], *, entity: str, detail: str, path: str) -> None:
+    if entity == "store_quote_request" and detail in {"full", "full_with_vin_photo"}:
+        _validate_quote_full_collection_counts(item, path=path)
+
+
 def _validate_entity_projection(
     item: dict[str, Any],
     *,
@@ -1332,6 +1363,7 @@ def _validate_entity_projection(
     if detail == "full_with_vin_photo" and entity == "store_quote_request":
         allowed |= {"vin_photo"}
     _require_allowed_keys(item, allowed, path=path)
+    _validate_entity_scalar_types(item, path=path)
 
     if "counts" in item:
         _require_allowed_keys(item["counts"], _STORE_STATE_COUNT_FIELDS, path=f"{path}.counts")
@@ -1349,6 +1381,7 @@ def _validate_entity_projection(
             raise ValueError(f"{path}.notes is not allowed for {entity}")
         for index, note in enumerate(_require_object_list(item["notes"], path=f"{path}.notes")):
             _require_allowed_keys(note, _QUOTE_NOTE_FIELDS, path=f"{path}.notes[{index}]")
+    _validate_entity_full_collections(item, entity=entity, detail=detail, path=path)
     if "vin_photo" in item:
         if entity != "store_quote_request" or detail != "full_with_vin_photo":
             raise ValueError(f"{path}.vin_photo is not allowed for this detail level")

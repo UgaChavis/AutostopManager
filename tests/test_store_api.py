@@ -573,6 +573,7 @@ def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeyp
                 "published_customer_response": None,
                 "customer_response_published_at": None,
                 "customer_response_read_at": None,
+                "has_estimate_draft": False,
                 "items": [
                     {
                         "item_id": "item-1",
@@ -601,14 +602,65 @@ def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeyp
     assert result["items"][0]["phone"] == "+79990000000"
     assert result["items"][0]["vin"] == "WDD00000000000001"
     assert result["items"][0]["customer_response_draft"] == "Подготовлен ответ"
+    assert result["items"][0]["has_estimate_draft"] is False
     assert result["items"][0]["archived_at"] is None
     assert captured["authorization"] == "Bearer quote-secret"
+
+    payload["items"][0]["has_estimate_draft"] = "false"
+    invalid = _client(quote_token="quote-secret").entity_context(
+        entity="store_quote_request", entity_id="quote-1", detail="full"
+    )
+    assert invalid["summary"]["error_code"] == "store_response_schema_invalid"
 
 
 def test_exact_quote_full_read_fails_closed_without_quote_token():
     result = _client().entity_context(entity="store_quote_request", entity_id="quote-1", detail="full")
     assert result["summary"]["error_code"] == "store_quote_token_missing"
     assert result["meta"]["request_dispatched"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("notes_count", 1),
+        ("items_count", 2),
+        ("items_has_more", "false"),
+    ],
+)
+def test_exact_quote_full_read_rejects_incomplete_collection_projection(monkeypatch, field, value):
+    quote = {
+        "entity": "store_quote_request",
+        "id": "quote-1",
+        "updated_at": "2026-07-19T10:00:00+00:00",
+        "items_count": 1,
+        "notes_count": 0,
+        "items": [
+            {
+                "item_id": "item-1",
+                "part_description": "Фильтр",
+                "quantity": 1,
+                "comment": None,
+                "sort_order": 1,
+                "offers": [],
+            }
+        ],
+        "notes": [],
+        "items_has_more": False,
+    }
+    quote[field] = value
+    payload = _envelope(
+        summary={"entity": "store_quote_request", "entity_id": "quote-1", "detail": "full"},
+        items=[quote],
+    )
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+
+    result = _client(quote_token="quote-secret").entity_context(
+        entity="store_quote_request",
+        entity_id="quote-1",
+        detail="full",
+    )
+
+    assert result["summary"]["error_code"] == "store_response_schema_invalid"
 
 
 def test_exact_quote_vin_photo_detail_is_scoped_and_rejects_unknown_photo_fields(monkeypatch):
@@ -630,7 +682,7 @@ def test_exact_quote_vin_photo_detail_is_scoped_and_rejects_unknown_photo_fields
                 "status": "WAITING_FOR_QUOTE",
                 "assigned_user_id": None,
                 "assigned_user_name": None,
-                "items_count": 1,
+                "items_count": 0,
                 "has_internal_comment": False,
                 "internal_comment_sha256": "a" * 64,
                 "created_at": "2026-07-19T09:00:00+00:00",
