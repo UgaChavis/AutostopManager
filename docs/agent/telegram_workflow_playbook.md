@@ -23,12 +23,20 @@ verification.
 - Use the selected daemon for normal work. Never open its SQLite session from
   a second Telethon client; stop only that exact daemon for bounded
   authorization or diagnostics and restore it immediately.
+- Run the bridge as the selected account's service user: `autostop-telegram`
+  for `personal`, and `autostop-work-telegram` for `work`. The work socket is
+  intentionally private to its service user; invoking `--account work` as the
+  personal service user fails closed with `bridge_unavailable` and is not an
+  authorization failure.
 
-Run commands as `autostop-telegram` and expose only task-relevant fields:
+Expose only task-relevant fields:
 
 ```bash
 sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account personal probe
+
+sudo -u autostop-work-telegram env PYTHONPATH=/opt/autostop-work-telegram-releases/current \
+  /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work probe
 ```
 
 The live bridge CLI/schema owns the current command list, media allowlist,
