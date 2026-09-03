@@ -1,28 +1,30 @@
 # Telegram Workflow Playbook
 
-Use the owner's private Telethon bridge only for the exact current Telegram
-task. Telegram remains the source of truth for dialogs, contacts, messages and
-media; Manager stores only de-identified operating rules and verification.
+Use the owner's explicitly selected Telethon bridge only for the exact current
+Telegram task. Telegram remains the source of truth for dialogs, contacts,
+messages and media; Manager stores only de-identified operating rules and
+verification.
 
 ## Runtime And Secrets
 
-- Service: `autostop-telegram.service`; canonical socket:
-  `/run/autostop-telegram/bridge.sock` with mode 0600 and service ownership.
-- Use `/opt/autostop-telegram-venv` and the active immutable release at
-  `/opt/autostop-telegram-releases/current`.
-- Credentials and the Telethon session stay in service-controlled files under
-  `/etc/autostop-telegram` and `/var/lib/autostop-telegram`.
+- `personal` is `autostop-telegram.service`; `work` is the separate
+  `autostop-work-telegram.service`. Each owns its own credentials, session,
+  state directory, Unix socket, contracts, idempotency state and immutable
+  release root.
+- Every command selects `--account personal|work`; account aliases use fixed
+  paths and reject manual path overrides. Never infer an account from a peer,
+  title or prior task.
 - Never print or persist keys, login/QR/2FA data, contract tokens, sessions,
   peer IDs, phone numbers, private message bodies or role bindings.
-- Use the daemon for normal work. Never open its SQLite session from a second
-  Telethon client; stop it only for bounded authorization or diagnostics and
-  restore it immediately.
+- Use the selected daemon for normal work. Never open its SQLite session from
+  a second Telethon client; stop only that exact daemon for bounded
+  authorization or diagnostics and restore it immediately.
 
 Run commands as `autostop-telegram` and expose only task-relevant fields:
 
 ```bash
 sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
-  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge status
+  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account personal probe
 ```
 
 The live bridge CLI/schema owns the current command list, media allowlist,
@@ -98,15 +100,21 @@ Photo sends use one service-owned mode-0600 JPEG in the private outbox, an
 explicit caption and the same contract/readback sequence. Remove the staged
 copy after verified delivery. Never use a real send as a health check.
 
-## QR And 2FA Recovery
+## Authorization, QR And 2FA Recovery
 
-- Stop the daemon for the bounded authorization session.
+- Work-account first authorization uses
+  `scripts/authorize-telegram-account.sh --account work` from an interactive
+  controlled terminal. It asks for the phone, Desktop-delivered login code and
+  optional cloud password through hidden prompts; never use chat, argv, env,
+  docs or logs. Do not copy Telegram Desktop `tdata` or a session file.
+- QR is a fallback only: stop the selected daemon, generate a fresh unique QR
+  after the prior token expires, and keep the waiting process alive while the
+  owner accepts it in Telegram Devices.
 - Supply a cloud password only through a hidden prompt or one-time mode-0600
-  file under `/run/autostop-telegram`; never use chat, argv, env, docs or logs.
-- Generate a fresh unique QR only after the previous token expires and keep the
-  waiting process alive while the owner accepts it in Telegram Devices.
-- After authorization, remove one-time files/expired QR images, restore the
-  daemon, verify status and a bounded read, restart once and verify again.
+  file in the selected runtime directory.
+- After authorization, remove one-time files/expired QR images, restore only
+  the selected daemon, and verify `probe` reports `authorized=true`. First
+  connection needs no dialog read or test message.
 - If compromise is suspected, stop the bridge and have the owner revoke the
   session in an official Telegram client; never export or silently migrate it.
 
@@ -116,7 +124,8 @@ copy after verified delivery. Never use a real send as a health check.
   or changes to Telegram presence/read semantics.
 - Do not change VPN, DNS, default route, firewall or CRM networking for
   Telegram. FST.KZ work first follows `/root/.codex/CODEX_VPN_FST_ACCESS.md`.
-- Healthy means: enabled/active service, private socket and session, authorized
-  status, successful bounded read/search and no new warning-or-higher errors.
+- Healthy after first connection means: enabled/active selected service,
+  private selected socket and session, `probe` authorization and no new
+  warning-or-higher errors. A later read/search still needs its own exact task.
 - Completion requires the exact requested result plus independent readback;
   service health alone never proves a send or download succeeded.

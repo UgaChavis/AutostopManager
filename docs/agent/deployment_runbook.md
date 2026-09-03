@@ -207,10 +207,9 @@ curl -fsS --max-time 8 -o /dev/null https://crm.autostopcrm.ru/
 ## Telegram-Only Release
 
 Telegram bridge and local voice-recognition changes do not require a CRM or
-Store deployment. They use the dedicated immutable
-`/opt/autostop-telegram-releases/current` release so an owner-authorized
-Telegram-only update cannot replace CRM containers or the shared Manager
-release.
+Store deployment. `personal` and `work` use separate dedicated immutable
+release roots, so an owner-authorized Telegram-only update cannot replace CRM
+containers, the shared Manager release, or the other Telegram account.
 
 After the normal Manager gates, publish the exact Manager commit to
 `origin/AutostopManager`, install the Telegram Python dependencies and pinned
@@ -220,15 +219,20 @@ local model, then run:
 cd /opt/AutostopManager
 git fetch origin AutostopManager --prune
 revision="$(git rev-parse origin/AutostopManager)"
-sudo ./scripts/deploy_telegram_bridge.sh "$revision"
+# Work-only release: --account is mandatory and selects only the isolated work
+# bridge.
+sudo ./scripts/install-telegram-bridge.sh --account work
+sudo ./scripts/deploy_telegram_bridge.sh --account work "$revision"
 ```
 
 The script archives only that exact remote commit into a new root-owned
-read-only release, atomically switches the Telegram-specific `current`
-symlink, installs the unit, restarts only `autostop-telegram.service`, and
-checks authorization plus the offline transcription runtime. On failure it
-restores the previous Telegram release. It does not deploy or restart CRM,
-Store, VPN, nginx or other Manager consumers. A dirty Manager working tree may
+read-only release, atomically switches the selected Telegram account's
+`current` symlink and installs only its unit. A work release that has not yet
+been authorized remains inactive; an active selected account is restarted and
+verified with the identity-free `probe`. Only the personal account runs the
+offline transcription-runtime check. On failure an active selected account is
+rolled back. It does not deploy or restart CRM, Store, VPN, nginx, the other
+Telegram account or other Manager consumers. A dirty Manager working tree may
 remain untouched because the archive is built from the exact published commit;
 never include uncommitted files in the release.
 

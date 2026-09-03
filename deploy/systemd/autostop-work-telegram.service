@@ -1,21 +1,21 @@
 [Unit]
-Description=AutoStop Manager private Telegram bridge
+Description=AutoStop Manager work Telegram bridge
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-User=autostop-telegram
-Group=autostop-telegram
-WorkingDirectory=/opt/autostop-telegram-releases/current
+User=autostop-work-telegram
+Group=autostop-work-telegram
+WorkingDirectory=/opt/autostop-work-telegram-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
-Environment=PYTHONPATH=/opt/autostop-telegram-releases/current
+Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
 UMask=0077
-RuntimeDirectory=autostop-telegram
+RuntimeDirectory=autostop-work-telegram
 RuntimeDirectoryMode=0700
-StateDirectory=autostop-telegram
+StateDirectory=autostop-work-telegram
 StateDirectoryMode=0700
-ExecStart=/opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account personal daemon
+ExecStart=/opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work daemon
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
@@ -30,7 +30,7 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/autostop-telegram /run/autostop-telegram
+ReadWritePaths=/var/lib/autostop-work-telegram /run/autostop-work-telegram
 
 [Install]
 WantedBy=multi-user.target

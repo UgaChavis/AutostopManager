@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import getpass
 import hashlib
 import hmac
 import io
@@ -12,7 +13,9 @@ import re
 import secrets
 import socket
 import stat
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +25,10 @@ DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
 DEFAULT_SESSION_PATH = Path("/var/lib/autostop-telegram/account")
 DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
 DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
+WORK_CREDENTIALS_PATH = Path("/etc/autostop-work-telegram/credentials")
+WORK_SESSION_PATH = Path("/var/lib/autostop-work-telegram/account")
+WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
+WORK_SOCKET_PATH = Path("/run/autostop-work-telegram/bridge.sock")
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_MESSAGE_CHARS = 4096
 MAX_CAPTION_CHARS = 1024
@@ -56,6 +63,30 @@ class BridgeError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+@dataclass(frozen=True)
+class TelegramAccountPaths:
+    credentials_path: Path
+    session_path: Path
+    state_dir: Path
+    socket_path: Path
+
+
+ACCOUNT_PATHS = {
+    "personal": TelegramAccountPaths(
+        credentials_path=DEFAULT_CREDENTIALS_PATH,
+        session_path=DEFAULT_SESSION_PATH,
+        state_dir=DEFAULT_STATE_DIR,
+        socket_path=DEFAULT_SOCKET_PATH,
+    ),
+    "work": TelegramAccountPaths(
+        credentials_path=WORK_CREDENTIALS_PATH,
+        session_path=WORK_SESSION_PATH,
+        state_dir=WORK_STATE_DIR,
+        socket_path=WORK_SOCKET_PATH,
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -122,6 +153,18 @@ class TelegramConfig:
             state_dir=state_dir,
             socket_path=socket_path,
         )
+
+
+def _config_for_account(account: str) -> TelegramConfig:
+    paths = ACCOUNT_PATHS.get(account)
+    if paths is None:
+        raise BridgeError("account_invalid")
+    return TelegramConfig.load(
+        paths.credentials_path,
+        session_path=paths.session_path,
+        state_dir=paths.state_dir,
+        socket_path=paths.socket_path,
+    )
 
 
 def _canonical_json(payload: dict[str, Any]) -> bytes:
@@ -698,6 +741,18 @@ def _read_one_time_password(path: Path) -> str:
     return password
 
 
+def _read_hidden_terminal_value(prompt: str) -> str:
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise BridgeError("interactive_terminal_required")
+    try:
+        value = getpass.getpass(prompt, stream=sys.stderr)
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise BridgeError("interactive_input_unavailable") from exc
+    if not value:
+        raise BridgeError("interactive_input_empty")
+    return value
+
+
 def _ensure_private_key(path: Path) -> bytes:
     for _ in range(2):
         try:
@@ -1210,6 +1265,9 @@ async def _handle_send_text_to_entity(
 
 async def _handle_operation(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
     operation = str(request.get("operation") or "")
+    if operation == "probe":
+        return {"ok": True, "authorized": bool(await client.get_me())}
+
     if operation == "status":
         me = await client.get_me()
         return {
@@ -1429,6 +1487,60 @@ async def run_qr_login(config: TelegramConfig, output_path: Path, *, two_factor_
         await client.disconnect()
 
 
+async def run_code_login(
+    config: TelegramConfig,
+    *,
+    read_secret: Callable[[str], str] = _read_hidden_terminal_value,
+) -> dict[str, Any]:
+    """Authorize one new account through a local hidden terminal prompt.
+
+    The phone, login code, and optional cloud password remain in process memory
+    only. This deliberately takes no secret-bearing CLI arguments or files.
+    """
+
+    TelegramClient, utils, SessionPasswordNeededError = _load_telethon()
+    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
+    phone = ""
+    code = ""
+    password = ""
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            raise BridgeError("account_already_authorized")
+
+        raw_phone = read_secret("Telegram phone: ")
+        normalized_phone = utils.parse_phone(raw_phone)
+        if not normalized_phone:
+            raise BridgeError("phone_invalid")
+        phone = str(normalized_phone)
+        await client.send_code_request(phone)
+
+        code = read_secret("Telegram login code: ").strip()
+        if not code:
+            raise BridgeError("login_code_invalid")
+        try:
+            await client.sign_in(phone=phone, code=code)
+        except SessionPasswordNeededError:
+            password = read_secret("Telegram cloud password: ")
+            try:
+                await client.sign_in(password=password)
+            except Exception as exc:  # never leak provider errors or secret-bearing context.
+                raise BridgeError("two_factor_password_invalid") from exc
+
+        if not await client.get_me():
+            raise BridgeError("account_not_authorized")
+        return {"ok": True, "authorized": True, "already_authorized": False, "verified": True}
+    except BridgeError:
+        raise
+    except Exception as exc:  # never leak provider errors or secret-bearing context.
+        raise BridgeError("code_login_failed") from exc
+    finally:
+        phone = ""
+        code = ""
+        password = ""
+        await client.disconnect()
+
+
 def send_local_request(socket_path: Path, request: dict[str, Any]) -> dict[str, Any]:
     encoded = _canonical_json(request) + b"\n"
     if len(encoded) > MAX_REQUEST_BYTES:
@@ -1457,17 +1569,24 @@ def send_local_request(socket_path: Path, request: dict[str, Any]) -> dict[str, 
     return response
 
 
+def _config_from_args(args: Any) -> TelegramConfig:
+    return _config_for_account(args.account)
+
+
+def _socket_from_args(args: Any) -> Path:
+    return ACCOUNT_PATHS[args.account].socket_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram")
-    parser.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIALS_PATH)
-    parser.add_argument("--session", type=Path, default=DEFAULT_SESSION_PATH)
-    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
-    parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET_PATH)
+    parser.add_argument("--account", choices=tuple(ACCOUNT_PATHS), required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("daemon")
     qr_login = subparsers.add_parser("qr-login")
     qr_login.add_argument("--output", type=Path)
     qr_login.add_argument("--password-file", type=Path)
+    subparsers.add_parser("code-login")
+    subparsers.add_parser("probe")
     subparsers.add_parser("status")
     dialogs = subparsers.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
@@ -1508,24 +1627,18 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "daemon":
-            config = TelegramConfig.load(
-                args.credentials,
-                session_path=args.session,
-                state_dir=args.state_dir,
-                socket_path=args.socket,
-            )
+            config = _config_from_args(args)
             asyncio.run(run_daemon(config))
             return 0
         if args.command == "qr-login":
-            config = TelegramConfig.load(
-                args.credentials,
-                session_path=args.session,
-                state_dir=args.state_dir,
-                socket_path=args.socket,
-            )
+            config = _config_from_args(args)
             two_factor_password = _read_one_time_password(args.password_file) if args.password_file else ""
             output_path = args.output or config.state_dir / "login-qr.png"
             payload = asyncio.run(run_qr_login(config, output_path, two_factor_password=two_factor_password))
+        elif args.command == "code-login":
+            if args.account != "work":
+                raise BridgeError("code_login_requires_work_account")
+            payload = asyncio.run(run_code_login(_config_from_args(args)))
         else:
             request: dict[str, Any] = {"operation": args.command}
             if args.command == "dialogs":
@@ -1571,11 +1684,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif args.command == "discard-download":
                 request.update({"operation": "discard_download", "path": str(args.file)})
-            payload = send_local_request(args.socket, request)
+            payload = send_local_request(_socket_from_args(args), request)
     except BridgeError as exc:
         payload = {"ok": False, "error": exc.code}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 0 if payload.get("ok") is True else 1
+    succeeded = payload.get("ok") is True and (args.command != "probe" or payload.get("authorized") is True)
+    return 0 if succeeded else 1
 
 
 if __name__ == "__main__":
