@@ -35,3 +35,6 @@ the v2 control-plane contract.
   a generic interactive shell, FastMCP or an unregistered MCP surface.
 - Never repair, enroll, re-enroll, rotate, deploy or modify MNG1 networking as
   a side effect of a fleet task. Escalate using the v2 playbook instead.
+- A generic server request such as "restart SSHD", change a firewall or repair
+  reverse SSH is outside this fleet skill. Stop and use the named server's
+  separately authorized runbook; it is never a managed-PC SSHD action.

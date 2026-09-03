@@ -71,6 +71,10 @@ transfer are owner-authorized remote actions, not background fleet maintenance.
 - Do not edit MNG1 SSH, firewall, routes, endpoint keys or device records to
   make a probe pass. A server rollout or recovery remains a separately guarded
   infrastructure change with backup, independent rollback and a second session.
+- A generic request to restart SSHD, change firewall/routes or repair legacy
+  reverse SSH on a named server is server infrastructure, not a Windows-fleet
+  operation. Stop and use that server's separately authorized runbook; do not
+  route it through `managed-pc` or treat system SSHD as a v2 component.
 - Do not use `StrictHostKeyChecking=accept-new`, `StrictHostKeyChecking=no`, a
   raw IP, direct SSH, a generic `shell`, a new public API or an unregistered MCP
   surface.

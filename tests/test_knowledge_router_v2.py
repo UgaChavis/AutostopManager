@@ -207,12 +207,8 @@ def test_explicit_remote_server_still_uses_remote_access_route():
         "Запусти bootstrap home-pc",
     ],
 )
-def test_explicit_remote_change_uses_destructive_route(query):
-    routes = plan_command_routes(query)
-
-    assert [route["workflow_id"] for route in routes] == ["remote_codex_access_change"]
-    assert routes[0]["effects"] == ["destructive"]
-    assert routes[0]["dependencies"] == ["remote_codex_access"]
+def test_legacy_server_change_stops_without_a_v2_fleet_route(query):
+    assert plan_command_routes(query) == []
 
 
 @pytest.mark.parametrize(

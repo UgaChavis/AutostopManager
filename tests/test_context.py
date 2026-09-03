@@ -167,12 +167,11 @@ def test_agent_brief_remote_check_has_no_blanket_destructive_gate(tmp_path):
     assert not any("Resolve exact targets and recovery material" in rule for rule in result["hot_rules"])
 
 
-def test_agent_brief_remote_change_keeps_destructive_gate(tmp_path):
+def test_agent_brief_server_sshd_change_does_not_route_to_v2_fleet(tmp_path):
     result = context.build_agent_brief(_store(tmp_path), "Перезапусти SSHD на удалённом сервере")
 
-    assert result["route"]["workflow_id"] == "remote_codex_access_change"
-    assert result["route"]["steps"][0]["effects"] == ["destructive"]
-    assert any("Resolve exact targets and recovery material" in rule for rule in result["hot_rules"])
+    assert result["route"]["workflow_id"] is None
+    assert result["next_actions"] == ["safe_exploration"]
 
 
 def test_agent_brief_exposes_optional_navigation_for_routed_vin_writeback(tmp_path):
