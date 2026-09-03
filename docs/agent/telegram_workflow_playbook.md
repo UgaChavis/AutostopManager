@@ -14,6 +14,9 @@ verification.
 - Every command selects `--account personal|work`; account aliases use fixed
   paths and reject manual path overrides. Never infer an account from a peer,
   title or prior task.
+- Media helpers also require `--account personal|work`. They derive the
+  selected private inbox and local model directory themselves; do not add a
+  manual inbox or model-path override.
 - Never print or persist keys, login/QR/2FA data, contract tokens, sessions,
   peer IDs, phone numbers, private message bodies or role bindings.
 - Use the selected daemon for normal work. Never open its SQLite session from
@@ -58,22 +61,36 @@ the same download. Preserve default redaction of credential-bearing URIs.
 ## Voice And Video
 
 Voice/audio transcription and short MP4 inspection are local, private and
-one-file-at-a-time. Use the downloaded exact path with:
+one-file-at-a-time. Use the matching selected account, service user, release
+root and venv; do not cross-substitute paths or users. The selected helper
+accepts the exact downloaded file only when it is in that account's inbox.
 
 ```bash
 sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_transcribe \
-  --file /run/autostop-telegram/inbox/EXACT_FILE --language ru --delete-after
+  --account personal --file /run/autostop-telegram/inbox/EXACT_FILE --language ru --delete-after
+
+sudo /usr/local/sbin/autostop-work-telegram-media transcribe \
+  --file /run/autostop-work-telegram/inbox/EXACT_FILE --language ru --delete-after
 
 sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_video_preview \
-  --file /run/autostop-telegram/inbox/EXACT_FILE.mp4 --delete-after
+  --account personal --file /run/autostop-telegram/inbox/EXACT_FILE.mp4 --delete-after
+
+sudo /usr/local/sbin/autostop-work-telegram-media preview \
+  --file /run/autostop-work-telegram/inbox/EXACT_FILE.mp4 --delete-after
 ```
 
-The helpers own and enforce current ownership, signature, codec, duration,
-size, model and sandbox limits. Transcription stays local. Video inspection
-uses only the generated silent storyboard; discard any surviving original and
-preview paths.
+The work helpers run in a transient systemd sandbox with no network and with
+the work session, credentials and bridge socket made inaccessible. The helpers
+own and enforce current ownership, signature, codec, duration, size, model and
+sandbox limits. Transcription stays local. Video inspection
+uses only the generated silent storyboard; it does not transcribe a video's
+audio track. `--delete-after` removes the source audio/MP4 after processing.
+For a video, inspect the returned storyboard transiently and then remove the
+exact remaining JPEG through selected-account `discard-download`. Photos use
+the same exact download, transient private inspection and discard flow; there
+is no general Telegram OCR or arbitrary-file execution path.
 
 ## Send
 

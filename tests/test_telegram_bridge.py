@@ -19,6 +19,9 @@ from autostop_manager.telegram_bridge import (
     _read_one_time_password,
     _requires_mutation_lock,
     _save_qr,
+    account_inbox_dir,
+    account_model_dir,
+    account_outbox_dir,
     build_parser,
     issue_download_contract,
     issue_send_contract,
@@ -74,6 +77,16 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert '"${previous_release}/${unit_relative_path}"' in text
     assert "authorization_required=true" in text
     assert "inactive existing work Telegram profile must be recovered" in text
+    assert 'if [[ "${account}" == "personal" ]]; then' in text
+    assert "DEFAULT_MODEL_DIR, _validate_local_model" in text
+    assert "account_model_dir('work')" in text
+    assert "_load_model(account_model_dir('work'), cpu_threads=1, system_owned_model=True)" in text
+    assert "rm -rf" not in text
+    assert "autostop-work-telegram-media" in text
+    assert "run-work-telegram-media.sh" in text
+    assert "restore_previous_release_assets" in text
+    assert "restore_media_wrapper" in text
+    assert 'unlink -- "${media_wrapper_path}"' in text
     assert "docker" not in text
 
 
@@ -92,6 +105,93 @@ def test_telegram_admin_scripts_require_an_explicit_account_selector() -> None:
 
         assert completed.returncode == 2
         assert "--account personal|work" in completed.stderr
+
+
+def test_work_model_provisioner_is_syntax_valid_and_scoped() -> None:
+    script = ROOT / "scripts/provision-telegram-transcription-model.sh"
+    completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
+
+    assert completed.returncode == 0
+    text = script.read_text(encoding="utf-8")
+    assert "usage: $0 --account work --revision <commit>" in text
+    assert 'model_root="/opt/autostop-work-telegram-models"' in text
+    assert 'target_model="${model_root}/faster-whisper-small"' in text
+    assert 'install -d -m 0750 -o root -g "${target_user}" "${model_root}"' in text
+    assert 'mktemp -d "${model_root}/.faster-whisper-small.XXXXXX"' in text
+    assert "--no-dereference" in text
+    assert "sha256sum -c --status" in text
+    assert "source_transcription_model_invalid=true" in text
+    assert "autostop-work-telegram" in text
+    assert "telegram_release_source_invalid=true" in text
+    assert "transcription_model_manifest_revision_mismatch=true" in text
+    assert "PYTHONPATH" not in text
+    assert "curl" not in text
+    assert "wget" not in text
+
+
+def test_work_media_sandbox_wrapper_is_scoped_and_has_no_bridge_access() -> None:
+    script = ROOT / "scripts/run-work-telegram-media.sh"
+    completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
+
+    assert completed.returncode == 0
+    text = script.read_text(encoding="utf-8")
+    assert "transcribe|preview" in text
+    assert "--account" in text and "work" in text
+    assert "systemd-run --quiet --wait --pipe --collect" in text
+    assert "PrivateNetwork=true" in text
+    assert "InaccessiblePaths=/var/lib/autostop-work-telegram" in text
+    assert "/etc/autostop-work-telegram" in text
+    assert "/run/autostop-work-telegram/bridge.sock" in text
+    assert "ReadWritePaths=${inbox_dir}" in text
+    assert "telegram_bridge" not in text
+
+
+def test_model_manifest_is_static_and_has_only_model_payloads() -> None:
+    manifest = ROOT / "deploy/telegram/faster-whisper-small.sha256"
+
+    entries = [line for line in manifest.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
+
+    assert [entry.rsplit("  ", 1)[1] for entry in entries] == [
+        "config.json",
+        "model.bin",
+        "tokenizer.json",
+        "vocabulary.txt",
+    ]
+    assert all(len(entry.split("  ", 1)[0]) == 64 for entry in entries)
+
+
+def test_telegram_dependency_lock_is_hash_pinned_and_installer_requires_it() -> None:
+    lock = ROOT / "deploy/telegram/requirements-py312-linux-x86_64.lock"
+    build_lock = ROOT / "deploy/telegram/build-requirements-py312-linux-x86_64.lock"
+    source_lock = ROOT / "deploy/telegram/pyaes-source-py312-linux-x86_64.lock"
+    wheel_lock = ROOT / "deploy/telegram/pyaes-wheel-py312-linux-x86_64.lock"
+    installer = (ROOT / "scripts/install-telegram-bridge.sh").read_text(encoding="utf-8")
+
+    entries = [line for line in lock.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
+    build_entries = [
+        line for line in build_lock.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")
+    ]
+    source_entries = [
+        line for line in source_lock.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")
+    ]
+    wheel_entries = [
+        line for line in wheel_lock.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")
+    ]
+
+    assert len(entries) >= 20
+    assert all("==" in entry and "--hash=sha256:" in entry for entry in entries)
+    assert len(build_entries) == 2
+    assert all("==" in entry and "--hash=sha256:" in entry for entry in build_entries)
+    assert len(source_entries) == len(wheel_entries) == 1
+    assert source_entries[0] != wheel_entries[0]
+    assert "--require-hashes --no-deps" in installer
+    assert "--no-build-isolation" in installer
+    assert "--only-binary=:all:" in installer
+    assert "--no-index" in installer
+    assert "pyaes_wheel_sha256" in installer
+    assert "pip check" in installer
+    assert "requirements-py312-linux-x86_64.lock" in installer
+    assert 'faster-whisper==1.2.1"' not in installer
 
 
 def test_work_authorization_script_is_syntax_valid_and_has_no_message_operations() -> None:
@@ -283,6 +383,10 @@ def test_telegram_install_script_supports_an_isolated_work_account() -> None:
     assert "cp --no-dereference" in text
     assert "/opt/autostop-work-telegram-venv" in text
     assert "source_credentials_permissions_invalid" in text
+    assert "--require-hashes --no-deps" in text
+    assert "requirements-py312-linux-x86_64.lock" in text
+    assert "usage: $0 --account personal|work --revision <commit>" in text
+    assert "telegram_release_source_invalid=true" in text
 
 
 def test_private_download_reader_handles_short_system_reads(monkeypatch, tmp_path) -> None:
@@ -411,6 +515,21 @@ def test_named_work_account_owns_all_runtime_paths() -> None:
     assert paths.session_path == telegram_bridge.WORK_SESSION_PATH
     assert paths.state_dir == telegram_bridge.WORK_STATE_DIR
     assert paths.socket_path == telegram_bridge.WORK_SOCKET_PATH
+
+
+def test_named_accounts_have_fixed_isolated_media_paths() -> None:
+    personal_inbox = account_inbox_dir("personal")
+    work_inbox = account_inbox_dir("work")
+
+    assert personal_inbox == telegram_bridge.DEFAULT_INBOX_DIR
+    assert account_outbox_dir("personal") == telegram_bridge.DEFAULT_OUTBOX_DIR
+    assert account_model_dir("personal") == telegram_bridge.DEFAULT_STATE_DIR / "models" / "faster-whisper-small"
+    assert work_inbox == telegram_bridge.WORK_SOCKET_PATH.parent / "inbox"
+    assert account_outbox_dir("work") == telegram_bridge.WORK_SOCKET_PATH.parent / "outbox"
+    assert account_model_dir("work") == telegram_bridge.WORK_TRANSCRIPTION_MODEL_DIR
+    assert work_inbox != personal_inbox
+    with pytest.raises(BridgeError, match="account_invalid"):
+        account_inbox_dir("unknown")
 
 
 def test_named_account_rejects_manual_runtime_path_overrides(tmp_path) -> None:

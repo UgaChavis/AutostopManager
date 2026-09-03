@@ -12,7 +12,7 @@ from autostop_manager.telegram_video_preview import VideoPreviewError, build_pri
 
 def _private_video(tmp_path: Path, content: bytes = b"\x00\x00\x00\x18ftypisomvideo") -> tuple[Path, Path]:
     inbox = tmp_path / "inbox"
-    inbox.mkdir(mode=0o700)
+    inbox.mkdir(mode=0o700, parents=True)
     video = inbox / "42-example.mp4"
     video.write_bytes(content)
     video.chmod(0o600)
@@ -105,6 +105,8 @@ def test_probe_accepts_one_bounded_video_and_optional_audio(monkeypatch, tmp_pat
         "audio_present": True,
     }
     assert "file,pipe" in seen["argv"]
+    assert seen["kwargs"]["stdout"] is telegram_video_preview.subprocess.PIPE
+    assert seen["kwargs"]["stderr"] is telegram_video_preview.subprocess.DEVNULL
     assert seen["kwargs"]["timeout"] == 20
 
 
@@ -186,14 +188,14 @@ def test_cli_delete_after_removes_exact_video_and_keeps_preview(monkeypatch, tmp
     preview = inbox / "42-example.preview.jpg"
     preview.write_bytes(b"\xff\xd8\xffframes\xff\xd9")
     preview.chmod(0o600)
-    monkeypatch.setattr(telegram_video_preview, "DEFAULT_INBOX_DIR", inbox)
+    monkeypatch.setattr(telegram_video_preview, "account_inbox_path", lambda _account: inbox)
     monkeypatch.setattr(
         telegram_video_preview,
         "build_private_video_storyboard",
         lambda *_args, **_kwargs: {"ok": True, "preview_path": str(preview), "frame_count": 8},
     )
 
-    assert telegram_video_preview.main(["--file", str(video), "--delete-after"]) == 0
+    assert telegram_video_preview.main(["--account", "work", "--file", str(video), "--delete-after"]) == 0
     assert not video.exists()
     assert preview.exists()
     assert json.loads(capsys.readouterr().out)["preview_path"] == str(preview)
@@ -204,7 +206,7 @@ def test_cli_cleanup_failure_preserves_exact_preview_path(monkeypatch, tmp_path,
     preview = inbox / "42-example.preview.jpg"
     preview.write_bytes(b"\xff\xd8\xffframes\xff\xd9")
     preview.chmod(0o600)
-    monkeypatch.setattr(telegram_video_preview, "DEFAULT_INBOX_DIR", inbox)
+    monkeypatch.setattr(telegram_video_preview, "account_inbox_path", lambda _account: inbox)
     monkeypatch.setattr(
         telegram_video_preview,
         "build_private_video_storyboard",
@@ -216,9 +218,85 @@ def test_cli_cleanup_failure_preserves_exact_preview_path(monkeypatch, tmp_path,
         lambda *_args, **_kwargs: (_ for _ in ()).throw(VideoPreviewError("video_cleanup_failed")),
     )
 
-    assert telegram_video_preview.main(["--file", str(video), "--delete-after"]) == 1
+    assert telegram_video_preview.main(["--account", "work", "--file", str(video), "--delete-after"]) == 1
     assert json.loads(capsys.readouterr().out) == {
         "ok": False,
         "error": "video_cleanup_failed",
         "preview_path": str(preview),
+    }
+
+
+def test_cli_delete_after_preserves_processing_error_after_removing_valid_video(monkeypatch, tmp_path, capsys) -> None:
+    inbox, video = _private_video(tmp_path)
+    monkeypatch.setattr(telegram_video_preview, "account_inbox_path", lambda _account: inbox)
+    monkeypatch.setattr(
+        telegram_video_preview,
+        "build_private_video_storyboard",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(VideoPreviewError("storyboard_render_failed")),
+    )
+
+    assert telegram_video_preview.main(["--account", "work", "--file", str(video), "--delete-after"]) == 1
+    assert not video.exists()
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "storyboard_render_failed"}
+
+
+def test_cli_delete_after_keeps_video_processing_error_when_cleanup_also_fails(monkeypatch, tmp_path, capsys) -> None:
+    inbox, video = _private_video(tmp_path)
+    monkeypatch.setattr(telegram_video_preview, "account_inbox_path", lambda _account: inbox)
+    monkeypatch.setattr(
+        telegram_video_preview,
+        "build_private_video_storyboard",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(VideoPreviewError("storyboard_render_failed")),
+    )
+    monkeypatch.setattr(
+        telegram_video_preview,
+        "discard_private_video",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(VideoPreviewError("video_cleanup_failed")),
+    )
+
+    assert telegram_video_preview.main(["--account", "work", "--file", str(video), "--delete-after"]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": False,
+        "error": "storyboard_render_failed",
+        "cleanup_failed": True,
+    }
+
+
+def test_cli_requires_an_explicit_account() -> None:
+    parser = telegram_video_preview.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--file", "/run/example.mp4"])
+
+
+def test_cli_work_uses_only_its_fixed_inbox(monkeypatch, tmp_path, capsys) -> None:
+    work_inbox, video = _private_video(tmp_path / "work")
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(
+        telegram_video_preview,
+        "account_inbox_path",
+        lambda account: work_inbox if account == "work" else pytest.fail("wrong account"),
+    )
+    monkeypatch.setattr(
+        telegram_video_preview,
+        "build_private_video_storyboard",
+        lambda path, **kwargs: (
+            calls.update(path=path, **kwargs) or {"ok": True, "preview_path": str(work_inbox / "preview.jpg")}
+        ),
+    )
+
+    assert telegram_video_preview.main(["--account", "work", "--file", str(video)]) == 0
+    assert calls == {"path": video, "inbox_dir": work_inbox}
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_cli_work_rejects_a_personal_inbox_path(monkeypatch, tmp_path, capsys) -> None:
+    work_inbox, _work_video = _private_video(tmp_path / "work")
+    _personal_inbox, personal_video = _private_video(tmp_path / "personal")
+    monkeypatch.setattr(telegram_video_preview, "account_inbox_path", lambda _account: work_inbox)
+
+    assert telegram_video_preview.main(["--account", "work", "--file", str(personal_video)]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": False,
+        "error": "video_permissions_or_size_invalid",
     }

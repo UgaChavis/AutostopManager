@@ -221,7 +221,8 @@ git fetch origin AutostopManager --prune
 revision="$(git rev-parse origin/AutostopManager)"
 # Work-only release: --account is mandatory and selects only the isolated work
 # bridge.
-sudo ./scripts/install-telegram-bridge.sh --account work
+sudo ./scripts/install-telegram-bridge.sh --account work --revision "$revision"
+sudo ./scripts/provision-telegram-transcription-model.sh --account work --revision "$revision"
 sudo ./scripts/deploy_telegram_bridge.sh --account work "$revision"
 ```
 
@@ -229,12 +230,22 @@ The script archives only that exact remote commit into a new root-owned
 read-only release, atomically switches the selected Telegram account's
 `current` symlink and installs only its unit. A work release that has not yet
 been authorized remains inactive; an active selected account is restarted and
-verified with the identity-free `probe`. Only the personal account runs the
+verified with the identity-free `probe`. The selected account also runs an
 offline transcription-runtime check. On failure an active selected account is
-rolled back. It does not deploy or restart CRM, Store, VPN, nginx, the other
-Telegram account or other Manager consumers. A dirty Manager working tree may
-remain untouched because the archive is built from the exact published commit;
-never include uncommitted files in the release.
+rolled back at the release/unit and bridge-probe level. The independent
+root-owned media model and venv are immutable checked inputs, not rollback
+assets; if a media gate fails, treat media as unavailable until a corrected
+work-only release succeeds. It does not deploy or restart CRM, Store, VPN,
+nginx, the other Telegram account or other Manager consumers. A dirty Manager
+working tree may remain untouched because the archive is built from the exact
+published commit; never include uncommitted files in the release.
+
+The installer places the versioned, reviewed root-owned checksum manifest before
+the work provisioner runs. The provisioner accepts only an exact match to that
+manifest, copies the fixed model payload through a root-owned staging directory
+on the target filesystem, verifies the checksums again and installs a
+root-owned read-only work model. It never uses personal-model cache metadata as
+a trust input.
 
 ## Failure And Rollback
 

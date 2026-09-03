@@ -29,13 +29,13 @@ WORK_CREDENTIALS_PATH = Path("/etc/autostop-work-telegram/credentials")
 WORK_SESSION_PATH = Path("/var/lib/autostop-work-telegram/account")
 WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
 WORK_SOCKET_PATH = Path("/run/autostop-work-telegram/bridge.sock")
+WORK_TRANSCRIPTION_MODEL_DIR = Path("/opt/autostop-work-telegram-models/faster-whisper-small")
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_MESSAGE_CHARS = 4096
 MAX_CAPTION_CHARS = 1024
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 CONTRACT_TTL_SECONDS = 15 * 60
-DEFAULT_OUTBOX_DIR = Path("/run/autostop-telegram/outbox")
-DEFAULT_INBOX_DIR = Path("/run/autostop-telegram/inbox")
+TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
 PHONE_RESOLVE_INTERVAL_SECONDS = 3.0
@@ -87,6 +87,39 @@ ACCOUNT_PATHS = {
         socket_path=WORK_SOCKET_PATH,
     ),
 }
+
+
+def account_inbox_dir(account: str) -> Path:
+    """Return the only private inbox accepted for a named account."""
+
+    paths = ACCOUNT_PATHS.get(account)
+    if paths is None:
+        raise BridgeError("account_invalid")
+    return paths.socket_path.parent / "inbox"
+
+
+def account_outbox_dir(account: str) -> Path:
+    """Return the only private outbox accepted for a named account."""
+
+    paths = ACCOUNT_PATHS.get(account)
+    if paths is None:
+        raise BridgeError("account_invalid")
+    return paths.socket_path.parent / "outbox"
+
+
+def account_model_dir(account: str) -> Path:
+    """Return the account-owned local speech model path."""
+
+    paths = ACCOUNT_PATHS.get(account)
+    if paths is None:
+        raise BridgeError("account_invalid")
+    if account == "work":
+        return WORK_TRANSCRIPTION_MODEL_DIR
+    return paths.state_dir / "models" / TRANSCRIPTION_MODEL_NAME
+
+
+DEFAULT_OUTBOX_DIR = account_outbox_dir("personal")
+DEFAULT_INBOX_DIR = account_inbox_dir("personal")
 
 
 @dataclass(frozen=True)

@@ -8,10 +8,10 @@ import stat
 import subprocess
 from typing import Any
 
-from .telegram_bridge import BridgeError, _read_private_download
+from .telegram_bridge import ACCOUNT_PATHS, BridgeError, _read_private_download, account_inbox_dir
 
 
-DEFAULT_INBOX_DIR = Path("/run/autostop-telegram/inbox")
+DEFAULT_INBOX_DIR = account_inbox_dir("personal")
 MAX_VIDEO_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
 MAX_VIDEO_PIXELS = 4096 * 2160
@@ -98,7 +98,8 @@ def _probe_video(path: Path) -> dict[str, Any]:
                 str(path),
             ],
             check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             timeout=20,
         )
@@ -272,8 +273,18 @@ def discard_private_video(path: Path, *, inbox_dir: Path = DEFAULT_INBOX_DIR) ->
         raise VideoPreviewError("video_cleanup_failed")
 
 
+def account_inbox_path(account: str) -> Path:
+    """Resolve the fixed private inbox for one selected account."""
+
+    try:
+        return account_inbox_dir(account)
+    except BridgeError as exc:
+        raise VideoPreviewError(exc.code) from exc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram-video-preview")
+    parser.add_argument("--account", choices=tuple(ACCOUNT_PATHS), required=True)
     parser.add_argument("--file", required=True, type=Path)
     parser.add_argument("--delete-after", action="store_true")
     return parser
@@ -282,8 +293,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     payload: dict[str, Any] = {"ok": False, "error": "video_preview_failed"}
+    inbox_dir = account_inbox_path(args.account)
     try:
-        payload = build_private_video_storyboard(args.file)
+        payload = build_private_video_storyboard(args.file, inbox_dir=inbox_dir)
     except VideoPreviewError as exc:
         payload = {"ok": False, "error": exc.code}
     except Exception:  # noqa: BLE001 - CLI boundary must not expose decoder details.
@@ -291,12 +303,15 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if args.delete_after:
             try:
-                discard_private_video(args.file, inbox_dir=DEFAULT_INBOX_DIR)
+                discard_private_video(args.file, inbox_dir=inbox_dir)
             except VideoPreviewError:
-                preview_path = payload.get("preview_path")
-                payload = {"ok": False, "error": "video_cleanup_failed"}
-                if isinstance(preview_path, str):
-                    payload["preview_path"] = preview_path
+                if payload.get("ok") is True:
+                    preview_path = payload.get("preview_path")
+                    payload = {"ok": False, "error": "video_cleanup_failed"}
+                    if isinstance(preview_path, str):
+                        payload["preview_path"] = preview_path
+                else:
+                    payload["cleanup_failed"] = True
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload.get("ok") is True else 1
 

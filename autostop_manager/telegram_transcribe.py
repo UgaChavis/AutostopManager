@@ -8,12 +8,15 @@ import stat
 import subprocess
 from typing import Any
 
+from .telegram_bridge import ACCOUNT_PATHS, BridgeError, account_inbox_dir, account_model_dir
 
-DEFAULT_INBOX_DIR = Path("/run/autostop-telegram/inbox")
-DEFAULT_MODEL_DIR = Path("/var/lib/autostop-telegram/models/faster-whisper-small")
-MODEL_REVISION = "536b0662742c02347bc0e980a01041f333bce120"
+
+DEFAULT_INBOX_DIR = account_inbox_dir("personal")
+DEFAULT_MODEL_DIR = account_model_dir("personal")
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_AUDIO_DURATION_SECONDS = 10 * 60
+PCM_SAMPLE_RATE = 16_000
+MAX_DECODED_AUDIO_BYTES = MAX_AUDIO_DURATION_SECONDS * PCM_SAMPLE_RATE * 2
 SUPPORTED_AUDIO_SUFFIXES = {".m4a", ".mp3", ".ogg", ".opus"}
 
 
@@ -65,6 +68,8 @@ def _probe_audio(path: Path) -> dict[str, Any]:
                 "/usr/bin/ffprobe",
                 "-v",
                 "error",
+                "-protocol_whitelist",
+                "file,pipe",
                 "-show_entries",
                 "format=duration:stream=codec_type,codec_name",
                 "-of",
@@ -73,7 +78,8 @@ def _probe_audio(path: Path) -> dict[str, Any]:
                 str(path),
             ],
             check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             timeout=20,
         )
@@ -98,21 +104,82 @@ def _probe_audio(path: Path) -> dict[str, Any]:
     }
 
 
-def _validate_local_model(model_dir: Path) -> None:
+def _decode_private_audio(path: Path) -> Any:
+    """Decode locally constrained input to PCM so Whisper never opens a media URL."""
+
+    try:
+        completed = subprocess.run(
+            [
+                "/usr/bin/ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-protocol_whitelist",
+                "file,pipe",
+                "-i",
+                str(path),
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-sn",
+                "-dn",
+                "-t",
+                str(MAX_AUDIO_DURATION_SECONDS),
+                "-ac",
+                "1",
+                "-ar",
+                str(PCM_SAMPLE_RATE),
+                "-f",
+                "s16le",
+                "pipe:1",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=40,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TranscriptionError("audio_decode_failed") from exc
+    if (
+        completed.returncode != 0
+        or not completed.stdout
+        or len(completed.stdout) > MAX_DECODED_AUDIO_BYTES
+        or len(completed.stdout) % 2 != 0
+    ):
+        raise TranscriptionError("audio_decode_failed")
+    try:
+        import numpy as np
+
+        return np.frombuffer(completed.stdout, dtype="<i2").astype("float32") / 32768.0
+    except (ImportError, ValueError) as exc:
+        raise TranscriptionError("audio_decode_failed") from exc
+
+
+def _validate_local_model(model_dir: Path, *, system_owned_model: bool = False) -> None:
     if not model_dir.is_absolute() or not model_dir.is_dir():
         raise TranscriptionError("transcription_model_unavailable")
     try:
         model_stat = model_dir.stat()
     except OSError as exc:
         raise TranscriptionError("transcription_model_unavailable") from exc
-    if model_stat.st_uid != os.geteuid() or stat.S_IMODE(model_stat.st_mode) != 0o700:
-        raise TranscriptionError("transcription_model_permissions_invalid")
+    if system_owned_model:
+        if model_stat.st_uid != 0 or model_stat.st_gid != os.getegid() or stat.S_IMODE(model_stat.st_mode) != 0o750:
+            raise TranscriptionError("transcription_model_permissions_invalid")
+        required_owner = 0
+        required_group = os.getegid()
+        required_mode = 0o640
+    else:
+        if model_stat.st_uid != os.geteuid() or stat.S_IMODE(model_stat.st_mode) != 0o700:
+            raise TranscriptionError("transcription_model_permissions_invalid")
+        required_owner = os.geteuid()
+        required_group = model_stat.st_gid
+        required_mode = 0o600
     required_files = (
         "config.json",
         "model.bin",
         "tokenizer.json",
         "vocabulary.txt",
-        f".cache/huggingface/trees/{MODEL_REVISION}.json",
     )
     for name in required_files:
         candidate = model_dir / name
@@ -122,14 +189,15 @@ def _validate_local_model(model_dir: Path) -> None:
             raise TranscriptionError("transcription_model_invalid") from exc
         if (
             not stat.S_ISREG(candidate_stat.st_mode)
-            or candidate_stat.st_uid != os.geteuid()
-            or stat.S_IMODE(candidate_stat.st_mode) != 0o600
+            or candidate_stat.st_uid != required_owner
+            or candidate_stat.st_gid != required_group
+            or stat.S_IMODE(candidate_stat.st_mode) != required_mode
         ):
             raise TranscriptionError("transcription_model_invalid")
 
 
-def _load_model(model_dir: Path, *, cpu_threads: int) -> Any:
-    _validate_local_model(model_dir)
+def _load_model(model_dir: Path, *, cpu_threads: int, system_owned_model: bool = False) -> Any:
+    _validate_local_model(model_dir, system_owned_model=system_owned_model)
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
@@ -153,14 +221,16 @@ def transcribe_private_audio(
     language: str = "ru",
     inbox_dir: Path = DEFAULT_INBOX_DIR,
     model_dir: Path = DEFAULT_MODEL_DIR,
+    system_owned_model: bool = False,
 ) -> dict[str, Any]:
     _validate_private_audio(path, inbox_dir=inbox_dir)
     probe = _probe_audio(path)
+    pcm_audio = _decode_private_audio(path)
     cpu_threads = max(1, min(os.cpu_count() or 1, 4))
-    model = _load_model(model_dir, cpu_threads=cpu_threads)
+    model = _load_model(model_dir, cpu_threads=cpu_threads, system_owned_model=system_owned_model)
     try:
         segments, info = model.transcribe(
-            str(path),
+            pcm_audio,
             language=language,
             beam_size=5,
             vad_filter=True,
@@ -192,28 +262,47 @@ def discard_private_audio(path: Path, *, inbox_dir: Path = DEFAULT_INBOX_DIR) ->
         raise TranscriptionError("audio_cleanup_failed")
 
 
+def account_media_paths(account: str) -> tuple[Path, Path]:
+    """Resolve fixed account-owned paths; callers cannot supply path overrides."""
+
+    try:
+        return account_inbox_dir(account), account_model_dir(account)
+    except BridgeError as exc:
+        raise TranscriptionError(exc.code) from exc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram-transcribe")
+    parser.add_argument("--account", choices=tuple(ACCOUNT_PATHS), required=True)
     parser.add_argument("--file", required=True, type=Path)
     parser.add_argument("--language", default="ru")
     parser.add_argument("--delete-after", action="store_true")
-    parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     payload: dict[str, Any]
+    inbox_dir, model_dir = account_media_paths(args.account)
     try:
-        payload = transcribe_private_audio(args.file, language=args.language, model_dir=args.model_dir)
+        payload = transcribe_private_audio(
+            args.file,
+            language=args.language,
+            inbox_dir=inbox_dir,
+            model_dir=model_dir,
+            system_owned_model=args.account == "work",
+        )
     except TranscriptionError as exc:
         payload = {"ok": False, "error": exc.code}
     finally:
         if args.delete_after:
             try:
-                discard_private_audio(args.file, inbox_dir=DEFAULT_INBOX_DIR)
+                discard_private_audio(args.file, inbox_dir=inbox_dir)
             except TranscriptionError:
-                payload = {"ok": False, "error": "audio_cleanup_failed"}
+                if payload.get("ok") is True:
+                    payload = {"ok": False, "error": "audio_cleanup_failed"}
+                else:
+                    payload["cleanup_failed"] = True
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload.get("ok") is True else 1
 

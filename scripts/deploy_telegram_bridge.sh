@@ -32,6 +32,7 @@ case "${account}" in
     service_user="autostop-work-telegram"
     venv_root="/opt/autostop-work-telegram-venv"
     session_file="/var/lib/autostop-work-telegram/account.session"
+    media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"
     ;;
   *)
     echo "account_invalid=true" >&2
@@ -74,7 +75,10 @@ current_link="${release_root}/current"
 previous_release="$(readlink -f "${current_link}" 2>/dev/null || true)"
 
 cleanup() {
-  rm -rf -- "${staging_dir}"
+  [[ "${staging_dir}" == "${release_root}"/*.partial-* ]] || return 1
+  [[ -d "${staging_dir}" && ! -L "${staging_dir}" ]] || return 0
+  find -P "${staging_dir}" -mindepth 1 -delete
+  rmdir -- "${staging_dir}"
 }
 trap cleanup EXIT
 
@@ -88,6 +92,13 @@ git -C "${SOURCE_DIR}" archive --format=tar "${revision}" | tar -xf - -C "${stag
 chown -R root:root "${staging_dir}"
 find "${staging_dir}" -type d -exec chmod 0755 {} +
 find "${staging_dir}" -type f -exec chmod 0644 {} +
+if [[ "${account}" == "work" ]]; then
+  media_wrapper_source="${staging_dir}/scripts/run-work-telegram-media.sh"
+  if [[ ! -f "${media_wrapper_source}" || -L "${media_wrapper_source}" ]]; then
+    echo "ERROR: work media sandbox wrapper missing from release" >&2
+    exit 1
+  fi
+fi
 mv -- "${staging_dir}" "${release_dir}"
 
 next_link="${release_root}/.current-${release_id}"
@@ -103,7 +114,20 @@ bridge_ready() {
       | grep -Eq '"authorized": true'
 }
 
-rollback() {
+restore_media_wrapper() {
+  local previous_media_wrapper
+  if [[ "${account}" != "work" ]]; then
+    return 0
+  fi
+  previous_media_wrapper="${previous_release}/scripts/run-work-telegram-media.sh"
+  if [[ -f "${previous_media_wrapper}" && ! -L "${previous_media_wrapper}" ]]; then
+    install -o root -g root -m 0755 "${previous_media_wrapper}" "${media_wrapper_path}"
+  elif [[ -e "${media_wrapper_path}" || -L "${media_wrapper_path}" ]]; then
+    unlink -- "${media_wrapper_path}"
+  fi
+}
+
+restore_previous_release_assets() {
   if [[ -z "${previous_release}" || ! -d "${previous_release}" \
     || ! -f "${previous_release}/${unit_relative_path}" ]]; then
     return 1
@@ -114,7 +138,12 @@ rollback() {
   if ! install -o root -g root -m 0644 "${previous_release}/${unit_relative_path}" "${unit_path}"; then
     return 1
   fi
+  restore_media_wrapper || return 1
   systemctl daemon-reload
+}
+
+rollback() {
+  restore_previous_release_assets || return 1
   if ! systemctl restart "${service_unit}"; then
     return 1
   fi
@@ -126,6 +155,26 @@ rollback() {
   done
   return 1
 }
+
+install_current_media_wrapper() {
+  if [[ "${account}" != "work" ]]; then
+    return 0
+  fi
+  media_wrapper_source="${release_dir}/scripts/run-work-telegram-media.sh"
+  [[ -f "${media_wrapper_source}" && ! -L "${media_wrapper_source}" ]] || return 1
+  install -o root -g root -m 0755 "${media_wrapper_source}" "${media_wrapper_path}"
+}
+
+if ! install_current_media_wrapper; then
+  if [[ "${was_active}" -eq 1 ]] && rollback; then
+    echo "ERROR: work media sandbox wrapper install failed; previous release restored" >&2
+  elif [[ "${was_active}" -eq 0 ]] && restore_previous_release_assets; then
+    echo "ERROR: work media sandbox wrapper install failed; previous release assets restored" >&2
+  else
+    echo "ERROR: work media sandbox wrapper install failed; no previous Telegram release exists" >&2
+  fi
+  exit 1
+fi
 
 if [[ "${account}" == "work" && "${was_active}" -eq 0 ]]; then
   echo "telegram_bridge_deployed=true"
@@ -158,10 +207,19 @@ if [[ "${ready}" -ne 1 ]]; then
   fi
   exit 1
 fi
-if [[ "${account}" == "personal" ]] \
-  && ! sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
+transcription_runtime_ready() {
+  if [[ "${account}" == "personal" ]]; then
+    sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
+      "${venv_root}/bin/python" -c \
+      'from autostop_manager.telegram_transcribe import DEFAULT_MODEL_DIR, _validate_local_model; from faster_whisper import WhisperModel; _validate_local_model(DEFAULT_MODEL_DIR); assert WhisperModel'
+    return
+  fi
+  sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
     "${venv_root}/bin/python" -c \
-    'from autostop_manager.telegram_transcribe import DEFAULT_MODEL_DIR, _validate_local_model; from faster_whisper import WhisperModel; _validate_local_model(DEFAULT_MODEL_DIR); assert WhisperModel'; then
+    "from autostop_manager.telegram_bridge import account_model_dir; from autostop_manager.telegram_transcribe import _load_model; _load_model(account_model_dir('work'), cpu_threads=1, system_owned_model=True)"
+}
+
+if ! transcription_runtime_ready; then
   if rollback; then
     echo "ERROR: local Telegram transcription runtime failed; previous release restored" >&2
   else
