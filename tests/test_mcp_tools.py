@@ -263,10 +263,20 @@ def test_selective_registration_keeps_only_requested_tools(tmp_path):
     register_manager_memory_tools(
         server,
         ManagerMemoryStore(tmp_path / "memory.sqlite3"),
-        include_tools={"agent_bootstrap", "store_runtime_status"},
+        include_tools={
+            "agent_bootstrap",
+            "store_owner_api",
+            "store_owner_capabilities",
+            "store_runtime_status",
+        },
     )
 
-    assert set(server.tools) == {"agent_bootstrap", "store_runtime_status"}
+    assert set(server.tools) == {
+        "agent_bootstrap",
+        "store_owner_api",
+        "store_owner_capabilities",
+        "store_runtime_status",
+    }
 
 
 def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
@@ -496,7 +506,19 @@ def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_pat
         "agent_api_url": "http://autostop-app:8000/internal/agent/v1",
         "owner_token": "owner-runtime-secret",
     }
-    assert server.tools["store_owner_capabilities"](query="parts", limit=10)["ok"] is True
+    assert (
+        server.tools["store_owner_capabilities"](
+            query="parts",
+            limit=10,
+            operation_id="update_part",
+        )["ok"]
+        is True
+    )
+    assert captured["list"] == {
+        "query": "parts",
+        "limit": 10,
+        "operation_id": "update_part",
+    }
 
     read = server.tools["store_owner_api"](
         operation_id="get_part",

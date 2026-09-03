@@ -77,6 +77,11 @@ def test_client_repr_and_local_status_never_expose_tokens():
     assert "secret" not in str(status)
 
 
+def test_removed_supplier_directory_is_not_advertised_as_store_entity():
+    with pytest.raises(ValueError, match="unsupported store entity"):
+        _client().search(entity="store_supplier")
+
+
 def test_live_runtime_status_keeps_redacted_adapter_readiness(monkeypatch):
     monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope()))
 
@@ -503,6 +508,28 @@ def test_store_contacts_fail_closed_and_contacts_detail_is_not_exposed(monkeypat
         client.entity_context(entity="store_order", entity_id="1", detail="contacts")
 
 
+def test_exact_order_read_accepts_live_archive_projection(monkeypatch):
+    payload = _envelope(
+        items=[
+            {
+                "entity": "store_order",
+                "id": "order-1",
+                "updated_at": "2026-09-03T10:00:00+00:00",
+                "archived_at": None,
+                "has_archive_reason": True,
+                "archive_reason_sha256": "c" * 64,
+            }
+        ],
+    )
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+
+    result = _client().entity_context(entity="store_order", entity_id="order-1", detail="full")
+
+    assert result["ok"] is True
+    assert result["items"][0]["has_archive_reason"] is True
+    assert result["items"][0]["archive_reason_sha256"] == "c" * 64
+
+
 def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeypatch):
     captured = {}
     payload = _envelope(
@@ -515,13 +542,16 @@ def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeyp
                 "entity_id": "quote-1",
                 "updated_at": "2026-07-19T10:00:00+00:00",
                 "request_number": 2,
-                "status": "NEW",
+                "status": "WAITING_FOR_QUOTE",
                 "assigned_user_id": None,
                 "assigned_user_name": None,
                 "items_count": 1,
                 "has_internal_comment": False,
                 "internal_comment_sha256": "a" * 64,
                 "created_at": "2026-07-19T09:00:00+00:00",
+                "archived_at": None,
+                "has_archive_reason": False,
+                "archive_reason_sha256": None,
                 "notes_count": 0,
                 "agent_draft_count": 0,
                 "published_offer_count": 0,
@@ -539,6 +569,10 @@ def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeyp
                 "converted_order_id": None,
                 "approved_at": None,
                 "closed_at": None,
+                "customer_response_draft": "Подготовлен ответ",
+                "published_customer_response": None,
+                "customer_response_published_at": None,
+                "customer_response_read_at": None,
                 "items": [
                     {
                         "item_id": "item-1",
@@ -566,6 +600,8 @@ def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeyp
     )
     assert result["items"][0]["phone"] == "+79990000000"
     assert result["items"][0]["vin"] == "WDD00000000000001"
+    assert result["items"][0]["customer_response_draft"] == "Подготовлен ответ"
+    assert result["items"][0]["archived_at"] is None
     assert captured["authorization"] == "Bearer quote-secret"
 
 
@@ -591,13 +627,16 @@ def test_exact_quote_vin_photo_detail_is_scoped_and_rejects_unknown_photo_fields
                 "entity_id": "quote-1",
                 "updated_at": "2026-07-19T10:00:00+00:00",
                 "request_number": 2,
-                "status": "NEW",
+                "status": "WAITING_FOR_QUOTE",
                 "assigned_user_id": None,
                 "assigned_user_name": None,
                 "items_count": 1,
                 "has_internal_comment": False,
                 "internal_comment_sha256": "a" * 64,
                 "created_at": "2026-07-19T09:00:00+00:00",
+                "archived_at": None,
+                "has_archive_reason": False,
+                "archive_reason_sha256": None,
                 "notes_count": 0,
                 "agent_draft_count": 0,
                 "published_offer_count": 0,
@@ -615,6 +654,10 @@ def test_exact_quote_vin_photo_detail_is_scoped_and_rejects_unknown_photo_fields
                 "converted_order_id": None,
                 "approved_at": None,
                 "closed_at": None,
+                "customer_response_draft": None,
+                "published_customer_response": None,
+                "customer_response_published_at": None,
+                "customer_response_read_at": None,
                 "items": [],
                 "notes": [],
                 "items_has_more": False,
@@ -756,9 +799,13 @@ def test_real_app_digest_status_distribution_list_passes_snake_case_contract(mon
         ),
         (
             "set_quote_request_status",
-            {"status": "IN_PROGRESS"},
-            {"entity_type": "store_quote_request", "entity_id": "quote-1", "status": "IN_PROGRESS"},
-            [{"field": "status", "before": "NEW", "after": "IN_PROGRESS"}],
+            {"status": "WAITING_FOR_APPROVAL"},
+            {
+                "entity_type": "store_quote_request",
+                "entity_id": "quote-1",
+                "status": "WAITING_FOR_APPROVAL",
+            },
+            [{"field": "status", "before": "WAITING_FOR_QUOTE", "after": "WAITING_FOR_APPROVAL"}],
         ),
         (
             "update_quote_request_comment",

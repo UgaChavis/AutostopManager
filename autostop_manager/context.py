@@ -63,11 +63,13 @@ EFFECT_POLICIES: dict[str, dict[str, list[str]]] = {
         "verification": ["verify document_guard, rendered totals and SHA-256"],
     },
     "external_send": {
-        "hot_rules": ["External sends require the exact recipient, verified sender and immutable attachment hash."],
-        "read_order": ["reread recipient, sender and active connector schema"],
-        "allowed_actions": ["send once through an idempotent external step"],
-        "forbidden_actions": ["send when recipient, sender, QA or attachment identity is ambiguous"],
-        "verification": ["record connector refs and verify exactly one external result"],
+        "hot_rules": [
+            "External visibility or delivery requires an exact destination or target, an authorized channel or principal, and immutable content or attachment identity when applicable."
+        ],
+        "read_order": ["reread the target, active channel schema, and content identity"],
+        "allowed_actions": ["publish or send once through a proof-bound idempotent operation"],
+        "forbidden_actions": ["publish or send when target, channel, content, QA or attachment identity is ambiguous"],
+        "verification": ["record compact refs and verify exactly one customer-visible or outbound result"],
     },
     "remote_diagnostics": {
         "hot_rules": ["Tablet calls require an explicit live-session owner start and the PAD VII current status gate."],
@@ -87,10 +89,10 @@ EFFECT_POLICIES: dict[str, dict[str, list[str]]] = {
     },
     "finance": {
         "hot_rules": ["Financial effects require direct task-specific owner intent and proof-bound apply."],
-        "read_order": ["reread current monetary and tax basis before preview"],
+        "read_order": ["reread the current monetary and tax basis for the exact business target before preview"],
         "allowed_actions": ["apply only the owner-authorized financial result"],
         "forbidden_actions": ["apply a monetary or tax mismatch without separate confirmation"],
-        "verification": ["reconcile amount, tax status and current repair-order basis"],
+        "verification": ["reconcile the exact business target's monetary basis, tax status and resulting state"],
     },
     "destructive": {
         "hot_rules": ["Resolve exact targets and recovery material before a destructive action."],
@@ -370,7 +372,7 @@ def build_agent_brief(
         },
         "source_boundaries": {
             "crm": "live source of truth for cards, clients, vehicles, repair orders, payments, cashboxes, files, and board state",
-            "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, suppliers, quote requests, internet orders, warehouse operations, and marketplace state",
+            "store": "AutoStop App API is the live source of truth for catalog, stock, batches, storage locations, supplier-sourcing evidence, quote requests, internet orders, warehouse operations, and marketplace state",
             "manager_memory": "durable non-CRM context, rules, lessons, tasks, and short conclusions",
             "gmail": "source of truth for raw email messages, threads, drafts, labels, attachments, and sent history",
             "store_analytics": "AutoStop App aggregate report is the source of truth; raw event rows never enter agent context",

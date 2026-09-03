@@ -7,19 +7,33 @@ identifiers, money data, secrets, OAuth state or generated private output.
 
 ## Release Gates
 
-Run once on the final tree:
+Run once on the final tree. The disposable database is mandatory: preflight
+must never rewrite the persistent production Manager index.
 
 ```bash
-.venv/bin/python -m autostop_manager.cli knowledge-sync
-.venv/bin/python -m autostop_manager.cli knowledge-audit
-.venv/bin/python -m autostop_manager.cli skills-audit
-.venv/bin/python -m autostop_manager.cli cleanup-audit
-.venv/bin/python -m ruff check .
-.venv/bin/python -m ruff format --check autostop_manager tests
-.venv/bin/python -m mypy autostop_manager
-.venv/bin/python -m coverage run -m pytest -q
-.venv/bin/python -m coverage report --fail-under=82
-git diff --check
+run_manager_release_gates() (
+  set -e
+  local release_gate_tmp
+  release_gate_tmp="$(mktemp -d /tmp/autostop-manager-release-gates.XXXXXX)"
+  cleanup_release_gate_tmp() {
+    [[ "$release_gate_tmp" == /tmp/autostop-manager-release-gates.* ]] || return 1
+    rm -rf -- "$release_gate_tmp"
+  }
+  trap cleanup_release_gate_tmp EXIT
+  export AUTOSTOP_MANAGER_DB="$release_gate_tmp/preflight.sqlite3"
+
+  .venv/bin/python -m autostop_manager.cli knowledge-sync
+  .venv/bin/python -m autostop_manager.cli knowledge-audit
+  .venv/bin/python -m autostop_manager.cli skills-audit
+  .venv/bin/python -m autostop_manager.cli cleanup-audit
+  .venv/bin/python -m ruff check .
+  .venv/bin/python -m ruff format --check autostop_manager tests
+  .venv/bin/python -m mypy autostop_manager
+  .venv/bin/python -m coverage run -m pytest -q
+  .venv/bin/python -m coverage report --fail-under=82
+  git diff --check
+)
+run_manager_release_gates
 ```
 
 `missing_files` and warnings must be empty; absent optional private knowledge is
@@ -102,7 +116,15 @@ systemctl daemon-reload
 cmp --silent \
   /opt/autostop-manager-releases/current/deploy/systemd/autostop-integration-audit.service \
   /etc/systemd/system/autostop-integration-audit.service
+cmp --silent \
+  /opt/autostop-manager-releases/current/deploy/systemd/autostop-integration-audit.timer \
+  /etc/systemd/system/autostop-integration-audit.timer
 systemctl show --property=LoadState --value autostop-integration-audit.service | grep -Fx loaded
+systemctl show --property=LoadState --value autostop-integration-audit.timer | grep -Fx loaded
+systemctl is-enabled --quiet autostop-integration-audit.timer
+systemctl is-active --quiet autostop-integration-audit.timer
+systemctl show --property=NextElapseUSecRealtime --value \
+  autostop-integration-audit.timer | grep -Ev '^(n/a)?$'
 ```
 
 A bare `./deploy.sh` no longer installs the production watchdog. Approved releases
@@ -111,11 +133,11 @@ Do not set `AUTOSTOP_INSTALL_WATCHDOG=1` without a separate exact owner authoriz
 They create rollback data and a Manager snapshot, preserve `.env`/uploads/PostgreSQL volumes, and replace only CRM in the bounded window.
 They must pass internal/public smoke. No Git-sync bypass.
 
-Every coupled release runs `integration-audit --full`, then uses backup ->
-Store API/auth/migration -> pure read/service-scope checks -> internal network
--> Manager snapshot -> CRM Gateway. Store failure must degrade only Store.
-Never create a customer order as smoke or perform supplier procurement without
-a separate exact command.
+The coupled deploy uses backup -> Store API/auth/migration -> pure
+read/service-scope checks -> internal network -> Manager snapshot -> CRM
+Gateway. The operator runs `integration-audit --full` in the post-deploy block
+below. Store failure must degrade only Store. Never create a customer order as
+smoke or perform supplier procurement without a separate exact command.
 
 ## Post-Deploy Verification
 

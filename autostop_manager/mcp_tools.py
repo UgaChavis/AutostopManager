@@ -458,7 +458,8 @@ def register_manager_memory_tools(  # noqa: C901
         description=(
             "READ_ONLY RAW_CAPABILITY: Discover the current typed AutoStop App employee API operations exposed "
             "to the owner-approved service principal. The inventory is derived from the live Store OpenAPI, "
-            "excludes public/customer and human login/logout routes, and never returns business data."
+            "excludes public/customer and human login/logout routes, and never returns business data. Pass one "
+            "exact operation_id to receive its bounded validation-only input contract."
         ),
         annotations=ToolAnnotations(
             title="Store Owner Capabilities",
@@ -468,8 +469,16 @@ def register_manager_memory_tools(  # noqa: C901
             openWorldHint=False,
         ),
     )
-    def store_owner_capabilities_tool(query: str = "", limit: int = 200) -> dict[str, Any]:
-        return store_owner_client.list_capabilities(query=query, limit=limit)
+    def store_owner_capabilities_tool(
+        query: str = "",
+        limit: int = 200,
+        operation_id: str = "",
+    ) -> dict[str, Any]:
+        return store_owner_client.list_capabilities(
+            query=query,
+            limit=limit,
+            operation_id=operation_id,
+        )
 
     @server.tool(
         name="store_owner_api",

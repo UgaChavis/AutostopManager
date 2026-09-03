@@ -85,9 +85,9 @@ procedures belong to the playbooks returned by the route, not here.
   `docs/agent/deployment_runbook.md` for revision checks, deployment and
   rollback. A release-preparation task does not authorize deployment.
 - Keep one canonical owner per rule and link instead of copying. After docs,
-  routes, catalogs or skills change run `knowledge-sync`, `knowledge-audit`,
-  `skills-audit` and `cleanup-audit` before the normal
-  lint, type, test and coverage gates.
+  routes, catalogs or skills change, use the isolated release gates in
+  `docs/agent/deployment_runbook.md`; never run `knowledge-sync` against the
+  persistent Manager database as a preflight check.
 
 Navigation owners: `docs/agent/command_routes.json` for operational workflows,
 `docs/agent/knowledge_map.json` for document paths,

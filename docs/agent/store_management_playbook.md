@@ -3,8 +3,9 @@
 ## Purpose and source boundaries
 
 Use this route for live store catalog, stock, batches, storage locations,
-suppliers, quote requests, internet orders, warehouse operations, and
-marketplace state. AutoStop App is the source of truth for those objects.
+supplier-sourcing evidence, quote requests, internet orders, warehouse
+operations, and marketplace state. AutoStop App is the source of truth for
+those objects.
 AutoStop CRM remains the source of truth for service cards, vehicles,
 repair orders, service payments, cashboxes, files, and board state. Gmail is
 the source of truth for mail. AutostopManager stores only routes, rules,
@@ -24,9 +25,8 @@ or change business state.
 
 Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 
-- `agent_bootstrap` for CRM readiness plus one compact degraded-safe Store
-  snapshot; it performs one Store GET, has no cursor/ACK, and does not read the
-  change feed;
+- `agent_bootstrap` for CRM/Manager startup; Store is intentionally returned as
+  `not_loaded`, so follow with `get_runtime_status` or a focused Store call;
 - `agent_board_digest(scope="store")` for the store digest and the
   owner-visible `store_digest` stream;
 - `agent_search` for bounded store lists and catalog/stock lookup;
@@ -39,7 +39,7 @@ Gateway v2 keeps exactly 24 public tools. Use the existing tools:
   OpenAPI.
 
 Supported entities are `store_part`, `store_order`, `store_quote_request`,
-`store_supplier`, `store_batch`, `store_warehouse_operation`,
+`store_batch`, `store_warehouse_operation`,
 `store_marketplace_listing`, and `store_state`. `store_sourcing_offer` is a
 lookup-only `agent_search` entity. Lists use opaque cursors and a strict maximum
 limit. General search remains redacted; an exact `store_quote_request` with
@@ -54,7 +54,8 @@ call a hidden Store tool directly:
 
 | Owner intent | Public Gateway v2 call | Required arguments |
 | --- | --- | --- |
-| readiness, counts, stock summary, marketplace state/errors | `agent_bootstrap` | no Store cursor or ACK |
+| CRM/Manager startup and route selection | `agent_bootstrap` | Store remains `not_loaded`; no Store cursor or ACK |
+| Store readiness, counts, stock summary, marketplace state/errors | `get_runtime_status` or `agent_search` | use `entity="store_state"` for the focused state row |
 | “что нового” and change-feed traversal | `agent_board_digest` | `scope="store"`; continue with the returned opaque `cursor` and `ack_token` |
 | list, filter, search, stock or sourcing candidates | `agent_search` | exact `entity`, bounded `limit`, only the filters below |
 | one exact object | `agent_entity_context` | exact `entity`, `entity_id`; `detail="full"` or `"full_with_vin_photo"` only for an exact quote request |
@@ -71,23 +72,65 @@ customer `SalesOrder`, `create_manual_order`, or ROSSKO confirmation for
 workshop procurement. Execute a supplier purchase only when the live OpenAPI
 advertises a dedicated supplier operation and the owner separately directs
 that exact purchase. Otherwise return
-`supplier_order_capability_unavailable`; this is a safe terminal result.
+`supplier_order_capability_unavailable`; this is a safe terminal result. The
+current Store has no supplier-directory entity or supplier CRUD. Supplier names
+exist only in quote offers, order source labels, ROSSKO sourcing, and masked
+ROSSKO configuration.
 
 `agent_search` entity selection and accepted filters:
 
 | Entity | Use for | Accepted filters |
 | --- | --- | --- |
 | `store_part` | id, SKU, name, manufacturer; stock summary | `is_active` boolean; `low_stock` boolean |
-| `store_order` | id, order number, item SKU/name | `status`: `IN_PROGRESS`, `READY`, `COMPLETED`, `ANNULLED`, or `RETURNED` |
-| `store_quote_request` | id or request number | `status`: `NEW`, `IN_PROGRESS`, `PRICED`, `APPROVED`, `CONVERTED`, or `CANCELLED`; `assigned_user_id`: exact string or `null` for unassigned |
-| `store_supplier` | id or supplier name | `is_active` boolean |
+| `store_order` | id, order number, item SKU/name | `status`: `IN_PROGRESS`, `IN_TRANSIT`, `READY`, `COMPLETED`, `ANNULLED`, or `RETURNED` |
+| `store_quote_request` | id or request number | `status`: `WAITING_FOR_QUOTE`, `WAITING_FOR_APPROVAL`, `APPROVED`, or `CANCELLED_BY_CUSTOMER`; `assigned_user_id`: exact string or `null` for unassigned |
 | `store_batch` | id, cell, part SKU/name | `status`: `IN_PROGRESS` or `COMPLETED`; exact non-empty `storage_location` up to 200 chars |
 | `store_warehouse_operation` | id, receipt/shipment state | `kind`: `RECEIPT` or `SHIPMENT`; `status`: `IN_PROGRESS`, `COMPLETED`, or `ANNULLED` |
 | `store_marketplace_listing` | id, external listing id, part SKU/name | `status`: `DRAFT`, `PUBLISHED`, `FAILED`, or `ARCHIVED` |
 | `store_state` | aggregate Store and marketplace state | no filters; query empty or `store`, `state`, `store_state` |
 | `store_sourcing_offer` | local and ROSSKO-like candidates | no filters or cursor; query is required and has at least two characters |
 
-For marketplace export problems, use bootstrap/state aggregates for 24 hours,
+### Exact full-information reads
+
+“Full information” means a focused read of the exact object and all fields
+needed for the current task, never an unbounded customer, order, or warehouse
+export. Resolve with a redacted named read, then use only an exact operation
+present in the live OpenAPI when the named DTO is insufficient. Prefer
+`agent_entity_context(detail="full")` for a quote request; keep customer PII and
+money transient. Store settings have an exact read, but static pages, banners,
+menus and design have no CMS API and require a separate Store code release.
+
+For orders, prefer the bounded page and exact-order operations. Send
+`itemLimit` on the first read, then the returned `itemsNextCursor` with the same
+limit. Each success reports
+`itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor`; continue only while
+`itemsHasMore=true`. On `ORDER_ITEMS_CURSOR_STALE`, restart that exact order
+without a cursor. If the bounded operations are absent from live OpenAPI, the
+unpaginated fallback requires one exact `order_id` and is never a bulk export.
+An unpaginated employee list and the transport's 2 MiB ceiling are not proof of
+completeness.
+
+### Customer response boundary
+
+An exact response draft can be stored through
+`update_admin_quote_request_api_v1_admin_quote_requests__quote_request_id__patch`
+with only `customerResponse` in the body. This is a private draft; it must not
+be described as sent or published. The broad PATCH operation is still generic
+owner high-risk, so its live input contract and exact quote revision are
+required and no other optional field may be supplied.
+
+Publishing uses the exact
+`publish_admin_quote_request_response_api_v1_admin_quote_requests__quote_request_id__publish_response_post`
+operation only after a separate explicit owner command and the full generic
+write contract. Store rejects an empty quote, any item without exactly one
+selected `PUBLISHED` offer, and archived, converted, or customer-cancelled
+requests. Success makes the response customer-visible and moves the quote to
+`WAITING_FOR_APPROVAL`; it does not send Telegram or email. The narrow
+`store_customer_response_publish` command route discloses external visibility
+and financial scope; the broad Store route remains draft-only. A draft-only
+command never authorizes publication.
+
+For marketplace export problems, use `store_state` aggregates for 24 hours,
 7 days, all time, and the latest five safe errors. Use
 `store_marketplace_listing` with `status="FAILED"` only when exact failed
 listings are needed. Never request raw job messages. Retry and publication are
@@ -133,38 +176,15 @@ Manager digest reads one page per call:
    `store-checkpoint-reset --stream ... --confirm-rebaseline` only after an
    explicit reset decision; never silently discard a generation mismatch.
 
-Bootstrap uses stateless `/bootstrap-snapshot`, never `store_digest` or the
-legacy `store_bootstrap` checkpoint, so startup cannot hide changes from “Что
-нового появилось в магазине?”. One response contains Store API readiness,
-product/active-order/open-request counts, aggregate stock, marketplace state,
-safe marketplace export-error counts for 24 hours/7 days/all time, the latest
-five generic errors, and Store contract version. Error entries contain only
-date, fixed `error_code`, part/account refs, and attempt count; raw messages,
-payloads, tokens, and contacts are forbidden. `agent_board_digest(scope="store")`
-alone uses `cursor` and `ack_token`.
-
-## Optimized named writes
-
-These common domain/action pairs keep their compact named workflow:
-
-They include the existing append-only quote note and private structured quote-offer draft
-contracts; the broader owner route does not weaken those
-named DTO guarantees.
-
-- `store_quote_request/assign_quote_request` with `assignee_id`;
-- `store_quote_request/set_quote_request_status` with `NEW` or `IN_PROGRESS`;
-- `store_quote_request/update_quote_request_comment` with `internal_comment`;
-- `store_quote_request/add_quote_request_note` with append-only `text`;
-- `store_quote_request/replace_quote_offer_drafts` with at most three private
-  structured drafts per exact quote item;
-- `store_batch/set_batch_storage_location` with `storage_location`;
-- `store_order/mark_order_ready` with explicit `status=READY`, only from
-  `IN_PROGRESS` and only on an exact owner command.
+`agent_bootstrap` does not load Store and cannot advance a Store checkpoint.
+`get_runtime_status` and focused `store_state` reads are stateless; only
+`agent_board_digest(scope="store")` uses `cursor` and `ack_token`. Thus startup
+and health checks cannot hide changes from “Что нового появилось в магазине?”.
 
 ## Full owner parity
 
-The named list above is an optimized path, not a permission ceiling. When the
-owner asks for another action available in the employee/admin UI, resolve
+The named write selector below is an optimized path, not a permission ceiling.
+When the owner asks for another action available in the employee/admin UI, resolve
 `store_owner_capabilities` through guarded raw discovery, select the exact live
 `operation_id`, and call `store_owner_api`. That transport authenticates only
 as the reserved non-interactive `autostop-manager-owner` principal with the
@@ -178,6 +198,11 @@ unless the owner explicitly requested the exact document/photo, the operation
 is a GET whose live OpenAPI declares a non-JSON success response, and
 `allow_binary_response=true` is set. JSON fields that embed base64/file bytes
 are also blocked without that opt-in.
+
+Before forming an exact call, request that `operation_id` through
+`store_owner_capabilities` with `allow_large_output=true`. Use its bounded,
+self-contained validation contract for path, query and body; never infer an
+omitted field from an admin screen or an older release.
 
 For a write:
 
@@ -205,13 +230,18 @@ For a write:
    collection membership/count, or absence plus audit for delete. Until this
    succeeds, the applied result stays `compensating`, never `completed`.
 
-An ordinary reversible create/update follows this single contract without a
-second human confirmation. A high-risk operation receives stricter revision,
-preflight, effect disclosure, and reconciliation, but is not functionally
-hidden from an owner-approved principal.
+Every generic owner write is fail-closed high risk and needs an exact owner
+command, current input contract, disclosed effects, preflight and
+reconciliation. Gateway treats every `store_owner_api(mode="apply")` as
+destructive. It also finance-gates operations or fields that can affect prices,
+payments, procurement/ROSSKO, quote items/offers/publication, sales orders,
+stock/warehouse state, or marketplace/FEED publication. The same gate covers
+the relevant named status, offer-draft and READY actions. A successful preview
+grants neither switch and never authorizes apply.
 
 The transport itself requires `Expected-Revision` for every non-GET operation
-except the five reviewed collection creates. Direct Python use cannot bypass
+except the four reviewed collection creates: category, customer, manufacturer,
+and part. Direct Python use cannot bypass
 that rule. Successful writes always return `compensating` with one of four
 verification classes: exact entity, created collection membership,
 operation-specific state, or delete absence plus audit. Every HTTP error after
@@ -242,7 +272,7 @@ task-specific `owner_intent`, strict `planned_changes`, and normally one stable
 | Owner command | Domain / operation | Exact `planned_changes` | Exact reread check |
 | --- | --- | --- | --- |
 | assign the quote request | `store_quote_request/assign_quote_request` | `{"assignee_id":"<non-empty id, max 36>"}` | assigned user only |
-| move the quote request to work or back to new | `store_quote_request/set_quote_request_status` | `{"status":"IN_PROGRESS"}` or `{"status":"NEW"}` | status only |
+| move the quote request between quotation and customer approval | `store_quote_request/set_quote_request_status` | `{"status":"WAITING_FOR_QUOTE"}` or `{"status":"WAITING_FOR_APPROVAL"}` | status only |
 | replace or clear the current internal comment | `store_quote_request/update_quote_request_comment` | `{"internal_comment":"<max 2000>"}` or `{"internal_comment":null}` | replaceable comment only |
 | append a note/history entry without replacing prior text | `store_quote_request/add_quote_request_note` | `{"text":"<non-empty, max 2000>"}` | one new append-only note |
 | replace the complete private offer-draft set for one exact quote | `store_quote_request/replace_quote_offer_drafts` | `{"items":[...]}` using the draft rules below | complete Manager-owned draft post-state for that quote |
@@ -257,44 +287,19 @@ whether existing text must be replaced or preserved.
 For `replace_quote_offer_drafts`, first read the full exact quote and send the
 complete desired post-state of Manager-owned drafts for that quote. Existing
 Manager drafts for the same agent that are omitted from `items` are superseded,
-not preserved. `items` has 1..20 unique exact quote item ids and each item has
-0..3 drafts with unique `candidate_key`; at most one draft per item is
-recommended. Each draft requires non-empty `candidate_key` and
-`part_name`, positive `sale_price`, `source_kind` from
-`LOCAL|ROSSKO|CATALOG|WEB|MANUAL_REFERENCE`, and `price_basis` from
-`STORE_RETAIL|CONFIRMED_PURCHASE|PUBLIC_RETAIL|ESTIMATE`. Optional fields are
-`part_sku`, `brand`, `supplier`, positive `purchase_price`, `delivery_days`
-0..3650, `comment` up to 1000, `source_ref` up to 500, `source_url` up to 1000,
-`availability` up to 300, `fitment_confidence` from
-`HIGH|MEDIUM|LOW|UNVERIFIED`, `oem_reference` up to 120, and
-`is_recommended`. To clear the complete Manager-owned draft set, send at least
-one valid exact quote item with an empty `drafts` list. The operation never
-changes a published offer or another principal's drafts.
+not preserved. Follow the exact live input contract; each exact item may carry
+at most three private drafts, and an empty `drafts` list clears that item's
+Manager-owned set. The operation never changes a published offer or another
+principal's drafts.
 
-For every write: reread the exact target, build `prepare_action_contract`, pass
-`expected_updated_at`, and call `agent_inventory_workflow` in `dry_run`. The
-dry-run and apply phases must use two distinct unique idempotency keys and the
-same stable correlation ID. ActionContractV2 derives that correlation from the
-normalized domain, action, target, revision, and planned changes; an explicit
-correlation is optional and must be an alphanumeric-first 8..160 character safe
-identifier. Owner wording, mode, and phase idempotency keys must not change it.
-
-Dry-run intentionally records a sanitized receipt and audit proof while leaving
-business state and `updated_at` unchanged. Inspect its effects, then apply only
-with a matching proof that is at most 1800 seconds old. Direct apply without a
-fresh matching proof is blocked. A READY dry-run must disclose whether a
-customer notification will be sent. After apply, reread the exact target.
-
-For lost-response recovery, if the apply pre-read already shows a newer
-revision, resend the original apply request with its original
-`expected_updated_at`, idempotency key, payload, and correlation so the App can
-replay the receipt before its stale-revision check. Without a matching receipt,
-the App returns a conflict. POST is never retried automatically. A POST timeout,
-network error, 5xx, oversized response, invalid JSON, or invalid response schema
-has an uncertain outcome: always perform one exact reread and keep the result in
-`compensating` with `write_applied_unverified` evidence until reconciliation.
-A successful idempotent replay reports `meta.idempotency_replay=true` and may
-return the already-applied result without advancing `updated_at` again.
+For every named write, reread the exact target, build
+`prepare_action_contract`, dry-run with `expected_updated_at`, then apply with a
+different idempotency key, the same stable correlation ID and a fresh matching
+proof. A READY dry-run must disclose customer notification. Reread after apply.
+On a lost response, replay only the identical original request; never retry a
+POST automatically with new inputs. Timeout, network/5xx, oversized or invalid
+response means uncertain outcome: exact reread is mandatory and the result
+stays `compensating` until reconciled.
 
 Store workflow ledger rows are refs-only. Gateway workflow IDs such as
 `inventory:<operation>` are store workflows even without a `store_*` scope.
@@ -315,32 +320,15 @@ docs, Git, or workflow ledger. A stale hash, absent photo, non-JPEG response,
 or oversized preview fails closed. This is read-only: it does not perform OCR,
 write a VIN, or change the quote.
 
-Never expose generic legacy Manager Store adapters through raw discovery. The
-guarded owner capability/API pair is the only full-parity raw route. Deletion,
-price/product/customer/quantity/finance changes,
-COMPLETE/ANNULLED/RETURNED, ROSSKO ordering, marketplace publication, mass
-changes, messages, and settings are high-risk when classified by the matrix:
-they require an exact explicit owner command and the full proof/readback path;
-they are not silently denied merely because the named workflow lacks them.
-
 ## Runtime configuration and degraded behavior
 
-The composition root injects `AUTOSTOP_STORE_API_URL`,
-`AUTOSTOP_STORE_READ_TOKEN`, `AUTOSTOP_STORE_QUOTE_TOKEN`,
-`AUTOSTOP_STORE_MANAGE_TOKEN`, and the independent
-`AUTOSTOP_STORE_OWNER_TOKEN`. Tokens are runtime secrets; do not print their
-values or use a human ADMIN password. The owner token identifies the reserved
-`store:owner` service principal and is accepted only by guarded human-parity
-operations discovered from the live OpenAPI schema. The
-URL is fail-closed: production accepts only
-`http://autostop-app:8000/internal/agent/v1` and local tests may use an explicit
-loopback port; userinfo, query, fragment, other paths, and external hosts are
-rejected. The
-adapter uses separate read/quote/manage identities, bounded responses, schema
-validation, redaction, timeout, GET-only retries, and a circuit breaker.
-Authentication and request conflicts do not trip the outage circuit.
+Runtime injects a fail-closed internal Store URL and separate
+read/quote/manage/owner credentials. The owner credential is only for the
+reserved `store:owner` service principal; never print tokens or substitute a
+human ADMIN password. The adapter bounds and validates responses, retries only
+GET, and isolates Store outages with a circuit breaker.
 
-Store failure degrades only store fields in bootstrap/runtime/digest. CRM
+Store failure degrades only Store runtime/search/digest fields. CRM
 operations remain available.
 
 ## Routing boundaries
@@ -357,8 +345,8 @@ service payments stay in CRM workflows.
   `store_owner_capabilities` and `store_owner_api`; public Gateway v2 remains
   exactly 24 tools.
 - Read API calls never mutate store state; read-only credentials cannot write.
-- Bootstrap is one stateless Store request with no ACK/change-feed query;
-  digest pagination, ACK/replay, abort/resume, CAS conflict, and failure
+- Bootstrap does not call Store; runtime health and focused reads are stateless.
+  Digest pagination, ACK/replay, abort/resume, CAS conflict, and failure
   preservation tests pass unchanged.
 - Seven optimized named writes pass DTO-shaped
   dry-run/apply/idempotency/concurrency/readback tests. The owner capability

@@ -33,6 +33,12 @@ MAX_QUERY_BYTES = 16 * 1024
 MAX_CAPABILITIES = 250
 MAX_CONTAINER_ITEMS = 1000
 MAX_JSON_DEPTH = 16
+MAX_INPUT_CONTRACT_BYTES = 256 * 1024
+MAX_INPUT_SCHEMA_DEPTH = 16
+MAX_INPUT_SCHEMA_NODES = 4096
+MAX_INPUT_SCHEMA_DEFINITIONS = 256
+MAX_INPUT_SCHEMA_ITEMS = 1000
+MAX_INPUT_SCHEMA_STRING_LENGTH = 4096
 OPENAPI_CACHE_SECONDS = 60
 OWNER_INTENT_HEADER = "X-Autostop-Owner-Intent"
 CORRELATION_HEADER = "X-Correlation-ID"
@@ -70,18 +76,7 @@ SAFE_REVERSIBLE_COLLECTION_CREATE_PATHS = frozenset(
         "/api/v1/customers",
         "/api/v1/manufacturers",
         "/api/v1/parts",
-        "/api/v1/warehouse/suppliers",
     }
-)
-_HIGH_RISK_WRITE_PATH_MARKERS = (
-    "/admin/users",
-    "/customers/blocked-buyers",
-    "/marketplaces/",
-    "/orders",
-    "/rossko-settings",
-    "/settings",
-    "/stock-movements/",
-    "/warehouse",
 )
 
 
@@ -184,7 +179,16 @@ class StoreOwnerApiClient:
         self._capabilities: dict[str, OwnerCapability] = {}
         self._loaded_from_openapi = False
 
-    def list_capabilities(self, *, query: str = "", limit: int = 200) -> dict[str, Any]:
+    def list_capabilities(
+        self,
+        *,
+        query: str = "",
+        limit: int = 200,
+        operation_id: str = "",
+    ) -> dict[str, Any]:
+        normalized_operation_id = str(operation_id or "").strip()
+        if normalized_operation_id:
+            return self.describe_operation(normalized_operation_id)
         capabilities = self._load_capabilities()
         if isinstance(capabilities, dict) and capabilities.get("ok") is False:
             return capabilities
@@ -221,11 +225,23 @@ class StoreOwnerApiClient:
         capability = capabilities.get(normalized)
         if capability is None:
             return _error("store_owner_operation_not_found")
+        try:
+            input_contract = _operation_input_contract(capability)
+        except (TypeError, ValueError, OverflowError) as exc:
+            error_code = str(exc)
+            if not error_code.startswith("store_owner_input_contract_"):
+                error_code = "store_owner_input_contract_invalid"
+            return _error(error_code)
         return {
             "ok": True,
             "format": STORE_OWNER_FORMAT,
             "status": "completed",
-            "summary": capability.compact(),
+            "summary": {
+                **capability.compact(),
+                "owner_api_ready": True,
+                "input_contract_bytes": len(_canonical_json_bytes(input_contract)),
+            },
+            "input_contract": input_contract,
             "data_included": False,
         }
 
@@ -812,21 +828,451 @@ def _is_employee_path(path: str) -> bool:
     )
 
 
+_JSON_SCHEMA_TYPES = frozenset({"array", "boolean", "integer", "null", "number", "object", "string"})
+_JSON_SCHEMA_ANNOTATION_KEYS = frozenset(
+    {
+        "$comment",
+        "$defs",
+        "$id",
+        "$schema",
+        "contentEncoding",
+        "contentMediaType",
+        "default",
+        "definitions",
+        "deprecated",
+        "description",
+        "discriminator",
+        "example",
+        "examples",
+        "externalDocs",
+        "readOnly",
+        "title",
+        "writeOnly",
+        "xml",
+    }
+)
+_JSON_SCHEMA_MAPPING_KEYS = frozenset({"dependentSchemas", "patternProperties", "properties"})
+_JSON_SCHEMA_SINGLE_SCHEMA_KEYS = frozenset(
+    {
+        "additionalProperties",
+        "contains",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+_JSON_SCHEMA_SCHEMA_LIST_KEYS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
+_JSON_SCHEMA_NONNEGATIVE_INTEGER_KEYS = frozenset(
+    {
+        "maxContains",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "minContains",
+        "minItems",
+        "minLength",
+        "minProperties",
+    }
+)
+_JSON_SCHEMA_NUMBER_KEYS = frozenset({"exclusiveMaximum", "exclusiveMinimum", "maximum", "minimum", "multipleOf"})
+
+
+class _InputSchemaSanitizer:
+    """Return a bounded validation-only schema with self-contained local refs."""
+
+    def __init__(self, root_schema: Any, *, components: dict[str, Any]) -> None:
+        self.root_schema = root_schema
+        self.components = components
+        self.nodes = 0
+        self.output_bytes = 0
+        self.ref_keys: dict[tuple[str, str], str] = {}
+        self.pending_refs: list[tuple[str, Any, Any, str]] = []
+
+    def sanitize(self) -> bool | dict[str, Any]:
+        sanitized = self._schema(
+            self.root_schema,
+            depth=0,
+            scope_root=self.root_schema,
+            scope_id="root",
+        )
+        definitions: dict[str, Any] = {}
+        if self.pending_refs:
+            if isinstance(sanitized, bool):
+                sanitized = {"allOf": [sanitized]}
+            sanitized["$defs"] = definitions
+        position = 0
+        while position < len(self.pending_refs):
+            definition_key, target, scope_root, scope_id = self.pending_refs[position]
+            position += 1
+            definitions[definition_key] = self._schema(
+                target,
+                depth=0,
+                scope_root=scope_root,
+                scope_id=scope_id,
+            )
+            self._check_serialized_size(sanitized)
+        if definitions:
+            if isinstance(sanitized, bool):
+                sanitized = {"allOf": [sanitized]}
+            sanitized["$defs"] = {key: definitions[key] for key in sorted(definitions)}
+        self._check_serialized_size(sanitized)
+        try:
+            Draft202012Validator.check_schema(sanitized)
+        except (SchemaError, re.error) as exc:
+            raise ValueError("store_owner_input_contract_schema_invalid") from exc
+        return sanitized
+
+    @staticmethod
+    def _check_serialized_size(value: Any) -> None:
+        if len(_canonical_json_bytes(value)) > MAX_INPUT_CONTRACT_BYTES:
+            raise ValueError("store_owner_input_contract_too_large")
+
+    def _bump(self, *, depth: int) -> None:
+        if depth > MAX_INPUT_SCHEMA_DEPTH:
+            raise ValueError("store_owner_input_contract_too_deep")
+        self.nodes += 1
+        if self.nodes > MAX_INPUT_SCHEMA_NODES:
+            raise ValueError("store_owner_input_contract_too_complex")
+        self._charge(())
+
+    def _charge(self, value: Any) -> None:
+        self.output_bytes += len(_canonical_json_bytes(value)) + 8
+        if self.output_bytes > MAX_INPUT_CONTRACT_BYTES:
+            raise ValueError("store_owner_input_contract_too_large")
+
+    def _schema(
+        self,
+        value: Any,
+        *,
+        depth: int,
+        scope_root: Any,
+        scope_id: str,
+    ) -> bool | dict[str, Any]:
+        self._bump(depth=depth)
+        if isinstance(value, bool):
+            self._charge(value)
+            return value
+        if (
+            not isinstance(value, dict)
+            or len(value) > MAX_INPUT_SCHEMA_ITEMS
+            or any(not isinstance(key, str) for key in value)
+        ):
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        output: dict[str, Any] = {}
+        for key in sorted(value):
+            item = value[key]
+            if key in _JSON_SCHEMA_ANNOTATION_KEYS or key.startswith("x-"):
+                continue
+            self._charge(key)
+            if key == "$ref":
+                output[key] = self._register_local_ref(
+                    item,
+                    scope_root=scope_root,
+                    scope_id=scope_id,
+                )
+            elif key in _JSON_SCHEMA_MAPPING_KEYS:
+                output[key] = self._schema_mapping(
+                    item,
+                    depth=depth + 1,
+                    scope_root=scope_root,
+                    scope_id=scope_id,
+                )
+            elif key in _JSON_SCHEMA_SINGLE_SCHEMA_KEYS:
+                output[key] = self._schema(
+                    item,
+                    depth=depth + 1,
+                    scope_root=scope_root,
+                    scope_id=scope_id,
+                )
+            elif key in _JSON_SCHEMA_SCHEMA_LIST_KEYS:
+                output[key] = self._schema_list(
+                    item,
+                    depth=depth + 1,
+                    scope_root=scope_root,
+                    scope_id=scope_id,
+                )
+            elif key == "dependentRequired":
+                output[key] = self._dependent_required(item)
+            else:
+                output[key] = self._validation_value(key, item)
+        return output
+
+    def _schema_mapping(
+        self,
+        value: Any,
+        *,
+        depth: int,
+        scope_root: Any,
+        scope_id: str,
+    ) -> dict[str, Any]:
+        if not isinstance(value, dict) or len(value) > MAX_INPUT_SCHEMA_ITEMS:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        output: dict[str, Any] = {}
+        for raw_name, schema in sorted(value.items(), key=lambda pair: str(pair[0])):
+            name = self._name(raw_name)
+            self._charge(name)
+            output[name] = self._schema(
+                schema,
+                depth=depth,
+                scope_root=scope_root,
+                scope_id=scope_id,
+            )
+        return output
+
+    def _schema_list(
+        self,
+        value: Any,
+        *,
+        depth: int,
+        scope_root: Any,
+        scope_id: str,
+    ) -> list[Any]:
+        if not isinstance(value, list) or not value or len(value) > MAX_INPUT_SCHEMA_ITEMS:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        return [
+            self._schema(
+                item,
+                depth=depth,
+                scope_root=scope_root,
+                scope_id=scope_id,
+            )
+            for item in value
+        ]
+
+    def _dependent_required(self, value: Any) -> dict[str, list[str]]:
+        if not isinstance(value, dict) or len(value) > MAX_INPUT_SCHEMA_ITEMS:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        return {
+            self._name(raw_name): self._string_list(names)
+            for raw_name, names in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+
+    def _string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list) or len(value) > MAX_INPUT_SCHEMA_ITEMS:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        normalized = [self._name(item) for item in value]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        self._charge(normalized)
+        return normalized
+
+    def _schema_type(self, value: Any) -> str | list[str]:
+        if isinstance(value, str):
+            if value not in _JSON_SCHEMA_TYPES:
+                raise ValueError("store_owner_input_contract_schema_invalid")
+            self._charge(value)
+            return value
+        values = self._string_list(value)
+        if not values or any(item not in _JSON_SCHEMA_TYPES for item in values):
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        return sorted(values)
+
+    def _enum(self, value: Any) -> list[Any]:
+        if not isinstance(value, list) or not value or len(value) > MAX_INPUT_SCHEMA_ITEMS:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        result = [self._literal(item) for item in value]
+        canonical = [_canonical_json_bytes(item) for item in result]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        self._charge(result)
+        return result
+
+    def _validation_value(self, key: str, value: Any) -> Any:
+        if key == "required":
+            return self._string_list(value)
+        if key == "type":
+            return self._schema_type(value)
+        if key in {"const", "enum"}:
+            result = self._enum(value) if key == "enum" else self._literal(value)
+        elif key in _JSON_SCHEMA_NONNEGATIVE_INTEGER_KEYS:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("store_owner_input_contract_schema_invalid")
+            result = value
+        elif key in _JSON_SCHEMA_NUMBER_KEYS:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError("store_owner_input_contract_schema_invalid")
+            result = value
+        elif key == "uniqueItems":
+            if not isinstance(value, bool):
+                raise ValueError("store_owner_input_contract_schema_invalid")
+            result = value
+        elif key in {"format", "pattern"}:
+            result = self._string(value)
+        else:
+            raise ValueError("store_owner_input_contract_keyword_unsupported")
+        if key != "enum":
+            self._charge(result)
+        return result
+
+    def _literal(self, value: Any) -> Any:
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, float) and math.isfinite(value):
+            return value
+        if isinstance(value, str):
+            return self._string(value)
+        raise ValueError("store_owner_input_contract_literal_invalid")
+
+    def _string(self, value: Any) -> str:
+        if not isinstance(value, str) or len(value) > MAX_INPUT_SCHEMA_STRING_LENGTH:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        if any(ord(character) < 0x20 and character not in "\t\n\r" for character in value):
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        return value
+
+    def _name(self, value: Any) -> str:
+        name = self._string(value)
+        if not name or len(name) > 200:
+            raise ValueError("store_owner_input_contract_schema_invalid")
+        return name
+
+    def _register_local_ref(
+        self,
+        value: Any,
+        *,
+        scope_root: Any,
+        scope_id: str,
+    ) -> str:
+        reference = self._string(value)
+        if reference != "#" and not reference.startswith("#/"):
+            raise ValueError("store_owner_input_contract_ref_invalid")
+        parts = _json_pointer_parts(reference)
+        if parts[:2] == ["components", "schemas"]:
+            if len(parts) < 3:
+                raise ValueError("store_owner_input_contract_ref_invalid")
+            schemas = self.components.get("schemas")
+            if not isinstance(schemas, dict) or parts[2] not in schemas:
+                raise ValueError("store_owner_input_contract_ref_invalid")
+            target_scope = schemas[parts[2]]
+            target = self._resolve_pointer({"components": self.components}, parts)
+            target_scope_id = f"component:{hashlib.sha256(parts[2].encode()).hexdigest()}"
+            reference_scope = "document"
+        elif parts and parts[0] == "components":
+            raise ValueError("store_owner_input_contract_ref_invalid")
+        else:
+            target_scope = scope_root
+            target = self._resolve_pointer(scope_root, parts)
+            target_scope_id = scope_id
+            reference_scope = scope_id
+        if not isinstance(target_scope, (bool, dict)) or not isinstance(target, (bool, dict)):
+            raise ValueError("store_owner_input_contract_ref_invalid")
+        ref_key = (reference_scope, reference)
+        if ref_key not in self.ref_keys:
+            if len(self.ref_keys) >= MAX_INPUT_SCHEMA_DEFINITIONS:
+                raise ValueError("store_owner_input_contract_too_complex")
+            digest_input = f"{reference_scope}\0{reference}".encode()
+            definition_key = f"schema_{hashlib.sha256(digest_input).hexdigest()[:24]}"
+            self.ref_keys[ref_key] = definition_key
+            if len(self.ref_keys) == 1:
+                self._charge("$defs")
+            self._charge(definition_key)
+            self.pending_refs.append((definition_key, target, target_scope, target_scope_id))
+        rendered = f"#/$defs/{self.ref_keys[ref_key]}"
+        self._charge(rendered)
+        return rendered
+
+    @staticmethod
+    def _resolve_pointer(root: Any, parts: list[str]) -> Any:
+        for part in parts:
+            if isinstance(root, dict) and part in root:
+                root = root[part]
+            elif (
+                isinstance(root, list)
+                and (part == "0" or (part.isdigit() and not part.startswith("0")))
+                and int(part) < len(root)
+            ):
+                root = root[int(part)]
+            else:
+                raise ValueError("store_owner_input_contract_ref_invalid")
+        return root
+
+
+def _json_pointer_parts(reference: str) -> list[str]:
+    if reference == "#":
+        return []
+    if not reference.startswith("#/"):
+        raise ValueError("store_owner_input_contract_ref_invalid")
+    parts: list[str] = []
+    for raw_part in reference[2:].split("/"):
+        if re.search(r"~(?![01])", raw_part):
+            raise ValueError("store_owner_input_contract_ref_invalid")
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not part or len(part) > 200 or any(ord(character) < 0x20 for character in part):
+            raise ValueError("store_owner_input_contract_ref_invalid")
+        parts.append(part)
+    if len(parts) > MAX_INPUT_SCHEMA_DEPTH:
+        raise ValueError("store_owner_input_contract_ref_invalid")
+    return parts
+
+
+def _parameter_schema(
+    names: tuple[str, ...],
+    schemas: tuple[tuple[str, Any], ...],
+    *,
+    required: tuple[str, ...],
+    components: dict[str, Any],
+) -> bool | dict[str, Any]:
+    declared = [str(name) for name in names]
+    schema_by_name = {str(name): schema for name, schema in schemas if str(name) in declared}
+    raw_schema = {
+        "type": "object",
+        "properties": {name: schema_by_name.get(name, True) for name in declared},
+        "required": list(required),
+        "additionalProperties": False,
+    }
+    return _InputSchemaSanitizer(raw_schema, components=components).sanitize()
+
+
+def _operation_input_contract(capability: OwnerCapability) -> dict[str, Any]:
+    contract = {
+        "contract_version": "store-owner-input-contract-v1",
+        "path_parameters": _parameter_schema(
+            capability.path_parameters,
+            capability.path_parameter_schemas,
+            required=capability.path_parameters,
+            components=capability.schema_components,
+        ),
+        "query_parameters": _parameter_schema(
+            capability.query_parameters,
+            capability.query_parameter_schemas,
+            required=capability.required_query_parameters,
+            components=capability.schema_components,
+        ),
+        "request_body": {
+            "required": capability.request_required,
+            "content": [
+                {
+                    "content_type": content_type,
+                    "schema": _InputSchemaSanitizer(
+                        schema,
+                        components=capability.schema_components,
+                    ).sanitize(),
+                }
+                for content_type, schema in sorted(capability.request_schemas, key=lambda item: item[0])
+            ],
+        },
+    }
+    if len(_canonical_json_bytes(contract)) > MAX_INPUT_CONTRACT_BYTES:
+        raise ValueError("store_owner_input_contract_too_large")
+    return contract
+
+
 def _risk(method: str, path: str) -> str:
     if method == "GET":
         return "read"
     if (method, path) in _SESSION_BOUNDARIES:
         return "write"
-    if is_safe_reversible_collection_create(method, path):
-        return "write"
-    if (
-        method == "DELETE"
-        or ":" in path
-        or any(marker in path for marker in _HIGH_RISK_WRITE_PATH_MARKERS)
-        or (method == "POST" and "{" not in path)
-    ):
-        return "high_risk_write"
-    return "write"
+    # The generic owner route is broader than the seven named Store writes.
+    # A path alone cannot prove that a body is free of pricing, customer,
+    # publication, stock, or downstream marketplace effects, so fail closed.
+    return "high_risk_write"
 
 
 def is_safe_reversible_collection_create(method: str, path: str) -> bool:
@@ -1528,8 +1974,17 @@ def _plan_hash(
 
 
 def _canonical_hash(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
 
 
 def _validate_write_metadata(*, owner_intent: str, idempotency_key: str, correlation_id: str) -> str | None:

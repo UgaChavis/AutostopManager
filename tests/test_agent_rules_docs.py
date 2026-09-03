@@ -36,9 +36,8 @@ def test_codex_native_startup_files_are_present_and_safe():
         "24-tool Gateway v2 connector",
         "codex_apps/autostopcrm.*",
         "knowledge-sync",
-        "knowledge-audit",
-        "skills-audit",
-        "cleanup-audit",
+        "isolated release gates",
+        "persistent Manager database",
         "raw CRM/Store/Gmail/Telegram exports",
     ]:
         assert expected in agents
@@ -154,9 +153,9 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
 
     for expected in [
         "cleanup-audit",
-        "knowledge-sync",
         "Compact startup contract",
         "Keep one canonical owner per rule",
+        "docs/agent/deployment_runbook.md",
     ]:
         assert expected in combined
 
@@ -311,9 +310,19 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
     playbook = (ROOT / "docs" / "agent" / "store_management_playbook.md").read_text(encoding="utf-8")
     routes = {route["command_id"]: route for route in routes_payload["routes"]}
 
-    assert {"store_read_workflow", "store_management_workflow"} <= set(routes)
+    assert {
+        "store_read_workflow",
+        "store_management_workflow",
+        "store_customer_response_publish",
+    } <= set(routes)
     assert "store_management" in routes["store_management_workflow"]["knowledge_domains"]
     assert routes["store_management_workflow"]["effects"] == []
+    store_phrases = routes["store_management_workflow"]["signals"]["phrases"]
+    assert "подготовь черновик ответа клиенту по заявке магазина" in store_phrases
+    assert "ответь клиенту по заявке магазина" not in store_phrases
+    response_route = routes["store_customer_response_publish"]
+    assert response_route["workflow_id"] == "store_management_workflow"
+    assert response_route["effects"] == ["external_send", "finance"]
     assert "planned_changes_by_action" not in manager_catalog
     for required in [
         'agent_board_digest(scope="store")',
@@ -324,6 +333,10 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
         "replace_quote_offer_drafts",
         "storage_location",
         "store_owner_api",
+        "itemLimit",
+        "itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor",
+        "ORDER_ITEMS_CURSOR_STALE",
+        "itemsHasMore=true",
     ]:
         assert required in playbook
 
@@ -344,6 +357,15 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
         "pull_request",
     ]:
         assert expected in workflow
+
+
+def test_release_runbook_isolates_knowledge_preflight_from_persistent_db():
+    runbook = (ROOT / "docs" / "agent" / "deployment_runbook.md").read_text(encoding="utf-8")
+
+    assert "mktemp -d /tmp/autostop-manager-release-gates.XXXXXX" in runbook
+    assert 'export AUTOSTOP_MANAGER_DB="$release_gate_tmp/preflight.sqlite3"' in runbook
+    assert "trap cleanup_release_gate_tmp EXIT" in runbook
+    assert runbook.index("AUTOSTOP_MANAGER_DB") < runbook.index("knowledge-sync")
 
 
 def test_board_cleanup_docs_do_not_reintroduce_old_archive_or_description_preview_policy():

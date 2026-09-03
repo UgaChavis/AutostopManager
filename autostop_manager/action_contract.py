@@ -718,7 +718,7 @@ def _validate_store_changes(
         blockers.append("missing_store_assignee_id")
     elif action == "set_quote_request_status":
         status = str(changes.get("status") or "").strip().upper()
-        if status not in {"NEW", "IN_PROGRESS"}:
+        if status not in {"WAITING_FOR_QUOTE", "WAITING_FOR_APPROVAL"}:
             blockers.append("unsupported_store_quote_status")
     elif action == "update_quote_request_comment":
         comment = changes.get("internal_comment")
@@ -849,12 +849,9 @@ def _is_store_owner_collection_create(domain: str, changes: dict[str, Any]) -> b
     if domain != "store_owner_api":
         return False
     path = str(changes.get("path_template") or "").strip()
-    return (
-        is_safe_reversible_collection_create(
-            str(changes.get("method") or "").strip(),
-            path,
-        )
-        and str(changes.get("risk") or "").strip() == "write"
+    return is_safe_reversible_collection_create(
+        str(changes.get("method") or "").strip(),
+        path,
     )
 
 

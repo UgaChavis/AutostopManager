@@ -137,6 +137,28 @@ def test_agent_brief_store_management_has_no_blanket_destructive_gate(tmp_path):
     assert not any("Resolve exact targets and recovery material" in rule for rule in result["hot_rules"])
 
 
+def test_agent_brief_store_customer_response_publish_uses_external_visibility_policy(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Ответь клиенту по заявке магазина")
+
+    step = result["route"]["steps"][0]
+    assert step["command_id"] == "store_customer_response_publish"
+    assert step["effects"] == ["external_send", "finance"]
+    assert any("exact destination or target" in rule for rule in result["hot_rules"])
+    assert any("customer-visible or outbound result" in check for check in result["verification"])
+    assert any("exact business target's monetary basis" in check for check in result["verification"])
+    assert all("repair-order basis" not in check for check in result["verification"])
+
+
+def test_agent_brief_routes_site_parts_management_to_store(tmp_path):
+    result = context.build_agent_brief(
+        _store(tmp_path),
+        "Получай полную информацию и управляй нашим сайтом автозапчастей",
+    )
+
+    assert result["route"]["workflow_id"] == "store_management_workflow"
+    assert result["route"]["domain"] == "store_management"
+
+
 def test_agent_brief_remote_check_has_no_blanket_destructive_gate(tmp_path):
     result = context.build_agent_brief(_store(tmp_path), "Проверь подключение к удалённому серверу по SSH")
 

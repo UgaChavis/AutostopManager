@@ -577,7 +577,7 @@ def test_existing_entity_update_requires_target_revision_and_idempotency():
     ("domain", "action", "changes"),
     [
         ("store_quote_request", "assign_quote_request", {"assignee_id": "employee-7"}),
-        ("store_quote_request", "set_quote_request_status", {"status": "IN_PROGRESS"}),
+        ("store_quote_request", "set_quote_request_status", {"status": "WAITING_FOR_APPROVAL"}),
         ("store_quote_request", "update_quote_request_comment", {"internal_comment": "Проверить VIN"}),
         ("store_quote_request", "add_quote_request_note", {"text": "Нужно уточнить сторону"}),
         (
@@ -640,7 +640,7 @@ def test_store_contract_uses_stable_correlation_across_dry_run_and_apply_phases(
         "domain": "store_quote_request",
         "action": "set_quote_request_status",
         "target_id": "quote-1",
-        "planned_changes": {"status": "IN_PROGRESS"},
+        "planned_changes": {"status": "WAITING_FOR_APPROVAL"},
         "expected_revision": "version-1",
     }
     preview = prepare_action_contract(
@@ -733,7 +733,12 @@ def test_store_ready_contract_discloses_notification_and_requires_explicit_ready
     ("domain", "action", "raw_changes", "canonical_changes"),
     [
         ("store_quote_request", "assign_quote_request", {"assignee_id": " employee-7 "}, {"assignee_id": "employee-7"}),
-        ("store_quote_request", "set_quote_request_status", {"status": " in_progress "}, {"status": "IN_PROGRESS"}),
+        (
+            "store_quote_request",
+            "set_quote_request_status",
+            {"status": " waiting_for_approval "},
+            {"status": "WAITING_FOR_APPROVAL"},
+        ),
         (
             "store_quote_request",
             "update_quote_request_comment",
@@ -778,6 +783,7 @@ def test_store_contract_normalizes_planned_changes_once_for_transport_and_readba
     [
         ("store_order", "delete", {"status": "READY"}, "unsupported_store_management_operation"),
         ("store_order", "mark_order_ready", {"price": 1}, "unsupported_store_change_fields"),
+        ("store_quote_request", "set_quote_request_status", {"status": "NEW"}, "unsupported_store_quote_status"),
         ("store_quote_request", "set_quote_request_status", {"status": "COMPLETE"}, "unsupported_store_quote_status"),
         ("store_batch", "set_batch_storage_location", {"storage_location": ""}, "invalid_store_storage_location"),
     ],
@@ -1335,15 +1341,15 @@ def test_reversible_store_owner_collection_create_does_not_require_fake_revision
     result = prepare_action_contract(
         domain="store_owner_api",
         action="execute_owner_api",
-        target_id="collection:/api/v1/warehouse/suppliers",
+        target_id="collection:/api/v1/categories",
         planned_changes={
-            "operation_id": "create_supplier",
+            "operation_id": "create_category",
             "method": "POST",
-            "path_template": "/api/v1/warehouse/suppliers",
+            "path_template": "/api/v1/categories",
             "plan_hash": "e" * 64,
-            "risk": "write",
+            "risk": "high_risk_write",
             "schema_hash": "b" * 64,
-            "concrete_path": "/api/v1/warehouse/suppliers",
+            "concrete_path": "/api/v1/categories",
             "query_fields": [],
             "query_sha256": "c" * 64,
             "request_sha256": "d" * 64,
@@ -1351,9 +1357,9 @@ def test_reversible_store_owner_collection_create_does_not_require_fake_revision
             "body_fields": ["name"],
             "file_fields": [],
         },
-        owner_intent="Создать поставщика по точной команде владельца",
-        idempotency_key="store-owner-create-supplier-001",
-        correlation_id="store-owner-create-supplier-001",
+        owner_intent="Создать категорию по точной команде владельца",
+        idempotency_key="store-owner-create-category-001",
+        correlation_id="store-owner-create-category-001",
     )
 
     assert result["ok"] is True

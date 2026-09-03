@@ -19,7 +19,6 @@ STORE_ENTITIES = frozenset(
         "store_part",
         "store_order",
         "store_quote_request",
-        "store_supplier",
         "store_batch",
         "store_warehouse_operation",
         "store_marketplace_listing",
@@ -107,7 +106,19 @@ _ENTITY_SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "data_quality_warnings",
         }
     ),
-    "store_order": frozenset({"order_number", "status", "ready_at", "items_count", "total", "has_external_items"}),
+    "store_order": frozenset(
+        {
+            "order_number",
+            "status",
+            "ready_at",
+            "archived_at",
+            "has_archive_reason",
+            "archive_reason_sha256",
+            "items_count",
+            "total",
+            "has_external_items",
+        }
+    ),
     "store_quote_request": frozenset(
         {
             "request_number",
@@ -118,6 +129,9 @@ _ENTITY_SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "has_internal_comment",
             "internal_comment_sha256",
             "created_at",
+            "archived_at",
+            "has_archive_reason",
+            "archive_reason_sha256",
             "notes_count",
             "agent_draft_count",
             "published_offer_count",
@@ -140,7 +154,6 @@ _ENTITY_SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "public_url",
         }
     ),
-    "store_supplier": frozenset({"name", "is_active"}),
     "store_batch": frozenset(
         {
             "part_id",
@@ -200,6 +213,10 @@ _ENTITY_FULL_FIELDS: dict[str, frozenset[str]] = {
             "converted_order_id",
             "approved_at",
             "closed_at",
+            "customer_response_draft",
+            "published_customer_response",
+            "customer_response_published_at",
+            "customer_response_read_at",
             "items",
             "notes",
             "items_has_more",
@@ -207,7 +224,6 @@ _ENTITY_FULL_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "store_sourcing_offer": frozenset(),
-    "store_supplier": frozenset(),
     "store_batch": frozenset({"supplier_id", "supplier_name"}),
     "store_warehouse_operation": frozenset({"items", "items_has_more", "nested_limit"}),
     "store_marketplace_listing": frozenset(

@@ -209,7 +209,6 @@ STORE_LEDGER_REF_ENTITIES = frozenset(
         "store_part",
         "store_quote_request",
         "store_state",
-        "store_supplier",
         "store_warehouse_operation",
     }
 )

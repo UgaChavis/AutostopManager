@@ -197,8 +197,15 @@ def test_openapi_inventory_keeps_employee_routes_and_excludes_session_boundaries
 
 
 def test_risk_classifier_fails_closed_for_unreviewed_collection_and_side_effect_posts():
-    assert store_owner_api._risk("POST", "/api/v1/warehouse/suppliers") == "write"
-    assert store_owner_api._risk("POST", "/api/v1/categories") == "write"
+    assert store_owner_api._risk("POST", "/api/v1/categories") == "high_risk_write"
+    assert store_owner_api._risk("PATCH", "/api/v1/parts/{id}") == "high_risk_write"
+    assert (
+        store_owner_api._risk(
+            "POST",
+            "/api/v1/admin/quote-requests/{quote_request_id}:publish-response",
+        )
+        == "high_risk_write"
+    )
     assert store_owner_api._risk("POST", "/api/v1/warehouse/receipts/batch") == "high_risk_write"
     assert store_owner_api._risk("POST", "/api/v1/customers/blocked-buyers") == "high_risk_write"
     assert store_owner_api._risk("POST", "/api/v1/marketplaces/exports") == "high_risk_write"
@@ -559,6 +566,305 @@ def test_capability_inventory_can_return_all_current_employee_operations():
     assert result["summary"]["matches"] == 115
     assert result["summary"]["returned"] == 115
     assert len(result["items"]) == 115
+
+
+def test_exact_capability_returns_bounded_validation_only_input_contract():
+    components = {
+        "schemas": {
+            "PartPatch": {
+                "title": "not returned",
+                "description": "not returned",
+                "type": "object",
+                "$defs": {"Identifier": {"type": "string", "pattern": "^[a-z]+$"}},
+                "required": ["name"],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "default": "private default",
+                        "examples": ["private example"],
+                    },
+                    "state": {"$ref": "#/components/schemas/PartState"},
+                    "code": {"$ref": "#/$defs/Identifier"},
+                    "parent": {
+                        "anyOf": [
+                            {"$ref": "#/components/schemas/PartPatch"},
+                            {"type": "null"},
+                        ]
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "PartState": {
+                "type": "string",
+                "enum": ["ACTIVE", "INACTIVE"],
+                "description": "not returned",
+            },
+        }
+    }
+    capability = OwnerCapability(
+        operation_id="update_part",
+        method="PATCH",
+        path_template="/api/v1/parts/{part_id}",
+        risk="high_risk_write",
+        request_content_types=("application/json",),
+        request_required=True,
+        path_parameters=("part_id",),
+        schema_hash="a" * 64,
+        query_parameters=("notify",),
+        required_query_parameters=("notify",),
+        request_schemas=(("application/json", {"$ref": "#/components/schemas/PartPatch"}),),
+        path_parameter_schemas=(("part_id", {"type": "string", "minLength": 1, "description": "not returned"}),),
+        query_parameter_schemas=(("notify", {"type": "boolean", "default": False}),),
+        schema_components=components,
+    )
+    client = _client_with_capability(capability)
+
+    result = client.list_capabilities(operation_id="update_part")
+
+    assert result["ok"] is True
+    assert result["summary"]["operation_id"] == "update_part"
+    assert result["summary"]["schema_hash"] == "a" * 64
+    assert result["summary"]["input_contract_bytes"] <= store_owner_api.MAX_INPUT_CONTRACT_BYTES
+    assert result["data_included"] is False
+    contract = result["input_contract"]
+    assert contract["path_parameters"]["required"] == ["part_id"]
+    assert contract["path_parameters"]["properties"]["part_id"] == {
+        "minLength": 1,
+        "type": "string",
+    }
+    assert contract["query_parameters"]["required"] == ["notify"]
+    assert contract["query_parameters"]["properties"]["notify"] == {"type": "boolean"}
+    request_schema = contract["request_body"]["content"][0]["schema"]
+    assert request_schema["$ref"].startswith("#/$defs/schema_")
+    assert len(request_schema["$defs"]) == 3
+    assert any(
+        definition.get("properties", {}).get("parent", {}).get("anyOf", [{}])[0].get("$ref") == request_schema["$ref"]
+        for definition in request_schema["$defs"].values()
+    )
+    rendered = json.dumps(contract, ensure_ascii=False)
+    for forbidden in ("default", "description", "example", "examples", "title"):
+        assert f'"{forbidden}"' not in rendered
+    assert "private default" not in rendered
+    assert "private example" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("schema", "error_code"),
+    [
+        ({"$ref": "https://example.invalid/schema.json"}, "store_owner_input_contract_ref_invalid"),
+        ({"$ref": "#/components/securitySchemes/Owner"}, "store_owner_input_contract_ref_invalid"),
+        (
+            {"$ref": "#/anyOf/00", "anyOf": [{"type": "string"}]},
+            "store_owner_input_contract_ref_invalid",
+        ),
+        ({"nullable": True, "type": "string"}, "store_owner_input_contract_keyword_unsupported"),
+        ({"pattern": "[", "type": "string"}, "store_owner_input_contract_schema_invalid"),
+        ({"multipleOf": 0, "type": "number"}, "store_owner_input_contract_schema_invalid"),
+    ],
+)
+def test_exact_capability_rejects_unsafe_or_non_validation_schema_keywords(schema, error_code):
+    capability = OwnerCapability(
+        operation_id="update_part",
+        method="PATCH",
+        path_template="/api/v1/parts/{id}",
+        risk="high_risk_write",
+        request_content_types=("application/json",),
+        request_required=True,
+        path_parameters=("id",),
+        request_schemas=(("application/json", schema),),
+    )
+
+    result = _client_with_capability(capability).list_capabilities(operation_id="update_part")
+
+    assert result["error"]["code"] == error_code
+
+
+def test_exact_capability_input_contract_is_depth_and_size_bounded(monkeypatch):
+    deep_schema = {"type": "string"}
+    for _ in range(store_owner_api.MAX_INPUT_SCHEMA_DEPTH + 1):
+        deep_schema = {"allOf": [deep_schema]}
+    capability = OwnerCapability(
+        operation_id="update_part",
+        method="PATCH",
+        path_template="/api/v1/parts/{id}",
+        risk="high_risk_write",
+        request_content_types=("application/json",),
+        request_required=True,
+        path_parameters=("id",),
+        request_schemas=(("application/json", deep_schema),),
+    )
+    client = _client_with_capability(capability)
+
+    too_deep = client.list_capabilities(operation_id="update_part")
+    monkeypatch.setattr(store_owner_api, "MAX_INPUT_CONTRACT_BYTES", 64)
+    too_large = _client_with_capability(_json_write_capability()).list_capabilities(operation_id="update_part")
+
+    assert too_deep["error"]["code"] == "store_owner_input_contract_too_deep"
+    assert too_large["error"]["code"] == "store_owner_input_contract_too_large"
+
+
+def test_input_schema_sanitizer_preserves_supported_validation_keywords():
+    schema = {
+        "$comment": "not returned",
+        "description": "not returned",
+        "x-private-note": "not returned",
+        "type": ["null", "object"],
+        "required": ["items", "metadata"],
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 4,
+                "uniqueItems": True,
+                "contains": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "exclusiveMinimum": -1,
+                    "exclusiveMaximum": 101,
+                    "multipleOf": 0.5,
+                },
+                "minContains": 0,
+                "maxContains": 2,
+                "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                "prefixItems": [{"const": None}, {"enum": [True, 2, 2.5, "two"]}],
+                "unevaluatedItems": False,
+            },
+            "metadata": {
+                "type": "object",
+                "minProperties": 0,
+                "maxProperties": 8,
+                "minLength": 0,
+                "maxLength": 200,
+                "dependentRequired": {"state": ["reason"]},
+                "dependentSchemas": {"state": {"required": ["reason"]}},
+                "patternProperties": {"^[a-z]+$": {"type": "string"}},
+                "additionalProperties": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^[a-z0-9-]+$",
+                },
+                "propertyNames": {"type": "string", "minLength": 1},
+                "if": {"required": ["state"]},
+                "then": {"required": ["reason"]},
+                "else": {"not": {"required": ["reason"]}},
+                "unevaluatedProperties": False,
+            },
+            "choice": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+        },
+        "allOf": [True, {"type": ["object", "null"]}],
+    }
+
+    result = store_owner_api._InputSchemaSanitizer(schema, components={}).sanitize()
+
+    assert result["type"] == ["null", "object"]
+    assert result["properties"]["items"]["contains"]["multipleOf"] == 0.5
+    assert result["properties"]["items"]["prefixItems"][1]["enum"] == [True, 2, 2.5, "two"]
+    assert result["properties"]["metadata"]["dependentRequired"] == {"state": ["reason"]}
+    assert result["properties"]["metadata"]["unevaluatedProperties"] is False
+    assert "$comment" not in result
+    assert "description" not in result
+    assert "x-private-note" not in result
+
+
+def test_input_schema_sanitizer_resolves_escaped_root_and_array_pointers():
+    schema = {
+        "$defs": {"escaped/name~": {"type": "string", "minLength": 1}},
+        "examples": [{"type": "integer", "minimum": 1}],
+        "allOf": [
+            {"$ref": "#"},
+            {"$ref": "#/$defs/escaped~1name~0"},
+            {"$ref": "#/examples/0"},
+            {"$ref": "#/examples/0"},
+        ],
+    }
+
+    result = store_owner_api._InputSchemaSanitizer(schema, components={}).sanitize()
+
+    references = [item["$ref"] for item in result["allOf"]]
+    assert references[2] == references[3]
+    assert len(result["$defs"]) == 3
+    assert {definition["type"] for definition in result["$defs"].values() if "type" in definition} == {
+        "integer",
+        "string",
+    }
+    assert any(definition.get("allOf", [{}])[0].get("$ref") == references[0] for definition in result["$defs"].values())
+
+
+@pytest.mark.parametrize(
+    ("schema", "error_code"),
+    [
+        (None, "store_owner_input_contract_schema_invalid"),
+        ({1: {"type": "string"}}, "store_owner_input_contract_schema_invalid"),
+        ({"properties": []}, "store_owner_input_contract_schema_invalid"),
+        ({"properties": {"": {"type": "string"}}}, "store_owner_input_contract_schema_invalid"),
+        ({"allOf": []}, "store_owner_input_contract_schema_invalid"),
+        ({"allOf": {}}, "store_owner_input_contract_schema_invalid"),
+        ({"dependentRequired": []}, "store_owner_input_contract_schema_invalid"),
+        ({"dependentRequired": {"a": ["b", "b"]}}, "store_owner_input_contract_schema_invalid"),
+        ({"required": "name"}, "store_owner_input_contract_schema_invalid"),
+        ({"type": "invalid"}, "store_owner_input_contract_schema_invalid"),
+        ({"type": []}, "store_owner_input_contract_schema_invalid"),
+        ({"type": ["string", "invalid"]}, "store_owner_input_contract_schema_invalid"),
+        ({"enum": []}, "store_owner_input_contract_schema_invalid"),
+        ({"enum": [1, 1]}, "store_owner_input_contract_schema_invalid"),
+        ({"enum": [["nested"]]}, "store_owner_input_contract_literal_invalid"),
+        ({"const": float("inf")}, "store_owner_input_contract_literal_invalid"),
+        ({"minItems": True}, "store_owner_input_contract_schema_invalid"),
+        ({"minItems": -1}, "store_owner_input_contract_schema_invalid"),
+        ({"minimum": True}, "store_owner_input_contract_schema_invalid"),
+        ({"minimum": float("nan")}, "store_owner_input_contract_schema_invalid"),
+        ({"uniqueItems": 1}, "store_owner_input_contract_schema_invalid"),
+        ({"format": 1}, "store_owner_input_contract_schema_invalid"),
+        ({"pattern": "bad\x00pattern"}, "store_owner_input_contract_schema_invalid"),
+        ({"$ref": "#/missing"}, "store_owner_input_contract_ref_invalid"),
+        ({"$ref": "#/items/01", "items": [{"type": "string"}]}, "store_owner_input_contract_ref_invalid"),
+        ({"$ref": "#/items/2", "items": [{"type": "string"}]}, "store_owner_input_contract_ref_invalid"),
+    ],
+)
+def test_input_schema_sanitizer_rejects_malformed_validation_contracts(schema, error_code):
+    with pytest.raises(ValueError, match=f"^{error_code}$"):
+        store_owner_api._InputSchemaSanitizer(schema, components={}).sanitize()
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "relative/schema",
+        "#/bad~2escape",
+        "#/empty//part",
+        f"#/{'x' * 201}",
+        "#/control\x00name",
+        "#/" + "/".join("x" for _ in range(store_owner_api.MAX_INPUT_SCHEMA_DEPTH + 1)),
+    ],
+)
+def test_json_pointer_parser_rejects_unbounded_or_ambiguous_references(reference):
+    with pytest.raises(ValueError, match=r"^store_owner_input_contract_ref_invalid$"):
+        store_owner_api._json_pointer_parts(reference)
+
+
+def test_input_schema_sanitizer_enforces_complexity_and_definition_bounds(monkeypatch):
+    monkeypatch.setattr(store_owner_api, "MAX_INPUT_SCHEMA_NODES", 1)
+    with pytest.raises(ValueError, match=r"^store_owner_input_contract_too_complex$"):
+        store_owner_api._InputSchemaSanitizer(
+            {"properties": {"name": {"type": "string"}}},
+            components={},
+        ).sanitize()
+
+    monkeypatch.setattr(store_owner_api, "MAX_INPUT_SCHEMA_NODES", 100)
+    monkeypatch.setattr(store_owner_api, "MAX_INPUT_SCHEMA_DEFINITIONS", 1)
+    with pytest.raises(ValueError, match=r"^store_owner_input_contract_too_complex$"):
+        store_owner_api._InputSchemaSanitizer(
+            {
+                "$defs": {
+                    "First": {"type": "string"},
+                    "Second": {"type": "integer"},
+                },
+                "allOf": [{"$ref": "#/$defs/First"}, {"$ref": "#/$defs/Second"}],
+            },
+            components={},
+        ).sanitize()
 
 
 def test_large_binary_response_requires_explicit_opt_in(monkeypatch):

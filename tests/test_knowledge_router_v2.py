@@ -45,10 +45,28 @@ def _workflows(query: str, *, intent: str | None = None) -> list[str]:
             ["ecosystem_capability_parity", "manager_documentation_hygiene"],
         ),
         ("Покажи состояние склада", ["store_read_workflow"]),
+        (
+            "Получай полную информацию и управляй нашим сайтом автозапчастей",
+            ["store_management_workflow"],
+        ),
+        ("Покажи все каталоги запасных частей и наличие деталей", ["store_read_workflow"]),
+        ("Подготовь черновик ответа клиенту по заявке магазина", ["store_management_workflow"]),
+        ("Ответь клиенту по заявке магазина", ["store_management_workflow"]),
     ],
 )
 def test_command_route_regression_table(query, expected):
     assert _workflows(query) == expected
+
+
+def test_store_customer_response_publish_uses_narrow_effectful_route():
+    draft = plan_command_routes("Подготовь черновик ответа клиенту по заявке магазина")
+    publish = plan_command_routes("Ответь клиенту по заявке магазина")
+
+    assert [route["command_id"] for route in draft] == ["store_management_workflow"]
+    assert draft[0]["effects"] == []
+    assert [route["command_id"] for route in publish] == ["store_customer_response_publish"]
+    assert publish[0]["workflow_id"] == "store_management_workflow"
+    assert publish[0]["effects"] == ["external_send", "finance"]
 
 
 def test_email_lookup_does_not_select_external_send():

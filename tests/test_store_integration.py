@@ -656,17 +656,20 @@ def test_management_apply_requires_exact_readback_match(tmp_path):
     before = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "NEW",
+        "status": "WAITING_FOR_QUOTE",
         "updated_at": "version-1",
     }
-    client = _ActionClient(before=before, after={**before, "status": "IN_PROGRESS", "updated_at": "version-2"})
+    client = _ActionClient(
+        before=before,
+        after={**before, "status": "WAITING_FOR_APPROVAL", "updated_at": "version-2"},
+    )
     integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
         action="set_quote_request_status",
         target_id="quote-1",
-        planned_changes={"status": "IN_PROGRESS"},
+        planned_changes={"status": "WAITING_FOR_APPROVAL"},
         owner_intent="Переведи точную заявку quote-1 в работу",
         expected_updated_at="version-1",
         idempotency_key="quote-1-progress-v1",
@@ -684,17 +687,20 @@ def test_management_sends_and_verifies_the_same_canonical_store_changes(tmp_path
     before = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "NEW",
+        "status": "WAITING_FOR_QUOTE",
         "updated_at": "version-1",
     }
-    client = _ActionClient(before=before, after={**before, "status": "IN_PROGRESS", "updated_at": "version-2"})
+    client = _ActionClient(
+        before=before,
+        after={**before, "status": "WAITING_FOR_APPROVAL", "updated_at": "version-2"},
+    )
     integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
         action="set_quote_request_status",
         target_id=" quote-1 ",
-        planned_changes={"status": " in_progress "},
+        planned_changes={"status": " waiting_for_approval "},
         owner_intent="  Переведи точную заявку quote-1 в работу  ",
         expected_updated_at="version-1",
         idempotency_key=" quote-1-progress-canonical-v1 ",
@@ -707,7 +713,7 @@ def test_management_sends_and_verifies_the_same_canonical_store_changes(tmp_path
     assert sent["target_id"] == "quote-1"
     assert sent["owner_intent"] == "Переведи точную заявку quote-1 в работу"
     assert sent["idempotency_key"] == "quote-1-progress-canonical-v1"
-    assert sent["planned_changes"] == {"status": "IN_PROGRESS"}
+    assert sent["planned_changes"] == {"status": "WAITING_FOR_APPROVAL"}
     assert result["meta"]["readback_verified"] is True
 
 
@@ -769,7 +775,7 @@ def test_management_apply_replays_original_request_when_preread_revision_is_alre
     current = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "IN_PROGRESS",
+        "status": "WAITING_FOR_APPROVAL",
         "updated_at": "version-2",
     }
     replay_result = {
@@ -790,7 +796,7 @@ def test_management_apply_replays_original_request_when_preread_revision_is_alre
         domain="store_quote_request",
         action="set_quote_request_status",
         target_id="quote-1",
-        planned_changes={"status": "IN_PROGRESS"},
+        planned_changes={"status": "WAITING_FOR_APPROVAL"},
         owner_intent="Повтори исходный запрос после потерянного ответа",
         expected_updated_at="version-1",
         idempotency_key="quote-1-progress-original-v1",
@@ -812,7 +818,7 @@ def test_management_apply_with_stale_preread_and_no_receipt_returns_app_conflict
     current = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "IN_PROGRESS",
+        "status": "WAITING_FOR_APPROVAL",
         "updated_at": "version-2",
     }
     conflict = {
@@ -833,7 +839,7 @@ def test_management_apply_with_stale_preread_and_no_receipt_returns_app_conflict
         domain="store_quote_request",
         action="set_quote_request_status",
         target_id="quote-1",
-        planned_changes={"status": "IN_PROGRESS"},
+        planned_changes={"status": "WAITING_FOR_APPROVAL"},
         owner_intent="Повтори исходный запрос без сохраненной квитанции",
         expected_updated_at="version-1",
         idempotency_key="quote-1-progress-missing-receipt-v1",
@@ -987,7 +993,7 @@ def test_management_apply_unknown_outcome_always_rereads_and_enters_compensating
     before = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "NEW",
+        "status": "WAITING_FOR_QUOTE",
         "updated_at": "version-1",
     }
     unknown = {
@@ -1003,7 +1009,7 @@ def test_management_apply_unknown_outcome_always_rereads_and_enters_compensating
     }
 
     for suffix, after, expected_failed in (
-        ("matching", {**before, "status": "IN_PROGRESS", "updated_at": "version-2"}, []),
+        ("matching", {**before, "status": "WAITING_FOR_APPROVAL", "updated_at": "version-2"}, []),
         ("mismatching", {**before, "updated_at": "version-2"}, ["status"]),
     ):
         client = _ActionClient(before=before, after=after, action_result=unknown)
@@ -1012,7 +1018,7 @@ def test_management_apply_unknown_outcome_always_rereads_and_enters_compensating
             domain="store_quote_request",
             action="set_quote_request_status",
             target_id="quote-1",
-            planned_changes={"status": "IN_PROGRESS"},
+            planned_changes={"status": "WAITING_FOR_APPROVAL"},
             owner_intent="Переведи точную заявку quote-1 в работу",
             expected_updated_at="version-1",
             idempotency_key=f"quote-1-progress-{suffix}-v1",
@@ -1052,7 +1058,7 @@ def test_management_blocks_missing_or_mismatched_pre_read_identity_and_version(t
             domain="store_quote_request",
             action="set_quote_request_status",
             target_id="quote-1",
-            planned_changes={"status": "IN_PROGRESS"},
+            planned_changes={"status": "WAITING_FOR_APPROVAL"},
             owner_intent="Переведи точную заявку quote-1 в работу",
             expected_updated_at="version-1",
             idempotency_key=f"quote-1-{expected_error}",
@@ -1069,16 +1075,21 @@ def test_management_apply_requires_matching_target_and_advanced_version(tmp_path
     before = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "NEW",
+        "status": "WAITING_FOR_QUOTE",
         "updated_at": "version-1",
     }
     cases = [
         (
-            {**before, "id": "other-quote", "status": "IN_PROGRESS", "updated_at": "version-2"},
+            {
+                **before,
+                "id": "other-quote",
+                "status": "WAITING_FOR_APPROVAL",
+                "updated_at": "version-2",
+            },
             "store_apply_readback_target_mismatch",
         ),
         (
-            {**before, "status": "IN_PROGRESS"},
+            {**before, "status": "WAITING_FOR_APPROVAL"},
             "store_apply_readback_version_not_advanced",
         ),
     ]
@@ -1091,7 +1102,7 @@ def test_management_apply_requires_matching_target_and_advanced_version(tmp_path
             domain="store_quote_request",
             action="set_quote_request_status",
             target_id="quote-1",
-            planned_changes={"status": "IN_PROGRESS"},
+            planned_changes={"status": "WAITING_FOR_APPROVAL"},
             owner_intent="Переведи точную заявку quote-1 в работу",
             expected_updated_at="version-1",
             idempotency_key=f"quote-1-{expected_error}",
@@ -1107,7 +1118,7 @@ def test_management_apply_accepts_same_version_only_for_idempotency_replay(tmp_p
     state = {
         "entity": "store_quote_request",
         "id": "quote-1",
-        "status": "IN_PROGRESS",
+        "status": "WAITING_FOR_APPROVAL",
         "updated_at": "version-2",
     }
     replay_result = {
@@ -1128,7 +1139,7 @@ def test_management_apply_accepts_same_version_only_for_idempotency_replay(tmp_p
         domain="store_quote_request",
         action="set_quote_request_status",
         target_id="quote-1",
-        planned_changes={"status": "IN_PROGRESS"},
+        planned_changes={"status": "WAITING_FOR_APPROVAL"},
         owner_intent="Повтори точное ранее выполненное действие для quote-1",
         expected_updated_at="version-2",
         idempotency_key="quote-1-progress-replay-v1",

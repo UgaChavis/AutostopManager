@@ -136,6 +136,14 @@ def test_store_workflow_ledger_accepts_compact_refs_and_rejects_raw_business_pay
         checkpoint={"phase": "read", "verification": {"customer_phone": "+79990000000"}},
     )
     assert nested_raw_checkpoint["error"] == "raw_store_payload_not_allowed_in_manager_ledger"
+    retired_supplier_ref = store.checkpoint_workflow_run(
+        started["id"],
+        checkpoint={
+            "phase": "read",
+            "compact_refs": [{"entity": "store_supplier", "id": "supplier-1", "version": "v1"}],
+        },
+    )
+    assert retired_supplier_ref["error"] == "raw_store_payload_not_allowed_in_manager_ledger"
 
     compact = store.checkpoint_workflow_run(
         started["id"],
