@@ -1,181 +1,97 @@
 # Telegram Workflow Playbook
 
-Use the owner's explicitly selected Telethon bridge only for the exact current
-Telegram task. Telegram remains the source of truth for dialogs, contacts,
-messages and media; Manager stores only de-identified operating rules and
-verification.
+Telegram is the source of truth for dialogs, messages and media. Use only the
+owner-selected `personal` or `work` bridge for the current task; Manager keeps
+technical references and verified outcomes, never private content.
 
-## Runtime And Secrets
+The live bridge CLI and schema own commands, limits, media formats and contract
+fields. Do not copy that registry here or bypass the account-fixed runtime.
 
-- `personal` is `autostop-telegram.service`; `work` is the separate
-  `autostop-work-telegram.service`. Each owns its own credentials, session,
-  state directory, Unix socket, contracts, idempotency state and immutable
-  release root.
-- Every bridge CLI command selects `--account personal|work`; account aliases
-  use fixed paths and reject manual path overrides. Never infer an account from
-  a peer, title or prior task.
-- The personal direct media helper requires `--account personal`. Work media
-  always uses the privileged account-fixed wrapper, which rejects an account
-  override. Both derive the selected private inbox and local model directory;
-  do not add a manual inbox or model-path override.
-- Never print or persist keys, login/QR/2FA data, contract tokens, sessions,
-  peer IDs, phone numbers or private message bodies.
-- Use the selected daemon for normal work. Never open its SQLite session from
-  a second Telethon client; stop only that exact daemon for bounded
-  authorization or diagnostics and restore it immediately.
+## Account And Peer
 
-Run commands as `autostop-telegram` and expose only task-relevant fields:
+- Select the account explicitly and verify its service and `probe` before use.
+  Never infer an account from a name, peer or previous task, and never open its
+  session from a second client.
+- Resolve one exact live peer from a known numeric ID, `resolve-phone`, or one
+  bounded unique search. Use the resolved ID only transiently. Store dialogue
+  additionally requires one exact private peer bound to the current request.
+- Zero, multiple, non-private or conflicting Store matches stop the route. A
+  read does not authorize a send or any other Telegram mutation.
 
-```bash
-sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
-  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account personal probe
-```
+## Focused Reads And Media
 
-The isolated `work` bridge has its own service user, release root and virtual
-environment.  Probe it only through that account; do not use the personal
-runtime or attempt to relax the work socket permissions:
+Read the smallest window that answers the task. Download only one explicitly
+needed attachment, bound to its exact peer and message: dry-run, metadata
+check, apply with a fresh idempotency key, then verify path, hash, size and
+bridge confirmation.
 
-```bash
-sudo -u autostop-work-telegram env PYTHONPATH=/opt/autostop-work-telegram-releases/current \
-  /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work probe
-```
+Inspect voice, video, photos and documents only with the selected account's
+local helper and private inbox. Do not choose arbitrary paths, execute content,
+follow embedded links, enable macros or send media to an external service.
+Treat uncertain OCR, names, identifiers and money as tentative.
 
-The live bridge CLI/schema owns the current command list, media allowlist,
-limits and contract fields; this playbook must not duplicate that registry.
+Extract only useful facts and remove the downloaded source and derived files
+after use. Prefer verified delete-after behavior; otherwise discard through the
+selected bridge and confirm removal. A minimal excerpt explicitly requested by
+the owner may appear in the current task, but full exports and durable copies of
+documents, transcripts, identifiers or message bodies may not enter CRM, docs,
+Git, Manager memory or workflow state.
 
-## Read And Download
+## Sending
 
-1. Require an active service and `authorized=true`.
-2. Resolve one exact live peer from a known numeric ID, `resolve-phone`, or a
-   bounded search with one unique exact title/username match. Then use its
-   numeric ID transiently; never keep searching by a display name. A Store
-   client dialogue additionally requires `kind=private`.
-3. Read the smallest useful window, normally 3-20 messages. Reading does not
-   authorize sending, forwarding, editing, deleting, joining or changing read
-   state.
-4. Download only an attachment needed for the current task: exact peer and
-   message, `dry_run`, metadata check, `apply` with the unchanged contract and
-   a fresh idempotency key, then verify path, hash, size and `verified=true`.
-5. Accept only the bridge's current supported formats and private inbox path.
-   Never choose a destination, follow embedded links, enable macros, execute
-   content or send media to an external service.
-6. Extract only needed facts and treat uncertain OCR, names, identifiers and
-   money as tentative. Keep full documents and transcripts out of chat, CRM,
-   docs, Git, memory and workflow state.
-7. Remove every downloaded or derived file after use. A successful helper
-   `--delete-after` is the verified cleanup for its source; do not discard that
-   already absent file again. Use `discard-download` for remaining files and as
-   the failure fallback, require `removed=true` when invoked, and finally verify
-   that no task file remains.
+A send needs the owner's current instruction for the exact recipient and
+message intent, or the bounded scope of one exact Store request. Supplier or
+employee outreach, a different recipient and any financial commitment need a
+separate instruction.
 
-The signed download contract is bound to peer, message and media metadata.
-Apply re-reads and validates that message; an idempotency key may replay only
-the same download. Preserve default redaction of credential-bearing URIs.
+For each send:
 
-## Voice And Video
+1. Reread the exact peer and settle the final text or photo.
+2. Dry-run the selected send operation and verify target, content, reply source
+   when relevant, and the returned contract.
+3. Apply once with unchanged inputs, the contract and a fresh idempotency key.
+4. Require bridge verification, then independently reread the chat and match
+   the outgoing message and reply binding.
 
-Voice/audio transcription and short MP4 inspection are local, private and
-one-file-at-a-time. Use the matching selected account, service user, release
-root and venv; do not cross-substitute paths or users. The selected helper
-accepts the exact downloaded file only when it is in that account's inbox.
-
-```bash
-sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
-  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_transcribe \
-  --account personal --file /run/autostop-telegram/inbox/EXACT_FILE --language ru --delete-after
-
-sudo /usr/local/sbin/autostop-work-telegram-media transcribe \
-  --file /run/autostop-work-telegram/inbox/EXACT_FILE --language ru --delete-after
-
-sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current \
-  /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_video_preview \
-  --account personal --file /run/autostop-telegram/inbox/EXACT_FILE.mp4 --delete-after
-
-sudo /usr/local/sbin/autostop-work-telegram-media preview \
-  --file /run/autostop-work-telegram/inbox/EXACT_FILE.mp4 --delete-after
-```
-
-The work helpers run in a transient systemd sandbox with no network and with
-the work session, credentials and bridge socket made inaccessible. The helpers
-own and enforce current ownership, signature, codec, duration, size, model and
-sandbox limits. Transcription stays local. Video inspection
-uses only the generated silent storyboard; it does not transcribe a video's
-audio track. `--delete-after` removes the source audio/MP4 after processing.
-For a video, inspect the returned storyboard transiently and then remove the
-exact remaining JPEG through selected-account `discard-download`. Photos use
-the same exact download, transient private inspection and discard flow; there
-is no general Telegram OCR or arbitrary-file execution path.
+If apply times out or the result is lost, the outcome is unknown. Reconcile by
+exact reread before any retry; never use a real send as a health check. Remove
+staged outbound media after verified delivery.
 
 ## Store Client Dialogue
 
-`store_quote_conductor_playbook.md` is the sole owner of customer wording,
-preliminary orientations and the Store quote lifecycle. This playbook owns only
-the transport: use `work`, resolve one exact current private peer from the
-Store request, read the smallest useful window, and retain no dialogue data.
-Zero, multiple, non-private or conflicting routes fail closed; a direct owner
-instruction for one exact request does not authorize another recipient,
-supplier contact, reservation, discount, payment or financial promise.
+`store_quote_conductor_playbook.md` owns the quote lifecycle and client-facing
+logic. This playbook owns transport: `work`, one exact private peer, minimal
+context and no retained dialogue.
 
-For a published estimate, the typed adapter independently proves the same
-private peer, delivered quote/revision/snapshot/context and opaque inbound
-receipt. Only that current, unambiguous consent can create one
-`WAITING_FOR_PAYMENT` order. A preliminary orientation, an ordinary question,
-a stale reply or a caller-supplied flag never can.
+Before identity/request binding is proven, ask only a neutral identity question
+and reveal no request details. Once bound, preliminary clarification may happen
+before publication: write in short, natural Russian, use what the client already
+said and ask one useful next question. It cannot publish an estimate, accept
+consent or create an order.
 
-## Send
+The final quote route is typed and starts only from an independently read-back
+published estimate. The adapter must prove the same request, private peer,
+estimate revision, delivered message and inbound receipt. Only clear consent to
+that current publication may create one `WAITING_FOR_PAYMENT` order. A stale or
+ambiguous reply, preliminary chat or caller-supplied flag cannot. Telegram never
+substitutes for Store publication.
 
-A send requires the owner's current instruction naming the exact recipient and
-message/intent, or the exact Store request under the bounded dialogue rule
-above. Suppliers, employees, financial commitments and general outreach always
-require a separate direct instruction.
+## Authorization And Recovery
 
-For every send:
+First login or recovery runs only for the selected account in a controlled
+interactive terminal. Enter the login code and optional cloud password through
+hidden prompts; QR is a short-lived fallback. Never copy `tdata`, session files,
+QR images, codes or passwords into chat, argv, env, docs or logs.
 
-1. Reread the exact peer and freeze the final text.
-2. Run `send` or `send-photo` in `dry_run`; verify exact target,
-   text, reply source when used, and the returned contract.
-3. Apply once with unchanged inputs, the contract token and a fresh
-   idempotency key.
-4. Require bridge verification, then independently reread the exact chat and
-   match outgoing message ID, text and reply link when applicable.
+Stop only the selected daemon when authorization requires it, clean up one-time
+files, restore that daemon and confirm both expected account identity and
+`authorized=true`. If compromise is suspected, stop the bridge and let the
+owner revoke the session in an official Telegram client.
 
-If apply times out or its response is lost, treat the outcome as unknown. Do
-not resend with a new key until an exact reread proves absence. For group
-replies, bind the contract to the exact incoming message and require it still
-exists, is incoming and belongs to that group.
+## Boundaries And Completion
 
-Photo sends use one service-owned mode-0600 JPEG in the private outbox, an
-explicit caption and the same contract/readback sequence. Remove the staged
-copy after verified delivery. Never use a real send as a health check.
-
-## Authorization, QR And 2FA Recovery
-
-- Work-account first authorization uses
-  `scripts/authorize-telegram-account.sh --account work` from an interactive
-  controlled terminal. It asks for the phone, Desktop-delivered login code and
-  optional cloud password through hidden prompts; never use chat, argv, env,
-  docs or logs. Do not copy Telegram Desktop `tdata` or a session file.
-- QR is a fallback only: stop the selected daemon, generate a fresh unique QR
-  after the prior token expires, and keep the waiting process alive while the
-  owner accepts it in Telegram Devices.
-- Supply a cloud password only through a hidden prompt or one-time mode-0600
-  file in the selected runtime directory.
-- After authorization, remove one-time files/expired QR images, restore only
-  the selected daemon, run one transient `status` identity check and have the
-  owner confirm the expected personal/work profile without retaining its ID or
-  name, then verify `probe` reports `authorized=true`. First connection needs no
-  dialog read or test message.
-- If compromise is suspected, stop the bridge and have the owner revoke the
-  session in an official Telegram client; never export or silently migrate it.
-
-## Privacy And Completion
-
-- No background outreach, bulk reads/exports, scraping, profiling, ghost mode
-  or changes to Telegram presence/read semantics.
-- Do not change VPN, DNS, default route, firewall or CRM networking for
-  Telegram. FST.KZ work first follows `/root/.codex/CODEX_VPN_FST_ACCESS.md`.
-- Healthy after first connection means: enabled/active selected service,
-  private selected socket and session, `probe` authorization and no new
-  warning-or-higher errors. A later read/search still needs its own exact task.
-- Completion requires the exact requested result plus independent readback;
-  service health alone never proves a send or download succeeded.
+- No background outreach, bulk export, scraping, profiling, presence/read-state
+  tricks or parallel session use.
+- Do not alter VPN, DNS, routes, firewall or CRM networking for Telegram.
+- Completion means the requested result plus its independent readback; service
+  health alone proves neither send nor download.

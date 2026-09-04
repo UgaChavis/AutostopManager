@@ -1,103 +1,64 @@
 # AutostopManager Codex Instructions
 
-Compact startup contract for work in `/opt/AutostopManager`. Detailed
-procedures belong to the playbooks returned by the route, not here.
+Compact startup contract for `/opt/AutostopManager`; task playbooks own the details.
 
-## Startup
+## Start
 
-- Answer the owner in Russian by default: short, operational and direct.
-- For a non-trivial request use the project venv once:
-  `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"`. Never fall
-  back to host Python. Use `knowledge-probe` only for focused document lookup;
-  it never grants writes, connector access or financial authority.
-- Resolve `work` or `learning` mode. In learning mode use the
-  `autostop-learning-loop` skill; ordinary work has no mandatory learning
-  review.
-- For a voice session read `docs/agent/voice_agent_brief.md` before the first
-  owner task. For multi-step work use the Gateway v2 workflow ledger with
-  compact, state-versioned checkpoints.
+- Answer the owner in concise, direct Russian. In voice and customer dialogue,
+  speak naturally and ask only questions that materially help the next action.
+- For a non-trivial task run once:
+  `.venv/bin/python -m autostop_manager.cli agent-brief "<query>"`. Use the
+  returned route and the project venv; `knowledge-probe` finds documents but
+  grants no write, connector or financial authority.
+- Default to `work`. If the owner asks for learning, use
+  `autostop-learning-loop`. Keep multi-step state in the Gateway v2 ledger as
+  compact refs, hashes and versions.
 
-## Source Boundaries
+## Sources And Privacy
 
-- AutostopManager stores only durable non-CRM memory: routes, cross-system
-  rules, compact references, technical cursors and verified lessons.
-- AutoStop CRM is the source of truth for cards, companies, clients, vehicles,
-  repair orders, payments, cashboxes, files and board state.
-- AutoStop App is the source of truth for Store catalog, stock, batches,
-  suppliers, quotes, orders, warehouse and marketplace state.
-- Gmail is the source of truth for messages, threads, drafts, labels,
-  attachments and sent history. Telegram is the source of truth for its own
-  dialogs, contacts and media; keep private content transient.
-- Never persist raw CRM/Store/Gmail/Telegram exports, customer or vehicle
-  identifiers, mail/chat bodies, money ledgers, credentials, OAuth state or
-  secrets in docs, Git, Manager memory or workflow state.
-- Never dump `.env`, Docker `.Config.Env` or process environments. Inspect an
-  explicit non-secret allowlist and report only presence or validation flags.
+- CRM owns service records and board state. AutoStop App owns Store catalog,
+  stock, estimates and orders. Gmail and Telegram own their messages and media.
+- Manager keeps routes, cross-system rules, technical cursors and approved,
+  de-identified lessons—not copies of live business data.
+- Never persist raw exports, correspondence, customer or vehicle identifiers,
+  money ledgers, credentials, OAuth state or secrets in Git, docs, memory or
+  workflow state. Inspect only explicit non-secret configuration fields; never
+  dump `.env`, Docker environments or process environments.
 
-## Remote Vehicle Diagnostics
+## Live Work
 
-- Route PAD VII work through `remote_diagnostics_pad_vii`; the isolated gateway
-  owns tablet control, while Manager plans, interprets transient evidence and
-  reports. Do not copy its action tools into CRM or Manager MCP registrations.
-- Its project MCP entry invokes only the fixed root-owned local launcher; never
-  put a device ID, UDS path, pairing/TLS material or runtime environment in Git.
-- Before any live call read the local playbook and the server PAD VII contract.
-  No `status`, `observe`, `history` or action occurs before the owner explicitly
-  starts a session; verify every dispatch with the required fresh observation.
-- Never persist raw screenshots, UI trees, VINs or diagnostic values. Read-only
-  ID/DTC/freeze-frame/live data are in live scope; clears/tests/resets/coding,
-  calibration/flashing/immobilizer operations require exact new authorization.
+- The configured CRM Gateway v2 is the external project surface. Begin with
+  `agent_bootstrap`, then use `agent_board_digest`, focused search and exact
+  entity context. Internal Manager tools and unconfigured App namespaces are
+  not alternative live surfaces.
+- A direct request authorizes the ordinary, reversible steps needed for its
+  result—not unrelated cleanup, recipients, purchases or deployment. Choose the
+  shortest useful path and adapt it to the evidence instead of following a
+  script mechanically.
+- Route Store work through `$manage-autostop-store`; its Admin V2 conductor owns
+  customer quotes. Route PAD VII work through `remote_diagnostics_pad_vii` and
+  require the owner's explicit live session plus fresh observation.
+- Prefer named workflows. Raw capabilities are read-only by default; any rare
+  raw mutation follows the exact exception in `manager_rules.json`.
+- Before a mutation, reread the exact target, prepare its action contract,
+  dry-run, apply idempotently with concurrency protection, then reread the
+  result. An unknown outcome stays unresolved until reconciled.
+- Payments, cashboxes, refunds, payroll, supplier orders, financial totals,
+  destructive changes and a new external recipient require exact authority.
+  Keep private messages transient and verify the account, peer and delivery.
 
-## Live Work And Write Gates
-
-- CRM's only external Codex surface is the configured 24-tool Gateway v2 connector.
-  Start with `agent_bootstrap` and `agent_board_digest`, then use focused search
-  and exact entity context. The standalone 78-tool Manager registry is internal
-  project/runtime inventory, not another configured Codex or App surface;
-  production imports only the Manager subset required by the 24-tool Gateway.
-  Treat `codex_apps/autostopcrm.*` and any unconfigured account App namespace as
-  legacy, outside project health checks and execution paths.
-- A direct owner task authorizes only the necessary in-scope non-financial
-  changes. Do not expand it into unrelated cleanup or deployment.
-- Route Store work through `$manage-autostop-store`. For one exact quote,
-  “посмотри” is read-only, “подготовь” is draft-only, and “обработай/ответь”
-  includes the normal customer-visible Store response plus only necessary
-  bounded dialogue through `work` Telegram. Quote writes additionally require
-  a complete live projection proving no hidden Admin V2 estimate; missing or
-  conflicting proof blocks publication until Store exposes it. Store remains
-  authoritative; procurement, discounts, payments and another recipient need
-  exact authority.
-- Every mutation follows: focused exact reread -> `prepare_action_contract` ->
-  named workflow `dry_run` -> `apply` with a different idempotency key ->
-  independent exact reread. Use concurrency controls and a correlation id;
-  unresolved outcomes remain compensating.
-- Payments, cashboxes, refunds, payroll, supplier orders, repair-order totals
-  and other financial changes require a direct instruction for that exact
-  operation. Destructive changes require the same exact scope.
-- Document and Gmail delivery contracts keep only refs, hashes and booleans.
-  A PDF invoice send requires the exact recipient, verified sender, attachment
-  SHA-256 and successful document QA; a financial or tax mismatch requires
-  separate confirmation.
-- Raw discovery is only for a capability absent from a named workflow. A raw
-  write requires its exact literal name, current schema hash, unique
-  idempotency key and strict readback.
-
-## Server And Release Boundary
+## Release Boundary
 
 - For FST.KZ first read `/root/.codex/CODEX_VPN_FST_ACCESS.md`, use
-  `autostop-vpn-fst`, never expose secrets, and never route CRM through VPN.
-- Preserve dirty work. Never reset, rebase, force-push, delete a release or
-  restart services unless the active owner request explicitly requires it.
-- Publish Manager from the workstation with
-  `git push origin HEAD:AutostopManager`. Use
-  `docs/agent/deployment_runbook.md` for revision checks, deployment and
-  rollback. A release-preparation task does not authorize deployment.
-- Keep one canonical owner per rule and link instead of copying. After docs,
-  routes, catalogs or skills change, use the isolated release gates in
-  `docs/agent/deployment_runbook.md`; never run `knowledge-sync` against the
-  persistent Manager database as a preflight check.
+  `autostop-vpn-fst`, expose no secrets and never route CRM through the VPN.
+- Preserve dirty work. Never reset, rebase, force-push, remove a release,
+  restart or deploy unless the current request says so.
+- Publish Manager with `git push origin HEAD:AutostopManager`. Deployment and
+  rollback live only in `docs/agent/deployment_runbook.md`; release preparation
+  does not authorize deployment. Its isolated gates must never sync knowledge
+  into the persistent Manager database.
+- Keep one owner for each rule and link to it rather than copying it.
 
-Navigation owners: `docs/agent/command_routes.json` for operational workflows,
-`docs/agent/knowledge_map.json` for document paths,
-`docs/agent/manager_rules.json` for cross-system runtime invariants, and the
-live Manager/CRM registrations for tool schemas.
+Navigation: `command_routes.json` selects workflows, `knowledge_map.json`
+selects documents, `manager_rules.json` holds cross-system invariants, and live
+Manager/CRM registrations define tool schemas.

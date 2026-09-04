@@ -230,7 +230,6 @@ STORE_WORKFLOW_OPERATIONS = frozenset(
         "set_batch_storage_location",
         "mark_order_ready",
         "add_quote_request_note",
-        "replace_quote_offer_drafts",
         "store_quote_conductor",
     }
 )

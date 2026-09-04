@@ -34,7 +34,6 @@ STORE_MANAGEMENT_OPERATIONS = frozenset(
         "set_batch_storage_location",
         "mark_order_ready",
         "add_quote_request_note",
-        "replace_quote_offer_drafts",
     }
 )
 STORE_DETAIL_LEVELS = frozenset({"summary", "full", "full_with_vin_photo"})
@@ -58,7 +57,6 @@ _ACTION_CHANGE_LIMITS = {
     "set_batch_storage_location": 1,
     "mark_order_ready": 2,
     "add_quote_request_note": 1,
-    "replace_quote_offer_drafts": 1,
 }
 _ENVELOPE_FIELDS = frozenset(
     {
@@ -418,7 +416,6 @@ _ACTION_ALLOWED_CHANGE_NAMES = {
     "set_quote_request_status": frozenset({"status"}),
     "update_quote_request_comment": frozenset({"has_internal_comment", "internal_comment_sha256"}),
     "add_quote_request_note": frozenset({"notes_count"}),
-    "replace_quote_offer_drafts": frozenset({"agent_draft_count"}),
     "set_batch_storage_location": frozenset({"storage_location"}),
     "mark_order_ready": frozenset({"status", "ready_at"}),
 }
@@ -498,28 +495,11 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
             "updated_at",
         }
     ),
-    "replace_quote_offer_drafts": frozenset(
-        {
-            "entity_type",
-            "entity_id",
-            "request_number",
-            "status",
-            "assigned_user_id",
-            "has_internal_comment",
-            "internal_comment_sha256",
-            "notes_count",
-            "agent_draft_count",
-            "published_offer_count",
-            "updated_at",
-        }
-    ),
     "set_batch_storage_location": frozenset({"entity_type", "entity_id", "part_id", "storage_location", "updated_at"}),
     "mark_order_ready": frozenset({"entity_type", "entity_id", "order_number", "status", "ready_at", "updated_at"}),
 }
 _ACTION_EFFECT_FIELDS: dict[str, frozenset[str]] = {
     "append_internal_note": frozenset({"effect", "text_sha256"}),
-    "supersede_agent_drafts": frozenset({"effect", "count"}),
-    "create_private_drafts": frozenset({"effect", "count"}),
     "customer_notification": frozenset({"effect", "applies"}),
     "quote_status_change": frozenset({"effect", "applies"}),
     "set_order_status": frozenset({"effect", "status"}),

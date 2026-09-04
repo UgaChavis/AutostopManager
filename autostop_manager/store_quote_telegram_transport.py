@@ -1,10 +1,9 @@
 """Typed, privacy-safe Store quote transport over the work Telegram bridge.
 
 The conductor receives this object only through its narrow
-``StoreQuoteTelegramSender`` protocol.  It never resolves a peer, accepts a
-message id, or returns customer text.  A deployment must explicitly construct
-the transport with the fixed work bridge socket (or an injected RPC for tests);
-there is deliberately no default sender in the Manager MCP surface.
+``StoreQuoteTelegramSender`` protocol. It never resolves a peer, accepts a
+message id, or returns customer text. A deployment composition root must inject
+the transport; tests may use an in-process RPC.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from .store_quote_conductor import (
     StoreQuoteTelegramInboundReply,
     StoreQuoteTelegramSender,
 )
-from .telegram_bridge import BridgeError, WORK_SOCKET_PATH, send_local_request
+from .telegram_bridge import BridgeError, send_local_request
 
 
 BridgeRpc = Callable[[dict[str, Any]], dict[str, Any]]
@@ -67,12 +66,7 @@ def create_work_store_quote_transport(
     socket_path: Path | None = None,
     rpc: BridgeRpc | None = None,
 ) -> WorkStoreQuoteTransport:
-    """Create the transport only through an explicit configuration seam.
-
-    Tests pass an in-process ``rpc``.  A production composition root must pass
-    the work bridge socket explicitly; this factory does not register or invoke
-    a sender by itself.
-    """
+    """Build a transport from an explicit fixed socket or injected test RPC."""
 
     if rpc is not None and socket_path is not None:
         raise ValueError("store_quote_telegram_transport_configuration_ambiguous")
@@ -87,12 +81,6 @@ def create_work_store_quote_transport(
 
         rpc = _socket_rpc
     return WorkStoreQuoteTransport(rpc=rpc)
-
-
-def create_default_work_store_quote_transport() -> WorkStoreQuoteTransport:
-    """An explicit convenience factory for the fixed work socket only."""
-
-    return create_work_store_quote_transport(socket_path=WORK_SOCKET_PATH)
 
 
 class WorkStoreQuoteTransport(StoreQuoteTelegramSender):

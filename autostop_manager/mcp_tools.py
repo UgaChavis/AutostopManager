@@ -440,7 +440,7 @@ def register_manager_memory_tools(  # noqa: C901
             "READ_ONLY RAW_CAPABILITY: Read one compact aggregate-only first-party AutoStop storefront report "
             "for today, yesterday, the last 7/30 days, or a custom Krasnoyarsk date range. Accepts a natural "
             "Russian query and never returns raw events, visitor/session identifiers, search text, or customer data. "
-            "It remains outside the 24-tool public Gateway surface and is called only through guarded raw discovery."
+            "It remains outside the named public Gateway surface and is called only through guarded raw discovery."
         ),
     )
     def get_store_analytics_report_tool(
@@ -819,7 +819,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_management_action",
         description=(
-            "INTERNAL_ONLY: Execute only the seven allowlisted AutoStop App management operations through "
+            "INTERNAL_ONLY: Execute only allowlisted AutoStop App management operations through "
             "ActionContractV2, exact pre-read, dry_run/apply, idempotency, optimistic concurrency, and apply reread. "
             "Production Gateway must exclude this generic tool from raw discovery and expose it only through "
             "agent_inventory_workflow policy."
@@ -912,14 +912,6 @@ def register_manager_memory_tools(  # noqa: C901
         ),
     )(prepare_action_contract)
 
-    server.tool(
-        name="prepare_crm_card_action",
-        description=(
-            "Compatibility name for the canonical connector-neutral ActionContractV2 preflight. "
-            "Requires its current domain/action schema and never performs the write."
-        ),
-    )(prepare_action_contract)
-
     @server.tool(
         name="manager_journal",
         description="Append a bounded generic manager event without copying CRM records, correspondence, private identifiers, or money data.",
@@ -979,13 +971,6 @@ def register_manager_memory_tools(  # noqa: C901
         return audit_knowledge_base(memory)
 
     @server.tool(
-        name="audit_knowledge_annotations",
-        description="Compatibility audit for knowledge-map and source-document metadata.",
-    )
-    def audit_knowledge_annotations_tool() -> dict[str, Any]:
-        return audit_knowledge_base(memory)
-
-    @server.tool(
         name="audit_skill_registry",
         description="Audit local Codex skills linked from AutostopManager knowledge routes.",
     )
@@ -1029,14 +1014,6 @@ def register_manager_memory_tools(  # noqa: C901
             }
         return report
 
-    server.tool(
-        name="crm_health_plan",
-        description=(
-            "Compatibility name for the Agent Gateway v2 bootstrap. Use its route to read current CRM health "
-            "through the live agent_board_digest connector tool."
-        ),
-    )(agent_bootstrap_tool)
-
     @server.tool(
         name="audit_memory",
         description="Audit long-term manager memory for duplicate, expired, and superseded memories.",
@@ -1050,26 +1027,6 @@ def register_manager_memory_tools(  # noqa: C901
     )
     def curate_memory_tool(apply: bool = False) -> dict[str, Any]:
         return curate_memory(memory, apply=apply)
-
-    server.tool(
-        name="memory_review",
-        description="Compatibility name for the canonical privacy-safe long-term memory audit.",
-    )(audit_memory_tool)
-
-    server.tool(
-        name="memory_review_apply",
-        description="Compatibility name for canonical memory curation; apply=true archives duplicate copies without deletion.",
-    )(curate_memory_tool)
-
-    server.tool(
-        name="knowledge_intake_plan",
-        description="Compatibility name for the canonical knowledge-map and local-index audit.",
-    )(audit_knowledge_base_tool)
-
-    server.tool(
-        name="provider_smoke_report",
-        description="Compatibility name for canonical provider configuration and callable-status reporting.",
-    )(catalog_provider_status)
 
     @server.tool(
         name="start_workflow",
@@ -1571,31 +1528,15 @@ def register_manager_memory_tools(  # noqa: C901
         )
 
     server.tool(
-        name="lookup_oem_catalog_candidates",
-        description=(
-            "Resolve one VIN/frame and requested part through the canonical identity, part-intent, PartsAPI candidate, "
-            "enrichment, readiness, and manual-action flow; no writes or orders."
-        ),
-        annotations=ToolAnnotations(
-            title="OEM Catalog Candidates",
-            readOnlyHint=True,
-            destructiveHint=False,
-        ),
-    )(resolve_vin_oem_parts)
-
-    server.tool(
         name="resolve_vin_oem_parts",
         description=(
             "Resolve one VIN/frame/body-number and requested part into a read-only VinOemResolution: "
             "identity, part intent, PartsAPI category, OEM candidates, enrichment, readiness gates, manual actions, and CRM gate."
         ),
-    )(resolve_vin_oem_parts)
-
-    server.tool(
-        name="plan_crm_vin_oem_parts_lookup",
-        description=(
-            "Compatibility name for the canonical read-only VIN/frame/body-number OEM resolver: "
-            "identity, part intent, candidates, readiness gates, manual actions, and CRM gate."
+        annotations=ToolAnnotations(
+            title="OEM Catalog Candidates",
+            readOnlyHint=True,
+            destructiveHint=False,
         ),
     )(resolve_vin_oem_parts)
 
@@ -1608,26 +1549,10 @@ def register_manager_memory_tools(  # noqa: C901
     )(benchmark_vin_parts_lookup)
 
     server.tool(
-        name="build_vin_parts_work_order",
-        description=(
-            "Compatibility name for the read-only VIN/frame parts benchmark: identity confidence, part-intent recognition, "
-            "provider blockers, safe search templates, and prepared lookup calls. Raw identifiers are redacted from output."
-        ),
-    )(benchmark_vin_parts_lookup)
-
-    server.tool(
         name="recommend_automotive_sources",
         description=(
             "Recommend authoritative repair, TSB, recall, diagnostic, wiring, labor, fluid, torque, or OEM source routes "
             "by brand and data type without copying licensed source content."
-        ),
-    )(recommend_automotive_sources)
-
-    server.tool(
-        name="recommend_fluid_maintenance_sources",
-        description=(
-            "Compatibility name for the general automotive source router. Pass data_type='fluids' explicitly; "
-            "this direct alias does not select a fluid route by default."
         ),
     )(recommend_automotive_sources)
 
@@ -1646,14 +1571,6 @@ def register_manager_memory_tools(  # noqa: C901
             openWorldHint=True,
         ),
     )(lookup_public_automotive_evidence)
-
-    server.tool(
-        name="recommend_service_management_actions",
-        description=(
-            "Compatibility alias for agent_brief. Return the canonical command route, knowledge sources, "
-            "safety policy, missing context, next actions, and verification for a workshop-management task."
-        ),
-    )(agent_brief_tool)
 
     if include_tools is not None:
         server.tool = original_tool

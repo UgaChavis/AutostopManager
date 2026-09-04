@@ -6,7 +6,6 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Any
 
@@ -20,7 +19,6 @@ STORE_DOMAIN_ACTIONS = {
     ("store_quote_request", "set_quote_request_status"),
     ("store_quote_request", "update_quote_request_comment"),
     ("store_quote_request", "add_quote_request_note"),
-    ("store_quote_request", "replace_quote_offer_drafts"),
     ("store_batch", "set_batch_storage_location"),
     ("store_order", "mark_order_ready"),
 }
@@ -585,7 +583,7 @@ class StoreIntegration:
         pre_state = self.entity_context(
             entity=normalized_domain,
             entity_id=canonical_target_id,
-            detail="full" if normalized_action == "replace_quote_offer_drafts" else "summary",
+            detail="summary",
         )
         if not pre_state.get("ok"):
             return _error_envelope(
@@ -606,14 +604,6 @@ class StoreIntegration:
                 status="blocked",
                 summary={"contract_id": contract.get("contract_id")},
             )
-        if normalized_action == "replace_quote_offer_drafts":
-            blocker = _quote_draft_write_blocker(pre_state)
-            if blocker:
-                return _error_envelope(
-                    blocker,
-                    status="conflict" if blocker == "store_estimate_draft_conflict" else "blocked",
-                    summary={"contract_id": contract.get("contract_id")},
-                )
         pre_read_revision_mismatch = str(observed_updated_at) != canonical_expected_updated_at
         if pre_read_revision_mismatch and normalized_mode != "apply":
             return _error_envelope(
@@ -641,11 +631,7 @@ class StoreIntegration:
                 reconcile_state = self.entity_context(
                     entity=normalized_domain,
                     entity_id=canonical_target_id,
-                    detail=(
-                        "full"
-                        if normalized_action in {"add_quote_request_note", "replace_quote_offer_drafts"}
-                        else "summary"
-                    ),
+                    detail="full" if normalized_action == "add_quote_request_note" else "summary",
                 )
                 post_state_read = reconcile_state.get("ok") is True
                 target_matches = post_state_read and _entity_matches(
@@ -698,11 +684,7 @@ class StoreIntegration:
             post_state = self.entity_context(
                 entity=normalized_domain,
                 entity_id=canonical_target_id,
-                detail=(
-                    "full"
-                    if normalized_action in {"add_quote_request_note", "replace_quote_offer_drafts"}
-                    else "summary"
-                ),
+                detail="full" if normalized_action == "add_quote_request_note" else "summary",
             )
             if not post_state.get("ok"):
                 return _error_envelope(
@@ -1038,17 +1020,6 @@ def _entity_matches(payload: dict[str, Any], *, entity: str, entity_id: str) -> 
     return observed_entity == entity and observed_id == entity_id
 
 
-def _quote_draft_write_blocker(payload: dict[str, Any]) -> str:
-    entity = _entity_payload(payload)
-    if entity.get("has_estimate_draft") is True:
-        return "store_estimate_draft_conflict"
-    if entity.get("has_estimate_draft") is not False:
-        return "store_estimate_draft_state_unavailable"
-    if entity.get("items_has_more") is not False:
-        return "store_quote_items_incomplete"
-    return ""
-
-
 def _version_advanced(before: str, after: str) -> bool:
     normalized_before = str(before or "").strip()
     normalized_after = str(after or "").strip()
@@ -1063,143 +1034,6 @@ def _version_advanced(before: str, after: str) -> bool:
         return after_timestamp > before_timestamp
     except TypeError:
         return False
-
-
-def _readback_value_matches(actual: Any, expected: Any) -> bool:
-    if isinstance(expected, bool):
-        return isinstance(actual, bool) and actual is expected
-    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
-        # Store serializes Decimal prices as JSON strings in some owner paths
-        # and JSON numbers in others.  Compare their numeric value, not their
-        # presentation (for example 1300 and "1300.00"), while refusing bool,
-        # NaN/infinity and arbitrary identifier-like strings.
-        actual_decimal = _finite_decimal(actual)
-        expected_decimal = _finite_decimal(expected)
-        return actual_decimal is not None and expected_decimal is not None and actual_decimal == expected_decimal
-    if isinstance(expected, str):
-        # Keep identifier-like strings exact.  A decimal representation with
-        # an explicit scale is the only string form that may equal a JSON
-        # numeric value on the reverse Store serialization path.
-        if _decimal_string_with_scale(expected):
-            actual_decimal = _finite_decimal(actual)
-            expected_decimal = _finite_decimal(expected)
-            if actual_decimal is not None and expected_decimal is not None:
-                return actual_decimal == expected_decimal
-        return isinstance(actual, str) and actual.strip() == expected.strip()
-    return actual == expected
-
-
-def _finite_decimal(value: Any) -> Decimal | None:
-    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
-        return None
-    normalized = str(value).strip()
-    if not normalized or re.fullmatch(r"[+-]?\d+(?:\.\d+)?", normalized) is None:
-        return None
-    try:
-        parsed = Decimal(normalized)
-    except (InvalidOperation, ValueError):
-        return None
-    return parsed if parsed.is_finite() else None
-
-
-def _decimal_string_with_scale(value: str) -> bool:
-    normalized = str(value or "").strip()
-    return re.fullmatch(r"[+-]?\d+\.\d+", normalized) is not None
-
-
-_QUOTE_DRAFT_DEFAULTS: dict[str, Any] = {
-    "part_sku": None,
-    "brand": None,
-    "supplier": None,
-    "purchase_price": None,
-    "delivery_days": None,
-    "comment": None,
-    "source_ref": None,
-    "source_url": None,
-    "availability": None,
-    "fitment_confidence": "UNVERIFIED",
-    "oem_reference": None,
-    "is_recommended": False,
-}
-_QUOTE_DRAFT_REQUIRED_FIELDS = frozenset({"candidate_key", "part_name", "sale_price", "source_kind", "price_basis"})
-_QUOTE_DRAFT_READBACK_FIELDS = _QUOTE_DRAFT_REQUIRED_FIELDS | _QUOTE_DRAFT_DEFAULTS.keys()
-
-
-def _manager_drafts_by_item(value: Any) -> dict[str, dict[str, dict[str, Any]]] | None:
-    if not isinstance(value, list):
-        return None
-    result: dict[str, dict[str, dict[str, Any]]] = {}
-    for item in value:
-        if not isinstance(item, dict) or not isinstance(item.get("offers"), list):
-            return None
-        item_id = str(item.get("item_id") or "").strip()
-        if not item_id or item_id in result:
-            return None
-        drafts: dict[str, dict[str, Any]] = {}
-        for offer in item["offers"]:
-            if not isinstance(offer, dict):
-                return None
-            if offer.get("origin") != "AUTOSTOP_MANAGER" or offer.get("publication_status") != "DRAFT":
-                continue
-            if not str(offer.get("offer_id") or "").strip():
-                return None
-            candidate_key = str(offer.get("candidate_key") or "").strip()
-            if not candidate_key or candidate_key in drafts:
-                return None
-            drafts[candidate_key] = offer
-        result[item_id] = drafts
-    return result
-
-
-def _expected_drafts_by_item(value: Any) -> dict[str, dict[str, dict[str, Any]]] | None:
-    if not isinstance(value, list):
-        return None
-    result: dict[str, dict[str, dict[str, Any]]] = {}
-    for item in value:
-        if not isinstance(item, dict) or not isinstance(item.get("drafts"), list):
-            return None
-        item_id = str(item.get("item_id") or "").strip()
-        if not item_id or item_id in result:
-            return None
-        drafts: dict[str, dict[str, Any]] = {}
-        for draft in item["drafts"]:
-            if (
-                not isinstance(draft, dict)
-                or not _QUOTE_DRAFT_REQUIRED_FIELDS.issubset(draft)
-                or set(draft).difference(_QUOTE_DRAFT_READBACK_FIELDS)
-            ):
-                return None
-            candidate_key = str(draft.get("candidate_key") or "").strip()
-            if not candidate_key or candidate_key in drafts:
-                return None
-            drafts[candidate_key] = {**_QUOTE_DRAFT_DEFAULTS, **draft}
-        result[item_id] = drafts
-    return result
-
-
-def _quote_draft_readback_matches(entity: dict[str, Any], expected_items: Any) -> bool:
-    if entity.get("items_has_more") is not False or entity.get("has_estimate_draft") is not False:
-        return False
-    expected = _expected_drafts_by_item(expected_items)
-    observed = _manager_drafts_by_item(entity.get("items"))
-    if expected is None or observed is None:
-        return False
-    if any(drafts and item_id not in expected for item_id, drafts in observed.items()):
-        return False
-    for item_id, expected_drafts in expected.items():
-        observed_drafts = observed.get(item_id)
-        if observed_drafts is None or set(observed_drafts) != set(expected_drafts):
-            return False
-        for candidate_key, expected_draft in expected_drafts.items():
-            observed_draft = observed_drafts[candidate_key]
-            if any(
-                field not in observed_draft or not _readback_value_matches(observed_draft.get(field), expected_value)
-                for field, expected_value in expected_draft.items()
-            ):
-                return False
-            if observed_draft.get("is_selected") is not False:
-                return False
-    return True
 
 
 def _failed_readback_fields(
@@ -1223,8 +1057,6 @@ def _failed_readback_fields(
             )
             else ["text"]
         )
-    if operation == "replace_quote_offer_drafts":
-        return [] if _quote_draft_readback_matches(entity, planned_changes.get("items")) else ["items"]
     failed: list[str] = []
     for field, expected in planned_changes.items():
         readback_field = "assigned_user_id" if operation == "assign_quote_request" and field == "assignee_id" else field

@@ -64,6 +64,29 @@ def test_work_telegram_service_has_no_personal_state_or_socket() -> None:
     assert "/run/autostop-telegram" not in service
 
 
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ("да", "confirmed"),
+        ("Добрый день, да, оставлял.", "confirmed"),
+        ("Да, это я", "confirmed"),
+        ("Да, оставлял, но фото сейчас нет", "confirmed"),
+        ("Нет, не оставлял", "declined"),
+        ("Нет, ошиблись", "declined"),
+        ("Нет, это я", "ambiguous"),
+        ("Да, сколько будет стоить?", "ambiguous"),
+        ("Муж оставлял", "ambiguous"),
+        ("Не помню, оставлял", "ambiguous"),
+        ("Оставлял не я", "declined"),
+        ("Верно ли я понял", "ambiguous"),
+        ("Кажется, моя заявка", "ambiguous"),
+        ("Конечно", "ambiguous"),
+    ],
+)
+def test_store_quote_identity_reply_understands_clear_natural_language(reply: str, expected: str) -> None:
+    assert telegram_bridge._classify_store_quote_identity_reply(reply) == expected
+
+
 def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     script = ROOT / "scripts/deploy_telegram_bridge.sh"
     completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)

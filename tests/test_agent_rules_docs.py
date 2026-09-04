@@ -46,7 +46,7 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert len(agents.encode("utf-8")) < 32 * 1024
     _assert_contains(
         agents,
-        "AutoStop CRM is the source of truth|Gmail is the source of truth|AutostopManager stores only durable non-CRM memory|agent_bootstrap|agent_board_digest|dry_run|Gateway v2 workflow ledger|Docker `.Config.Env`|Use `knowledge-probe` only for focused document lookup|it never grants writes, connector access or financial authority|78-tool Manager registry is internal|24-tool Gateway v2 connector|codex_apps/autostopcrm.*|knowledge-sync|isolated release gates|persistent Manager database|raw CRM/Store/Gmail/Telegram exports",
+        "Compact startup contract|agent-brief|knowledge-probe|agent_bootstrap|agent_board_digest|Gateway v2 ledger|AutoStop App owns Store|Manager keeps routes|dry-run|idempotently|persistent Manager database|$manage-autostop-store",
     )
     assert "Store work is paused" not in agents
     assert "Store Scope" not in agents
@@ -79,14 +79,9 @@ def test_codex_native_startup_files_are_present_and_safe():
     config_text = config_path.read_text(encoding="utf-8").casefold()
     assert not re.search(r"(api[_-]?key|token|secret|password|credential)", config_text)
 
-    assert "`AGENTS.md` - canonical compact startup instruction for Codex." in readme
+    assert "`AGENTS.md` — canonical startup contract." in readme
     assert "agent.md" not in readme
-
-    voice_brief = (ROOT / "docs" / "agent" / "voice_agent_brief.md").read_text(encoding="utf-8")
-    assert "дополнение к `AGENTS.md`, а не копия" in voice_brief
-    assert "Выполни один" in voice_brief
-    assert "`agent-brief` для фактической первой команды" in voice_brief
-    assert "подготовительный вызов не нужен" in voice_brief
+    assert not (ROOT / "docs" / "agent" / "voice_agent_brief.md").exists()
 
 
 def test_home_pc_remote_access_is_documented_as_current_capability():
@@ -115,17 +110,14 @@ def test_pad_vii_playbook_requires_the_complete_current_status_gate():
     )
 
 
-def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
+def test_documentation_hygiene_keeps_docs_compact_and_single_owned():
     checked_paths = [
         ROOT / "AGENTS.md",
         ROOT / "README.md",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in checked_paths)
 
-    _assert_contains(
-        combined,
-        "cleanup-audit|Compact startup contract|Keep one canonical owner per rule|docs/agent/deployment_runbook.md",
-    )
+    _assert_contains(combined, "Compact startup contract|Keep one owner for each rule|docs/agent/deployment_runbook.md")
 
     knowledge_map = _payload("docs", "agent", "knowledge_map.json")
     allowed = {"title", "primary_files", "reference_files", "optional_runtime_files", "skill_path"}
@@ -136,6 +128,7 @@ def test_documentation_hygiene_keeps_docs_compact_and_requires_cleanup_audit():
     assert ".codex/config.toml" in startup_files
     assert "docs/agent/crm_mcp_catalog.json" in startup_files
     assert "docs/agent/voice_agent_brief.md" not in startup_files
+    assert "reference_files" not in knowledge_map["domains"]["startup_and_identity"]
     store = knowledge_map["domains"]["store_management"]
     assert store["skill_path"] == ".agents/skills/manage-autostop-store/SKILL.md"
     assert store["primary_files"][0] == ".agents/skills/manage-autostop-store/SKILL.md"
@@ -176,20 +169,18 @@ def test_manager_rules_only_hold_cross_system_runtime_invariants():
     assert payload["format"] == "manager_runtime_invariants_v2"
     assert {rule["id"] for rule in payload["rules"]} == set(
         _items(
-            "source-boundaries|command-knowledge-separation|guarded-write-lifecycle|store-quote-workflow-boundary|store-telegram-consent-boundary|financial-and-external-authority|workflow-recovery|release-boundary"
+            "source-and-privacy|route-and-authority|guarded-mutation|store-client-flow|sensitive-actions|workflow-and-release"
         )
     )
-    separation = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "command-knowledge-separation")
-    assert "codex_apps/autostopcrm.*" in separation
-    boundaries = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "source-boundaries")
-    assert "Telegram never substitutes for Store publication" in boundaries
-    quote_boundary = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "store-quote-workflow-boundary")
-    assert "has_estimate_draft=false" in quote_boundary
+    assert all(set(rule) == {"id", "priority", "rule"} for rule in payload["rules"])
+    assert [rule["priority"] for rule in payload["rules"]] == sorted(rule["priority"] for rule in payload["rules"])
+    quote = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "store-client-flow")
+    _assert_contains(quote, "Admin V2 conductor|Preliminary clarification|published readback|WAITING_FOR_PAYMENT")
 
 
 def test_redundant_navigation_and_generated_source_maps_stay_removed():
     removed = _items(
-        "docs/agent/knowledge_base_index.md|docs/agent/knowledge_intake_playbook.md|docs/agent/ai_parts_krasnoyarsk_playbook.md|docs/agent/zzap_search_playbook.md|docs/agent/manager_identity.json|docs/agent/memory_policy.json|docs/agent/phone_flow.json|docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack|docs/agent/automotive_sources/brand_source_map.json|docs/agent/automotive_sources/data_type_source_map.json|docs/agent/automotive_sources/dsg_transmission_sources.json|docs/agent/automotive_sources/model_source_overrides.json|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json|docs/agent/gmail_mcp_catalog.json|docs/agent/knowledge_annotations.jsonl"
+        "docs/agent/knowledge_base_index.md|docs/agent/knowledge_intake_playbook.md|docs/agent/ai_parts_krasnoyarsk_playbook.md|docs/agent/zzap_search_playbook.md|docs/agent/manager_identity.json|docs/agent/memory_policy.json|docs/agent/phone_flow.json|docs/agent/voice_agent_brief.md|.agents/skills/resolve-autostop-service-case/references/evidence-contract.md|docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack|docs/agent/automotive_sources/brand_source_map.json|docs/agent/automotive_sources/data_type_source_map.json|docs/agent/automotive_sources/dsg_transmission_sources.json|docs/agent/automotive_sources/model_source_overrides.json|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json|docs/agent/gmail_mcp_catalog.json|docs/agent/knowledge_annotations.jsonl"
     )
 
     assert all(not (ROOT / path).exists() for path in removed)
@@ -225,16 +216,23 @@ def test_mcp_catalogs_are_minimal_verified_surface_manifests():
     manager_catalog = _payload("docs", "agent", "manager_mcp_catalog.json")
     crm_catalog = _payload("docs", "agent", "crm_mcp_catalog.json")
     expected_keys = set(_items("format|source|expected_tool_count|expected_tool_names|schema_fingerprint|verified_at"))
-    for catalog, expected_count in ((manager_catalog, 78), (crm_catalog, 24)):
+    for catalog in (manager_catalog, crm_catalog):
         assert set(catalog) == expected_keys
         assert catalog["format"] == "mcp_surface_manifest_v1"
         names = catalog["expected_tool_names"]
         assert names == sorted(set(names))
-        assert catalog["expected_tool_count"] == len(names) == expected_count
+        assert catalog["expected_tool_count"] == len(names)
         assert re.fullmatch(r"[0-9a-f]{64}", catalog["schema_fingerprint"])
         assert "sha256(canonical sorted [{name,inputSchema}])" in catalog["source"]
 
-    assert "audit_knowledge_annotations" in manager_catalog["expected_tool_names"]
+    assert {
+        "audit_knowledge_annotations",
+        "crm_health_plan",
+        "memory_review",
+        "prepare_crm_card_action",
+        "recommend_service_management_actions",
+    }.isdisjoint(manager_catalog["expected_tool_names"])
+    assert crm_catalog["expected_tool_count"] == 24
     assert "agent_finance_workflow" in crm_catalog["expected_tool_names"]
 
 
@@ -273,10 +271,9 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
     normalized_playbook = " ".join(playbook.split())
     _assert_contains(
         normalized_playbook,
-        'agent_board_digest(scope="store")|assign_quote_request|assignee_id|update_quote_request_comment|internal_comment|replace_quote_offer_drafts|storage_location|store_owner_api|itemLimit|itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor|ORDER_ITEMS_CURSOR_STALE|itemsHasMore=true|Admin V2 estimate conductor|Internal owner transport boundary|Admin V2 `estimate_draft`|typed adapter\'s opaque inbound receipt|WAITING_FOR_PAYMENT|Quote compatibility|preliminary Telegram orientation|$manage-autostop-store',
+        "AutoStop App is authoritative|current named Gateway tools|Drom/Avito|store_quote_conductor|Admin V2 `estimate_draft`|preliminary orientation|typed Telegram adapter|WAITING_FOR_PAYMENT|exact reread -> action contract -> dry-run -> apply -> exact readback",
     )
-    assert "### Legacy QuoteOffer workflow" not in playbook
-    assert "### Guard for legacy offer writes" not in playbook
+    assert "replace_quote_offer_drafts" not in playbook
 
     workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
     _assert_contains(
@@ -289,13 +286,10 @@ def test_work_telegram_is_linked_to_one_exact_store_client_dialogue():
     skill = _text(".agents", "skills", "manage-owner-telegram", "SKILL.md")
     playbook = _text("docs", "agent", "telegram_workflow_playbook.md")
     normalized_skill = " ".join(skill.split())
-    _assert_contains(
-        normalized_skill,
-        "личным и рабочим Telegram|Для заявки Store использовать только `work`|через `resolve-phone`|account-fixed work-wrapper|подтверждённой Store–Telegram привязке|Telegram не заменяет публикацию ответа в Store",
-    )
+    _assert_contains(normalized_skill, "`personal` или `work`|private peer|dry-run/apply|readback|quote conductor")
     _assert_contains(
         playbook,
-        "Store Client Dialogue|store_quote_conductor_playbook.md` is the sole owner|use `work`|exact current private peer|Zero, multiple, non-private or conflicting routes fail closed|WAITING_FOR_PAYMENT|privileged account-fixed wrapper|`--delete-after` is the verified cleanup",
+        "owner-selected `personal` or `work` bridge|one exact private peer|dry-run|independently reread|Store Client Dialogue|published estimate|WAITING_FOR_PAYMENT",
     )
 
 

@@ -9,7 +9,6 @@ from pathlib import Path
 from autostop_manager.integration_audit import (
     DEFAULT_STORE_ROOT,
     EXPECTED_GATEWAY_TOOLS,
-    EXPECTED_MANAGER_REGISTRY_TOOL_COUNT,
     GMAIL_PROOF_FORMAT,
     audit_docs_runtime_contract,
     audit_gmail_connector,
@@ -26,9 +25,7 @@ def _write_catalog(root) -> None:
     docs.mkdir(parents=True)
     manifests = {
         "crm_mcp_catalog.json": sorted(EXPECTED_GATEWAY_TOOLS),
-        "manager_mcp_catalog.json": [
-            f"manager_tool_{index:02d}" for index in range(EXPECTED_MANAGER_REGISTRY_TOOL_COUNT)
-        ],
+        "manager_mcp_catalog.json": ["agent_brief"],
     }
     for filename, names in manifests.items():
         canonical = json.dumps(names, separators=(",", ":"))

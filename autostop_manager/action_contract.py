@@ -46,7 +46,6 @@ MUTATING_ACTIONS = {
     "set_batch_storage_location",
     "mark_order_ready",
     "add_quote_request_note",
-    "replace_quote_offer_drafts",
     "execute_owner_api",
     "replace_estimate_draft",
     "submit_estimate",
@@ -133,7 +132,6 @@ EXECUTOR_TOOLS = {
     ("store_quote_request", "set_quote_request_status"): "agent_inventory_workflow",
     ("store_quote_request", "update_quote_request_comment"): "agent_inventory_workflow",
     ("store_quote_request", "add_quote_request_note"): "agent_inventory_workflow",
-    ("store_quote_request", "replace_quote_offer_drafts"): "agent_inventory_workflow",
     ("store_batch", "set_batch_storage_location"): "agent_inventory_workflow",
     ("store_order", "mark_order_ready"): "agent_inventory_workflow",
     ("store_owner_api", "execute_owner_api"): "store_owner_api",
@@ -168,7 +166,6 @@ STORE_ACTIONS = {
     ("store_quote_request", "set_quote_request_status"),
     ("store_quote_request", "update_quote_request_comment"),
     ("store_quote_request", "add_quote_request_note"),
-    ("store_quote_request", "replace_quote_offer_drafts"),
     ("store_batch", "set_batch_storage_location"),
     ("store_order", "mark_order_ready"),
 }
@@ -735,7 +732,6 @@ def _validate_store_changes(
         ("store_quote_request", "set_quote_request_status"): {"status"},
         ("store_quote_request", "update_quote_request_comment"): {"internal_comment"},
         ("store_quote_request", "add_quote_request_note"): {"text"},
-        ("store_quote_request", "replace_quote_offer_drafts"): {"items"},
         ("store_batch", "set_batch_storage_location"): {"storage_location"},
         ("store_order", "mark_order_ready"): {"status"},
     }
@@ -757,12 +753,6 @@ def _validate_store_changes(
         text = changes.get("text")
         if not isinstance(text, str) or not text.strip() or len(text) > 2000:
             blockers.append("invalid_store_quote_note")
-    elif action == "replace_quote_offer_drafts":
-        items = changes.get("items")
-        if not isinstance(items, list) or not 1 <= len(items) <= 20:
-            blockers.append("invalid_store_quote_drafts")
-        elif not _valid_store_quote_drafts(items):
-            blockers.append("invalid_store_quote_drafts")
     elif action == "set_batch_storage_location":
         location = changes.get("storage_location")
         if not isinstance(location, str) or not location.strip() or len(location) > 200:
@@ -957,76 +947,6 @@ def _normalize_store_planned_changes(action: str, changes: dict[str, Any]) -> di
     elif action == "mark_order_ready" and isinstance(normalized.get("status"), str):
         normalized["status"] = normalized["status"].strip().upper()
     return normalized
-
-
-def _valid_store_quote_drafts(items: list[Any]) -> bool:
-    item_ids: set[str] = set()
-    allowed_draft_fields = {
-        "candidate_key",
-        "part_name",
-        "part_sku",
-        "brand",
-        "supplier",
-        "purchase_price",
-        "sale_price",
-        "delivery_days",
-        "comment",
-        "source_kind",
-        "source_ref",
-        "source_url",
-        "availability",
-        "price_basis",
-        "fitment_confidence",
-        "oem_reference",
-        "is_recommended",
-    }
-    allowed_source_kinds = {"LOCAL", "ROSSKO", "CATALOG", "WEB", "MANUAL_REFERENCE"}
-    allowed_price_basis = {"STORE_RETAIL", "CONFIRMED_PURCHASE", "PUBLIC_RETAIL", "ESTIMATE"}
-    allowed_confidence = {"HIGH", "MEDIUM", "LOW", "UNVERIFIED"}
-    for item in items:
-        if not isinstance(item, dict) or set(item) != {"item_id", "drafts"}:
-            return False
-        item_id = str(item.get("item_id") or "").strip()
-        drafts = item.get("drafts")
-        if not item_id or len(item_id) > 36 or item_id in item_ids or not isinstance(drafts, list) or len(drafts) > 3:
-            return False
-        item_ids.add(item_id)
-        candidate_keys: set[str] = set()
-        recommended = 0
-        for draft in drafts:
-            if not isinstance(draft, dict) or set(draft).difference(allowed_draft_fields):
-                return False
-            candidate_key = str(draft.get("candidate_key") or "").strip()
-            part_name = str(draft.get("part_name") or "").strip()
-            if (
-                not candidate_key
-                or len(candidate_key) > 160
-                or candidate_key in candidate_keys
-                or not part_name
-                or len(part_name) > 300
-            ):
-                return False
-            candidate_keys.add(candidate_key)
-            if (
-                draft.get("source_kind") not in allowed_source_kinds
-                or draft.get("price_basis") not in allowed_price_basis
-            ):
-                return False
-            if draft.get("fitment_confidence", "UNVERIFIED") not in allowed_confidence:
-                return False
-            sale_price = draft.get("sale_price")
-            purchase_price = draft.get("purchase_price")
-            if isinstance(sale_price, bool) or not isinstance(sale_price, (int, float)) or sale_price <= 0:
-                return False
-            if purchase_price is not None and (
-                isinstance(purchase_price, bool) or not isinstance(purchase_price, (int, float)) or purchase_price <= 0
-            ):
-                return False
-            if draft.get("is_recommended") is True:
-                recommended += 1
-        if recommended > 1:
-            return False
-    return True
 
 
 def _validate_financial_changes(

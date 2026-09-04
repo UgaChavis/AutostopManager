@@ -15,7 +15,7 @@ from .storage import ManagerMemoryStore, _now
 
 
 MANAGER_MCP_CATALOG_PATH = PROJECT_ROOT / "docs" / "agent" / "manager_mcp_catalog.json"
-REQUIRED_HEALTH_TOOLS = {"agent_brief", "cleanup_audit", "system_audit", "crm_health_plan"}
+REQUIRED_HEALTH_TOOLS = {"agent_bootstrap", "agent_brief", "cleanup_audit", "system_audit"}
 
 
 def build_system_audit(

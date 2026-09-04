@@ -98,6 +98,19 @@ _STORE_QUOTE_SELECTION_PATTERN = re.compile(
     r"\b(?:перв(?:ый|ая|ое)|втор(?:ой|ая|ое)|трет(?:ий|ья|ье)|оригинал|аналог|вариант)\b",
     re.IGNORECASE,
 )
+_STORE_QUOTE_IDENTITY_DECLINE_PATTERN = re.compile(
+    r"\b(?:не\s+(?:я\s+)?оставлял(?:а)?|оставлял(?:а)?\s+не\s+я|это\s+не\s+я|не\s+моя\s+заявка)\b",
+    re.IGNORECASE,
+)
+_STORE_QUOTE_IDENTITY_CONFIRM_PATTERN = re.compile(
+    r"\b(?:я\s+оставлял(?:а)?|это\s+я|моя\s+заявка|вс[её]\s+верно)\b",
+    re.IGNORECASE,
+)
+_STORE_QUOTE_IDENTITY_CONTEXT_PATTERN = re.compile(r"\b(?:оставлял(?:а)?|верно)\b", re.IGNORECASE)
+_STORE_QUOTE_IDENTITY_UNCERTAIN_PATTERN = re.compile(
+    r"\b(?:не\s+уверен(?:а)?|не\s+помню|кажется|вроде|возможно|наверное|может\s+быть)\b",
+    re.IGNORECASE,
+)
 _STORE_QUOTE_SENTENCE_PATTERN = re.compile(r"[.!?]+")
 _STORE_QUOTE_SPACE_PATTERN = re.compile(r"\s+")
 _MUTATION_LOCK = asyncio.Lock()
@@ -1183,20 +1196,30 @@ def _classify_store_quote_reply(value: str) -> str:
 
 
 def _classify_store_quote_identity_reply(value: str) -> str:
-    """Classify identity only from one direct reply to the neutral prompt.
-
-    A bare Russian "да" is intentionally accepted nowhere else in the Store
-    quote route.  Anything more elaborate remains ambiguous rather than
-    accidentally promoting a guessed recipient.
-    """
+    """Recognize a clear natural reply to the neutral identity prompt."""
 
     if not isinstance(value, str) or not value or len(value) > MAX_MESSAGE_CHARS or "\x00" in value:
         raise BridgeError("store_quote_identity_reply_invalid")
     normalized = _STORE_QUOTE_SPACE_PATTERN.sub(" ", value).strip().casefold()
-    if normalized in {"да", "да.", "да!"}:
-        return "confirmed"
-    if normalized in {"нет", "нет.", "нет!"}:
+    if not normalized or "?" in normalized or _STORE_QUOTE_IDENTITY_UNCERTAIN_PATTERN.search(normalized):
+        return "ambiguous"
+    bare = normalized.rstrip(".! ")
+    confirmed = (
+        bare in {"да", "оставлял", "оставляла", "верно"}
+        or _STORE_QUOTE_IDENTITY_CONFIRM_PATTERN.search(normalized) is not None
+        or (
+            re.search(r"\bда\b", normalized) is not None
+            and _STORE_QUOTE_IDENTITY_CONTEXT_PATTERN.search(normalized) is not None
+        )
+    )
+    declined = _STORE_QUOTE_IDENTITY_DECLINE_PATTERN.search(normalized) is not None
+    leading_no = re.match(r"^нет(?:\b|[,.!])", normalized) is not None
+    if confirmed and (declined or leading_no):
+        return "ambiguous"
+    if declined or leading_no:
         return "declined"
+    if confirmed:
+        return "confirmed"
     return "ambiguous"
 
 

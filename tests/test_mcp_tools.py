@@ -81,7 +81,7 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
     server = _FakeServer()
     register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
 
-    for name in ("decode_vehicle_identity", "partsapi_catalog_lookup", "lookup_oem_catalog_candidates"):
+    for name in ("decode_vehicle_identity", "partsapi_catalog_lookup", "resolve_vin_oem_parts"):
         annotations = server.options[name]["annotations"]
         assert annotations.readOnlyHint is True
         assert annotations.destructiveHint is False
@@ -93,13 +93,7 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
 
     register_manager_memory_tools(server, store)
 
-    expected = {
-        "control_report",
-        "memory_review",
-        "memory_review_apply",
-        "knowledge_intake_plan",
-        "provider_smoke_report",
-    }
+    expected = {"control_report", "audit_memory", "curate_memory", "audit_knowledge_base", "catalog_provider_status"}
     assert expected.issubset(server.tools)
 
     control = server.tools["control_report"]()
@@ -110,51 +104,6 @@ def test_control_center_and_review_tools_are_registered(tmp_path):
     assert "runtime_readiness" in control
     assert "production_ops" in control
     assert control["provider_readiness"]["safety"]["orders_blocked"] is True
-
-    for alias, canonical in (
-        ("memory_review", "audit_memory"),
-        ("memory_review_apply", "curate_memory"),
-        ("knowledge_intake_plan", "audit_knowledge_base"),
-        ("provider_smoke_report", "catalog_provider_status"),
-    ):
-        assert server.tools[alias] is server.tools[canonical]
-        assert inspect.signature(server.tools[alias]) == inspect.signature(server.tools[canonical])
-
-    live_tools = build_server()._tool_manager._tools
-    assert live_tools["memory_review"].parameters == live_tools["audit_memory"].parameters
-    assert live_tools["memory_review_apply"].parameters == live_tools["curate_memory"].parameters
-    assert live_tools["knowledge_intake_plan"].parameters == live_tools["audit_knowledge_base"].parameters
-    assert live_tools["provider_smoke_report"].parameters == live_tools["catalog_provider_status"].parameters
-
-
-def test_oem_lookup_compatibility_names_use_canonical_resolver(tmp_path):
-    server = _FakeServer()
-    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
-
-    canonical = server.tools["resolve_vin_oem_parts"]
-    for name in ("lookup_oem_catalog_candidates", "plan_crm_vin_oem_parts_lookup"):
-        assert server.tools[name] is canonical
-        assert inspect.signature(server.tools[name]) == inspect.signature(canonical)
-
-    live_tools = build_server()._tool_manager._tools
-    for name in ("lookup_oem_catalog_candidates", "plan_crm_vin_oem_parts_lookup"):
-        assert live_tools[name].parameters == live_tools["resolve_vin_oem_parts"].parameters
-
-
-def test_fluid_source_name_is_general_source_router_alias(tmp_path):
-    server = _FakeServer()
-    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
-
-    alias = server.tools["recommend_fluid_maintenance_sources"]
-    canonical = server.tools["recommend_automotive_sources"]
-    assert alias is canonical
-    assert inspect.signature(alias) == inspect.signature(canonical)
-    assert inspect.signature(alias).parameters["data_type"].default is None
-    live_tools = build_server()._tool_manager._tools
-    assert (
-        live_tools["recommend_fluid_maintenance_sources"].parameters
-        == live_tools["recommend_automotive_sources"].parameters
-    )
 
 
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
@@ -251,9 +200,6 @@ def test_knowledge_base_tools_are_registered(tmp_path):
 
     audit_result = server.tools["audit_knowledge_base"]()
     assert audit_result["ok"] is True
-    assert "audit_knowledge_annotations" in server.tools
-    annotation_result = server.tools["audit_knowledge_annotations"]()
-    assert annotation_result["ok"] is True
     assert not (ROOT / "docs/agent/knowledge_annotations.jsonl").exists()
 
 
@@ -286,7 +232,7 @@ def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     register_manager_memory_tools(server, store)
 
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    assert catalog["expected_tool_count"] == len(server.tools) == 78
+    assert catalog["expected_tool_count"] == len(catalog["expected_tool_names"]) == len(server.tools)
     assert set(catalog["expected_tool_names"]) == set(server.tools)
 
 
@@ -295,7 +241,7 @@ def test_manager_mcp_catalog_fingerprint_matches_live_input_schemas():
     schemas = {name: tool.parameters for name, tool in server._tool_manager._tools.items()}
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
 
-    assert len(schemas) == 78
+    assert len(schemas) == catalog["expected_tool_count"]
     assert catalog["schema_fingerprint"] == _mcp_schema_fingerprint(schemas)
 
 
@@ -335,31 +281,17 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     assert brief["route"]["steps"][0]["effects"] == ["crm_write"]
     assert "crm_card_description_standard" in brief["route"]["steps"][0]["knowledge_domains"]
 
-    compatibility = server.tools["recommend_service_management_actions"]
-    assert compatibility is server.tools["agent_brief"]
-    assert inspect.signature(compatibility) == inspect.signature(server.tools["agent_brief"])
-    compatibility_brief = compatibility("Приберись", intent="board_cleanup", limit=5)
-    assert compatibility_brief["format"] == "agent_brief_v1"
-    assert compatibility_brief["route"]["selected_workflows"] == ["board_cleanup_autopilot"]
-
     assert "audit_skill_registry" in server.tools
     skills = server.tools["audit_skill_registry"]()
     assert skills["ok"] is True
 
     assert "cleanup_audit" in server.tools
     assert "system_audit" in server.tools
-    assert "crm_health_plan" in server.tools
     cleanup = server.tools["cleanup_audit"]()
     assert cleanup["ok"] is True
     assert cleanup["mode"] == "dry_run"
     system = server.tools["system_audit"]()
     assert system["ok"] is True
-    crm_health = server.tools["crm_health_plan"]
-    assert crm_health is server.tools["agent_bootstrap"]
-    assert inspect.signature(crm_health) == inspect.signature(server.tools["agent_bootstrap"])
-    live_tools = build_server()._tool_manager._tools
-    assert live_tools["crm_health_plan"].parameters == live_tools["agent_bootstrap"].parameters
-
     for retired_tool in {
         "start_manager_run",
         "record_manager_run_event",
@@ -705,18 +637,6 @@ def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_pat
         "workflow_cancel",
     }:
         assert "expected_state_version" in inspect.signature(server.tools[tool_name]).parameters
-
-
-def test_prepare_crm_card_action_is_canonical_action_contract_alias(tmp_path):
-    server = _FakeServer()
-    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
-
-    assert server.tools["prepare_crm_card_action"] is server.tools["prepare_action_contract"]
-    assert inspect.signature(server.tools["prepare_crm_card_action"]) == inspect.signature(
-        server.tools["prepare_action_contract"]
-    )
-    live_tools = build_server()._tool_manager._tools
-    assert live_tools["prepare_crm_card_action"].parameters == live_tools["prepare_action_contract"].parameters
 
 
 def test_memory_curator_tools_are_registered(tmp_path):

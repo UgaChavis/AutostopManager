@@ -13,9 +13,8 @@ application or admin panel.
   `get_raw_capability_schema` -> `call_raw_capability` because this is a pure
   read with no named public workflow.
 - Timezone: `Asia/Krasnoyarsk` for day boundaries and owner-facing periods.
-- Public Gateway v2 surface remains exactly 24 tools; the hidden Manager raw
-  registry has 78 tools after Store management, analytics, guarded owner
-  API integration.
+- The public Gateway exposes only its stable named surface; the hidden Manager
+  registry remains internal inventory.
 
 The runtime reuses the AutoStop App `store:read` service identity through
 `AUTOSTOP_STORE_READ_TOKEN`; the report is DB-backed and does not call the
@@ -106,5 +105,4 @@ Official references reviewed for this route:
 4. For production smoke, send one safe test event through the public ingest,
    call this capability through Gateway raw discovery, and find the aggregate
    change without exposing the event record.
-5. Recheck public Gateway tool count is exactly 24 and CRM/store health remains
-   green.
+5. Recheck the public Gateway against its manifest and confirm CRM/store health.

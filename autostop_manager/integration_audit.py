@@ -48,7 +48,6 @@ EXPECTED_GATEWAY_TOOLS = frozenset(
         "workflow_wait_for_external",
     }
 )
-EXPECTED_MANAGER_REGISTRY_TOOL_COUNT = 78
 _GMAIL_REQUIRED_PROOF_CHECKS = frozenset(
     {"profile_read", "labels_read", "search_read", "self_delivery_readback", "self_delivery_cleanup"}
 )
@@ -212,8 +211,6 @@ def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
     }
     validations = {
         "visible_tool_names_exact": set(tools["crm"]) == EXPECTED_GATEWAY_TOOLS,
-        f"manager_registry_tool_count_exactly_{EXPECTED_MANAGER_REGISTRY_TOOL_COUNT}": len(tools["manager"])
-        == EXPECTED_MANAGER_REGISTRY_TOOL_COUNT,
     }
     for name, payload in catalogs.items():
         validations[f"{name}_manifest_valid"] = (
