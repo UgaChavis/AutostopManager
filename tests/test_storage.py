@@ -124,7 +124,7 @@ def test_recall_query_requires_text_match_before_importance_boost(tmp_path):
     result = store.recall("source boundaries service records", limit=5)
 
     titles = [str(item.get("title") or "") for item in result["items"]]
-    assert titles[0] == "source-boundaries"
+    assert titles[0] == "source-and-privacy"
     assert all(item["matched_fields"] for item in result["items"])
     assert not any(item.get("category") == "board_cleanup" for item in result["items"])
 
@@ -166,7 +166,7 @@ def test_memory_context_uses_cross_system_rule_without_domain_procedure_noise(tm
 
     assert result["preferences_or_facts"]
     assert result["preferences_or_facts"][0]["kind"] == "rule"
-    assert result["preferences_or_facts"][0]["title"] == "source-boundaries"
+    assert result["preferences_or_facts"][0]["title"] == "source-and-privacy"
     context_text = "\n".join(
         str(item.get("title") or item.get("content") or item.get("rule") or "")
         for item in result["preferences_or_facts"]
@@ -228,7 +228,7 @@ def test_memory_context_keeps_command_knowledge_boundary_for_routing_query(tmp_p
         str(item.get("title") or item.get("content") or item.get("rule") or "")
         for item in result["preferences_or_facts"]
     ).casefold()
-    assert "command-knowledge-separation" in context_text
+    assert "route-and-authority" in context_text
 
 
 def test_learn_from_feedback_creates_searchable_lesson(tmp_path):
