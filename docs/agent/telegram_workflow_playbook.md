@@ -108,68 +108,19 @@ is no general Telegram OCR or arbitrary-file execution path.
 
 ## Store Client Dialogue
 
-### Published Admin V2 estimate
+`store_quote_conductor_playbook.md` is the sole owner of customer wording,
+preliminary orientations and the Store quote lifecycle. This playbook owns only
+the transport: use `work`, resolve one exact current private peer from the
+Store request, read the smallest useful window, and retain no dialogue data.
+Zero, multiple, non-private or conflicting routes fail closed; a direct owner
+instruction for one exact request does not authorize another recipient,
+supplier contact, reservation, discount, payment or financial promise.
 
-`store_quote_conductor` binds a dialogue turn to the exact Store quote ID,
-published estimate revision and opaque context hash.  Store remains the source
-of truth: publish and reread the client-cabinet estimate before sending a
-Telegram summary.  The workflow ledger retains only those references and text
-hashes, never the peer, message body, contact, VIN or prices.
-
-Outgoing customer messages are one to three short natural Russian sentences
-with one next question.  A client may add a new position, but it becomes a
-quote line only after the same fitment and price checks as the original request.
-An unambiguous consent tied to the current context may create one
-`WAITING_FOR_PAYMENT` order; a bare “да”, a question, a stale reply or a
-different context must not.  Do not state that payment was received or send
-payment requisites: mention only reception or an approved employee instruction.
-
-Consent is never an argument supplied by the caller. The typed adapter receives
-an opaque inbound receipt, independently rereads it and proves the confirmed
-private `work` peer, incoming sender and binding to the exact delivered
-quote/revision/snapshot/context. It returns only the permitted classification
-and hashes. Missing receipt, changed delivery, stale snapshot or any mismatch
-fails closed before Store order creation.
-
-Identity confirmation is a separate setup exchange, never a published-quote
-reply and never an order trigger.  The bridge derives a stable opaque route
-binding from the quote reference, published estimate revision, snapshot and
-context hashes.  A new Store revision or snapshot therefore cannot reuse an
-old confirmed peer.  It may bind a private candidate only to the literal
-neutral text `Привет! Вы оставляли заявку на запчасти в AutoStop?` and records
-that route as pending.  A caller-provided `recipient_confirmed` flag is
-ignored.  The bridge then mints one short-lived opaque receipt for exactly one
-direct reply to that prompt and independently rereads it.  Only a bare `да`
-in this identity exchange promotes the route; `нет` or any longer/ambiguous
-reply does not.  The receipt is one-use and tombstoned through the route TTL.
-Only after that promotion may a normal offer, selection or payment message be
-bound to the same private peer.  Identity prompts never enter the conductor's
-quote-response or consent path.
-
-- Use `work` only. Start from one exact live Store quote request and pass its
-  current phone to `resolve-phone`, then use the returned live numeric peer. If
-  the phone returns zero matches and the same current request has an exact
-  `telegram_username`, run one bounded exact username search and accept only
-  one private peer. A display name, old alias or similar phone is not enough;
-  multiple or ambiguous matches always fail closed.
-- A unique peer is only a routing match. Unless the current Store record has a
-  verified Telegram binding, the first message is the typed literal neutral
-  identity prompt above. It contains no VIN, vehicle, part, price, photo or
-  other request detail. Continue or disclose request data only after its
-  independently verified affirmative reply; otherwise stop and report the
-  mismatch. A manager-side boolean, a display name or a stale alias never
-  confirms a recipient.
-- A direct owner instruction to process that exact request may cover the
-  necessary bounded clarification and follow-up with that client. It never
-  covers another recipient, general outreach, supplier contact, reservation,
-  discount, payment or other financial promise.
-- Read only the relevant window and media. Write briefly, calmly and naturally:
-  one clear question when data is missing, then the useful answer. Do not send
-  internal reports, source lists, automation language or long templates.
-- Keep the dialogue tied to the same request. Confirmed facts return to the
-  transient Store workflow; waiting for the client is `external_wait`. Telegram
-  neither changes the Store status nor proves that an offer reached the client
-  cabinet.
+For a published estimate, the typed adapter independently proves the same
+private peer, delivered quote/revision/snapshot/context and opaque inbound
+receipt. Only that current, unambiguous consent can create one
+`WAITING_FOR_PAYMENT` order. A preliminary orientation, an ordinary question,
+a stale reply or a caller-supplied flag never can.
 
 ## Send
 

@@ -20,13 +20,14 @@ Keep these identities separate:
 Marketplace text is not OEM proof. Stabilize the OEM/reference or selected
 replacement before comparing prices.
 
-## Source Order
+## Source approach
 
-1. Live internal catalog/stock and contracted supplier offers when authorized.
-2. Krasnoyarsk supplier cabinet/API/export or direct confirmation.
-3. Drom, ZZap, EuroAuto and Avito public listings.
-4. Nearby Siberia, then Russia-wide suppliers.
-5. Foreign prices only as a sanity check when import is actually intended.
+Use the sources that best answer the case, rather than a fixed script: live
+internal stock and contracted offers, ROSSKO and other Krasnoyarsk suppliers,
+public local retail, ZZap/Drom/EuroAuto/Avito, then wider Russia or foreign
+sanity checks when relevant. For a Store request, look beyond the first result
+when a client would benefit from a real choice; record an unavailable source as
+a limit, not as a reason to stop searching.
 
 Supplier capabilities and secret names live only in
 `procurement_price_sources.json`. Do not scrape private cabinets, bypass
@@ -72,10 +73,13 @@ never authorizes an order.
 
 ## Output And Memory
 
-Report the requested part, selected options, price basis, city, delivery,
-availability and the weak items needing confirmation. Public CRM card text
-follows the single `crm_card_description_standard.md`; source lists and
-confidence stay in the owner report.
+Give the client a useful result even before every fact is final: candidate
+articles and a clearly labelled market corridor, plus what is being checked.
+Only a confirmed option may become an Admin V2 estimate or order. Report the
+requested part, selected options, price basis, city, delivery, availability and
+the weak items needing confirmation. Public CRM card text follows the single
+`crm_card_description_standard.md`; source lists and confidence stay in the
+owner report.
 
 Do not store current offers, seller contacts, customer vehicle identifiers,
 supplier secrets or listing dumps in Manager memory. Keep only reusable search

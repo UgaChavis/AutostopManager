@@ -273,8 +273,10 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
     normalized_playbook = " ".join(playbook.split())
     _assert_contains(
         normalized_playbook,
-        'agent_board_digest(scope="store")|assign_quote_request|assignee_id|update_quote_request_comment|internal_comment|replace_quote_offer_drafts|storage_location|store_owner_api|itemLimit|itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor|ORDER_ITEMS_CURSOR_STALE|itemsHasMore=true|Admin V2 estimate conductor|Internal owner transport boundary|Admin V2 `estimate_draft`|typed adapter\'s opaque inbound receipt|WAITING_FOR_PAYMENT|legacy QuoteOffer repair|len(notes) == notes_count|Guard for legacy offer writes|non-NULL estimate|A Manager-only release does not remove these blockers|$manage-autostop-store',
+        'agent_board_digest(scope="store")|assign_quote_request|assignee_id|update_quote_request_comment|internal_comment|replace_quote_offer_drafts|storage_location|store_owner_api|itemLimit|itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor|ORDER_ITEMS_CURSOR_STALE|itemsHasMore=true|Admin V2 estimate conductor|Internal owner transport boundary|Admin V2 `estimate_draft`|typed adapter\'s opaque inbound receipt|WAITING_FOR_PAYMENT|Quote compatibility|preliminary Telegram orientation|$manage-autostop-store',
     )
+    assert "### Legacy QuoteOffer workflow" not in playbook
+    assert "### Guard for legacy offer writes" not in playbook
 
     workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
     _assert_contains(
@@ -286,13 +288,14 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
 def test_work_telegram_is_linked_to_one_exact_store_client_dialogue():
     skill = _text(".agents", "skills", "manage-owner-telegram", "SKILL.md")
     playbook = _text("docs", "agent", "telegram_workflow_playbook.md")
+    normalized_skill = " ".join(skill.split())
     _assert_contains(
-        skill,
-        "личным и рабочим Telegram|Для заявки Store использовать только `work`|через `resolve-phone`|account-fixed work-wrapper|Telegram не заменяет публикацию ответа в Store",
+        normalized_skill,
+        "личным и рабочим Telegram|Для заявки Store использовать только `work`|через `resolve-phone`|account-fixed work-wrapper|подтверждённой Store–Telegram привязке|Telegram не заменяет публикацию ответа в Store",
     )
     _assert_contains(
         playbook,
-        "Store Client Dialogue|current phone to `resolve-phone`|privileged account-fixed wrapper|`--delete-after` is the verified cleanup|transient `status` identity check|bounded exact username search|multiple or ambiguous matches always fail closed|waiting for the client is `external_wait`|neither changes the Store status",
+        "Store Client Dialogue|store_quote_conductor_playbook.md` is the sole owner|use `work`|exact current private peer|Zero, multiple, non-private or conflicting routes fail closed|WAITING_FOR_PAYMENT|privileged account-fixed wrapper|`--delete-after` is the verified cleanup",
     )
 
 

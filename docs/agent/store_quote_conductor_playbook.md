@@ -37,40 +37,53 @@ revision, prepare the action contract, run Store dry-run, apply with a new
 idempotency key, and independently reread.  A timeout or partial result stays
 compensating until it is reconciled.
 
-## Eligibility and escalation
+## Client result and escalation
 
-An automatic recommendation is allowed only when the exact part/application,
-article, availability, lead time, client price and service warranty are all
-confirmed.  Show at most three understandable choices: an original option if
-available and up to two verified analogues.
+Do not stop at an internal report. Search broadly with the sources that can
+answer this request: Store stock and `store_sourcing_offer`, ROSSKO and
+contracted suppliers, Krasnoyarsk public retail, Drom/Avito and the web. Choose
+the order by urgency and evidence quality; do not stop after one weak source.
+Marketplace text can widen a market range; it never proves fitment.
 
-Stop and hand off for uncertain fitment, conflicting catalogue evidence,
-unconfirmed availability or warranty, a requested discount, supplier purchase,
-reservation, unusual delivery, payment confirmation, or manual Store estimate.
-The Store-owned default warranty text must be configured before an estimate can
-be submitted; Manager does not invent it.
+Keep a clear difference between two kinds of client answer:
+
+- **Preliminary orientation** is a useful short Telegram answer with candidate
+  article(s), a market corridor and the next check. It honestly separates what
+  is likely from what still needs verification. It is not an Admin V2 estimate
+  and cannot draft, publish, reserve or create an order.
+- **Confirmed estimate** has exact application, article, availability, lead
+  time, client price and Store warranty. Show up to three clear choices: an
+  original if available and up to two verified analogues.
+
+Conflicting catalogues, incomplete evidence or unavailable stock stop only the
+confirmed-estimate path, not the conversation: give the useful preliminary
+result first, then hand off if a person must obtain the missing proof. A
+discount, supplier purchase, reservation, unusual delivery, payment confirmation
+or manual/mixed Store estimate is a direct handoff. The Store-owned warranty
+text must exist before publication; Manager never invents it.
 
 ## Telegram dialog
 
-Use the `work` account and one exact private peer resolved from the current
-Store request.  A unique route is not proof of identity: without a confirmed
-Store-Telegram binding, a privileged setup exchange may send only the literal
-neutral question `Привет! Вы оставляли заявку на запчасти в AutoStop?`.  It
-creates a pending stable route binding from the quote reference plus the exact
-published revision, snapshot and context; a later Store revision/snapshot
-cannot reuse the old peer, and a caller boolean cannot mark it confirmed.  The
-typed bridge mints and independently rereads one opaque direct-reply receipt.
-Only bare `да` in this identity exchange promotes the route; `нет` and
-ambiguous text do not.  A normal offer can bind only after that promotion.
-Identity setup is outside the conductor: `identity_prompt` is explicitly
-rejected as a published quote delivery and can never be classified as order
-consent.
+Use the `work` account and one exact current private peer. Start the business
+conversation from the request only after the current Store–Telegram binding is
+confirmed. Zero, multiple, non-private, conflicting or unconfirmed routes stay
+a neutral identity check with no request detail. Identity is a transport
+prerequisite, not a script for the customer: the bridge should prove an
+unambiguous natural reply by meaning rather than demand a magic answer format.
+Until it can, Manager fails closed instead of inventing confirmation. Never make
+the customer repeat a photo, VIN or comment already attached to the request.
 
-Each sent message is bound to the quote ID, published estimate revision and
-context hash.  The text is transient; the ledger keeps only its hash.  Write
-one to three short, natural sentences with one next question.  Do not disclose
-internal sources, purchase prices, automation details, payment requisites or
-unconfirmed facts.
+Each sent message is transient and tied to the same request. Speak briefly and
+naturally: notice what the client has already sent, move the conversation
+forward, and ask what is useful now. For example: “Фото увидел. Нужен полный
+комплект? Оригинал смотреть или хороший аналог тоже подойдёт?” This is a pattern,
+not a script. Do not disclose purchase prices, internal sources, automation
+details, payment requisites or a tentative fact as confirmed.
+
+Only an estimate published in Store is bound to its revision and context hash.
+The typed adapter must independently prove the private peer and delivery before
+it treats an inbound reply as a selection or consent. Identity confirmation and
+a preliminary orientation never trigger an order.
 
 The Manager MCP server intentionally starts without a live sender.  A pilot
 must inject a concrete typed `work`-Telegram adapter that performs dry-run,
@@ -112,6 +125,10 @@ Telegram wait and does not send or create anything else.
 At completion record only a de-identified technical review: outcome,
 verification state, route version and improvement category.  A proposed rule,
 template or source change requires owner review before promotion.
+
+After an owner-observed test, update only the canonical rule or regression test
+that explains the result, and delete the superseded duplicate. Never preserve a
+chat, VIN, offer or a one-off workaround as a permanent instruction.
 
 Release in fixed waves:
 
