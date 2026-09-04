@@ -175,12 +175,15 @@ def test_manager_rules_only_hold_cross_system_runtime_invariants():
     assert all(set(rule) == {"id", "priority", "rule"} for rule in payload["rules"])
     assert [rule["priority"] for rule in payload["rules"]] == sorted(rule["priority"] for rule in payload["rules"])
     quote = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "store-client-flow")
-    _assert_contains(quote, "Admin V2 conductor|Preliminary clarification|published readback|WAITING_FOR_PAYMENT")
+    _assert_contains(
+        quote,
+        "incoming exact Store request or order|Admin V2 conductor|quote_request_id|request phone|order alone|published readback|WAITING_FOR_PAYMENT",
+    )
 
 
 def test_redundant_navigation_and_generated_source_maps_stay_removed():
     removed = _items(
-        "docs/agent/knowledge_base_index.md|docs/agent/knowledge_intake_playbook.md|docs/agent/ai_parts_krasnoyarsk_playbook.md|docs/agent/zzap_search_playbook.md|docs/agent/manager_identity.json|docs/agent/memory_policy.json|docs/agent/phone_flow.json|docs/agent/voice_agent_brief.md|.agents/skills/resolve-autostop-service-case/references/evidence-contract.md|docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack|docs/agent/automotive_sources/brand_source_map.json|docs/agent/automotive_sources/data_type_source_map.json|docs/agent/automotive_sources/dsg_transmission_sources.json|docs/agent/automotive_sources/model_source_overrides.json|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json|docs/agent/gmail_mcp_catalog.json|docs/agent/knowledge_annotations.jsonl"
+        "docs/agent/knowledge_base_index.md|docs/agent/knowledge_intake_playbook.md|docs/agent/ai_parts_krasnoyarsk_playbook.md|docs/agent/zzap_search_playbook.md|docs/agent/manager_identity.json|docs/agent/memory_policy.json|docs/agent/phone_flow.json|docs/agent/voice_agent_brief.md|docs/agent/store_management_playbook.md|.agents/skills/resolve-autostop-service-case/references/evidence-contract.md|docs/agent/automotive_sources/source_cache/ai_parts_krasnoyarsk_project_pack|docs/agent/automotive_sources/brand_source_map.json|docs/agent/automotive_sources/data_type_source_map.json|docs/agent/automotive_sources/dsg_transmission_sources.json|docs/agent/automotive_sources/model_source_overrides.json|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/MANIFEST.md|docs/agent/automotive_sources/source_cache/offline_parts_catalogs_knowledge_pack/sources/offline_parts_catalog_sources.json|docs/agent/gmail_mcp_catalog.json|docs/agent/knowledge_annotations.jsonl"
     )
 
     assert all(not (ROOT / path).exists() for path in removed)
@@ -236,15 +239,16 @@ def test_mcp_catalogs_are_minimal_verified_surface_manifests():
     assert "agent_finance_workflow" in crm_catalog["expected_tool_names"]
 
 
-def test_store_procedures_live_in_playbook_not_route_or_catalog():
+def test_store_quote_guidance_has_one_canonical_playbook_and_intake_route():
     routes_payload = _payload("docs", "agent", "command_routes.json")
     manager_catalog = _text("docs", "agent", "manager_mcp_catalog.json")
-    playbook = _text("docs", "agent", "store_management_playbook.md")
+    skill = _text(".agents", "skills", "manage-autostop-store", "SKILL.md")
+    playbook = _text("docs", "agent", "store_quote_conductor_playbook.md")
     routes = {route["command_id"]: route for route in routes_payload["routes"]}
 
     assert set(
         _items(
-            "store_read_workflow|store_quote_draft|store_product_create|store_price_management|store_order_ready|store_management_workflow|store_quote_estimate_publish|store_customer_response_publish"
+            "store_read_workflow|store_quote_intake|store_quote_draft|store_order_intake|store_product_create|store_price_management|store_order_ready|store_management_workflow|store_customer_response_publish"
         )
     ) <= set(routes)
     assert "store_management" in routes["store_management_workflow"]["knowledge_domains"]
@@ -254,8 +258,14 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
     assert routes["store_product_create"]["effects"] == ["store_write", "finance", "destructive"]
     assert routes["store_price_management"]["effects"] == ["store_write", "finance", "destructive"]
     assert routes["store_order_ready"]["effects"] == ["store_write", "external_send", "destructive"]
-    assert routes["store_quote_estimate_publish"]["workflow_id"] == "store_quote_conductor"
-    assert routes["store_quote_estimate_publish"]["effects"] == _items("store_write|external_send")
+    intake_route = routes["store_quote_intake"]
+    assert intake_route["workflow_id"] == "store_quote_conductor"
+    assert intake_route["effects"] == []
+    assert "бери в работу заявку на проценку" in intake_route["signals"]["phrases"]
+    order_intake = routes["store_order_intake"]
+    assert order_intake["workflow_id"] == "store_management_workflow"
+    assert order_intake["effects"] == []
+    assert "бери в работу заказ магазина" in order_intake["signals"]["phrases"]
     store_phrases = routes["store_quote_draft"]["signals"]["phrases"]
     assert "подготовь черновик ответа клиенту по заявке магазина" in store_phrases
     assert "ответь клиенту по заявке магазина" not in store_phrases
@@ -265,13 +275,19 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
     assert response_route["knowledge_domains"] == _items(
         "store_management|vehicle_identity_and_oem|parts_sourcing|telegram_operations"
     )
-    assert "обработай новую заявку магазина" in response_route["signals"]["phrases"]
+    assert "обработай новую заявку магазина" not in response_route["signals"]["phrases"]
+    assert "опубликуй предложения по заявке на проценку" in response_route["signals"]["phrases"]
     assert "переведи заявку в ждёт согласования" in response_route["signals"]["phrases"]
     assert "planned_changes_by_action" not in manager_catalog
+    normalized_skill = " ".join(skill.split())
     normalized_playbook = " ".join(playbook.split())
     _assert_contains(
+        normalized_skill,
+        "Store — источник истины|store_quote_request/full_with_vin_photo|VIN-photo preview|store_order/full|quote_request_id|не спрашивай, оставлял ли он заявку|один private work peer|WAITING_FOR_PAYMENT",
+    )
+    _assert_contains(
         normalized_playbook,
-        "AutoStop App is authoritative|current named Gateway tools|Drom/Avito|store_quote_conductor|Admin V2 `estimate_draft`|preliminary orientation|typed Telegram adapter|WAITING_FOR_PAYMENT|exact reread -> action contract -> dry-run -> apply -> exact readback",
+        "full_with_vin_photo|phone resolves one private `work` peer|Never send an authorship check|Drom/Avito|Admin V2 `estimate_draft`|WAITING_FOR_PAYMENT|exact reread",
     )
     assert "replace_quote_offer_drafts" not in playbook
 
@@ -289,7 +305,7 @@ def test_work_telegram_is_linked_to_one_exact_store_client_dialogue():
     _assert_contains(normalized_skill, "`personal` или `work`|private peer|dry-run/apply|readback|quote conductor")
     _assert_contains(
         playbook,
-        "owner-selected `personal` or `work` bridge|one exact private peer|dry-run|independently reread|Store Client Dialogue|published estimate|WAITING_FOR_PAYMENT",
+        "owner-selected `personal` or `work` bridge|one exact private peer|dry-run|independently reread|Store transport|exact Store request phone|no Telegram send",
     )
 
 

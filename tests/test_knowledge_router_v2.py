@@ -76,16 +76,21 @@ _EXACT_ROUTE_GROUPS = {
         _QUOTE_CONDUCTOR_DRAFT,
     ): "Подготовь черновик ответа клиенту по заявке магазина|Подготовь ответ клиенту по заявке магазина|Подготовь ответ клиенту по заявке на проценку|Заполни позиции в заявке на проценку|Добавь предложение в запрос магазина|Добавь предложение в заявку на проценку|Добавь позицию в заявку на проценку|Измени предложение в заявке на проценку|Измени позицию в заявке на проценку|Обнови стоимость в заявке на проценку|Обнови стоимость позиции в заявке на проценку|Обнови срок в заявке на проценку|Обнови срок позиции в заявке на проценку|Добавь комментарий к предложению в заявке на проценку|Добавь комментарий к ответу по заявке на проценку",
     (
+        "store_quote_intake",
+        "store_quote_conductor",
+        (),
+    ): "Бери в работу заявку на проценку|Возьми в работу заявку на проценку|Занимайся заявкой на проценку|Обработай новую заявку магазина|Обработай новую заявку на проценку",
+    (
+        "store_order_intake",
+        "store_management_workflow",
+        (),
+    ): "Бери в работу заказ магазина|Возьми в работу заказ магазина|Занимайся заказом магазина|Обработай новый заказ магазина|Обработай заказ магазина",
+    ("store_management_workflow", _STORE, ("store_write",)): "Добавь комментарий в заявку на проценку",
+    (
         "store_customer_response_publish",
         "store_quote_conductor",
         _QUOTE_CONDUCTOR_PUBLISH,
-    ): "Обработай новую заявку магазина|Обработай новую заявку на проценку|Переведи заявку в ждёт согласования|Ответь клиенту по заявке магазина|Ответь клиенту по заявке на проценку|Заполни позиции и переведи заявку в ждёт согласования",
-    ("store_management_workflow", _STORE, ("store_write",)): "Добавь комментарий в заявку на проценку",
-    (
-        "store_quote_estimate_publish",
-        "store_quote_conductor",
-        _QUOTE_CONDUCTOR_PUBLISH,
-    ): "Опубликуй предложения по заявке на проценку|Опубликуй предложения в заявке на проценку|Опубликуй предложения заявки на проценку|Опубликуй проценку по заявке магазина",
+    ): "Переведи заявку в ждёт согласования|Ответь клиенту по заявке магазина|Ответь клиенту по заявке на проценку|Заполни позиции и переведи заявку в ждёт согласования|Опубликуй предложения по заявке на проценку|Опубликуй предложения в заявке на проценку|Опубликуй предложения заявки на проценку|Опубликуй проценку по заявке магазина",
     ("store_price_management", _STORE, _DRAFT): "Измени цену товара|Измени цену товара в магазине",
     ("store_product_create", _STORE, _DRAFT): "Создай товар в магазине",
     ("store_order_ready", _STORE, ("store_write", "external_send", "destructive")): "Переведи заказ магазина в ready",
@@ -130,11 +135,11 @@ def test_legacy_quote_offer_selection_is_never_a_public_route(query):
 
 _COMPOSED_ROUTE_GROUPS = {
     (
-        "store_customer_response_publish",
+        "store_quote_intake",
         "telegram_owner_operations",
-    ): "Посмотри новый запрос на проценку, обработай его и ответь клиенту в рабочем Телеграме|Посмотри новый запрос, обработай его и ответь в Телеграмм клиенту",
+    ): "Посмотри новый запрос на проценку, обработай его и ответь клиенту в рабочем Телеграме|Посмотри новый запрос на проценку, обработай его и ответь в Телеграмм клиенту",
     (
-        "store_customer_response_publish",
+        "store_quote_intake",
     ): "Обработай новую заявку на проценку, но в Telegram не отвечай|Обработай новую заявку на проценку без Telegram",
     ("telegram_owner_operations",): "Ответь клиенту в Telegram по заявке на проценку, публикацию Store не делай",
 }
@@ -145,16 +150,9 @@ def test_store_and_work_telegram_composition_respects_partial_opt_outs(expected,
     for query in _queries(query_text):
         routes = plan_command_routes(query)
         assert tuple(route["command_id"] for route in routes) == expected
-        if expected[0] == "store_customer_response_publish":
-            assert routes[0]["effects"] == list(_QUOTE_CONDUCTOR_PUBLISH)
-            expected_domains = [
-                "store_management",
-                "vehicle_identity_and_oem",
-                "parts_sourcing",
-            ]
-            if len(expected) > 1:
-                expected_domains.append("telegram_operations")
-            assert routes[0]["knowledge_domains"] == expected_domains
+        if expected[0] == "store_quote_intake":
+            assert routes[0]["effects"] == []
+            assert routes[0]["knowledge_domains"] == ["store_management", "vehicle_identity_and_oem"]
 
 
 @pytest.mark.parametrize(
@@ -166,7 +164,12 @@ def test_store_and_work_telegram_composition_respects_partial_opt_outs(expected,
 def test_ambiguous_new_request_never_routes_effectful_store(query):
     routes = plan_command_routes(query)
 
-    assert all(route["command_id"] != "store_customer_response_publish" for route in routes)
+    assert all(route["command_id"] not in {"store_customer_response_publish", "store_quote_intake"} for route in routes)
+
+
+@pytest.mark.parametrize("query", ("Бери в работу новый заказ", "Нам пришел заказ, обработай его"))
+def test_ambiguous_order_never_routes_store_intake(query):
+    assert all(route["command_id"] != "store_order_intake" for route in plan_command_routes(query))
 
 
 def test_email_lookup_does_not_select_external_send():

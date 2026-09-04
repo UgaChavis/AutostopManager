@@ -891,8 +891,6 @@ def _action_scoped_to_other_channel(text: str, match: re.Match[str], route: dict
         intent = str(route.get("intent") or "")
         if action in {"ответь", "отправь"} and re.search(r"(?:telegram|телеграм\w*)", suffix):
             return True
-        if intent == "store_customer_response_publish" and action == "обработай":
-            return re.match(r"\s+(?:(?:сам\w*|нов\w*)\s+)?(?:заявк\w*|запрос\w*|его|её|ее)\b", suffix) is None
         if intent == "store_price_management":
             return re.match(r"\s+(?:цен\w*|стоимост\w*|прайс\w*)\b", suffix) is None
         if intent == "store_product_create":
@@ -976,10 +974,6 @@ def _route_scope_is_negated(lowered: str, route: dict[str, Any]) -> bool:
     if "external_send" in effects and _has_scoped_negation(lowered, route, kind="send"):
         return True
     if route.get("command_id") == "telegram_owner_operations" and _telegram_send_opted_out(lowered):
-        return True
-    if route.get("intent") == "store_customer_response_publish" and re.search(
-        r"\bбез\s+изменени\w*\s+статус\w*", lowered
-    ):
         return True
     if (
         str(route.get("command_id") or "") != "telegram_owner_operations"

@@ -57,24 +57,14 @@ If apply times out or the result is lost, the outcome is unknown. Reconcile by
 exact reread before any retry; never use a real send as a health check. Remove
 staged outbound media after verified delivery.
 
-## Store Client Dialogue
+## Store transport
 
-`store_quote_conductor_playbook.md` owns the quote lifecycle and client-facing
-logic. This playbook owns transport: `work`, one exact private peer, minimal
-context and no retained dialogue.
-
-Before identity/request binding is proven, ask only a neutral identity question
-and reveal no request details. Once bound, preliminary clarification may happen
-before publication: write in short, natural Russian, use what the client already
-said and ask one useful next question. It cannot publish an estimate, accept
-consent or create an order.
-
-The final quote route is typed and starts only from an independently read-back
-published estimate. The adapter must prove the same request, private peer,
-estimate revision, delivered message and inbound receipt. Only clear consent to
-that current publication may create one `WAITING_FOR_PAYMENT` order. A stale or
-ambiguous reply, preliminary chat or caller-supplied flag cannot. Telegram never
-substitutes for Store publication.
+`store_quote_conductor_playbook.md` owns the quote and client logic. This
+playbook owns transport: `work`, one exact private peer, minimal context and no
+retained dialogue. Resolve that peer only from the exact Store request phone;
+an order context alone does not prove a recipient. Do not ask whether the
+recipient left the request. Zero, multiple or non-private matches mean no Telegram send.
+Telegram never substitutes for Store publication or current explicit consent.
 
 ## Authorization And Recovery
 

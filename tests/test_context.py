@@ -197,16 +197,27 @@ def test_agent_brief_store_ready_question_is_read_only(tmp_path, query):
     assert result["route"]["write_domains"] == []
 
 
-def test_agent_brief_store_quote_processing_loads_director_route(tmp_path):
+def test_agent_brief_store_quote_intake_reads_before_any_external_action(tmp_path):
     result = context.build_agent_brief(_store(tmp_path), "Обработай новую заявку магазина")
 
     assert result["role"] == "AutoStop operations director agent"
-    assert result["route"]["command_id"] == "store_customer_response_publish"
+    assert result["route"]["command_id"] == "store_quote_intake"
     assert result["route"]["workflow_id"] == "store_quote_conductor"
     assert result["route"]["open_first"] == ".agents/skills/manage-autostop-store/SKILL.md"
-    assert result["route"]["write_domains"] == ["store"]
-    assert result["route"]["external_connectors"] == ["telegram", "store"]
+    assert result["route"]["write_domains"] == []
+    assert result["route"]["external_connectors"] == ["store"]
     assert result["source_boundaries"]["telegram"] == "source of truth for raw dialogs, contacts, messages, and media"
+
+
+def test_agent_brief_store_order_intake_reads_before_any_external_action(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Бери в работу заказ магазина")
+
+    assert result["role"] == "AutoStop operations director agent"
+    assert result["route"]["command_id"] == "store_order_intake"
+    assert result["route"]["workflow_id"] == "store_management_workflow"
+    assert result["route"]["open_first"] == ".agents/skills/manage-autostop-store/SKILL.md"
+    assert result["route"]["write_domains"] == []
+    assert result["route"]["external_connectors"] == ["store"]
 
 
 def test_agent_brief_store_read_has_no_write_domain(tmp_path):
