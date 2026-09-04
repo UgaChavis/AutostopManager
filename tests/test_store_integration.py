@@ -6,7 +6,7 @@ from copy import deepcopy
 import pytest
 
 from autostop_manager.storage import ManagerMemoryStore
-from autostop_manager.store_integration import StoreIntegration, _merge_compact_refs
+from autostop_manager.store_integration import StoreIntegration, _merge_compact_refs, _readback_value_matches
 
 
 def _digest_page(
@@ -1053,7 +1053,7 @@ def test_management_readback_handles_missing_offer_lists_as_failed_verification(
     assert result["summary"]["failed_fields"] == ["items"]
 
 
-@pytest.mark.parametrize(("observed_price", "verified"), [(1300, True), (1400, False)])
+@pytest.mark.parametrize(("observed_price", "verified"), [(1300, True), ("1300.00", True), (1400, False)])
 def test_management_readback_verifies_quote_draft_fields(tmp_path, observed_price, verified):
     before = {
         "entity": "store_quote_request",
@@ -1119,6 +1119,14 @@ def test_management_readback_verifies_quote_draft_fields(tmp_path, observed_pric
 
     assert result["meta"]["readback_verified"] is verified
     assert result["summary"].get("failed_fields", []) == ([] if verified else ["items"])
+
+
+def test_quote_price_readback_matches_decimal_string_and_number_in_both_directions():
+    assert _readback_value_matches("1300.00", 1300) is True
+    assert _readback_value_matches(1300, "1300.00") is True
+    # Plain numeric strings can be identifiers in other Store DTOs, so they
+    # retain strict string semantics rather than becoming numeric aliases.
+    assert _readback_value_matches(1300, "1300") is False
 
 
 @pytest.mark.parametrize(

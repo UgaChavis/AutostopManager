@@ -46,7 +46,7 @@ def test_codex_native_startup_files_are_present_and_safe():
     assert len(agents.encode("utf-8")) < 32 * 1024
     _assert_contains(
         agents,
-        "AutoStop CRM is the source of truth|Gmail is the source of truth|AutostopManager stores only durable non-CRM memory|agent_bootstrap|agent_board_digest|dry_run|Gateway v2 workflow ledger|Docker `.Config.Env`|Use `knowledge-probe` only for focused document lookup|it never grants writes, connector access or financial authority|77-tool Manager registry is internal|24-tool Gateway v2 connector|codex_apps/autostopcrm.*|knowledge-sync|isolated release gates|persistent Manager database|raw CRM/Store/Gmail/Telegram exports",
+        "AutoStop CRM is the source of truth|Gmail is the source of truth|AutostopManager stores only durable non-CRM memory|agent_bootstrap|agent_board_digest|dry_run|Gateway v2 workflow ledger|Docker `.Config.Env`|Use `knowledge-probe` only for focused document lookup|it never grants writes, connector access or financial authority|78-tool Manager registry is internal|24-tool Gateway v2 connector|codex_apps/autostopcrm.*|knowledge-sync|isolated release gates|persistent Manager database|raw CRM/Store/Gmail/Telegram exports",
     )
     assert "Store work is paused" not in agents
     assert "Store Scope" not in agents
@@ -176,7 +176,7 @@ def test_manager_rules_only_hold_cross_system_runtime_invariants():
     assert payload["format"] == "manager_runtime_invariants_v2"
     assert {rule["id"] for rule in payload["rules"]} == set(
         _items(
-            "source-boundaries|command-knowledge-separation|guarded-write-lifecycle|store-quote-workflow-boundary|financial-and-external-authority|workflow-recovery|release-boundary"
+            "source-boundaries|command-knowledge-separation|guarded-write-lifecycle|store-quote-workflow-boundary|store-telegram-consent-boundary|financial-and-external-authority|workflow-recovery|release-boundary"
         )
     )
     separation = next(rule["rule"] for rule in payload["rules"] if rule["id"] == "command-knowledge-separation")
@@ -225,7 +225,7 @@ def test_mcp_catalogs_are_minimal_verified_surface_manifests():
     manager_catalog = _payload("docs", "agent", "manager_mcp_catalog.json")
     crm_catalog = _payload("docs", "agent", "crm_mcp_catalog.json")
     expected_keys = set(_items("format|source|expected_tool_count|expected_tool_names|schema_fingerprint|verified_at"))
-    for catalog, expected_count in ((manager_catalog, 77), (crm_catalog, 24)):
+    for catalog, expected_count in ((manager_catalog, 78), (crm_catalog, 24)):
         assert set(catalog) == expected_keys
         assert catalog["format"] == "mcp_surface_manifest_v1"
         names = catalog["expected_tool_names"]
@@ -246,22 +246,24 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
 
     assert set(
         _items(
-            "store_read_workflow|store_quote_draft|store_product_create|store_price_management|store_order_ready|store_management_workflow|store_offer_visibility_step|store_customer_response_publish"
+            "store_read_workflow|store_quote_draft|store_product_create|store_price_management|store_order_ready|store_management_workflow|store_quote_estimate_publish|store_customer_response_publish"
         )
     ) <= set(routes)
     assert "store_management" in routes["store_management_workflow"]["knowledge_domains"]
     assert routes["store_management_workflow"]["effects"] == ["store_write"]
-    assert routes["store_quote_draft"]["effects"] == ["store_write", "finance", "destructive"]
+    assert routes["store_quote_draft"]["workflow_id"] == "store_quote_conductor"
+    assert routes["store_quote_draft"]["effects"] == ["store_write"]
     assert routes["store_product_create"]["effects"] == ["store_write", "finance", "destructive"]
     assert routes["store_price_management"]["effects"] == ["store_write", "finance", "destructive"]
     assert routes["store_order_ready"]["effects"] == ["store_write", "external_send", "destructive"]
-    assert routes["store_offer_visibility_step"]["effects"] == _items("store_write|external_send|finance|destructive")
+    assert routes["store_quote_estimate_publish"]["workflow_id"] == "store_quote_conductor"
+    assert routes["store_quote_estimate_publish"]["effects"] == _items("store_write|external_send")
     store_phrases = routes["store_quote_draft"]["signals"]["phrases"]
     assert "подготовь черновик ответа клиенту по заявке магазина" in store_phrases
     assert "ответь клиенту по заявке магазина" not in store_phrases
     response_route = routes["store_customer_response_publish"]
-    assert response_route["workflow_id"] == "store_management_workflow"
-    assert response_route["effects"] == ["store_write", "external_send", "finance", "destructive"]
+    assert response_route["workflow_id"] == "store_quote_conductor"
+    assert response_route["effects"] == ["store_write", "external_send"]
     assert response_route["knowledge_domains"] == _items(
         "store_management|vehicle_identity_and_oem|parts_sourcing|telegram_operations"
     )
@@ -271,7 +273,7 @@ def test_store_procedures_live_in_playbook_not_route_or_catalog():
     normalized_playbook = " ".join(playbook.split())
     _assert_contains(
         normalized_playbook,
-        'agent_board_digest(scope="store")|assign_quote_request|assignee_id|update_quote_request_comment|internal_comment|replace_quote_offer_drafts|storage_location|store_owner_api|itemLimit|itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor|ORDER_ITEMS_CURSOR_STALE|itemsHasMore=true|Quote request director workflow|untrusted business input|there is no named article-history|has_estimate_draft=false|store_estimate_draft_state_unavailable|exactly those intended draft offers|exactly one published offer|/offers:publish|/offers/{offer_id}:select|:publish-response|proposed_sale_price|unique peer|partial customer visibility|preflight all three publication operations|one intermediate operation|len(notes) == notes_count|Required Store API dependency before offer writes|non-NULL estimate|A Manager-only release does not remove these blockers|$manage-autostop-store',
+        'agent_board_digest(scope="store")|assign_quote_request|assignee_id|update_quote_request_comment|internal_comment|replace_quote_offer_drafts|storage_location|store_owner_api|itemLimit|itemsTotal/itemsLimit/itemsHasMore/itemsNextCursor|ORDER_ITEMS_CURSOR_STALE|itemsHasMore=true|Admin V2 estimate conductor|Internal owner transport boundary|Admin V2 `estimate_draft`|typed adapter\'s opaque inbound receipt|WAITING_FOR_PAYMENT|legacy QuoteOffer repair|len(notes) == notes_count|Guard for legacy offer writes|non-NULL estimate|A Manager-only release does not remove these blockers|$manage-autostop-store',
     )
 
     workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")

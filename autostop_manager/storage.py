@@ -115,6 +115,16 @@ EXTERNAL_REF_KEYS = {
     "subject_hash",
     "error_code",
     "expected_revision_sha256",
+    "consent_context_hash",
+    "delivery_ref_sha256",
+    "delivery_binding_sha256",
+    "route_binding_sha256",
+    "inbound_binding_sha256",
+    "incoming_ref_sha256",
+    "message_sha256",
+    "quote_snapshot_hash",
+    "reply_text_sha256",
+    "telegram_context_hash",
 }
 EXTERNAL_BODY_KEYS = {
     "body",
@@ -221,11 +231,100 @@ STORE_WORKFLOW_OPERATIONS = frozenset(
         "mark_order_ready",
         "add_quote_request_note",
         "replace_quote_offer_drafts",
+        "store_quote_conductor",
     }
 )
 STORE_OWNER_LEDGER_OPERATION = "store_owner_api"
 STORE_OWNER_LEDGER_WORKFLOW_ID = "raw:store_owner_api"
 STORE_OWNER_LEDGER_INTENT = "raw_store_owner_api"
+STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION = "store_quote_conductor"
+STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID = "store_quote_conductor"
+STORE_QUOTE_CONDUCTOR_LEDGER_INTENT = "store_quote_conductor"
+# The named conductor is the only owner of this workflow's durable state.
+# Generic workflow tools never receive this object and therefore cannot mutate
+# conductor runs even when they know a run id.
+_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS = object()
+_STORE_QUOTE_CONDUCTOR_START_SCOPE_KEYS = frozenset(
+    {
+        "operation",
+        "workflow_id",
+        "domain",
+        "source",
+        "correlation_id",
+        "target_entity",
+        "target_ref_sha256",
+        "expected_revision_sha256",
+    }
+)
+_STORE_QUOTE_CONDUCTOR_CHECKPOINT_KEYS = frozenset(
+    {
+        "consent_context_hash",
+        "contract_id",
+        "counts",
+        "delivery_binding_sha256",
+        "route_binding_sha256",
+        "delivery_ref_sha256",
+        "entries_hash",
+        "evidence_hash",
+        "error_code",
+        "expected_revision_sha256",
+        "inbound_binding_sha256",
+        "incoming_ref_sha256",
+        "message_sha256",
+        "next_action",
+        "operation",
+        "phase",
+        "published_snapshot_hash",
+        "quote_snapshot_hash",
+        "reply_text_sha256",
+        "request_fingerprint",
+        "snapshot_at",
+        "target_ref_sha256",
+        "telegram_context_hash",
+        "verification",
+    }
+)
+_STORE_QUOTE_CONDUCTOR_HASH_KEYS = frozenset(
+    {
+        "consent_context_hash",
+        "delivery_binding_sha256",
+        "route_binding_sha256",
+        "delivery_ref_sha256",
+        "entries_hash",
+        "evidence_hash",
+        "expected_revision_sha256",
+        "inbound_binding_sha256",
+        "incoming_ref_sha256",
+        "message_sha256",
+        "published_snapshot_hash",
+        "quote_snapshot_hash",
+        "reply_text_sha256",
+        "request_fingerprint",
+        "snapshot_at",
+        "target_ref_sha256",
+        "telegram_context_hash",
+    }
+)
+_STORE_QUOTE_CONDUCTOR_COUNT_KEYS = frozenset({"offers", "entries", "coverage"})
+_STORE_QUOTE_CONDUCTOR_PHASES = frozenset(
+    {
+        "new",
+        "clarifying",
+        "evidence_ready",
+        "draft_saved",
+        "published",
+        "waiting_client",
+        "waiting_payment",
+        "revision_needed",
+        "handoff",
+        "declined",
+        "compensating",
+    }
+)
+_STORE_QUOTE_CONDUCTOR_EXTERNAL_ACTIONS = frozenset({"clarification", "quote_response"})
+_STORE_QUOTE_CONDUCTOR_REPLY_STATUSES = frozenset(
+    {"clarification", "addition", "selection", "consent", "decline", "ambiguous"}
+)
 STORE_OWNER_LEDGER_RETENTION = timedelta(days=180)
 STORE_OWNER_LEDGER_CLEANUP_BATCH = 500
 STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS = frozenset(
@@ -247,9 +346,12 @@ STORE_LEDGER_SAFE_CHECKPOINT_KEYS = {
     "compact_refs",
     "contract_id",
     "contract_fingerprint",
+    "consent_context_hash",
     "counts",
     "cursor",
     "entity",
+    "entries_hash",
+    "evidence_hash",
     "error_code",
     "expected_revision_sha256",
     "last_success_at",
@@ -262,6 +364,8 @@ STORE_LEDGER_SAFE_CHECKPOINT_KEYS = {
     "phase",
     "request_fingerprint",
     "request_sha256",
+    "published_snapshot_hash",
+    "quote_snapshot_hash",
     "schema_hash",
     "snapshot_at",
     "state_version",
@@ -269,6 +373,14 @@ STORE_LEDGER_SAFE_CHECKPOINT_KEYS = {
     "target_id",
     "target_ref_sha256",
     "target_version",
+    "telegram_context_hash",
+    "message_sha256",
+    "delivery_ref_sha256",
+    "delivery_binding_sha256",
+    "route_binding_sha256",
+    "inbound_binding_sha256",
+    "incoming_ref_sha256",
+    "reply_text_sha256",
     "verification",
     "verification_class",
 }
@@ -384,9 +496,12 @@ _STORE_SENSITIVE_KEY_TOKENS = {
 _STORE_VERIFICATION_STRING_KEYS = {
     "entity",
     "error_code",
+    "failure_class",
     "mode",
     "operation",
+    "outcome",
     "phase",
+    "route_version",
     "status",
     "target_id",
     "target_version",
@@ -581,6 +696,14 @@ def _store_workflow_operation(
     normalized_workflow_id = str(workflow_id or "").strip().casefold()
     normalized_intent = str(intent or "").strip().casefold()
     if (
+        normalized_workflow_id == STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID
+        and normalized_intent == STORE_QUOTE_CONDUCTOR_LEDGER_INTENT
+        and candidates[0] == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION
+        and str(scope_payload.get("domain") or "").strip().casefold() == "store"
+        and str(scope_payload.get("source") or "").strip().casefold() == "store_quote_conductor"
+    ):
+        return STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION
+    if (
         normalized_workflow_id == STORE_OWNER_LEDGER_WORKFLOW_ID
         and normalized_intent == STORE_OWNER_LEDGER_INTENT
         and candidates[0] == STORE_OWNER_LEDGER_OPERATION
@@ -636,7 +759,7 @@ def _find_unsafe_store_machine_values(value: Any, *, prefix: str = "") -> list[s
     return list(dict.fromkeys(found))
 
 
-def _store_start_channel_forbidden(
+def _store_start_channel_forbidden(  # noqa: C901
     *,
     workflow_id: str,
     intent: str,
@@ -651,7 +774,10 @@ def _store_start_channel_forbidden(
     selected_ids: list[str],
 ) -> list[str]:
     operation = _store_workflow_operation(workflow_id=workflow_id, intent=intent, scope=scope)
-    if operation == STORE_OWNER_LEDGER_OPERATION:
+    if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+        allowed_workflow_ids = {STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID}
+        allowed_intents = {STORE_QUOTE_CONDUCTOR_LEDGER_INTENT}
+    elif operation == STORE_OWNER_LEDGER_OPERATION:
         allowed_workflow_ids = {STORE_OWNER_LEDGER_WORKFLOW_ID}
         allowed_intents = {STORE_OWNER_LEDGER_INTENT}
     else:
@@ -668,7 +794,22 @@ def _store_start_channel_forbidden(
         forbidden.append("workflow_id")
     if str(intent or "").strip().casefold() not in allowed_intents:
         forbidden.append("intent")
-    if operation == STORE_OWNER_LEDGER_OPERATION:
+    if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+        required = {
+            "correlation_id": str(scope.get("correlation_id") or "").strip(),
+            "expected_revision_sha256": str(scope.get("expected_revision_sha256") or "").strip(),
+            "target_ref_sha256": str(scope.get("target_ref_sha256") or "").strip(),
+        }
+        if required["correlation_id"] != str(correlation_id or "").strip():
+            forbidden.append("scope.correlation_id")
+        if str(scope.get("domain") or "").strip().casefold() != "store":
+            forbidden.append("scope.domain")
+        if str(scope.get("source") or "").strip().casefold() != "store_quote_conductor":
+            forbidden.append("scope.source")
+        for key in ("expected_revision_sha256", "target_ref_sha256"):
+            if re.fullmatch(r"[0-9a-f]{64}", required[key]) is None:
+                forbidden.append(f"scope.{key}")
+    elif operation == STORE_OWNER_LEDGER_OPERATION:
         owner_required = {
             "correlation_id": str(scope.get("correlation_id") or "").strip(),
             "expected_revision_sha256": str(scope.get("expected_revision_sha256") or "").strip(),
@@ -750,11 +891,260 @@ def _store_summary_is_allowed(summary: str, *, operation: str) -> bool:
     if not normalized:
         return True
     allowed = {"store_management", "store_management_workflow"}
-    if operation == STORE_OWNER_LEDGER_OPERATION:
+    if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+        allowed.add(STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID)
+    elif operation == STORE_OWNER_LEDGER_OPERATION:
         allowed.add(STORE_OWNER_LEDGER_WORKFLOW_ID)
     elif operation:
         allowed.update({f"inventory:{operation}", f"store:{operation}"})
     return normalized in allowed
+
+
+def _store_quote_conductor_hash(value: Any) -> bool:
+    return re.fullmatch(r"[0-9a-f]{64}", str(value or "").strip()) is not None
+
+
+def _store_quote_conductor_code(value: Any) -> bool:
+    normalized = str(value or "").strip().casefold()
+    return re.fullmatch(r"[a-z][a-z0-9_]{0,159}", normalized) is not None
+
+
+def _store_quote_conductor_start_forbidden(
+    *,
+    workflow_id: str,
+    intent: str,
+    query: str,
+    correlation_id: str,
+    source: str,
+    scope: dict[str, Any],
+    metadata: dict[str, Any],
+    selected_ids: list[str],
+    dry_run: bool,
+    active_target_ref_sha256: str,
+) -> list[str]:
+    """Validate the conductor's deliberately tiny durable start record."""
+
+    forbidden: list[str] = []
+    if workflow_id != STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID:
+        forbidden.append("workflow_id")
+    if intent != STORE_QUOTE_CONDUCTOR_LEDGER_INTENT:
+        forbidden.append("intent")
+    if query:
+        forbidden.append("query")
+    if metadata:
+        forbidden.append("metadata")
+    if selected_ids:
+        forbidden.append("selected_ids")
+    if dry_run:
+        forbidden.append("dry_run")
+    if source != "store_quote_conductor":
+        forbidden.append("source")
+    if set(scope) != _STORE_QUOTE_CONDUCTOR_START_SCOPE_KEYS:
+        forbidden.append("scope_keys")
+    expected_values = {
+        "operation": STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION,
+        "workflow_id": STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID,
+        "domain": "store",
+        "source": "store_quote_conductor",
+        "target_entity": "store_quote_request",
+    }
+    for key, expected in expected_values.items():
+        if str(scope.get(key) or "").strip().casefold() != expected:
+            forbidden.append(f"scope.{key}")
+    scope_correlation = str(scope.get("correlation_id") or "").strip()
+    if (
+        not scope_correlation
+        or scope_correlation != correlation_id
+        or not _store_machine_value_is_safe(scope_correlation)
+    ):
+        forbidden.append("scope.correlation_id")
+    for key in ("target_ref_sha256", "expected_revision_sha256"):
+        if not _store_quote_conductor_hash(scope.get(key)):
+            forbidden.append(f"scope.{key}")
+    if active_target_ref_sha256 != str(scope.get("target_ref_sha256") or "").strip():
+        forbidden.append("active_target_ref_sha256")
+    return list(dict.fromkeys(forbidden))
+
+
+def _store_quote_conductor_checkpoint_forbidden(  # noqa: C901
+    *,
+    scope: dict[str, Any],
+    checkpoint: dict[str, Any],
+    selected_ids: list[str] | None,
+    message: str,
+    expected_state_version: int | None,
+) -> list[str]:
+    """Keep quote-conductor checkpoints strictly hash/code/count based.
+
+    This is intentionally narrower than the generic Store ledger.  In
+    particular, it leaves no extensible numeric map that could carry client
+    prices and no free-form value that could carry Telegram text or a peer.
+    """
+
+    forbidden: list[str] = []
+    if expected_state_version is None:
+        forbidden.append("expected_state_version")
+    if selected_ids not in (None, []):
+        forbidden.append("selected_ids")
+    if message != f"verify {STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION}":
+        forbidden.append("message")
+    unknown_keys = set(checkpoint).difference(_STORE_QUOTE_CONDUCTOR_CHECKPOINT_KEYS)
+    forbidden.extend(sorted(unknown_keys))
+    if checkpoint.get("operation") != STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+        forbidden.append("operation")
+    phase = str(checkpoint.get("phase") or "").strip()
+    if phase not in _STORE_QUOTE_CONDUCTOR_PHASES:
+        forbidden.append("phase")
+    if not _store_quote_conductor_hash(checkpoint.get("expected_revision_sha256")):
+        forbidden.append("expected_revision_sha256")
+    if checkpoint.get("target_ref_sha256") != scope.get("target_ref_sha256"):
+        forbidden.append("target_ref_sha256")
+    for key in _STORE_QUOTE_CONDUCTOR_HASH_KEYS:
+        if key in checkpoint and not _store_quote_conductor_hash(checkpoint.get(key)):
+            forbidden.append(key)
+    contract_id = checkpoint.get("contract_id")
+    if contract_id is not None and re.fullmatch(r"ac_[0-9a-f]{20}", str(contract_id or "")) is None:
+        forbidden.append("contract_id")
+    error_code = checkpoint.get("error_code")
+    if error_code is not None and not _store_quote_conductor_code(error_code):
+        forbidden.append("error_code")
+    next_action = checkpoint.get("next_action")
+    if next_action is not None and str(next_action) not in {"telegram_clarification", "telegram_quote_response"}:
+        forbidden.append("next_action")
+
+    counts = checkpoint.get("counts")
+    if counts is not None:
+        if not isinstance(counts, dict) or not set(counts).issubset(_STORE_QUOTE_CONDUCTOR_COUNT_KEYS):
+            forbidden.append("counts")
+        else:
+            for key, value in counts.items():
+                if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 50:
+                    forbidden.append(f"counts.{key}")
+
+    verification = checkpoint.get("verification")
+    if verification is not None:
+        required_verification = {"route_version", "outcome", "failure_class", "offers", "entries", "coverage"}
+        if not isinstance(verification, dict) or set(verification) != required_verification:
+            forbidden.append("verification")
+        else:
+            if verification.get("route_version") != "store_quote_conductor_v1":
+                forbidden.append("verification.route_version")
+            if str(verification.get("outcome") or "") not in _STORE_QUOTE_CONDUCTOR_PHASES:
+                forbidden.append("verification.outcome")
+            if not _store_quote_conductor_code(verification.get("failure_class")):
+                forbidden.append("verification.failure_class")
+            for key in _STORE_QUOTE_CONDUCTOR_COUNT_KEYS:
+                value = verification.get(key)
+                if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 50:
+                    forbidden.append(f"verification.{key}")
+    return list(dict.fromkeys(forbidden))
+
+
+def _store_quote_conductor_transition_forbidden(
+    *,
+    status: str,
+    message: str,
+    verification: dict[str, Any] | None,
+    summary: str,
+    expected_state_version: int | None,
+) -> list[str]:
+    forbidden: list[str] = []
+    if expected_state_version is None:
+        forbidden.append("expected_state_version")
+    if not _store_message_is_allowed(message, operation=STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION):
+        forbidden.append("message")
+    if summary not in {"", STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID}:
+        forbidden.append("summary")
+    proof = verification if isinstance(verification, dict) else {}
+    if status == "completed":
+        if proof != {"workflow_completed": True}:
+            forbidden.append("verification")
+    elif status == "compensating":
+        if proof != {"executor_ok": True, "passed": False}:
+            forbidden.append("verification")
+    elif verification not in (None, {}):
+        forbidden.append("verification")
+    return list(dict.fromkeys(forbidden))
+
+
+def _store_quote_conductor_external_request_forbidden(
+    *,
+    step_id: str,
+    connector: str,
+    action: str,
+    request_refs: dict[str, Any] | None,
+    expected_state_version: int | None,
+) -> list[str]:
+    forbidden: list[str] = []
+    if expected_state_version is None:
+        forbidden.append("expected_state_version")
+    if connector != "telegram":
+        forbidden.append("connector")
+    if action not in _STORE_QUOTE_CONDUCTOR_EXTERNAL_ACTIONS:
+        forbidden.append("action")
+    if re.fullmatch(r"telegram-[A-Za-z0-9._:-]{1,159}", step_id or "") is None:
+        forbidden.append("step_id")
+    refs = request_refs if isinstance(request_refs, dict) else {}
+    expected_keys = {"expected_revision_sha256"}
+    if action == "quote_response":
+        expected_keys.update(
+            {
+                "quote_snapshot_hash",
+                "telegram_context_hash",
+                "message_sha256",
+                "delivery_binding_sha256",
+                "route_binding_sha256",
+                "delivery_ref_sha256",
+            }
+        )
+    if set(refs) != expected_keys:
+        forbidden.append("request_refs")
+    for key in expected_keys.intersection(refs):
+        if not _store_quote_conductor_hash(refs.get(key)):
+            forbidden.append(f"request_refs.{key}")
+    return list(dict.fromkeys(forbidden))
+
+
+def _store_quote_conductor_external_result_forbidden(
+    *,
+    action: str,
+    result_refs: dict[str, Any] | None,
+    expected_state_version: int | None,
+) -> list[str]:
+    forbidden: list[str] = []
+    if expected_state_version is None:
+        forbidden.append("expected_state_version")
+    refs = result_refs if isinstance(result_refs, dict) else {}
+    status = str(refs.get("status") or "").strip().casefold()
+    if action not in _STORE_QUOTE_CONDUCTOR_EXTERNAL_ACTIONS:
+        forbidden.append("action")
+        return forbidden
+    if status == "cabinet_order_confirmed":
+        if action != "quote_response" or set(refs) != {"status", "quote_snapshot_hash"}:
+            forbidden.append("result_refs")
+        elif not _store_quote_conductor_hash(refs.get("quote_snapshot_hash")):
+            forbidden.append("result_refs.quote_snapshot_hash")
+        return forbidden
+    if status not in _STORE_QUOTE_CONDUCTOR_REPLY_STATUSES:
+        forbidden.append("status")
+        return forbidden
+    required_keys = {
+        "status",
+        "quote_snapshot_hash",
+        "telegram_context_hash",
+        "delivery_binding_sha256",
+        "reply_text_sha256",
+        "incoming_ref_sha256",
+        "inbound_binding_sha256",
+    }
+    if status == "consent":
+        required_keys.add("consent_context_hash")
+    if set(refs) != required_keys:
+        forbidden.append("result_refs")
+    for key in required_keys.difference({"status"}).intersection(refs):
+        if not _store_quote_conductor_hash(refs.get(key)):
+            forbidden.append(f"result_refs.{key}")
+    return list(dict.fromkeys(forbidden))
 
 
 def _store_owner_verification_is_refs_only(value: Any) -> bool:
@@ -1699,6 +2089,11 @@ def _is_context_noise(
     text = _memory_item_text(item)
     category = str(item.get("category") or item.get("applies_to") or item.get("scope") or "").casefold()
     title = str(item.get("title") or "").casefold()
+    store_quote_terms = ("store", "магазин", "процен", "заявк", "telegram", "телеграм")
+    if title.startswith(("store-quote-", "store-telegram-")) and not any(
+        term in task_text for term in store_quote_terms
+    ):
+        return True
     if suppress_board_cleanup:
         if category in {"board_cleanup", "board_cleanup_autopilot"}:
             return True
@@ -4201,7 +4596,33 @@ class ManagerMemoryStore:
             items.append(item)
         return {"ok": True, "items": items, "total_returned": len(items)}
 
-    def start_workflow_run(
+    def start_store_quote_conductor_run(
+        self,
+        *,
+        idempotency_key: str,
+        correlation_id: str,
+        scope: dict[str, Any],
+        active_target_ref_sha256: str,
+    ) -> dict[str, Any]:
+        """Start the named Store quote conductor with its closed ledger schema.
+
+        This method is intentionally not registered as a generic Manager MCP
+        capability.  The conductor is its only caller; public workflow tools
+        must not be able to manufacture or take over a quote run.
+        """
+
+        return self.start_workflow_run(
+            workflow_id=STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID,
+            intent=STORE_QUOTE_CONDUCTOR_LEDGER_INTENT,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            scope=scope,
+            source="store_quote_conductor",
+            active_target_ref_sha256=active_target_ref_sha256,
+            _conductor_access=_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS,
+        )
+
+    def start_workflow_run(  # noqa: C901
         self,
         *,
         workflow_id: str,
@@ -4216,6 +4637,8 @@ class ManagerMemoryStore:
         dry_run: bool = False,
         source: str = "codex",
         metadata: dict[str, Any] | None = None,
+        active_target_ref_sha256: str | None = None,
+        _conductor_access: object | None = None,
     ) -> dict[str, Any]:
         """Start an idempotent v2 workflow without changing any external system."""
 
@@ -4237,6 +4660,7 @@ class ManagerMemoryStore:
         scope_provided = isinstance(scope, dict)
         selected_ids_provided = selected_ids is not None
         scope_payload = dict(scope) if isinstance(scope, dict) else {}
+        normalized_active_target_ref = str(active_target_ref_sha256 or "").strip()
         owner_workflow = (
             _store_workflow_operation(
                 workflow_id=workflow_id,
@@ -4245,6 +4669,25 @@ class ManagerMemoryStore:
             )
             == STORE_OWNER_LEDGER_OPERATION
         )
+        conductor_workflow = (
+            _store_workflow_operation(
+                workflow_id=workflow_id,
+                intent=intent,
+                scope=scope_payload,
+            )
+            == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION
+        )
+        if conductor_workflow and _conductor_access is not _STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS:
+            return {
+                "ok": False,
+                "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+            }
+        if normalized_active_target_ref and (
+            not conductor_workflow
+            or re.fullmatch(r"[0-9a-f]{64}", normalized_active_target_ref) is None
+            or normalized_active_target_ref != str(scope_payload.get("target_ref_sha256") or "").strip()
+        ):
+            return {"ok": False, "error": "store_quote_conductor_active_target_invalid"}
         metadata_payload = metadata if isinstance(metadata, dict) else {}
         forbidden = _find_forbidden_body_keys({"scope": scope_payload, "metadata": metadata_payload})
         if forbidden:
@@ -4276,6 +4719,25 @@ class ManagerMemoryStore:
                     "error": "raw_store_payload_not_allowed_in_manager_ledger",
                     "forbidden_keys": list(dict.fromkeys(store_forbidden)),
                 }
+            if conductor_workflow:
+                conductor_forbidden = _store_quote_conductor_start_forbidden(
+                    workflow_id=workflow_id,
+                    intent=intent,
+                    query=query,
+                    correlation_id=effective_correlation_id,
+                    source=str(source or "").strip().casefold(),
+                    scope=scope_payload,
+                    metadata=metadata_payload,
+                    selected_ids=normalized_ids,
+                    dry_run=dry_run,
+                    active_target_ref_sha256=normalized_active_target_ref,
+                )
+                if conductor_forbidden:
+                    return {
+                        "ok": False,
+                        "error": "store_quote_conductor_ledger_schema_invalid",
+                        "forbidden_keys": conductor_forbidden,
+                    }
         with self.connect() as conn:
             # Serialize the idempotency lookup and insert so concurrent stateless
             # MCP requests deduplicate instead of racing into the unique index.
@@ -4308,6 +4770,32 @@ class ManagerMemoryStore:
                         "conflict_fields": conflict_fields,
                     }
                 return {"ok": True, **item, "deduplicated": True}
+
+            if normalized_active_target_ref:
+                placeholders = ",".join("?" for _ in ACTIVE_WORKFLOW_STATES)
+                active_rows = conn.execute(
+                    f"""
+                    SELECT * FROM manager_runs
+                    WHERE workflow_id = ? AND intent = ? AND status IN ({placeholders})
+                    ORDER BY updated_at DESC, id DESC
+                    """,
+                    (
+                        STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID,
+                        STORE_QUOTE_CONDUCTOR_LEDGER_INTENT,
+                        *sorted(ACTIVE_WORKFLOW_STATES),
+                    ),
+                ).fetchall()
+                for active in active_rows:
+                    active_scope = _decode_json(active["scope_json"], {})
+                    if str(active_scope.get("target_ref_sha256") or "").strip() != normalized_active_target_ref:
+                        continue
+                    item = self._row_to_dict(active)
+                    return {
+                        "ok": True,
+                        **item,
+                        "deduplicated": True,
+                        "active_target_deduplicated": True,
+                    }
 
             cursor = conn.execute(
                 """
@@ -4366,7 +4854,29 @@ class ManagerMemoryStore:
             "deduplicated": False,
         }
 
-    def transition_workflow_run(
+    def transition_store_quote_conductor_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        message: str,
+        verification: dict[str, Any] | None = None,
+        summary: str = "",
+        expected_state_version: int,
+    ) -> dict[str, Any]:
+        """Advance a conductor run through its fixed, refs-only state machine."""
+
+        return self.transition_workflow_run(
+            run_id,
+            status=status,
+            message=message,
+            verification=verification,
+            summary=summary,
+            expected_state_version=expected_state_version,
+            _conductor_access=_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS,
+        )
+
+    def transition_workflow_run(  # noqa: C901
         self,
         run_id: int,
         *,
@@ -4375,6 +4885,7 @@ class ManagerMemoryStore:
         verification: dict[str, Any] | None = None,
         summary: str = "",
         expected_state_version: int | None = None,
+        _conductor_access: object | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         target_status = str(status or "").strip().casefold()
@@ -4394,6 +4905,27 @@ class ManagerMemoryStore:
                     intent=row["intent"],
                     scope=scope_payload,
                 )
+                if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+                    if _conductor_access is not _STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS:
+                        return {
+                            "ok": False,
+                            "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                            "run_id": run_id,
+                        }
+                    conductor_forbidden = _store_quote_conductor_transition_forbidden(
+                        status=target_status,
+                        message=message,
+                        verification=verification,
+                        summary=summary,
+                        expected_state_version=expected_state_version,
+                    )
+                    if conductor_forbidden:
+                        return {
+                            "ok": False,
+                            "error": "store_quote_conductor_ledger_schema_invalid",
+                            "run_id": run_id,
+                            "forbidden_keys": conductor_forbidden,
+                        }
                 owner_transition_error = (
                     _store_owner_transition_error(
                         run_id,
@@ -4559,6 +5091,24 @@ class ManagerMemoryStore:
             "deduplicated": False,
         }
 
+    def checkpoint_store_quote_conductor_run(
+        self,
+        run_id: int,
+        *,
+        checkpoint: dict[str, Any],
+        message: str,
+        expected_state_version: int,
+    ) -> dict[str, Any]:
+        """Persist the conductor's closed checkpoint projection only."""
+
+        return self.checkpoint_workflow_run(
+            run_id,
+            checkpoint=checkpoint,
+            message=message,
+            expected_state_version=expected_state_version,
+            _conductor_access=_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS,
+        )
+
     def checkpoint_workflow_run(
         self,
         run_id: int,
@@ -4567,6 +5117,7 @@ class ManagerMemoryStore:
         selected_ids: list[str] | None = None,
         message: str = "",
         expected_state_version: int | None = None,
+        _conductor_access: object | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         checkpoint_payload = checkpoint if isinstance(checkpoint, dict) else {}
@@ -4597,6 +5148,27 @@ class ManagerMemoryStore:
                     intent=row["intent"],
                     scope=scope_payload,
                 )
+                if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+                    if _conductor_access is not _STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS:
+                        return {
+                            "ok": False,
+                            "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                            "run_id": run_id,
+                        }
+                    conductor_forbidden = _store_quote_conductor_checkpoint_forbidden(
+                        scope=scope_payload,
+                        checkpoint=checkpoint_payload,
+                        selected_ids=selected_ids,
+                        message=message,
+                        expected_state_version=expected_state_version,
+                    )
+                    if conductor_forbidden:
+                        return {
+                            "ok": False,
+                            "error": "store_quote_conductor_ledger_schema_invalid",
+                            "run_id": run_id,
+                            "forbidden_keys": conductor_forbidden,
+                        }
                 if operation == STORE_OWNER_LEDGER_OPERATION and expected_state_version is None:
                     return {
                         "ok": False,
@@ -4674,6 +5246,28 @@ class ManagerMemoryStore:
             "checkpoint": checkpoint_payload,
         }
 
+    def register_store_quote_conductor_external_step(
+        self,
+        run_id: int,
+        *,
+        step_id: str,
+        connector: str,
+        action: str,
+        request_refs: dict[str, Any],
+        expected_state_version: int,
+    ) -> dict[str, Any]:
+        """Register the conductor's typed Telegram wait with hash refs only."""
+
+        return self.register_external_step(
+            run_id,
+            step_id=step_id,
+            connector=connector,
+            action=action,
+            request_refs=request_refs,
+            expected_state_version=expected_state_version,
+            _conductor_access=_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS,
+        )
+
     def register_external_step(
         self,
         run_id: int,
@@ -4683,6 +5277,7 @@ class ManagerMemoryStore:
         action: str,
         request_refs: dict[str, Any] | None = None,
         expected_state_version: int | None = None,
+        _conductor_access: object | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         step_id = str(step_id or "").strip()
@@ -4702,14 +5297,33 @@ class ManagerMemoryStore:
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
-            if (
-                _store_workflow_operation(
-                    workflow_id=run["workflow_id"],
-                    intent=run["intent"],
-                    scope=_decode_json(run["scope_json"], {}),
+            operation = _store_workflow_operation(
+                workflow_id=run["workflow_id"],
+                intent=run["intent"],
+                scope=_decode_json(run["scope_json"], {}),
+            )
+            if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+                if _conductor_access is not _STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS:
+                    return {
+                        "ok": False,
+                        "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                        "run_id": run_id,
+                    }
+                conductor_forbidden = _store_quote_conductor_external_request_forbidden(
+                    step_id=step_id,
+                    connector=connector,
+                    action=action,
+                    request_refs=request_refs,
+                    expected_state_version=expected_state_version,
                 )
-                == STORE_OWNER_LEDGER_OPERATION
-            ):
+                if conductor_forbidden:
+                    return {
+                        "ok": False,
+                        "error": "store_quote_conductor_ledger_schema_invalid",
+                        "run_id": run_id,
+                        "forbidden_keys": conductor_forbidden,
+                    }
+            if operation == STORE_OWNER_LEDGER_OPERATION:
                 return {
                     "ok": False,
                     "error": "store_owner_external_steps_not_allowed",
@@ -4794,6 +5408,24 @@ class ManagerMemoryStore:
             "deduplicated": False,
         }
 
+    def complete_store_quote_conductor_external_step(
+        self,
+        run_id: int,
+        *,
+        step_id: str,
+        result_refs: dict[str, Any],
+        expected_state_version: int,
+    ) -> dict[str, Any]:
+        """Complete a conductor Telegram wait after typed inbound readback."""
+
+        return self.complete_external_step(
+            run_id,
+            step_id=step_id,
+            result_refs=result_refs,
+            expected_state_version=expected_state_version,
+            _conductor_access=_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS,
+        )
+
     def complete_external_step(
         self,
         run_id: int,
@@ -4801,6 +5433,7 @@ class ManagerMemoryStore:
         step_id: str,
         result_refs: dict[str, Any] | None = None,
         expected_state_version: int | None = None,
+        _conductor_access: object | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         step_id = str(step_id or "").strip()
@@ -4820,14 +5453,20 @@ class ManagerMemoryStore:
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
-            if (
-                _store_workflow_operation(
-                    workflow_id=run["workflow_id"],
-                    intent=run["intent"],
-                    scope=_decode_json(run["scope_json"], {}),
-                )
-                == STORE_OWNER_LEDGER_OPERATION
+            operation = _store_workflow_operation(
+                workflow_id=run["workflow_id"],
+                intent=run["intent"],
+                scope=_decode_json(run["scope_json"], {}),
+            )
+            if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION and (
+                _conductor_access is not _STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS
             ):
+                return {
+                    "ok": False,
+                    "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                    "run_id": run_id,
+                }
+            if operation == STORE_OWNER_LEDGER_OPERATION:
                 return {
                     "ok": False,
                     "error": "store_owner_external_steps_not_allowed",
@@ -4854,6 +5493,19 @@ class ManagerMemoryStore:
             ).fetchone()
             if not step:
                 return {"ok": False, "error": "external step not found", "run_id": run_id, "step_id": step_id}
+            if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+                conductor_forbidden = _store_quote_conductor_external_result_forbidden(
+                    action=str(step["action"] or ""),
+                    result_refs=result_refs,
+                    expected_state_version=expected_state_version,
+                )
+                if conductor_forbidden:
+                    return {
+                        "ok": False,
+                        "error": "store_quote_conductor_ledger_schema_invalid",
+                        "run_id": run_id,
+                        "forbidden_keys": conductor_forbidden,
+                    }
             if (
                 step["connector"] == "gmail"
                 and step["action"] in {"send", "forward"}
@@ -4930,20 +5582,41 @@ class ManagerMemoryStore:
             "deduplicated": False,
         }
 
-    def resume_workflow_run(self, run_id: int, *, expected_state_version: int | None = None) -> dict[str, Any]:
+    def resume_store_quote_conductor_run(self, run_id: int, *, expected_state_version: int) -> dict[str, Any]:
+        """Resume a conductor run only after its typed external step is complete."""
+
+        return self.resume_workflow_run(
+            run_id,
+            expected_state_version=expected_state_version,
+            _conductor_access=_STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS,
+        )
+
+    def resume_workflow_run(
+        self,
+        run_id: int,
+        *,
+        expected_state_version: int | None = None,
+        _conductor_access: object | None = None,
+    ) -> dict[str, Any]:
         self.initialize()
         run = self.get_manager_run(run_id, include_events=False, include_external_steps=True)
         if not run.get("ok"):
             return run
         item = run["item"]
-        if (
-            _store_workflow_operation(
-                workflow_id=str(item.get("workflow_id") or ""),
-                intent=str(item.get("intent") or ""),
-                scope=item.get("scope") if isinstance(item.get("scope"), dict) else {},
-            )
-            == STORE_OWNER_LEDGER_OPERATION
+        operation = _store_workflow_operation(
+            workflow_id=str(item.get("workflow_id") or ""),
+            intent=str(item.get("intent") or ""),
+            scope=item.get("scope") if isinstance(item.get("scope"), dict) else {},
+        )
+        if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION and (
+            _conductor_access is not _STORE_QUOTE_CONDUCTOR_INTERNAL_ACCESS
         ):
+            return {
+                "ok": False,
+                "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                "run_id": run_id,
+            }
+        if operation == STORE_OWNER_LEDGER_OPERATION:
             return {
                 "ok": False,
                 "error": "store_owner_resume_not_allowed",
@@ -4976,6 +5649,7 @@ class ManagerMemoryStore:
                 status="executing",
                 message="workflow resumed",
                 expected_state_version=current_version,
+                _conductor_access=_conductor_access,
             )
             if not transitioned.get("ok"):
                 return transitioned
@@ -5046,6 +5720,12 @@ class ManagerMemoryStore:
                     intent=run["intent"],
                     scope=_decode_json(run["scope_json"], {}),
                 )
+                if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+                    return {
+                        "ok": False,
+                        "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                        "run_id": run_id,
+                    }
                 if str(event_type or "").strip().casefold() not in STORE_LEDGER_SAFE_EVENT_TYPES:
                     store_forbidden.append("event_type")
                 if not _store_message_is_allowed(message, operation=operation):
@@ -5097,14 +5777,18 @@ class ManagerMemoryStore:
             ).fetchone()
         if not existing:
             return {"ok": False, "error": "manager run not found", "run_id": run_id}
-        if (
-            _store_workflow_operation(
-                workflow_id=existing["workflow_id"],
-                intent=existing["intent"],
-                scope=_decode_json(existing["scope_json"], {}),
-            )
-            == STORE_OWNER_LEDGER_OPERATION
-        ):
+        operation = _store_workflow_operation(
+            workflow_id=existing["workflow_id"],
+            intent=existing["intent"],
+            scope=_decode_json(existing["scope_json"], {}),
+        )
+        if operation == STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION:
+            return {
+                "ok": False,
+                "error": "store_quote_conductor_ledger_owned_by_named_workflow",
+                "run_id": run_id,
+            }
+        if operation == STORE_OWNER_LEDGER_OPERATION:
             return {
                 "ok": False,
                 "error": "store_owner_compatibility_finish_not_allowed",

@@ -33,10 +33,13 @@ Gateway v2 keeps exactly 24 public tools. Use the existing tools:
 - `agent_entity_context` for one exact store object; an exact quote may use
   `detail="full_with_vin_photo"` to read only safe VIN-photo metadata;
 - `get_runtime_status` for adapter and store health;
-- `agent_inventory_workflow` for seven optimized named writes;
-- guarded raw `store_owner_capabilities` and `store_owner_api` for every other
-  operation available to the Manager service principal through the live Store
-  OpenAPI.
+- `agent_inventory_workflow` for reviewed named writes, including the typed
+  `store_quote_conductor` for Admin V2 customer estimates.
+
+`store_owner_capabilities` and `store_owner_api` are Manager-internal transport
+components, not public Gateway tools.  Raw discovery and raw invocation reject
+them; a caller cannot select an arbitrary Store operation.  A new public Store
+action needs its own reviewed named workflow and release.
 
 Supported entities are `store_part`, `store_order`, `store_quote_request`,
 `store_batch`, `store_warehouse_operation`,
@@ -62,7 +65,7 @@ call a hidden Store tool directly:
 | one exact VIN-photo preview | `agent_document_workflow` | `operation="download_store_quote_vin_photo"`, exact quote id, current photo SHA-256, idempotency key, and `allow_large_output=true` |
 | adapter/API health | `get_runtime_status` | read-only |
 | one of the seven optimized writes below | `agent_inventory_workflow` | exact `operation`, strict `payload`, unique phase `idempotency_key`, explicit `mode` |
-| any other available employee operation | guarded raw discovery -> `store_owner_capabilities` / `store_owner_api` | exact `operation_id`, live `schema_hash`, target/revision, ActionContractV2, unique idempotency/correlation ids, `dry_run` proof, `apply`, exact reread |
+| an operation without a named workflow | stop and request a reviewed workflow/release | do not use raw owner API or browser/CSRF access |
 
 ### Service materials and supplier purchases
 
@@ -82,7 +85,7 @@ ROSSKO configuration.
 | Entity | Use for | Accepted filters |
 | --- | --- | --- |
 | `store_part` | id, SKU, name, manufacturer; stock summary | `is_active` boolean; `low_stock` boolean |
-| `store_order` | id, order number, item SKU/name | `status`: `IN_PROGRESS`, `IN_TRANSIT`, `READY`, `COMPLETED`, `ANNULLED`, or `RETURNED` |
+| `store_order` | id, order number, item SKU/name | `status`: `WAITING_FOR_PAYMENT`, `IN_PROGRESS`, `IN_TRANSIT`, `READY`, `COMPLETED`, `ANNULLED`, or `RETURNED` |
 | `store_quote_request` | id or request number | `status`: `WAITING_FOR_QUOTE`, `WAITING_FOR_APPROVAL`, `APPROVED`, or `CANCELLED_BY_CUSTOMER`; `assigned_user_id`: exact string or `null` for unassigned |
 | `store_batch` | id, cell, part SKU/name | `status`: `IN_PROGRESS` or `COMPLETED`; exact non-empty `storage_location` up to 200 chars |
 | `store_warehouse_operation` | id, receipt/shipment state | `kind`: `RECEIPT` or `SHIPMENT`; `status`: `IN_PROGRESS`, `COMPLETED`, or `ANNULLED` |
@@ -110,7 +113,44 @@ unpaginated fallback requires one exact `order_id` and is never a bulk export.
 An unpaginated employee list and the transport's 2 MiB ceiling are not proof of
 completeness.
 
-### Quote request director workflow
+### Admin V2 estimate conductor
+
+For a quote led by `store_quote_conductor`, Admin V2 `estimate_draft` is the
+only customer-facing quote model.  Do not use the legacy Manager
+`replace_quote_offer_drafts` path for that request: a QuoteOffer conflicts with
+the existing estimate-to-order path.
+
+The conductor uses the dedicated Store owner operations to read, replace,
+submit, reopen and confirm an Admin V2 estimate.  They are action routes, not
+browser endpoints: use the current owner schema, exact revision,
+ActionContractV2, dry-run, apply with a different idempotency key and exact
+readback.  A manual estimate or a legacy mixed estimate/offers record is a
+handoff, never an automatic cleanup.
+
+On submission, Store publishes the estimate to the customer cabinet. Only after
+Store readback may the same exact request receive a bounded work Telegram
+message. Telegram consent is accepted only from a typed adapter's opaque inbound
+receipt and independent readback proving the same private peer and delivery
+binding; caller-supplied consent/context hashes are not proof. Current consent
+converges with cabinet confirmation on one `WAITING_FOR_PAYMENT` order. It does
+not authorize a reserve, supplier purchase, discount, payment, cashbox entry or
+card details.
+
+See `store_quote_conductor_playbook.md` for the state machine, conversational
+rules and recovery contract.
+
+### Legacy QuoteOffer workflow (not for `store_quote_conductor`)
+
+This compatibility route is for an explicitly requested legacy QuoteOffer
+case only.  It is never the route for a new customer-facing Store estimate:
+use the Admin V2 estimate conductor above for those requests.  Do not move a
+record between the two models automatically; an existing estimate, an offer,
+or a mixed legacy record is a handoff boundary.
+
+There is no ordinary public command route to this compatibility path. Phrases
+such as “заполни позиции” and “опубликуй предложения” for a current request
+start the conductor, not QuoteOffer. An already legacy request is transferred
+to a person; Manager must not repair or extend it by selecting a raw operation.
 
 The public form can contain a VIN or article, free text and one photo. Screen
 labels and notifications are only leads; the exact current
@@ -123,16 +163,16 @@ labels and notifications are only leads; the exact current
   clarification for that same client. It does not authorize procurement,
   reservation, discount, payment, deletion, or another recipient.
 
-For an end-to-end request:
+The following retained constraints describe an explicitly handed-off legacy
+record only; they do not authorize a new client estimate:
 
 1. Resolve one exact request from the bounded list or digest, then read
    `detail="full"` or `full_with_vin_photo`. The named agent DTO exposes current
    status, `customer_comment`, contact, VIN, delivery method, item
    `part_description`/quantity/comment, attachment metadata, offers, notes and
    revision. It does not expose the original `request_text` or Admin V2
-   `estimate_draft`. When the original text is material, use only a current,
-   reviewed exact employee GET through `store_owner_api`; otherwise state the
-   missing field instead of calling the DTO complete. Also require
+   `estimate_draft`. When the original text is material, hand the legacy record
+   to a person rather than calling a raw owner operation. Also require
    `len(notes) == notes_count`; the current Store projection has no
    `notes_has_more`, so a shorter list requires a reviewed exact bounded
    fallback GET or a stop. Keep all private fields transient. The full DTO marks customer content as
@@ -143,15 +183,13 @@ For an end-to-end request:
    must positively show both `has_estimate_draft=false` and
    `items_has_more=false`. If the estimate flag is true, stop with
    `store_estimate_draft_conflict`; if absent, stop with
-   `store_estimate_draft_state_unavailable`. The current Store agent projection
-   does not yet emit this flag, so a separate Store API release is required
-   before Manager offer writes can proceed. Do not create an offer when the
-   state is unknown: any offer disables the existing Admin V2 estimate path for
-   later order conversion.
+   `store_estimate_draft_state_unavailable`. Do not create an offer when the
+   state is unknown: any offer disables the Admin V2 estimate path for later
+   order conversion.
 
-### Required Store API dependency before offer writes
+### Guard for legacy offer writes
 
-The Store service must add a boolean `has_estimate_draft` to exact
+The Store service exposes a boolean `has_estimate_draft` in exact
 `store_quote_request` `full` and `full_with_vin_photo` projections, derived from
 the persisted Admin V2 estimate without exposing its contents. Store contract
 tests must prove `false` only when `estimate_draft is None`, `true` for every
@@ -162,111 +200,53 @@ named draft path. If notes can exceed the nested limit, Store must also expose
 an exact bounded notes continuation or an equivalent complete employee read;
 until then Manager compares `len(notes)` with `notes_count` and stops on a
 short list. A Manager-only release does not remove these blockers.
-2. Classify and decode the vehicle through `vehicle_identity_playbook.md`, then
-   prove OEM/reference and selected-part fitment. A photo, label, marketplace
-   title or prior quote is a lead, never enough fitment evidence by itself.
-3. Search live Store stock and sourcing offers first, including ROSSKO when
-   available; then follow `parts_search_playbook.md` for other approved suppliers
-   and current market checks. Use historical Store quotes only when the current
-   live OpenAPI exposes an exact bounded read; there is no named article-history
-   search. History is supporting evidence only: recheck article, package,
-   quantity, stock, lead time, price, warranty and return terms now.
-4. If a material ambiguity remains, use only the `work` Telegram account and
-   resolve one private peer from this exact live request: send the current phone
-   to `resolve-phone` first, then use one exact current `telegram_username` as a
-   bounded-search fallback. Zero or multiple matches fail closed. A unique peer
-   proves routability, not that this person submitted the request: unless a
-   current verified Store-to-Telegram binding or an explicit owner-confirmed
-   mapping exists, first ask only whether they submitted an AutoStop parts
-   request, without VIN, vehicle, parts, price, photo or other request details.
-   Continue only after an affirmative reply. Then ask a short natural question,
-   process only relevant text/photo/audio/video through the Telegram playbook,
-   and return confirmed facts to this request. While waiting, keep the workflow
-   in `external_wait`; do not invent an answer or start another chat.
-5. Build the customer offer using the live operation schema. The admin-facing
-   position maps to name, catalog number, manufacturer, quantity, lead time,
-   customer price, comment and, only when explicitly supported, warranty/photo.
-   Preserve purchase, public-retail and customer-sale price bases separately.
-   The optimized private-draft operation does not prove support for every UI
-   field; use a reviewed generic owner operation only when its current schema
-   explicitly covers the required complete position.
-6. Save only the intended private drafts/fields. Reread the exact request with
-   `items_has_more=false` and collect the resulting draft offer IDs. Before the
-   first customer-visible call, preflight all three publication operations,
-   their current schemas, ID hand-offs, exact readbacks and an available repair
-   or rollback path. If any stage cannot be proved, publish nothing. Then publish
-   exactly those intended draft offers, reread them as `PUBLISHED`, select
-   exactly one published offer for every request item, and reread every
-   selection. Only then publish the customer response and independently reread
-   the request. Each stage uses its own current revision, ActionContractV2,
-   dry-run, apply and readback. A failure after offer publication is partial
-   customer visibility: reread the exact request, do not blindly retry, enter a
-   compensating workflow, and use only a reviewed authorized repair/rollback
-   operation. If none exists, report the visible partial state and required
-   owner action. Completion requires the expected customer-visible response and
-   `WAITING_FOR_APPROVAL`; a separate Telegram summary, when needed, uses its
-   own verified send/readback.
 
-An owner command to only “publish offers” or “select an offer” authorizes that
-one intermediate operation, not `publish-response`, a status transition or the
-rest of the chain. Verify and report its customer-visible post-state, then stop.
-The full chain above is reserved for an explicit process/respond/publish-response
-instruction for the exact request.
+These guards are retained only to stop an accidental legacy write. They never
+authorize the remaining offer workflow: hand the existing record to a person
+and start a new safe request only through `store_quote_conductor`.
 
-The current Store publication stages are the employee routes
-`POST /api/v1/admin/quote-requests/{quote_request_id}/offers:publish`,
-`POST /api/v1/admin/quote-requests/{quote_request_id}/offers/{offer_id}:select`
-and `POST /api/v1/admin/quote-requests/{quote_request_id}:publish-response`, in
-that order. Resolve each current `operation_id`, schema hash and response
-contract through `store_owner_capabilities`; never infer them from the path or
-reuse a stale schema.
+No customer wording authorizes the old offer publication chain. For a current
+request, “опубликуй предложения” means the Admin V2 conductor route; for an
+already legacy record, leave the decision and any historical publication to the
+human handoff.
+
+The historical Store publication stages for QuoteOffer are not public Manager
+operations. Do not resolve or invoke them through `store_owner_capabilities` or
+`store_owner_api`; a legacy completion belongs to a human handoff.
 
 Client wording should be brief, calm and human: answer the question, state the
 option/price/term and ask only the next necessary question. Do not expose source
 lists, confidence machinery, contracts, internal comments or implementation
 details.
 
-The current named read exposes quote-item quantity; the named private-draft
-write supports offer `part_name`, `part_sku`, `brand`, prices,
-`delivery_days`, comment and sourcing evidence. Changing item quantity requires
-a reviewed generic owner operation whose current schema explicitly supports it.
-The service principal does not expose the browser-only Admin V2
-`estimate_draft`, `estimate-photo` or a separate warranty field. Never borrow a
-human CSRF/session to fill them. If the exact response depends on one of those
-fields and no current owner operation exposes it, return
-`store_estimate_draft_capability_unavailable` and leave the response unpublished
-until the Store API is extended.
+The current named conductor owns Admin V2 `estimate_draft` and its Store
+warranty setting through the dedicated owner API. It validates quantity, Decimal
+price, comment sanitation, original-item coverage and provenance under the same
+rules as the Admin V2 form. Never borrow a human CSRF/session, and never use an
+offer draft as a substitute for the estimate.
 
 ### Customer response boundary
 
-An exact response draft can be stored through
-`update_admin_quote_request_api_v1_admin_quote_requests__quote_request_id__patch`
-with only `customerResponse` in the body. This is a private draft; it must not
-be described as sent or published. The broad PATCH operation is still generic
-owner high-risk, so its live input contract and exact quote revision are
-required and no other optional field may be supplied.
+For a new customer request, the only publication path is
+`store_quote_conductor`: a complete current Admin V2 estimate is submitted,
+then Store independently rereads its customer-cabinet snapshot. The historical
+broad PATCH and QuoteOffer publication operations are not public Gateway
+operations and must not be used as a substitute. A draft-only conductor step
+never authorizes publication.
 
-Publishing uses the exact
-`publish_admin_quote_request_response_api_v1_admin_quote_requests__quote_request_id__publish_response_post`
-operation only after an explicit owner command to process, answer or publish
-that exact request and the full generic write contract. Store rejects an empty
-quote, any item without exactly one
-selected `PUBLISHED` offer, and archived, converted, or customer-cancelled
-requests. Success makes the response customer-visible and moves the quote to
-`WAITING_FOR_APPROVAL`; it does not send Telegram or email. The narrow
-`store_customer_response_publish` command route discloses external visibility,
-financial scope and complete exact-request processing. The broad Store route
-remains draft-only. In the admin UI publication
-appears as the move to “Ждёт согласования”, but the named status-only action is
-not proof that an offer was published. A draft-only command never authorizes
-publication.
+Publication makes the estimate visible in the cabinet. Only after that readback
+may the typed work-Telegram adapter deliver a short summary; if delivery is not
+verified, retain the Store publication and resume without republishing. A
+current cabinet confirmation and a typed, independently readback Telegram
+consent converge on one `WAITING_FOR_PAYMENT` order. No stage reserves stock,
+procures, discounts, charges, changes a cashbox or sends card details.
 
 For marketplace export problems, use `store_state` aggregates for 24 hours,
 7 days, all time, and the latest five safe errors. Use
 `store_marketplace_listing` with `status="FAILED"` only when exact failed
 listings are needed. Never request raw job messages. Retry and publication are
-not supported by the optimized named workflow; an explicit owner command may
-use their exact live employee operation through `store_owner_api`.
+not supported by a named workflow; treat a request for them as a separate
+reviewed implementation task, not a raw owner-API call.
 
 For stock location, use active batches and aggregate `qty_remaining`, reserved,
 and available quantities by part and storage location. Return every location;
@@ -312,86 +292,20 @@ Manager digest reads one page per call:
 `agent_board_digest(scope="store")` uses `cursor` and `ack_token`. Thus startup
 and health checks cannot hide changes from “Что нового появилось в магазине?”.
 
-## Full owner parity
+## Internal owner transport boundary
 
-The named write selector below is an optimized path, not a permission ceiling.
-When the owner asks for another action exposed by the live employee OpenAPI,
-resolve `store_owner_capabilities` through guarded raw discovery, select the
-exact live `operation_id`, and call `store_owner_api`. Browser-only Admin V2/CSRF
-actions are unavailable until that API exposes an owner operation. The
-transport authenticates only as the reserved non-interactive
-`autostop-manager-owner` principal with the
-single `store:owner` scope and calls the same `/api/v1` handler as Flutter; it
-never writes the Store database directly or creates a human admin session.
+The `autostop-manager-owner` principal and `store_owner_api` are implementation
+details used only inside reviewed typed Manager workflows. They are neither
+discoverable nor callable as public Gateway capabilities. A user request must
+never turn into a raw operation ID, browser session or CSRF flow; if a named
+workflow does not support it, stop for a reviewed implementation/release.
 
-Reads use `mode="read"`, exact path/query parameters, and bounded output. A
-single discovery call can return all current employee operations with their
-method, path, risk, parameters, and schema hash. Binary output remains omitted
-unless the owner explicitly requested the exact document/photo, the operation
-is a GET whose live OpenAPI declares a non-JSON success response, and
-`allow_binary_response=true` is set. JSON fields that embed base64/file bytes
-are also blocked without that opt-in.
-
-Before forming an exact call, request that `operation_id` through
-`store_owner_capabilities` with `allow_large_output=true`. Use its bounded,
-self-contained validation contract for path, query and body; never infer an
-omitted field from an admin screen or an older release.
-
-For a write:
-
-1. Reread the exact entity or reviewed collection and capture its current
-   revision. A normal collection create does not invent a fake entity revision;
-   destructive, financial, warehouse, bulk, publication, state-transition,
-   and existing-target operations require current concurrency evidence.
-2. Let Manager validate the concrete path, typed query, JSON or multipart body,
-   and declared response contract against the protected live OpenAPI. Build
-   ActionContractV2 from the exact operation, live schema hash, target,
-   concrete path, query/request SHA-256, field names, task-specific owner
-   intent, unique idempotency key, and correlation ID. Keep bodies/files
-   transient and refs-only in the ledger.
-3. Call the identical inputs in `dry_run`; its deterministic request proof is
-   bound to the operation schema, method, concrete path, sorted query, exact
-   request bytes, and revision. Apply refreshes live OpenAPI before dispatch.
-4. Call `apply` with that proof. The Store independently requires owner safety
-   headers, compares the revision with current entity or aggregate state, and
-   accepts only a matching unexpired server-issued dry-run receipt. It audits
-   the service principal, correlation, idempotency, proof, and only a hash of
-   owner intent. A Store deployment that merely checks revision/proof format is
-   not production-acceptable; Manager request hashing is defense in depth, not
-   a replacement for this backend check.
-5. Reread according to the operation's matrix class: exact entity, exact
-   collection membership/count, or absence plus audit for delete. Until this
-   succeeds, the applied result stays `compensating`, never `completed`.
-
-Every generic owner write is fail-closed high risk and needs an exact owner
-command, current input contract, disclosed effects, preflight and
-reconciliation. Gateway treats every `store_owner_api(mode="apply")` as
-destructive. It also finance-gates operations or fields that can affect prices,
-payments, procurement/ROSSKO, quote items/offers/publication, sales orders,
-stock/warehouse state, or marketplace/FEED publication. The same gate covers
-the relevant named status, offer-draft and READY actions. A successful preview
-grants neither switch and never authorizes apply.
-
-The transport itself requires `Expected-Revision` for every non-GET operation
-except the four reviewed collection creates: category, customer, manufacturer,
-and part. Direct Python use cannot bypass
-that rule. Successful writes always return `compensating` with one of four
-verification classes: exact entity, created collection membership,
-operation-specific state, or delete absence plus audit. Every HTTP error after
-a dispatched `apply`, including validation/conflict 4xx responses, plus
-oversized/invalid success bodies and response-schema mismatches sets
-`outcome_uncertain=true` and remains `compensating` until exact reread. A Store
-handler may persist diagnostic or failure state before returning an error, so
-HTTP status alone never proves that no mutation occurred; response bodies are
-hashed for diagnostics but never echoed.
-
-Manager bounds JSON/form input to 2 MiB, query serialization to 16 KiB, each
-file to 10 MiB, aggregate files to 20 MiB, and the complete multipart envelope
-to 22 MiB. JSON keys, form JSON, query order, and multipart boundaries are
-deterministic for replay. Normal JSON responses are limited to 2 MiB and an
-explicitly allowed binary GET to 10 MiB. Unicode owner intent is sent as a
-bounded ASCII-safe `utf8-b64:` header value; neither raw intent nor response
-error bodies are echoed by the transport.
+The typed conductor is the only internal consumer of the dedicated Admin V2
+estimate operations. It uses current Store schema/plan checks, exact revision,
+ActionContractV2, server-issued dry-run proof, distinct idempotency keys,
+correlation ID and exact readback. The durable ledger contains only hashes,
+counts, status and version references. Unknown or conflicting outcomes remain
+compensating until reread; no HTTP response alone proves an effect was absent.
 
 ### Write command selector
 
@@ -408,7 +322,7 @@ task-specific `owner_intent`, strict `planned_changes`, and normally one stable
 | change only the quote workflow status (never substitute for publishing a response) | `store_quote_request/set_quote_request_status` | `{"status":"WAITING_FOR_QUOTE"}` or `{"status":"WAITING_FOR_APPROVAL"}` | status only |
 | replace or clear the current internal comment | `store_quote_request/update_quote_request_comment` | `{"internal_comment":"<max 2000>"}` or `{"internal_comment":null}` | replaceable comment only |
 | append a note/history entry without replacing prior text | `store_quote_request/add_quote_request_note` | `{"text":"<non-empty, max 2000>"}` | one new append-only note |
-| replace the complete private offer-draft set for one exact quote | `store_quote_request/replace_quote_offer_drafts` | `{"items":[...]}` using the draft rules below | complete Manager-owned draft post-state for that quote |
+| legacy QuoteOffer repair after human handoff only | `store_quote_request/replace_quote_offer_drafts` | never a new customer quote; do not route ordinary wording here | handoff evidence, not publication |
 | change one batch cell/location | `store_batch/set_batch_storage_location` | `{"storage_location":"<non-empty, max 200>"}` | storage location only |
 | mark one assembled order ready | `store_order/mark_order_ready` | `{"status":"READY"}` | status and disclosed notification result |
 
@@ -419,21 +333,10 @@ an internal note and a customer-visible offer comment: clarify its destination.
 Do not guess when the owner wording does not say whether existing text must be
 replaced or preserved.
 
-For `replace_quote_offer_drafts`, first read the full exact quote and send the
-complete desired post-state of Manager-owned drafts for that quote. Existing
-Manager drafts for the same agent that are omitted from `items` are superseded,
-not preserved. Follow the exact live input contract; each exact item may carry
-at most three private drafts, and an empty `drafts` list clears that item's
-Manager-owned set. The operation never changes a published offer or another
-principal's drafts. A complete readback requires `items_has_more=false`, every
-expected item to be present even when its draft list is empty, no unexpected
-Manager draft on any other item, and equality for every explicitly planned
-draft field plus the normalized defaults of every omitted writable field.
-Every returned draft must also have a non-empty `offer_id` and
-`is_selected=false`. For `CONFIRMED_PURCHASE` with `purchase_price`, Store
-derives the effective `sale_price` from its live markup; copy the current
-`proposed_sale_price` value into the planned `sale_price`. A mismatch remains
-`compensating` instead of being reported as success.
+`replace_quote_offer_drafts` is retained solely for an existing legacy case
+that a person has already taken over. It is never selected by a normal quote
+phrase and cannot coexist with Admin V2 `estimate_draft`; a manual or mixed
+record remains a handoff rather than an automatic repair.
 
 For every named write, reread the exact target, build
 `prepare_action_contract`, dry-run with `expected_updated_at`, then apply with a
@@ -484,7 +387,7 @@ materials, service debt, and service payments stay in CRM workflows.
 
 ## Verification
 
-- Manager raw registry contains 77 tools, including guarded
+- Manager raw registry contains 78 tools, including guarded
   `store_owner_capabilities` and `store_owner_api`; public Gateway v2 remains
   exactly 24 tools.
 - Read API calls never mutate store state; read-only credentials cannot write.

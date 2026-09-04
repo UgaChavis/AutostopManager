@@ -52,7 +52,7 @@ procedures belong to the playbooks returned by the route, not here.
 
 - CRM's only external Codex surface is the configured 24-tool Gateway v2 connector.
   Start with `agent_bootstrap` and `agent_board_digest`, then use focused search
-  and exact entity context. The standalone 77-tool Manager registry is internal
+  and exact entity context. The standalone 78-tool Manager registry is internal
   project/runtime inventory, not another configured Codex or App surface;
   production imports only the Manager subset required by the 24-tool Gateway.
   Treat `codex_apps/autostopcrm.*` and any unconfigured account App namespace as

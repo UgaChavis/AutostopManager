@@ -31,6 +31,15 @@ sudo -u autostop-telegram env PYTHONPATH=/opt/autostop-telegram-releases/current
   /opt/autostop-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account personal probe
 ```
 
+The isolated `work` bridge has its own service user, release root and virtual
+environment.  Probe it only through that account; do not use the personal
+runtime or attempt to relax the work socket permissions:
+
+```bash
+sudo -u autostop-work-telegram env PYTHONPATH=/opt/autostop-work-telegram-releases/current \
+  /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work probe
+```
+
 The live bridge CLI/schema owns the current command list, media allowlist,
 limits and contract fields; this playbook must not duplicate that registry.
 
@@ -99,6 +108,44 @@ is no general Telegram OCR or arbitrary-file execution path.
 
 ## Store Client Dialogue
 
+### Published Admin V2 estimate
+
+`store_quote_conductor` binds a dialogue turn to the exact Store quote ID,
+published estimate revision and opaque context hash.  Store remains the source
+of truth: publish and reread the client-cabinet estimate before sending a
+Telegram summary.  The workflow ledger retains only those references and text
+hashes, never the peer, message body, contact, VIN or prices.
+
+Outgoing customer messages are one to three short natural Russian sentences
+with one next question.  A client may add a new position, but it becomes a
+quote line only after the same fitment and price checks as the original request.
+An unambiguous consent tied to the current context may create one
+`WAITING_FOR_PAYMENT` order; a bare “да”, a question, a stale reply or a
+different context must not.  Do not state that payment was received or send
+payment requisites: mention only reception or an approved employee instruction.
+
+Consent is never an argument supplied by the caller. The typed adapter receives
+an opaque inbound receipt, independently rereads it and proves the confirmed
+private `work` peer, incoming sender and binding to the exact delivered
+quote/revision/snapshot/context. It returns only the permitted classification
+and hashes. Missing receipt, changed delivery, stale snapshot or any mismatch
+fails closed before Store order creation.
+
+Identity confirmation is a separate setup exchange, never a published-quote
+reply and never an order trigger.  The bridge derives a stable opaque route
+binding from the quote reference, published estimate revision, snapshot and
+context hashes.  A new Store revision or snapshot therefore cannot reuse an
+old confirmed peer.  It may bind a private candidate only to the literal
+neutral text `Привет! Вы оставляли заявку на запчасти в AutoStop?` and records
+that route as pending.  A caller-provided `recipient_confirmed` flag is
+ignored.  The bridge then mints one short-lived opaque receipt for exactly one
+direct reply to that prompt and independently rereads it.  Only a bare `да`
+in this identity exchange promotes the route; `нет` or any longer/ambiguous
+reply does not.  The receipt is one-use and tombstoned through the route TTL.
+Only after that promotion may a normal offer, selection or payment message be
+bound to the same private peer.  Identity prompts never enter the conductor's
+quote-response or consent path.
+
 - Use `work` only. Start from one exact live Store quote request and pass its
   current phone to `resolve-phone`, then use the returned live numeric peer. If
   the phone returns zero matches and the same current request has an exact
@@ -106,11 +153,12 @@ is no general Telegram OCR or arbitrary-file execution path.
   one private peer. A display name, old alias or similar phone is not enough;
   multiple or ambiguous matches always fail closed.
 - A unique peer is only a routing match. Unless the current Store record has a
-  verified Telegram binding or the owner explicitly confirms that exact peer,
-  the first message asks only whether the person submitted an AutoStop parts
-  request. It contains no VIN, vehicle, part, price, photo or other request
-  detail. Continue or disclose request data only after an affirmative reply;
-  otherwise stop and report the mismatch.
+  verified Telegram binding, the first message is the typed literal neutral
+  identity prompt above. It contains no VIN, vehicle, part, price, photo or
+  other request detail. Continue or disclose request data only after its
+  independently verified affirmative reply; otherwise stop and report the
+  mismatch. A manager-side boolean, a display name or a stale alias never
+  confirms a recipient.
 - A direct owner instruction to process that exact request may cover the
   necessary bounded clarification and follow-up with that client. It never
   covers another recipient, general outreach, supplier contact, reservation,

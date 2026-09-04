@@ -1246,6 +1246,63 @@ def test_active_board_timer_floor_contract_rejects_archive_scope_and_missing_buf
     assert "target_total_seconds_must_exceed_minimum" in result["preflight"]["blocking_reasons"]
 
 
+def test_store_quote_conductor_contract_keeps_estimate_payload_as_hashes_only():
+    result = prepare_action_contract(
+        domain="store_quote_conductor",
+        action="replace_estimate_draft",
+        target_id="quote-1",
+        planned_changes={
+            "entries_count": 2,
+            "entries_sha256": "a" * 64,
+            "coverage_count": 1,
+            "coverage_sha256": "b" * 64,
+            "evidence_sha256": "c" * 64,
+            "provenance": "AUTOSTOP_MANAGER",
+        },
+        owner_intent="Сохрани проверенную проценку заявки",
+        expected_revision="revision-1",
+        idempotency_key="quote-estimate-draft-001",
+        correlation_id="quote-estimate-draft-001",
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["tool"] == "store_quote_conductor"
+    assert result["execution"]["operation"] == "store_quote_conductor"
+    assert result["execution"]["gateway_arguments"]["operation"] == "replace_estimate_draft"
+    payload = result["execution"]["gateway_arguments"]["payload"]
+    assert payload["quote_request_id"] == "quote-1"
+    assert payload["planned_change_hashes"]["entries_sha256"] == "a" * 64
+    assert "typed_store_quote_operation_checked" in result["preflight"]["checks"]
+    assert result["ledger"]["store_payload"] is False
+
+
+def test_store_quote_conductor_contract_rejects_manual_provenance_or_raw_fields():
+    result = prepare_action_contract(
+        domain="store_quote_conductor",
+        action="replace_estimate_draft",
+        target_id="quote-1",
+        planned_changes={
+            "entries_count": 1,
+            "entries_sha256": "a" * 64,
+            "coverage_count": 1,
+            "coverage_sha256": "b" * 64,
+            "evidence_sha256": "c" * 64,
+            "provenance": "MANUAL",
+            "entries": [{"cost": "not-for-contract"}],
+        },
+        owner_intent="Сохрани проценку",
+        expected_revision="revision-1",
+        idempotency_key="quote-estimate-invalid-001",
+        correlation_id="quote-estimate-invalid-001",
+    )
+
+    assert result["ok"] is False
+    blockers = result["preflight"]["blocking_reasons"]
+    assert "unsupported_store_quote_conductor_change_fields" in blockers
+    assert "store_quote_conductor_provenance_required" in blockers
+
+
 def test_store_owner_api_contract_is_refs_only_and_routes_to_guarded_transport():
     result = prepare_action_contract(
         domain="store_owner_api",

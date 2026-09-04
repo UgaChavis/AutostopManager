@@ -68,7 +68,7 @@ URLs.
 - CRM container API/MCP: `127.0.0.1:41731` /
   `http://127.0.0.1:41831/mcp`.
 - Public MCP: `https://crm.autostopcrm.ru/mcp`.
-- External Codex surface: the 24-tool CRM Gateway only. The standalone 77-tool
+- External Codex surface: the 24-tool CRM Gateway only. The standalone 78-tool
   Manager registry is internal inventory; production imports only its required
   Gateway subset and does not install it as a separate account App.
 - Store: `/opt/autostop-app`, public site `https://autostop24.shop`.
@@ -167,7 +167,7 @@ cd /opt/autostop-manager-releases/current
 
 Confirm:
 
-- exactly 24 public Gateway v2 tools and 77 internal Manager registry tools;
+- exactly 24 public Gateway v2 tools and 78 internal Manager registry tools;
 - protected OAuth/PKCE/refresh behavior and both internal/public smoke;
 - knowledge/system audits and capability matrices have no gaps;
 - no raw payloads or secrets appear in logs;

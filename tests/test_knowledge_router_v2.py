@@ -62,7 +62,8 @@ def test_command_route_regression_table(query, expected):
 
 _STORE = "store_management_workflow"
 _DRAFT = ("store_write", "finance", "destructive")
-_PUBLISH = ("store_write", "external_send", "finance", "destructive")
+_QUOTE_CONDUCTOR_DRAFT = ("store_write",)
+_QUOTE_CONDUCTOR_PUBLISH = ("store_write", "external_send")
 _EXACT_ROUTE_GROUPS = {
     (
         "store_read_workflow",
@@ -71,20 +72,20 @@ _EXACT_ROUTE_GROUPS = {
     ): "Покажи состояние склада|Получай полную информацию и управляй нашим сайтом автозапчастей|Покажи все каталоги запасных частей и наличие деталей|Посмотри новый запрос на проценку|Посмотри новую заявку на проценку|Разбери новую заявку на проценку|Заказ магазина в READY?|Какой заказ магазина в READY?|Проверь, переведена ли заявка в ждёт согласования?|Заявка уже переведена в ждёт согласования?|Покажи, переведена ли заявка в ждет согласования|Почему заявка переведена в ждёт согласования?|Покажи черновик ответа клиенту по заявке на проценку",
     (
         "store_quote_draft",
-        _STORE,
-        _DRAFT,
+        "store_quote_conductor",
+        _QUOTE_CONDUCTOR_DRAFT,
     ): "Подготовь черновик ответа клиенту по заявке магазина|Подготовь ответ клиенту по заявке магазина|Подготовь ответ клиенту по заявке на проценку|Заполни позиции в заявке на проценку|Добавь предложение в запрос магазина|Добавь предложение в заявку на проценку|Добавь позицию в заявку на проценку|Измени предложение в заявке на проценку|Измени позицию в заявке на проценку|Обнови стоимость в заявке на проценку|Обнови стоимость позиции в заявке на проценку|Обнови срок в заявке на проценку|Обнови срок позиции в заявке на проценку|Добавь комментарий к предложению в заявке на проценку|Добавь комментарий к ответу по заявке на проценку",
     (
         "store_customer_response_publish",
-        _STORE,
-        _PUBLISH,
+        "store_quote_conductor",
+        _QUOTE_CONDUCTOR_PUBLISH,
     ): "Обработай новую заявку магазина|Обработай новую заявку на проценку|Переведи заявку в ждёт согласования|Ответь клиенту по заявке магазина|Ответь клиенту по заявке на проценку|Заполни позиции и переведи заявку в ждёт согласования",
     ("store_management_workflow", _STORE, ("store_write",)): "Добавь комментарий в заявку на проценку",
     (
-        "store_offer_visibility_step",
-        _STORE,
-        _PUBLISH,
-    ): "Опубликуй предложения по заявке на проценку|Опубликуй предложения в заявке на проценку|Опубликуй предложения заявки на проценку|Выбери предложение в заявке на проценку",
+        "store_quote_estimate_publish",
+        "store_quote_conductor",
+        _QUOTE_CONDUCTOR_PUBLISH,
+    ): "Опубликуй предложения по заявке на проценку|Опубликуй предложения в заявке на проценку|Опубликуй предложения заявки на проценку|Опубликуй проценку по заявке магазина",
     ("store_price_management", _STORE, _DRAFT): "Измени цену товара|Измени цену товара в магазине",
     ("store_product_create", _STORE, _DRAFT): "Создай товар в магазине",
     ("store_order_ready", _STORE, ("store_write", "external_send", "destructive")): "Переведи заказ магазина в ready",
@@ -117,6 +118,16 @@ def test_store_and_telegram_exact_route_matrix(expected, query_text):
         assert route["effects"] == list(effects)
 
 
+@pytest.mark.parametrize(
+    "query",
+    _queries(
+        "Выбери предложение в заявке на проценку|Выбери offer в запросе магазина|Выбери legacy предложение в заявке на проценку"
+    ),
+)
+def test_legacy_quote_offer_selection_is_never_a_public_route(query):
+    assert plan_command_routes(query) == []
+
+
 _COMPOSED_ROUTE_GROUPS = {
     (
         "store_customer_response_publish",
@@ -135,7 +146,7 @@ def test_store_and_work_telegram_composition_respects_partial_opt_outs(expected,
         routes = plan_command_routes(query)
         assert tuple(route["command_id"] for route in routes) == expected
         if expected[0] == "store_customer_response_publish":
-            assert routes[0]["effects"] == list(_PUBLISH)
+            assert routes[0]["effects"] == list(_QUOTE_CONDUCTOR_PUBLISH)
             expected_domains = [
                 "store_management",
                 "vehicle_identity_and_oem",

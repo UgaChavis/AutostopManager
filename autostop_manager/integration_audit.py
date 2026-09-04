@@ -48,7 +48,7 @@ EXPECTED_GATEWAY_TOOLS = frozenset(
         "workflow_wait_for_external",
     }
 )
-EXPECTED_MANAGER_REGISTRY_TOOL_COUNT = 77
+EXPECTED_MANAGER_REGISTRY_TOOL_COUNT = 78
 _GMAIL_REQUIRED_PROOF_CHECKS = frozenset(
     {"profile_read", "labels_read", "search_read", "self_delivery_readback", "self_delivery_cleanup"}
 )

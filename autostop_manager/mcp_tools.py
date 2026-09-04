@@ -47,6 +47,7 @@ from .store_api import StoreApiClient
 from .store_analytics import get_store_analytics_report
 from .store_integration import StoreIntegration
 from .store_owner_api import StoreOwnerApiClient
+from .store_quote_conductor import StoreQuoteConductor, StoreQuoteOwnerApi, StoreQuoteTelegramSender
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
@@ -97,6 +98,7 @@ def register_manager_memory_tools(  # noqa: C901
     store: ManagerMemoryStore | None = None,
     store_client: StoreApiClient | None = None,
     include_tools: Collection[str] | None = None,
+    telegram_sender: StoreQuoteTelegramSender | None = None,
 ) -> None:
     original_tool = server.tool
     if include_tools is not None:
@@ -122,6 +124,11 @@ def register_manager_memory_tools(  # noqa: C901
     store_owner_client = StoreOwnerApiClient(
         agent_api_url=get_store_api_url(),
         owner_token=get_store_owner_token(),
+    )
+    quote_conductor = StoreQuoteConductor(
+        store=memory,
+        gateway=StoreQuoteOwnerApi(store_owner_client),
+        telegram_sender=telegram_sender,
     )
 
     @server.tool(
@@ -838,6 +845,61 @@ def register_manager_memory_tools(  # noqa: C901
             expected_updated_at=expected_updated_at,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            mode=mode,
+        )
+
+    @server.tool(
+        name="store_quote_conductor",
+        description=(
+            "INTERNAL_ONLY: Run the typed Admin V2 estimate workflow for one Store quote request. "
+            "It exposes only start/status, refs-only Telegram waits and classified replies, verified evidence, "
+            "and the four fixed owner estimate operations; it never exposes a generic Store owner API. "
+            "Every write uses an exact reread, ActionContractV2, Store dry-run receipt, apply, and independent reread. "
+            "Production Gateway must route it only through agent_inventory_workflow and keep it out of raw discovery."
+        ),
+    )
+    def store_quote_conductor_tool(
+        operation: str,
+        quote_request_id: str = "",
+        run_id: int | None = None,
+        expected_state_version: int | None = None,
+        expected_revision: str = "",
+        idempotency_key: str = "",
+        correlation_id: str = "",
+        entries: list[dict[str, Any]] | None = None,
+        coverage: list[dict[str, Any]] | None = None,
+        customer_response: str = "",
+        evidence: dict[str, Any] | None = None,
+        step_id: str = "",
+        reply_classification: str = "",
+        consent_context_hash: str = "",
+        published_snapshot_hash: str = "",
+        telegram_context_hash: str = "",
+        telegram_inbound_receipt: str = "",
+        telegram_message: str = "",
+        telegram_message_kind: str = "",
+        mode: str = "apply",
+    ) -> dict[str, Any]:
+        return quote_conductor.execute(
+            operation=operation,
+            quote_request_id=quote_request_id,
+            run_id=run_id,
+            expected_state_version=expected_state_version,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            entries=entries,
+            coverage=coverage,
+            customer_response=customer_response,
+            evidence=evidence,
+            step_id=step_id,
+            reply_classification=reply_classification,
+            consent_context_hash=consent_context_hash,
+            published_snapshot_hash=published_snapshot_hash,
+            telegram_context_hash=telegram_context_hash,
+            telegram_inbound_receipt=telegram_inbound_receipt,
+            telegram_message=telegram_message,
+            telegram_message_kind=telegram_message_kind,
             mode=mode,
         )
 

@@ -6,6 +6,7 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Any
 
@@ -1068,10 +1069,42 @@ def _readback_value_matches(actual: Any, expected: Any) -> bool:
     if isinstance(expected, bool):
         return isinstance(actual, bool) and actual is expected
     if isinstance(expected, (int, float)) and not isinstance(expected, bool):
-        return isinstance(actual, (int, float)) and not isinstance(actual, bool) and actual == expected
+        # Store serializes Decimal prices as JSON strings in some owner paths
+        # and JSON numbers in others.  Compare their numeric value, not their
+        # presentation (for example 1300 and "1300.00"), while refusing bool,
+        # NaN/infinity and arbitrary identifier-like strings.
+        actual_decimal = _finite_decimal(actual)
+        expected_decimal = _finite_decimal(expected)
+        return actual_decimal is not None and expected_decimal is not None and actual_decimal == expected_decimal
     if isinstance(expected, str):
-        return str(actual or "").strip() == expected.strip()
+        # Keep identifier-like strings exact.  A decimal representation with
+        # an explicit scale is the only string form that may equal a JSON
+        # numeric value on the reverse Store serialization path.
+        if _decimal_string_with_scale(expected):
+            actual_decimal = _finite_decimal(actual)
+            expected_decimal = _finite_decimal(expected)
+            if actual_decimal is not None and expected_decimal is not None:
+                return actual_decimal == expected_decimal
+        return isinstance(actual, str) and actual.strip() == expected.strip()
     return actual == expected
+
+
+def _finite_decimal(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        return None
+    normalized = str(value).strip()
+    if not normalized or re.fullmatch(r"[+-]?\d+(?:\.\d+)?", normalized) is None:
+        return None
+    try:
+        parsed = Decimal(normalized)
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _decimal_string_with_scale(value: str) -> bool:
+    normalized = str(value or "").strip()
+    return re.fullmatch(r"[+-]?\d+\.\d+", normalized) is not None
 
 
 _QUOTE_DRAFT_DEFAULTS: dict[str, Any] = {

@@ -286,7 +286,7 @@ def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     register_manager_memory_tools(server, store)
 
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    assert catalog["expected_tool_count"] == len(server.tools) == 77
+    assert catalog["expected_tool_count"] == len(server.tools) == 78
     assert set(catalog["expected_tool_names"]) == set(server.tools)
 
 
@@ -295,7 +295,7 @@ def test_manager_mcp_catalog_fingerprint_matches_live_input_schemas():
     schemas = {name: tool.parameters for name, tool in server._tool_manager._tools.items()}
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
 
-    assert len(schemas) == 77
+    assert len(schemas) == 78
     assert catalog["schema_fingerprint"] == _mcp_schema_fingerprint(schemas)
 
 
@@ -389,6 +389,28 @@ def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_pat
             "expected_updated_at",
             "idempotency_key",
             "correlation_id",
+            "mode",
+        ],
+        "store_quote_conductor": [
+            "operation",
+            "quote_request_id",
+            "run_id",
+            "expected_state_version",
+            "expected_revision",
+            "idempotency_key",
+            "correlation_id",
+            "entries",
+            "coverage",
+            "customer_response",
+            "evidence",
+            "step_id",
+            "reply_classification",
+            "consent_context_hash",
+            "published_snapshot_hash",
+            "telegram_context_hash",
+            "telegram_inbound_receipt",
+            "telegram_message",
+            "telegram_message_kind",
             "mode",
         ],
     }

@@ -144,11 +144,11 @@ def test_agent_brief_store_customer_response_publish_uses_external_visibility_po
 
     step = result["route"]["steps"][0]
     assert step["command_id"] == "store_customer_response_publish"
-    assert step["effects"] == ["store_write", "external_send", "finance", "destructive"]
+    assert step["workflow_id"] == "store_quote_conductor"
+    assert step["effects"] == ["store_write", "external_send"]
     assert any("exact destination or target" in rule for rule in result["hot_rules"])
     assert any("customer-visible or outbound result" in check for check in result["verification"])
-    assert any("exact business target's monetary basis" in check for check in result["verification"])
-    assert all("repair-order basis" not in check for check in result["verification"])
+    assert all("monetary basis" not in check for check in result["verification"])
 
 
 def test_agent_brief_effect_safety_rules_are_not_truncated_by_retrieval_limit(tmp_path):
@@ -161,13 +161,12 @@ def test_agent_brief_effect_safety_rules_are_not_truncated_by_retrieval_limit(tm
     for marker in (
         "Store writes require",
         "exact destination or target",
-        "Financial effects require",
-        "before a destructive action",
+        "External visibility or delivery requires",
     ):
         assert any(marker in rule for rule in result["hot_rules"])
 
 
-def test_agent_brief_store_quote_draft_has_store_and_finance_gates(tmp_path):
+def test_agent_brief_store_quote_draft_uses_conductor_without_finance_effect(tmp_path):
     result = context.build_agent_brief(
         _store(tmp_path),
         "Подготовь ответ клиенту по заявке на проценку",
@@ -175,7 +174,8 @@ def test_agent_brief_store_quote_draft_has_store_and_finance_gates(tmp_path):
 
     step = result["route"]["steps"][0]
     assert step["command_id"] == "store_quote_draft"
-    assert step["effects"] == ["store_write", "finance", "destructive"]
+    assert step["workflow_id"] == "store_quote_conductor"
+    assert step["effects"] == ["store_write"]
     assert result["route"]["write_domains"] == ["store"]
     assert all("publish or send once" not in action for action in result["allowed_actions"])
 
@@ -202,6 +202,7 @@ def test_agent_brief_store_quote_processing_loads_director_route(tmp_path):
 
     assert result["role"] == "AutoStop operations director agent"
     assert result["route"]["command_id"] == "store_customer_response_publish"
+    assert result["route"]["workflow_id"] == "store_quote_conductor"
     assert result["route"]["open_first"] == ".agents/skills/manage-autostop-store/SKILL.md"
     assert result["route"]["write_domains"] == ["store"]
     assert result["route"]["external_connectors"] == ["telegram", "store"]

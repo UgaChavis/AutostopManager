@@ -694,6 +694,14 @@ def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "discard_download"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_send", "mode": "dry_run"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_send", "mode": "apply"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_readback"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_mint_inbound_receipt"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_bind_identity_candidate"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_mint_identity_receipt"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_reply_readback"}) is True
+    assert _requires_mutation_lock({"operation": "store_quote_identity_readback"}) is True
     assert _requires_mutation_lock({"operation": "read"}) is False
 
 

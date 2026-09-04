@@ -48,6 +48,10 @@ MUTATING_ACTIONS = {
     "add_quote_request_note",
     "replace_quote_offer_drafts",
     "execute_owner_api",
+    "replace_estimate_draft",
+    "submit_estimate",
+    "reopen_estimate",
+    "confirm_estimate_order_from_telegram",
 }
 
 CREATE_ACTIONS = {
@@ -133,6 +137,10 @@ EXECUTOR_TOOLS = {
     ("store_batch", "set_batch_storage_location"): "agent_inventory_workflow",
     ("store_order", "mark_order_ready"): "agent_inventory_workflow",
     ("store_owner_api", "execute_owner_api"): "store_owner_api",
+    ("store_quote_conductor", "replace_estimate_draft"): "store_quote_conductor",
+    ("store_quote_conductor", "submit_estimate"): "store_quote_conductor",
+    ("store_quote_conductor", "reopen_estimate"): "store_quote_conductor",
+    ("store_quote_conductor", "confirm_estimate_order_from_telegram"): "store_quote_conductor",
 }
 
 INVENTORY_EXECUTOR_TOOLS = {
@@ -154,7 +162,7 @@ FINANCE_WORKFLOW_ACTIONS = {
 DESTRUCTIVE_ACTIONS = {"delete", "merge", "archive", "reset_completion_act_form"}
 TARGET_ONLY_ACTIONS = {"delete", "archive"}
 EXTERNAL_DOMAINS = {"gmail"}
-STORE_DOMAINS = {"store_quote_request", "store_batch", "store_order", "store_owner_api"}
+STORE_DOMAINS = {"store_quote_request", "store_batch", "store_order", "store_owner_api", "store_quote_conductor"}
 STORE_ACTIONS = {
     ("store_quote_request", "assign_quote_request"),
     ("store_quote_request", "set_quote_request_status"),
@@ -165,6 +173,12 @@ STORE_ACTIONS = {
     ("store_order", "mark_order_ready"),
 }
 STORE_OWNER_ACTIONS = {("store_owner_api", "execute_owner_api")}
+STORE_QUOTE_CONDUCTOR_ACTIONS = {
+    ("store_quote_conductor", "replace_estimate_draft"),
+    ("store_quote_conductor", "submit_estimate"),
+    ("store_quote_conductor", "reopen_estimate"),
+    ("store_quote_conductor", "confirm_estimate_order_from_telegram"),
+}
 RAW_CRM_ACTIONS = frozenset({"create_client", "create_card", "link_card_to_client"})
 RAW_CRM_COLLECTION_CREATES = frozenset({"create_client", "create_card"})
 STORE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
@@ -481,6 +495,18 @@ def _gateway_execution(
             "idempotency_key": idempotency_key or None,
             "mode": mode,
         }
+    if (domain, action) in STORE_QUOTE_CONDUCTOR_ACTIONS:
+        return "store_quote_conductor", {
+            "operation": action,
+            "payload": {
+                "quote_request_id": target_id,
+                "expected_revision": revision,
+                "planned_change_hashes": changes,
+                "correlation_id": correlation_id,
+            },
+            "idempotency_key": idempotency_key or None,
+            "mode": mode,
+        }
     if domain == "document" and action in COMPLETION_ACT_ACTIONS:
         try:
             expected_version = int(str(revision or ""))
@@ -695,11 +721,14 @@ def _validate_store_changes(
     blockers: list[str],
     warnings: list[str],
 ) -> None:
-    if (domain, action) not in STORE_ACTIONS | STORE_OWNER_ACTIONS:
+    if (domain, action) not in STORE_ACTIONS | STORE_OWNER_ACTIONS | STORE_QUOTE_CONDUCTOR_ACTIONS:
         blockers.append("unsupported_store_management_operation")
         return
     if domain == "store_owner_api":
         _validate_store_owner_api_changes(changes, blockers)
+        return
+    if domain == "store_quote_conductor":
+        _validate_store_quote_conductor_changes(action, changes, blockers)
         return
     allowed_fields: dict[tuple[str, str], set[str]] = {
         ("store_quote_request", "assign_quote_request"): {"assignee_id"},
@@ -742,6 +771,59 @@ def _validate_store_changes(
         if str(changes.get("status") or "").strip().upper() != "READY":
             blockers.append("store_order_ready_status_required")
         warnings.append("store_order_ready_may_notify_customer")
+
+
+def _validate_store_quote_conductor_changes(
+    action: str,
+    changes: dict[str, Any],
+    blockers: list[str],
+) -> None:
+    allowed_fields: dict[str, set[str]] = {
+        "replace_estimate_draft": {
+            "coverage_count",
+            "coverage_sha256",
+            "entries_count",
+            "entries_sha256",
+            "evidence_sha256",
+            "provenance",
+        },
+        "submit_estimate": {
+            "customer_response_sha256",
+            "entries_count",
+            "entries_sha256",
+            "provenance",
+        },
+        "reopen_estimate": {"published_snapshot_sha256"},
+        "confirm_estimate_order_from_telegram": {"consent_context_sha256", "published_snapshot_sha256"},
+    }
+    allowed = allowed_fields.get(action, set())
+    if set(changes).difference(allowed):
+        blockers.append("unsupported_store_quote_conductor_change_fields")
+    required_by_action: dict[str, set[str]] = {
+        "replace_estimate_draft": {
+            "coverage_count",
+            "coverage_sha256",
+            "entries_count",
+            "entries_sha256",
+            "evidence_sha256",
+            "provenance",
+        },
+        "submit_estimate": {"customer_response_sha256", "entries_count", "entries_sha256", "provenance"},
+        "reopen_estimate": {"published_snapshot_sha256"},
+        "confirm_estimate_order_from_telegram": {"consent_context_sha256", "published_snapshot_sha256"},
+    }
+    if not required_by_action.get(action, set()).issubset(changes):
+        blockers.append("missing_store_quote_conductor_changes")
+    for field, value in changes.items():
+        if field.endswith("_sha256") and re.fullmatch(r"[0-9a-f]{64}", str(value or "")) is None:
+            blockers.append(f"invalid_store_quote_conductor_{field}")
+    for field in ("entries_count", "coverage_count"):
+        value = changes.get(field)
+        if value is not None and (type(value) is not int or not 1 <= value <= 50):
+            blockers.append(f"invalid_store_quote_conductor_{field}")
+    provenance = changes.get("provenance")
+    if provenance is not None and provenance != "AUTOSTOP_MANAGER":
+        blockers.append("store_quote_conductor_provenance_required")
 
 
 def _validate_store_owner_api_changes(changes: dict[str, Any], blockers: list[str]) -> None:
@@ -820,6 +902,10 @@ def _store_preflight_checks(
         checks.append("store_reviewed_collection_create_confirmed")
     if action == "mark_order_ready":
         checks.extend(["store_order_current_status_is_in_progress", "notification_effect_disclosed"])
+    if domain == "store_quote_conductor":
+        checks.extend(["typed_store_quote_operation_checked", "estimate_provenance_reread"])
+        if action == "confirm_estimate_order_from_telegram":
+            checks.extend(["published_snapshot_current", "telegram_consent_context_hash_matches"])
     return checks
 
 
