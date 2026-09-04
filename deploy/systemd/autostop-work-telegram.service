@@ -12,7 +12,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
 UMask=0077
 RuntimeDirectory=autostop-work-telegram
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=0710
 StateDirectory=autostop-work-telegram
 StateDirectoryMode=0700
 ExecStart=/opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work daemon

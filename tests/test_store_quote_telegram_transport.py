@@ -196,20 +196,22 @@ def _promote_identity(
             "correlation_id": "identity-correlation-0001",
         },
     )
-    assert confirmed["summary"]["identity_classification"] == (
+    assert confirmed["summary"]["reply_classification"] == (
         "confirmed" if reply == "да" else "declined" if reply == "нет" else "ambiguous"
     )
     return identity
 
 
-def _bind_confirmed_offer(client: _WorkClient, config: TelegramConfig, delivery: StoreQuoteTelegramDelivery) -> dict:
+def _prepare_offer_send(client: _WorkClient, config: TelegramConfig, delivery: StoreQuoteTelegramDelivery) -> dict:
     return _run(
         client,
         config,
         {
-            "operation": "store_quote_bind_recipient",
-            **_delivery_request(delivery),
-            "peer": str(client.peer_id),
+            "operation": "store_quote_send",
+            **_delivery_request(delivery, text=True),
+            "mode": "dry_run",
+            "idempotency_key": f"route-check-{delivery.binding_sha256[:32]}",
+            "correlation_id": f"route-check-{delivery.binding_sha256[:32]}",
         },
     )
 
@@ -254,7 +256,7 @@ def test_identity_candidate_is_literal_pending_and_cannot_unlock_offer(monkeypat
     assert pending["summary"]["recipient_confirmed"] is False
     assert pending["summary"]["identity_pending"] is True
     with pytest.raises(BridgeError, match="store_quote_recipient_not_confirmed"):
-        _bind_confirmed_offer(client, config, delivery)
+        _prepare_offer_send(client, config, delivery)
 
 
 def test_identity_confirmation_cannot_cross_changed_published_snapshot_or_revision(monkeypatch, tmp_path) -> None:
@@ -284,7 +286,7 @@ def test_identity_confirmation_cannot_cross_changed_published_snapshot_or_revisi
     assert changed_revision.route_binding_sha256 != delivery.route_binding_sha256
     for changed in (changed_snapshot, changed_revision):
         with pytest.raises(BridgeError, match="store_quote_route_binding_missing"):
-            _bind_confirmed_offer(client, config, changed)
+            _prepare_offer_send(client, config, changed)
 
 
 def test_identity_receipt_requires_direct_reply_and_is_one_time(monkeypatch, tmp_path) -> None:
@@ -349,8 +351,7 @@ def test_identity_receipt_requires_direct_reply_and_is_one_time(monkeypatch, tmp
     confirmed = _run(client, config, readback_request)
     assert confirmed["summary"]["identity_confirmed"] is True
     assert confirmed["summary"]["recipient_confirmed"] is True
-    with pytest.raises(BridgeError, match="store_quote_identity_reply_consumed"):
-        _run(client, config, readback_request)
+    assert _run(client, config, readback_request) == confirmed
 
 
 def test_identity_receipt_expiry_keeps_tombstone_and_does_not_promote(monkeypatch, tmp_path) -> None:
@@ -432,9 +433,9 @@ def test_typed_work_quote_delivery_and_inbound_receipt_are_bound_and_redacted(mo
     _install_private_peer(monkeypatch, client)
 
     _promote_identity(client, config, delivery)
-    bind = _bind_confirmed_offer(client, config, delivery)
-    assert bind["summary"]["recipient_bound"] is True
-    assert "peer" not in json.dumps(bind)
+    bound = _prepare_offer_send(client, config, delivery)
+    assert bound["summary"]["recipient_confirmed"] is True
+    assert "peer" not in json.dumps(bound)
 
     dry = _run(
         client,
@@ -585,7 +586,7 @@ def test_typed_reply_category_is_verified_not_caller_asserted(monkeypatch, tmp_p
     delivery = _delivery()
     _install_private_peer(monkeypatch, client)
     _promote_identity(client, config, delivery)
-    _bind_confirmed_offer(client, config, delivery)
+    _prepare_offer_send(client, config, delivery)
     dry = _run(
         client,
         config,
@@ -646,7 +647,7 @@ def test_expired_inbound_receipt_is_tombstoned_and_cannot_be_reminted(monkeypatc
     delivery = _delivery()
     _install_private_peer(monkeypatch, client)
     _promote_identity(client, config, delivery)
-    _bind_confirmed_offer(client, config, delivery)
+    _prepare_offer_send(client, config, delivery)
     dry = _run(
         client,
         config,
@@ -876,17 +877,13 @@ def test_manager_transport_projection_matches_the_conductor_contract(monkeypatch
         correlation_id="identity-correlation-0005",
     )
     assert identity_confirmed["summary"]["identity_confirmed"] is True
-    bound = transport.bind_work_quote_recipient(
-        delivery=delivery,
-        peer=str(client.peer_id),
-    )
-    assert bound["summary"]["recipient_bound"] is True
     dry = transport.send_work_quote_message(
         delivery=delivery,
         idempotency_key="quote-delivery-0005.dry",
         correlation_id="quote-correlation-0005",
         mode="dry_run",
     )
+    assert dry["summary"]["recipient_confirmed"] is True
     assert store_quote_conductor._telegram_delivery_projection_matches(dry, delivery, require_delivery=False)
     applied = transport.send_work_quote_message(
         delivery=delivery,

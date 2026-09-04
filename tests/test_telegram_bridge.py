@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 import os
@@ -1908,8 +1909,9 @@ def test_probe_requires_authorization_for_success(monkeypatch, tmp_path, capsys)
 
 
 def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path)
+    config = replace(_runtime_config(tmp_path), account="work")
     state: dict[str, bool] = {}
+    paths: list[str] = []
 
     class Client:
         def __init__(self, session, api_id, api_hash):
@@ -1937,8 +1939,8 @@ def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> N
 
     async def start_unix_server(callback, *, path):
         assert callable(callback)
-        assert path == str(config.socket_path)
-        config.socket_path.touch()
+        paths.append(path)
+        Path(path).touch()
         return Server()
 
     monkeypatch.setattr(telegram_bridge, "_load_telethon", lambda: (Client, object(), object()))
@@ -1949,6 +1951,8 @@ def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> N
     outbox = config.socket_path.parent / "outbox"
     assert outbox.stat().st_mode & 0o777 == 0o700
     assert not config.socket_path.exists()
+    assert paths == [str(config.socket_path), str(config.socket_path.with_name("store-quote.sock"))]
+    assert not config.socket_path.with_name("store-quote.sock").exists()
     assert state == {"connected": True, "served": True, "disconnected": True}
 
 
@@ -1996,3 +2000,15 @@ def test_rpc_boundary_maps_invalid_and_supported_requests(monkeypatch, tmp_path)
     invalid_writer = Writer()
     asyncio.run(telegram_bridge._serve_client(object(), config, Reader(b"not-json\n"), invalid_writer))
     assert json.loads(invalid_writer.payload) == {"ok": False, "error": "request_invalid"}
+
+    quote_only_writer = Writer()
+    asyncio.run(
+        telegram_bridge._serve_client(
+            object(),
+            config,
+            Reader(b'{"operation":"store_quote_bind_identity_candidate"}\n'),
+            quote_only_writer,
+            store_quote_only=True,
+        )
+    )
+    assert json.loads(quote_only_writer.payload) == {"ok": False, "error": "operation_not_supported"}

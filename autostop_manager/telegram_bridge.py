@@ -75,6 +75,14 @@ _STORE_QUOTE_MESSAGE_KINDS = frozenset(
 )
 _STORE_QUOTE_REPLY_CATEGORIES = frozenset({"clarification", "addition", "selection", "consent", "decline", "ambiguous"})
 _STORE_QUOTE_IDENTITY_CATEGORIES = frozenset({"confirmed", "declined", "ambiguous"})
+_STORE_QUOTE_RPC_OPERATIONS = frozenset(
+    {
+        "store_quote_send",
+        "store_quote_readback",
+        "store_quote_mint_inbound_receipt",
+        "store_quote_reply_readback",
+    }
+)
 _STORE_QUOTE_DECLINE_PATTERN = re.compile(
     r"\b(?:не\s+(?:надо|нужен|нужна|нужно|буду|беру)|отмен(?:а|яем|яй(?:те)?|ить)|"
     r"отказ(?:ываюсь|ался|алась)?)\b",
@@ -1223,30 +1231,6 @@ def _classify_store_quote_identity_reply(value: str) -> str:
     return "ambiguous"
 
 
-def _store_quote_identity_inbound_binding(
-    projection: dict[str, str],
-    *,
-    delivery_ref_sha256: str,
-    identity_classification: str,
-    reply_text_sha256: str,
-    incoming_ref_sha256: str,
-) -> str:
-    return hashlib.sha256(
-        _canonical_json(
-            {
-                "kind": "store_quote_work_identity_inbound_v1",
-                "quote_ref_sha256": projection["quote_ref_sha256"],
-                "route_binding_sha256": projection["route_binding_sha256"],
-                "delivery_binding_sha256": projection["delivery_binding_sha256"],
-                "delivery_ref_sha256": delivery_ref_sha256,
-                "identity_classification": identity_classification,
-                "reply_text_sha256": reply_text_sha256,
-                "incoming_ref_sha256": incoming_ref_sha256,
-            }
-        )
-    ).hexdigest()
-
-
 def _target_from_entity(entity: Any, utils: Any) -> dict[str, Any]:
     title = (
         getattr(entity, "title", None)
@@ -1679,8 +1663,9 @@ async def _store_quote_bound_target(
     projection: dict[str, str],
     *,
     allow_pending_identity: bool = False,
+    binding_override: dict[str, Any] | None = None,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    binding = state["bindings"].get(projection["delivery_binding_sha256"])
+    binding = binding_override if binding_override is not None else state["bindings"].get(projection["delivery_binding_sha256"])
     if not isinstance(binding, dict) or not _store_quote_projection_matches(binding, projection):
         raise BridgeError("store_quote_recipient_binding_missing")
     route = state["routes"].get(projection["route_binding_sha256"])
@@ -1830,67 +1815,6 @@ async def _handle_store_quote_bind_identity_candidate(
     }
 
 
-async def _handle_store_quote_bind_recipient(
-    client: Any,
-    config: TelegramConfig,
-    request: dict[str, Any],
-) -> dict[str, Any]:
-    """Bind a normal quote turn only to an identity-confirmed route."""
-
-    _require_store_quote_work_account(config)
-    projection = _store_quote_projection(request, require_text=False)
-    if projection["message_kind"] == "identity_prompt":
-        raise BridgeError("store_quote_identity_candidate_required")
-    peer = str(request.get("peer") or "").strip()
-    if not peer:
-        raise BridgeError("store_quote_peer_required")
-    _entity, target = await _resolve_peer(client, peer)
-    if target.get("kind") != "private" or not isinstance(target.get("id"), int) or int(target["id"]) == 0:
-        raise BridgeError("store_quote_private_peer_required")
-    now = int(time.time())
-    state = _load_store_quote_transport_state(config)
-    _store_quote_prune_state(state, now=now)
-    route = state["routes"].get(projection["route_binding_sha256"])
-    if not isinstance(route, dict) or (
-        route.get("route_binding_sha256") != projection["route_binding_sha256"]
-        or route.get("quote_ref_sha256") != projection["quote_ref_sha256"]
-    ):
-        raise BridgeError("store_quote_route_binding_missing")
-    if route.get("recipient_confirmed") is not True:
-        raise BridgeError("store_quote_recipient_not_confirmed")
-    if route.get("peer_id") != target["id"]:
-        raise BridgeError("store_quote_recipient_binding_changed")
-    binding_key = projection["delivery_binding_sha256"]
-    existing = state["bindings"].get(binding_key)
-    if existing is not None:
-        if (
-            not isinstance(existing, dict)
-            or not _store_quote_projection_matches(existing, projection)
-            or existing.get("peer_id") != target["id"]
-            or existing.get("identity_candidate") is True
-        ):
-            raise BridgeError("store_quote_recipient_binding_conflict")
-    else:
-        state["bindings"][binding_key] = {
-            **projection,
-            "peer_id": int(target["id"]),
-            "recipient_confirmed": True,
-            "created_at": now,
-        }
-    _save_store_quote_transport_state(config, state)
-    return {
-        "ok": True,
-        "summary": _store_quote_summary(
-            projection,
-            recipient_bound=True,
-            recipient_confirmed=True,
-            private_target_confirmed=True,
-            unique_target_confirmed=True,
-            work_account_confirmed=True,
-        ),
-    }
-
-
 async def _handle_store_quote_send(
     client: Any,
     config: TelegramConfig,
@@ -1907,14 +1831,34 @@ async def _handle_store_quote_send(
     now = int(time.time())
     state = _load_store_quote_transport_state(config)
     _store_quote_prune_state(state, now=now)
+    binding_key = projection["delivery_binding_sha256"]
+    binding = state["bindings"].get(binding_key)
+    if binding is None and not _store_quote_is_identity_prompt(projection):
+        route = state["routes"].get(projection["route_binding_sha256"])
+        if not isinstance(route, dict) or (
+            route.get("route_binding_sha256") != projection["route_binding_sha256"]
+            or route.get("quote_ref_sha256") != projection["quote_ref_sha256"]
+        ):
+            raise BridgeError("store_quote_route_binding_missing")
+        peer_id = route.get("peer_id")
+        if isinstance(peer_id, bool) or not isinstance(peer_id, int) or peer_id == 0:
+            raise BridgeError("store_quote_recipient_binding_invalid")
+        binding = {
+            **projection,
+            "peer_id": peer_id,
+            "recipient_confirmed": route.get("recipient_confirmed") is True,
+            "created_at": now,
+        }
+        if mode == "apply" and route.get("recipient_confirmed") is True:
+            state["bindings"][binding_key] = binding
     entity, _target, binding = await _store_quote_bound_target(
         client,
         state,
         projection,
         allow_pending_identity=_store_quote_is_identity_prompt(projection),
+        binding_override=binding,
     )
     recipient_confirmed = state["routes"][projection["route_binding_sha256"]].get("recipient_confirmed") is True
-    binding_key = projection["delivery_binding_sha256"]
     existing = state["deliveries"].get(binding_key)
     if existing is not None:
         if (
@@ -2275,7 +2219,7 @@ async def _handle_store_quote_mint_identity_receipt(
                 "summary": _store_quote_summary(
                     projection,
                     delivery_ref_sha256=supplied_ref,
-                    identity_classification=record.get("identity_classification"),
+                    reply_classification=record.get("identity_classification"),
                     reply_text_sha256=record.get("reply_text_sha256"),
                     incoming_ref_sha256=record.get("incoming_ref_sha256"),
                     recipient_confirmed=False,
@@ -2318,7 +2262,7 @@ async def _handle_store_quote_mint_identity_receipt(
         "summary": _store_quote_summary(
             projection,
             delivery_ref_sha256=supplied_ref,
-            identity_classification=identity_classification,
+            reply_classification=identity_classification,
             reply_text_sha256=reply_text_sha256,
             incoming_ref_sha256=incoming_ref_sha256,
             recipient_confirmed=False,
@@ -2380,8 +2324,6 @@ async def _handle_store_quote_identity_readback(
         raise BridgeError("store_quote_inbound_receipt_unknown")
     if record.get("receipt_kind") != "identity":
         raise BridgeError("store_quote_identity_binding_invalid")
-    if record.get("consumed") is True:
-        raise BridgeError("store_quote_identity_reply_consumed")
     if _store_quote_receipt_expired(record, now=now):
         raise BridgeError("store_quote_identity_reply_expired")
     if (
@@ -2390,8 +2332,6 @@ async def _handle_store_quote_identity_readback(
         or record.get("peer_id") != target["id"]
     ):
         raise BridgeError("store_quote_identity_binding_invalid")
-    if route.get("recipient_confirmed") is True:
-        raise BridgeError("store_quote_identity_already_confirmed")
     incoming_id = record.get("incoming_message_id")
     if isinstance(incoming_id, bool) or not isinstance(incoming_id, int) or incoming_id <= 0:
         raise BridgeError("store_quote_inbound_receipt_invalid")
@@ -2414,38 +2354,46 @@ async def _handle_store_quote_identity_readback(
     incoming_ref_sha256 = _store_quote_hash(
         record.get("incoming_ref_sha256"), code="store_quote_inbound_receipt_invalid"
     )
-    identity_binding_sha256 = _store_quote_identity_inbound_binding(
+    identity_binding_sha256 = _store_quote_inbound_binding(
         projection,
         delivery_ref_sha256=delivery_ref_sha256,
-        identity_classification=identity_classification,
+        reply_classification=identity_classification,
         reply_text_sha256=reply_text_sha256,
         incoming_ref_sha256=incoming_ref_sha256,
     )
-    record["consumed"] = True
     confirmed = identity_classification == "confirmed"
+    summary = _store_quote_summary(
+        projection,
+        delivery_ref_sha256=delivery_ref_sha256,
+        reply_classification=identity_classification,
+        reply_text_sha256=reply_text_sha256,
+        incoming_ref_sha256=incoming_ref_sha256,
+        inbound_binding_sha256=identity_binding_sha256,
+        recipient_confirmed=confirmed,
+        private_target_confirmed=True,
+        unique_target_confirmed=True,
+        work_account_confirmed=True,
+        delivery_confirmed=True,
+        reply_confirmed=True,
+        reply_sender_matches_delivery=True,
+        identity_pending=not confirmed,
+        identity_confirmed=confirmed,
+    )
+    if record.get("consumed") is True:
+        if record.get("readback_summary") == summary:
+            return {"ok": True, "summary": summary}
+        raise BridgeError("store_quote_identity_reply_consumed")
+    if route.get("recipient_confirmed") is True:
+        raise BridgeError("store_quote_identity_already_confirmed")
+    record["consumed"] = True
+    record["readback_summary"] = summary
     if confirmed:
         route["recipient_confirmed"] = True
         route["confirmed_at"] = now
     _save_store_quote_transport_state(config, state)
     return {
         "ok": True,
-        "summary": _store_quote_summary(
-            projection,
-            delivery_ref_sha256=delivery_ref_sha256,
-            identity_classification=identity_classification,
-            reply_text_sha256=reply_text_sha256,
-            incoming_ref_sha256=incoming_ref_sha256,
-            inbound_binding_sha256=identity_binding_sha256,
-            recipient_confirmed=confirmed,
-            private_target_confirmed=True,
-            unique_target_confirmed=True,
-            work_account_confirmed=True,
-            delivery_confirmed=True,
-            reply_confirmed=True,
-            reply_sender_matches_delivery=True,
-            identity_pending=not confirmed,
-            identity_confirmed=confirmed,
-        ),
+        "summary": summary,
     }
 
 
@@ -2633,9 +2581,6 @@ async def _handle_operation(  # noqa: C901
     if operation == "store_quote_bind_identity_candidate":
         return await _handle_store_quote_bind_identity_candidate(client, config, request)
 
-    if operation == "store_quote_bind_recipient":
-        return await _handle_store_quote_bind_recipient(client, config, request)
-
     if operation == "store_quote_send":
         return await _handle_store_quote_send(client, config, request)
 
@@ -2689,7 +2634,6 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     ) or request.get("operation") in {
         "discard_download",
         "store_quote_bind_identity_candidate",
-        "store_quote_bind_recipient",
         # Every typed Store quote operation may prune or persist the private
         # bridge state.  Serialize all of them so a stale readback/dry-run
         # cannot overwrite a receipt which another request has consumed.
@@ -2703,7 +2647,12 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
 
 
 async def _serve_client(
-    client: Any, config: TelegramConfig, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    client: Any,
+    config: TelegramConfig,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    store_quote_only: bool = False,
 ) -> None:
     response: dict[str, Any]
     try:
@@ -2713,6 +2662,8 @@ async def _serve_client(
         request = json.loads(raw)
         if not isinstance(request, dict):
             raise BridgeError("request_invalid")
+        if store_quote_only and request.get("operation") not in _STORE_QUOTE_RPC_OPERATIONS:
+            raise BridgeError("operation_not_supported")
         if _requires_mutation_lock(request):
             async with _MUTATION_LOCK:
                 response = await _handle_operation(client, config, request)
@@ -2730,6 +2681,10 @@ async def _serve_client(
     await writer.wait_closed()
 
 
+def _store_quote_socket_path(config: TelegramConfig) -> Path | None:
+    return config.socket_path.with_name("store-quote.sock") if config.account == "work" else None
+
+
 async def run_daemon(config: TelegramConfig) -> None:
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
@@ -2741,6 +2696,9 @@ async def run_daemon(config: TelegramConfig) -> None:
     inbox_dir.mkdir(mode=0o700, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
     config.socket_path.unlink(missing_ok=True)
+    store_quote_socket = _store_quote_socket_path(config)
+    if store_quote_socket is not None:
+        store_quote_socket.unlink(missing_ok=True)
     client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
     await client.connect()
     if not await client.is_user_authorized():
@@ -2751,12 +2709,25 @@ async def run_daemon(config: TelegramConfig) -> None:
         path=str(config.socket_path),
     )
     os.chmod(config.socket_path, 0o600)
+    store_quote_server = None
+    if store_quote_socket is not None:
+        store_quote_server = await asyncio.start_unix_server(
+            lambda reader, writer: _serve_client(client, config, reader, writer, store_quote_only=True),
+            path=str(store_quote_socket),
+        )
+        os.chmod(store_quote_socket, 0o660)
     try:
         async with server:
-            await server.serve_forever()
+            if store_quote_server is None:
+                await server.serve_forever()
+            else:
+                async with store_quote_server:
+                    await server.serve_forever()
     finally:
         await client.disconnect()
         config.socket_path.unlink(missing_ok=True)
+        if store_quote_socket is not None:
+            store_quote_socket.unlink(missing_ok=True)
 
 
 def _save_qr(url: str, output_path: Path) -> None:

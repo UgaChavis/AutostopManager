@@ -73,8 +73,8 @@ manual/mixed estimates are handed to a person.
 
 Wrong or uncertain peer, stale publication, duplicate-order risk, privacy risk
 or an unapproved side effect stops automation and preserves evidence for a
-human decision. A missing deployed typed sender or identity-binding route is
-also a handoff, never a reason to forge confirmation. A lost response stays
+human decision. CRM uses only the quote-only work socket; a missing route is a
+handoff, never a reason to forge confirmation. A lost response stays
 unresolved until exact readback.
 
 Improve this route from de-identified outcomes and owner-reviewed regression

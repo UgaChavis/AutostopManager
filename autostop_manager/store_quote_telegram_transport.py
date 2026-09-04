@@ -27,8 +27,7 @@ BridgeRpc = Callable[[dict[str, Any]], dict[str, Any]]
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _RECEIPT = re.compile(r"^[A-Za-z0-9_-]{24,256}$")
 _ERROR = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,119}$")
-_CATEGORIES = frozenset({"clarification", "addition", "selection", "consent", "decline", "ambiguous"})
-_IDENTITY_CATEGORIES = frozenset({"confirmed", "declined", "ambiguous"})
+_CATEGORIES = frozenset({"clarification", "addition", "selection", "consent", "decline", "confirmed", "declined", "ambiguous"})
 _HASH_FIELDS = frozenset(
     {
         "quote_ref_sha256",
@@ -84,40 +83,17 @@ def create_work_store_quote_transport(
 
 
 class WorkStoreQuoteTransport(StoreQuoteTelegramSender):
-    """Adapter for the bridge's five typed Store quote RPC operations.
+    """Adapter for the bridge's typed Store quote RPC operations.
 
-    Recipient and identity setup methods are explicit privileged seams.  They
-    are not part of ``StoreQuoteTelegramSender`` and must never be exposed as
-    generic Manager tools.  A caller cannot assert recipient confirmation:
-    only an independently reread direct reply to the neutral identity prompt
-    promotes the stable quote route.
+    Identity setup remains an explicit privileged seam, never a generic
+    Manager tool.  A later quote delivery inherits only that confirmed route;
+    no caller can assert recipient confirmation or repeat a peer identifier.
     """
 
     def __init__(self, *, rpc: BridgeRpc) -> None:
         if not callable(rpc):
             raise ValueError("store_quote_telegram_transport_rpc_required")
         self._rpc = rpc
-
-    def bind_work_quote_recipient(
-        self,
-        *,
-        delivery: StoreQuoteTelegramDelivery,
-        peer: str,
-    ) -> dict[str, Any]:
-        """Bind a normal delivery only after its quote route is confirmed.
-
-        The bridge resolves ``peer`` transiently and requires it to match the
-        recipient which a prior verified identity reply promoted.  The returned
-        projection never includes it, and the conductor does not call this
-        method.
-        """
-
-        request = {
-            "operation": "store_quote_bind_recipient",
-            **_delivery_request_projection(delivery),
-            "peer": str(peer or ""),
-        }
-        return self._invoke(request)
 
     def bind_work_quote_identity_candidate(
         self,
@@ -365,12 +341,6 @@ def _sanitized_summary(value: Any) -> dict[str, Any] | None:
         if normalized_category not in _CATEGORIES:
             return None
         result["reply_classification"] = normalized_category
-    identity_category = value.get("identity_classification")
-    if identity_category is not None:
-        normalized_identity_category = str(identity_category).strip().casefold()
-        if normalized_identity_category not in _IDENTITY_CATEGORIES:
-            return None
-        result["identity_classification"] = normalized_identity_category
     error_code = value.get("error_code")
     if error_code is not None:
         normalized_error = str(error_code).strip()

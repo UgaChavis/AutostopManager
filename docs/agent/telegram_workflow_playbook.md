@@ -60,8 +60,8 @@ staged outbound media after verified delivery.
 ## Store Client Dialogue
 
 `store_quote_conductor_playbook.md` owns the quote lifecycle and client-facing
-logic. This playbook owns transport: `work`, one exact private peer, minimal
-context and no retained dialogue.
+logic. This playbook owns quote-only `work` transport; its general bridge stays
+isolated. It uses one exact private peer, minimal context and no retained dialogue.
 
 Before identity/request binding is proven, ask only a neutral identity question
 and reveal no request details. Once bound, preliminary clarification may happen
