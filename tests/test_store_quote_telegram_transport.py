@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from autostop_manager import store_quote_conductor, telegram_bridge
+from autostop_manager import store_quote_conductor, store_quote_telegram_transport, telegram_bridge
 from autostop_manager.store_quote_conductor import StoreQuoteTelegramDelivery, StoreQuoteTelegramInboundReply
 from autostop_manager.store_quote_telegram_transport import (
     create_work_store_quote_transport,
@@ -922,3 +922,135 @@ def test_manager_transport_projection_matches_the_conductor_contract(monkeypatch
         correlation_id="quote-correlation-0005",
     )
     assert store_quote_conductor._telegram_reply_readback_refs(reply, inbound) is not None
+
+
+def test_manager_transport_requires_an_explicit_absolute_socket_and_keeps_the_request_typed(
+    monkeypatch, tmp_path
+) -> None:
+    delivery = _delivery()
+    socket_path = tmp_path / "store-quote.sock"
+
+    with pytest.raises(ValueError, match="configuration_ambiguous"):
+        create_work_store_quote_transport(socket_path=socket_path, rpc=lambda _request: {})
+    with pytest.raises(ValueError, match="socket_invalid"):
+        create_work_store_quote_transport(socket_path=Path("relative-store-quote.sock"))
+    with pytest.raises(ValueError, match="rpc_required"):
+        store_quote_telegram_transport.WorkStoreQuoteTransport(rpc=object())
+
+    calls: list[tuple[Path, dict]] = []
+
+    def fake_send_local_request(path: Path, request: dict) -> dict:
+        calls.append((path, request))
+        return {"ok": False, "error": "store_quote_socket_unavailable"}
+
+    monkeypatch.setattr(store_quote_telegram_transport, "send_local_request", fake_send_local_request)
+    result = create_work_store_quote_transport(socket_path=socket_path).readback_work_quote_message(
+        delivery=delivery,
+        correlation_id="quote-correlation-socket-0001",
+    )
+
+    assert result == {"ok": False, "summary": {"error_code": "store_quote_socket_unavailable"}}
+    assert calls[0][0] == socket_path
+    assert calls[0][1]["operation"] == "store_quote_readback"
+    assert "text" not in calls[0][1] and "peer" not in calls[0][1]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        None,
+        {"quote_ref_sha256": "not-a-hash"},
+        {"recipient_confirmed": "true"},
+        {"reply_classification": "unknown"},
+        {"identity_classification": "unknown"},
+        {"error_code": "not valid with spaces"},
+    ],
+)
+def test_manager_transport_sanitizer_rejects_each_untrusted_summary_shape(summary) -> None:
+    assert store_quote_telegram_transport._sanitized_summary(summary) is None
+
+
+def test_manager_transport_fails_closed_for_untrusted_bridge_payloads_and_allows_only_safe_metadata() -> None:
+    delivery = _delivery()
+    invalid_response = create_work_store_quote_transport(rpc=lambda _request: ["not", "a", "mapping"])
+    assert invalid_response.readback_work_quote_message(
+        delivery=delivery,
+        correlation_id="quote-correlation-invalid-0001",
+    ) == {"ok": False, "summary": {"error_code": "store_quote_telegram_bridge_response_invalid"}}
+
+    bridge_error = create_work_store_quote_transport(
+        rpc=lambda _request: {
+            "ok": False,
+            "error": "store_quote_socket_timeout",
+            "meta": {"outcome_uncertain": True, "peer": "customer-private"},
+        }
+    )
+    assert bridge_error.send_work_quote_message(
+        delivery=delivery,
+        idempotency_key="quote-delivery-invalid-0001",
+        correlation_id="quote-correlation-invalid-0001",
+        mode="apply",
+    ) == {
+        "ok": False,
+        "summary": {"error_code": "store_quote_socket_timeout"},
+        "meta": {"outcome_uncertain": True},
+    }
+
+    malformed_projection = create_work_store_quote_transport(
+        rpc=lambda _request: {"ok": True, "summary": {"quote_ref_sha256": "not-a-hash"}}
+    )
+    assert malformed_projection.readback_work_quote_message(
+        delivery=delivery,
+        correlation_id="quote-correlation-invalid-0002",
+    ) == {"ok": False, "summary": {"error_code": "store_quote_telegram_bridge_projection_invalid"}}
+
+    malformed_receipt = create_work_store_quote_transport(
+        rpc=lambda _request: {"ok": True, "summary": {}, "receipt": "bad"}
+    )
+    assert malformed_receipt.mint_work_quote_inbound_receipt(
+        delivery=delivery,
+        delivery_ref_sha256="d" * 64,
+        correlation_id="quote-correlation-invalid-0003",
+    ) == {"ok": False, "summary": {"error_code": "store_quote_telegram_bridge_projection_invalid"}}
+
+    safe_success = create_work_store_quote_transport(
+        rpc=lambda _request: {
+            "ok": True,
+            "mode": "apply",
+            "replayed": True,
+            "meta": {"outcome_uncertain": True, "peer": "customer-private"},
+            "summary": {
+                "quote_ref_sha256": "A" * 64,
+                "recipient_confirmed": True,
+                "reply_classification": "CONSENT",
+                "identity_classification": "CONFIRMED",
+                "error_code": "store_quote_readback_replayed",
+            },
+        }
+    )
+    assert safe_success.send_work_quote_message(
+        delivery=delivery,
+        idempotency_key="quote-delivery-safe-0001",
+        correlation_id="quote-correlation-safe-0001",
+        mode="apply",
+    ) == {
+        "ok": True,
+        "mode": "apply",
+        "replayed": True,
+        "meta": {"outcome_uncertain": True},
+        "summary": {
+            "quote_ref_sha256": "a" * 64,
+            "recipient_confirmed": True,
+            "reply_classification": "consent",
+            "identity_classification": "confirmed",
+            "error_code": "store_quote_readback_replayed",
+        },
+    }
+
+    with pytest.raises(ValueError, match="delivery_invalid"):
+        safe_success.send_work_quote_message(
+            delivery=object(),
+            idempotency_key="quote-delivery-safe-0002",
+            correlation_id="quote-correlation-safe-0002",
+            mode="apply",
+        )

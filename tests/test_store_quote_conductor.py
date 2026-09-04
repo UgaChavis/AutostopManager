@@ -4,8 +4,16 @@ from copy import deepcopy
 import hashlib
 import json
 
+import pytest
+
 from autostop_manager.storage import ManagerMemoryStore
-from autostop_manager.store_quote_conductor import StoreQuoteConductor, assess_quote_evidence
+from autostop_manager.store_quote_conductor import (
+    StoreQuoteConductor,
+    StoreQuoteOwnerApi,
+    StoreQuoteTelegramDelivery,
+    StoreQuoteTelegramInboundReply,
+    assess_quote_evidence,
+)
 
 
 _SNAPSHOT_HASH = "b" * 64
@@ -613,3 +621,219 @@ def test_conductor_rejects_identity_prompt_from_published_quote_delivery(tmp_pat
     assert "store_quote_conductor_identity_prompt_requires_explicit_binding" in result["warnings"]
     assert sender.calls == []
     assert store.get_manager_run(published["run_id"], include_external_steps=True)["item"]["external_steps"] == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("quote_request_id", "", "quote_id_invalid"),
+        ("estimate_revision", "", "expected_revision_required"),
+        ("published_snapshot_hash", "not-a-hash", "published_snapshot_stale"),
+        ("context_hash", "not-a-hash", "telegram_context_hash_invalid"),
+        ("kind", "free-form-message", "telegram_message_kind_invalid"),
+        ("text", "No question mark.", "telegram_message_invalid"),
+    ],
+)
+def test_quote_telegram_delivery_rejects_unbound_or_non_neutral_input(field, value, error):
+    payload = {
+        "quote_request_id": "quote-1",
+        "estimate_revision": "revision-1",
+        "published_snapshot_hash": _SNAPSHOT_HASH,
+        "context_hash": _TELEGRAM_CONTEXT_HASH,
+        "kind": "offer",
+        "text": "Глянул: нормальный вариант. Его оформляем?",
+    }
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=error):
+        StoreQuoteTelegramDelivery(**payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("quote_request_id", "", "quote_id_invalid"),
+        ("revision_sha256", "not-a-hash", "telegram_reply_binding_invalid"),
+        ("classification", "unverified", "reply_classification_invalid"),
+        ("receipt", "too-short", "telegram_inbound_receipt_invalid"),
+    ],
+)
+def test_quote_telegram_inbound_receipt_rejects_unverified_binding_input(field, value, error):
+    payload = {
+        "quote_request_id": "quote-1",
+        "revision_sha256": "a" * 64,
+        "published_snapshot_hash": _SNAPSHOT_HASH,
+        "context_hash": _TELEGRAM_CONTEXT_HASH,
+        "delivery_binding_sha256": "b" * 64,
+        "delivery_ref_sha256": "c" * 64,
+        "classification": "consent",
+        "receipt": "receipt-token-1234567890123456",
+    }
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=error):
+        StoreQuoteTelegramInboundReply(**payload)
+
+
+def test_conductor_rejects_unknown_and_non_apply_ledger_operations(tmp_path):
+    conductor, _, _ = _conductor(tmp_path)
+
+    unknown = conductor.execute(operation="archive", quote_request_id="quote-1")
+    assert unknown["ok"] is False
+    assert "store_quote_conductor_operation_invalid" in unknown["warnings"]
+
+    dry_ledger_operation = conductor.execute(operation="evidence", mode="dry_run")
+    assert dry_ledger_operation["ok"] is False
+    assert "store_quote_conductor_ledger_operations_require_apply" in dry_ledger_operation["warnings"]
+
+
+def test_assess_quote_evidence_rejects_unknown_or_malformed_review_claims():
+    unexpected = assess_quote_evidence({**_EVIDENCE, "unexpected_field": True})
+    assert unexpected == {"ok": False, "error_code": "store_quote_conductor_evidence_fields_invalid"}
+
+    malformed = assess_quote_evidence(
+        {
+            **_EVIDENCE,
+            "recommendation_basis": "unverified",
+            "handoff_reasons": "discount_requested",
+        }
+    )
+    assert malformed["ok"] is False
+    assert malformed["error_code"] == "store_quote_conductor_evidence_incomplete"
+    assert malformed["blockers"] == ["handoff_reasons", "recommendation_basis"]
+
+
+class _OwnerApiClient:
+    def __init__(self, *, prepared: dict) -> None:
+        self.prepared = prepared
+        self.prepare_calls: list[dict] = []
+        self.invoke_calls: list[dict] = []
+
+    def prepare_invocation(self, **kwargs) -> dict:
+        self.prepare_calls.append(kwargs)
+        return self.prepared
+
+    def invoke(self, **kwargs) -> dict:
+        self.invoke_calls.append(kwargs)
+        return {"ok": True, "summary": {"operation": kwargs["operation_id"]}}
+
+
+def test_store_quote_owner_api_uses_only_approved_operations_and_a_prepared_plan():
+    client = _OwnerApiClient(
+        prepared={
+            "ok": True,
+            "summary": {
+                "operation_id": "get_estimate_draft",
+                "method": "GET",
+                "schema_hash": "a" * 64,
+                "plan_hash": "b" * 64,
+            },
+        }
+    )
+    owner_api = StoreQuoteOwnerApi(client)
+
+    assert owner_api.get_estimate_draft(quote_request_id="quote-1")["ok"] is True
+
+    for operation_id, method, call in (
+        (
+            "replace_estimate_draft",
+            "POST",
+            lambda: owner_api.replace_estimate_draft(
+                quote_request_id="quote-1",
+                entries=_ENTRIES,
+                coverage=_COVERAGE,
+                expected_revision="revision-1",
+                idempotency_key="owner-draft-0001",
+                correlation_id="owner-correlation-0001",
+                mode="dry_run",
+            ),
+        ),
+        (
+            "submit_estimate",
+            "POST",
+            lambda: owner_api.submit_estimate(
+                quote_request_id="quote-1",
+                customer_response="Проверьте опубликованную смету.",
+                expected_revision="revision-1",
+                idempotency_key="owner-publish-0001",
+                correlation_id="owner-correlation-0001",
+                mode="apply",
+                dry_run_proof="c" * 64,
+            ),
+        ),
+        (
+            "reopen_estimate",
+            "POST",
+            lambda: owner_api.reopen_estimate(
+                quote_request_id="quote-1",
+                expected_revision="revision-1",
+                idempotency_key="owner-reopen-0001",
+                correlation_id="owner-correlation-0001",
+                mode="apply",
+                dry_run_proof="d" * 64,
+            ),
+        ),
+        (
+            "confirm_estimate_order_from_telegram",
+            "POST",
+            lambda: owner_api.confirm_estimate_order_from_telegram(
+                quote_request_id="quote-1",
+                published_snapshot_hash=_SNAPSHOT_HASH,
+                consent_context_hash=_CONSENT_HASH,
+                expected_revision="revision-1",
+                idempotency_key="owner-order-0001",
+                correlation_id="owner-correlation-0001",
+                mode="apply",
+                dry_run_proof="e" * 64,
+            ),
+        ),
+    ):
+        client.prepared["summary"] = {
+            "operation_id": operation_id,
+            "method": method,
+            "schema_hash": "a" * 64,
+            "plan_hash": "b" * 64,
+        }
+        assert call()["ok"] is True
+
+    assert [call["operation_id"] for call in client.prepare_calls] == [
+        "get_estimate_draft",
+        "replace_estimate_draft",
+        "submit_estimate",
+        "reopen_estimate",
+        "confirm_estimate_order_from_telegram",
+    ]
+    assert all(call["path_parameters"] == {"quote_request_id": "quote-1"} for call in client.prepare_calls)
+    assert client.invoke_calls[0]["mode"] == "read"
+    assert client.invoke_calls[3]["owner_intent"] == "store_quote_conductor_reopen_estimate"
+    assert all(call["expected_plan_hash"] == "b" * 64 for call in client.invoke_calls)
+
+
+def test_store_quote_owner_api_fails_closed_before_invoke_when_the_operation_contract_changes():
+    unprepared_client = _OwnerApiClient(prepared={"ok": False, "summary": {"error_code": "owner_unavailable"}})
+    assert StoreQuoteOwnerApi(unprepared_client).get_estimate_draft(quote_request_id="quote-1")["ok"] is False
+    assert unprepared_client.invoke_calls == []
+
+    changed_client = _OwnerApiClient(
+        prepared={
+            "ok": True,
+            "summary": {
+                "operation_id": "submit_estimate",
+                "method": "DELETE",
+                "schema_hash": "a" * 64,
+                "plan_hash": "b" * 64,
+            },
+        }
+    )
+    blocked = StoreQuoteOwnerApi(changed_client).submit_estimate(
+        quote_request_id="quote-1",
+        customer_response="Проверьте опубликованную смету.",
+        expected_revision="revision-1",
+        idempotency_key="owner-publish-contract-0001",
+        correlation_id="owner-correlation-contract-0001",
+        mode="apply",
+    )
+
+    assert blocked["ok"] is False
+    assert blocked["summary"]["error_code"] == "store_quote_owner_operation_contract_changed"
+    assert changed_client.invoke_calls == []
