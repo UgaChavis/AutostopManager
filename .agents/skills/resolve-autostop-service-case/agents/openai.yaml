@@ -1,4 +1,4 @@
 interface:
   display_name: "AutoStop Service Case Resolver"
-  short_description: "Мульти-источниковая оценка ремонта и ЗН"
-  default_prompt: "Use $resolve-autostop-service-case to price this repair and draft a defensible AutoStop work order."
+  short_description: "Решение сервисных и ремонтных задач AutoStop"
+  default_prompt: "Используй $resolve-autostop-service-case, чтобы разобраться с этой сервисной задачей AutoStop."

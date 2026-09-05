@@ -21,11 +21,6 @@ def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
         "Покажи состояние склада": "store_read_workflow",
         "переведи заказ магазина в READY": "store_management_workflow",
         "Обработай новую заявку магазина": "store_quote_conductor",
-        "сколько посетителей сегодня": "store_analytics_reporting",
-        "какие товары смотрели за неделю": "store_analytics_reporting",
-        "куда чаще нажимают": "store_analytics_reporting",
-        "сколько времени проводят на сайте": "store_analytics_reporting",
-        "какая конверсия в корзину и заказ": "store_analytics_reporting",
         "покажи аналитику сайта за неделю": "store_analytics_reporting",
         "сколько у сайта было посетителей сегодня?": "store_analytics_reporting",
     }
@@ -73,12 +68,9 @@ def test_agent_bootstrap_is_compact_and_exposes_unfinished_resume_point(tmp_path
 
     assert result["ok"] is True
     assert result["format"] == "agent_envelope_v2"
-    assert result["summary"]["selected_workflow"]["workflow_id"] == "crm_finance_operation"
-    assert result["summary"]["selected"]["workflow_id"] == "crm_finance_operation"
     assert [item["workflow_id"] for item in result["summary"]["selected_workflows"]] == ["crm_finance_operation"]
     assert result["summary"]["unfinished_runs"][0]["run_id"] == started["id"]
     assert result["summary"]["unfinished_runs"][0]["checkpoint"]["phase"] == "preflight"
-    assert result["summary"]["policy"]["owner_confirmation_state"] is False
 
 
 def test_agent_bootstrap_queries_all_active_runs_instead_of_recent_history_window(tmp_path):
@@ -138,8 +130,6 @@ def test_workflow_registry_response_stays_named_and_compact():
 
     assert result["ok"] is True
     assert result["format"] == "agent_envelope_v2"
-    assert result["summary"]["selected_workflow_id"] == "crm_gmail_workflow"
-    assert result["summary"]["selected"]["workflow_id"] == "crm_gmail_workflow"
     assert result["summary"]["selected_workflows"][0]["workflow_id"] == "crm_gmail_workflow"
     assert result["summary"]["workflow_count"] >= 12
     assert len(str(result).encode("utf-8")) < 20_000

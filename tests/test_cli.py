@@ -47,6 +47,9 @@ def test_cli_parser_has_core_commands():
     args = parser.parse_args(["cleanup-audit"])
     assert args.command == "cleanup-audit"
 
+    args = parser.parse_args(["store-conductor-release-gate"])
+    assert args.command == "store-conductor-release-gate"
+
     args = parser.parse_args(["doctor"])
     assert args.command == "doctor"
 
@@ -138,3 +141,14 @@ def test_every_top_level_cli_command_has_working_help(capsys):
         assert exc_info.value.code == 0, command
 
     assert "usage:" in capsys.readouterr().out
+
+
+def test_store_conductor_release_gate_reports_store_readiness(monkeypatch, capsys):
+    class _Store:
+        def store_quote_conductor_release_readiness(self):
+            return {"ok": True, "read_only": True}
+
+    monkeypatch.setattr(cli, "ManagerMemoryStore", _Store)
+
+    assert cli.main(["store-conductor-release-gate"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "read_only": True}

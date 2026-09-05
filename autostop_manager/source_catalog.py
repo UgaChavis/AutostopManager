@@ -269,7 +269,6 @@ def recommend_automotive_sources(
                 "access": source.get("access", ""),
                 "legal_ingestion_status": source.get("legal_ingestion_status", ""),
                 "priority_score_1_5": source.get("priority_score_1_5", 0),
-                "recommended_ingestion_route": source.get("recommended_ingestion_route", ""),
                 "url": source.get("url", ""),
                 "brand_match": brand_match,
                 "data_type_match": data_type_match,

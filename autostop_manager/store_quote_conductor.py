@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
 from .action_contract import prepare_action_contract
@@ -21,25 +21,20 @@ from .store_owner_api import StoreOwnerApiClient
 STORE_QUOTE_CONDUCTOR_FORMAT = "store_quote_conductor_v1"
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
-_INBOUND_RECEIPT = re.compile(r"^[A-Za-z0-9._~-]{16,1024}$")
 _WRITE_OPERATIONS = frozenset({"draft", "publish", "reopen", "order"})
 _OPERATIONS = frozenset(
     {
         "start",
         "status",
-        "clarification",
         "evidence",
         "draft",
         "publish",
-        "wait",
-        "reply",
         "reopen",
         "order",
         "handoff",
         "decline",
     }
 )
-_REPLY_CLASSIFICATIONS = frozenset({"clarification", "addition", "selection", "consent", "decline", "ambiguous"})
 _EVIDENCE_FLAGS = frozenset(
     {
         "fitment_confirmed",
@@ -50,38 +45,13 @@ _EVIDENCE_FLAGS = frozenset(
         "warranty_confirmed",
     }
 )
-_HANDOFF_REASONS = frozenset(
-    {
-        "fitment_ambiguous",
-        "catalog_conflict",
-        "discount_requested",
-        "procurement_requested",
-        "reservation_requested",
-        "nonstandard_delivery",
-        "manual_estimate",
-        "quote_offer_conflict",
-        "store_contract_unavailable",
-    }
-)
-_RECOMMENDATION_BASES = frozenset({"quality", "delivery", "price"})
-_TELEGRAM_MESSAGE_KINDS = frozenset(
-    {
-        "identity_prompt",
-        "clarification",
-        "offer",
-        "selection_confirmation",
-        "addition_clarification",
-        "payment_instruction",
-    }
-)
+_EVIDENCE_LABEL = re.compile(r"^[a-z][a-z0-9_.:-]{0,79}$")
 _PHASES = frozenset(
     {
         "new",
-        "clarifying",
         "evidence_ready",
         "draft_saved",
         "published",
-        "waiting_client",
         "waiting_payment",
         "revision_needed",
         "handoff",
@@ -173,149 +143,6 @@ class StoreQuoteGateway(Protocol):
         correlation_id: str,
         mode: str,
         dry_run_proof: str | None = None,
-    ) -> dict[str, Any]: ...
-
-
-@dataclass(frozen=True)
-class StoreQuoteTelegramDelivery:
-    """One transient, context-bound work Telegram delivery request.
-
-    The object deliberately keeps the actual wording out of repr and exposes
-    only hashes for the Manager workflow ledger.  A sender owns recipient
-    resolution and must fail closed unless it has one confirmed private work
-    Telegram dialog for this exact Store quote.
-    """
-
-    quote_request_id: str = field(repr=False)
-    estimate_revision: str = field(repr=False)
-    published_snapshot_hash: str
-    context_hash: str
-    kind: str
-    text: str = field(repr=False)
-    text_sha256: str = field(init=False)
-    binding_sha256: str = field(init=False)
-    route_binding_sha256: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        if not _safe_quote_identifier(self.quote_request_id):
-            raise ValueError("store_quote_conductor_quote_id_invalid")
-        if not _safe_store_revision(self.estimate_revision):
-            raise ValueError("store_quote_conductor_expected_revision_required")
-        if _HASH.fullmatch(str(self.published_snapshot_hash or "")) is None:
-            raise ValueError("store_quote_conductor_published_snapshot_stale")
-        if _HASH.fullmatch(str(self.context_hash or "")) is None:
-            raise ValueError("store_quote_conductor_telegram_context_hash_invalid")
-        if str(self.kind or "").strip().casefold() not in _TELEGRAM_MESSAGE_KINDS:
-            raise ValueError("store_quote_conductor_telegram_message_kind_invalid")
-        if not _valid_telegram_text(self.text):
-            raise ValueError("store_quote_conductor_telegram_message_invalid")
-        object.__setattr__(self, "kind", str(self.kind).strip().casefold())
-        object.__setattr__(self, "text_sha256", _sha256(self.text))
-        object.__setattr__(
-            self,
-            "route_binding_sha256",
-            _route_binding_sha256(
-                self.quote_request_id,
-                self.estimate_revision,
-                self.published_snapshot_hash,
-                self.context_hash,
-            ),
-        )
-        object.__setattr__(
-            self,
-            "binding_sha256",
-            _sha256(
-                _canonical_json(
-                    {
-                        "quote_ref_sha256": _quote_ref_sha256(self.quote_request_id),
-                        "revision_sha256": _sha256(self.estimate_revision),
-                        "published_snapshot_hash": self.published_snapshot_hash,
-                        "context_hash": self.context_hash,
-                        "kind": self.kind,
-                        "message_sha256": self.text_sha256,
-                    }
-                )
-            ),
-        )
-
-    def refs(self) -> dict[str, str]:
-        return {
-            "telegram_context_hash": self.context_hash,
-            "message_sha256": self.text_sha256,
-            "quote_snapshot_hash": self.published_snapshot_hash,
-            "delivery_binding_sha256": self.binding_sha256,
-            "route_binding_sha256": self.route_binding_sha256,
-        }
-
-
-@dataclass(frozen=True)
-class StoreQuoteTelegramInboundReply:
-    """Transient receipt for one inbound work-Telegram reply.
-
-    ``receipt`` is an opaque bridge capability, not a Telegram message id,
-    peer id, or customer text.  The transport must resolve and verify it
-    against the exact outgoing delivery before returning only the hash-based
-    projection consumed by the conductor.
-    """
-
-    quote_request_id: str = field(repr=False)
-    revision_sha256: str
-    published_snapshot_hash: str
-    context_hash: str
-    delivery_binding_sha256: str
-    delivery_ref_sha256: str
-    classification: str
-    receipt: str = field(repr=False)
-    receipt_sha256: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        if not _safe_quote_identifier(self.quote_request_id):
-            raise ValueError("store_quote_conductor_quote_id_invalid")
-        for field_name in (
-            "revision_sha256",
-            "published_snapshot_hash",
-            "context_hash",
-            "delivery_binding_sha256",
-            "delivery_ref_sha256",
-        ):
-            if _HASH.fullmatch(str(getattr(self, field_name) or "")) is None:
-                raise ValueError("store_quote_conductor_telegram_reply_binding_invalid")
-        normalized = str(self.classification or "").strip().casefold()
-        if normalized not in _REPLY_CLASSIFICATIONS:
-            raise ValueError("store_quote_conductor_reply_classification_invalid")
-        receipt = str(self.receipt or "").strip()
-        if _INBOUND_RECEIPT.fullmatch(receipt) is None:
-            raise ValueError("store_quote_conductor_telegram_inbound_receipt_invalid")
-        object.__setattr__(self, "classification", normalized)
-        object.__setattr__(self, "receipt", receipt)
-        object.__setattr__(self, "receipt_sha256", _sha256(receipt))
-
-
-class StoreQuoteTelegramSender(Protocol):
-    """Narrow work-Telegram transport; no generic Telegram API is exposed."""
-
-    def send_work_quote_message(
-        self,
-        *,
-        delivery: StoreQuoteTelegramDelivery,
-        idempotency_key: str,
-        correlation_id: str,
-        mode: str,
-        dry_run_proof: str | None = None,
-    ) -> dict[str, Any]: ...
-
-    def readback_work_quote_message(
-        self,
-        *,
-        delivery: StoreQuoteTelegramDelivery,
-        correlation_id: str,
-    ) -> dict[str, Any]: ...
-
-    def readback_work_quote_reply(
-        self,
-        *,
-        inbound: StoreQuoteTelegramInboundReply,
-        correlation_id: str,
     ) -> dict[str, Any]: ...
 
 
@@ -507,18 +334,16 @@ class StoreQuoteOwnerApi:
 
 
 class StoreQuoteConductor:
-    """Runs a quote request as one refs-only, CAS-protected Store-Telegram workflow."""
+    """Runs a quote request as one refs-only, CAS-protected Store workflow."""
 
     def __init__(
         self,
         *,
         store: ManagerMemoryStore,
         gateway: StoreQuoteGateway,
-        telegram_sender: StoreQuoteTelegramSender | None = None,
     ) -> None:
         self.store = store
         self.gateway = gateway
-        self.telegram_sender = telegram_sender
 
     def execute(
         self,
@@ -534,14 +359,8 @@ class StoreQuoteConductor:
         coverage: list[dict[str, Any]] | None = None,
         customer_response: str = "",
         evidence: dict[str, Any] | None = None,
-        step_id: str = "",
-        reply_classification: str = "",
         consent_context_hash: str = "",
         published_snapshot_hash: str = "",
-        telegram_context_hash: str = "",
-        telegram_inbound_receipt: str = "",
-        telegram_message: str = "",
-        telegram_message_kind: str = "",
         mode: str = "apply",
     ) -> dict[str, Any]:
         normalized = str(operation or "").strip().casefold().replace("-", "_")
@@ -580,43 +399,6 @@ class StoreQuoteConductor:
                 quote_request_id=quote_request_id,
                 expected_state_version=expected_state_version,
                 evidence=evidence,
-            )
-        if normalized == "clarification":
-            return self._wait_for_client(
-                run_id=run_id,
-                quote_request_id=quote_request_id,
-                expected_state_version=expected_state_version,
-                step_id=step_id,
-                phase="clarifying",
-                action="clarification",
-                correlation_id=correlation_id,
-            )
-        if normalized == "wait":
-            return self._wait_for_client(
-                run_id=run_id,
-                quote_request_id=quote_request_id,
-                expected_state_version=expected_state_version,
-                step_id=step_id,
-                phase="waiting_client",
-                action="quote_response",
-                published_snapshot_hash=published_snapshot_hash,
-                expected_revision=expected_revision,
-                correlation_id=correlation_id,
-                telegram_context_hash=telegram_context_hash,
-                telegram_message=telegram_message,
-                telegram_message_kind=telegram_message_kind,
-            )
-        if normalized == "reply":
-            return self._record_reply(
-                run_id=run_id,
-                quote_request_id=quote_request_id,
-                expected_state_version=expected_state_version,
-                step_id=step_id,
-                classification=reply_classification,
-                telegram_inbound_receipt=telegram_inbound_receipt,
-                supplied_consent_context_hash=consent_context_hash,
-                supplied_published_snapshot_hash=published_snapshot_hash,
-                supplied_telegram_context_hash=telegram_context_hash,
             )
         if normalized == "handoff":
             return self._handoff(
@@ -700,80 +482,7 @@ class StoreQuoteConductor:
         run = self._get_run(run_id, quote_request_id)
         if not run.get("ok"):
             return _error(str(run.get("error") or "store_quote_conductor_run_not_found"))
-        if _phase(run) in {"published", "waiting_client"} and str(run.get("status") or "") in ACTIVE_WORKFLOW_STATES:
-            snapshot_result = self._read_snapshot(quote_request_id)
-            if not snapshot_result.get("ok"):
-                return _error(
-                    str(snapshot_result.get("error_code") or "store_quote_conductor_estimate_read_failed"), run=run
-                )
-            snapshot: QuoteEstimateSnapshot = snapshot_result["snapshot"]
-            if snapshot.converted_order_ref_sha256 is not None:
-                return self._reconcile_cabinet_order(run, quote_request_id=quote_request_id, snapshot=snapshot)
         return _envelope(ok=True, status=str(run["status"]), run=run)
-
-    def _reconcile_cabinet_order(
-        self,
-        run: dict[str, Any],
-        *,
-        quote_request_id: str,
-        snapshot: QuoteEstimateSnapshot,
-    ) -> dict[str, Any]:
-        """Record Store's already-created cabinet order without a Telegram or Store write."""
-
-        expected_snapshot = _checkpoint_value(run, "published_snapshot_hash")
-        if not _valid_hash_match(str(snapshot.published_snapshot_hash or ""), expected_snapshot):
-            return _error("store_quote_conductor_cabinet_order_snapshot_mismatch", run=run, status="conflict")
-        current = run
-        if str(current.get("status") or "") == "external_wait":
-            pending = _pending_step(current, "quote_response")
-            if pending is None:
-                return _error(
-                    "store_quote_conductor_cabinet_order_pending_step_invalid", run=current, status="conflict"
-                )
-            completed = self.store.complete_store_quote_conductor_external_step(
-                int(current["id"]),
-                step_id=pending,
-                result_refs={
-                    "status": "cabinet_order_confirmed",
-                    "quote_snapshot_hash": expected_snapshot,
-                },
-                expected_state_version=int(current["state_version"]),
-            )
-            if not completed.get("ok"):
-                return _error(
-                    str(completed.get("error") or "store_quote_conductor_cabinet_order_reconcile_failed"), run=current
-                )
-            current_result = self._get_run(int(current["id"]), quote_request_id)
-            if not current_result.get("ok"):
-                return _error(str(current_result.get("error")))
-            current = current_result
-        if str(current.get("status") or "") in {"planned", "external_wait"}:
-            executing = self._ensure_executing(current)
-            if not executing.get("ok"):
-                return _error(str(executing.get("error")), run=current)
-            current = executing["run"]
-        if str(current.get("status") or "") != "executing":
-            return _error("store_quote_conductor_cabinet_order_workflow_not_resumable", run=current, status="conflict")
-        checkpoint = self._checkpoint(
-            current,
-            phase="waiting_payment",
-            expected_revision=snapshot.updated_at,
-            technical={
-                "quote_snapshot_hash": expected_snapshot,
-                "verification": _technical_review(current, outcome="waiting_payment"),
-            },
-        )
-        if not checkpoint.get("ok"):
-            return _error(
-                str(checkpoint.get("error") or "store_quote_conductor_cabinet_order_reconcile_failed"), run=current
-            )
-        refreshed = self._get_run(int(current["id"]), quote_request_id)
-        return _envelope(
-            ok=True,
-            status="waiting_payment",
-            run=refreshed if refreshed.get("ok") else current,
-            technical={"cabinet_order_reconciled": True},
-        )
 
     def _record_evidence(
         self,
@@ -790,7 +499,7 @@ class StoreQuoteConductor:
         if not executing.get("ok"):
             return _error(str(executing.get("error")), run=run)
         run = executing["run"]
-        if _phase(run) not in {"new", "clarifying", "revision_needed"}:
+        if _phase(run) not in {"new", "revision_needed"}:
             return _error("store_quote_conductor_evidence_phase_invalid", run=run, status="conflict")
         assessment = assess_quote_evidence(evidence)
         if not assessment["ok"]:
@@ -811,351 +520,6 @@ class StoreQuoteConductor:
             status="executing",
             run=current if current.get("ok") else run,
             technical={"evidence_hash": assessment["evidence_hash"], "offer_count": assessment["offer_count"]},
-        )
-
-    def _wait_for_client(
-        self,
-        *,
-        run_id: int | None,
-        quote_request_id: str,
-        expected_state_version: int | None,
-        step_id: str,
-        phase: str,
-        action: str,
-        published_snapshot_hash: str = "",
-        expected_revision: str = "",
-        correlation_id: str = "",
-        telegram_context_hash: str = "",
-        telegram_message: str = "",
-        telegram_message_kind: str = "",
-    ) -> dict[str, Any]:
-        run = self._require_active_run(run_id, quote_request_id, expected_state_version)
-        if not run.get("ok"):
-            return _error(str(run.get("error")))
-        executing = self._ensure_executing(run)
-        if not executing.get("ok"):
-            return _error(str(executing.get("error")), run=run)
-        run = executing["run"]
-        current_phase = _phase(run)
-        if phase == "clarifying" and current_phase not in {"new", "clarifying", "revision_needed"}:
-            return _error("store_quote_conductor_clarification_phase_invalid", run=run, status="conflict")
-        if phase == "waiting_client":
-            expected_snapshot = _checkpoint_value(run, "published_snapshot_hash")
-            if current_phase != "published" or not _valid_hash_match(published_snapshot_hash, expected_snapshot):
-                return _error("store_quote_conductor_published_snapshot_stale", run=run, status="conflict")
-            if _sha256(expected_revision) != _checkpoint_value(run, "expected_revision_sha256"):
-                return _error("store_quote_conductor_expected_revision_stale", run=run, status="conflict")
-            snapshot_result = self._read_snapshot(quote_request_id)
-            if not snapshot_result.get("ok"):
-                return _error(
-                    str(snapshot_result.get("error_code") or "store_quote_conductor_estimate_read_failed"), run=run
-                )
-            current_snapshot: QuoteEstimateSnapshot = snapshot_result["snapshot"]
-            if current_snapshot.updated_at != expected_revision or _snapshot_handoff_reason(current_snapshot):
-                return _error("store_quote_conductor_expected_revision_stale", run=run, status="conflict")
-            if current_snapshot.published_snapshot_hash != published_snapshot_hash:
-                return _error("store_quote_conductor_published_snapshot_stale", run=run, status="conflict")
-        pending = _pending_step(run, action)
-        if pending is not None:
-            return _envelope(
-                ok=True,
-                status="external_wait",
-                run=run,
-                technical={"step_id": pending, "deduplicated": True},
-            )
-        delivery_refs: dict[str, str] = {}
-        if phase == "waiting_client":
-            delivery = self._deliver_published_quote(
-                run=run,
-                quote_request_id=quote_request_id,
-                published_snapshot_hash=published_snapshot_hash,
-                expected_revision=expected_revision,
-                correlation_id=correlation_id,
-                telegram_context_hash=telegram_context_hash,
-                telegram_message=telegram_message,
-                telegram_message_kind=telegram_message_kind,
-            )
-            if not delivery.get("ok"):
-                return _envelope(
-                    ok=False,
-                    status="retryable",
-                    run=run,
-                    technical={
-                        "error_code": str(
-                            delivery.get("error_code") or "store_quote_conductor_telegram_delivery_failed"
-                        )
-                    },
-                    warnings=[str(delivery.get("error_code") or "store_quote_conductor_telegram_delivery_failed")],
-                )
-            delivery_refs = _mapping(delivery.get("refs"))
-        checkpoint = self._checkpoint(
-            run,
-            phase=phase,
-            technical={"next_action": f"telegram_{action}", **delivery_refs},
-        )
-        if not checkpoint.get("ok"):
-            return _error(str(checkpoint.get("error") or "store_quote_conductor_checkpoint_failed"), run=run)
-        current = self._get_run(int(run["id"]), quote_request_id)
-        if not current.get("ok"):
-            return _error(str(current.get("error")))
-        current_step = (
-            str(step_id or "").strip() or f"telegram-{action}-{int(run['id'])}-{int(current['state_version'])}"
-        )
-        references = {"expected_revision_sha256": _checkpoint_value(current, "expected_revision_sha256")}
-        if phase == "waiting_client":
-            references["quote_snapshot_hash"] = published_snapshot_hash
-            references.update(delivery_refs)
-        waited = self.store.register_store_quote_conductor_external_step(
-            int(run["id"]),
-            step_id=current_step,
-            connector="telegram",
-            action=action,
-            request_refs=references,
-            expected_state_version=int(current["state_version"]),
-        )
-        if not waited.get("ok"):
-            return _error(str(waited.get("error") or "store_quote_conductor_wait_failed"), run=current)
-        waited_run = self._get_run(int(run["id"]), quote_request_id)
-        return _envelope(
-            ok=True,
-            status="external_wait",
-            run=waited_run if waited_run.get("ok") else current,
-            technical={"step_id": current_step, "external_action": action},
-        )
-
-    def _deliver_published_quote(
-        self,
-        *,
-        run: dict[str, Any],
-        quote_request_id: str,
-        published_snapshot_hash: str,
-        expected_revision: str,
-        correlation_id: str,
-        telegram_context_hash: str,
-        telegram_message: str,
-        telegram_message_kind: str,
-    ) -> dict[str, Any]:
-        """Send one already-published estimate, then independently verify delivery.
-
-        A failed or uncertain Telegram apply intentionally leaves the workflow
-        in ``published``.  Retrying uses the same deterministic sender key and
-        therefore reconciles delivery instead of publishing Store again.
-        """
-
-        # Identity verification is an explicit, neutral setup exchange owned
-        # by the typed work-Telegram bridge.  It never represents a published
-        # estimate and must not enter the quote-response/order conductor.
-        if str(telegram_message_kind or "").strip().casefold() == "identity_prompt":
-            return {"ok": False, "error_code": "store_quote_conductor_identity_prompt_requires_explicit_binding"}
-
-        if self.telegram_sender is None:
-            return {"ok": False, "error_code": "store_quote_conductor_telegram_sender_unavailable"}
-        try:
-            delivery = StoreQuoteTelegramDelivery(
-                quote_request_id=quote_request_id,
-                estimate_revision=expected_revision,
-                published_snapshot_hash=published_snapshot_hash,
-                context_hash=telegram_context_hash,
-                kind=telegram_message_kind,
-                text=telegram_message,
-            )
-        except (TypeError, ValueError) as exc:
-            return {"ok": False, "error_code": str(exc)}
-        effective_correlation = _delivery_correlation(run, correlation_id)
-        if effective_correlation is None:
-            return {"ok": False, "error_code": "store_quote_conductor_correlation_id_invalid"}
-        delivery_key = _telegram_delivery_key(run, delivery)
-        try:
-            dry_result = self.telegram_sender.send_work_quote_message(
-                delivery=delivery,
-                idempotency_key=_dry_run_key(delivery_key),
-                correlation_id=effective_correlation,
-                mode="dry_run",
-            )
-        except (OSError, TypeError, ValueError):
-            return {"ok": False, "error_code": "store_quote_conductor_telegram_dry_run_failed"}
-        proof = _dry_run_proof(dry_result)
-        if proof is None or not _telegram_delivery_projection_matches(dry_result, delivery, require_delivery=False):
-            return {
-                "ok": False,
-                "error_code": _result_error_code(dry_result, "store_quote_conductor_telegram_dry_run_failed"),
-            }
-        try:
-            applied = self.telegram_sender.send_work_quote_message(
-                delivery=delivery,
-                idempotency_key=delivery_key,
-                correlation_id=effective_correlation,
-                mode="apply",
-                dry_run_proof=proof,
-            )
-            readback = self.telegram_sender.readback_work_quote_message(
-                delivery=delivery,
-                correlation_id=effective_correlation,
-            )
-        except (OSError, TypeError, ValueError):
-            return {"ok": False, "error_code": "store_quote_conductor_telegram_readback_failed"}
-        if not _telegram_delivery_readback_matches(readback, delivery):
-            return {"ok": False, "error_code": "store_quote_conductor_telegram_readback_mismatch"}
-        if not applied.get("ok") and not _apply_outcome_uncertain(applied):
-            return {
-                "ok": False,
-                "error_code": _result_error_code(applied, "store_quote_conductor_telegram_apply_failed"),
-            }
-        delivery_ref = _delivery_ref_sha256(readback)
-        if delivery_ref is None:
-            return {"ok": False, "error_code": "store_quote_conductor_telegram_delivery_ref_invalid"}
-        return {"ok": True, "refs": {**delivery.refs(), "delivery_ref_sha256": delivery_ref}}
-
-    def _record_reply(  # noqa: C901
-        self,
-        *,
-        run_id: int | None,
-        quote_request_id: str,
-        expected_state_version: int | None,
-        step_id: str,
-        classification: str,
-        telegram_inbound_receipt: str,
-        supplied_consent_context_hash: str,
-        supplied_published_snapshot_hash: str,
-        supplied_telegram_context_hash: str,
-    ) -> dict[str, Any]:
-        normalized = str(classification or "").strip().casefold()
-        if normalized not in _REPLY_CLASSIFICATIONS:
-            return _error("store_quote_conductor_reply_classification_invalid")
-        # A public caller must not be able to assert a consent/context hash.
-        # The work-Telegram transport proves the exact incoming turn below and
-        # this method derives the consent binding from that readback only.
-        if any(
-            str(value or "").strip()
-            for value in (
-                supplied_consent_context_hash,
-                supplied_published_snapshot_hash,
-                supplied_telegram_context_hash,
-            )
-        ):
-            return _error("store_quote_conductor_reply_binding_must_be_transport_verified")
-        run = self._require_active_run(run_id, quote_request_id, expected_state_version)
-        if not run.get("ok"):
-            return _error(str(run.get("error")))
-        if str(run.get("status") or "") != "external_wait":
-            return _error("store_quote_conductor_reply_requires_external_wait", run=run, status="conflict")
-        current_step = str(step_id or "").strip()
-        if not current_step:
-            return _error("store_quote_conductor_step_id_required", run=run)
-        expected_snapshot = _checkpoint_value(run, "published_snapshot_hash")
-        expected_context = _checkpoint_value(run, "telegram_context_hash")
-        expected_delivery_binding = _checkpoint_value(run, "delivery_binding_sha256")
-        expected_delivery_ref = _checkpoint_value(run, "delivery_ref_sha256")
-        expected_revision = _checkpoint_value(run, "expected_revision_sha256")
-        if not all(
-            _HASH.fullmatch(value) is not None
-            for value in (
-                expected_snapshot,
-                expected_context,
-                expected_delivery_binding,
-                expected_delivery_ref,
-                expected_revision,
-            )
-        ):
-            return _error("store_quote_conductor_telegram_reply_delivery_binding_missing", run=run, status="conflict")
-        if current_step != _pending_step(run, "quote_response"):
-            return _error("store_quote_conductor_reply_step_binding_invalid", run=run, status="conflict")
-        if self.telegram_sender is None:
-            return _error("store_quote_conductor_telegram_reply_sender_unavailable", run=run)
-        try:
-            inbound = StoreQuoteTelegramInboundReply(
-                quote_request_id=quote_request_id,
-                revision_sha256=expected_revision,
-                published_snapshot_hash=expected_snapshot,
-                context_hash=expected_context,
-                delivery_binding_sha256=expected_delivery_binding,
-                delivery_ref_sha256=expected_delivery_ref,
-                classification=normalized,
-                receipt=telegram_inbound_receipt,
-            )
-        except (TypeError, ValueError) as exc:
-            return _error(str(exc), run=run)
-        correlation_id = _delivery_correlation(run, "")
-        if correlation_id is None:
-            return _error("store_quote_conductor_correlation_id_invalid", run=run)
-        try:
-            readback = self.telegram_sender.readback_work_quote_reply(
-                inbound=inbound,
-                correlation_id=correlation_id,
-            )
-        except (OSError, TypeError, ValueError):
-            return _error("store_quote_conductor_telegram_reply_readback_failed", run=run)
-        reply_refs = _telegram_reply_readback_refs(readback, inbound)
-        if reply_refs is None:
-            return _error("store_quote_conductor_telegram_reply_readback_mismatch", run=run, status="conflict")
-        refs: dict[str, str] = {
-            "status": normalized,
-            "quote_snapshot_hash": expected_snapshot,
-            "telegram_context_hash": expected_context,
-            "delivery_binding_sha256": expected_delivery_binding,
-            **reply_refs,
-        }
-        consent_context_hash = ""
-        if normalized == "consent":
-            consent_context_hash = _consent_context_hash(inbound, reply_refs)
-            refs["consent_context_hash"] = consent_context_hash
-        completed = self.store.complete_store_quote_conductor_external_step(
-            int(run["id"]),
-            step_id=current_step,
-            result_refs=refs,
-            expected_state_version=int(run["state_version"]),
-        )
-        if not completed.get("ok"):
-            return _error(str(completed.get("error") or "store_quote_conductor_reply_failed"), run=run)
-        current = self._get_run(int(run["id"]), quote_request_id)
-        if not current.get("ok"):
-            return _error(str(current.get("error")))
-        if normalized == "decline":
-            return self._complete_from_run(current, phase="declined")
-        resumed = self._ensure_executing(current)
-        if not resumed.get("ok"):
-            return _error(str(resumed.get("error")), run=current)
-        current = resumed["run"]
-        if normalized in {"selection", "addition"}:
-            return self._checkpoint_reply(current, quote_request_id, phase="revision_needed")
-        if normalized == "clarification":
-            return self._checkpoint_reply(current, quote_request_id, phase="clarifying")
-        if normalized == "consent":
-            return self._checkpoint_reply(
-                current,
-                quote_request_id,
-                phase="published",
-                technical={"consent_context_hash": consent_context_hash, **reply_refs},
-                response_technical={"consent_context_hash": consent_context_hash},
-            )
-        return self._wait_for_client(
-            run_id=int(current["id"]),
-            quote_request_id=quote_request_id,
-            expected_state_version=int(current["state_version"]),
-            step_id="",
-            phase="clarifying",
-            action="clarification",
-            correlation_id="",
-        )
-
-    def _checkpoint_reply(
-        self,
-        run: dict[str, Any],
-        quote_request_id: str,
-        *,
-        phase: str,
-        technical: dict[str, Any] | None = None,
-        response_technical: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        checkpoint = self._checkpoint(run, phase=phase, technical=technical or {})
-        if not checkpoint.get("ok"):
-            return _error(str(checkpoint.get("error") or "store_quote_conductor_checkpoint_failed"), run=run)
-        current = self._get_run(int(run["id"]), quote_request_id)
-        return _envelope(
-            ok=True,
-            status="executing",
-            run=current if current.get("ok") else run,
-            technical=response_technical,
         )
 
     def _write(
@@ -1399,16 +763,7 @@ class StoreQuoteConductor:
         current = self._get_run(int(run["id"]), None)
         if not current.get("ok"):
             return _error(str(current.get("error")))
-        status = str(current["status"])
-        if status == "external_wait":
-            terminal = self.store.transition_store_quote_conductor_run(
-                int(current["id"]),
-                status="cancelled",
-                message="failed store_quote_conductor",
-                expected_state_version=int(current["state_version"]),
-            )
-        else:
-            terminal = self._complete_from_run(current, phase="handoff", return_raw=True)
+        terminal = self._complete_from_run(current, phase="handoff", return_raw=True)
         if not terminal.get("ok"):
             return _error(str(terminal.get("error") or "store_quote_conductor_handoff_failed"), run=current)
         final_run = self._get_run(int(current["id"]), None)
@@ -1457,8 +812,6 @@ class StoreQuoteConductor:
         if not current_result.get("ok"):
             return current_result
         current = current_result
-        if str(current["status"]) == "external_wait":
-            return {"ok": False, "error": "store_quote_conductor_pending_external_step"}
         if str(current["status"]) == "executing":
             verifying = self.store.transition_store_quote_conductor_run(
                 int(current["id"]),
@@ -1590,10 +943,6 @@ class StoreQuoteConductor:
                 message="execute store_quote_conductor",
                 expected_state_version=int(run["state_version"]),
             )
-        elif status == "external_wait":
-            transitioned = self.store.resume_store_quote_conductor_run(
-                int(run["id"]), expected_state_version=int(run["state_version"])
-            )
         else:
             return {"ok": False, "error": "store_quote_conductor_not_resumable"}
         if not transitioned.get("ok"):
@@ -1621,21 +970,13 @@ class StoreQuoteConductor:
             for key, value in _mapping(run.get("checkpoint")).items()
             if key
             in {
-                "consent_context_hash",
                 "counts",
-                "delivery_binding_sha256",
-                "delivery_ref_sha256",
                 "entries_hash",
                 "evidence_hash",
-                "inbound_binding_sha256",
-                "incoming_ref_sha256",
-                "message_sha256",
                 "published_snapshot_hash",
                 "quote_snapshot_hash",
-                "reply_text_sha256",
                 "request_fingerprint",
                 "snapshot_at",
-                "telegram_context_hash",
                 "verification",
             }
         }
@@ -1670,7 +1011,7 @@ class StoreQuoteConductor:
 
 
 def assess_quote_evidence(evidence: dict[str, Any] | None) -> dict[str, Any]:
-    """Fail closed unless every customer-visible recommendation fact is verified."""
+    """Validate a compact factual review without prescribing the recommendation."""
 
     value = _mapping(evidence)
     allowed = set(_EVIDENCE_FLAGS) | {"offer_count", "handoff_reasons", "recommendation_basis"}
@@ -1678,13 +1019,10 @@ def assess_quote_evidence(evidence: dict[str, Any] | None) -> dict[str, Any]:
         return {"ok": False, "error_code": "store_quote_conductor_evidence_fields_invalid"}
     missing = sorted(flag for flag in _EVIDENCE_FLAGS if value.get(flag) is not True)
     offer_count = value.get("offer_count")
-    if type(offer_count) is not int or not 1 <= offer_count <= 3:
+    if type(offer_count) is not int or not 1 <= offer_count <= 50:
         missing.append("offer_count")
-    basis = str(value.get("recommendation_basis") or "").strip().casefold()
-    if basis not in _RECOMMENDATION_BASES:
-        missing.append("recommendation_basis")
     reasons = value.get("handoff_reasons", [])
-    if not isinstance(reasons, list) or any(str(reason) not in _HANDOFF_REASONS for reason in reasons):
+    if not isinstance(reasons, list) or any(_EVIDENCE_LABEL.fullmatch(str(reason)) is None for reason in reasons):
         missing.append("handoff_reasons")
     elif reasons:
         missing.extend(f"handoff:{reason}" for reason in reasons)
@@ -1771,9 +1109,6 @@ def _write_request(
     snapshot_hash = str(published_snapshot_hash or "")
     saved_snapshot = str(saved.get("published_snapshot_hash") or "")
     if not _valid_hash_match(snapshot_hash, saved_snapshot) or _HASH.fullmatch(str(consent_context_hash or "")) is None:
-        return {"ok": False, "error_code": "store_quote_conductor_consent_binding_invalid"}
-    saved_consent = str(saved.get("consent_context_hash") or "")
-    if not _valid_hash_match(consent_context_hash, saved_consent):
         return {"ok": False, "error_code": "store_quote_conductor_consent_binding_invalid"}
     return {
         "ok": True,
@@ -1931,13 +1266,6 @@ def _safe_quote_identifier(value: str) -> bool:
     )
 
 
-def _safe_store_revision(value: Any) -> bool:
-    normalized = str(value or "").strip()
-    return (
-        1 <= len(normalized) <= 1_024 and "\x00" not in normalized and "\n" not in normalized and "\r" not in normalized
-    )
-
-
 def _valid_entries(value: Any) -> bool:
     return isinstance(value, list) and 1 <= len(value) <= 50 and all(isinstance(item, dict) for item in value)
 
@@ -1951,188 +1279,6 @@ def _valid_customer_response(value: str) -> bool:
     return 1 <= len(normalized) <= 2_000
 
 
-def _valid_telegram_text(value: Any) -> bool:
-    if not isinstance(value, str) or not value or len(value) > 4_096:
-        return False
-    if any(marker in value for marker in ("\r", "\n", "\x00")):
-        return False
-    sentence_count = len(re.findall(r"[.!?]+", value))
-    return 1 <= sentence_count <= 3 and value.count("?") == 1 and value.endswith("?")
-
-
-def _delivery_correlation(run: dict[str, Any], supplied: str) -> str | None:
-    stored = str(_mapping(run.get("scope")).get("correlation_id") or "").strip()
-    candidate = str(supplied or "").strip() or stored
-    if _IDENTIFIER.fullmatch(candidate) is None:
-        return None
-    if stored and candidate != stored:
-        return None
-    return candidate
-
-
-def _telegram_delivery_key(run: dict[str, Any], delivery: StoreQuoteTelegramDelivery) -> str:
-    run_id = int(run.get("id") or 0)
-    fingerprint = _sha256(
-        f"telegram-delivery-v1\0{run_id}\0{delivery.published_snapshot_hash}\0{delivery.context_hash}\0{delivery.text_sha256}"
-    )
-    return f"telegram-delivery-{run_id}-{fingerprint[:32]}"
-
-
-def _telegram_delivery_readback_matches(result: Any, delivery: StoreQuoteTelegramDelivery) -> bool:
-    return _telegram_delivery_projection_matches(result, delivery, require_delivery=True)
-
-
-def _telegram_delivery_projection_matches(
-    result: Any,
-    delivery: StoreQuoteTelegramDelivery,
-    *,
-    require_delivery: bool,
-) -> bool:
-    payload = _mapping(result)
-    if not payload.get("ok"):
-        return False
-    projection = {**_mapping(payload.get("summary")), **_mapping(payload.get("data"))}
-    return (
-        (not require_delivery or projection.get("recipient_confirmed") is True)
-        and (not require_delivery or projection.get("private_target_confirmed") is True)
-        and (not require_delivery or projection.get("unique_target_confirmed") is True)
-        and (not require_delivery or projection.get("work_account_confirmed") is True)
-        and (not require_delivery or projection.get("delivery_confirmed") is True)
-        and _valid_hash_match(
-            str(projection.get("quote_ref_sha256") or ""), _quote_ref_sha256(delivery.quote_request_id)
-        )
-        and _valid_hash_match(str(projection.get("revision_sha256") or ""), _sha256(delivery.estimate_revision))
-        and _valid_hash_match(str(projection.get("message_sha256") or ""), delivery.text_sha256)
-        and _valid_hash_match(str(projection.get("context_hash") or ""), delivery.context_hash)
-        and _valid_hash_match(
-            str(projection.get("published_snapshot_hash") or ""),
-            delivery.published_snapshot_hash,
-        )
-        and _valid_hash_match(str(projection.get("delivery_binding_sha256") or ""), delivery.binding_sha256)
-        and _valid_hash_match(str(projection.get("route_binding_sha256") or ""), delivery.route_binding_sha256)
-    )
-
-
-def _delivery_ref_sha256(result: Any) -> str | None:
-    payload = _mapping(result)
-    projection = {**_mapping(payload.get("summary")), **_mapping(payload.get("data"))}
-    value = str(projection.get("delivery_ref_sha256") or "").strip()
-    return value if _HASH.fullmatch(value) is not None else None
-
-
-def _telegram_reply_readback_refs(
-    result: Any,
-    inbound: StoreQuoteTelegramInboundReply,
-) -> dict[str, str] | None:
-    """Validate an inbound receipt against the exact active Telegram turn.
-
-    The bridge may inspect raw Telegram content and peer state transiently,
-    but it returns only booleans and one-way references.  A caller-supplied
-    classification is accepted only when that independent readback agrees.
-    """
-
-    payload = _mapping(result)
-    if not payload.get("ok"):
-        return None
-    projection = {**_mapping(payload.get("summary")), **_mapping(payload.get("data"))}
-    reply_text_sha256 = str(projection.get("reply_text_sha256") or "").strip()
-    incoming_ref_sha256 = str(projection.get("incoming_ref_sha256") or "").strip()
-    inbound_binding_sha256 = str(projection.get("inbound_binding_sha256") or "").strip()
-    expected_binding = _inbound_binding_sha256(
-        inbound=inbound,
-        reply_text_sha256=reply_text_sha256,
-        incoming_ref_sha256=incoming_ref_sha256,
-    )
-    if not all(
-        projection.get(flag) is True
-        for flag in (
-            "recipient_confirmed",
-            "private_target_confirmed",
-            "unique_target_confirmed",
-            "work_account_confirmed",
-            "delivery_confirmed",
-            "reply_confirmed",
-            "reply_sender_matches_delivery",
-        )
-    ):
-        return None
-    if not (
-        _valid_hash_match(str(projection.get("quote_ref_sha256") or ""), _quote_ref_sha256(inbound.quote_request_id))
-        and _valid_hash_match(str(projection.get("revision_sha256") or ""), inbound.revision_sha256)
-        and _valid_hash_match(str(projection.get("published_snapshot_hash") or ""), inbound.published_snapshot_hash)
-        and _valid_hash_match(str(projection.get("context_hash") or ""), inbound.context_hash)
-        and _valid_hash_match(str(projection.get("delivery_binding_sha256") or ""), inbound.delivery_binding_sha256)
-        and _valid_hash_match(str(projection.get("delivery_ref_sha256") or ""), inbound.delivery_ref_sha256)
-        and str(projection.get("reply_classification") or "").strip().casefold() == inbound.classification
-        and _HASH.fullmatch(reply_text_sha256) is not None
-        and _HASH.fullmatch(incoming_ref_sha256) is not None
-        and _valid_hash_match(inbound_binding_sha256, expected_binding)
-    ):
-        return None
-    return {
-        "reply_text_sha256": reply_text_sha256,
-        "incoming_ref_sha256": incoming_ref_sha256,
-        "inbound_binding_sha256": inbound_binding_sha256,
-    }
-
-
-def _inbound_binding_sha256(
-    *,
-    inbound: StoreQuoteTelegramInboundReply,
-    reply_text_sha256: str,
-    incoming_ref_sha256: str,
-) -> str:
-    return _sha256(
-        _canonical_json(
-            {
-                "quote_ref_sha256": _quote_ref_sha256(inbound.quote_request_id),
-                "revision_sha256": inbound.revision_sha256,
-                "published_snapshot_hash": inbound.published_snapshot_hash,
-                "telegram_context_hash": inbound.context_hash,
-                "delivery_binding_sha256": inbound.delivery_binding_sha256,
-                "delivery_ref_sha256": inbound.delivery_ref_sha256,
-                "reply_classification": inbound.classification,
-                "reply_text_sha256": reply_text_sha256,
-                "incoming_ref_sha256": incoming_ref_sha256,
-            }
-        )
-    )
-
-
-def _consent_context_hash(inbound: StoreQuoteTelegramInboundReply, reply_refs: dict[str, str]) -> str:
-    """Derive Store's consent token from a transport-verified incoming turn."""
-
-    return _sha256(
-        _canonical_json(
-            {
-                "kind": "store_quote_conductor_consent_v1",
-                "quote_ref_sha256": _quote_ref_sha256(inbound.quote_request_id),
-                "revision_sha256": inbound.revision_sha256,
-                "published_snapshot_hash": inbound.published_snapshot_hash,
-                "telegram_context_hash": inbound.context_hash,
-                "delivery_binding_sha256": inbound.delivery_binding_sha256,
-                "delivery_ref_sha256": inbound.delivery_ref_sha256,
-                "reply_text_sha256": reply_refs["reply_text_sha256"],
-                "incoming_ref_sha256": reply_refs["incoming_ref_sha256"],
-                "inbound_binding_sha256": reply_refs["inbound_binding_sha256"],
-                "reply_classification": inbound.classification,
-            }
-        )
-    )
-
-
-def _pending_step(run: dict[str, Any], action: str) -> str | None:
-    for step in run.get("external_steps", []):
-        if (
-            isinstance(step, dict)
-            and str(step.get("connector") or "") == "telegram"
-            and str(step.get("action") or "") == action
-            and str(step.get("status") or "") != "completed"
-        ):
-            return str(step.get("step_id") or "") or None
-    return None
-
-
 def _phase(run: dict[str, Any]) -> str:
     value = str(_mapping(run.get("checkpoint")).get("phase") or "new")
     return value if value in _PHASES else "new"
@@ -2140,10 +1286,6 @@ def _phase(run: dict[str, Any]) -> str:
 
 def _checkpoint_value(run: dict[str, Any], key: str) -> str:
     return str(_mapping(run.get("checkpoint")).get(key) or "")
-
-
-def _run_revision(run: dict[str, Any]) -> str:
-    return _checkpoint_value(run, "expected_revision_sha256")
 
 
 def _valid_hash_match(value: str, expected: str) -> bool:
@@ -2167,30 +1309,14 @@ def _apply_outcome_uncertain(result: dict[str, Any]) -> bool:
 
 def _result_error_code(result: dict[str, Any], fallback: str) -> str:
     error = _mapping(result.get("error"))
-    code = str(error.get("code") or _mapping(result.get("summary")).get("error_code") or fallback)
+    code = str(
+        result.get("error_code") or error.get("code") or _mapping(result.get("summary")).get("error_code") or fallback
+    )
     return code if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:-]{0,119}", code) is not None else fallback
 
 
 def _quote_ref_sha256(quote_request_id: str) -> str:
     return _sha256(f"store-quote-conductor-v1\0{quote_request_id}")
-
-
-def _route_binding_sha256(
-    quote_request_id: str,
-    estimate_revision: str,
-    published_snapshot_hash: str,
-    context_hash: str,
-) -> str:
-    """Stable identity route for one exact current published quote context.
-
-    The recipient proof must expire as soon as Store replaces the published
-    snapshot or revision.  All inputs are already opaque one-way references.
-    """
-
-    return _sha256(
-        f"store-quote-work-route-v2\0{_quote_ref_sha256(quote_request_id)}\0{_sha256(estimate_revision)}"
-        f"\0{published_snapshot_hash}\0{context_hash}"
-    )
 
 
 def _optional_ref_hash(value: Any) -> str | None:
@@ -2271,8 +1397,6 @@ def _next_actions(checkpoint: dict[str, Any], status: str) -> list[str]:
     phase = str(checkpoint.get("phase") or "")
     if status == "handoff" or phase == "handoff":
         return ["human_review_required"]
-    if phase == "waiting_client":
-        return ["wait_for_verified_telegram_reply"]
     if phase == "waiting_payment":
         return ["human_payment_confirmation_required"]
     if phase == "revision_needed":
@@ -2282,7 +1406,7 @@ def _next_actions(checkpoint: dict[str, Any], status: str) -> list[str]:
     if phase == "draft_saved":
         return ["publish_estimate"]
     if phase == "published":
-        return ["send_or_wait_for_telegram_quote_response"]
+        return ["continue_customer_dialogue_or_create_order_after_choice"]
     return []
 
 
@@ -2292,8 +1416,5 @@ __all__ = [
     "StoreQuoteConductor",
     "StoreQuoteGateway",
     "StoreQuoteOwnerApi",
-    "StoreQuoteTelegramDelivery",
-    "StoreQuoteTelegramInboundReply",
-    "StoreQuoteTelegramSender",
     "assess_quote_evidence",
 ]

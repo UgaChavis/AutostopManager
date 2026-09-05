@@ -232,8 +232,8 @@ def _rank_oem_candidate(
     }
 
 
-def _manual_action(code: str, message: str, *, priority: int = 1) -> dict[str, Any]:
-    return {"code": code, "priority": priority, "message": message}
+def _manual_action(code: str, message: str | None = None, *, priority: int = 1, **context: Any) -> dict[str, Any]:
+    return {"code": code, "priority": priority, **({"message": message} if message else {}), **context}
 
 
 def _status(readiness: dict[str, Any], *, candidates: list[dict[str, Any]], live_partsapi_oem: bool) -> str:
@@ -402,9 +402,7 @@ def resolve_vin_oem_parts(
         manual_actions.append(
             _manual_action(
                 "clarify_part_position",
-                part_profile.get("crm_clarification_prompt")
-                or part_profile.get("clarification_prompt")
-                or "Уточнить позицию детали.",
+                fields=list(part_profile.get("clarification_fields") or []),
             )
         )
     if part_actionable and not category_numeric:

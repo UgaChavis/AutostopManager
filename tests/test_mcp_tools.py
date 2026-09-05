@@ -192,9 +192,9 @@ def test_knowledge_base_tools_are_registered(tmp_path):
 
     probe_result = server.tools["probe_knowledge_base"]("clutch gearbox", limit=3)
     assert probe_result["ok"] is True
-    assert probe_result["best_domain"] == "automotive_repair"
+    assert probe_result["best_domain"] == "service_case"
 
-    search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="automotive_repair", limit=5)
+    search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="service_case", limit=5)
     assert search_result["ok"] is True
     assert search_result["items"]
 
@@ -270,16 +270,16 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     assert "prepare_manager_context" in server.tools
     context = server.tools["prepare_manager_context"]("Приберись", intent="board_cleanup", limit=5)
     assert context["ok"] is True
-    assert context["command_route"]["command_id"] == "board_cleanup_autopilot"
+    assert [route["command_id"] for route in context["command_routes"]] == ["board_cleanup_autopilot"]
 
     assert "agent_brief" in server.tools
     brief = server.tools["agent_brief"]("Приберись", intent="board_cleanup", limit=5)
     assert brief["ok"] is True
     assert brief["format"] == "agent_brief_v1"
-    assert brief["route"]["domain"] == "board_cleanup_autopilot"
-    assert brief["route"]["selected_workflows"] == ["board_cleanup_autopilot"]
+    assert [step["workflow_id"] for step in brief["route"]["steps"]] == ["board_cleanup_autopilot"]
+    assert brief["route"]["steps"][0]["domain"] == "board_cleanup_autopilot"
     assert brief["route"]["steps"][0]["effects"] == ["crm_write"]
-    assert "crm_card_description_standard" in brief["route"]["steps"][0]["knowledge_domains"]
+    assert brief["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
 
     assert "audit_skill_registry" in server.tools
     skills = server.tools["audit_skill_registry"]()
@@ -335,14 +335,8 @@ def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_pat
             "coverage",
             "customer_response",
             "evidence",
-            "step_id",
-            "reply_classification",
             "consent_context_hash",
             "published_snapshot_hash",
-            "telegram_context_hash",
-            "telegram_inbound_receipt",
-            "telegram_message",
-            "telegram_message_kind",
             "mode",
         ],
     }
@@ -455,7 +449,7 @@ def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_pat
 
     assert "READ_ONLY RAW_CAPABILITY" in server.descriptions["store_owner_capabilities"]
     assert "OWNER_SCOPED RAW_CAPABILITY" in server.descriptions["store_owner_api"]
-    assert "schema-bound dry-run proof" in server.descriptions["store_owner_api"]
+    assert "dry-run proof" in server.descriptions["store_owner_api"]
     assert captured["config"] == {
         "agent_api_url": "http://autostop-app:8000/internal/agent/v1",
         "owner_token": "owner-runtime-secret",
@@ -613,7 +607,7 @@ def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_pat
         intent="crm_finance_operation",
     )
     assert bootstrap["format"] == "agent_envelope_v2"
-    assert bootstrap["summary"]["selected_workflow"]["workflow_id"] == "crm_finance_operation"
+    assert bootstrap["summary"]["selected_workflows"][0]["workflow_id"] == "crm_finance_operation"
 
     started = server.tools["start_workflow"](
         workflow_id="crm_finance_operation",

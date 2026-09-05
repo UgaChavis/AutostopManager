@@ -1,4 +1,4 @@
 interface:
   display_name: "Публичные камеры Красноярска"
   short_description: "Разовый снимок с проверенной городской камеры"
-  default_prompt: "Use $capture-public-camera to obtain one current frame from an allowlisted Krasnoyarsk public camera by street, address, or landmark."
+  default_prompt: "Используй $capture-public-camera, чтобы получить актуальный кадр публичной камеры по указанному месту."

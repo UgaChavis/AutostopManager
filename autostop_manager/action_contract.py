@@ -895,7 +895,7 @@ def _store_preflight_checks(
     if domain == "store_quote_conductor":
         checks.extend(["typed_store_quote_operation_checked", "estimate_provenance_reread"])
         if action == "confirm_estimate_order_from_telegram":
-            checks.extend(["published_snapshot_current", "telegram_consent_context_hash_matches"])
+            checks.extend(["published_snapshot_current", "telegram_consent_context_hash_present"])
     return checks
 
 

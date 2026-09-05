@@ -135,7 +135,6 @@ def get_store_analytics_report(
         report = _allowlisted_report(payload)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
         return _error("store_analytics_response_invalid")
-    report["answer"] = _natural_answer(report, query=query)
     return report
 
 
@@ -341,40 +340,6 @@ def _comparison(value: Any) -> dict[str, dict[str, int | float | None]]:
             if key in item
         }
     return result
-
-
-def _natural_answer(report: dict[str, Any], *, query: str) -> str:
-    lowered = str(query or "").casefold()
-    summary = report["summary"]
-    funnel = report["funnel"]
-    if any(term in lowered for term in ("время", "сколько времени", "проводят на сайте")):
-        return (
-            f"Активное время на сессию: в среднем {summary['averageEngagedSeconds']:.1f} с, "
-            f"медиана {summary['medianEngagedSeconds']:.1f} с; измерено сессий: {summary['engagedSessions']}."
-        )
-    if any(term in lowered for term in ("товар", "смотрел", "популярн")):
-        items = report["topProducts"][:5]
-        if not items:
-            return "За выбранный период просмотров товаров пока нет."
-        rendered = "; ".join(
-            f"{item.get('name') or item.get('sku') or item.get('productId')}: {item['views']}" for item in items
-        )
-        return f"Чаще всего смотрели: {rendered}."
-    if any(term in lowered for term in ("нажим", "клик", "куда чаще")):
-        items = report["clicks"][:5]
-        if not items:
-            return "За выбранный период значимых нажатий пока нет."
-        return "Значимые нажатия: " + "; ".join(f"{item['label']}: {item['count']}" for item in items) + "."
-    if any(term in lowered for term in ("конверс", "ворон", "в корзину", "в заказ")):
-        return (
-            f"Конверсия с просмотра товара в корзину — {funnel['viewToCartRate']:.2f}%, "
-            f"в заказ — {funnel['viewToOrderRate']:.2f}%; заказов: {summary['orders']}, "
-            f"заявок: {summary['quoteSubmissions']}."
-        )
-    return (
-        f"За выбранный период: посетителей {summary['visitors']}, сессий {summary['sessions']}, "
-        f"просмотров страниц {summary['pageViews']}."
-    )
 
 
 def _number(value: Any) -> int | float:

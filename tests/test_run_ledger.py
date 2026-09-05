@@ -93,7 +93,7 @@ def test_v2_workflow_is_idempotent_resumable_and_keeps_external_steps_refs_only(
     assert status["item"]["external_steps"][0]["result_refs"]["message_id"] == "message-9"
 
 
-def test_store_quote_conductor_uses_one_active_target_and_refs_only_telegram_steps(tmp_path):
+def test_store_quote_conductor_uses_one_active_target_and_guarded_ledger(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     target_hash = "a" * 64
     revision_hash = "b" * 64
@@ -150,69 +150,25 @@ def test_store_quote_conductor_uses_one_active_target_and_refs_only_telegram_ste
         expected_state_version=started["state_version"],
     )
     assert executing["ok"] is True
-    request_refs = {
-        "expected_revision_sha256": revision_hash,
-        "quote_snapshot_hash": "c" * 64,
-        "telegram_context_hash": "d" * 64,
-        "message_sha256": "e" * 64,
-        "delivery_binding_sha256": "f" * 64,
-        "route_binding_sha256": "6" * 64,
-        "delivery_ref_sha256": "1" * 64,
-    }
     assert (
         store.register_external_step(
             started["id"],
             step_id="telegram-quote-response-001",
             connector="telegram",
             action="quote_response",
-            request_refs=request_refs,
+            request_refs={"external_ref": "telegram-reply"},
             expected_state_version=executing["state_version"],
         )["error"]
         == "store_quote_conductor_ledger_owned_by_named_workflow"
     )
-    waiting = store.register_store_quote_conductor_external_step(
-        started["id"],
-        step_id="telegram-quote-response-001",
-        connector="telegram",
-        action="quote_response",
-        request_refs=request_refs,
-        expected_state_version=executing["state_version"],
-    )
-    assert waiting["ok"] is True
-    result_refs = {
-        "status": "consent",
-        "quote_snapshot_hash": "c" * 64,
-        "telegram_context_hash": "d" * 64,
-        "delivery_binding_sha256": "f" * 64,
-        "reply_text_sha256": "2" * 64,
-        "incoming_ref_sha256": "3" * 64,
-        "inbound_binding_sha256": "4" * 64,
-        "consent_context_hash": "5" * 64,
-    }
-    assert (
-        store.complete_external_step(
-            started["id"],
-            step_id="telegram-quote-response-001",
-            result_refs=result_refs,
-            expected_state_version=waiting["state_version"],
-        )["error"]
-        == "store_quote_conductor_ledger_owned_by_named_workflow"
-    )
-    complete = store.complete_store_quote_conductor_external_step(
-        started["id"],
-        step_id="telegram-quote-response-001",
-        result_refs=result_refs,
-        expected_state_version=waiting["state_version"],
-    )
-    assert complete["ok"] is True
 
     assert (
-        store.resume_workflow_run(started["id"], expected_state_version=complete["state_version"])["error"]
+        store.resume_workflow_run(started["id"], expected_state_version=executing["state_version"])["error"]
         == "store_quote_conductor_ledger_owned_by_named_workflow"
     )
     valid_checkpoint = {
         "operation": STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION,
-        "phase": "waiting_client",
+        "phase": "published",
         "expected_revision_sha256": revision_hash,
         "target_ref_sha256": target_hash,
         "entries_hash": "e" * 64,
@@ -222,7 +178,7 @@ def test_store_quote_conductor_uses_one_active_target_and_refs_only_telegram_ste
             started["id"],
             checkpoint=valid_checkpoint,
             message="verify store_quote_conductor",
-            expected_state_version=complete["state_version"],
+            expected_state_version=executing["state_version"],
         )["error"]
         == "store_quote_conductor_ledger_owned_by_named_workflow"
     )
@@ -233,7 +189,7 @@ def test_store_quote_conductor_uses_one_active_target_and_refs_only_telegram_ste
             "counts": {"customer_price": 1300},
         },
         message="verify store_quote_conductor",
-        expected_state_version=complete["state_version"],
+        expected_state_version=executing["state_version"],
     )
     assert raw["ok"] is False
     assert raw["error"] == "store_quote_conductor_ledger_schema_invalid"
@@ -241,7 +197,7 @@ def test_store_quote_conductor_uses_one_active_target_and_refs_only_telegram_ste
         started["id"],
         checkpoint={**valid_checkpoint, "telegram_peer_ref_sha256": "f" * 64},
         message="verify store_quote_conductor",
-        expected_state_version=complete["state_version"],
+        expected_state_version=executing["state_version"],
     )
     assert peer["ok"] is False
     assert peer["error"] == "store_quote_conductor_ledger_schema_invalid"

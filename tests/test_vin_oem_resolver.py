@@ -116,6 +116,9 @@ def test_resolver_blocks_generic_part_before_live_catalog_search(monkeypatch):
     assert result["status"] == "needs_part_clarification"
     assert result["readiness"]["ready_for_category_lookup"] is False
     assert "parts_by_vin" not in operations
+    clarification = next(action for action in result["manual_actions"] if action["code"] == "clarify_part_position")
+    assert clarification["fields"] == ["axle"]
+    assert "message" not in clarification
 
 
 def test_resolver_blocks_live_oem_when_category_is_unresolved(monkeypatch):

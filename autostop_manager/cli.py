@@ -109,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("cleanup-audit", help="Dry-run audit for cache, duplicate, and knowledge cleanup candidates")
 
+    sub.add_parser(
+        "store-conductor-release-gate",
+        help="Read-only block for active legacy Store quote-conductor runs before release",
+    )
+
     sub.add_parser("doctor", help="Run the read-only AutoStop Manager health audit")
 
     integration_audit = sub.add_parser(
@@ -159,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
         return _print_checked_json(audit_knowledge_base(store))
     elif args.command == "cleanup-audit":
         return _print_checked_json(build_cleanup_audit(store=store))
+    elif args.command == "store-conductor-release-gate":
+        return _print_checked_json(store.store_quote_conductor_release_readiness())
     elif args.command == "doctor":
         return _print_checked_json(build_system_audit(store=store))
     elif args.command == "integration-audit":

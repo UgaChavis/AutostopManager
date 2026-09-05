@@ -47,7 +47,7 @@ from .store_api import StoreApiClient
 from .store_analytics import get_store_analytics_report
 from .store_integration import StoreIntegration
 from .store_owner_api import StoreOwnerApiClient
-from .store_quote_conductor import StoreQuoteConductor, StoreQuoteOwnerApi, StoreQuoteTelegramSender
+from .store_quote_conductor import StoreQuoteConductor, StoreQuoteOwnerApi
 from .system_audit import build_system_audit
 from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
@@ -98,7 +98,6 @@ def register_manager_memory_tools(  # noqa: C901
     store: ManagerMemoryStore | None = None,
     store_client: StoreApiClient | None = None,
     include_tools: Collection[str] | None = None,
-    telegram_sender: StoreQuoteTelegramSender | None = None,
 ) -> None:
     original_tool = server.tool
     if include_tools is not None:
@@ -128,7 +127,6 @@ def register_manager_memory_tools(  # noqa: C901
     quote_conductor = StoreQuoteConductor(
         store=memory,
         gateway=StoreQuoteOwnerApi(store_owner_client),
-        telegram_sender=telegram_sender,
     )
 
     @server.tool(
@@ -228,7 +226,7 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="memory_map",
-        description="Return compact counts and sections for manager memory so the agent can navigate memory before broad recall.",
+        description="Return compact manager-memory section counts and timestamps.",
     )
     def memory_map() -> dict[str, Any]:
         return memory.memory_map()
@@ -242,17 +240,14 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="memory_context_for",
-        description=(
-            "Build compact memory context for a task: relevant preferences, rules, lessons, source boundaries, and suggested use. "
-            "Use as context for judgment, not as a rigid text template."
-        ),
+        description="Return task-relevant lessons, preferences or facts, and source boundaries.",
     )
     def memory_context_for(task: str, limit: int = 5) -> dict[str, Any]:
         return memory.memory_context_for(task, limit=limit)
 
     @server.tool(
         name="memory_gaps",
-        description="Return sparse or empty memory areas and review prompts without copying CRM or Gmail data.",
+        description="Return sparse and empty manager-memory sections plus detected conflicts.",
     )
     def memory_gaps() -> dict[str, Any]:
         return memory.memory_gaps()
@@ -272,20 +267,14 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="today_context",
-        description=(
-            "Return manager memory context for today's work: due tasks, recent generic journal, "
-            "rules, and reusable routing context."
-        ),
+        description="Return due manager tasks, recent journal entries, rules and warnings.",
     )
     def today_context(limit: int = 20) -> dict[str, Any]:
         return memory.today_context(limit=limit)
 
     @server.tool(
         name="prepare_manager_context",
-        description=(
-            "Prepare task-specific context by combining owner command routes, relevant memory/rules, "
-            "knowledge-base routing, missing required context, and next actions."
-        ),
+        description="Suggest compact workflow candidates and source pointers for a request.",
     )
     def prepare_manager_context_tool(
         query: str,
@@ -297,8 +286,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="agent_brief",
         description=(
-            "Return a compact startup package for an agent before broad document reads: role, route, source boundaries, hot rules, "
-            "read order, allowed/forbidden actions, missing context, next actions, and verification."
+            "Return a compact outcome-driven starting brief: recommended workflow, source pointers, effects "
+            "and verification goals. Routes are guidance, not a script."
         ),
     )
     def agent_brief_tool(
@@ -311,8 +300,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="agent_bootstrap",
         description=(
-            "Return the compact Agent Gateway v2 startup envelope: deterministic workflow, source boundaries, "
-            "internal safety policy, missing context, and resumable unfinished runs. It never reads or writes live CRM/Gmail."
+            "Return an adaptive Agent Gateway v2 starting point with suggested workflows, source boundaries "
+            "and resumable unfinished runs. It does not access live business systems."
         ),
     )
     def agent_bootstrap_tool(
@@ -437,10 +426,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="get_store_analytics_report",
         description=(
-            "READ_ONLY RAW_CAPABILITY: Read one compact aggregate-only first-party AutoStop storefront report "
-            "for today, yesterday, the last 7/30 days, or a custom Krasnoyarsk date range. Accepts a natural "
-            "Russian query and never returns raw events, visitor/session identifiers, search text, or customer data. "
-            "It remains outside the named public Gateway surface and is called only through guarded raw discovery."
+            "READ_ONLY RAW_CAPABILITY: Return one aggregate Store report for the requested period; "
+            "never return raw events, identifiers, search text or customer data."
         ),
     )
     def get_store_analytics_report_tool(
@@ -463,10 +450,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_owner_capabilities",
         description=(
-            "READ_ONLY RAW_CAPABILITY: Discover the current typed AutoStop App employee API operations exposed "
-            "to the owner-approved service principal. The inventory is derived from the live Store OpenAPI, "
-            "excludes public/customer and human login/logout routes, and never returns business data. Pass one "
-            "exact operation_id to receive its bounded validation-only input contract."
+            "READ_ONLY RAW_CAPABILITY: List owner-scoped Store OpenAPI operations or describe one "
+            "validation-only input contract; never return business data."
         ),
         annotations=ToolAnnotations(
             title="Store Owner Capabilities",
@@ -490,11 +475,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_owner_api",
         description=(
-            "OWNER_SCOPED RAW_CAPABILITY: Read or execute one typed AutoStop App employee API operation through "
-            "the dedicated store:owner service principal and the same backend route used by Flutter. Writes "
-            "require ActionContractV2 metadata, exact target/revision, idempotency, correlation, and a matching "
-            "schema-bound dry-run proof; applied results remain compensating until exact reread. Responses are "
-            "transient and never persisted by Manager."
+            "OWNER_SCOPED RAW_CAPABILITY: Invoke one typed Store operation. Writes require the exact "
+            "target and revision, ActionContractV2, idempotency, dry-run proof and reread; results stay transient."
         ),
         annotations=ToolAnnotations(
             title="Store Owner API",
@@ -719,11 +701,7 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="store_runtime_status",
-        description=(
-            "INTERNAL_ONLY: Return secrets-redacted AutoStop App adapter readiness and optional live health in "
-            "store_agent_v1. Production Gateway must exclude this generic capability from public raw discovery "
-            "and expose store health only through existing Gateway v2 bootstrap/runtime tools."
-        ),
+        description=("INTERNAL_ONLY: Return redacted Store adapter readiness and optional live health for Gateway v2."),
     )
     def store_runtime_status_tool(
         live: bool = False,
@@ -737,10 +715,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_digest",
         description=(
-            "INTERNAL_ONLY: Read one bounded pure-read store digest page with at-least-once delivery. A non-empty page "
-            "returns a cursor-bound ack_token; pass both on the next call before Manager advances. First use creates a "
-            "baseline; no raw payload is persisted. Production "
-            "Gateway must expose this through existing Gateway v2 tools, not raw discovery."
+            "INTERNAL_ONLY: Read one bounded Store digest page. Acknowledge its cursor before advancing; "
+            "the first read creates a baseline and Manager persists no raw payload."
         ),
     )
     def store_digest_tool(
@@ -763,9 +739,7 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_search",
         description=(
-            "INTERNAL_ONLY: Search an allowlisted AutoStop App entity through the pure-read agent API with bounded "
-            "pagination, compact DTO validation, and contact redaction. Production Gateway must expose it through "
-            "agent_search and exclude this generic capability from public raw discovery."
+            "INTERNAL_ONLY: Search an allowlisted Store entity with bounded pagination and redacted contacts."
         ),
     )
     def store_search_tool(
@@ -780,9 +754,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_entity_context",
         description=(
-            "INTERNAL_ONLY: Read one exact allowlisted AutoStop App entity by id with summary or full detail. "
-            "General reads remain redacted; exact full quote reads use a dedicated scoped credential and remain transient. Production Gateway must expose it through "
-            "agent_entity_context and exclude this generic capability from public raw discovery."
+            "INTERNAL_ONLY: Read one exact Store entity. General reads are redacted; full quote data uses "
+            "the scoped credential and remains transient."
         ),
     )
     def store_entity_context_tool(
@@ -794,11 +767,7 @@ def register_manager_memory_tools(  # noqa: C901
 
     @server.tool(
         name="download_store_quote_vin_photo",
-        description=(
-            "INTERNAL_ONLY: Read the bounded JPEG preview for one exact Store quote VIN photo. "
-            "The response remains transient, requires the quote-scoped credential, and production Gateway "
-            "must expose it only through agent_document_workflow."
-        ),
+        description=("INTERNAL_ONLY: Read a bounded transient JPEG preview for one exact Store quote VIN photo."),
         annotations=ToolAnnotations(
             title="Store Quote VIN Photo Preview",
             readOnlyHint=True,
@@ -819,10 +788,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_management_action",
         description=(
-            "INTERNAL_ONLY: Execute only allowlisted AutoStop App management operations through "
-            "ActionContractV2, exact pre-read, dry_run/apply, idempotency, optimistic concurrency, and apply reread. "
-            "Production Gateway must exclude this generic tool from raw discovery and expose it only through "
-            "agent_inventory_workflow policy."
+            "INTERNAL_ONLY: Run one allowlisted Store management operation with ActionContractV2, exact "
+            "preread, dry-run/apply, idempotency, optimistic concurrency and reread."
         ),
     )
     def store_management_action_tool(
@@ -851,11 +818,9 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="store_quote_conductor",
         description=(
-            "INTERNAL_ONLY: Run the typed Admin V2 estimate workflow for one Store quote request. "
-            "It exposes only start/status, refs-only Telegram waits and classified replies, verified evidence, "
-            "and the four fixed owner estimate operations; it never exposes a generic Store owner API. "
-            "Every write uses an exact reread, ActionContractV2, Store dry-run receipt, apply, and independent reread. "
-            "Production Gateway must route it only through agent_inventory_workflow and keep it out of raw discovery."
+            "INTERNAL_ONLY: Advance one Store quote through Admin V2; use the work Telegram workflow for dialogue. "
+            "Supports start, status, evidence, draft, publish, reopen, order, handoff and decline; writes use the exact "
+            "current quote and a confirmed reread."
         ),
     )
     def store_quote_conductor_tool(
@@ -870,14 +835,8 @@ def register_manager_memory_tools(  # noqa: C901
         coverage: list[dict[str, Any]] | None = None,
         customer_response: str = "",
         evidence: dict[str, Any] | None = None,
-        step_id: str = "",
-        reply_classification: str = "",
         consent_context_hash: str = "",
         published_snapshot_hash: str = "",
-        telegram_context_hash: str = "",
-        telegram_inbound_receipt: str = "",
-        telegram_message: str = "",
-        telegram_message_kind: str = "",
         mode: str = "apply",
     ) -> dict[str, Any]:
         return quote_conductor.execute(
@@ -892,14 +851,8 @@ def register_manager_memory_tools(  # noqa: C901
             coverage=coverage,
             customer_response=customer_response,
             evidence=evidence,
-            step_id=step_id,
-            reply_classification=reply_classification,
             consent_context_hash=consent_context_hash,
             published_snapshot_hash=published_snapshot_hash,
-            telegram_context_hash=telegram_context_hash,
-            telegram_inbound_receipt=telegram_inbound_receipt,
-            telegram_message=telegram_message,
-            telegram_message_kind=telegram_message_kind,
             mode=mode,
         )
 

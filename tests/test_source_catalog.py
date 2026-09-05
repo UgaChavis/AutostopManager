@@ -94,15 +94,15 @@ def test_source_maps_are_derived_from_the_canonical_catalog():
         assert actual == expected
 
 
-def test_source_catalog_has_specific_publishers_and_current_verified_routes():
+def test_source_catalog_keeps_only_routing_fields_and_current_urls():
     catalog_path = ROOT / "docs" / "agent" / "automotive_sources" / "automotive_repair_sources_catalog.json"
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     by_id = {row["id"]: row for row in catalog["sources"]}
 
-    assert all(row["publisher"] != "Public source route" for row in catalog["sources"])
+    assert all("publisher" not in row and "regions" not in row for row in catalog["sources"])
+    assert all("recommended_ingestion_route" not in row for row in catalog["sources"])
     assert by_id["hyundai_oem_parts"]["url"].startswith("https://www.hyundai.com/eu/")
     assert by_id["toyota_jp_owner_manuals"]["brands"] == ["Toyota"]
-    assert by_id["toyota_jp_owner_manuals"]["regions"] == ["Japan"]
     assert "fluids" in by_id["toyota_jp_owner_manuals"]["data_types"]
 
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Управление Telegram AutoStop"
   short_description: "Личный и рабочий Telegram без смешения"
-  default_prompt: "Используй $manage-owner-telegram для безопасной работы с выбранным Telegram AutoStop."
+  default_prompt: "Используй $manage-owner-telegram и естественно продолжи этот диалог AutoStop."

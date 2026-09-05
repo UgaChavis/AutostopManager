@@ -104,8 +104,9 @@ def test_report_posts_bounded_custom_period_and_returns_only_aggregates(monkeypa
     assert result["format"] == "store_analytics_report_v1"
     assert result["summary"]["visitors"] == 12
     assert result["topProducts"][0]["name"] == "Фильтр"
-    assert "40.00%" in result["answer"]
-    assert "20.00%" in result["answer"]
+    assert result["funnel"]["viewToCartRate"] == 40.0
+    assert result["funnel"]["viewToOrderRate"] == 20.0
+    assert "answer" not in result
     assert result["meta"]["aggregatedOnly"] is True
     assert result["meta"]["rawEventsIncluded"] is False
     assert "previous" not in result
@@ -124,21 +125,16 @@ def test_report_posts_bounded_custom_period_and_returns_only_aggregates(monkeypa
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_period", "answer_fragment"),
+    ("query", "expected_period"),
     [
-        ("сколько посетителей сегодня", "today", "посетителей 12"),
-        ("какие товары смотрели за неделю", "last_7_days", "Фильтр: 7"),
-        ("куда чаще нажимают", "today", "Открытие корзины: 5"),
-        ("сколько времени проводят на сайте", "today", "75.5 с"),
-        ("какая конверсия в корзину и заказ", "today", "20.00%"),
+        ("сколько посетителей сегодня", "today"),
+        ("какие товары смотрели за неделю", "last_7_days"),
+        ("куда чаще нажимают", "today"),
+        ("сколько времени проводят на сайте", "today"),
+        ("какая конверсия в корзину и заказ", "today"),
     ],
 )
-def test_natural_queries_select_period_and_compose_russian_answer(
-    monkeypatch,
-    query,
-    expected_period,
-    answer_fragment,
-):
+def test_natural_queries_select_period_and_return_structured_metrics(monkeypatch, query, expected_period):
     captured = {}
 
     def fake_urlopen(request, timeout):
@@ -154,7 +150,10 @@ def test_natural_queries_select_period_and_compose_russian_answer(
 
     assert result["ok"] is True
     assert captured["body"]["period"] == expected_period
-    assert answer_fragment in result["answer"]
+    assert result["summary"]["visitors"] == 12
+    assert result["funnel"]["viewToOrderRate"] == 20.0
+    assert result["topProducts"][0]["views"] == 7
+    assert "answer" not in result
 
 
 def test_private_or_raw_backend_fields_fail_closed(monkeypatch):

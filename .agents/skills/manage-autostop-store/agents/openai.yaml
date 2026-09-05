@@ -1,4 +1,4 @@
 interface:
   display_name: "Директор магазина AutoStop"
   short_description: "Заявки, подбор, ответы и управление Store"
-  default_prompt: "Используй $manage-autostop-store для полного и проверенного ведения этой задачи AutoStop App."
+  default_prompt: "Используй $manage-autostop-store, пойми потребность клиента и выбери полезный следующий шаг."

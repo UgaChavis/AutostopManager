@@ -6,23 +6,39 @@ if [[ "${EUID}" -ne 0 ]]; then
   echo "run_as_root_required=true" >&2
   exit 1
 fi
-if [[ $# -ne 2 || "$1" != "--account" || "$2" != "work" ]]; then
-  echo "usage: $0 --account work" >&2
+if [[ $# -ne 2 || "$1" != "--account" ]]; then
+  echo "usage: $0 --account personal|work" >&2
   exit 2
 fi
 
-service_unit="autostop-work-telegram.service"
-service_user="autostop-work-telegram"
-release_link="/opt/autostop-work-telegram-releases/current"
-venv_python="/opt/autostop-work-telegram-venv/bin/python"
-session_base="/var/lib/autostop-work-telegram/account.session"
+account="$2"
+case "${account}" in
+  personal)
+    service_unit="autostop-telegram.service"
+    service_user="autostop-telegram"
+    release_link="/opt/autostop-telegram-releases/current"
+    venv_python="/opt/autostop-telegram-venv/bin/python"
+    session_base="/var/lib/autostop-telegram/account.session"
+    ;;
+  work)
+    service_unit="autostop-work-telegram.service"
+    service_user="autostop-work-telegram"
+    release_link="/opt/autostop-work-telegram-releases/current"
+    venv_python="/opt/autostop-work-telegram-venv/bin/python"
+    session_base="/var/lib/autostop-work-telegram/account.session"
+    ;;
+  *)
+    echo "usage: $0 --account personal|work" >&2
+    exit 2
+    ;;
+esac
 
 if [[ ! -x "${venv_python}" || ! -d "${release_link}" ]]; then
-  echo "work_release_unavailable=true" >&2
+  echo "${account}_release_unavailable=true" >&2
   exit 1
 fi
 if ! systemctl show --property=LoadState --value "${service_unit}" | grep -Fxq loaded; then
-  echo "work_service_unavailable=true" >&2
+  echo "${account}_service_unavailable=true" >&2
   exit 1
 fi
 
@@ -38,7 +54,7 @@ fi
 bridge_authorized() {
   systemctl is-active --quiet "${service_unit}" \
     && sudo -u "${service_user}" env PYTHONPATH="${release_link}" \
-      "${venv_python}" -m autostop_manager.telegram_bridge --account work probe \
+      "${venv_python}" -m autostop_manager.telegram_bridge --account "${account}" probe \
       | grep -Eq '"authorized": true'
 }
 
@@ -100,13 +116,13 @@ verify_private_session_files() {
 if session_state_present && ! verify_private_session_files; then
   systemctl stop "${service_unit}" || true
   systemctl disable "${service_unit}" || true
-  echo "work_session_permissions_invalid=true" >&2
+  echo "${account}_session_permissions_invalid=true" >&2
   exit 1
 fi
 
 trap cleanup_failed_authorization EXIT
 
-enable_and_verify_work_bridge() {
+enable_and_verify_bridge() {
   systemctl enable --now "${service_unit}"
   for _attempt in $(seq 1 15); do
     if bridge_authorized; then
@@ -119,13 +135,12 @@ enable_and_verify_work_bridge() {
 
 if bridge_authorized; then
   systemctl enable "${service_unit}"
-  echo "work_telegram_already_authorized=true"
+  echo "${account}_telegram_already_authorized=true"
   trap - EXIT
   exit 0
 fi
 
-# Only the isolated work daemon may be stopped for this bounded login; the
-# existing personal bridge is never referenced by this script.
+# Only the selected daemon may be stopped for this bounded login.
 if [[ "${was_active}" -eq 1 ]]; then
   systemctl stop "${service_unit}"
 fi
@@ -135,20 +150,20 @@ login_status=0
 login_output="$(
   sudo -u "${service_user}" sh -c 'umask 077; exec "$@"' sh \
     env PYTHONPATH="${release_link}" \
-    "${venv_python}" -m autostop_manager.telegram_bridge --account work code-login
+    "${venv_python}" -m autostop_manager.telegram_bridge --account "${account}" code-login
 )" || login_status="$?"
 
 if [[ "${login_status}" -ne 0 ]]; then
   if grep -Eq '"error": "account_already_authorized"' <<<"${login_output}"; then
-    if ! verify_private_session_files || ! enable_and_verify_work_bridge; then
-      echo "work_telegram_existing_authorization_unverified=true" >&2
+    if ! verify_private_session_files || ! enable_and_verify_bridge; then
+      echo "${account}_telegram_existing_authorization_unverified=true" >&2
       exit 1
     fi
-    echo "work_telegram_already_authorized=true"
+    echo "${account}_telegram_already_authorized=true"
     trap - EXIT
     exit 0
   fi
-  echo "work_telegram_login_failed=true" >&2
+  echo "${account}_telegram_login_failed=true" >&2
   exit 1
 fi
 
@@ -158,15 +173,15 @@ if ! verify_private_session_files; then
     "${session_base}-journal" \
     "${session_base}-shm" \
     "${session_base}-wal"
-  echo "work_session_permissions_invalid=true" >&2
+  echo "${account}_session_permissions_invalid=true" >&2
   exit 1
 fi
 
-if ! enable_and_verify_work_bridge; then
-  echo "work_telegram_authorization_unverified=true" >&2
+if ! enable_and_verify_bridge; then
+  echo "${account}_telegram_authorization_unverified=true" >&2
   exit 1
 fi
 
-echo "work_telegram_authorized=true"
+echo "${account}_telegram_authorized=true"
 trap - EXIT
 exit 0

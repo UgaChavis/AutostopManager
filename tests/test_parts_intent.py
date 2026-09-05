@@ -37,7 +37,16 @@ def test_normalize_part_intent_recognizes_unspecified_brake_pads_as_clarificatio
     assert result["intent_id"] == "brake_pads_unspecified_axle"
     assert result["clarification_required"] is True
     assert result["clarification_fields"] == ["axle"]
-    assert "передние или задние" in result["clarification_prompt"]
+    assert "clarification_prompt" not in result
+    assert "price_basis_hint" not in result
+    assert "fitment_caveats" not in result
+
+
+def test_normalize_part_intent_resolves_structured_clarification_from_context():
+    result = normalize_part_intent("тормозные колодки", axle="front")
+
+    assert result["clarification_required"] is False
+    assert result["clarification_fields"] == []
 
 
 def test_normalize_part_intent_recognizes_drive_shaft_with_position_clarification():
@@ -57,6 +66,8 @@ def test_normalize_part_intent_unknown_keeps_search_text():
     assert result["catalog_search_terms"] == ["редкая штука"]
     assert result["positions"] == ["front"]
     assert result["clarification_required"] is True
+    assert result["clarification_fields"] == ["part_group", "side"]
+    assert "clarification_prompt" not in result
 
 
 def test_normalize_part_intent_ignores_blank_position_context():

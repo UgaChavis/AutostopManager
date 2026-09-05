@@ -320,7 +320,6 @@ def probe_knowledge_base(
         "optional_missing_files": best["optional_missing_files"] if best else [],
         "optional_runtime_available": best["optional_runtime_available"] if best else False,
         "optional_runtime_note": best["optional_runtime_note"] if best else "",
-        "command_route": None,
         "routes": routes,
         "ambiguous": ambiguous,
         "next_action": "compare_route_candidates"
@@ -689,6 +688,36 @@ def _normalize_command_route(route: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _implicit_command_context(query: str) -> str:
+    """Add read-only hints for terse inbound parts messages."""
+
+    lowered = query.casefold()
+    tokens = re.findall(r"[0-9a-zа-яё-]+", lowered)
+    vin = re.search(r"(?<![0-9a-z])[a-hj-npr-z0-9]{17}(?![0-9a-z])", lowered) is not None
+    part_number = any(
+        (len(token) >= 7 and any(char.isdigit() for char in token) and any(char.isalpha() for char in token))
+        or re.fullmatch(r"\d{5,}-\d{4,}", token) is not None
+        for token in tokens
+    )
+    part_words = any(
+        term in lowered for term in ("vin", "вин", "oem", "артикул", "запчаст", "детал", "колод", "фильтр", "подшип")
+    )
+    media = any(term in lowered for term in ("фото", "снимок", "изображен"))
+    message = any(term in lowered for term in ("telegram", "телеграм", "в чате", "сообщен")) or (
+        "клиент" in lowered and any(term in lowered for term in ("написал", "прислал"))
+    )
+    customer_choice = message and any(
+        term in lowered for term in ("беру", "подходит", "заказывайте", "оформляйте", "выбираю", "выбрал")
+    )
+    other_context = any(term in lowered for term in ("crm", "карточк", "диагност", "ремонт", "сервис", "dtc"))
+    bare_reference = not other_context and len(tokens) <= 4 and (vin or part_number or media)
+    if not customer_choice and not (
+        (vin or part_number or part_words or (media and message)) and (message or bare_reference)
+    ):
+        return ""
+    return "запчаст прочит telegram"
+
+
 def _scope_exclusions(query: str) -> set[str]:
     return {
         next(value for value in match.groups() if value).casefold()
@@ -729,16 +758,15 @@ def _canonical_scope(value: str) -> str:
 
 
 def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[str, Any]]:
-    """Return every independently matched workflow in safe execution order."""
+    """Return independently matched workflow suggestions in a useful order."""
 
     lowered = (query or "").casefold()
     top_level_text = _strip_quoted_spans(lowered)
     effects_deferred = _query_defers_effects(lowered)
     normalized_intent = (intent or "").casefold()
+    implicit_context = _implicit_command_context(lowered)
     excluded_scopes = _scope_exclusions(query)
     excluded_domains = {_canonical_scope(scope) for scope in excluded_scopes}
-    if _telegram_send_opted_out(lowered):
-        excluded_domains.add("telegram")
     available = [
         dict(route)
         for route in _load_command_routes().get("routes", [])
@@ -755,6 +783,8 @@ def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[s
             score, terms = 1000, [str(route.get("intent") or "")]
         else:
             signal_text = top_level_text if route.get("effects") else lowered
+            if route.get("intent") in {"store_read", "telegram_read", "telegram_operations"}:
+                signal_text = f"{signal_text} {implicit_context}".strip()
             score, terms = _score_command_signals(signal_text, route.get("signals") or {}, route=route)
         if score <= 0:
             continue
@@ -849,8 +879,9 @@ def _has_unnegated_action_signal(lowered: str, route: dict[str, Any]) -> bool:
                 continue
             if re.search(
                 r"(?:клиент|пользователь|человек|сотрудник|менеджер|он|она|мне|я|ты)"
-                r"(?:\s+\w+){0,3}\s+(?:написал\w*|сказал\w*|просит\w*|прислал\w*)|"
-                r"вот\s+что\s+(?:написал\w*|сказал\w*|прислал\w*)\s+клиент\w*|"
+                r"(?:\s+\w+){0,3}\s+(?:написал\w*|сказал\w*|просит\w*|прислал\w*)"
+                r"(?:\s+\w+){0,3}\s*:?\s*$|"
+                r"вот\s+что\s+(?:написал\w*|сказал\w*|прислал\w*)\s+клиент\w*\s*:\s*$|"
                 r"(?:в|на|из)\s+(?:инструкц|документац|справк|заявк|фото|аудио|чат|сообщен\w*|текст)"
                 r"[^:]{0,25}(?:написан|сказан|:)|"
                 r"(?:заявк|коммент|запрос|описан|сообщен|текст|расшифровк|аудио|голосов|фото|чат|цитат)\w*"
@@ -904,22 +935,10 @@ def _action_scoped_to_other_channel(text: str, match: re.Match[str], route: dict
             target = r"\s+заказ\w*[^.!?]{0,35}(?:\bготов\w*\b|\bв\s+ready\b)"
             return re.match(target, suffix) is None
     if primary == "telegram" and route.get("intent") == "telegram_operations":
-        return re.search(r"\b(?:в|через)\s+(?:рабоч\w*\s+|личн\w*\s+)?(?:telegram|телеграм\w*)\b", window) is None
+        return False
     if primary == "telegram" and route.get("intent") == "telegram_authorization" and action == "подключи":
         return re.search(r"\b(?:втор\w*|рабоч\w*|аккаунт\w*|сесси\w*|вход\w*)\b", window) is None
     return False
-
-
-def _telegram_send_opted_out(lowered: str) -> bool:
-    return (
-        re.search(
-            r"\bне\s+(?:в|через)\s+(?:рабоч\w*\s+|личн\w*\s+)?(?:telegram|телеграм\w*)\b|"
-            r"(?:telegram|телеграм\w*)[^.!?]{0,30}\b(?:не\s+(?:пиши|отвечай|отправляй|используй)|без\s+ответа)|"
-            r"\b(?:не\s+(?:пиши|отвечай|отправляй)|без\s+ответа)\b[^.!?]{0,30}(?:telegram|телеграм\w*)",
-            lowered,
-        )
-        is not None
-    )
 
 
 def _strip_quoted_spans(value: str) -> str:
@@ -960,42 +979,22 @@ def _query_defers_effects(lowered: str) -> bool:
 
 def _route_scope_is_negated(lowered: str, route: dict[str, Any]) -> bool:
     effects = set(_string_list(route.get("effects")))
-    domains = set(_string_list(route.get("knowledge_domains")))
-    if "store_write" in effects and re.search(
-        r"(?:store|магазин\w*|сайт\w*)[^.!?]{0,50}\bне\s+(?:делай|меняй|изменяй|публикуй|отправляй)",
-        lowered,
-    ):
-        return True
-    if {"store_write", "crm_write"}.intersection(effects) and (
-        re.search(r"(?:store|магазин\w*)[^.!?]{0,40}\bничего\s+делать\s+не\s+(?:надо|нужно)", lowered)
-        or _has_scoped_negation(lowered, route, kind="write")
-    ):
+    if {"store_write", "crm_write"}.intersection(effects) and _has_scoped_negation(lowered, route, kind="write"):
         return True
     if "external_send" in effects and _has_scoped_negation(lowered, route, kind="send"):
         return True
-    if route.get("command_id") == "telegram_owner_operations" and _telegram_send_opted_out(lowered):
-        return True
-    if (
-        str(route.get("command_id") or "") != "telegram_owner_operations"
-        or "telegram_operations" not in domains
-        or "external_send" not in effects
-    ):
-        return False
-    return any(
-        re.search(pattern, lowered) is not None
-        for pattern in (
-            r"(?:telegram|телеграм\w*)[^.!?]{0,30}\bне\s+(?:пиши|отвечай|отправляй)",
-            r"(?:telegram|телеграм\w*)\s+не\s+делай",
-            r"\bне\s+(?:пиши|отвечай|отправляй)\b[^.!?]{0,30}(?:telegram|телеграм\w*)",
-        )
-    )
+    return False
 
 
 def _has_scoped_negation(lowered: str, route: dict[str, Any], *, kind: str) -> bool:
     patterns = {
-        "write": r"\bничего\s+не\s+(?:записывай|добавляй|меняй|изменяй|обновляй|создавай)\b",
+        "write": (
+            r"\b(?:ничего\s+)?не\s+(?:делай|делать|записывай|добавляй|меняй|изменяй|обновляй|создавай|публикуй)\b|"
+            r"\bбез\s+(?:записи|изменений|публикации)\b"
+        ),
         "send": (
-            r"\bне\s+(?:отвечай|ответь|отправляй|отправь|публикуй|опубликуй)\b|"
+            r"\bне\s+(?:в|через)\s+(?:рабоч\w*\s+|личн\w*\s+)?(?:telegram|телеграм\w*)\b|"
+            r"\bне\s+(?:используй|пиши|отвечай|ответь|отправляй|отправь|публикуй|опубликуй)\b|"
             r"\bбез\s+(?:отправки|публикации|ответа)\b|\bклиент\w*[^.!?]{0,20}\bне\s+(?:отправлять|отвечать)\b|"
             r"\b(?:ответ|отправка)\s+клиент\w*\s+не\s+(?:нуж|долж)|\bответ\w*[^.!?]{0,20}\bне\s+должно\s+быть|"
             r"\b(?:ничего\s+)?не\s+(?:отправлять|публиковать|отвечать|писать)\b|"
@@ -1519,7 +1518,7 @@ def _domain_hints(query: str) -> dict[str, int]:
     if any(term in lowered for term in documentation_terms) and any(
         action in lowered for action in documentation_actions
     ):
-        hints["knowledge_intake"] = 90
+        hints["startup_and_identity"] = 90
 
     remote_access_terms = (
         "home-pc",
@@ -1601,7 +1600,7 @@ def _domain_hints(query: str) -> dict[str, int]:
     for domain, score in _focused_navigation_hints(lowered).items():
         hints[domain] = max(hints.get(domain, 0), score)
     if any(word in lowered for word in ["масло", "моторное", "жидк", "заправ", " то "]):
-        hints["fluids"] = 20
+        hints["service_case"] = 30
     technical_repair_terms = (
         "грм",
         "метк",
@@ -1625,9 +1624,9 @@ def _domain_hints(query: str) -> dict[str, int]:
         or any(term in lowered for term in technical_repair_terms)
         or bool(re.search(r"\bp[0-3]\d{4}\b", lowered))
     ):
-        hints["automotive_repair"] = 44
+        hints["service_case"] = max(hints.get("service_case", 0), 50)
     if any(word in lowered for word in ["вин", "vin", "oem", "каталог", "кузов"]):
-        hints["vehicle_identity_and_oem"] = 10
+        hints["service_case"] = max(hints.get("service_case", 0), 20)
     crm_vin_terms = [
         "crm",
         "карточк",
@@ -1659,13 +1658,12 @@ def _domain_hints(query: str) -> dict[str, int]:
         and any(word in lowered for word in part_terms)
         and any(word in lowered for word in crm_vin_terms)
     ):
-        hints["crm_vin_oem_parts_lookup"] = max(hints.get("crm_vin_oem_parts_lookup", 0), 34)
-        hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 12)
+        hints["service_case"] = max(hints.get("service_case", 0), 55)
     if not any(word in lowered for word in identifier_terms) and any(
         _term_count(lowered, word)
         for word in ["заказ-наряд", "зн", "материал", "материалы", "заменитель", "цена", "закуп"]
     ):
-        hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 40)
+        hints["service_case"] = max(hints.get("service_case", 0), 40)
     internal_store_reference = any(
         phrase in lowered
         for phrase in (
@@ -1694,9 +1692,9 @@ def _domain_hints(query: str) -> dict[str, int]:
             "рейк",
         ]
     ):
-        hints["parts_sourcing"] = max(hints.get("parts_sourcing", 0), 36)
+        hints["service_case"] = max(hints.get("service_case", 0), 36)
     if any(word in lowered for word in ["bmw", "бмв", "n63", "n63tu", "f15", "e15", "g05"]):
-        hints["automotive_repair"] = max(hints.get("automotive_repair", 0), 60)
+        hints["service_case"] = max(hints.get("service_case", 0), 60)
     if any(word in lowered for word in ["приберись", "board_cleanup_autopilot"]):
         hints["board_cleanup_autopilot"] = max(hints.get("board_cleanup_autopilot", 0), 30)
     elif "cleanup" in lowered and any(term in lowered for term in ("crm", "board", "карточк", "клиент", "автомобил")):
@@ -1720,19 +1718,19 @@ def _focused_navigation_hints(lowered: str) -> dict[str, int]:
         domain: score
         for domain, score, terms in (
             ("startup_and_identity", 70, ("подготовь менеджера", "manager startup", "менеджера к работе")),
-            ("automotive_repair", 70, ("dsg", "dq200", "dq250", "мехатроник", "odis", "svm")),
-            ("automotive_repair", 78, ("kombi", "приборк", "coding", "кодирован", "a2l", "odx", "dcm")),
+            ("service_case", 70, ("dsg", "dq200", "dq250", "мехатроник", "odis", "svm")),
+            ("service_case", 78, ("kombi", "приборк", "coding", "кодирован", "a2l", "odx", "dcm")),
         )
         if any(term in lowered for term in terms)
     }
     if any(term in lowered for term in ("сцеплен", "clutch", "коробк", "gearbox", "трансмисс")):
-        hints["automotive_repair"] = 70
+        hints["service_case"] = 70
     if any(term in lowered for term in ("счет", "счёт", "invoice", "акт", "коммерческ")) and any(
         term in lowered for term in ("созд", "сформир", "выстав", "шаблон", "pdf")
     ):
         hints["business_documents"] = 75
     if any(term in lowered for term in ("реквизит", "огрнип", "карточка предприятия")):
-        hints["business_identity"] = 75
+        hints["business_documents"] = 75
     return hints
 
 

@@ -56,14 +56,6 @@ _MEDIA_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^
 _PATH_PARAMETER = re.compile(r"\{([^{}]+)\}")
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
 _JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-_VERIFICATION_CLASSES = frozenset(
-    {
-        "absence_plus_audit",
-        "collection_membership",
-        "exact_entity",
-        "operation_specific_state",
-    }
-)
 _SESSION_BOUNDARIES = frozenset(
     {
         ("POST", "/api/v1/admin/auth/login"),

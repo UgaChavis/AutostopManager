@@ -16,9 +16,7 @@ from autostop_manager.telegram_bridge import (
     TelegramConfig,
     _ensure_private_key,
     _read_private_download,
-    _read_one_time_password,
     _requires_mutation_lock,
-    _save_qr,
     account_inbox_dir,
     account_model_dir,
     account_outbox_dir,
@@ -64,29 +62,6 @@ def test_work_telegram_service_has_no_personal_state_or_socket() -> None:
     assert "/run/autostop-telegram" not in service
 
 
-@pytest.mark.parametrize(
-    ("reply", "expected"),
-    [
-        ("да", "confirmed"),
-        ("Добрый день, да, оставлял.", "confirmed"),
-        ("Да, это я", "confirmed"),
-        ("Да, оставлял, но фото сейчас нет", "confirmed"),
-        ("Нет, не оставлял", "declined"),
-        ("Нет, ошиблись", "declined"),
-        ("Нет, это я", "ambiguous"),
-        ("Да, сколько будет стоить?", "ambiguous"),
-        ("Муж оставлял", "ambiguous"),
-        ("Не помню, оставлял", "ambiguous"),
-        ("Оставлял не я", "declined"),
-        ("Верно ли я понял", "ambiguous"),
-        ("Кажется, моя заявка", "ambiguous"),
-        ("Конечно", "ambiguous"),
-    ],
-)
-def test_store_quote_identity_reply_understands_clear_natural_language(reply: str, expected: str) -> None:
-    assert telegram_bridge._classify_store_quote_identity_reply(reply) == expected
-
-
 def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     script = ROOT / "scripts/deploy_telegram_bridge.sh"
     completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
@@ -94,6 +69,10 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert completed.returncode == 0
     text = script.read_text(encoding="utf-8")
     assert "origin/${BRANCH}" in text
+    assert 'fetch --quiet --prune origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"' in text
+    assert "ls-remote --heads origin" in text
+    assert "Telegram release checkout must match the fetched remote branch" in text
+    assert "status --porcelain --untracked-files=all" in text
     assert 'git -C "${SOURCE_DIR}" archive' in text
     assert "autostop-telegram.service" in text
     assert "autostop-work-telegram.service" in text
@@ -117,7 +96,6 @@ def test_telegram_admin_scripts_require_an_explicit_account_selector() -> None:
     for script_name in (
         "deploy_telegram_bridge.sh",
         "install-telegram-bridge.sh",
-        "set-telegram-2fa-password.sh",
     ):
         completed = subprocess.run(
             ["bash", str(ROOT / "scripts" / script_name)],
@@ -217,29 +195,32 @@ def test_telegram_dependency_lock_is_hash_pinned_and_installer_requires_it() -> 
     assert 'faster-whisper==1.2.1"' not in installer
 
 
-def test_work_authorization_script_is_syntax_valid_and_has_no_message_operations() -> None:
+def test_authorization_script_supports_both_accounts_without_message_operations() -> None:
     script = ROOT / "scripts/authorize-telegram-account.sh"
     completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
 
     assert completed.returncode == 0
     text = script.read_text(encoding="utf-8")
-    assert "--account work code-login" in text
-    assert "--account work probe" in text
+    assert "usage: $0 --account personal|work" in text
+    assert '--account "${account}" code-login' in text
+    assert '--account "${account}" probe' in text
     assert "umask 077" in text
     assert "umask 077; exec" in text
     assert "verify_private_session_files" in text
     assert "restore_original_service_state" in text
     assert 'systemctl disable "${service_unit}"' in text
     assert '"${service_user}:${service_user}:600"' in text
-    assert "autostop-telegram.service" not in text
+    assert "autostop-telegram.service" in text
+    assert "autostop-work-telegram.service" in text
     assert all(forbidden not in text for forbidden in (" dialogs", " send", " search", " read"))
 
 
-def _run_mocked_work_authorization(
+def _run_mocked_authorization(
     tmp_path: Path,
     *,
     scenario: str,
     session_mode: str = "600",
+    account: str = "work",
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     release_link = tmp_path / "release"
     venv_python = tmp_path / "venv" / "bin" / "python"
@@ -252,21 +233,26 @@ def _run_mocked_work_authorization(
     session_file.write_text("mock-session", encoding="utf-8")
     session_file.chmod(0o600)
 
+    service_user = "autostop-telegram" if account == "personal" else "autostop-work-telegram"
+    release_root = "autostop-telegram-releases" if account == "personal" else "autostop-work-telegram-releases"
+    venv_root = "autostop-telegram-venv" if account == "personal" else "autostop-work-telegram-venv"
+    state_root = "autostop-telegram" if account == "personal" else "autostop-work-telegram"
+
     source = (ROOT / "scripts/authorize-telegram-account.sh").read_text(encoding="utf-8")
     source = source.replace('if [[ "${EUID}" -ne 0 ]]; then', "if false; then", 1)
-    source = source.replace('service_user="autostop-work-telegram"', 'service_user="mock-service"', 1)
+    source = source.replace(f'service_user="{service_user}"', 'service_user="mock-service"', 1)
     source = source.replace(
-        'release_link="/opt/autostop-work-telegram-releases/current"',
+        f'release_link="/opt/{release_root}/current"',
         f'release_link="{release_link}"',
         1,
     )
     source = source.replace(
-        'venv_python="/opt/autostop-work-telegram-venv/bin/python"',
+        f'venv_python="/opt/{venv_root}/bin/python"',
         f'venv_python="{venv_python}"',
         1,
     )
     source = source.replace(
-        'session_base="/var/lib/autostop-work-telegram/account.session"',
+        f'session_base="/var/lib/{state_root}/account.session"',
         f'session_base="{session_file}"',
         1,
     )
@@ -359,7 +345,7 @@ exit 2
         }
     )
     completed = subprocess.run(
-        ["bash", str(authorize_script), "--account", "work"],
+        ["bash", str(authorize_script), "--account", account],
         check=False,
         capture_output=True,
         text=True,
@@ -369,16 +355,17 @@ exit 2
     return completed, state
 
 
-def test_work_authorization_failure_restores_original_active_enabled_state(tmp_path) -> None:
-    completed, state = _run_mocked_work_authorization(tmp_path, scenario="failure")
+@pytest.mark.parametrize("account", ["personal", "work"])
+def test_authorization_failure_restores_selected_service_state(tmp_path, account: str) -> None:
+    completed, state = _run_mocked_authorization(tmp_path, scenario="failure", account=account)
 
     assert completed.returncode == 1
-    assert "work_telegram_login_failed=true" in completed.stderr
+    assert f"{account}_telegram_login_failed=true" in completed.stderr
     assert state == "active=1,enabled=1"
 
 
 def test_work_authorization_recovers_an_existing_private_session(tmp_path) -> None:
-    completed, state = _run_mocked_work_authorization(tmp_path, scenario="existing")
+    completed, state = _run_mocked_authorization(tmp_path, scenario="existing")
 
     assert completed.returncode == 0
     assert "work_telegram_already_authorized=true" in completed.stdout
@@ -386,7 +373,7 @@ def test_work_authorization_recovers_an_existing_private_session(tmp_path) -> No
 
 
 def test_work_authorization_rejects_an_existing_open_session_before_login(tmp_path) -> None:
-    completed, state = _run_mocked_work_authorization(tmp_path, scenario="failure", session_mode="644")
+    completed, state = _run_mocked_authorization(tmp_path, scenario="failure", session_mode="644")
 
     assert completed.returncode == 1
     assert "work_session_permissions_invalid=true" in completed.stderr
@@ -544,7 +531,6 @@ def test_named_accounts_have_fixed_isolated_media_paths() -> None:
     personal_inbox = account_inbox_dir("personal")
     work_inbox = account_inbox_dir("work")
 
-    assert personal_inbox == telegram_bridge.DEFAULT_INBOX_DIR
     assert account_outbox_dir("personal") == telegram_bridge.DEFAULT_OUTBOX_DIR
     assert account_model_dir("personal") == telegram_bridge.DEFAULT_STATE_DIR / "models" / "faster-whisper-small"
     assert work_inbox == telegram_bridge.WORK_SOCKET_PATH.parent / "inbox"
@@ -717,15 +703,46 @@ def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "discard_download"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_send", "mode": "dry_run"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_send", "mode": "apply"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_readback"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_mint_inbound_receipt"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_bind_identity_candidate"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_mint_identity_receipt"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_reply_readback"}) is True
-    assert _requires_mutation_lock({"operation": "store_quote_identity_readback"}) is True
     assert _requires_mutation_lock({"operation": "read"}) is False
+
+
+def test_text_send_rejects_non_private_peer(monkeypatch, tmp_path) -> None:
+    async def resolve_peer(_client, _peer):
+        return object(), {"id": 10, "title": "Group", "username": None, "kind": "group"}
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
+
+    with pytest.raises(BridgeError, match="private_peer_required"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(),
+                _runtime_config(tmp_path),
+                {"operation": "send", "peer": "10", "text": "hello", "mode": "dry_run"},
+            )
+        )
+
+
+def test_photo_send_rejects_non_private_peer(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    outbox = config.socket_path.parent / "outbox"
+    outbox.mkdir(parents=True, mode=0o700)
+    photo = outbox / "frame.jpg"
+    photo.write_bytes(b"\xff\xd8example\xff\xd9")
+    photo.chmod(0o600)
+
+    async def resolve_peer(_client, _peer):
+        return object(), {"id": 10, "title": "Channel", "username": None, "kind": "channel"}
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
+
+    with pytest.raises(BridgeError, match="private_peer_required"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(),
+                config,
+                {"operation": "send_photo", "peer": "10", "photo": str(photo), "caption": "hello", "mode": "dry_run"},
+            )
+        )
 
 
 def test_photo_file_must_be_private_jpeg_inside_outbox(tmp_path) -> None:
@@ -864,48 +881,6 @@ def test_normal_message_text_is_unchanged() -> None:
 
     assert text == "Привет! Как дела?"
     assert redacted is False
-
-
-def test_save_qr_replaces_output_without_leaving_partial_file(tmp_path, monkeypatch) -> None:
-    class FakeImage:
-        def save(self, path, *, format) -> None:
-            assert format == "PNG"
-            path.write_bytes(b"\x89PNG\r\n\x1a\nexample")
-
-    class FakeQrCode:
-        @staticmethod
-        def make(url):
-            assert url == "tg://login?token=example"
-            return FakeImage()
-
-    monkeypatch.setattr("autostop_manager.telegram_bridge._load_qrcode", lambda: FakeQrCode())
-    output = tmp_path / "login-qr.png"
-
-    _save_qr("tg://login?token=example", output)
-
-    assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
-    assert output.stat().st_mode & 0o777 == 0o600
-    assert list(tmp_path.glob(".login-qr.png.*.tmp")) == []
-
-
-def test_one_time_password_is_private_and_consumed(tmp_path) -> None:
-    password_file = tmp_path / "password.once"
-    password_file.write_text("секретный пароль\n", encoding="utf-8")
-    os.chmod(password_file, 0o600)
-
-    assert _read_one_time_password(password_file) == "секретный пароль"
-    assert not password_file.exists()
-
-
-def test_one_time_password_rejects_open_permissions_without_consuming(tmp_path) -> None:
-    password_file = tmp_path / "password.once"
-    password_file.write_text("secret", encoding="utf-8")
-    os.chmod(password_file, 0o640)
-
-    with pytest.raises(BridgeError, match="two_factor_password_permissions_invalid"):
-        _read_one_time_password(password_file)
-
-    assert password_file.exists()
 
 
 def _runtime_config(tmp_path) -> TelegramConfig:
@@ -1453,7 +1428,7 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
 def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path) -> None:
     config = _runtime_config(tmp_path)
     entity = object()
-    target = {"id": 10, "title": "Target", "username": None, "kind": "supergroup"}
+    target = {"id": 10, "title": "Target", "username": None, "kind": "private"}
 
     async def resolve(_client, _peer):
         return entity, target
@@ -1527,7 +1502,7 @@ def test_text_reply_rejects_source_changed_after_dry_run(monkeypatch, tmp_path) 
     entity = object()
 
     async def resolve(_client, _peer):
-        return entity, {"id": 10, "title": "Target", "username": None, "kind": "supergroup"}
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
 
     async def last_message(_client, _entity):
         return 20
@@ -1666,50 +1641,6 @@ def test_local_request_transport_and_cli_mapping(monkeypatch, tmp_path, capsys) 
     )
     assert json.loads(capsys.readouterr().out)["request_operation"] == "send_photo"
     assert requests[-1]["caption"] == "caption"
-
-
-def test_qr_login_handles_existing_and_new_authorization(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path)
-    saved_urls: list[str] = []
-
-    class QrLogin:
-        url = "tg://login?token=safe-test"
-
-        async def wait(self):
-            return SimpleNamespace(id=77)
-
-        async def recreate(self):
-            raise AssertionError("recreate is not expected")
-
-    class Client:
-        authorized = True
-
-        def __init__(self, _session, _api_id, _api_hash):
-            self.disconnected = False
-
-        async def connect(self):
-            return None
-
-        async def disconnect(self):
-            self.disconnected = True
-
-        async def is_user_authorized(self):
-            return self.authorized
-
-        async def qr_login(self):
-            return QrLogin()
-
-    monkeypatch.setattr(telegram_bridge, "_load_telethon", lambda: (Client, object(), RuntimeError))
-    monkeypatch.setattr(telegram_bridge, "_save_qr", lambda url, _path: saved_urls.append(url))
-
-    existing = asyncio.run(telegram_bridge.run_qr_login(config, tmp_path / "existing.png"))
-    assert existing == {"ok": True, "authorized": True, "already_authorized": True}
-
-    Client.authorized = False
-    created = asyncio.run(telegram_bridge.run_qr_login(config, tmp_path / "new.png"))
-    assert created["account_id"] == 77
-    assert created["already_authorized"] is False
-    assert saved_urls == ["tg://login?token=safe-test"]
 
 
 def test_code_login_keeps_phone_code_and_identity_out_of_result(monkeypatch, tmp_path) -> None:
@@ -1891,9 +1822,25 @@ def test_hidden_terminal_prompt_rejects_noninteractive_input(monkeypatch) -> Non
         telegram_bridge._read_hidden_terminal_value("Telegram login code: ")
 
 
-def test_code_login_command_is_work_account_only(capsys) -> None:
-    assert telegram_bridge.main(["--account", "personal", "code-login"]) == 1
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "code_login_requires_work_account"}
+@pytest.mark.parametrize("account", ["personal", "work"])
+def test_code_login_command_accepts_both_accounts(monkeypatch, capsys, account) -> None:
+    selected_accounts: list[str] = []
+
+    monkeypatch.setattr(
+        telegram_bridge,
+        "_config_from_args",
+        lambda args: SimpleNamespace(account=args.account),
+    )
+
+    async def code_login(config):
+        selected_accounts.append(config.account)
+        return {"ok": True, "authorized": True, "verified": True}
+
+    monkeypatch.setattr(telegram_bridge, "run_code_login", code_login)
+
+    assert telegram_bridge.main(["--account", account, "code-login"]) == 0
+    assert selected_accounts == [account]
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "authorized": True, "verified": True}
 
 
 def test_probe_requires_authorization_for_success(monkeypatch, tmp_path, capsys) -> None:

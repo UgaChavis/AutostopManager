@@ -13,7 +13,6 @@ from typing import Any
 
 from .catalog_adapters import catalog_provider_status
 from .config import PROJECT_ROOT
-from .knowledge_base import audit_knowledge_base
 from .memory_curator import audit_memory
 from .storage import ManagerMemoryStore, _now
 from .system_audit import build_system_audit
@@ -83,7 +82,7 @@ def build_control_report(
 
     system_audit = build_system_audit(store=memory, project_root=root)
     git = _git_state(root)
-    knowledge = _knowledge_summary(memory)
+    knowledge = _knowledge_summary((system_audit.get("checks") or {}).get("knowledge_audit") or {})
     memory_summary = _memory_summary(memory)
     learning = memory.get_agent_learning_summary(limit=5)
     mcp = _mcp_catalog_summary()
@@ -264,8 +263,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _knowledge_summary(memory: ManagerMemoryStore) -> dict[str, Any]:
-    audit = audit_knowledge_base(memory)
+def _knowledge_summary(audit: dict[str, Any]) -> dict[str, Any]:
     summary = audit.get("summary") or {}
     return {
         "ok": bool(audit.get("ok")),

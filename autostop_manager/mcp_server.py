@@ -10,9 +10,8 @@ def build_server() -> FastMCP:
     server = FastMCP(
         name="AutostopManager",
         instructions=(
-            "AutoStop routing, safe memory and workflow ledger. Start non-trivial work with agent_brief; "
-            "follow the canonical Manager rules and named Gateway workflows. CRM, Store, Gmail and Telegram "
-            "remain sources of truth for their own data; Manager keeps only safe rules, refs and compact lessons."
+            "Tools for an AutoStop director. Treat agent_brief as guidance, combine useful capabilities, and drive "
+            "the task to an outcome. CRM, Store, Gmail and Telegram own their current data; Manager coordinates them."
         ),
         host=get_mcp_host(),
         port=get_mcp_port(),

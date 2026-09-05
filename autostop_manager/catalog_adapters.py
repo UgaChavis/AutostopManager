@@ -49,7 +49,7 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         priority="baseline",
         role="Local hints for common AutoStop ROW/JDM patterns and CRM identity conflicts.",
         limits="Rules are not VIN-specific EPC confirmation; cannot prove options or OEM parts alone.",
-        docs_url="docs/agent/vehicle_identity_playbook.md",
+        docs_url=".agents/skills/resolve-autostop-service-case/SKILL.md",
     ),
     CatalogProvider(
         source_id="partsapi_ru",
@@ -580,7 +580,6 @@ def build_oem_parts_provider_plan(
                 "step": "verify_applicability_and_crosses",
                 "providers": [provider["source_id"] for provider in cross_providers],
                 "acceptance": "OEM applicability and cross/analog confidence are separated; title-match crosses stay unconfirmed",
-                "fitment_caveats": part_profile.get("fitment_caveats", []),
             },
             {
                 "step": "lookup_public_aftermarket_catalogs",

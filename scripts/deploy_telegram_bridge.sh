@@ -46,11 +46,30 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 revision="${1:-}"
+if ! git -C "${SOURCE_DIR}" fetch --quiet --prune origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"; then
+  echo "ERROR: Telegram release Git fetch failed" >&2
+  exit 1
+fi
+remote_revision="$(git -C "${SOURCE_DIR}" rev-parse "origin/${BRANCH}^{commit}")"
+head_revision="$(git -C "${SOURCE_DIR}" rev-parse "HEAD^{commit}")"
+live_remote_revision="$(
+  git -C "${SOURCE_DIR}" ls-remote --heads origin "refs/heads/${BRANCH}" | awk 'NR == 1 { print $1 }'
+)"
+if [[ -z "${live_remote_revision}" || "${head_revision}" != "${remote_revision}" \
+  || "${remote_revision}" != "${live_remote_revision}" ]]; then
+  echo "ERROR: Telegram release checkout must match the fetched remote branch" >&2
+  exit 1
+fi
+if ! git -C "${SOURCE_DIR}" diff --quiet --ignore-submodules \
+  || ! git -C "${SOURCE_DIR}" diff --cached --quiet --ignore-submodules \
+  || [[ -n "$(git -C "${SOURCE_DIR}" status --porcelain --untracked-files=all)" ]]; then
+  echo "ERROR: Telegram release checkout must be clean" >&2
+  exit 1
+fi
 if [[ -z "${revision}" ]]; then
-  revision="$(git -C "${SOURCE_DIR}" rev-parse "origin/${BRANCH}")"
+  revision="${remote_revision}"
 fi
 revision="$(git -C "${SOURCE_DIR}" rev-parse "${revision}^{commit}")"
-remote_revision="$(git -C "${SOURCE_DIR}" rev-parse "origin/${BRANCH}")"
 if [[ "${revision}" != "${remote_revision}" ]]; then
   echo "ERROR: Telegram release revision must match origin/${BRANCH}" >&2
   exit 1

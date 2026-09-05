@@ -22,7 +22,6 @@ dev = [
 ]
 telegram = [
     "faster-whisper==1.2.1",
-    "qrcode[pil]>=8,<9",
     "telethon>=1.40,<2",
 ]
 

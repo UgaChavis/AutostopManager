@@ -46,15 +46,12 @@ def list_agent_workflows(*, query: str = "", intent: str | None = None, limit: i
     workflows = _load_workflows()
     selected_routes = plan_command_routes(query, intent=intent) if query or intent else []
     selected_workflows = [_compact_workflow(route) for route in selected_routes]
-    selected = selected_workflows[0] if selected_workflows else None
     limit = max(1, min(int(limit), 100))
     items = workflows[:limit]
     return agent_envelope(
         ok=True,
         status="completed",
         summary={
-            "selected_workflow_id": (selected or {}).get("workflow_id"),
-            "selected": selected,
             "selected_workflows": selected_workflows,
             "workflow_count": len(workflows),
             "items": items,
@@ -75,7 +72,7 @@ def build_agent_bootstrap(
 ) -> dict[str, Any]:
     memory = store or ManagerMemoryStore()
     brief = build_agent_brief(memory, query, intent=intent, limit=limit)
-    routes = plan_command_routes(query, intent=intent)
+    routes = list((brief.get("route") or {}).get("steps") or [])
     active = memory.list_active_manager_runs(limit=500).get("items", [])
     unfinished = [_compact_run(item) for item in active]
     selected_workflows = [_compact_workflow(route) for route in routes]
@@ -133,12 +130,8 @@ def build_agent_bootstrap(
         summary={
             "role": brief.get("role"),
             "intent": brief.get("intent"),
-            "selected_workflow": selected,
-            "selected": selected,
             "selected_workflows": selected_workflows,
             "source_boundaries": brief.get("source_boundaries", {}),
-            "required_context": brief.get("required_context", []),
-            "missing_context": brief.get("missing_context", []),
             "unfinished_runs": unfinished,
             "agent_mode": {
                 "global_mode": mode["global_mode"],
@@ -147,18 +140,8 @@ def build_agent_bootstrap(
                 "active_turn": active_turn.get("active_turn") if active_turn.get("ok") else None,
                 "learning_review_required": mode["effective_mode"] == "learning",
             },
-            "policy": {
-                "full_owner_agent_capability": True,
-                "owner_confirmation_state": False,
-                "preflight_required": True,
-                "idempotency_required": True,
-                "optimistic_concurrency_required": True,
-                "readback_verification_required": True,
-                "external_email_bodies_in_ledger": False,
-            },
         },
         warnings=warnings,
-        next_actions=list(brief.get("next_actions") or []),
         meta={
             "workflow_registry_count": len(_load_workflows()),
             "workflow_registry_tool": "list_agent_workflows",

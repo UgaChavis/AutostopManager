@@ -16,18 +16,9 @@ class PartIntentRule:
     positions: tuple[str, ...]
     critical_vehicle_fields: tuple[str, ...]
     quantity_basis: str
-    price_basis_hint: str
-    fitment_caveats: tuple[str, ...]
     partsapi_cat_candidates: tuple[str, ...] = ()
-    required_position_fields: tuple[str, ...] = ()
-    partsapi_category_candidates: tuple[str, ...] = ()
-    catalog_group_terms: tuple[str, ...] = ()
-    risk_fields: tuple[str, ...] = ()
-    crm_clarification_prompt: str | None = None
     confidence: float = 0.7
-    clarification_required: bool = False
     clarification_fields: tuple[str, ...] = ()
-    clarification_prompt: str | None = None
 
     def matches(self, text: str) -> bool:
         return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in self.patterns)
@@ -57,17 +48,9 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "drivetrain",
         ),
         quantity_basis="axle_set_after_axle_confirmation",
-        price_basis_hint="ask front or rear before quoting; front and rear kits usually differ",
-        fitment_caveats=(
-            "front/rear axle must be explicit before VIN catalog selection",
-            "brake disc diameter, PR/options, or trim can split pad shape",
-            "cross numbers are not fitment proof without VIN/frame applicability",
-        ),
         partsapi_cat_candidates=("brake pads", "front brake pads", "rear brake pads", "колодки тормозные"),
         confidence=0.74,
-        clarification_required=True,
         clarification_fields=("axle",),
-        clarification_prompt="Уточнить ось: передние или задние тормозные колодки?",
     ),
     PartIntentRule(
         intent_id="front_brake_pads",
@@ -91,12 +74,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "drivetrain",
         ),
         quantity_basis="axle_set",
-        price_basis_hint="quote one axle set unless supplier explicitly prices one side or one pad kit differently",
-        fitment_caveats=(
-            "front/rear axle must be explicit",
-            "brake disc diameter, PR/options, or trim can split pad shape",
-            "cross numbers are not fitment proof without VIN/frame applicability",
-        ),
         partsapi_cat_candidates=("brake pads", "front brake pads", "колодки тормозные передние"),
         confidence=0.9,
     ),
@@ -121,11 +98,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "drivetrain",
         ),
         quantity_basis="axle_set",
-        price_basis_hint="separate disc pads from drum shoes and parking brake shoes",
-        fitment_caveats=(
-            "rear brakes can be disc or drum",
-            "parking brake shoe and service brake pad are different parts",
-        ),
         partsapi_cat_candidates=("rear brake pads", "brake shoes", "колодки тормозные задние"),
         confidence=0.88,
     ),
@@ -147,8 +119,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "wheel_size",
         ),
         quantity_basis="piece_or_pair_must_be_explicit",
-        price_basis_hint="do not mix one-disc price with pair total",
-        fitment_caveats=("diameter and axle side are common split points",),
         partsapi_cat_candidates=("brake disc", "brake rotor", "диск тормозной"),
         confidence=0.86,
     ),
@@ -162,8 +132,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("front_or_rear_required", "left_right_when_split"),
         critical_vehicle_fields=("axle", "side", "market", "production_date", "suspension_type", "drivetrain"),
         quantity_basis="piece; pair only when both sides are explicitly requested",
-        price_basis_hint="quote per piece and total quantity separately",
-        fitment_caveats=("front and rear links usually differ", "left/right can differ on some platforms"),
         partsapi_cat_candidates=("stabilizer link", "стойка стабилизатора"),
         confidence=0.88,
     ),
@@ -177,8 +145,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("front_or_rear_required", "left_right_required"),
         critical_vehicle_fields=("axle", "side", "production_date", "drivetrain", "suspension_type", "market"),
         quantity_basis="piece by side",
-        price_basis_hint="left and right part numbers/prices can differ",
-        fitment_caveats=("side is VIN-critical", "bushing/ball-joint included status must be visible"),
         partsapi_cat_candidates=("control arm", "lower arm", "рычаг подвески"),
         confidence=0.86,
     ),
@@ -192,8 +158,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("front_or_rear_required", "left_right_required", "inner_outer_required"),
         critical_vehicle_fields=("side", "inner_outer", "drivetrain", "abs_ring", "transmission", "production_date"),
         quantity_basis="piece",
-        price_basis_hint="quote joint kit contents: boot, grease, clips, nut",
-        fitment_caveats=("ABS ring teeth/spline count can split fitment", "inner and outer joints are different"),
         partsapi_cat_candidates=("cv joint", "drive shaft joint", "шрус"),
         confidence=0.84,
     ),
@@ -207,16 +171,9 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("front_or_rear_required", "left_right_required"),
         critical_vehicle_fields=("side", "axle", "drivetrain", "transmission", "abs_ring", "production_date"),
         quantity_basis="piece by side and axle",
-        price_basis_hint="quote one shaft after side/axle confirmation; used and new shafts must be separated",
-        fitment_caveats=(
-            "left/right and front/rear context are VIN-critical",
-            "transmission, ABS ring, spline count, and shaft length can split fitment",
-        ),
         partsapi_cat_candidates=("drive shaft", "axle shaft", "приводной вал", "полуось"),
         confidence=0.78,
-        clarification_required=True,
         clarification_fields=("side", "axle"),
-        clarification_prompt="Уточнить приводной вал: сторона и ось/привод, например передний левый или правый.",
     ),
     PartIntentRule(
         intent_id="spark_plug",
@@ -228,8 +185,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("per_cylinder_quantity_required",),
         critical_vehicle_fields=("engine", "engine_code", "production_date", "fuel_type", "market"),
         quantity_basis="set by cylinder count unless one plug is explicitly requested",
-        price_basis_hint="quote full engine set and keep one-piece price separate",
-        fitment_caveats=("heat range, electrode type, and engine code are VIN-critical",),
         partsapi_cat_candidates=("spark plug", "свеча зажигания"),
         confidence=0.86,
     ),
@@ -243,8 +198,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("engine_variant_required",),
         critical_vehicle_fields=("engine", "engine_code", "production_date", "market"),
         quantity_basis="piece",
-        price_basis_hint="quote one filter; keep oil and drain plug washer separate unless service kit is requested",
-        fitment_caveats=("engine code and production split can change filter type",),
         partsapi_cat_candidates=("oil filter", "масляный фильтр"),
         confidence=0.88,
     ),
@@ -258,8 +211,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("engine_variant_required",),
         critical_vehicle_fields=("engine", "market", "production_date", "body"),
         quantity_basis="piece",
-        price_basis_hint="separate engine air filter from cabin filter",
-        fitment_caveats=("engine and market can split air-box/filter shape",),
         partsapi_cat_candidates=("air filter", "воздушный фильтр"),
         confidence=0.86,
     ),
@@ -273,8 +224,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("market_or_hvac_required",),
         critical_vehicle_fields=("market", "production_date", "hvac", "body"),
         quantity_basis="piece or kit if paired",
-        price_basis_hint="separate dust, carbon, and antibacterial versions",
-        fitment_caveats=("market and HVAC housing can split shape",),
         partsapi_cat_candidates=("cabin filter", "pollen filter", "салонный фильтр"),
         confidence=0.84,
     ),
@@ -294,13 +243,9 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("engine_variant_required",),
         critical_vehicle_fields=("engine", "engine_code", "production_date", "with_ac", "belt_route"),
         quantity_basis="piece or kit contents must be explicit",
-        price_basis_hint="do not mix belt, idler, tensioner, and full kit prices",
-        fitment_caveats=("engine code, A/C, alternator, and belt route can split parts",),
         partsapi_cat_candidates=("drive belt", "belt tensioner", "idler roller", "ремень приводной", "ролик"),
         confidence=0.8,
-        clarification_required=True,
         clarification_fields=("part_group",),
-        clarification_prompt="Уточнить, что именно нужно: ремень, ролик, натяжитель или комплект.",
     ),
     PartIntentRule(
         intent_id="ac_compressor",
@@ -319,8 +264,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "mounting_type",
         ),
         quantity_basis="piece",
-        price_basis_hint="separate new, remanufactured, and used/contract compressor prices",
-        fitment_caveats=("pulley, connector, clutch/control valve, and mounting can split fitment",),
         partsapi_cat_candidates=("a/c compressor", "air conditioning compressor", "компрессор кондиционера"),
         confidence=0.84,
     ),
@@ -334,11 +277,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("front_or_rear_required", "left_right_when_split"),
         critical_vehicle_fields=("axle", "side", "production_date", "suspension_type", "drivetrain", "market"),
         quantity_basis="piece; pair only if both sides are explicitly requested",
-        price_basis_hint="quote per piece and list dust boot/mount separately unless kit",
-        fitment_caveats=(
-            "front/rear differ; left/right can differ for struts",
-            "sport/standard suspension can split fitment",
-        ),
         partsapi_cat_candidates=("shock absorber", "strut", "амортизатор"),
         confidence=0.84,
     ),
@@ -352,8 +290,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("per_cylinder_or_failed_unit_quantity_required",),
         critical_vehicle_fields=("engine", "engine_code", "fuel_system", "production_date", "market"),
         quantity_basis="piece or full set must be explicit",
-        price_basis_hint="do not mix one injector, used set, and new OEM set prices",
-        fitment_caveats=("engine code, injector generation, flow/calibration, and seal kit must match",),
         partsapi_cat_candidates=("fuel injector", "injector", "форсунка топливная"),
         confidence=0.86,
     ),
@@ -367,13 +303,9 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("upstream_downstream_required",),
         critical_vehicle_fields=("engine", "emissions_standard", "production_date", "bank", "before_after_cat"),
         quantity_basis="piece by bank and position",
-        price_basis_hint="quote exact upstream/downstream sensor; universal sensors need explicit approval",
-        fitment_caveats=("before/after catalyst and bank position are VIN-critical",),
         partsapi_cat_candidates=("oxygen sensor", "lambda sensor", "датчик кислорода"),
         confidence=0.82,
-        clarification_required=True,
         clarification_fields=("position",),
-        clarification_prompt="Уточнить датчик кислорода: до/после катализатора и банк при V-образном двигателе.",
     ),
     PartIntentRule(
         intent_id="timing_chain_kit",
@@ -392,8 +324,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "chain_or_belt",
         ),
         quantity_basis="kit contents must be listed explicitly",
-        price_basis_hint="price the selected kit and separately list seals, guides, phasers, bolts, and fluids when not included",
-        fitment_caveats=("chain/belt route, guides, tensioner revision, phasers, and engine code are VIN-critical",),
         partsapi_cat_candidates=("timing chain kit", "timing belt kit", "комплект грм"),
         confidence=0.82,
     ),
@@ -407,8 +337,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("engine_variant_required",),
         critical_vehicle_fields=("engine", "engine_code", "production_date", "cooling_package", "market"),
         quantity_basis="piece or kit contents must be explicit",
-        price_basis_hint="separate pump, thermostat, housing, gasket, and coolant",
-        fitment_caveats=("engine code and housing revision can split fitment",),
         partsapi_cat_candidates=("water pump", "thermostat", "помпа", "термостат"),
         confidence=0.82,
     ),
@@ -422,8 +350,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("transmission_unit_required",),
         critical_vehicle_fields=("engine", "transmission", "drivetrain", "production_date", "flywheel_type"),
         quantity_basis="kit contents must be explicit",
-        price_basis_hint="separate disc/cover/release bearing/flywheel and list kit contents",
-        fitment_caveats=("gearbox, flywheel, and release bearing type can split fitment",),
         partsapi_cat_candidates=("clutch kit", "clutch", "комплект сцепления"),
         confidence=0.82,
     ),
@@ -437,8 +363,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("engine_transmission_required",),
         critical_vehicle_fields=("engine", "transmission", "production_date", "start_stop", "market"),
         quantity_basis="piece",
-        price_basis_hint="separate new, rebuilt, and used starter prices",
-        fitment_caveats=("engine/transmission and start-stop equipment can split fitment",),
         partsapi_cat_candidates=("starter motor", "стартер"),
         confidence=0.84,
     ),
@@ -452,8 +376,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("engine_variant_required",),
         critical_vehicle_fields=("engine", "production_date", "amperage", "pulley_type", "start_stop"),
         quantity_basis="piece",
-        price_basis_hint="separate alternator, pulley, and remanufactured unit",
-        fitment_caveats=("amperage, pulley, start-stop, and connector can split fitment",),
         partsapi_cat_candidates=("alternator", "генератор"),
         confidence=0.84,
     ),
@@ -482,10 +404,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "transmission",
         ),
         quantity_basis="assembly; included ancillaries must be listed",
-        price_basis_hint="separate bare engine, long block, complete used engine, warranty, and delivery",
-        fitment_caveats=(
-            "engine code, emissions, sensors, harness, mounts, and transmission compatibility are critical",
-        ),
         partsapi_cat_candidates=("engine assembly", "long block", "двигатель в сборе"),
         confidence=0.78,
     ),
@@ -499,8 +417,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("left_right_required",),
         critical_vehicle_fields=("side", "market", "production_date", "body", "lamp_type", "afs/leveling"),
         quantity_basis="piece by side",
-        price_basis_hint="separate halogen/xenon/LED, used, new OEM, and repair tabs",
-        fitment_caveats=("left/right, lamp technology, AFS/leveling, and market can split part numbers",),
         partsapi_cat_candidates=("headlight", "headlamp", "фара"),
         confidence=0.82,
     ),
@@ -514,8 +430,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("body_trim_and_head_unit_required",),
         critical_vehicle_fields=("market", "production_date", "trim/options", "head_unit", "body", "tailgate"),
         quantity_basis="piece",
-        price_basis_hint="separate OEM camera, used camera, and harness/connector repair",
-        fitment_caveats=("camera connector, head unit, trim, and tailgate/handle assembly can split fitment",),
         partsapi_cat_candidates=("rear view camera", "parking camera", "камера заднего вида"),
         confidence=0.76,
     ),
@@ -529,8 +443,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("wheel_position_required",),
         critical_vehicle_fields=("axle", "market", "production_date", "hub_type", "thread_size"),
         quantity_basis="piece",
-        price_basis_hint="quote per stud; add nut only if requested or damaged",
-        fitment_caveats=("thread length and knurl diameter must match",),
         partsapi_cat_candidates=("wheel stud", "wheel bolt", "шпилька колеса"),
         confidence=0.82,
     ),
@@ -552,11 +464,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
             "bearing_type",
         ),
         quantity_basis="piece by axle and side",
-        price_basis_hint="separate hub assembly, bearing only, ABS sensor, and bolts when catalog splits them",
-        fitment_caveats=(
-            "front/rear and left/right context are VIN-critical",
-            "hub assembly and bearing-only numbers must not be mixed",
-        ),
         partsapi_cat_candidates=("wheel hub", "hub bearing", "wheel bearing", "ступица колеса"),
         confidence=0.84,
     ),
@@ -570,8 +477,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("per_injector_quantity_required",),
         critical_vehicle_fields=("engine", "production_date", "fuel_system", "injector_type"),
         quantity_basis="piece per injector; kit if supplier bundles",
-        price_basis_hint="do not price one washer as a full injector seal kit",
-        fitment_caveats=("engine code and injector type are critical",),
         partsapi_cat_candidates=("injector washer", "injector seal", "шайба форсунки"),
         confidence=0.86,
     ),
@@ -585,8 +490,6 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         positions=("transmission_unit_required",),
         critical_vehicle_fields=("transmission_code", "production_date", "drivetrain", "pan_type", "market"),
         quantity_basis="kit_or_piece_must_be_explicit",
-        price_basis_hint="separate filter, pan/filter assembly, gasket, bolts, and ATF",
-        fitment_caveats=("same vehicle can use different gearbox codes",),
         partsapi_cat_candidates=("transmission filter", "automatic transmission filter", "фильтр акпп"),
         confidence=0.84,
     ),
@@ -604,6 +507,7 @@ def normalize_part_intent(
     matched = next((rule for rule in PART_INTENT_RULES if rule.matches(lowered)), None)
 
     if matched is None:
+        missing_fields = [field for field, value in (("part_group", None), ("axle", axle), ("side", side)) if not value]
         return {
             "ok": True,
             "raw": text,
@@ -617,13 +521,8 @@ def normalize_part_intent(
             "partsapi_category_candidates": [],
             "catalog_group_terms": [],
             "risk_fields": ["make", "model", "market", "production_date", "engine", "drivetrain"],
-            "fitment_caveats": [
-                "Unknown part intent; request exact part group, axle/side, and old part/OEM number when available."
-            ],
             "clarification_required": bool(text),
-            "clarification_fields": ["part_group", "axle", "side"],
-            "clarification_prompt": "Уточнить точную группу детали, ось/сторону и старый номер/OEM при наличии.",
-            "crm_clarification_prompt": "Уточнить точную группу детали, ось/сторону и старый номер/OEM при наличии.",
+            "clarification_fields": missing_fields,
         }
 
     payload = asdict(matched)
@@ -636,7 +535,13 @@ def normalize_part_intent(
         "side": any("left_right_required" in value or value == "side_required" for value in matched.positions),
         "inner_outer": any("inner_outer_required" in value for value in matched.positions),
     }
-    missing_fields = list(matched.clarification_fields)
+    supplied_context = {
+        "axle": axle,
+        "side": side,
+        "position": position,
+        "inner_outer": position,
+    }
+    missing_fields = [field for field in matched.clarification_fields if not supplied_context.get(field)]
     if required_position_tokens["axle"] and not any(value for value in [axle, position] if value):
         missing_fields.append("axle")
     if required_position_tokens["side"] and not side:
@@ -669,20 +574,12 @@ def normalize_part_intent(
             "catalog_group_terms": list(
                 dict.fromkeys(list(matched.catalog_groups_ru) + list(matched.catalog_groups_en))
             ),
-            "partsapi_category_candidates": list(
-                matched.partsapi_category_candidates or matched.partsapi_cat_candidates
-            ),
-            "required_position_fields": list(matched.required_position_fields or derived_required_fields),
-            "risk_fields": list(matched.risk_fields or matched.critical_vehicle_fields),
+            "partsapi_category_candidates": list(matched.partsapi_cat_candidates),
+            "required_position_fields": derived_required_fields,
+            "risk_fields": list(matched.critical_vehicle_fields),
             "explicit_positions": explicit_positions,
-            "missing_position_context": bool(missing_fields),
-            "clarification_required": matched.clarification_required or bool(missing_fields),
+            "clarification_required": bool(missing_fields),
             "clarification_fields": missing_fields,
-            "clarification_prompt": matched.clarification_prompt
-            if matched.clarification_required or missing_fields
-            else None,
-            "crm_clarification_prompt": matched.crm_clarification_prompt
-            or (matched.clarification_prompt if matched.clarification_required or missing_fields else None),
         }
     )
     return payload
