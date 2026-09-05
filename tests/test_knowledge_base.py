@@ -46,7 +46,6 @@ def test_sync_does_not_index_paths_outside_active_root(tmp_path, monkeypatch):
                         "aliases": ["safe"],
                         "keywords": ["safe"],
                         "questions": ["safe?"],
-                        "source_of_truth_files": ["docs/agent/safe.md"],
                         "primary_files": ["docs/agent/safe.md", str(outside), "../outside-secret.md"],
                     }
                 }

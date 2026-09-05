@@ -19,13 +19,10 @@ def _default_skill_root() -> Path:
 SKILL_ROOT = _default_skill_root()
 KNOWLEDGE_MAP_PATH = PROJECT_ROOT / "docs" / "agent" / "knowledge_map.json"
 
-_ROUTE_LIST_FIELDS = ("source_of_truth_files", "primary_files")
-
 
 def _normalize_route_list_fields(route: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(route)
-    for field in _ROUTE_LIST_FIELDS:
-        normalized[field] = _string_list(normalized.get(field))
+    normalized["primary_files"] = _string_list(normalized.get("primary_files"))
     return normalized
 
 
@@ -104,14 +101,7 @@ def load_skill_registry(*, skill_root: Path | None = None) -> dict[str, Any]:
     by_skill: dict[str, dict[str, Any]] = {}
 
     for domain, route in domains.items():
-        raw_skill_path = str(route.get("skill_path") or "")
         skill_paths = []
-        if raw_skill_path:
-            skill_paths.append(raw_skill_path)
-        for raw_path in _string_list(route.get("source_of_truth_files")):
-            text = str(raw_path)
-            if text.endswith("SKILL.md"):
-                skill_paths.append(text)
         for raw_path in _string_list(route.get("primary_files")):
             text = str(raw_path)
             if text.endswith("SKILL.md"):

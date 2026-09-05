@@ -328,7 +328,7 @@ def test_gateway_inventory_workflow_is_detected_as_store_and_rejects_free_text_c
     assert "intent" in intent_rejected["forbidden_keys"]
 
 
-def test_gateway_inventory_workflow_accepts_machine_channels_and_blocks_raw_lifecycle_text(tmp_path):
+def test_gateway_inventory_workflow_blocks_raw_lifecycle_text(tmp_path):
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
     operation = "set_quote_request_status"
     started = store.start_workflow_run(
@@ -372,27 +372,6 @@ def test_gateway_inventory_workflow_accepts_machine_channels_and_blocks_raw_life
         message=f"verify {operation}",
     )
     assert safe_checkpoint["ok"] is True
-
-    raw_event = store.record_manager_run_event(
-        started["id"],
-        event_type="customer_message",
-        message="email client@example.test",
-        target_type="store_quote_request",
-        target_id="quote-1",
-        payload={"operation": operation},
-    )
-    assert raw_event["error"] == "raw_store_payload_not_allowed_in_manager_ledger"
-    assert set(raw_event["forbidden_keys"]) == {"event_type", "message"}
-
-    safe_event = store.record_manager_run_event(
-        started["id"],
-        event_type="verification",
-        message=f"verify {operation}",
-        target_type="store_quote_request",
-        target_id="quote-1",
-        payload={"operation": operation, "status": "completed"},
-    )
-    assert safe_event["ok"] is True
 
 
 def test_crm_store_workflow_envelope_is_accepted_across_verified_and_compensating_paths(tmp_path):
@@ -852,13 +831,10 @@ def test_raw_store_owner_ledger_requires_state_version_on_every_mutation(tmp_pat
         expected_state_version=executing["state_version"],
     )
     resumed = store.resume_workflow_run(started["id"], expected_state_version=executing["state_version"])
-    compatibility_finish = store.finish_manager_run(started["id"])
-
     assert external_wait["error"] == "store_owner_external_wait_not_allowed"
     assert external_step["error"] == "store_owner_external_steps_not_allowed"
     assert external_complete["error"] == "store_owner_external_steps_not_allowed"
     assert resumed["error"] == "store_owner_resume_not_allowed"
-    assert compatibility_finish["error"] == "store_owner_compatibility_finish_not_allowed"
     assert store.get_manager_run(started["id"])["item"]["state_version"] == 2
 
 

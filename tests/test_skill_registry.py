@@ -76,7 +76,7 @@ def test_skill_registry_rejects_unsafe_knowledge_map_skill_path(tmp_path, monkey
     unsafe_skill_path.write_text("# Demo\n", encoding="utf-8")
     knowledge_map_path = tmp_path / "knowledge_map.json"
     knowledge_map_path.write_text(
-        json.dumps({"domains": {"demo": {"source_of_truth_files": [str(unsafe_skill_path)]}}}),
+        json.dumps({"domains": {"demo": {"primary_files": [str(unsafe_skill_path)]}}}),
         encoding="utf-8",
     )
     monkeypatch.setattr(skill_registry, "KNOWLEDGE_MAP_PATH", knowledge_map_path)

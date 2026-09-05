@@ -89,7 +89,6 @@ def test_knowledge_base_string_list_fields_do_not_char_split(tmp_path, monkeypat
                         "aliases": "demo alias",
                         "keywords": "demo keyword",
                         "questions": "demo question",
-                        "source_of_truth_files": str(demo_path),
                         "primary_files": str(demo_path),
                         "reference_files": str(reference_path),
                         "required_context": "demo context",
@@ -155,7 +154,6 @@ def test_skill_registry_string_lists_are_normalized(tmp_path, monkeypatch):
             {
                 "domains": {
                     "demo_domain": {
-                        "source_of_truth_files": str(skill_path),
                         "primary_files": str(skill_path),
                     }
                 }
@@ -211,7 +209,6 @@ def test_cleanup_audit_string_route_lists_keep_referenced_docs(tmp_path):
                 "domains": {
                     "demo_domain": {
                         "primary_files": "docs/agent/known.md",
-                        "source_of_truth_files": "docs/agent/known.md",
                         "reference_files": "docs/agent/known.md",
                     }
                 }

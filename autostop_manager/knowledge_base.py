@@ -109,7 +109,6 @@ _KNOWLEDGE_ROUTE_LIST_FIELDS = (
     "keywords",
     "questions",
     "questions_it_answers",
-    "source_of_truth_files",
     "primary_files",
     "reference_files",
     "required_context",
@@ -347,7 +346,6 @@ def _audit_route_paths(
             domains_without_source_of_truth.append(domain)
         required_paths = _unique_strings(
             [
-                *_string_list(route.get("source_of_truth_files")),
                 *_string_list(route.get("primary_files")),
                 *_string_list(route.get("reference_files")),
             ]
@@ -1034,7 +1032,7 @@ def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
     primary_files = _unique_strings(_string_list(route.get("primary_files")))
     reference_files = _unique_strings(_string_list(route.get("reference_files")))
     optional_runtime_files = _optional_runtime_files(route)
-    source_of_truth = _unique_strings(_string_list(route.get("source_of_truth_files"))) or primary_files[:3]
+    source_of_truth = primary_files[:3]
     aliases = _unique_strings(
         [
             domain,
@@ -1051,12 +1049,10 @@ def _build_route_card(domain: str, route: dict[str, Any]) -> _RouteCard:
     )
     required_context = _unique_strings(_string_list(route.get("required_context")))
     title = str(route.get("title") or f"{domain} route")
-    skill_path = str(route.get("skill_path") or "")
     search_text = "\n".join(
         [
             domain,
             title,
-            skill_path,
             *use_when,
             *aliases,
             *keywords,

@@ -1,20 +1,18 @@
 ---
 name: remote-diagnostics-pad-vii
-description: Prepare and run a supervised Launch PAD VII remote diagnostic session through the isolated AutoStop Remote gateway.
+description: Supervised Launch PAD VII remote diagnostics through the isolated AutoStop Remote gateway.
 ---
 
-# Launch PAD VII remote diagnostics
+Для live-сессии сверяй `REMOTE_DIAGNOSTICS_PAD_VII.md` и
+`LAUNCH_LIVE_RUNBOOK.md` в `/opt/autostop-remote-diagnostics-server/docs/`;
+работай только через `autostop_remote_diagnostics` по прямому текущему поручению
+владельца.
 
-Before a live session, read the protocol and UI owners in
-`/opt/autostop-remote-diagnostics-server/docs/REMOTE_DIAGNOSTICS_PAD_VII.md` and
-`/opt/autostop-remote-diagnostics-server/docs/LAUNCH_LIVE_RUNBOOK.md`. Use only the project
-`autostop_remote_diagnostics` MCP after the owner starts that session.
+Перед action status: ready CONTROL, `controlEnabled`, `onUnlocked`, Launch
+foreground, active projection/accessibility, `commandAvailable`. Затем fresh
+observe → один разрешённый action → fresh confirmation; данные и изображения
+временные.
 
-Act only on a fresh ready CONTROL state with Launch foregrounded and screen,
-projection, accessibility and commands available. Work as fresh observation,
-one useful permitted action, then confirmation; an unobserved dispatch remains
-uncertain. Keep UI data, images, VIN and diagnostic values transient.
-
-Clearing DTCs, active tests, resets, service functions, coding, adaptation,
-calibration, flashing and immobilizer work need a separate exact instruction.
-Do not bypass the gateway with raw device interfaces or blind retries.
+Clear DTC, active tests, reset/service functions, coding/adaptation/calibration,
+flashing и immobilizer — только по отдельному точному поручению. Не обходи
+gateway и не повторяй unknown outcome.

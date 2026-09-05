@@ -13,7 +13,7 @@ COMMAND_ROUTES_PATH = ROOT / "docs" / "agent" / "command_routes.json"
 MANAGER_RULES_PATH = ROOT / "docs" / "agent" / "manager_rules.json"
 DEPLOYMENT_RUNBOOK_PATH = ROOT / "docs" / "agent" / "deployment_runbook.md"
 
-_MAP_FIELDS = {"title", "primary_files", "reference_files", "optional_runtime_files", "skill_path"}
+_MAP_FIELDS = {"title", "primary_files", "reference_files", "optional_runtime_files"}
 _ROUTE_FIELDS = {
     "command_id",
     "workflow_id",
@@ -73,12 +73,12 @@ def test_skills_have_metadata_and_one_knowledge_map_entrypoint():
     domains = knowledge_map["domains"]
     assert isinstance(domains, dict) and domains
 
-    declared_paths: set[str] = set()
-    for definition in domains.values():
-        if "skill_path" in definition:
-            path = definition["skill_path"]
-            assert isinstance(path, str)
-            declared_paths.add(path)
+    declared_paths = {
+        path
+        for definition in domains.values()
+        for path in _string_list(definition.get("primary_files"))
+        if path.endswith("SKILL.md")
+    }
 
     skills = _skill_paths()
     assert skills
@@ -111,11 +111,6 @@ def test_knowledge_map_has_safe_resolvable_owners():
                 assert _relative_path(raw_path).is_file()
         for raw_path in _string_list(definition.get("optional_runtime_files", [])):
             _relative_path(raw_path)
-        skill_path = definition.get("skill_path")
-        if skill_path is not None:
-            assert isinstance(skill_path, str)
-            assert skill_path in primary
-            assert _relative_path(skill_path).is_file()
 
 
 def test_command_routes_are_structural_and_keep_effects_explicit():

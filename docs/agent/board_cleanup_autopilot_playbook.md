@@ -1,21 +1,9 @@
 # CRM Board Cleanup
 
-Make each selected card easier to understand and act on. For a broad request,
-use the board digest and `manager_board_scan` dry-run to choose real operational
-blockers, then work in small verified batches. For one card, use
-`agent_board_workflow(operation="cleanup_card")` with its current context.
+Make each selected card easier to understand and act on. For broad work, use `agent_board_digest` to choose a bounded evidence-backed scope, then adapt card by card. For one card, use `agent_board_workflow(operation="cleanup_card")` on the exact current card with its action contract, revision, idempotency and reread.
 
-Improve only what evidence supports: structured client/vehicle links, factual
-title and vehicle, a few useful tags, current `board_summary`, and one coherent
-description of the complaint, findings, agreements, work, state and next
-action. Keep useful history and manual diagnosis, remove repetition, and use no
-fixed headings or prose template. Leave an already clear card alone.
+Make only the smallest evidence-backed patch: concise factual handoff, current state and useful next action. Preserve history and manual diagnosis; use no fixed template, leave clear cards alone, and link entities only through their dedicated action with evidence.
 
-Phone belongs to the client; VIN, plate and mileage belong to the vehicle.
-Engine, gearbox, drivetrain and client matches need evidence. Preserve files,
-staff facts, order rows, prices, totals and payments. Moving, archiving,
-deleting, changing deadlines or touching finance needs a separate exact request.
+Keep client and vehicle facts separate; identity and technical matches need evidence. Preserve files, staff facts, order rows, prices, totals and payments. Moving, archiving, deleting, deadlines and finance need a separate exact request.
 
-Verify the intended fields and absence of unrelated change. Report compact
-counts and only blockers that need a decision; keep raw board data and private
-identifiers out of chat and Manager memory.
+Verify intended fields and unrelated state. Report only compact counts and decision blockers; keep raw board data and identifiers transient.
