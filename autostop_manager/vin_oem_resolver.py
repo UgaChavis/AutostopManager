@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from typing import Any
 
 from .catalog_clients import partsapi_catalog_lookup, resolve_partsapi_category
@@ -41,6 +42,10 @@ def _call_digest(call: dict[str, Any]) -> dict[str, Any]:
         "ok": bool(call.get("ok")),
         "dry_run": bool(call.get("dry_run")),
         "empty_payload": bool(call.get("empty_payload")),
+        "outcome": call.get("outcome"),
+        "failure_class": call.get("failure_class"),
+        "retryable": bool(call.get("retryable")),
+        "requires_fallback": bool(call.get("requires_fallback")),
         "quota_cost_estimate": call.get("quota_cost_estimate"),
         "attempt_count": call.get("attempt_count"),
         "max_attempts": call.get("max_attempts"),
@@ -232,6 +237,78 @@ def _rank_oem_candidate(
     }
 
 
+def _with_applicability(candidate: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
+    part_number = _normalize_compare_value(candidate.get("part_number"))
+    matches = [
+        item
+        for item in call.get("oem_candidates") or []
+        if isinstance(item, dict) and _normalize_compare_value(item.get("part_number")) == part_number
+    ]
+    if call.get("dry_run"):
+        status, blocker = "not_checked", "applicability_not_checked"
+    elif not call.get("ok"):
+        status, blocker = "check_failed", "applicability_check_failed"
+    elif not matches:
+        status, blocker = "not_found", "applicability_not_confirmed"
+    elif any((item.get("fitment_evidence") or {}).get("is_fit_for_this_vin") in (False, 0, "0") for item in matches):
+        status, blocker = "rejected", "applicability_rejected"
+    else:
+        status, blocker = "catalog_evidence_found", None
+
+    updated = {**candidate, "applicability_status": status, "applicability_evidence_count": len(matches)}
+    score = float(updated.get("confidence_score") or 0.0)
+    if status == "rejected":
+        updated.update(confidence_label="low", confidence_score=min(score, 0.35))
+    elif status in {"check_failed", "not_found"}:
+        updated["confidence_score"] = min(score, 0.78)
+        if updated.get("confidence_label") == "high":
+            updated["confidence_label"] = "medium"
+    blockers = list(updated.get("blocking_reasons") or [])
+    if blocker and blocker not in blockers:
+        blockers.append(blocker)
+    updated["blocking_reasons"] = blockers
+    return updated
+
+
+def _prioritize_applicability(
+    candidates: list[dict[str, Any]],
+    *,
+    max_candidates: int,
+    live_allowed: bool,
+    lookup: Callable[..., dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    evidence: list[dict[str, Any]] = []
+    checks: dict[str, list[dict[str, Any]]] = {}
+    for index, original in enumerate(candidates[:max_candidates]):
+        part_number = original.get("part_number")
+        if not part_number:
+            continue
+        call = lookup("oe_applicability", live_allowed=live_allowed, part_number=part_number)
+        candidate = _with_applicability(original, call)
+        candidates[index] = candidate
+        checks[candidate["candidate_id"]] = [call]
+        evidence.append(
+            {
+                "candidate_id": candidate["candidate_id"],
+                "operation": "oe_applicability",
+                "ok": bool(call.get("ok")),
+                "empty_payload": bool(call.get("empty_payload")),
+                "oem_candidate_count": len(call.get("oem_candidates") or []),
+                "status": candidate.get("applicability_status"),
+            }
+        )
+
+    order = {"catalog_evidence_found": 0, "not_checked": 1, "not_found": 2, "check_failed": 3, "rejected": 4}
+    candidates.sort(
+        key=lambda item: (
+            order.get(str(item.get("applicability_status") or "not_checked"), 1),
+            -float(item.get("confidence_score") or 0.0),
+            item.get("part_number") or "",
+        )
+    )
+    return candidates, evidence, checks
+
+
 def _manual_action(code: str, message: str | None = None, *, priority: int = 1, **context: Any) -> dict[str, Any]:
     return {"code": code, "priority": priority, **({"message": message} if message else {}), **context}
 
@@ -340,8 +417,6 @@ def resolve_vin_oem_parts(
                     "error": "PartsAPI live call budget exhausted before this operation.",
                 }
             )
-        if call_is_live:
-            live_calls_used += 1
         call = partsapi_catalog_lookup(
             operation=operation,
             timeout=timeout,
@@ -349,6 +424,10 @@ def resolve_vin_oem_parts(
             dry_run=not call_is_live,
             **kwargs,
         )
+        # A credentials/input rejection never left the process, so it must not
+        # consume the small live budget that could still reach another source.
+        if call_is_live and int(call.get("attempt_count") or 0) > 0:
+            live_calls_used += 1
         calls.append(call)
         return call
 
@@ -481,14 +560,22 @@ def resolve_vin_oem_parts(
         )
 
     article_enrichment: list[dict[str, Any]] = []
-    applicability_evidence: list[dict[str, Any]] = []
     cross_candidates: list[dict[str, Any]] = []
+    ranked_candidates, applicability_evidence, checks_by_candidate = _prioritize_applicability(
+        ranked_candidates,
+        max_candidates=max_candidates,
+        live_allowed=live_partsapi_oem,
+        lookup=partsapi_call,
+    )
+
+    # Applicability is decision-changing, so every bounded candidate gets its
+    # chance at the live-call budget before article and cross enrichment.
     for candidate in ranked_candidates[:max_candidates]:
         part_number = candidate.get("part_number")
         brand = candidate.get("brand")
         if not part_number:
             continue
-        candidate_checks: list[dict[str, Any]] = []
+        candidate_checks = checks_by_candidate.get(candidate["candidate_id"], [])
         search_call = partsapi_call("search_articles", live_allowed=live_partsapi_oem, part_number=part_number)
         candidate_checks.append(search_call)
         for article in (search_call.get("article_candidates") or [])[:max_candidates]:
@@ -497,9 +584,6 @@ def resolve_vin_oem_parts(
                 candidate_checks.append(
                     partsapi_call("article_crosses", live_allowed=live_partsapi_oem, article_id=article_id)
                 )
-        candidate_checks.append(
-            partsapi_call("oe_applicability", live_allowed=live_partsapi_oem, part_number=part_number)
-        )
         candidate_checks.append(partsapi_call("crosses_title", live_allowed=live_partsapi_oem, part_number=part_number))
         if brand:
             candidate_checks.append(
@@ -520,17 +604,6 @@ def resolve_vin_oem_parts(
                 ][:max_candidates],
                 "checks": [_call_digest(call) for call in candidate_checks],
             }
-        )
-        applicability_evidence.extend(
-            {
-                "candidate_id": candidate["candidate_id"],
-                "operation": call.get("operation"),
-                "ok": bool(call.get("ok")),
-                "empty_payload": bool(call.get("empty_payload")),
-                "oem_candidate_count": len(call.get("oem_candidates") or []),
-            }
-            for call in candidate_checks
-            if call.get("operation") == "oe_applicability"
         )
         cross_candidates.extend(
             {

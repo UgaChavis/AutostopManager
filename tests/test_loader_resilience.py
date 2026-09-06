@@ -122,6 +122,7 @@ def test_command_routes_string_lists_are_normalized(tmp_path, monkeypatch):
                         "command_id": "demo_route",
                         "workflow_id": "demo_route",
                         "intent": "demo_intent",
+                        "aliases": "demo_old_intent",
                         "knowledge_domains": "demo_domain",
                         "effects": "crm_write",
                         "dependencies": "demo_dependency",
@@ -138,9 +139,11 @@ def test_command_routes_string_lists_are_normalized(tmp_path, monkeypatch):
 
     assert route is not None
     assert route["knowledge_domains"] == ["demo_domain"]
-    assert route["effects"] == ["crm_write"]
-    assert route["dependencies"] == ["demo_dependency"]
+    assert route["aliases"] == ["demo_old_intent"]
+    assert route["effects"] == []
+    assert route["dependencies"] == []
     assert route["signals"]["phrases"] == ["demo alias"]
+    assert module.plan_command_routes("unrelated", intent="demo_old_intent")[0]["command_id"] == "demo_route"
 
 
 def test_skill_registry_string_lists_are_normalized(tmp_path, monkeypatch):

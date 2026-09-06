@@ -79,10 +79,17 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert '"${previous_release}/${unit_relative_path}"' in text
     assert "authorization_required=true" in text
     assert "inactive existing work Telegram profile must be recovered" in text
-    assert 'if [[ "${account}" == "personal" ]]; then' in text
-    assert "DEFAULT_MODEL_DIR, _validate_local_model" in text
-    assert "account_model_dir('work')" in text
-    assert "_load_model(account_model_dir('work'), cpu_threads=1, system_owned_model=True)" in text
+    assert 'if [[ "${account}" == "work" ]]; then' in text
+    assert '"${media_wrapper_path}" self-check' in text
+    assert "-m autostop_manager.telegram_transcribe --account personal --self-check" in text
+    assert "/usr/bin/timeout --signal=TERM --kill-after=10s 120s" in text
+    inactive_start = text.index("if ! install_current_media_wrapper; then")
+    inactive_release = text[inactive_start : text.index("if ! systemctl restart", inactive_start)]
+    assert "if ! transcription_runtime_ready; then" in inactive_release
+    assert inactive_release.index("if ! transcription_runtime_ready; then") < inactive_release.index(
+        'echo "authorization_required=true"'
+    )
+    assert "HF_HUB_OFFLINE=1" in text
     assert "rm -rf" not in text
     assert "autostop-work-telegram-media" in text
     assert "run-work-telegram-media.sh" in text
@@ -137,14 +144,39 @@ def test_work_media_sandbox_wrapper_is_scoped_and_has_no_bridge_access() -> None
     assert completed.returncode == 0
     text = script.read_text(encoding="utf-8")
     assert "transcribe|preview" in text
+    assert "self-check" in text
     assert "--account" in text and "work" in text
     assert "systemd-run --quiet --wait --pipe --collect" in text
     assert "PrivateNetwork=true" in text
+    assert "InaccessiblePaths=-/var/lib/autostop-work-telegram" in text
     assert "InaccessiblePaths=/var/lib/autostop-work-telegram" in text
     assert "/etc/autostop-work-telegram" in text
     assert "/run/autostop-work-telegram/bridge.sock" in text
     assert "ReadWritePaths=${inbox_dir}" in text
+    assert "HF_HUB_OFFLINE=1" in text
+    assert "command+=(--self-check)" in text
+    assert 'runtime_properties+=(\n    --property="RuntimeMaxSec=120s"' in text
+    assert '--property="TimeoutStopSec=10s"' in text
+    assert '"${runtime_properties[@]}"' in text
+    assert '--property="ReadWritePaths=${inbox_dir}"' in text
+    media_branch = text[
+        text.index('if [[ "${self_check}" -eq 1 ]]', text.index("path_properties=(")) : text.index("systemd-run")
+    ]
+    self_check_branch, file_action_branch = media_branch.split("\nelse\n", 1)
+    assert "ReadWritePaths" not in self_check_branch
+    assert "InaccessiblePaths=-/var/lib" in self_check_branch
+    assert "ReadWritePaths" in file_action_branch
+    assert "InaccessiblePaths=/var/lib" in file_action_branch
+    assert "InaccessiblePaths=-/var/lib" not in file_action_branch
+    assert '"${path_properties[@]}"' in text
     assert "telegram_bridge" not in text
+
+
+def test_telegram_skill_requires_verified_private_audio_cleanup() -> None:
+    text = (ROOT / ".agents/skills/manage-owner-telegram/SKILL.md").read_text(encoding="utf-8")
+
+    assert "--delete-after" in text
+    assert "после ошибки" in text
 
 
 def test_model_manifest_is_static_and_has_only_model_payloads() -> None:

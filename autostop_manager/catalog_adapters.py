@@ -5,6 +5,7 @@ import os
 from typing import Any
 from urllib.parse import quote_plus
 
+from .catalog_clients import PARTSAPI_OPERATIONS, partsapi_operation_status
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .vin_lookup import classify_identifier
@@ -312,27 +313,34 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
                 "public_site_manual",
                 "local_rules",
             }
-        providers.append(
-            {
-                **asdict(provider),
-                "env_names": list(provider.env_names),
-                "env_any_groups": [list(group) for group in provider.env_any_groups],
-                "capabilities": list(provider.capabilities),
-                "configured": configured,
-                "present_env_names": present,
-                "missing_env_names": missing,
-                "missing_env_groups": missing_groups,
-                "live_callable_now": configured
-                and provider.access_mode
-                not in {
-                    "manual_subscription",
-                    "subscription_or_manual",
-                    "partner_or_manual",
-                    "public_site_manual",
-                    "local_rules",
-                },
+        row = {
+            **asdict(provider),
+            "env_names": list(provider.env_names),
+            "env_any_groups": [list(group) for group in provider.env_any_groups],
+            "capabilities": list(provider.capabilities),
+            "configured": configured,
+            "present_env_names": present,
+            "missing_env_names": missing,
+            "missing_env_groups": missing_groups,
+            "live_callable_now": configured
+            and provider.access_mode
+            not in {
+                "manual_subscription",
+                "subscription_or_manual",
+                "partner_or_manual",
+                "public_site_manual",
+                "local_rules",
+            },
+        }
+        if provider.source_id == "partsapi_ru":
+            operation_status = {
+                operation: partsapi_operation_status(operation) for operation in sorted(PARTSAPI_OPERATIONS)
             }
-        )
+            row["operation_status"] = operation_status
+            row["live_operations"] = [
+                operation for operation, status in operation_status.items() if status.get("live_callable_now")
+            ]
+        providers.append(row)
     stage_matrix = _provider_stage_matrix(providers)
     return {
         "ok": True,
@@ -473,17 +481,40 @@ def build_oem_parts_provider_plan(
 
     identity_providers = _pick_configured(_providers_for_stage("identity"))
     oem_providers = _pick_configured(_providers_for_stage("oem_catalog"))
-    cross_providers = _pick_configured(_providers_for_stage("catalog_cross"))
+    all_cross_providers = _providers_for_stage("catalog_cross")
+    cross_providers = _pick_configured(all_cross_providers)
     aftermarket_providers = _pick_configured(_providers_for_stage("aftermarket_catalog"))
     procurement_providers = _pick_configured(_providers_for_stage("procurement_price"))
     market_providers = _pick_configured(_providers_for_stage("market_price"))
 
-    oem_capable_source_ids = {"vin17_api", "partsapi_ru"}
+    partsapi_provider = next(
+        (provider for provider in all_cross_providers if provider["source_id"] == "partsapi_ru"), None
+    )
+    partsapi_operation_statuses = dict(partsapi_provider.get("operation_status") or {}) if partsapi_provider else {}
+    partsapi_oem_operations = ("vin_decode_oe", "parts_by_vin", "oe_applicability")
+    partsapi_oem_candidate_operations = ("parts_by_vin",)
+    partsapi_live_oem_operations = [
+        operation
+        for operation in partsapi_oem_operations
+        if bool((partsapi_operation_statuses.get(operation) or {}).get("live_callable_now"))
+    ]
+    partsapi_live_oem_candidate_operations = [
+        operation
+        for operation in partsapi_oem_candidate_operations
+        if bool((partsapi_operation_statuses.get(operation) or {}).get("live_callable_now"))
+    ]
+    partsapi_live_oem = bool(partsapi_live_oem_candidate_operations)
+    oem_capable_source_ids = {"vin17_api"}
     live_oem = [
         provider
         for provider in oem_providers + cross_providers
         if provider["live_callable_now"] and provider["source_id"] in oem_capable_source_ids
     ]
+    if partsapi_provider and partsapi_live_oem:
+        live_oem.append(partsapi_provider)
+    oem_candidate_providers = list(oem_providers)
+    if partsapi_provider and partsapi_live_oem:
+        oem_candidate_providers.append(partsapi_provider)
     live_aftermarket = [provider for provider in aftermarket_providers if provider["live_callable_now"]]
     live_price_references = [provider for provider in procurement_providers if provider["live_callable_now"]]
     live_procurement = [
@@ -555,6 +586,17 @@ def build_oem_parts_provider_plan(
             "identity_ready_for_oem_candidate_lookup": identity_ready,
             "identity_ready_for_crm_writeback": writeback_ready,
             "live_oem_catalog_available": bool(live_oem),
+            "live_oem_candidate_lookup_available": bool(
+                partsapi_live_oem_candidate_operations
+                or any(provider["source_id"] == "vin17_api" for provider in live_oem)
+            ),
+            "live_oem_applicability_available": bool(
+                (partsapi_operation_statuses.get("oe_applicability") or {}).get("live_callable_now")
+            ),
+            "partsapi_oem_operations": {
+                operation: partsapi_operation_statuses.get(operation, {}) for operation in partsapi_oem_operations
+            },
+            "partsapi_live_oem_operations": partsapi_live_oem_operations,
             "live_aftermarket_catalog_available": bool(live_aftermarket),
             "live_price_reference_available": bool(live_price_references),
             "live_public_retail_reference_available": any(
@@ -571,7 +613,7 @@ def build_oem_parts_provider_plan(
             },
             {
                 "step": "find_oem_candidates",
-                "providers": [provider["source_id"] for provider in oem_providers],
+                "providers": list(dict.fromkeys(provider["source_id"] for provider in oem_candidate_providers)),
                 "acceptance": "VIN/frame-specific catalog returns OEM candidates with group/position/production evidence",
                 "part_search_terms": part_profile.get("catalog_search_terms", [])[:8],
                 "critical_vehicle_fields": part_profile.get("critical_vehicle_fields", []),

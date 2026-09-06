@@ -13,7 +13,19 @@ from autostop_manager.store_quote_conductor import (
 
 _SNAPSHOT_HASH = "b" * 64
 _CONSENT_HASH = "c" * 64
-_ENTRIES = [{"type": "position", "name": "part-one", "cost": "1300.00", "quantity": 1}]
+_ENTRIES = [
+    {
+        "type": "position",
+        "name": "part-one",
+        "catalogNumber": "TEST-001",
+        "manufacturer": "TEST",
+        "quantity": 1,
+        "delivery": "2 days",
+        "cost": "1300.00",
+        "requestItemId": "item-1",
+        "source": "original_request",
+    }
+]
 _COVERAGE = [{"requestItemId": "item-1", "state": "OFFERED"}]
 _EVIDENCE = {
     "fitment_confirmed": True,
@@ -66,8 +78,28 @@ class _QuoteGateway:
             self.revision = "revision-2"
             self.status = "WAITING_FOR_QUOTE"
             self.estimate = {
-                "entries": deepcopy(kwargs["entries"]),
-                "coverage": deepcopy(kwargs["coverage"]),
+                # Mirror the owner API's canonical readback: browser-style
+                # estimate fields are serialized as text and an offered
+                # coverage row exposes an explicit null reason.
+                "entries": [
+                    {
+                        **deepcopy(entry),
+                        "quantity": str(entry.get("quantity") or ""),
+                        "warranty": str(entry.get("warranty") or ""),
+                    }
+                    if entry.get("type") == "position"
+                    else deepcopy(entry)
+                    for entry in kwargs["entries"]
+                ],
+                "coverage": [
+                    {
+                        **deepcopy(item),
+                        "clientReason": (
+                            str(item.get("clientReason") or "") if item.get("state") == "DECLINED" else None
+                        ),
+                    }
+                    for item in kwargs["coverage"]
+                ],
                 "provenance": "AUTOSTOP_MANAGER",
                 "publishedSnapshotHash": None,
             }
@@ -79,6 +111,9 @@ class _QuoteGateway:
             self.revision = "revision-3"
             self.status = "WAITING_FOR_APPROVAL"
             assert self.estimate is not None
+            for entry in self.estimate["entries"]:
+                if entry.get("type") == "position":
+                    entry["warranty"] = "Configured Store warranty"
             self.estimate["publishedSnapshotHash"] = _SNAPSHOT_HASH
         return {"ok": True, "summary": {"dry_run_proof": "d" * 64}}
 
@@ -214,6 +249,62 @@ def test_conductor_runs_verified_estimate_to_one_waiting_payment_order_without_l
     assert "1300.00" not in serialized
     assert "client-visible response" not in serialized
     assert "quote-1" not in serialized
+
+
+def test_conductor_accepts_owner_canonical_draft_and_store_owned_warranty(tmp_path):
+    conductor, gateway, store = _conductor(tmp_path)
+
+    published = _published(conductor)
+
+    assert published["ok"] is True
+    assert published["summary"]["phase"] == "published"
+    assert gateway.estimate is not None
+    assert gateway.estimate["entries"][0]["quantity"] == "1"
+    assert gateway.estimate["entries"][0]["warranty"] == "Configured Store warranty"
+    assert gateway.estimate["coverage"][0]["clientReason"] is None
+
+    persisted = store.get_manager_run(published["run_id"], include_events=False, include_external_steps=True)
+    assert persisted["item"]["status"] == "executing"
+    assert persisted["item"]["checkpoint"]["phase"] == "published"
+
+
+def test_conductor_reopen_requires_full_guard_and_verified_readback(tmp_path):
+    conductor, gateway, _ = _conductor(tmp_path)
+    published = _published(conductor)
+
+    missing_state_guard = conductor.execute(
+        operation="reopen",
+        quote_request_id="quote-1",
+        run_id=published["run_id"],
+        expected_revision="revision-3",
+        idempotency_key="quote-reopen-001",
+        correlation_id="quote-correlation-001",
+    )
+    assert missing_state_guard["ok"] is False
+    assert "workflow_state_conflict" in missing_state_guard["warnings"]
+    assert [name for name, _ in gateway.calls].count("reopen") == 0
+
+    reopened = conductor.execute(
+        operation="reopen",
+        quote_request_id="quote-1",
+        run_id=published["run_id"],
+        expected_state_version=published["summary"]["state_version"],
+        expected_revision="revision-3",
+        idempotency_key="quote-reopen-001",
+        correlation_id="quote-correlation-001",
+    )
+
+    assert reopened["ok"] is True
+    assert reopened["summary"]["phase"] == "revision_needed"
+    assert reopened["summary"]["readback_verified"] is True
+    reopen_calls = [payload for name, payload in gateway.calls if name == "reopen"]
+    assert len(reopen_calls) == 2
+    assert [call["mode"] for call in reopen_calls] == ["dry_run", "apply"]
+    assert all(call["expected_revision"] == "revision-3" for call in reopen_calls)
+    assert all(call["correlation_id"] == "quote-correlation-001" for call in reopen_calls)
+    assert reopen_calls[0]["idempotency_key"] != "quote-reopen-001"
+    assert reopen_calls[1]["idempotency_key"] == "quote-reopen-001"
+    assert reopen_calls[1]["dry_run_proof"] == "e" * 64
 
 
 def test_conductor_deduplicates_one_active_quote_run_and_rejects_stale_state(tmp_path):
@@ -400,6 +491,39 @@ def test_store_quote_owner_api_uses_only_approved_operations_and_a_prepared_plan
     assert client.invoke_calls[0]["mode"] == "read"
     assert client.invoke_calls[3]["owner_intent"] == "store_quote_conductor_reopen_estimate"
     assert all(call["expected_plan_hash"] == "b" * 64 for call in client.invoke_calls)
+
+
+def test_store_quote_owner_api_reopen_uses_no_request_body():
+    client = _OwnerApiClient(
+        prepared={
+            "ok": True,
+            "summary": {
+                "operation_id": "reopen_estimate",
+                "method": "POST",
+                "schema_hash": "a" * 64,
+                "plan_hash": "b" * 64,
+            },
+        }
+    )
+
+    result = StoreQuoteOwnerApi(client).reopen_estimate(
+        quote_request_id="quote-1",
+        expected_revision="revision-1",
+        idempotency_key="owner-reopen-body-0001",
+        correlation_id="owner-correlation-body-0001",
+        mode="dry_run",
+    )
+
+    assert result["ok"] is True
+    assert client.prepare_calls == [
+        {
+            "operation_id": "reopen_estimate",
+            "path_parameters": {"quote_request_id": "quote-1"},
+            "body": None,
+            "expected_revision": "revision-1",
+        }
+    ]
+    assert client.invoke_calls[0]["body"] is None
 
 
 def test_store_quote_owner_api_fails_closed_before_invoke_when_the_operation_contract_changes():

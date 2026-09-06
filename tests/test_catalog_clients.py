@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from autostop_manager import config as manager_config
 from autostop_manager.catalog_clients import (
     build_17vin_signed_request,
@@ -14,12 +16,14 @@ from autostop_manager.catalog_clients import (
     extract_partsapi_autonorms_rows,
     extract_partsapi_cross_candidates,
     extract_partsapi_fill_volumes,
+    extract_partsapi_search_tree_rows,
     extract_partsapi_parts_by_vin_candidates,
     extract_partsapi_vehicle_profiles,
     mann_filter_catalog_lookup,
     parse_exist_catalog_candidates,
     parse_exist_price_page,
     partsapi_catalog_lookup,
+    partsapi_operation_status,
     public_aftermarket_catalog_lookup,
     resolve_partsapi_category,
     vin17_decode_vehicle,
@@ -233,6 +237,21 @@ def test_partsapi_lookup_can_use_method_specific_test_key(monkeypatch):
     assert result["request_plan"]["configured"] is True
     assert result["request_plan"]["method_key_env_name"] == "PARTSAPI_VINDECODE_KEY"
     assert "method-secret" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_operation_status_is_specific_to_each_method_key(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setenv("PARTSAPI_PARTS_BY_VIN_KEY", "parts-secret")
+
+    by_vin = partsapi_operation_status("parts_by_vin")
+    vin_decode = partsapi_operation_status("vin_decode")
+
+    assert by_vin["live_callable_now"] is True
+    assert vin_decode["live_callable_now"] is False
+    assert "PARTSAPI_VINDECODE_KEY" in vin_decode["missing_key_env_names"]
+    assert "PARTSAPI_KEY" in vin_decode["accepted_key_env_names"]
 
 
 def test_partsapi_plate_and_part_name_operations_use_documented_params(monkeypatch):
@@ -511,6 +530,43 @@ def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
             "power_hp_from": "150",
         }
     ]
+
+
+def test_extract_partsapi_search_tree_rows_keeps_only_documented_nodes():
+    rows = extract_partsapi_search_tree_rows(
+        payload={
+            "data": [
+                {
+                    "STR_LEVEL": 2,
+                    "ROOT_NODE_TEXT": "Двигатель",
+                    "ROOT_NODE_STR_ID": 100,
+                    "NODE_1_TEXT": "Фильтры",
+                    "NODE_1_STR_ID": 110,
+                }
+            ]
+        }
+    )
+
+    assert rows[0]["ROOT_NODE_STR_ID"] == 100
+    assert rows[0]["NODE_1_STR_ID"] == 110
+
+
+@pytest.mark.parametrize("operation", ["engine_info", "search_tree"])
+def test_partsapi_structured_operation_falls_back_on_unrecognized_payload(monkeypatch, operation):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    payload = {"data": {}} if operation == "engine_info" else {"response": "unrecognised"}
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse(payload),
+    )
+
+    result = partsapi_catalog_lookup(operation=operation, type_id="1404")
+
+    assert result["ok"] is True
+    assert result["outcome"] == "empty_result"
+    assert result["requires_fallback"] is True
 
 
 def test_exist_request_builds_public_read_only_dry_run_plan():
@@ -794,6 +850,96 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
     assert "network timeout" in result["error"]
     assert "secret-key" not in result["request_plan"]["redacted_url"]
     assert len(calls) == 2
+
+
+def test_partsapi_retry_is_bounded_to_three_attempts(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    calls = []
+
+    def fake_urlopen(request, timeout=20.0):
+        calls.append(request.full_url)
+        raise TimeoutError("network timeout")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+    result = partsapi_catalog_lookup(
+        operation="parts_by_vin",
+        identifier="XW7BF4FK60S145161",
+        part_type="oem",
+        category="1191",
+        max_attempts=10,
+    )
+
+    assert result["outcome"] == "timeout"
+    assert result["retryable"] is True
+    assert result["attempt_count"] == 3
+    assert result["max_attempts"] == 3
+    assert len(calls) == 3
+
+
+def test_partsapi_declared_error_is_not_reported_as_empty_success(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse({"status": "error", "error": "unsupported identifier"}),
+    )
+
+    result = partsapi_catalog_lookup(operation="vin_decode_oe", identifier="MR41S123456")
+
+    assert result["ok"] is False
+    assert result["outcome"] == "provider_rejected"
+    assert result["requires_fallback"] is True
+    assert result["empty_payload"] is False
+    assert "secret-key" not in result["request_plan"]["redacted_url"]
+
+
+def test_partsapi_unknown_nonempty_vin_shape_is_an_empty_result_for_fallback(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse({"response": "unrecognised"}),
+    )
+
+    result = partsapi_catalog_lookup(operation="vin_decode_oe", identifier="MR41S123456")
+
+    assert result["ok"] is True
+    assert result["outcome"] == "empty_result"
+    assert result["requires_fallback"] is True
+    assert result["response_shape"] == "object"
+
+
+def test_vin17_non_object_payload_is_structured_not_an_exception(monkeypatch):
+    monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
+    monkeypatch.setenv("VIN17_SECRET", "test-secret")
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", lambda request, timeout=20.0: _FakeResponse([]))
+
+    result = vin17_decode_vehicle("LFMGJE720DS070251")
+
+    assert result["ok"] is False
+    assert result["outcome"] == "adapter_malformed_payload"
+    assert result["requires_fallback"] is True
+
+
+def test_vin17_connection_reset_is_structured_for_fallback(monkeypatch):
+    monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
+    monkeypatch.setenv("VIN17_SECRET", "test-secret")
+
+    def fail_urlopen(request, timeout=20.0):
+        raise ConnectionResetError("connection reset")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+
+    result = vin17_decode_vehicle("LFMGJE720DS070251")
+
+    assert result["ok"] is False
+    assert result["outcome"] == "network_error"
+    assert result["retryable"] is True
+    assert result["requires_fallback"] is True
 
 
 def test_partsapi_oe_applicability_allows_empty_payload(monkeypatch):

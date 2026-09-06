@@ -6,35 +6,20 @@ business records, identifiers, secrets, OAuth state or private output.
 
 ## Local gates
 
-Run once on the final tree with a disposable Manager database:
+Run once on the final tree:
 
 ```bash
-run_manager_release_gates() (
-  set -e
-  local gate_dir
-  gate_dir="$(mktemp -d /tmp/autostop-manager-release-gates.XXXXXX)"
-  trap '[[ "$gate_dir" == /tmp/autostop-manager-release-gates.* ]] && rm -rf -- "$gate_dir"' EXIT
-  export AUTOSTOP_MANAGER_DB="$gate_dir/preflight.sqlite3"
-  .venv/bin/python -m autostop_manager.cli knowledge-sync
-  .venv/bin/python -m autostop_manager.cli knowledge-audit
-  .venv/bin/python -m autostop_manager.cli skills-audit
-  .venv/bin/python -m autostop_manager.cli cleanup-audit
-  .venv/bin/python -m ruff check .
-  .venv/bin/python -m ruff format --check autostop_manager tests
-  .venv/bin/python -m mypy autostop_manager
-  .venv/bin/python -m coverage run -m pytest -q
-  .venv/bin/python -m coverage report --fail-under=82
-  git diff --check
-)
-run_manager_release_gates
+./scripts/release-gates.sh
 ```
 
-Warnings and missing files must be empty. Preserve existing work; never point
-these gates at the persistent database.
+The script keeps its database and generated files in a private disposable
+directory. Warnings and missing required files fail the run.
 
 ## Publish
 
 ```bash
+git status --porcelain=v1 --untracked-files=all
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
 git fetch origin AutostopManager --prune
 git merge-base --is-ancestor origin/AutostopManager HEAD
 git push origin HEAD:AutostopManager
@@ -42,8 +27,9 @@ test "$(git rev-parse HEAD)" = \
   "$(git ls-remote origin refs/heads/AutostopManager | awk 'NR == 1 { print $1 }')"
 ```
 
-Integrate concurrent work intentionally and rerun affected checks. Never force
-push; the published revision must match the remote readback.
+Commit the exact reviewed tree first. Integrate concurrent work intentionally
+and rerun affected checks. Never force push; the published revision must match
+the remote readback.
 
 ## Coupled-release preflight
 

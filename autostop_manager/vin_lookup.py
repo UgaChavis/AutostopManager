@@ -304,6 +304,18 @@ def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None =
     return payload
 
 
+def _vpic_failure_details(exc: BaseException) -> tuple[str, bool]:
+    if isinstance(exc, HTTPError):
+        return ("provider_http_5xx", True) if 500 <= int(exc.code) <= 599 else ("provider_http_4xx", False)
+    if isinstance(exc, TimeoutError):
+        return "timeout", True
+    if isinstance(exc, (URLError, OSError)):
+        return "network_error", True
+    if isinstance(exc, ValueError):
+        return "adapter_malformed_payload", False
+    return "adapter_error", False
+
+
 def decode_vin_vpic(
     vin: str,
     *,
@@ -318,6 +330,9 @@ def decode_vin_vpic(
             "source": "NHTSA vPIC",
             "error": "VIN is too short for vPIC decoding",
             "vin": normalized,
+            "outcome": "invalid_input",
+            "retryable": False,
+            "requires_fallback": False,
         }
     endpoint = "DecodeVinValuesExtended" if extended else "DecodeVinValues"
     base_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/{endpoint}/{quote(normalized, safe='*')}"
@@ -328,7 +343,8 @@ def decode_vin_vpic(
 
     try:
         payload = _vpic_request_json(request_url, timeout=timeout)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        outcome, retryable = _vpic_failure_details(exc)
         return {
             "ok": False,
             "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
@@ -336,6 +352,9 @@ def decode_vin_vpic(
             "vin": normalized,
             "error": str(exc),
             "extended": extended,
+            "outcome": outcome,
+            "retryable": retryable,
+            "requires_fallback": True,
         }
 
     results = payload.get("Results") or []
@@ -348,10 +367,14 @@ def decode_vin_vpic(
             "error": "vPIC returned no results",
             "payload": payload,
             "extended": extended,
+            "outcome": "empty_result",
+            "retryable": False,
+            "requires_fallback": True,
         }
 
     first = results[0]
     vehicle = _extract_vpic_vehicle(first)
+    clean_diagnostics = str(first.get("ErrorCode") or "") in {"", "0"}
     return {
         "ok": True,
         "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
@@ -362,23 +385,40 @@ def decode_vin_vpic(
         "error_text": first.get("ErrorText"),
         "payload": payload,
         "extended": extended,
+        "outcome": "success",
+        "retryable": False,
+        "requires_fallback": False,
+        "coverage": "basic" if clean_diagnostics else "partial_or_unsupported",
+        "epc_confirmed": False,
     }
 
 
 def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
     normalized = normalize_vin(wmi)[:3]
     if len(normalized) != 3:
-        return {"ok": False, "source": "NHTSA vPIC WMI", "wmi": normalized, "error": "WMI must be 3 characters"}
+        return {
+            "ok": False,
+            "source": "NHTSA vPIC WMI",
+            "wmi": normalized,
+            "error": "WMI must be 3 characters",
+            "outcome": "invalid_input",
+            "retryable": False,
+            "requires_fallback": False,
+        }
     request_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/{quote(normalized)}?format=json"
     try:
         payload = _vpic_request_json(request_url, timeout=timeout)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        outcome, retryable = _vpic_failure_details(exc)
         return {
             "ok": False,
             "source": "NHTSA vPIC WMI",
             "request_url": request_url,
             "wmi": normalized,
             "error": str(exc),
+            "outcome": outcome,
+            "retryable": retryable,
+            "requires_fallback": True,
         }
 
     results = payload.get("Results") or []
@@ -390,6 +430,9 @@ def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
             "wmi": normalized,
             "error": "vPIC returned no WMI results",
             "payload": payload,
+            "outcome": "empty_result",
+            "retryable": False,
+            "requires_fallback": True,
         }
 
     first = results[0]
@@ -402,6 +445,11 @@ def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
             key.lower(): value for key, value in first.items() if value not in (None, "", "Not Applicable")
         },
         "payload": payload,
+        "outcome": "success",
+        "retryable": False,
+        "requires_fallback": False,
+        "coverage": "basic",
+        "epc_confirmed": False,
     }
 
 
@@ -425,14 +473,24 @@ def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float 
         (vin, year) for vin, year in normalized_items if classify_identifier(vin).kind in {"vin", "vin_partial"}
     ]
     if not vin_rows:
-        return {"ok": True, "source": "NHTSA vPIC Batch", "count": 0, "results_by_vin": {}, "request_url": None}
+        return {
+            "ok": True,
+            "source": "NHTSA vPIC Batch",
+            "count": 0,
+            "results_by_vin": {},
+            "request_url": None,
+            "outcome": "empty_result",
+            "retryable": False,
+            "requires_fallback": False,
+        }
 
     data_rows = [f"{vin},{year}" if year is not None else vin for vin, year in vin_rows]
     request_url = "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/"
     body = urlencode({"format": "json", "data": ";".join(data_rows)}).encode("utf-8")
     try:
         payload = _vpic_request_json(request_url, timeout=timeout, data=body)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        outcome, retryable = _vpic_failure_details(exc)
         return {
             "ok": False,
             "source": "NHTSA vPIC Batch",
@@ -440,6 +498,9 @@ def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float 
             "count": len(vin_rows),
             "error": str(exc),
             "results_by_vin": {},
+            "outcome": outcome,
+            "retryable": retryable,
+            "requires_fallback": True,
         }
 
     results_by_vin: dict[str, dict[str, Any]] = {}
@@ -457,6 +518,11 @@ def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float 
             "error_text": row.get("ErrorText"),
             "payload": {"Results": [row]},
             "batch": True,
+            "outcome": "success",
+            "retryable": False,
+            "requires_fallback": False,
+            "coverage": "basic" if str(row.get("ErrorCode") or "") in {"", "0"} else "partial_or_unsupported",
+            "epc_confirmed": False,
         }
     return {
         "ok": True,
@@ -465,6 +531,9 @@ def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float 
         "count": len(vin_rows),
         "results_by_vin": results_by_vin,
         "payload": payload,
+        "outcome": "success" if results_by_vin else "empty_result",
+        "retryable": False,
+        "requires_fallback": not bool(results_by_vin),
     }
 
 

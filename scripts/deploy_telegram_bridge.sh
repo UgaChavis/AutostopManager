@@ -184,6 +184,16 @@ install_current_media_wrapper() {
   install -o root -g root -m 0755 "${media_wrapper_source}" "${media_wrapper_path}"
 }
 
+transcription_runtime_ready() {
+  if [[ "${account}" == "work" ]]; then
+    "${media_wrapper_path}" self-check
+    return
+  fi
+  sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
+    /usr/bin/timeout --signal=TERM --kill-after=10s 120s \
+    "${venv_root}/bin/python" -m autostop_manager.telegram_transcribe --account personal --self-check
+}
+
 if ! install_current_media_wrapper; then
   if [[ "${was_active}" -eq 1 ]] && rollback; then
     echo "ERROR: work media sandbox wrapper install failed; previous release restored" >&2
@@ -196,6 +206,14 @@ if ! install_current_media_wrapper; then
 fi
 
 if [[ "${account}" == "work" && "${was_active}" -eq 0 ]]; then
+  if ! transcription_runtime_ready; then
+    if restore_previous_release_assets; then
+      echo "ERROR: local Telegram transcription runtime failed; previous release assets restored" >&2
+    else
+      echo "ERROR: local Telegram transcription runtime failed; no previous Telegram release exists" >&2
+    fi
+    exit 1
+  fi
   echo "telegram_bridge_deployed=true"
   echo "account=work"
   echo "authorization_required=true"
@@ -226,18 +244,6 @@ if [[ "${ready}" -ne 1 ]]; then
   fi
   exit 1
 fi
-transcription_runtime_ready() {
-  if [[ "${account}" == "personal" ]]; then
-    sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
-      "${venv_root}/bin/python" -c \
-      'from autostop_manager.telegram_transcribe import DEFAULT_MODEL_DIR, _validate_local_model; from faster_whisper import WhisperModel; _validate_local_model(DEFAULT_MODEL_DIR); assert WhisperModel'
-    return
-  fi
-  sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
-    "${venv_root}/bin/python" -c \
-    "from autostop_manager.telegram_bridge import account_model_dir; from autostop_manager.telegram_transcribe import _load_model; _load_model(account_model_dir('work'), cpu_threads=1, system_owned_model=True)"
-}
-
 if ! transcription_runtime_ready; then
   if rollback; then
     echo "ERROR: local Telegram transcription runtime failed; previous release restored" >&2

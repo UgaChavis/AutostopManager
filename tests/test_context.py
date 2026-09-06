@@ -20,21 +20,22 @@ def test_prepare_context_leaves_missing_fact_judgment_to_the_agent(tmp_path):
     assert "missing_context" not in result
 
 
-def test_agent_brief_preserves_multi_step_effect_composition(tmp_path):
+def test_agent_brief_offers_composable_suggestions_without_permissions(tmp_path):
     result = context.build_agent_brief(
         _store(tmp_path),
-        "Найди компанию Horizon, выставь счёт и отправь на эту почту",
+        "Найди компанию Horizon в CRM, выставь счёт и отправь на эту почту",
     )
 
     route = result["route"]
-    assert route["steps"][0]["workflow_id"] == "crm_record_workflow"
-    assert {step["workflow_id"] for step in route["steps"]} == {
-        "crm_record_workflow",
-        "business_document_workflow",
-        "crm_gmail_workflow",
+    assert {step["command_id"] for step in route["steps"]} == {
+        "crm_operations",
+        "documents_and_mail",
     }
-    assert any("external_send" in step["effects"] for step in route["steps"])
-    assert "Reconcile the amounts and resulting business state." in result["verification"]
+    assert route["selection_mode"] == "recommended"
+    assert all(step["effects"] == [] for step in route["steps"])
+    assert route["write_domains"] == []
+    assert route["external_connectors"] == ["gmail"]
+    assert result["verification"] == ["Confirm the result solves the request."]
 
 
 def test_agent_brief_does_not_update_memory_usage(tmp_path):
@@ -52,39 +53,50 @@ def test_agent_brief_does_not_update_memory_usage(tmp_path):
     assert before is None and after is None
 
 
-def test_agent_brief_business_documents_keeps_document_and_finance_gates(tmp_path):
-    result = context.build_agent_brief(_store(tmp_path), "Выставь счёт из CRM")
+def test_agent_brief_selects_relevant_sources_for_multi_domain_suggestion(tmp_path):
+    result = context.build_agent_brief(_store(tmp_path), "Подготовь счёт и отправь его по Gmail")
 
     route = result["route"]
-    assert route["steps"][0]["workflow_id"] == "business_document_workflow"
-    assert route["steps"][0]["domain"] == "business_documents"
-    assert route["steps"][0]["effects"] == ["document", "finance"]
-    assert "Inspect the generated document before use." in result["verification"]
-    assert "Reconcile the amounts and resulting business state." in result["verification"]
+    assert [step["command_id"] for step in route["steps"]] == ["documents_and_mail"]
+    assert {
+        "docs/agent/business_document_quality_playbook.md",
+        "docs/agent/gmail_workflow_playbook.md",
+    } <= set(route["source_of_truth"] + route["reference_files"])
 
 
-def test_agent_brief_vin_lookup_stays_in_service_case_until_route_is_confident(tmp_path):
-    result = context.build_agent_brief(
-        _store(tmp_path),
-        "В карточке CRM по VIN найти OEM фильтра и записать в карточку",
-    )
+def test_agent_brief_does_not_load_unrelated_sibling_domain(tmp_path):
+    document = context.build_agent_brief(_store(tmp_path), "Создай документ")
+    remote = context.build_agent_brief(_store(tmp_path), "Проверь managed-pc")
 
-    route = result["route"]
-    assert route["selection_mode"] == "explore"
-    assert route["steps"] == []
-    assert route["write_domains"] == []
-    assert route["candidates"][0]["domain"] == "service_case"
+    assert document["route"]["steps"][0]["knowledge_domains"] == ["business_documents"]
+    assert document["route"]["external_connectors"] == []
+    assert remote["route"]["steps"][0]["knowledge_domains"] == ["remote_codex_access"]
+    assert "docs/agent/deployment_runbook.md" not in remote["route"]["source_of_truth"]
 
 
-def test_agent_brief_keeps_store_intake_read_only_and_publish_explicit(tmp_path):
+def test_agent_brief_preserves_exact_sources_for_legacy_intents(tmp_path):
+    store = _store(tmp_path)
+    gmail = context.build_agent_brief(store, "unrelated words", intent="crm_gmail_workflow")
+    cleanup = context.build_agent_brief(store, "unrelated words", intent="board_cleanup")
+    inbox = context.build_agent_brief(store, "unrelated words", intent="inbox_triage")
+    remote = context.build_agent_brief(store, "unrelated words", intent="remote_codex_access_change")
+
+    assert gmail["route"]["steps"][0]["knowledge_domains"] == ["gmail_operations"]
+    assert gmail["route"]["external_connectors"] == ["gmail"]
+    assert cleanup["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
+    assert cleanup["route"]["steps"][0]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
+    assert inbox["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
+    assert remote["route"]["steps"][0]["knowledge_domains"] == ["remote_codex_access", "deployment"]
+
+
+def test_agent_brief_keeps_store_work_as_guidance_only(tmp_path):
     store = _store(tmp_path)
     intake = context.build_agent_brief(store, "Обработай новую заявку магазина")
-    publish = context.build_agent_brief(store, "Опубликуй предложение по заявке магазина", limit=1)
+    publish = context.build_agent_brief(store, "Опубликуй предложение по заявке магазина")
 
-    assert intake["route"]["steps"][0]["workflow_id"] == "store_quote_conductor"
-    assert intake["route"]["write_domains"] == []
-    assert publish["route"]["steps"][0]["effects"] == ["store_write"]
-    assert "Confirm the intended Store record reflects the change." in publish["verification"]
+    assert intake["route"]["steps"][0]["workflow_id"] == "store_management_workflow"
+    assert publish["route"]["steps"][0]["effects"] == []
+    assert publish["route"]["write_domains"] == []
 
 
 def test_agent_brief_without_command_signal_remains_exploratory(tmp_path):

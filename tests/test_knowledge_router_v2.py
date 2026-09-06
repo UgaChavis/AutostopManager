@@ -11,165 +11,183 @@ def _routes(query: str, *, intent: str | None = None) -> list[dict]:
     return plan_command_routes(query, intent=intent)
 
 
-def _workflows(query: str, *, intent: str | None = None) -> list[str]:
-    return [route["workflow_id"] for route in _routes(query, intent=intent)]
+def _ids(query: str, *, intent: str | None = None) -> list[str]:
+    return [route["command_id"] for route in _routes(query, intent=intent)]
 
 
-def test_representative_composed_business_workflow_is_phase_ordered():
-    query = "Найди компанию Horizon, выставь счёт и отправь на эту почту"
+def test_routes_are_broad_effect_free_suggestions():
+    queries = (
+        "Найди компанию в CRM, подготовь счёт и отправь по Gmail",
+        "Обработай заявку на проценку и ответь клиенту в Telegram",
+        "Перезапусти SSHD на удалённом сервере",
+    )
 
-    assert _workflows(query) == [
-        "crm_record_workflow",
-        "business_document_workflow",
-        "crm_gmail_workflow",
-    ]
-    brief = build_agent_brief(None, query)
-    assert [step["phase"] for step in brief["route"]["steps"]] == [10, 20, 30]
-    assert brief["route"]["write_domains"] == ["crm"]
-    assert brief["route"]["external_connectors"] == ["gmail"]
+    for query in queries:
+        routes = _routes(query)
+        assert 1 <= len(routes) <= 3
+        assert all(route["effects"] == [] for route in routes)
+        assert all(route["dependencies"] == [] for route in routes)
+        assert all(route["phase"] == 0 for route in routes)
 
 
-def test_service_routes_share_the_current_service_case_domain():
+def test_composed_request_offers_capabilities_without_a_sequence():
+    routes = _routes("Найди компанию Horizon в CRM, выставь счёт и отправь на эту почту")
+
+    assert {route["command_id"] for route in routes} == {"crm_operations", "documents_and_mail"}
+    assert routes[0]["score"] >= routes[1]["score"]
+
+
+def test_service_case_uses_one_broad_route():
     routes = _routes("Найди оригинальный номер детали по VIN")
 
-    assert [route["workflow_id"] for route in routes] == [
-        "vehicle_identity_decode",
-        "parts_oem_lookup",
-    ]
-    assert all(route["knowledge_domains"] == ["service_case"] for route in routes)
+    assert _ids("Найди оригинальный номер детали по VIN") == ["service_case"]
+    assert routes[0]["knowledge_domains"] == ["service_case"]
 
 
-@pytest.mark.parametrize(
-    ("query", "command_id", "effects"),
-    [
-        ("Бери в работу заявку на проценку", "store_quote_intake", []),
-        ("Подготовь позиции в заявке на проценку", "store_quote_draft", ["store_write"]),
-        (
-            "Опубликуй предложения по заявке на проценку",
-            "store_customer_response_publish",
-            ["store_write"],
-        ),
-    ],
-)
-def test_store_quote_stages_keep_distinct_effect_boundaries(query, command_id, effects):
-    routes = _routes(query)
+def test_store_quote_and_telegram_can_be_combined_without_authorizing_actions():
+    routes = _routes("Обработай новую заявку на проценку и ответь клиенту в Telegram")
 
-    assert [route["command_id"] for route in routes] == [command_id]
-    route = routes[0]
-    assert route["workflow_id"] == "store_quote_conductor"
-    assert route["effects"] == effects
-    assert route["knowledge_domains"] == ["store_management"]
-
-
-def test_store_and_telegram_compose_without_broadening_store_publish():
-    composed = _routes("Обработай новую заявку на проценку и ответь клиенту в Telegram")
-    assert [route["command_id"] for route in composed] == [
-        "store_quote_intake",
-        "telegram_owner_operations",
-    ]
-    assert composed[0]["effects"] == []
-    assert composed[1]["effects"] == ["external_send"]
-
-    telegram_only = _routes("Ответь клиенту в Telegram по заявке на проценку, публикацию Store не делай")
-    assert [route["command_id"] for route in telegram_only] == ["telegram_owner_operations"]
-    assert all("store_write" not in route["effects"] for route in telegram_only)
-
-    opted_out = _routes("Обработай новую заявку на проценку, но в Telegram не отвечай")
-    assert [route["command_id"] for route in opted_out] == ["store_quote_intake"]
-    assert all("external_send" not in route["effects"] for route in opted_out)
-    assert all("telegram_operations" not in route["knowledge_domains"] for route in opted_out)
-
-
-def test_natural_store_handoff_and_read_only_opt_out_keep_the_right_telegram_route():
-    handoff = _routes("Уточни у клиента по заявке магазина")
-    assert {route["intent"] for route in handoff} == {"store_read", "telegram_operations"}
-    assert [route["effects"] for route in handoff] == [[], ["external_send"]]
-
-    read_only = _routes("Прочитай последние сообщения в Telegram, ничего не отправляй")
-    assert [route["command_id"] for route in read_only] == ["telegram_read_operations"]
-    assert read_only[0]["effects"] == []
-
-
-@pytest.mark.parametrize(
-    ("query", "send"),
-    [
-        ("В рабочем телеграме клиент прислал WBAFR9C50BC123456 и спросил сколько выйдет", False),
-        ("Клиент прислал артикул 1K0615301AA в телеграм", False),
-        ("В рабочем Telegram фото детали", False),
-        ("Клиент прислал VIN WBAFR9C50BC123456, ответь ему", True),
-        ("Клиент в Telegram написал: беру Bosch", False),
-        ("WBAFR9C50BC123456", False),
-    ],
-)
-def test_terse_telegram_parts_context_invites_research_without_implicit_mutation(query, send):
-    routes = _routes(query)
-    intents = {route["intent"] for route in routes}
-
-    assert {"store_read", "telegram_read"} <= intents
-    assert all("store_write" not in route["effects"] for route in routes)
-    assert any("external_send" in route["effects"] for route in routes) is send
-
-
-@pytest.mark.parametrize("query", ["Диагностика VIN WBAFR9C50BC123456", "Найди этот VIN в CRM WBAFR9C50BC123456"])
-def test_vin_in_another_explicit_context_does_not_become_store_work(query):
-    assert all(route["knowledge_domains"] != ["store_management"] for route in _routes(query))
-
-
-def test_cleanup_request_stays_out_of_finance_business_documents_and_crm_audit():
-    query = (
-        "Сократи кодовую базу и очисти дублирующие инструкции и документацию AutoStopManager; с минимальными тестами."
-    )
-    routes = _routes(query)
-
-    assert [route["command_id"] for route in routes] == [
-        "ecosystem_capability_parity",
-        "manager_documentation_hygiene",
-    ]
-    forbidden = {"business_document_workflow", "crm_agent_integration_audit", "crm_finance_operation"}
-    assert forbidden.isdisjoint(route["command_id"] for route in routes)
-    assert all("finance" not in route["effects"] for route in routes)
+    assert {route["command_id"] for route in routes} == {"store_quote", "telegram_operations"}
+    assert all(route["effects"] == [] for route in routes)
 
 
 @pytest.mark.parametrize(
     "query",
     [
-        "Обсудим команду «Опубликуй предложения по заявке на проценку», пока ничего не меняй",
-        "Проверь маршрут для фразы «обработай заявку на проценку»",
-        "Покажи черновик ответа клиенту по заявке на проценку",
+        "Ответь клиенту по Gmail",
+        "Ответь клиенту в CRM",
+        "Свяжись с клиентом по телефону",
     ],
 )
-def test_deferred_or_quoted_commands_never_authorize_effects(query):
-    assert all(not route["effects"] for route in _routes(query))
+def test_customer_dialogue_does_not_assume_telegram_channel(query):
+    assert "telegram_operations" not in _ids(query)
 
 
-def test_explicit_intent_is_deterministic_and_scope_opt_out_is_respected():
-    routes = _routes("письмо про оплату и документ", intent="crm_finance_operation")
-    assert [route["workflow_id"] for route in routes] == ["crm_finance_operation"]
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Уточни у клиента по заявке магазина",
+        "Ответь клиенту по заявке магазина",
+        "Свяжись с клиентом по предложению магазина",
+    ],
+)
+def test_store_customer_dialogue_can_suggest_telegram_without_naming_the_channel(query):
+    routes = _routes(query)
+
+    assert "telegram_operations" in {route["command_id"] for route in routes}
+    assert all(route["effects"] == [] for route in routes)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Ответь клиенту в WhatsApp",
+        "Ответь клиенту по SMS",
+        "Ответь клиенту через сайт",
+    ],
+)
+def test_customer_dialogue_respects_an_explicit_non_telegram_channel(query):
+    assert "telegram_operations" not in _ids(query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Создай коммерческое предложение для клиента",
+        "Опубликуй предложение по вакансии",
+    ],
+)
+def test_generic_proposals_do_not_assume_store(query):
+    assert "store_quote" not in _ids(query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Клиент подтвердил опубликованное предложение, создай заказ",
+        "Клиент согласовал актуальное опубликованное предложение по проценке, оформи выбранный заказ",
+    ],
+)
+def test_published_store_choice_can_suggest_quote_workflow_without_authorizing_an_order(query):
+    routes = _routes(query)
+
+    assert "store_quote" in {route["command_id"] for route in routes}
+    assert all(route["effects"] == [] for route in routes)
+
+
+def test_supplier_offer_does_not_become_a_store_customer_quote():
+    assert "store_quote" not in _ids("Проверь опубликованное предложение поставщика")
+
+
+def test_technical_instruction_stays_in_service_case():
+    assert _ids("Проверь инструкцию по ремонту двигателя") == ["service_case"]
+
+
+def test_manager_name_does_not_override_a_concrete_service_request():
+    assert _ids("В AutoStopManager найди OEM по VIN") == ["service_case"]
+
+
+@pytest.mark.parametrize(
+    ("intent", "command_id"),
+    [
+        ("crm_finance_operation", "crm_operations"),
+        ("store_quote_intake", "store_quote"),
+        ("store_quote_conductor_draft", "store_quote"),
+        ("store_customer_response_publish", "store_quote"),
+        ("store_quote_order_confirm", "store_quote"),
+        ("telegram_response_draft", "telegram_operations"),
+        ("telegram_authorization", "telegram_operations"),
+    ],
+)
+def test_legacy_intents_resolve_to_broad_suggestions(intent, command_id):
+    routes = _routes("unrelated words", intent=intent)
+
+    assert [route["command_id"] for route in routes] == [command_id]
     assert routes[0]["score"] == 1000
-
-    assert _routes("Покажи активные заказы магазина, но без Store — магазин не трогать") == []
-    assert _routes("Покажи активные заказы магазина, но без Store — магазин не трогать", intent="store_read") == []
+    assert routes[0]["effects"] == []
 
 
-def test_remote_read_change_and_pad_routes_remain_separate():
-    read = _routes("Проверь подключение к удалённому серверу по SSH")
-    assert [route["workflow_id"] for route in read] == ["remote_codex_access"]
-    assert read[0]["effects"] == []
+def test_current_documentation_request_does_not_become_a_crm_audit():
+    query = "Проанализируй главные инструкции проекта Автостоп Менеджер и предложи, как сделать агента свободнее"
 
-    change = _routes("Перезапусти SSHD на удалённом сервере")
-    assert [route["workflow_id"] for route in change] == ["remote_codex_access_change"]
-    assert change[0]["effects"] == ["destructive"]
-    assert change[0]["dependencies"] == ["remote_codex_access"]
+    assert _ids(query) == ["manager_project"]
 
-    pad = _routes("Подготовь удалённую диагностику Launch PAD VII")
-    assert [route["workflow_id"] for route in pad] == ["remote_diagnostics_pad_vii"]
-    assert pad[0]["effects"] == ["remote_diagnostics"]
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Проанализируй документацию Автостоп Менеджер про Telegram и Store",
+        "Оптимизируй инструкции и маршруты агента для магазина и телеграма",
+        "Добавь в документацию пример: «Ответь клиенту по заявке магазина»",
+    ],
+)
+def test_project_documentation_does_not_open_business_workflows(query):
+    assert _ids(query) == ["manager_project"]
+
+
+def test_candidate_in_crm_does_not_become_a_telegram_customer():
+    routes = _ids("Ответь клиенту по заявке кандидата в CRM")
+
+    assert "crm_operations" in routes
+    assert "telegram_operations" not in routes
+
+
+def test_scope_exclusion_is_respected():
+    assert all(
+        "store_management" not in route["knowledge_domains"]
+        for route in _routes("Покажи активные заказы магазина, но без Store — магазин не трогать")
+    )
+
+
+def test_remote_access_and_pad_remain_separate_capabilities():
+    assert _ids("Проверь подключение к удалённому серверу по SSH") == ["remote_and_release"]
+    assert _ids("Подготовь удалённую диагностику Launch PAD VII") == ["remote_diagnostics"]
 
 
 def test_command_registry_and_knowledge_map_are_independent(tmp_path, monkeypatch):
     with monkeypatch.context() as patched:
         patched.setattr(knowledge_base, "KNOWLEDGE_MAP_PATH", tmp_path / "missing-map.json")
-        assert _workflows("Приберись") == ["board_cleanup_autopilot"]
+        assert _ids("Приберись в CRM") == ["crm_operations"]
 
     with monkeypatch.context() as patched:
         patched.setattr(knowledge_base, "_load_command_routes", lambda: {"routes": []})
@@ -178,28 +196,23 @@ def test_command_registry_and_knowledge_map_are_independent(tmp_path, monkeypatc
         assert result["routes"]
 
 
-def test_unmatched_technical_question_stays_bounded_exploration():
+def test_unmatched_question_stays_bounded_exploration():
     brief = build_agent_brief(None, "Как выставить ГРМ на Mercedes M274?")
 
     assert brief["route"]["selection_mode"] == "explore"
     assert brief["route"]["steps"] == []
-    assert brief["route"]["candidates"][0]["confidence"] < 0.5
+    assert brief["route"]["candidates"]
+    assert all(candidate["confidence"] < 0.5 for candidate in brief["route"]["candidates"])
 
 
 @pytest.mark.parametrize(
     "query",
     [
-        "Подготовь ответ по заявке на проценку в CRM",
-        "Добавь позицию в заявку на проценку в CRM",
-        "Опубликуй предложение по заявке на проценку в CRM",
+        "Напиши текст ответа клиенту в Telegram",
+        "Клиент выбрал предложение",
+        "Клиент подтвердил опубликованное предложение, создай заказ",
+        "Обсудим команду «Опубликуй предложение», пока ничего не меняй",
     ],
 )
-def test_crm_scoped_quote_language_never_authorizes_store_write(query):
-    assert all("store_write" not in route["effects"] for route in _routes(query))
-
-
-def test_ambiguous_requests_do_not_gain_store_or_external_effects():
-    for query in ("Обработай новый запрос", "Нам пришел заказ, обработай его", "Ответь клиенту по заявке кандидата"):
-        routes = _routes(query)
-        assert all("store_write" not in route["effects"] for route in routes)
-        assert all("external_send" not in route["effects"] for route in routes)
+def test_drafts_choices_and_quoted_commands_never_gain_permissions(query):
+    assert all(route["effects"] == [] for route in _routes(query))

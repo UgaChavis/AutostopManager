@@ -286,8 +286,8 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="agent_brief",
         description=(
-            "Return a compact outcome-driven starting brief: recommended workflow, source pointers, effects "
-            "and verification goals. Routes are guidance, not a script."
+            "Return broad workflow suggestions, source pointers and a verification goal. "
+            "Routes are guidance, never permission or a script."
         ),
     )
     def agent_brief_tool(

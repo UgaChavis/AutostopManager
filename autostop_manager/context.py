@@ -15,15 +15,13 @@ SOURCE_BOUNDARIES = {
     "store_analytics": "aggregate Store metrics",
 }
 
-EFFECT_CHECKS = {
-    "crm_write": "Confirm the intended CRM record reflects the change.",
-    "store_write": "Confirm the intended Store record reflects the change.",
-    "document": "Inspect the generated document before use.",
-    "external_send": "Confirm the intended recipient received one result.",
-    "account_auth": "Confirm the selected account is authorized.",
-    "remote_diagnostics": "Confirm actions against current device state.",
-    "finance": "Reconcile the amounts and resulting business state.",
-    "destructive": "Confirm the intended scope changed and recovery remains possible.",
+_EXPLICIT_ROUTE_DOMAINS = {
+    "board_cleanup": ("board_cleanup_autopilot",),
+    "inbox_triage": ("board_cleanup_autopilot",),
+    "crm_gmail_workflow": ("gmail_operations",),
+    "remote_codex_access": ("remote_codex_access", "deployment"),
+    "remote_codex_access_change": ("remote_codex_access", "deployment"),
+    "crm_agent_integration_audit": ("startup_and_identity", "deployment"),
 }
 
 
@@ -78,9 +76,37 @@ def _route_navigation(knowledge: dict[str, Any], domain: str | None) -> dict[str
     )
 
 
+def _navigation_values(knowledge: dict[str, Any], domains: list[str], key: str) -> list[Any]:
+    return list(
+        dict.fromkeys(value for domain in domains for value in (_route_navigation(knowledge, domain).get(key) or []))
+    )
+
+
+def _route_domains(route: dict[str, Any], knowledge: dict[str, Any]) -> list[str]:
+    configured = list(dict.fromkeys(str(domain) for domain in route.get("knowledge_domains", []) if str(domain)))
+    explicit_domains = next(
+        (_EXPLICIT_ROUTE_DOMAINS[term] for term in route.get("matching_terms", []) if term in _EXPLICIT_ROUTE_DOMAINS),
+        (),
+    )
+    if explicit_domains:
+        return [domain for domain in explicit_domains if domain in configured]
+    scores = {
+        str(candidate.get("domain")): int(candidate.get("score") or 0) for candidate in knowledge.get("routes", [])
+    }
+    if not configured:
+        return []
+    strong = [domain for domain in configured if scores.get(domain, -1) >= 70]
+    if strong:
+        return strong
+    best_score = max(scores.get(domain, -1) for domain in configured)
+    best = [domain for domain in configured if scores.get(domain, -1) == best_score]
+    return best[:1]
+
+
 def _route_step(route: dict[str, Any], knowledge: dict[str, Any]) -> dict[str, Any]:
-    domain = str(route.get("domain") or "") or None
-    navigation = _route_navigation(knowledge, domain)
+    domains = _route_domains(route, knowledge)
+    domain = domains[0] if domains else None
+    source_of_truth = _navigation_values(knowledge, domains, "source_of_truth")
     return {
         "command_id": route.get("command_id"),
         "workflow_id": route.get("workflow_id") or route.get("command_id"),
@@ -89,10 +115,10 @@ def _route_step(route: dict[str, Any], knowledge: dict[str, Any]) -> dict[str, A
         "phase": int(route.get("phase") or 0),
         "dependencies": list(route.get("dependencies") or []),
         "effects": list(route.get("effects") or []),
-        "knowledge_domains": list(route.get("knowledge_domains") or []),
+        "knowledge_domains": domains,
         "domain": domain,
-        "open_first": navigation.get("open_first"),
-        "source_of_truth": navigation.get("source_of_truth", []),
+        "open_first": source_of_truth[0] if source_of_truth else None,
+        "source_of_truth": source_of_truth,
         "confidence": route.get("confidence"),
         "uncertainty": route.get("uncertainty"),
         "matching_terms": list(route.get("matching_terms") or []),
@@ -110,11 +136,6 @@ def build_agent_brief(
     knowledge = context.get("knowledge", {})
     command_routes = list(context.get("command_routes") or [])
     steps = [_route_step(route, knowledge) for route in command_routes]
-    first = steps[0] if steps else {}
-    domain = str(first.get("domain") or "")
-    effects = list(dict.fromkeys(effect for step in steps for effect in step.get("effects", [])))
-    verification = ["Confirm the result solves the request."]
-    verification.extend(EFFECT_CHECKS[effect] for effect in effects if effect in EFFECT_CHECKS)
     candidates = [
         {
             key: candidate.get(key)
@@ -131,13 +152,21 @@ def build_agent_brief(
         for candidate in candidates:
             candidate["confidence"] = min(float(candidate.get("confidence") or 0), 0.49)
             candidate["uncertainty"] = round(1.0 - float(candidate["confidence"]), 2)
-    source_of_truth = list(dict.fromkeys(source for step in steps for source in step.get("source_of_truth", [])))
-    route_domains = {str(value) for step in steps for value in step.get("knowledge_domains", [])}
-    write_domains = []
-    if "crm_write" in effects:
-        write_domains.append("crm")
-    if "store_write" in effects:
-        write_domains.append("store")
+    selected_domains = list(
+        dict.fromkeys(str(value) for step in steps for value in step.get("knowledge_domains", []) if str(value))
+    )
+    source_of_truth = _navigation_values(knowledge, selected_domains, "source_of_truth")
+    reference_files = _navigation_values(knowledge, selected_domains, "reference_files")
+    optional_runtime_files = _navigation_values(knowledge, selected_domains, "optional_runtime_files")
+    optional_available_files = _navigation_values(knowledge, selected_domains, "optional_available_files")
+    optional_missing_files = _navigation_values(knowledge, selected_domains, "optional_missing_files")
+    optional_notes = list(
+        dict.fromkeys(
+            str(_route_navigation(knowledge, domain).get("optional_runtime_note") or "")
+            for domain in selected_domains
+            if _route_navigation(knowledge, domain).get("optional_runtime_note")
+        )
+    )
     external_connectors = [
         connector
         for connector, marker in (
@@ -148,7 +177,7 @@ def build_agent_brief(
             ("public_camera", "public_camera"),
             ("remote_diagnostics", "remote_diagnostics"),
         )
-        if any(marker in route_domain for route_domain in route_domains)
+        if any(marker in domain for domain in selected_domains)
     ]
     canonical_rules = [str(item["rule"]) for item in load_manager_rules()]
 
@@ -163,28 +192,18 @@ def build_agent_brief(
         "route": {
             "steps": steps,
             "source_of_truth": source_of_truth,
-            "reference_files": _route_navigation(knowledge, domain).get("reference_files", []) if steps else [],
-            "optional_runtime_files": _route_navigation(knowledge, domain).get("optional_runtime_files", [])
-            if steps
-            else [],
-            "optional_available_files": _route_navigation(knowledge, domain).get("optional_available_files", [])
-            if steps
-            else [],
-            "optional_missing_files": _route_navigation(knowledge, domain).get("optional_missing_files", [])
-            if steps
-            else [],
-            "optional_runtime_available": _route_navigation(knowledge, domain).get("optional_runtime_available", False)
-            if steps
-            else False,
-            "optional_runtime_note": _route_navigation(knowledge, domain).get("optional_runtime_note", "")
-            if steps
-            else "",
+            "reference_files": reference_files,
+            "optional_runtime_files": optional_runtime_files,
+            "optional_available_files": optional_available_files,
+            "optional_missing_files": optional_missing_files,
+            "optional_runtime_available": bool(optional_runtime_files) and not optional_missing_files,
+            "optional_runtime_note": " ".join(optional_notes),
             "selection_mode": "recommended" if steps else "explore",
             "candidates": candidates,
-            "write_domains": write_domains,
+            "write_domains": [],
             "external_connectors": external_connectors,
         },
         "source_boundaries": SOURCE_BOUNDARIES,
         "hot_rules": canonical_rules,
-        "verification": verification,
+        "verification": ["Confirm the result solves the request."],
     }

@@ -647,6 +647,7 @@ def _merge_vpic_result(
 
     error_code = str(result.get("error_code") or "")
     vpic_clean = error_code in {"", "0"}
+    coverage = str(result.get("coverage") or ("basic" if vpic_clean else "partial_or_unsupported"))
     vpic_field_confidence = 0.75 if vpic_clean else 0.45
     field_map = {
         "make": "make",
@@ -683,6 +684,8 @@ def _merge_vpic_result(
             "decoded_fields": sorted(str(key) for key in vehicle),
             "error_code": result.get("error_code"),
             "error_text": result.get("error_text"),
+            "coverage": coverage,
+            "epc_confirmed": False,
             "limitations": "Basic manufacturer-reported VIN decode; not an EPC and often partial for ROW/JDM/Russia/CIS VINs.",
             "request_url": result.get("request_url"),
         }
@@ -900,7 +903,11 @@ def decode_vehicle_identity(
         "parts_lookup_readiness": {
             "ready_for_oem_lookup": ready_for_parts,
             "ready_for_oem_candidate_lookup": ready_for_parts,
-            "ready_for_crm_writeback": ready_for_parts,
+            # Identity can unlock read-only research, but has not selected a
+            # part or proved its applicability for a concrete record.
+            "ready_for_crm_writeback": False,
+            "identity_is_lead": True,
+            "epc_confirmation_required": True,
             "cross_source_agreement": {
                 "status": "not_checked",
                 "sources": ["NHTSA vPIC", "PartsAPI VINdecodeOE"],
@@ -908,9 +915,9 @@ def decode_vehicle_identity(
                 "conflicting_fields": [],
             },
             "blocking_reasons": blocking_reasons,
-            "reason": "High-confidence identity without high-severity conflicts is required before OEM/parts writeback."
+            "reason": "High-confidence identity without high-severity conflicts is required before OEM lookup."
             if not ready_for_parts
-            else "Identity is sufficient for OEM lookup, but part fitment still requires EPC/source attribution.",
+            else "Identity is sufficient for read-only OEM research; final fitment and any writeback still require EPC/source attribution.",
         },
         "field_evidence": field_evidence,
         "evidence_sources": evidence_sources,

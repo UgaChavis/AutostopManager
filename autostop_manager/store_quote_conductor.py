@@ -72,6 +72,7 @@ class QuoteEstimateSnapshot:
     entries_count: int
     coverage_hash: str
     coverage_count: int
+    warranty_present: bool
     published_snapshot_hash: str | None
     has_quote_offers: bool
     converted_order_ref_sha256: str | None
@@ -85,6 +86,7 @@ class QuoteEstimateSnapshot:
             "entries_count": self.entries_count,
             "coverage_hash": self.coverage_hash or None,
             "coverage_count": self.coverage_count,
+            "warranty_present": self.warranty_present,
             "published_snapshot_hash": self.published_snapshot_hash,
             "has_quote_offers": self.has_quote_offers,
             "converted_order_present": self.converted_order_ref_sha256 is not None,
@@ -248,7 +250,7 @@ class StoreQuoteOwnerApi:
         return self._invoke(
             "reopen",
             quote_request_id=quote_request_id,
-            body={},
+            body=None,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
@@ -1072,8 +1074,8 @@ def _write_request(
         evidence_hash = str(saved.get("evidence_hash") or "")
         if _HASH.fullmatch(evidence_hash) is None:
             return {"ok": False, "error_code": "store_quote_conductor_evidence_required"}
-        entries_hash = _sha256(_canonical_json(entries))
-        coverage_hash = _sha256(_canonical_json(coverage))
+        entries_hash = _estimate_entries_contract_hash(entries)
+        coverage_hash = _estimate_coverage_contract_hash(coverage)
         return {
             "ok": True,
             "entries": entries,
@@ -1143,6 +1145,7 @@ def _snapshot_from_data(value: Any, *, quote_request_id: str) -> QuoteEstimateSn
             entries_count=0,
             coverage_hash="",
             coverage_count=0,
+            warranty_present=False,
             published_snapshot_hash=None,
             has_quote_offers=bool(payload["hasQuoteOffers"]),
             converted_order_ref_sha256=_optional_ref_hash(payload.get("convertedOrderId")),
@@ -1164,10 +1167,11 @@ def _snapshot_from_data(value: Any, *, quote_request_id: str) -> QuoteEstimateSn
         updated_at=updated_at,
         status=status,
         provenance=provenance,
-        entries_hash=_sha256(_canonical_json(entries)),
+        entries_hash=_estimate_entries_contract_hash(entries),
         entries_count=len(entries),
-        coverage_hash=_sha256(_canonical_json(coverage)),
+        coverage_hash=_estimate_coverage_contract_hash(coverage),
         coverage_count=len(coverage),
+        warranty_present=_published_warranty_present(entries),
         published_snapshot_hash=snapshot_hash,
         has_quote_offers=bool(payload["hasQuoteOffers"]),
         converted_order_ref_sha256=_optional_ref_hash(payload.get("convertedOrderId")),
@@ -1187,6 +1191,7 @@ def _write_readback_matches(operation: str, snapshot: QuoteEstimateSnapshot, req
         return (
             snapshot.provenance == "AUTOSTOP_MANAGER"
             and snapshot.entries_hash == _mapping(request.get("contract_changes")).get("entries_sha256")
+            and snapshot.warranty_present
             and _HASH.fullmatch(str(snapshot.published_snapshot_hash or "")) is not None
             and snapshot.status == "WAITING_FOR_APPROVAL"
         )
@@ -1330,6 +1335,98 @@ def _sha256(value: str) -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _estimate_entries_contract_hash(entries: Any) -> str:
+    """Hash the Store-owned, customer-visible estimate core.
+
+    The owner API deliberately canonicalizes positional values before saving
+    them: quantities become text, a missing warranty becomes an empty string,
+    and publication later fills the warranty from system settings.  The
+    conductor must bind the part/price/delivery content without mistaking that
+    Store-owned formatting and warranty injection for a different quote.
+    """
+
+    normalized: list[Any] = []
+    for raw in entries if isinstance(entries, list) else []:
+        if not isinstance(raw, dict):
+            normalized.append(raw)
+            continue
+        entry_type = str(raw.get("type") or "")
+        if entry_type == "position":
+            source = str(raw.get("source") or "original_request").strip()
+            position: dict[str, Any] = {
+                "type": "position",
+                "name": str(raw.get("name") or ""),
+                "catalogNumber": str(raw.get("catalogNumber") or ""),
+                "manufacturer": str(raw.get("manufacturer") or ""),
+                "quantity": _estimate_quantity_text(raw.get("quantity")),
+                "delivery": str(raw.get("delivery") or ""),
+                "cost": str(raw.get("cost") or ""),
+                # Store owns this field.  Its specific published value is
+                # checked separately after submit, rather than being allowed
+                # to invalidate the part/price binding below.
+                "warranty": "",
+                "source": source,
+            }
+            if source == "conversation_added":
+                position["conversationContextHash"] = str(raw.get("conversationContextHash") or "").strip().casefold()
+            else:
+                position["requestItemId"] = str(raw.get("requestItemId") or "").strip()
+            normalized.append(position)
+            continue
+        if entry_type == "comment":
+            # Store rebuilds a declined-position notice from coverage.  It is
+            # not author-controlled quote content and must not multiply or
+            # change the contract hash on a full readback -> replace roundtrip.
+            if str(raw.get("coverageRequestItemId") or "").strip():
+                continue
+            normalized.append({"type": "comment", "html": str(raw.get("html") or "")})
+            continue
+        normalized.append(dict(raw))
+    return _sha256(_canonical_json(normalized))
+
+
+def _estimate_coverage_contract_hash(coverage: Any) -> str:
+    """Hash coverage independent of Store's stable source-item ordering."""
+
+    normalized: list[Any] = []
+    for raw in coverage if isinstance(coverage, list) else []:
+        if not isinstance(raw, dict):
+            normalized.append(raw)
+            continue
+        state = str(raw.get("state") or "").strip().upper()
+        item: dict[str, Any] = {
+            "requestItemId": str(raw.get("requestItemId") or "").strip(),
+            "state": state,
+            # The owner read model always emits null for an OFFERED item.
+            "clientReason": (str(raw.get("clientReason") or "").strip() if state == "DECLINED" else None),
+        }
+        normalized.append(item)
+    normalized.sort(
+        key=lambda item: (
+            str(item.get("requestItemId") or "") if isinstance(item, dict) else "",
+            _canonical_json(item),
+        )
+    )
+    return _sha256(_canonical_json(normalized))
+
+
+def _estimate_quantity_text(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return str(int(raw))
+    except (TypeError, ValueError):
+        return raw
+
+
+def _published_warranty_present(entries: Any) -> bool:
+    if not isinstance(entries, list):
+        return False
+    positions = [item for item in entries if isinstance(item, dict) and item.get("type") == "position"]
+    return bool(positions) and all(bool(str(item.get("warranty") or "").strip()) for item in positions)
 
 
 def _mapping(value: Any) -> dict[str, Any]:

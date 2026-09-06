@@ -1367,6 +1367,96 @@ def _partsapi_method_key(method: str) -> tuple[str, str | None]:
     return (os.getenv(env_name) or "", env_name) if env_name else ("", None)
 
 
+def _bounded_attempt_count(value: Any, *, limit: int = 3) -> int:
+    """Keep provider retries finite even when a caller passes a bad value."""
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = 1
+    return min(max(1, requested), limit)
+
+
+def _response_shape(payload: Any) -> str:
+    if payload is None:
+        return "null"
+    if isinstance(payload, dict):
+        return "object"
+    if isinstance(payload, list):
+        return "array"
+    return type(payload).__name__
+
+
+def _partsapi_provider_declared_error(payload: Any) -> bool:
+    """Recognise the common successful-HTTP error envelopes without guessing data."""
+    if not isinstance(payload, dict):
+        return False
+    if any(payload.get(key) not in (None, "", [], {}) for key in ("error", "errors", "exception")):
+        return True
+    if payload.get("success") is False or payload.get("ok") is False:
+        return True
+    return str(payload.get("status") or "").strip().casefold() in {"error", "failed", "failure", "fail"}
+
+
+def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
+    """Return a safe, machine-readable failure class and retry decision."""
+    if isinstance(exc, HTTPError):
+        code = int(exc.code)
+        if code == 429:
+            return "rate_limited", True, "PartsAPI rate limit reached."
+        if 500 <= code <= 599:
+            return "provider_http_5xx", True, f"PartsAPI returned HTTP {code}."
+        return "provider_http_4xx", False, f"PartsAPI returned HTTP {code}."
+    if isinstance(exc, TimeoutError):
+        detail = str(exc).strip()
+        return "timeout", True, f"PartsAPI request timed out: {detail}" if detail else "PartsAPI request timed out."
+    if isinstance(exc, URLError):
+        return "network_error", True, "PartsAPI network request failed."
+    if isinstance(exc, OSError):
+        return "network_error", True, "PartsAPI network request failed."
+    if isinstance(exc, ValueError):
+        return "adapter_malformed_payload", False, "PartsAPI returned malformed JSON."
+    return "adapter_error", False, "PartsAPI request failed."
+
+
+def partsapi_operation_status(operation: str) -> dict[str, Any]:
+    """Describe readiness for one operation, not merely for the whole account."""
+    if operation not in PARTSAPI_OPERATIONS:
+        return {
+            "ok": False,
+            "provider": "partsapi_ru",
+            "operation": operation,
+            "outcome": "invalid_operation",
+            "failure_class": "invalid_operation",
+            "retryable": False,
+            "live_callable_now": False,
+            "available_operations": sorted(PARTSAPI_OPERATIONS),
+        }
+
+    spec = PARTSAPI_OPERATIONS[operation]
+    request_plan = build_partsapi_request(method=spec["method"], params={})
+    method_key_env_name = PARTSAPI_METHOD_KEY_ENV_NAMES.get(spec["method"])
+    accepted_key_env_names = ["PARTSAPI_KEY", *([method_key_env_name] if method_key_env_name else [])]
+    has_key = bool(os.getenv("PARTSAPI_KEY") or (method_key_env_name and os.getenv(method_key_env_name)))
+    missing_key_env_names = [] if has_key else accepted_key_env_names
+    return {
+        "ok": bool(request_plan["configured"]),
+        "provider": "partsapi_ru",
+        "operation": operation,
+        "partsapi_method": spec["method"],
+        "role": spec["role"],
+        "required_params": list(spec["required"]),
+        "accepted_key_env_names": accepted_key_env_names,
+        "missing_key_env_names": missing_key_env_names,
+        "base_url_configured": bool(request_plan["base_url_configured"]),
+        "missing_env_names": list(request_plan["missing_env_names"]),
+        "method_key_env_name": method_key_env_name,
+        "live_callable_now": bool(request_plan["configured"]),
+        "outcome": "ready" if request_plan["configured"] else "credentials_missing",
+        "failure_class": None if request_plan["configured"] else "credentials_missing",
+        "retryable": False,
+    }
+
+
 def _redact_account(value: str) -> str:
     clean = str(value or "").strip()
     if not clean:
@@ -1548,7 +1638,8 @@ def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str
     elif operation == "plate_to_vin":
         items.extend(_partsapi_plate_vin_records(payload))
 
-    return [_partsapi_vehicle_profile_from_item(item, operation=operation) for item in items]
+    profiles = [_partsapi_vehicle_profile_from_item(item, operation=operation) for item in items]
+    return [profile for profile in profiles if len(profile) > 3]
 
 
 _AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
@@ -1581,6 +1672,17 @@ _AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 _FILL_VOLUME_FIELDS = ("fillVolume", "fillUnit", "fillType", "fillTitle", "fillInfo")
+_SEARCH_TREE_FIELDS = (
+    "STR_LEVEL",
+    "ROOT_NODE_TEXT",
+    "ROOT_NODE_STR_ID",
+    "NODE_1_TEXT",
+    "NODE_1_STR_ID",
+    "NODE_2_TEXT",
+    "NODE_2_STR_ID",
+    "NODE_3_TEXT",
+    "NODE_3_STR_ID",
+)
 
 
 def _partsapi_autonorms_records(payload: Any, *, fields: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -1633,6 +1735,21 @@ def extract_partsapi_fill_volumes(*, payload: Any) -> list[dict[str, Any]]:
         if len(row) > 3:
             rows.append(row)
     return rows
+
+
+def extract_partsapi_search_tree_rows(*, payload: Any) -> list[dict[str, Any]]:
+    """Return only recognized TecDoc product-tree nodes."""
+
+    return [
+        {
+            "provider": "partsapi_ru",
+            "source_operation": "search_tree",
+            "raw_keys": sorted(str(key) for key in item),
+            **{field: item[field] for field in _SEARCH_TREE_FIELDS if item.get(field) not in (None, "")},
+        }
+        for item in _partsapi_autonorms_records(payload, fields=_SEARCH_TREE_FIELDS)
+        if any(item.get(field) not in (None, "") for field in _SEARCH_TREE_FIELDS)
+    ]
 
 
 def _partsapi_parts_by_vin_records(payload: Any) -> list[dict[str, Any]]:
@@ -1869,6 +1986,10 @@ def build_partsapi_request(
         "params": {key: value for key, value in params.items() if value not in (None, "")},
         "base_url_configured": bool(actual_base_url),
         "method_key_env_name": method_key_env_name if method_key else None,
+        "credential_env_any_of": [
+            *([method_key_env_name] if method_key_env_name else []),
+            "PARTSAPI_KEY",
+        ],
         "key_param": actual_key_param,
         "method_param": actual_method_param,
         "missing_env_names": missing,
@@ -1964,6 +2085,13 @@ def partsapi_catalog_lookup(
             "provider": "partsapi_ru",
             "operation": operation,
             "error": "Unknown PartsAPI operation.",
+            "outcome": "invalid_operation",
+            "failure_class": "invalid_operation",
+            "retryable": False,
+            "requires_fallback": False,
+            "attempt_count": 0,
+            "max_attempts": _bounded_attempt_count(max_attempts),
+            "attempts": [],
             "available_operations": sorted(PARTSAPI_OPERATIONS),
         }
 
@@ -2037,6 +2165,13 @@ def partsapi_catalog_lookup(
             "ok": False,
             "missing_params": missing_params,
             "error": "Required PartsAPI parameters are missing.",
+            "outcome": "invalid_input",
+            "failure_class": "invalid_input",
+            "retryable": False,
+            "requires_fallback": False,
+            "attempt_count": 0,
+            "max_attempts": _bounded_attempt_count(max_attempts),
+            "attempts": [],
         }
     if not request_plan["configured"]:
         return {
@@ -2044,6 +2179,13 @@ def partsapi_catalog_lookup(
             "ok": False,
             "missing_env_names": request_plan["missing_env_names"],
             "error": "PARTSAPI_BASE_URL plus PARTSAPI_KEY or the method-specific PartsAPI key are required for live requests.",
+            "outcome": "credentials_missing",
+            "failure_class": "credentials_missing",
+            "retryable": False,
+            "requires_fallback": True,
+            "attempt_count": 0,
+            "max_attempts": _bounded_attempt_count(max_attempts),
+            "attempts": [],
         }
     if dry_run:
         return {
@@ -2051,30 +2193,75 @@ def partsapi_catalog_lookup(
             "ok": True,
             "dry_run": True,
             "attempt_count": 0,
-            "max_attempts": max(1, int(max_attempts or 1)),
+            "max_attempts": _bounded_attempt_count(max_attempts),
             "attempts": [],
+            "outcome": "ready",
+            "failure_class": None,
+            "retryable": False,
+            "requires_fallback": False,
         }
 
     request = Request(request_plan["url"], headers={"User-Agent": "AutostopManager/0.1"})
     attempts: list[dict[str, Any]] = []
     payload: Any = None
-    attempt_count = max(1, int(max_attempts or 1))
+    attempt_count = _bounded_attempt_count(max_attempts)
+    request_succeeded = False
+    last_failure_class = "network_error"
+    last_error = "PartsAPI request failed."
+    last_retryable = False
     for attempt in range(1, attempt_count + 1):
         try:
             with urlopen(request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             attempts.append({"attempt": attempt, "ok": True})
+            request_succeeded = True
             break
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
-            attempts.append({"attempt": attempt, "ok": False, "error": str(exc)})
-    else:
+            failure_class, retryable, error = _partsapi_failure_details(exc)
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": error,
+                    "failure_class": failure_class,
+                    "retryable": retryable,
+                }
+            )
+            last_failure_class = failure_class
+            last_error = error
+            last_retryable = retryable
+            if not retryable:
+                break
+    if not request_succeeded:
         return {
             **base,
             "ok": False,
-            "error": attempts[-1]["error"] if attempts else "PartsAPI request failed.",
+            "error": last_error,
             "attempt_count": len(attempts),
             "max_attempts": attempt_count,
             "attempts": attempts,
+            "outcome": last_failure_class,
+            "failure_class": last_failure_class,
+            "retryable": last_retryable,
+            "requires_fallback": True,
+        }
+
+    payload_shape = _response_shape(payload)
+    if _partsapi_provider_declared_error(payload):
+        return {
+            **base,
+            "ok": False,
+            "error": "PartsAPI returned a provider-declared error.",
+            "attempt_count": len(attempts),
+            "max_attempts": attempt_count,
+            "attempts": attempts,
+            "payload": payload,
+            "response_shape": payload_shape,
+            "empty_payload": False,
+            "outcome": "provider_rejected",
+            "failure_class": "provider_rejected",
+            "retryable": False,
+            "requires_fallback": True,
         }
 
     cross_candidates = (
@@ -2114,6 +2301,46 @@ def partsapi_catalog_lookup(
     if operation == "parts_by_vin":
         oem_candidates.extend(extract_partsapi_parts_by_vin_candidates(payload=payload, operation=operation))
 
+    vehicle_profiles = extract_partsapi_vehicle_profiles(payload=payload, operation=operation)
+    autonorms_rows = extract_partsapi_autonorms_rows(payload=payload, operation=operation)
+    fill_volumes = extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else []
+    search_tree_rows = extract_partsapi_search_tree_rows(payload=payload) if operation == "search_tree" else []
+    empty_payload = payload in (None, [], {})
+    record_counts = {
+        "vehicle_profiles": len(vehicle_profiles),
+        "oem_candidates": len(oem_candidates),
+        "cross_candidates": len(cross_candidates),
+        "article_candidates": len(article_candidates),
+        "autonorms_rows": len(autonorms_rows),
+        "fill_volumes": len(fill_volumes),
+        "search_tree_rows": len(search_tree_rows),
+    }
+    expected_records = {
+        "vin_decode": ("vehicle_profiles", "oem_candidates"),
+        "vin_decode_oe": ("vehicle_profiles", "oem_candidates"),
+        "plate_to_vin": ("vehicle_profiles", "oem_candidates"),
+        "parts_by_vin": ("oem_candidates",),
+        "oe_applicability": ("oem_candidates",),
+        "crosses": ("cross_candidates",),
+        "crosses_with_brand": ("cross_candidates",),
+        "crosses_title": ("cross_candidates",),
+        "search_articles": ("article_candidates",),
+        "article_crosses": ("article_candidates",),
+        "articles": ("article_candidates",),
+        "article": ("article_candidates",),
+        "article_criteria": ("article_candidates",),
+        "part_name_by_brand_number": ("article_candidates",),
+        "engine_info": ("vehicle_profiles",),
+        "search_tree": ("search_tree_rows",),
+        "norms_makes": ("autonorms_rows",),
+        "norms_models": ("autonorms_rows",),
+        "norms_motors": ("autonorms_rows",),
+        "norms_times": ("autonorms_rows",),
+        "fill_volumes": ("fill_volumes",),
+    }.get(operation, ())
+    no_expected_records = bool(expected_records) and not any(record_counts[name] for name in expected_records)
+    outcome = "empty_result" if empty_payload or no_expected_records else "success"
+
     return {
         **base,
         "ok": True,
@@ -2121,13 +2348,20 @@ def partsapi_catalog_lookup(
         "max_attempts": attempt_count,
         "attempts": attempts,
         "payload": payload,
-        "empty_payload": payload in (None, [], {}),
-        "vehicle_profiles": extract_partsapi_vehicle_profiles(payload=payload, operation=operation),
+        "response_shape": payload_shape,
+        "empty_payload": empty_payload,
+        "vehicle_profiles": vehicle_profiles,
         "oem_candidates": oem_candidates,
         "cross_candidates": cross_candidates,
         "article_candidates": article_candidates,
-        "autonorms_rows": extract_partsapi_autonorms_rows(payload=payload, operation=operation),
-        "fill_volumes": extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else [],
+        "autonorms_rows": autonorms_rows,
+        "fill_volumes": fill_volumes,
+        "search_tree_rows": search_tree_rows,
+        "record_counts": record_counts,
+        "outcome": outcome,
+        "failure_class": None,
+        "retryable": False,
+        "requires_fallback": outcome == "empty_result",
     }
 
 
@@ -2177,6 +2411,23 @@ def build_17vin_signed_request(
     }
 
 
+def _vin17_failure_details(exc: BaseException) -> tuple[str, bool, str]:
+    if isinstance(exc, HTTPError):
+        code = int(exc.code)
+        if code == 429:
+            return "rate_limited", True, "17VIN rate limit reached."
+        if 500 <= code <= 599:
+            return "provider_http_5xx", True, f"17VIN returned HTTP {code}."
+        return "provider_http_4xx", False, f"17VIN returned HTTP {code}."
+    if isinstance(exc, TimeoutError):
+        return "timeout", True, "17VIN request timed out."
+    if isinstance(exc, (URLError, OSError)):
+        return "network_error", True, "17VIN network request failed."
+    if isinstance(exc, ValueError):
+        return "adapter_malformed_payload", False, "17VIN returned malformed JSON."
+    return "adapter_error", False, "17VIN request failed."
+
+
 def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: bool = False) -> dict[str, Any]:
     normalized = normalize_vin(identifier)
     request_plan = build_17vin_signed_request(path="/", params={"vin": normalized})
@@ -2188,6 +2439,10 @@ def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: boo
             "missing_env_names": request_plan["missing_env_names"],
             "error": "VIN17_ACCOUNT and VIN17_SECRET are required for live 17VIN requests.",
             "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "outcome": "credentials_missing",
+            "failure_class": "credentials_missing",
+            "retryable": False,
+            "requires_fallback": True,
         }
     if dry_run:
         return {
@@ -2196,19 +2451,42 @@ def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: boo
             "redacted_identifier": _redact_identifier(identifier),
             "dry_run": True,
             "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "outcome": "ready",
+            "failure_class": None,
+            "retryable": False,
+            "requires_fallback": False,
         }
 
     request = Request(request_plan["signed_url"], headers={"User-Agent": "AutostopManager/0.1"})
     try:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        failure_class, retryable, error = _vin17_failure_details(exc)
         return {
             "ok": False,
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
-            "error": str(exc),
+            "error": error,
             "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "outcome": failure_class,
+            "failure_class": failure_class,
+            "retryable": retryable,
+            "requires_fallback": True,
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "provider": "vin17_api",
+            "redacted_identifier": _redact_identifier(identifier),
+            "error": "17VIN returned a non-object JSON payload.",
+            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "response_shape": _response_shape(payload),
+            "outcome": "adapter_malformed_payload",
+            "failure_class": "adapter_malformed_payload",
+            "retryable": False,
+            "requires_fallback": True,
         }
 
     return {
@@ -2218,6 +2496,11 @@ def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: boo
         "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
         "payload": payload,
         "oem_candidates": extract_oem_candidates(provider="vin17_api", payload=payload, operation="search_part_number"),
+        "response_shape": "object",
+        "outcome": "success" if payload.get("code") == 1 else "provider_rejected",
+        "failure_class": None if payload.get("code") == 1 else "provider_rejected",
+        "retryable": False,
+        "requires_fallback": payload.get("code") != 1,
     }
 
 
@@ -2349,6 +2632,10 @@ def vin17_search_part_number_by_vin(
             "missing_env_names": request_plan["missing_env_names"],
             "error": "VIN17_ACCOUNT and VIN17_SECRET are required for live 17VIN requests.",
             "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "outcome": "credentials_missing",
+            "failure_class": "credentials_missing",
+            "retryable": False,
+            "requires_fallback": True,
         }
     if dry_run:
         return {
@@ -2357,19 +2644,42 @@ def vin17_search_part_number_by_vin(
             "redacted_identifier": _redact_identifier(identifier),
             "dry_run": True,
             "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "outcome": "ready",
+            "failure_class": None,
+            "retryable": False,
+            "requires_fallback": False,
         }
 
     request = Request(request_plan["signed_url"], headers={"User-Agent": "AutostopManager/0.1"})
     try:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        failure_class, retryable, error = _vin17_failure_details(exc)
         return {
             "ok": False,
             "provider": "vin17_api",
             "redacted_identifier": _redact_identifier(identifier),
-            "error": str(exc),
+            "error": error,
             "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "outcome": failure_class,
+            "failure_class": failure_class,
+            "retryable": retryable,
+            "requires_fallback": True,
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "provider": "vin17_api",
+            "redacted_identifier": _redact_identifier(identifier),
+            "error": "17VIN returned a non-object JSON payload.",
+            "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
+            "response_shape": _response_shape(payload),
+            "outcome": "adapter_malformed_payload",
+            "failure_class": "adapter_malformed_payload",
+            "retryable": False,
+            "requires_fallback": True,
         }
 
     return {
@@ -2378,4 +2688,9 @@ def vin17_search_part_number_by_vin(
         "redacted_identifier": _redact_identifier(identifier),
         "request_plan": _safe_request_plan(request_plan, omit={"signed_url"}),
         "payload": payload,
+        "response_shape": "object",
+        "outcome": "success" if payload.get("code") == 1 else "provider_rejected",
+        "failure_class": None if payload.get("code") == 1 else "provider_rejected",
+        "retryable": False,
+        "requires_fallback": payload.get("code") != 1,
     }

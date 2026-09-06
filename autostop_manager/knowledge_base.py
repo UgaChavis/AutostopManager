@@ -118,8 +118,7 @@ _KNOWLEDGE_ROUTE_LIST_FIELDS = (
 
 _COMMAND_ROUTE_LIST_FIELDS = (
     "knowledge_domains",
-    "effects",
-    "dependencies",
+    "aliases",
 )
 
 
@@ -243,7 +242,7 @@ def probe_knowledge_base(
     ]
     domain_hints = _domain_hints(query)
     for domain in _unique_strings(preferred_domains or []):
-        domain_hints[domain] = max(domain_hints.get(domain, 0), 100)
+        domain_hints[domain] = domain_hints.get(domain, 0) + 40
     route_definitions = _load_knowledge_map().get("domains") or {}
     loaded_at = _now()
     routes: list[dict[str, Any]] = []
@@ -681,39 +680,13 @@ def _normalize_command_route(route: dict[str, Any]) -> dict[str, Any]:
         ],
         "any": _string_list(signals.get("any")),
         "exclude": _string_list(signals.get("exclude")),
-        "action": _string_list(signals.get("action")),
     }
+    # Preserve the old response shape while keeping navigation separate from
+    # authorization and execution contracts.
+    normalized["effects"] = []
+    normalized["dependencies"] = []
+    normalized["phase"] = 0
     return normalized
-
-
-def _implicit_command_context(query: str) -> str:
-    """Add read-only hints for terse inbound parts messages."""
-
-    lowered = query.casefold()
-    tokens = re.findall(r"[0-9a-zа-яё-]+", lowered)
-    vin = re.search(r"(?<![0-9a-z])[a-hj-npr-z0-9]{17}(?![0-9a-z])", lowered) is not None
-    part_number = any(
-        (len(token) >= 7 and any(char.isdigit() for char in token) and any(char.isalpha() for char in token))
-        or re.fullmatch(r"\d{5,}-\d{4,}", token) is not None
-        for token in tokens
-    )
-    part_words = any(
-        term in lowered for term in ("vin", "вин", "oem", "артикул", "запчаст", "детал", "колод", "фильтр", "подшип")
-    )
-    media = any(term in lowered for term in ("фото", "снимок", "изображен"))
-    message = any(term in lowered for term in ("telegram", "телеграм", "в чате", "сообщен")) or (
-        "клиент" in lowered and any(term in lowered for term in ("написал", "прислал"))
-    )
-    customer_choice = message and any(
-        term in lowered for term in ("беру", "подходит", "заказывайте", "оформляйте", "выбираю", "выбрал")
-    )
-    other_context = any(term in lowered for term in ("crm", "карточк", "диагност", "ремонт", "сервис", "dtc"))
-    bare_reference = not other_context and len(tokens) <= 4 and (vin or part_number or media)
-    if not customer_choice and not (
-        (vin or part_number or part_words or (media and message)) and (message or bare_reference)
-    ):
-        return ""
-    return "запчаст прочит telegram"
 
 
 def _scope_exclusions(query: str) -> set[str]:
@@ -755,14 +728,18 @@ def _canonical_scope(value: str) -> str:
     return next((alias for stem, alias in aliases.items() if value.startswith(stem)), value)
 
 
+def _command_route_intents(route: dict[str, Any]) -> set[str]:
+    return {
+        str(route.get("intent") or "").casefold(),
+        *(alias.casefold() for alias in _string_list(route.get("aliases"))),
+    }
+
+
 def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[str, Any]]:
-    """Return independently matched workflow suggestions in a useful order."""
+    """Return up to three broad workflow suggestions, never permissions."""
 
     lowered = (query or "").casefold()
-    top_level_text = _strip_quoted_spans(lowered)
-    effects_deferred = _query_defers_effects(lowered)
     normalized_intent = (intent or "").casefold()
-    implicit_context = _implicit_command_context(lowered)
     excluded_scopes = _scope_exclusions(query)
     excluded_domains = {_canonical_scope(scope) for scope in excluded_scopes}
     available = [
@@ -771,26 +748,17 @@ def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[s
         if not _command_route_excluded(route, excluded_scopes)
     ]
     if normalized_intent:
-        explicit = [route for route in available if normalized_intent == str(route.get("intent") or "").casefold()]
+        explicit = [route for route in available if normalized_intent in _command_route_intents(route)]
         if explicit:
             available = explicit
 
     matches: list[dict[str, Any]] = []
     for route in available:
-        if normalized_intent and normalized_intent == str(route.get("intent") or "").casefold():
-            score, terms = 1000, [str(route.get("intent") or "")]
+        if normalized_intent and normalized_intent in _command_route_intents(route):
+            score, terms = 1000, [normalized_intent]
         else:
-            signal_text = top_level_text if route.get("effects") else lowered
-            if route.get("intent") in {"store_read", "telegram_read", "telegram_operations"}:
-                signal_text = f"{signal_text} {implicit_context}".strip()
-            score, terms = _score_command_signals(signal_text, route.get("signals") or {}, route=route)
+            score, terms = _score_command_signals(lowered, route.get("signals") or {})
         if score <= 0:
-            continue
-        if route.get("effects") and (
-            effects_deferred
-            or _route_scope_is_negated(lowered, route)
-            or not _has_unnegated_action_signal(lowered, route)
-        ):
             continue
         route["score"] = score
         route["confidence"] = 1.0 if score >= 1000 else round(min(0.98, 0.55 + score / 250), 2)
@@ -806,25 +774,21 @@ def plan_command_routes(query: str, *, intent: str | None = None) -> list[dict[s
 
     matches.sort(
         key=lambda route: (
-            int(route.get("phase") or 0),
+            -int(route.get("score") or 0),
             -int(route.get("priority") or 0),
             str(route.get("workflow_id") or route.get("command_id") or ""),
         )
     )
-    return matches
+    return matches[:3]
 
 
 def _score_command_signals(
     lowered: str,
     signals: dict[str, Any],
-    *,
-    route: dict[str, Any] | None = None,
 ) -> tuple[int, list[str]]:
     ignored_excludes = {_canonical_scope(scope) for scope in _scope_exclusions(lowered)}
     if any(
-        _signal_present(lowered, term)
-        and _canonical_scope(term) not in ignored_excludes
-        and not _signal_scoped_to_other_channel(lowered, term, route)
+        _signal_present(lowered, term) and _canonical_scope(term) not in ignored_excludes
         for term in _string_list(signals.get("exclude"))
     ):
         return 0, []
@@ -854,172 +818,6 @@ def _score_command_signals(
             any_score += 10
     base = max(phrase_score, all_score)
     return (base + min(any_score, 30), list(dict.fromkeys(matched))) if base else (0, [])
-
-
-def _has_unnegated_action_signal(lowered: str, route: dict[str, Any]) -> bool:
-    raw_signals = route.get("signals")
-    signals: dict[str, Any] = raw_signals if isinstance(raw_signals, dict) else {}
-    actions = _string_list(signals.get("action"))
-    if not actions:
-        return True
-    text = _strip_quoted_spans(lowered)
-    for action in actions:
-        normalized = action.casefold().strip()
-        if not normalized:
-            continue
-        pattern = rf"(?<![0-9a-zа-яё-]){re.escape(normalized)}(?![0-9a-zа-яё-])"
-        for match in re.finditer(pattern, text):
-            if _action_scoped_to_other_channel(text, match, route):
-                continue
-            prefix = re.split(r"[.!?;\n]", text[: match.start()])[-1]
-            prefix_tokens = re.findall(r"[0-9a-zа-яё-]+", prefix)[-3:]
-            if "не" in prefix_tokens or "ни" in prefix_tokens:
-                continue
-            if re.search(
-                r"(?:клиент|пользователь|человек|сотрудник|менеджер|он|она|мне|я|ты)"
-                r"(?:\s+\w+){0,3}\s+(?:написал\w*|сказал\w*|просит\w*|прислал\w*)"
-                r"(?:\s+\w+){0,3}\s*:?\s*$|"
-                r"вот\s+что\s+(?:написал\w*|сказал\w*|прислал\w*)\s+клиент\w*\s*:\s*$|"
-                r"(?:в|на|из)\s+(?:инструкц|документац|справк|заявк|фото|аудио|чат|сообщен\w*|текст)"
-                r"[^:]{0,25}(?:написан|сказан|:)|"
-                r"(?:заявк|коммент|запрос|описан|сообщен|текст|расшифровк|аудио|голосов|фото|чат|цитат)\w*"
-                r"(?:\s+\w+){0,3}\s*:|"
-                r"проверь[^:]{0,30}(?:текст|фраз)[^:]{0,10}:|"
-                r"(?:пример|тест\w*)\s+(?:команд|фраз)|(?:не\s+нужно|не\s+следует|запрещено)\s+выполнять|"
-                r"(?:отмени|игнорируй)\s+(?:эту\s+)?команд|не\s+выполняй[^:]{0,30}(?:команд|просьб)|"
-                r"\bне\s+(?:надо|нужно|следует)\b|\bя\s+(?:не\s+прошу|запрещаю)\b",
-                prefix,
-            ):
-                continue
-            return True
-    return False
-
-
-def _signal_scoped_to_other_channel(
-    lowered: str,
-    signal: str,
-    route: dict[str, Any] | None,
-) -> bool:
-    if not route or _canonical_scope((_string_list(route.get("knowledge_domains")) or [""])[0]) != "store":
-        return False
-    text = signal.casefold().strip()
-    if not any(word in text for word in ("ответ", "отправ", "публик")):
-        return False
-    matches = list(re.finditer(re.escape(text), lowered))
-    return bool(matches) and all(
-        re.search(r"(?:telegram|телеграм\w*)", lowered[match.start() : match.end() + 40]) for match in matches
-    )
-
-
-def _action_scoped_to_other_channel(text: str, match: re.Match[str], route: dict[str, Any]) -> bool:
-    primary = _canonical_scope((_string_list(route.get("knowledge_domains")) or [""])[0])
-    action = match.group(0)
-    suffix = text[match.end() : match.end() + 60]
-    window = text[max(0, match.start() - 50) : match.end() + 60]
-    if primary == "store":
-        intent = str(route.get("intent") or "")
-        if action in {"ответь", "отправь"} and re.search(r"(?:telegram|телеграм\w*)", suffix):
-            return True
-        if intent == "store_price_management":
-            return re.match(r"\s+(?:цен\w*|стоимост\w*|прайс\w*)\b", suffix) is None
-        if intent == "store_product_create":
-            direct_object = r"\s+(?:нов\w*\s+)?(?:товар\w*|запчаст\w*)\b"
-            if re.match(direct_object, suffix) is None:
-                return True
-            return (
-                action == "добавь" and re.search(r"\bв\s+(?:каталог\w*\s+)?магазин\w*|\bв\s+каталог\w*", suffix) is None
-            )
-        if intent == "store_order_ready":
-            target = r"\s+заказ\w*[^.!?]{0,35}(?:\bготов\w*\b|\bв\s+ready\b)"
-            return re.match(target, suffix) is None
-    if primary == "telegram" and route.get("intent") == "telegram_operations":
-        return False
-    if primary == "telegram" and route.get("intent") == "telegram_authorization" and action == "подключи":
-        return re.search(r"\b(?:втор\w*|рабоч\w*|аккаунт\w*|сесси\w*|вход\w*)\b", window) is None
-    return False
-
-
-def _strip_quoted_spans(value: str) -> str:
-    return re.sub(
-        r"```[\s\S]*?```|`[^`]*`|«[^»]*»|“[^”]*”|„[^“]*“|‘[^’]*’|\"[^\"]*\"|'[^']*'|\[[^\]]*\]",
-        " ",
-        value.casefold(),
-    )
-
-
-def _query_defers_effects(lowered: str) -> bool:
-    patterns = (
-        r"\b(?:пока|сейчас)\b.{0,100}\b(?:ничего\s+)?не\s+(?:делай|меняй|изменяй|применяй|выполняй)\b",
-        r"\bничего\s+не\s+(?:делай|применяй|выполняй)\b",
-        r"\b(?:давай\s+)?обсудим\b",
-        r"\b(?:расскажи|объясни)\b.{0,80}\b(?:как\s+выполнить|команд[ауеы])\b",
-        r"\bчто\s+делает\s+(?:кнопка|команда)\b",
-        r"\bчто\s+значит\b",
-        r"\bесли\s+(?:написать|сказать)\b",
-        r"\bкак\s+(?:выполнить|использовать|работает)\b.{0,50}\bкоманд",
-        r"\bнапиши\s+инструкц",
-        r"\bпокажи\s+пример\b",
-        r"\bпроверь\s+(?:маршрут|фразу)\b",
-        r"\bэто\s+тестов\w*\s+фраз",
-        r"\b(?:покажи|расскажи),?\s+что\s+(?:произойд|будет)",
-        r"\bесли\b.{0,25}\b(?:я\s+)?(?:скажу|напишу|попрошу)",
-        r"\b(?:просто\s+)?(?:процитир|цитат)|\b(?:фраза|команда|тест\s+маршрута|пример\s+команды)\s*:",
-        r"\b(?:в\s+)?документац\w*\b.{0,50}\bкоманд",
-        r"\b(?:что\s+(?:будет|произойд\w*)\s+при|проведи\s+тест)\b.{0,50}\bкоманд",
-        r"\bэто\s+(?:просто\s+)?пример\b|\bэто\s+не\s+команда\b",
-        r"\b(?:проанализируй|поясни|объясни|разбер\w*|обсуд\w*|скажи)\b.{0,80}\b(?:команд|фраз)",
-        r"\b(?:команд|фраз)\w*\b.{0,30}\b(?:пример|безопасн)|\bвопрос\s+про\s+фраз",
-        r"\b(?:повтори\s+за\s+мной|переведи\s+на\s+\w+|исправь\s+пунктуац\w*|прочитай\s+вслух)\s*:",
-        r"\bвот\s+инструкц\w*\s+клиент\w*",
-    )
-    return any(re.search(pattern, lowered) is not None for pattern in patterns)
-
-
-def _route_scope_is_negated(lowered: str, route: dict[str, Any]) -> bool:
-    effects = set(_string_list(route.get("effects")))
-    if {"store_write", "crm_write"}.intersection(effects) and _has_scoped_negation(lowered, route, kind="write"):
-        return True
-    if "external_send" in effects and _has_scoped_negation(lowered, route, kind="send"):
-        return True
-    return False
-
-
-def _has_scoped_negation(lowered: str, route: dict[str, Any], *, kind: str) -> bool:
-    patterns = {
-        "write": (
-            r"\b(?:ничего\s+)?не\s+(?:делай|делать|записывай|добавляй|меняй|изменяй|обновляй|создавай|публикуй)\b|"
-            r"\bбез\s+(?:записи|изменений|публикации)\b"
-        ),
-        "send": (
-            r"\bне\s+(?:в|через)\s+(?:рабоч\w*\s+|личн\w*\s+)?(?:telegram|телеграм\w*)\b|"
-            r"\bне\s+(?:используй|пиши|отвечай|ответь|отправляй|отправь|публикуй|опубликуй)\b|"
-            r"\bбез\s+(?:отправки|публикации|ответа)\b|\bклиент\w*[^.!?]{0,20}\bне\s+(?:отправлять|отвечать)\b|"
-            r"\b(?:ответ|отправка)\s+клиент\w*\s+не\s+(?:нуж|долж)|\bответ\w*[^.!?]{0,20}\bне\s+должно\s+быть|"
-            r"\b(?:ничего\s+)?не\s+(?:отправлять|публиковать|отвечать|писать)\b|"
-            r"\b(?:отправлять|публиковать|отвечать|писать)\s+не\s+(?:надо|нужно)\b|"
-            r"\bне\s+(?:надо|нужно)\s+(?:отправлять|публиковать|отвечать|писать)\b|"
-            r"\bклиент\w*\s+ответ\w*\s+не\s+(?:посылай|отправляй)\b"
-        ),
-    }
-    primary = _canonical_scope((_string_list(route.get("knowledge_domains")) or [""])[0])
-    for match in re.finditer(patterns[kind], lowered):
-        prefix = lowered[max(0, match.start() - 35) : match.start()]
-        suffix = lowered[match.end() : match.end() + 35]
-        window = f"{prefix}{match.group(0)}{suffix}"
-        scoped = {
-            family
-            for family, pattern in {
-                "store": r"\b(?:store|магазин\w*|сайт\w*)\b",
-                "telegram": r"\b(?:telegram|телеграм\w*)\b",
-                "gmail": r"\b(?:gmail|почт\w*|email)\b",
-                "crm": r"\bcrm\b",
-            }.items()
-            if re.search(pattern, window)
-        }
-        if scoped and primary not in scoped:
-            continue
-        return True
-    return False
 
 
 def _signal_present(lowered: str, signal: str) -> bool:
@@ -1714,6 +1512,7 @@ def _focused_navigation_hints(lowered: str) -> dict[str, int]:
         domain: score
         for domain, score, terms in (
             ("startup_and_identity", 70, ("подготовь менеджера", "manager startup", "менеджера к работе")),
+            ("deployment", 80, ("релиз", "deploy", "deployment", "rollback", "откат", "публикац")),
             ("service_case", 70, ("dsg", "dq200", "dq250", "мехатроник", "odis", "svm")),
             ("service_case", 78, ("kombi", "приборк", "coding", "кодирован", "a2l", "odx", "dcm")),
         )
@@ -1727,6 +1526,10 @@ def _focused_navigation_hints(lowered: str) -> dict[str, int]:
         hints["business_documents"] = 75
     if any(term in lowered for term in ("реквизит", "огрнип", "карточка предприятия")):
         hints["business_documents"] = 75
+    if any(term in lowered for term in ("gmail", "email", "почт", "письм")) and any(
+        term in lowered for term in ("отправ", "ответ", "перешл", "прочит", "проверь")
+    ):
+        hints["gmail_operations"] = 75
     return hints
 
 

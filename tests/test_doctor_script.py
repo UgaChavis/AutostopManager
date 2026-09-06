@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
@@ -34,11 +35,7 @@ def _is_unavailable_wsl(output: str) -> bool:
     )
 
 
-def test_doctor_script_syntax_and_readiness_checks():
-    script = ROOT / "scripts" / "doctor.sh"
-
-    content = script.read_text(encoding="utf-8")
-
+def _assert_bash_syntax(script: Path) -> str:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is unavailable on this host")
@@ -49,6 +46,12 @@ def test_doctor_script_syntax_and_readiness_checks():
         pytest.skip("bash resolves to WSL, but no Linux distribution is installed")
 
     assert result.returncode == 0, output
+    return script.read_text(encoding="utf-8")
+
+
+def test_doctor_script_syntax_and_readiness_checks():
+    content = _assert_bash_syntax(ROOT / "scripts" / "doctor.sh")
+
     assert "manager MCP import" in content
     assert "crm MCP import" in content
     assert "crm playwright version" in content
@@ -59,3 +62,32 @@ def test_doctor_script_syntax_and_readiness_checks():
     assert "crm local Gateway v2" in content
     assert "crm public Gateway v2" in content
     assert "crm local MCP initialize" not in content
+
+
+def test_release_gates_script_is_local_disposable_and_non_live():
+    script = ROOT / "scripts" / "release-gates.sh"
+    content = _assert_bash_syntax(script)
+
+    assert script.stat().st_mode & stat.S_IXUSR
+    for marker in (
+        "mktemp -d /tmp/autostop-manager-release-gates.",
+        'AUTOSTOP_MANAGER_DB="$gate_dir/preflight.sqlite3"',
+        'COVERAGE_FILE="$gate_dir/.coverage"',
+        'MYPY_CACHE_DIR="$gate_dir/mypy-cache"',
+        'RUFF_CACHE_DIR="$gate_dir/ruff-cache"',
+        '--basetemp "$gate_dir/pytest"',
+        "umask 022",
+        "cleanup\ntrap - EXIT\nprintf '\\nrelease_gates_ok=true\\n'",
+    ):
+        assert marker in content
+    for forbidden in (
+        "store-conductor-release-gate",
+        "/opt/AutostopManager/data/autostop_manager.sqlite3",
+        "git fetch",
+        "git push",
+        "sudo ",
+        "systemctl",
+        "docker ",
+        "curl ",
+    ):
+        assert forbidden not in content

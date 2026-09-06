@@ -140,6 +140,20 @@ def test_vpic_decode_rejects_malformed_results_without_crashing(monkeypatch):
     assert result["error"] == "vPIC returned a malformed Results payload"
 
 
+def test_vpic_connection_reset_is_structured_for_fallback(monkeypatch):
+    def fail_urlopen(request, timeout=10.0):
+        raise ConnectionResetError("connection reset")
+
+    monkeypatch.setattr("autostop_manager.vin_lookup.urlopen", fail_urlopen)
+
+    result = decode_vin_vpic("1HGCM82633A004352")
+
+    assert result["ok"] is False
+    assert result["outcome"] == "network_error"
+    assert result["retryable"] is True
+    assert result["requires_fallback"] is True
+
+
 def test_vpic_batch_rejects_malformed_results_without_crashing(monkeypatch):
     monkeypatch.setattr(
         "autostop_manager.vin_lookup.urlopen",

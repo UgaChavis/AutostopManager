@@ -270,15 +270,15 @@ def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
     assert "prepare_manager_context" in server.tools
     context = server.tools["prepare_manager_context"]("Приберись", intent="board_cleanup", limit=5)
     assert context["ok"] is True
-    assert [route["command_id"] for route in context["command_routes"]] == ["board_cleanup_autopilot"]
+    assert [route["command_id"] for route in context["command_routes"]] == ["crm_operations"]
 
     assert "agent_brief" in server.tools
     brief = server.tools["agent_brief"]("Приберись", intent="board_cleanup", limit=5)
     assert brief["ok"] is True
     assert brief["format"] == "agent_brief_v1"
-    assert [step["workflow_id"] for step in brief["route"]["steps"]] == ["board_cleanup_autopilot"]
+    assert [step["workflow_id"] for step in brief["route"]["steps"]] == ["crm_operations"]
     assert brief["route"]["steps"][0]["domain"] == "board_cleanup_autopilot"
-    assert brief["route"]["steps"][0]["effects"] == ["crm_write"]
+    assert brief["route"]["steps"][0]["effects"] == []
     assert brief["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
 
     assert "audit_skill_registry" in server.tools
@@ -607,7 +607,7 @@ def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_pat
         intent="crm_finance_operation",
     )
     assert bootstrap["format"] == "agent_envelope_v2"
-    assert bootstrap["summary"]["selected_workflows"][0]["workflow_id"] == "crm_finance_operation"
+    assert bootstrap["summary"]["selected_workflows"][0]["workflow_id"] == "crm_operations"
 
     started = server.tools["start_workflow"](
         workflow_id="crm_finance_operation",

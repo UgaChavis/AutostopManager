@@ -62,6 +62,284 @@ def test_transcribe_private_audio_uses_local_model_and_returns_compact_text(monk
     }
 
 
+def test_transcribe_private_audio_reports_safe_vad_fallback_diagnostic(monkeypatch, tmp_path, capsys) -> None:
+    inbox, audio = _private_audio(tmp_path)
+    vad_marker = "private-vad-detail"
+    fallback_marker = "private-fallback-detail"
+
+    class Model:
+        def transcribe(self, _audio, **kwargs):
+            if kwargs["vad_filter"]:
+                raise RuntimeError(vad_marker)
+            raise ValueError(fallback_marker)
+
+    monkeypatch.setattr(telegram_transcribe, "account_media_paths", lambda _account: (inbox, tmp_path / "model"))
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_probe_audio",
+        lambda _path: {"codec": "opus", "duration_seconds": 4.2},
+    )
+    monkeypatch.setattr(telegram_transcribe, "_decode_private_audio", lambda _path: object())
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    assert telegram_transcribe.main(["--account", "work", "--file", str(audio)]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "ok": False,
+        "error": "transcription_failed",
+        "diagnostic": {
+            "stage": "vad_fallback_prepare",
+            "exception_module": "builtins",
+            "exception_class": "ValueError",
+            "fallback_from": "vad_prepare",
+            "vad_exception_module": "builtins",
+            "vad_exception_class": "RuntimeError",
+        },
+    }
+    assert vad_marker not in json.dumps(payload)
+    assert fallback_marker not in json.dumps(payload)
+
+
+def test_transcribe_private_audio_falls_back_without_vad(monkeypatch, tmp_path) -> None:
+    inbox, audio = _private_audio(tmp_path)
+    calls: list[bool] = []
+
+    class Model:
+        def transcribe(self, _audio, **kwargs):
+            calls.append(kwargs["vad_filter"])
+            if kwargs["vad_filter"]:
+                raise RuntimeError("private-vad-detail")
+            return iter([SimpleNamespace(text="Готово")]), SimpleNamespace(language="ru", language_probability=0.97)
+
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_probe_audio",
+        lambda _path: {"codec": "opus", "duration_seconds": 4.2},
+    )
+    monkeypatch.setattr(telegram_transcribe, "_decode_private_audio", lambda _path: object())
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    result = transcribe_private_audio(audio, inbox_dir=inbox, model_dir=tmp_path / "model")
+
+    assert result["text"] == "Готово"
+    assert result["vad_fallback_used"] is True
+    assert calls == [True, False]
+
+
+def test_transcribe_private_audio_reports_safe_fallback_inference_diagnostic(monkeypatch, tmp_path) -> None:
+    inbox, audio = _private_audio(tmp_path)
+    vad_marker = "private-vad-detail"
+    inference_marker = "private-inference-detail"
+
+    def failing_segments():
+        raise ValueError(inference_marker)
+        yield SimpleNamespace(text="unreachable")
+
+    class Model:
+        def transcribe(self, _audio, **kwargs):
+            if kwargs["vad_filter"]:
+                raise RuntimeError(vad_marker)
+            return failing_segments(), SimpleNamespace()
+
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_probe_audio",
+        lambda _path: {"codec": "opus", "duration_seconds": 4.2},
+    )
+    monkeypatch.setattr(telegram_transcribe, "_decode_private_audio", lambda _path: object())
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    with pytest.raises(TranscriptionError) as raised:
+        transcribe_private_audio(audio, inbox_dir=inbox, model_dir=tmp_path / "model")
+
+    error = raised.value
+    assert error.code == "transcription_failed"
+    assert error.diagnostic == {
+        "stage": "vad_fallback_segment_inference",
+        "exception_module": "builtins",
+        "exception_class": "ValueError",
+        "fallback_from": "vad_prepare",
+        "vad_exception_module": "builtins",
+        "vad_exception_class": "RuntimeError",
+    }
+    assert vad_marker not in json.dumps(error.diagnostic)
+    assert inference_marker not in json.dumps(error.diagnostic)
+
+
+def test_transcribe_private_audio_reports_safe_lazy_inference_diagnostic(monkeypatch, tmp_path) -> None:
+    inbox, audio = _private_audio(tmp_path)
+    marker = "private-inference-detail"
+
+    def failing_segments():
+        raise RuntimeError(marker)
+        yield SimpleNamespace(text="unreachable")
+
+    class Model:
+        def transcribe(self, _audio, **_kwargs):
+            return failing_segments(), SimpleNamespace(language="ru", language_probability=1.0)
+
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_probe_audio",
+        lambda _path: {"codec": "opus", "duration_seconds": 4.2},
+    )
+    monkeypatch.setattr(telegram_transcribe, "_decode_private_audio", lambda _path: object())
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    with pytest.raises(TranscriptionError) as raised:
+        transcribe_private_audio(audio, inbox_dir=inbox, model_dir=tmp_path / "model")
+
+    error = raised.value
+    assert error.code == "transcription_failed"
+    assert error.diagnostic == {
+        "stage": "segment_inference",
+        "exception_module": "builtins",
+        "exception_class": "RuntimeError",
+    }
+    assert marker not in json.dumps(error.diagnostic)
+
+
+def test_local_transcription_self_check_exercises_vad_and_inference(monkeypatch, tmp_path) -> None:
+    calls: list[dict[str, object]] = []
+    vad_calls: list[object] = []
+    silence = object()
+
+    class Numpy:
+        float32 = object()
+
+        @staticmethod
+        def zeros(samples, *, dtype):
+            assert samples == telegram_transcribe.PCM_SAMPLE_RATE
+            assert dtype is Numpy.float32
+            return silence
+
+    class Model:
+        def transcribe(self, audio, **kwargs):
+            calls.append({"audio": audio, **kwargs})
+            return iter(()), SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "numpy", Numpy)
+    monkeypatch.setattr(telegram_transcribe, "_run_vad_self_check", lambda audio: vad_calls.append(audio))
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    result = telegram_transcribe.local_transcription_self_check(model_dir=tmp_path / "model")
+
+    assert result == {"ok": True, "check": {"vad_prepare": "ok", "segment_inference": "ok"}}
+    assert vad_calls == [silence]
+    assert calls == [
+        {
+            "audio": silence,
+            "language": "ru",
+            "beam_size": 5,
+            "vad_filter": False,
+            "condition_on_previous_text": False,
+        },
+    ]
+
+
+def test_local_transcription_self_check_reports_safe_vad_degradation(monkeypatch, tmp_path) -> None:
+    marker = "private-vad-detail"
+
+    class Numpy:
+        float32 = object()
+
+        @staticmethod
+        def zeros(_samples, *, dtype):
+            assert dtype is Numpy.float32
+            return object()
+
+    class Model:
+        def transcribe(self, _audio, **_kwargs):
+            return iter(()), SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "numpy", Numpy)
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_run_vad_self_check",
+        lambda _audio: (_ for _ in ()).throw(RuntimeError(marker)),
+    )
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    result = telegram_transcribe.local_transcription_self_check(model_dir=tmp_path / "model")
+
+    assert result == {
+        "ok": True,
+        "check": {"vad_prepare": "degraded", "segment_inference": "ok"},
+        "diagnostic": {
+            "stage": "vad_prepare",
+            "exception_module": "builtins",
+            "exception_class": "RuntimeError",
+            "fallback": "vad_filter_disabled",
+        },
+    }
+    assert marker not in json.dumps(result)
+
+
+def test_local_transcription_self_check_reports_safe_inference_failure(monkeypatch, tmp_path) -> None:
+    marker = "private-inference-detail"
+
+    class Numpy:
+        float32 = object()
+
+        @staticmethod
+        def zeros(_samples, *, dtype):
+            assert dtype is Numpy.float32
+            return object()
+
+    def failing_segments():
+        raise RuntimeError(marker)
+        yield SimpleNamespace()
+
+    class Model:
+        def transcribe(self, _audio, **_kwargs):
+            return failing_segments(), SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "numpy", Numpy)
+    monkeypatch.setattr(telegram_transcribe, "_run_vad_self_check", lambda _audio: None)
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "_load_model",
+        lambda _path, cpu_threads, system_owned_model=False: Model(),
+    )
+
+    with pytest.raises(TranscriptionError) as raised:
+        telegram_transcribe.local_transcription_self_check(model_dir=tmp_path / "model")
+
+    error = raised.value
+    assert error.code == "transcription_self_check_failed"
+    assert error.diagnostic == {
+        "stage": "segment_inference",
+        "exception_module": "builtins",
+        "exception_class": "RuntimeError",
+    }
+    assert marker not in json.dumps(error.diagnostic)
+
+
 def test_private_audio_rejects_symlink_and_open_permissions(tmp_path) -> None:
     inbox, audio = _private_audio(tmp_path)
     link = inbox / "link.ogg"
@@ -294,6 +572,8 @@ def test_cli_requires_account_and_rejects_manual_model_path() -> None:
                 "/tmp/model",
             ]
         )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--account", "work", "--file", "/run/example.ogg", "--self-check"])
 
 
 def test_cli_work_uses_only_its_fixed_media_paths(monkeypatch, tmp_path, capsys) -> None:
@@ -317,6 +597,30 @@ def test_cli_work_uses_only_its_fixed_media_paths(monkeypatch, tmp_path, capsys)
     assert calls["model_dir"] == work_model
     assert calls["system_owned_model"] is True
     assert json.loads(capsys.readouterr().out)["text"] == "готово"
+
+
+def test_cli_self_check_uses_fixed_account_model(monkeypatch, tmp_path, capsys) -> None:
+    work_inbox = tmp_path / "work-inbox"
+    work_model = tmp_path / "work-model"
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "account_media_paths",
+        lambda account: (work_inbox, work_model) if account == "work" else pytest.fail("wrong account"),
+    )
+    monkeypatch.setattr(
+        telegram_transcribe,
+        "local_transcription_self_check",
+        lambda **kwargs: calls.update(kwargs) or {"ok": True, "check": {"vad_prepare": "ok"}},
+    )
+
+    assert telegram_transcribe.main(["--account", "work", "--self-check"]) == 0
+    assert calls == {
+        "language": "ru",
+        "model_dir": work_model,
+        "system_owned_model": True,
+    }
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "check": {"vad_prepare": "ok"}}
 
 
 def test_cli_work_rejects_a_personal_inbox_path(monkeypatch, tmp_path, capsys) -> None:

@@ -12,30 +12,19 @@ KNOWLEDGE_MAP_PATH = ROOT / "docs" / "agent" / "knowledge_map.json"
 COMMAND_ROUTES_PATH = ROOT / "docs" / "agent" / "command_routes.json"
 MANAGER_RULES_PATH = ROOT / "docs" / "agent" / "manager_rules.json"
 DEPLOYMENT_RUNBOOK_PATH = ROOT / "docs" / "agent" / "deployment_runbook.md"
+RELEASE_GATES_SCRIPT_PATH = ROOT / "scripts" / "release-gates.sh"
 
 _MAP_FIELDS = {"title", "primary_files", "reference_files", "optional_runtime_files"}
 _ROUTE_FIELDS = {
+    "aliases",
     "command_id",
     "workflow_id",
     "intent",
     "priority",
-    "phase",
     "knowledge_domains",
-    "effects",
-    "dependencies",
     "signals",
 }
-_SIGNAL_FIELDS = {"phrases", "all", "any", "exclude", "action"}
-_EFFECTS = {
-    "account_auth",
-    "crm_write",
-    "destructive",
-    "document",
-    "external_send",
-    "finance",
-    "remote_diagnostics",
-    "store_write",
-}
+_SIGNAL_FIELDS = {"phrases", "all", "any", "exclude"}
 
 
 def _payload(path: Path) -> dict:
@@ -66,6 +55,14 @@ def test_agent_startup_contract_is_small_and_has_no_legacy_entrypoint():
     assert AGENTS_PATH.is_file()
     assert AGENTS_PATH.stat().st_size <= 32 * 1024
     assert not (ROOT / "agent.md").exists()
+
+
+def test_remote_access_playbook_keeps_remote_targets_separate():
+    text = (ROOT / "docs/agent/codex_home_pc_reverse_ssh.md").read_text(encoding="utf-8")
+
+    assert "/opt/autostop-managed-pc/README.md" in text
+    assert "FST.KZ" in text and "AGENTS.md" in text
+    assert "never reuse home-PC credentials" in text
 
 
 def test_skills_have_metadata_and_one_knowledge_map_entrypoint():
@@ -113,15 +110,18 @@ def test_knowledge_map_has_safe_resolvable_owners():
             _relative_path(raw_path)
 
 
-def test_command_routes_are_structural_and_keep_effects_explicit():
+def test_command_routes_are_compact_effect_free_suggestions():
     knowledge_map = _payload(KNOWLEDGE_MAP_PATH)
     known_domains = set(knowledge_map["domains"])
     payload = _payload(COMMAND_ROUTES_PATH)
     assert re.fullmatch(r"agent_command_registry_v\d+", str(payload["format"]))
     routes = payload["routes"]
-    assert isinstance(routes, list) and routes
+    assert isinstance(routes, list)
+    assert 8 <= len(routes) <= 12
+    assert COMMAND_ROUTES_PATH.stat().st_size <= 8 * 1024
 
     command_ids: set[str] = set()
+    claimed_intents: set[str] = set()
     for route in routes:
         assert isinstance(route, dict)
         assert set(route) <= _ROUTE_FIELDS
@@ -130,25 +130,22 @@ def test_command_routes_are_structural_and_keep_effects_explicit():
         assert route["command_id"] not in command_ids
         command_ids.add(route["command_id"])
         assert isinstance(route.get("priority"), int)
-        assert isinstance(route.get("phase"), int)
         domains = _string_list(route.get("knowledge_domains"))
         assert set(domains) <= known_domains
-        effects = _string_list(route.get("effects"))
-        assert set(effects) <= _EFFECTS
-        _string_list(route.get("dependencies", []))
+        aliases = _string_list(route.get("aliases", []))
+        intents = [route["intent"], *aliases]
+        assert claimed_intents.isdisjoint(intents)
+        claimed_intents.update(intents)
 
         signals = route.get("signals")
         assert isinstance(signals, dict)
         assert set(signals) <= _SIGNAL_FIELDS
-        for field in ("phrases", "any", "exclude", "action"):
+        for field in ("phrases", "any", "exclude"):
             _string_list(signals.get(field, []))
         all_groups = signals.get("all", [])
         assert isinstance(all_groups, list)
         for group in all_groups:
             _string_list(group)
-
-        if "intake" in route["intent"]:
-            assert effects == []
 
     assert any("store_management" in route["knowledge_domains"] for route in routes)
     assert any("service_case" in route["knowledge_domains"] for route in routes)
@@ -196,8 +193,23 @@ def test_instruction_surface_is_readable_and_has_no_inline_secret_assignment():
 
 def test_deployment_runbook_checks_persistent_store_conductor_state_before_release():
     text = DEPLOYMENT_RUNBOOK_PATH.read_text(encoding="utf-8")
+    gates = RELEASE_GATES_SCRIPT_PATH.read_text(encoding="utf-8")
 
+    assert "./scripts/release-gates.sh" in text
+    assert 'test -z "$(git status --porcelain=v1 --untracked-files=all)"' in text
+    assert "run_manager_release_gates" not in text
     assert "store-conductor-release-gate" in text
     assert "AUTOSTOP_MANAGER_DB=/opt/AutostopManager/data/autostop_manager.sqlite3" in text
     assert "git fetch origin AutostopManager --prune" in text
     assert "git ls-remote origin refs/heads/AutostopManager" in text
+    for command in (
+        "knowledge-sync",
+        "knowledge-audit",
+        "skills-audit",
+        "cleanup-audit",
+        "ruff check",
+        "mypy autostop_manager",
+        "coverage run",
+        "git diff --check",
+    ):
+        assert command in gates

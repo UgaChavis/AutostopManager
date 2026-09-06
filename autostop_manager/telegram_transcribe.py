@@ -21,9 +21,27 @@ SUPPORTED_AUDIO_SUFFIXES = {".m4a", ".mp3", ".ogg", ".opus"}
 
 
 class TranscriptionError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, diagnostic: dict[str, str | int] | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.diagnostic = dict(diagnostic) if diagnostic else None
+
+
+def _safe_backend_diagnostic(stage: str, exc: Exception) -> dict[str, str | int]:
+    """Return only stable implementation details that cannot contain private media data."""
+
+    diagnostic: dict[str, str | int] = {
+        "stage": stage,
+        "exception_module": type(exc).__module__,
+        "exception_class": type(exc).__qualname__,
+    }
+    if isinstance(exc, OSError) and isinstance(exc.errno, int):
+        diagnostic["errno"] = exc.errno
+    return diagnostic
+
+
+def _backend_failure(code: str, stage: str, exc: Exception) -> TranscriptionError:
+    return TranscriptionError(code, diagnostic=_safe_backend_diagnostic(stage, exc))
 
 
 def _validate_private_audio(path: Path, *, inbox_dir: Path = DEFAULT_INBOX_DIR) -> None:
@@ -215,6 +233,31 @@ def _load_model(model_dir: Path, *, cpu_threads: int, system_owned_model: bool =
         raise TranscriptionError("transcription_model_load_failed") from exc
 
 
+def _start_model_transcription(
+    model: Any,
+    pcm_audio: Any,
+    *,
+    language: str,
+    beam_size: int,
+    vad_filter: bool,
+) -> tuple[Any, Any]:
+    return model.transcribe(
+        pcm_audio,
+        language=language,
+        beam_size=beam_size,
+        vad_filter=vad_filter,
+        condition_on_previous_text=False,
+    )
+
+
+def _run_vad_self_check(pcm_audio: Any) -> None:
+    """Load and execute the bundled VAD once without retaining any media."""
+
+    from faster_whisper.vad import get_speech_timestamps
+
+    get_speech_timestamps(pcm_audio)
+
+
 def transcribe_private_audio(
     path: Path,
     *,
@@ -228,28 +271,107 @@ def transcribe_private_audio(
     pcm_audio = _decode_private_audio(path)
     cpu_threads = max(1, min(os.cpu_count() or 1, 4))
     model = _load_model(model_dir, cpu_threads=cpu_threads, system_owned_model=system_owned_model)
+    vad_fallback_used = False
+    vad_diagnostic: dict[str, str | int] | None = None
     try:
-        segments, info = model.transcribe(
+        segments, info = _start_model_transcription(
+            model,
             pcm_audio,
             language=language,
             beam_size=5,
             vad_filter=True,
-            condition_on_previous_text=False,
         )
+    except Exception as vad_exc:  # noqa: BLE001 - VAD backend exception classes are provider-specific.
+        vad_diagnostic = _safe_backend_diagnostic("vad_prepare", vad_exc)
+        try:
+            segments, info = _start_model_transcription(
+                model,
+                pcm_audio,
+                language=language,
+                beam_size=5,
+                vad_filter=False,
+            )
+        except Exception as exc:
+            diagnostic = _safe_backend_diagnostic("vad_fallback_prepare", exc)
+            diagnostic["fallback_from"] = "vad_prepare"
+            diagnostic["vad_exception_module"] = str(vad_diagnostic["exception_module"])
+            diagnostic["vad_exception_class"] = str(vad_diagnostic["exception_class"])
+            raise TranscriptionError("transcription_failed", diagnostic=diagnostic) from exc
+        vad_fallback_used = True
+    try:
         text = " ".join(str(segment.text).strip() for segment in segments if str(segment.text).strip()).strip()
     except Exception as exc:
-        raise TranscriptionError("transcription_failed") from exc
+        if vad_fallback_used:
+            diagnostic = _safe_backend_diagnostic("vad_fallback_segment_inference", exc)
+            diagnostic["fallback_from"] = "vad_prepare"
+            if vad_diagnostic is not None:
+                diagnostic["vad_exception_module"] = str(vad_diagnostic["exception_module"])
+                diagnostic["vad_exception_class"] = str(vad_diagnostic["exception_class"])
+            raise TranscriptionError("transcription_failed", diagnostic=diagnostic) from exc
+        raise _backend_failure("transcription_failed", "segment_inference", exc) from exc
     if not text:
         raise TranscriptionError("transcription_empty")
     if len(text) > 32 * 1024:
         raise TranscriptionError("transcription_too_large")
-    return {
+    result = {
         "ok": True,
         "text": text,
         "language": str(getattr(info, "language", None) or language),
         "language_probability": round(float(getattr(info, "language_probability", 0.0) or 0.0), 4),
         **probe,
     }
+    if vad_fallback_used:
+        result["vad_fallback_used"] = True
+    return result
+
+
+def local_transcription_self_check(
+    *,
+    language: str = "ru",
+    model_dir: Path = DEFAULT_MODEL_DIR,
+    system_owned_model: bool = False,
+) -> dict[str, Any]:
+    """Exercise local VAD and inference in memory without opening private media."""
+
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise _backend_failure("transcription_self_check_failed", "runtime", exc) from exc
+
+    cpu_threads = max(1, min(os.cpu_count() or 1, 4))
+    model = _load_model(model_dir, cpu_threads=cpu_threads, system_owned_model=system_owned_model)
+    silence = np.zeros(PCM_SAMPLE_RATE, dtype=np.float32)
+    vad_diagnostic: dict[str, str | int] | None = None
+    try:
+        _run_vad_self_check(silence)
+    except Exception as exc:  # noqa: BLE001 - VAD backend exception classes are provider-specific.
+        vad_diagnostic = _safe_backend_diagnostic("vad_prepare", exc)
+    try:
+        segments, _info = _start_model_transcription(
+            model,
+            silence,
+            language=language,
+            beam_size=5,
+            vad_filter=False,
+        )
+        for _segment in segments:
+            pass
+    except Exception as exc:
+        diagnostic = _safe_backend_diagnostic("segment_inference", exc)
+        if vad_diagnostic is not None:
+            diagnostic["fallback_from"] = "vad_prepare"
+        raise TranscriptionError("transcription_self_check_failed", diagnostic=diagnostic) from exc
+    result: dict[str, Any] = {
+        "ok": True,
+        "check": {
+            "vad_prepare": "degraded" if vad_diagnostic is not None else "ok",
+            "segment_inference": "ok",
+        },
+    }
+    if vad_diagnostic is not None:
+        vad_diagnostic["fallback"] = "vad_filter_disabled"
+        result["diagnostic"] = vad_diagnostic
+    return result
 
 
 def discard_private_audio(path: Path, *, inbox_dir: Path = DEFAULT_INBOX_DIR) -> None:
@@ -274,7 +396,9 @@ def account_media_paths(account: str) -> tuple[Path, Path]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram-transcribe")
     parser.add_argument("--account", choices=tuple(ACCOUNT_PATHS), required=True)
-    parser.add_argument("--file", required=True, type=Path)
+    input_source = parser.add_mutually_exclusive_group(required=True)
+    input_source.add_argument("--file", type=Path)
+    input_source.add_argument("--self-check", action="store_true")
     parser.add_argument("--language", default="ru")
     parser.add_argument("--delete-after", action="store_true")
     return parser
@@ -282,20 +406,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.self_check and args.delete_after:
+        raise SystemExit("--delete-after requires --file")
     payload: dict[str, Any]
     inbox_dir, model_dir = account_media_paths(args.account)
     try:
-        payload = transcribe_private_audio(
-            args.file,
-            language=args.language,
-            inbox_dir=inbox_dir,
-            model_dir=model_dir,
-            system_owned_model=args.account == "work",
-        )
+        if args.self_check:
+            payload = local_transcription_self_check(
+                language=args.language,
+                model_dir=model_dir,
+                system_owned_model=args.account == "work",
+            )
+        else:
+            assert args.file is not None
+            payload = transcribe_private_audio(
+                args.file,
+                language=args.language,
+                inbox_dir=inbox_dir,
+                model_dir=model_dir,
+                system_owned_model=args.account == "work",
+            )
     except TranscriptionError as exc:
         payload = {"ok": False, "error": exc.code}
+        if exc.diagnostic:
+            payload["diagnostic"] = exc.diagnostic
     finally:
-        if args.delete_after:
+        if args.delete_after and args.file is not None:
             try:
                 discard_private_audio(args.file, inbox_dir=inbox_dir)
             except TranscriptionError:

@@ -10,19 +10,19 @@ def _route(query: str, *, intent: str | None = None):
     return max(routes, key=lambda item: int(item.get("score") or 0), default=None)
 
 
-def test_named_registry_resolves_integration_finance_documents_and_crm_gmail():
+def test_registry_resolves_broad_composable_capabilities():
     cases = {
-        "проанализируй связь Codex с Автостоп CRM, MCP команды, тестовый профиль и перегруженные ответы": "crm_agent_integration_audit",
-        "Коротко протестируй AutoStopManager: работают ли Gmail, Telegram, CRM и MCP серверы": "crm_agent_integration_audit",
-        "проведи оплату в CRM": "crm_finance_operation",
-        "проведи оплату по заказ-наряду": "crm_finance_operation",
-        "создай документ в CRM": "business_document_workflow",
-        "обработай письмо и обнови CRM": "crm_gmail_workflow",
-        "Покажи состояние склада": "store_read_workflow",
+        "проанализируй связь Codex с Автостоп Менеджером и MCP": "manager_project",
+        "Коротко протестируй проект AutoStopManager": "manager_project",
+        "проведи оплату в CRM": "crm_operations",
+        "проверь долги в CRM": "crm_operations",
+        "создай документ": "documents_and_mail",
+        "обработай письмо по Gmail": "documents_and_mail",
+        "Покажи состояние склада": "store_management_workflow",
         "переведи заказ магазина в READY": "store_management_workflow",
-        "Обработай новую заявку магазина": "store_quote_conductor",
-        "покажи аналитику сайта за неделю": "store_analytics_reporting",
-        "сколько у сайта было посетителей сегодня?": "store_analytics_reporting",
+        "Обработай новую заявку магазина": "store_management_workflow",
+        "покажи аналитику сайта за неделю": "store_management_workflow",
+        "сколько у сайта было посетителей сегодня?": "store_management_workflow",
     }
 
     for query, workflow_id in cases.items():
@@ -41,7 +41,7 @@ def test_explicit_intent_wins_deterministically_over_query_keywords():
     )
 
     assert route is not None
-    assert route["workflow_id"] == "crm_finance_operation"
+    assert route["workflow_id"] == "crm_operations"
     assert route["score"] == 1000
 
 
@@ -68,7 +68,7 @@ def test_agent_bootstrap_is_compact_and_exposes_unfinished_resume_point(tmp_path
 
     assert result["ok"] is True
     assert result["format"] == "agent_envelope_v2"
-    assert [item["workflow_id"] for item in result["summary"]["selected_workflows"]] == ["crm_finance_operation"]
+    assert [item["workflow_id"] for item in result["summary"]["selected_workflows"]] == ["crm_operations"]
     assert result["summary"]["unfinished_runs"][0]["run_id"] == started["id"]
     assert result["summary"]["unfinished_runs"][0]["checkpoint"]["phase"] == "preflight"
 
@@ -130,6 +130,9 @@ def test_workflow_registry_response_stays_named_and_compact():
 
     assert result["ok"] is True
     assert result["format"] == "agent_envelope_v2"
-    assert result["summary"]["selected_workflows"][0]["workflow_id"] == "crm_gmail_workflow"
-    assert result["summary"]["workflow_count"] >= 12
+    assert {item["workflow_id"] for item in result["summary"]["selected_workflows"]} == {
+        "crm_operations",
+        "documents_and_mail",
+    }
+    assert 8 <= result["summary"]["workflow_count"] <= 12
     assert len(str(result).encode("utf-8")) < 20_000

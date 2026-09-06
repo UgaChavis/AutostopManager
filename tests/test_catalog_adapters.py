@@ -98,6 +98,64 @@ def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypa
     assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_PARTS_BY_VIN_KEY"]
 
 
+def test_partsapi_identity_key_does_not_claim_oem_candidate_lookup(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_VINDECODE_OE_KEY", "test-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    plan = build_oem_parts_provider_plan(identifier="MR41S123456", requested_part="передние колодки")
+
+    assert plan["live_capability"]["partsapi_oem_operations"]["vin_decode_oe"]["live_callable_now"] is True
+    assert plan["live_capability"]["live_oem_candidate_lookup_available"] is False
+    assert plan["live_capability"]["live_oem_catalog_available"] is False
+
+
+def test_partsapi_provider_status_keeps_operation_level_readiness(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_PARTS_BY_VIN_KEY", "test-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    status = catalog_provider_status(stage="catalog_cross")
+    partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
+
+    assert partsapi["live_callable_now"] is True
+    assert partsapi["operation_status"]["parts_by_vin"]["live_callable_now"] is True
+    assert partsapi["operation_status"]["vin_decode"]["live_callable_now"] is False
+
+    plan = build_oem_parts_provider_plan(identifier="MR41S123456", requested_part="передние колодки")
+    assert plan["live_capability"]["live_oem_candidate_lookup_available"] is True
+    assert plan["live_capability"]["live_oem_applicability_available"] is False
+    assert plan["live_capability"]["partsapi_oem_operations"]["parts_by_vin"]["live_callable_now"] is True
+
+
+def test_applicability_key_alone_does_not_claim_oem_candidate_readiness(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
+    monkeypatch.setenv("PARTSAPI_OE_APPLICABILITY_KEY", "test-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setenv("ROSSKO_KEY1", "test-key-1")
+    monkeypatch.setenv("ROSSKO_KEY2", "test-key-2")
+
+    plan = build_oem_parts_provider_plan(
+        identifier="MR41S123456",
+        requested_part="передние колодки",
+        vehicle_identity={
+            "confidence_label": "high",
+            "parts_lookup_readiness": {
+                "ready_for_oem_candidate_lookup": True,
+                "ready_for_crm_writeback": True,
+            },
+        },
+    )
+
+    capability = plan["live_capability"]
+    assert capability["live_oem_applicability_available"] is True
+    assert capability["live_oem_candidate_lookup_available"] is False
+    assert capability["live_oem_catalog_available"] is False
+    assert capability["can_complete_full_auto_lookup_now"] is False
+
+
 def test_catalog_provider_status_detects_configured_17vin_account(monkeypatch):
     monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
     monkeypatch.setenv("VIN17_SECRET", "test-secret")
