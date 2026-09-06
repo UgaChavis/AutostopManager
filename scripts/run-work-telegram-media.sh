@@ -96,6 +96,10 @@ command=(
 )
 runtime_properties=()
 path_properties=()
+# CTranslate2 speech inference needs executable JIT memory on the production runtime.
+if [[ "${action}" == "preview" ]]; then
+  runtime_properties+=(--property="MemoryDenyWriteExecute=true")
+fi
 if [[ "${self_check}" -eq 1 ]]; then
   command+=(--self-check)
   runtime_properties+=(
@@ -135,7 +139,6 @@ systemd-run --quiet --wait --pipe --collect --service-type=exec --unit="autostop
   --property="RestrictSUIDSGID=true" \
   --property="RestrictNamespaces=true" \
   --property="LockPersonality=true" \
-  --property="MemoryDenyWriteExecute=true" \
   --property="RestrictAddressFamilies=AF_UNIX" \
   "${path_properties[@]}" \
   "${runtime_properties[@]}" \

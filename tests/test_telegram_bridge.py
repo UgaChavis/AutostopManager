@@ -159,6 +159,11 @@ def test_work_media_sandbox_wrapper_is_scoped_and_has_no_bridge_access() -> None
     assert '--property="TimeoutStopSec=10s"' in text
     assert '"${runtime_properties[@]}"' in text
     assert '--property="ReadWritePaths=${inbox_dir}"' in text
+    preview_runtime_start = text.index('if [[ "${action}" == "preview" ]]')
+    preview_runtime_end = text.index("\nfi", preview_runtime_start)
+    preview_runtime = text[preview_runtime_start:preview_runtime_end]
+    assert "MemoryDenyWriteExecute=true" in preview_runtime
+    assert "MemoryDenyWriteExecute=true" not in text[text.index("systemd-run") :]
     media_branch = text[
         text.index('if [[ "${self_check}" -eq 1 ]]', text.index("path_properties=(")) : text.index("systemd-run")
     ]
