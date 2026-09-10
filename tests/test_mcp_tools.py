@@ -109,7 +109,14 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
     server = _FakeServer()
     register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
 
-    for name in ("decode_vehicle_identity", "partsapi_catalog_lookup", "resolve_vin_oem_parts"):
+    for name in (
+        "decode_vehicle_identity",
+        "partsapi_catalog_lookup",
+        "resolve_vin_oem_parts",
+        "lookup_original_parts",
+        "catalog_provider_status",
+        "plan_oem_parts_providers",
+    ):
         annotations = server.options[name]["annotations"]
         assert annotations.readOnlyHint is True
         assert annotations.destructiveHint is False

@@ -1176,6 +1176,7 @@ def register_manager_memory_tools(  # noqa: C901
         description=(
             "Build a VIN, chassis, or market-code OEM lookup dossier with catalog routes, OEM candidates, confidence, and missing context."
         ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )
     def lookup_original_parts_tool(
         identifier: str,
@@ -1309,14 +1310,17 @@ def register_manager_memory_tools(  # noqa: C901
             "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
             "Use before claiming live catalog or supplier API access."
         ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )(catalog_provider_status)
 
     server.tool(
         name="plan_oem_parts_providers",
         description=(
-            "Build provider readiness and blocker plan for VIN/frame -> OEM candidates -> crosses/applicability "
-            "-> procurement/RF market price. Does not call suppliers or write CRM."
+            "Build provider readiness and blocker plan for VIN/frame or a vehicle-parameter profile -> OEM candidates "
+            "-> crosses/applicability -> procurement/RF market price. An empty identifier is allowed when the vehicle "
+            "profile is supplied. Does not call suppliers or write CRM."
         ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )(build_oem_parts_provider_plan)
 
     @server.tool(

@@ -160,6 +160,46 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         docs_url="https://en.17vin.com/doc.html",
     ),
     CatalogProvider(
+        source_id="partsouq_catalog",
+        name="PartSouq public catalog",
+        stage="oem_catalog",
+        access_mode="public_site_manual",
+        env_names=(),
+        capabilities=(
+            "vin_or_frame_entry",
+            "vehicle_parameter_navigation",
+            "part_name_diagram_search",
+            "oem_part_number_candidate",
+            "diagram_link_capture",
+            "applicability_condition_capture",
+        ),
+        priority="medium",
+        role="Free public route for preliminary JDM/Asian catalog diagrams and OEM-number candidates after the vehicle identity is known.",
+        limits="Manual public-site use only. Do not automate login, cart, checkout, private/mobile endpoints, or bypass JavaScript, cookie, rate-limit, or anti-bot checks. Capture the diagram/page link and model/period/engine/transmission/position evidence; a returned number is preliminary until fitment is independently checked.",
+        docs_url="https://partsouq.com/en/",
+        manual_allowed=True,
+    ),
+    CatalogProvider(
+        source_id="amayama_catalog",
+        name="Amayama public catalog",
+        stage="oem_catalog",
+        access_mode="public_site_manual",
+        env_names=(),
+        capabilities=(
+            "vin_or_frame_entry",
+            "vehicle_parameter_navigation",
+            "part_name_diagram_search",
+            "oem_part_number_candidate",
+            "diagram_link_capture",
+            "applicability_condition_capture",
+        ),
+        priority="medium",
+        role="Free public route for preliminary Japanese catalog diagrams, OEM-number candidates, and visible applicability conditions.",
+        limits="Manual public-site use only. Do not automate login, cart, checkout, private/mobile endpoints, or bypass JavaScript, cookie, rate-limit, or anti-bot checks. Treat the site's compatibility information as a reference and verify model code, period, engine, transmission, market, and position before order.",
+        docs_url="https://www.amayama.com/en/genuine-catalogs",
+        manual_allowed=True,
+    ),
+    CatalogProvider(
         source_id="autopoisk",
         name="AUTOPOISK",
         stage="catalog_cross",
@@ -438,7 +478,29 @@ def _manual_public_search_queries(
     primary_part = str(part_terms[0] if part_terms else requested_part).strip()
     query = " ".join(part for part in [vehicle_text, primary_part, city] if part).strip()
     compact_query = quote_plus(query)
+    catalog_capture_fields = [
+        "OEM number and supersession, if shown",
+        "direct diagram or part-page URL",
+        "catalog group/name and quantity",
+        "model code, production period, engine, transmission, market, and side/position conditions",
+    ]
     return [
+        {
+            "source_id": "partsouq_catalog_manual",
+            "role": "Public preliminary OEM-candidate and diagram route for VIN, frame, or vehicle-parameter lookup.",
+            "query": query,
+            "url": "https://partsouq.com/en/",
+            "needs": "Enter the original VIN/frame only in the interactive catalog, or select the exact vehicle parameters; capture the evidence below. If access is challenged or empty, continue to the next source without bypassing it.",
+            "capture_fields": catalog_capture_fields,
+        },
+        {
+            "source_id": "amayama_catalog_manual",
+            "role": "Public preliminary Japanese OEM-candidate and diagram route for VIN, frame, article, or vehicle-parameter lookup.",
+            "query": query,
+            "url": "https://www.amayama.com/en/genuine-catalogs",
+            "needs": "Enter the original VIN/frame only in the interactive catalog, or select exact model/year/engine/transmission; capture the evidence below. If access is challenged or empty, continue to the next source without bypassing it.",
+            "capture_fields": catalog_capture_fields,
+        },
         {
             "source_id": "zzap_manual",
             "role": "RF market benchmark and replacement visibility; not procurement proof.",

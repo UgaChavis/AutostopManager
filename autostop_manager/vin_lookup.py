@@ -894,6 +894,11 @@ def _next_actions(
     actions: list[str] = []
     family = _make_family(make)
     preferred = next((route for route in catalog_routes if route.get("requires_login")), None)
+    public_web_routes = [
+        route
+        for route in catalog_routes
+        if route.get("source_name") in {"PartSouq manual catalog", "Amayama public catalog"}
+    ]
     if not part_name:
         actions.append("Add part_name/part_group before OEM lookup.")
     if preferred and not oem_candidates:
@@ -904,12 +909,30 @@ def _next_actions(
         actions.append(
             f"Open {catalog_routes[0]['source_name']} and capture the OEM number from the matching catalog group."
         )
+    if public_web_routes and not oem_candidates:
+        web_source_names = ", ".join(route["source_name"] for route in public_web_routes)
+        actions.append(
+            f"If another route is unavailable or incomplete, use {web_source_names} as a public fallback and capture the "
+            "diagram/page link, OEM candidate, and visible model/period/engine/transmission/market/position conditions. "
+            "Do not bypass a JavaScript, cookie, or anti-bot challenge."
+        )
     if family == "bmw" and not oem_candidates:
         actions.append("For BMW, verify the result in AOS/AIR/ETK with VIN and SA/options before purchase search.")
     if family == "vag" and not oem_candidates:
         actions.append("For VAG, verify ETKA/partslink24 result with VIN, PR/options, and gearbox/body code.")
     if oem_candidates:
-        actions.append("Use the confirmed OEM number as the only starting point for market/price search.")
+        if all(candidate.get("confidence") == "high" for candidate in oem_candidates):
+            actions.append("Use the verified OEM number as the starting point for market/price search.")
+        else:
+            actions.append(
+                "Treat the captured OEM number as preliminary: verify its diagram/applicability conditions against another "
+                "catalog or manufacturer source before treating it as fitment-confirmed."
+            )
+        actions.append(
+            "After a brand and article are captured, compare manufacturer, web-search, and clearly labelled forum evidence "
+            "with FAPI cross candidates when available; analogs and forum matches remain unconfirmed until applicability "
+            "is checked."
+        )
         actions.append("Keep full EPC evidence outside CRM; write only concise OEM/result/next-action summary.")
     if missing_context:
         actions.append("Collect missing context before making a purchase recommendation.")

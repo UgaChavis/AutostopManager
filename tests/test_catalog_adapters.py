@@ -222,6 +222,50 @@ def test_catalog_provider_status_marks_euroauto_public_catalog_as_manual():
     assert "AutoEuro" in euroauto["limits"]
 
 
+def test_catalog_provider_status_marks_partsouq_and_amayama_as_manual_oem_routes(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+    monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
+    monkeypatch.delenv("VIN17_SECRET", raising=False)
+
+    status = catalog_provider_status(stage="oem_catalog")
+
+    for source_id in ("partsouq_catalog", "amayama_catalog"):
+        provider = next(provider for provider in status["providers"] if provider["source_id"] == source_id)
+        assert provider["configured"] is True
+        assert provider["live_callable_now"] is False
+        assert provider["access_mode"] == "public_site_manual"
+        assert "diagram_link_capture" in provider["capabilities"]
+
+    # Synthetic frame: this checks routing, not a real vehicle's applicability.
+    plan = build_oem_parts_provider_plan(identifier="NZE141-0000001", requested_part="воздушный фильтр")
+    oem_step = next(step for step in plan["pipeline"] if step["step"] == "find_oem_candidates")
+    assert {"partsouq_catalog", "amayama_catalog"} <= set(oem_step["providers"])
+    assert plan["live_capability"]["live_oem_catalog_available"] is False
+
+
+def test_oem_provider_plan_accepts_vehicle_parameters_without_identifier():
+    plan = build_oem_parts_provider_plan(
+        identifier="",
+        requested_part="воздушный фильтр",
+        vehicle_identity={
+            "vehicle_profile": {
+                "make": "Toyota",
+                "model": "Corolla",
+                "model_year": 2008,
+                "engine": "1NZ-FE",
+                "transmission": "AT",
+            }
+        },
+    )
+
+    partsouq = next(
+        item for item in plan["manual_public_search_queries"] if item["source_id"] == "partsouq_catalog_manual"
+    )
+    assert partsouq["url"] == "https://partsouq.com/en/"
+    assert "Toyota Corolla 2008 1NZ-FE" in partsouq["query"]
+    assert plan["identifier"]["kind"] == "unknown"
+
+
 def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     for name in ["ROSSKO_KEY1", "ROSSKO_KEY2"]:
@@ -251,6 +295,11 @@ def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeyp
     assert any(step["step"] == "lookup_public_aftermarket_catalogs" for step in plan["pipeline"])
     assert plan["manual_public_search_queries"]
     assert any(item["source_id"] == "euroauto_catalog_manual" for item in plan["manual_public_search_queries"])
+    assert any(item["source_id"] == "partsouq_catalog_manual" for item in plan["manual_public_search_queries"])
+    amayama = next(
+        item for item in plan["manual_public_search_queries"] if item["source_id"] == "amayama_catalog_manual"
+    )
+    assert "direct diagram or part-page URL" in amayama["capture_fields"]
     combined_queries = "\n".join(item["query"] + "\n" + item["url"] for item in plan["manual_public_search_queries"])
     assert "MR41S123456" not in combined_queries
     assert "Suzuki" in combined_queries

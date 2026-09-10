@@ -10,6 +10,86 @@ from .storage import _string_list
 
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 
+_JAPANESE_MAKES = frozenset(
+    {
+        "TOYOTA",
+        "LEXUS",
+        "HONDA",
+        "NISSAN",
+        "INFINITI",
+        "MAZDA",
+        "SUBARU",
+        "SUZUKI",
+        "MITSUBISHI",
+        "DAIHATSU",
+        "ISUZU",
+        "HINO",
+    }
+)
+_PUBLIC_JAPANESE_WEB_CATALOGS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "PartSouq manual catalog",
+        "kind": "portal",
+        "authority": "public_commercial_catalog_store",
+        "inputs": ["vin", "frame_number", "part_number", "vehicle_parameters", "part_name"],
+        "outputs": [
+            "oem_part_numbers",
+            "diagram_url",
+            "part_page_url",
+            "applicability_conditions",
+            "production_period",
+            "model_code",
+            "engine",
+            "transmission",
+            "market",
+            "position",
+            "quantity",
+            "supersessions",
+        ],
+        "url": "https://partsouq.com/en/",
+        "access_mode": "public",
+        "trust_level": "public_reference",
+        "adapter_status": ["manual_capture"],
+        "preferred_for": ["jdm_frame", "vin_or_frame", "diagram", "oem_part_candidate"],
+        "notes": (
+            "Public manual catalog route: enter VIN/frame in the interactive form, then capture the matching "
+            "diagram/page URL, OEM number, and applicability fields. JavaScript, cookies, or an anti-bot check may "
+            "be required; do not bypass it. A captured candidate is not final fitment proof."
+        ),
+    },
+    {
+        "name": "Amayama public catalog",
+        "kind": "portal",
+        "authority": "public_commercial_catalog_store",
+        "inputs": ["vin", "frame_number", "part_number", "vehicle_parameters", "part_name"],
+        "outputs": [
+            "oem_part_numbers",
+            "diagram_url",
+            "part_page_url",
+            "applicability_conditions",
+            "production_period",
+            "model_code",
+            "engine",
+            "transmission",
+            "market",
+            "position",
+            "quantity",
+            "supersessions",
+        ],
+        "url": "https://www.amayama.com/en/genuine-catalogs",
+        "access_mode": "public",
+        "trust_level": "public_reference",
+        "adapter_status": ["manual_capture"],
+        "preferred_for": ["jdm_frame", "vin_or_frame", "diagram", "oem_part_candidate"],
+        "notes": (
+            "Public manual catalog route: choose the exact model/version or enter VIN/frame where offered, then capture "
+            "the diagram/page URL, OEM number, and applicability conditions. Pages may require JavaScript or cookies; "
+            "do not bypass a challenge. Catalog fitment remains a candidate until a human verifies the listed conditions."
+        ),
+    },
+)
+_PUBLIC_JAPANESE_WEB_CATALOG_NAMES = tuple(source["name"] for source in _PUBLIC_JAPANESE_WEB_CATALOGS)
+
 _MAKE_SOURCE_MAP: dict[str, list[str]] = {
     "BMW": [
         "partslink24 Mobile",
@@ -83,10 +163,36 @@ def normalize_make(make: str | None) -> str:
     return re.sub(r"[^A-Z0-9]+", "", make.upper())
 
 
+def _runtime_sources() -> list[dict[str, Any]]:
+    """Enrich the legacy registry only when its public PartSouq route is present.
+
+    The registry predates structured diagram/applicability fields. Keeping the
+    enrichment here makes existing route consumers receive the same safe
+    manual-only metadata without changing their public schema or turning a
+    browser-protected catalog into an automated adapter.
+    """
+
+    registry_sources = [
+        dict(source) for source in load_source_registry().get("sources", []) if isinstance(source, dict)
+    ]
+    source_names = {str(source.get("name") or "").strip() for source in registry_sources}
+    if "PartSouq manual catalog" not in source_names:
+        return registry_sources
+
+    enrichments = {source["name"]: source for source in _PUBLIC_JAPANESE_WEB_CATALOGS}
+    result: list[dict[str, Any]] = []
+    for source in registry_sources:
+        name = str(source.get("name") or "").strip()
+        result.append({**source, **enrichments[name]} if name in enrichments else source)
+    for source in _PUBLIC_JAPANESE_WEB_CATALOGS:
+        if source["name"] not in source_names:
+            result.append(dict(source))
+    return result
+
+
 def source_index() -> dict[str, dict[str, Any]]:
-    registry = load_source_registry()
     index: dict[str, dict[str, Any]] = {}
-    for source in registry.get("sources", []):
+    for source in _runtime_sources():
         name = str(source.get("name") or "").strip()
         if name:
             index[name] = source
@@ -97,10 +203,14 @@ def source_names_for_make(make: str | None) -> list[str]:
     key = normalize_make(make)
     if not key:
         return []
-    for prefix, names in _MAKE_SOURCE_MAP.items():
+    names: list[str] = []
+    for prefix, mapped_names in _MAKE_SOURCE_MAP.items():
         if key.startswith(prefix):
-            return names
-    return []
+            names = list(mapped_names)
+            break
+    if key in _JAPANESE_MAKES:
+        names.extend(_PUBLIC_JAPANESE_WEB_CATALOG_NAMES)
+    return list(dict.fromkeys(names))
 
 
 def sources_for_make(make: str | None) -> list[dict[str, Any]]:
@@ -115,9 +225,8 @@ def sources_for_make(make: str | None) -> list[dict[str, Any]]:
 
 def sources_for_inputs(*inputs: str) -> list[dict[str, Any]]:
     wanted = {item for item in inputs if item}
-    registry = load_source_registry()
     result: list[dict[str, Any]] = []
-    for source in registry.get("sources", []):
+    for source in _runtime_sources():
         source_inputs = set(_string_list(source.get("inputs")))
         if wanted & source_inputs:
             result.append(source)

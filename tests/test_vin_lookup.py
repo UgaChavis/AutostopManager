@@ -37,6 +37,10 @@ def test_build_lookup_plan_uses_make_specific_sources(monkeypatch):
     assert plan["identifier"]["kind"] == "vin"
     assert plan["decoded_vehicle"]["make"] == "Toyota"
     assert any(step["source_name"] == "Toyota Japan EPC Help" for step in plan["steps"])
+    assert any(step["source_name"] == "PartSouq manual catalog" for step in plan["steps"])
+    amayama = next(step for step in plan["steps"] if step["source_name"] == "Amayama public catalog")
+    assert "diagram_url" in amayama["outputs"]
+    assert amayama["adapter_status"] == ["manual_capture"]
     assert plan["catalog_routes"] == plan["steps"]
     assert "oem_candidates" in plan
     assert "supersessions" in plan
@@ -86,6 +90,8 @@ def test_build_lookup_plan_for_frame_number_returns_japan_routes():
     assert plan["identifier"]["kind"] == "frame_number"
     assert plan["steps"]
     assert any(step["source_name"] == "Toyota Japan EPC Help" for step in plan["steps"])
+    assert any(step["source_name"] == "PartSouq manual catalog" for step in plan["steps"])
+    assert any(step["source_name"] == "Amayama public catalog" for step in plan["steps"])
     assert any("brand" in warning.lower() for warning in plan["warnings"])
 
 
@@ -182,6 +188,24 @@ def test_unverified_manual_capture_cannot_raise_fitment_to_high_confidence():
     assert plan["fitment_confidence"]["score"] == 60
 
 
+def test_public_web_catalog_capture_stays_preliminary_and_requests_cross_check():
+    plan = build_lookup_plan(
+        "NZE141-0000001",  # Synthetic frame, not a customer's vehicle.
+        make_hint="Toyota",
+        live_vpic=False,
+        part_name="воздушный фильтр",
+        captured_oem_number="TEST-OEM-001",
+        captured_source="PartSouq manual catalog",
+    )
+
+    candidate = plan["oem_candidates"][0]
+    assert candidate["confidence"] == "low"
+    assert candidate["source_access_mode"] == "public"
+    assert any("preliminary" in action for action in plan["next_actions"])
+    assert any("FAPI cross candidates" in action for action in plan["next_actions"])
+    assert "NZE141-0000001" not in json.dumps(plan, ensure_ascii=False)
+
+
 def test_bmw_and_vag_source_registry_has_preferred_paid_routes():
     bmw_sources = sources_for_make("BMW")
     audi_sources = sources_for_make("Audi")
@@ -192,3 +216,14 @@ def test_bmw_and_vag_source_registry_has_preferred_paid_routes():
     assert any(source["name"] == "Volkswagen Group ETKA" for source in audi_sources)
     assert bmw_sources[0]["requires_login"] is True
     assert "oem_part_numbers" in bmw_sources[0]["outputs"]
+
+
+def test_japanese_source_registry_adds_public_diagram_routes_without_duplicates():
+    toyota_sources = sources_for_make("Toyota")
+    names = [source["name"] for source in toyota_sources]
+
+    assert names.count("PartSouq manual catalog") == 1
+    assert names.count("Amayama public catalog") == 1
+    partsouq = next(source for source in toyota_sources if source["name"] == "PartSouq manual catalog")
+    assert "applicability_conditions" in partsouq["outputs"]
+    assert partsouq["access_mode"] == "public"
