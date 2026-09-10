@@ -526,10 +526,74 @@ def _uses_strict_north_american_vin(profile: dict[str, Any]) -> bool:
     )
 
 
+def _normalized_identity_value(value: Any) -> str:
+    return re.sub(r"[^0-9a-zа-яё]+", "", _compact(value).casefold())
+
+
+def _identity_values_agree(left: Any, right: Any) -> bool:
+    left_normalized = _normalized_identity_value(left)
+    right_normalized = _normalized_identity_value(right)
+    return bool(left_normalized and right_normalized) and (
+        left_normalized == right_normalized
+        or left_normalized in right_normalized
+        or right_normalized in left_normalized
+    )
+
+
+def _consensus_vin_evidence_conflicts(
+    crm_context: dict[str, Any], field_evidence: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return only strong CRM conflicts corroborated by two VIN-derived sources.
+
+    A local WMI hint and a non-clean vPIC reply are intentionally excluded by
+    the confidence floor.  The gate must fail closed only when a platform rule
+    and a clean decoder (or equivalent independent evidence) agree against an
+    explicit CRM make/model.
+    """
+
+    conflicts: list[dict[str, Any]] = []
+    for field in ("make", "model"):
+        crm_value = crm_context.get(field)
+        if crm_value in (None, ""):
+            continue
+        decoded = [
+            item
+            for item in field_evidence
+            if item.get("field") == field
+            and item.get("source") != "CRM context"
+            and _bounded_confidence(item.get("confidence"), default=0.0) >= 0.7
+            and item.get("value") not in (None, "")
+        ]
+        for item in decoded:
+            value = item.get("value")
+            agreeing = [candidate for candidate in decoded if _identity_values_agree(value, candidate.get("value"))]
+            evidence_sources = sorted(
+                {str(candidate.get("source") or "") for candidate in agreeing if candidate.get("source")}
+            )
+            if len(evidence_sources) < 2 or _identity_values_agree(crm_value, value):
+                continue
+            conflicts.append(
+                {
+                    "field": field,
+                    "crm_value": crm_value,
+                    "decoded_value": value,
+                    "evidence_sources": evidence_sources,
+                    "severity": "high",
+                    "note": "CRM make/model conflicts with two consistent VIN-derived sources; verify documents or EPC before VIN-critical lookup.",
+                }
+            )
+            break
+    return conflicts
+
+
 def _conflicts(
-    profile: dict[str, Any], crm_context: dict[str, Any], diagnostics: dict[str, Any]
+    profile: dict[str, Any],
+    crm_context: dict[str, Any],
+    diagnostics: dict[str, Any],
+    field_evidence: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
+    conflicts.extend(_consensus_vin_evidence_conflicts(crm_context, field_evidence))
     if crm_context.get("model_year") and diagnostics.get("model_year", {}).get("candidate_years"):
         years = diagnostics["model_year"]["candidate_years"]
         try:
@@ -852,7 +916,7 @@ def decode_vehicle_identity(
     if classification.kind == "market_code":
         warnings.append("Identifier is market/JDM-frame-like; do not treat it as a 17-character ISO VIN.")
 
-    conflicts = _conflicts(profile, crm, diagnostics)
+    conflicts = _conflicts(profile, crm, diagnostics, field_evidence)
     lookup_plan = build_lookup_plan(
         normalized,
         model_year=model_year or crm.get("model_year"),

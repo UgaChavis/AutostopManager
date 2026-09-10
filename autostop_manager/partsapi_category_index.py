@@ -93,7 +93,12 @@ def _category_text(row: dict[str, Any]) -> str:
 def _score_category(row: dict[str, Any], *, query: str | None = None, intent_id: str | None = None) -> float:
     score = 0.0
     matched = False
-    if intent_id and intent_id in _as_list(row.get("intent_ids")):
+    if intent_id:
+        if intent_id not in _as_list(row.get("intent_ids")):
+            # A numeric category may be selected automatically only for the
+            # exact normalized part intent.  Token overlap alone is too weak
+            # (for example, brake pads and brake discs share "brake").
+            return 0.0
         score += 3.0
         matched = True
     query_text = _compact(query)

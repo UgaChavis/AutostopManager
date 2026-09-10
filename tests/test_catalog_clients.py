@@ -713,6 +713,14 @@ def test_resolve_partsapi_category_distinguishes_numeric_and_text_candidates():
     assert unknown["category_kind"] == "unresolved"
 
 
+def test_resolve_partsapi_category_does_not_map_brake_disc_to_brake_pad_numeric_category():
+    result = resolve_partsapi_category("тормозные диски")
+
+    assert result["category"] != "1191"
+    assert result["category_unresolved"] is True
+    assert result["category_kind"] == "text_candidate"
+
+
 def test_extract_partsapi_vehicle_profiles_handles_vin_decode_payload():
     profiles = extract_partsapi_vehicle_profiles(
         operation="vin_decode",

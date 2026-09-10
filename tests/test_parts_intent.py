@@ -42,6 +42,36 @@ def test_normalize_part_intent_recognizes_unspecified_brake_pads_as_clarificatio
     assert "fitment_caveats" not in result
 
 
+def test_normalize_part_intent_blocks_single_lookup_for_brake_pads_on_both_axles():
+    for phrase in ["передние и задние колодки", "задние / передние колодки"]:
+        result = normalize_part_intent(phrase)
+
+        assert result["intent_id"] == "brake_pads_multiple_axles"
+        assert result["clarification_required"] is True
+        assert result["clarification_fields"] == ["split_by_axle"]
+        assert result["partsapi_category_candidates"] == []
+
+
+def test_normalize_part_intent_distinguishes_inner_outer_and_unspecified_cv_joints():
+    inner = normalize_part_intent("внутренний ШРУС")
+    outer = normalize_part_intent("наружный ШРУС")
+    unspecified = normalize_part_intent("ШРУС")
+
+    assert inner["intent_id"] == "inner_cv_joint"
+    assert outer["intent_id"] == "outer_cv_joint"
+    assert unspecified["intent_id"] == "cv_joint_unspecified"
+    assert unspecified["clarification_required"] is True
+    assert "inner_outer" in unspecified["clarification_fields"]
+
+
+def test_normalize_part_intent_does_not_classify_glow_plugs_as_spark_plugs():
+    glow = normalize_part_intent("свечи накаливания")
+    spark = normalize_part_intent("свечи зажигания")
+
+    assert glow["intent_id"] == "glow_plug"
+    assert spark["intent_id"] == "spark_plug"
+
+
 def test_normalize_part_intent_resolves_structured_clarification_from_context():
     result = normalize_part_intent("тормозные колодки", axle="front")
 

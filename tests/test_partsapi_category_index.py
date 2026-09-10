@@ -16,6 +16,13 @@ def test_category_index_maps_front_brake_pads_to_numeric_cat():
     assert result["selected_category"]["matched_by"]
 
 
+def test_category_index_rejects_generic_token_match_for_another_intent():
+    result = explain_partsapi_category_for_intent("brake_disc", query="тормозные диски")
+
+    assert result["selected_category"] is None
+    assert result["category_unresolved"] is True
+
+
 def test_category_index_search_and_validate_are_safe():
     search = search_partsapi_category_index("стойка стабилизатора", limit=3)
     validation = validate_partsapi_category_index()

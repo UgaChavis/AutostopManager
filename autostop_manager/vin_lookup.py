@@ -694,7 +694,7 @@ def _manual_capture_confidence(
     if source and identifier_kind in {"vin", "frame_number"} and part_name:
         access_mode = str(source.get("access_mode") or "")
         trust_level = str(source.get("trust_level") or "")
-        if source.get("authority") == "official" or trust_level in {"official", "preferred_paid"}:
+        if source.get("authority") in {"official", "manufacturer"} or trust_level in {"official", "preferred_paid"}:
             return "high"
         if access_mode in {"public", "public_mirror"}:
             return "low"
@@ -833,12 +833,23 @@ def _fitment_confidence(
         if any(level == "blocked" for level in candidate_levels):
             level: ConfidenceLevel = "blocked"
             score = 0
-        elif len(oem_candidates) == 1 and not missing_context:
-            level = "high"
-            score = 90
-        elif any(level == "high" for level in candidate_levels):
-            level = "medium" if missing_context else "high"
-            score = 70 if missing_context else 90
+        elif len(oem_candidates) == 1:
+            candidate_level = candidate_levels[0]
+            if candidate_level == "high" and not missing_context:
+                level = "high"
+                score = 90
+            elif candidate_level == "high":
+                level = "medium"
+                score = 70
+            elif candidate_level == "medium":
+                level = "medium"
+                score = 60
+            else:
+                level = "low"
+                score = 35
+        elif all(level == "high" for level in candidate_levels) and missing_context:
+            level = "medium"
+            score = 70
         else:
             level = "medium"
             score = 60
@@ -855,6 +866,8 @@ def _fitment_confidence(
     reasons: list[str] = []
     if oem_candidates:
         reasons.append("OEM candidate captured")
+        if any(str(candidate.get("confidence") or "low") != "high" for candidate in oem_candidates):
+            reasons.append("Captured candidate source is not high-confidence EPC evidence")
     else:
         reasons.append("No OEM candidate captured yet")
     if missing_context:

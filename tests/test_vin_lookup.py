@@ -167,6 +167,21 @@ def test_manual_capture_builds_oem_candidate_and_supersession(monkeypatch):
     assert plan["fitment_confidence"]["level"] == "high"
 
 
+def test_unverified_manual_capture_cannot_raise_fitment_to_high_confidence():
+    plan = build_lookup_plan(
+        "WBA" + "A" * 14,
+        make_hint="BMW",
+        live_vpic=False,
+        part_name="масляный фильтр",
+        captured_oem_number="TEST12345",
+        captured_source="unverified-manual-source",
+    )
+
+    assert plan["oem_candidates"][0]["confidence"] == "medium"
+    assert plan["fitment_confidence"]["level"] == "medium"
+    assert plan["fitment_confidence"]["score"] == 60
+
+
 def test_bmw_and_vag_source_registry_has_preferred_paid_routes():
     bmw_sources = sources_for_make("BMW")
     audi_sources = sources_for_make("Audi")

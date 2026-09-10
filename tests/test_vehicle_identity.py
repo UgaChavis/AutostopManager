@@ -82,6 +82,47 @@ def test_decode_vehicle_identity_reports_row_vin_caveats_without_demoting_identi
     assert any(source["source_id"] == "partsapi_ru" for source in result["required_next_sources"])
 
 
+def test_decode_vehicle_identity_blocks_clean_vin_consensus_conflicting_with_crm():
+    result = decode_vehicle_identity(
+        "WAUZZZ4H" + "A" * 9,
+        crm_context={"make": "Toyota", "model": "Camry"},
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result={
+            "ok": True,
+            "error_code": "0",
+            "vehicle": {"make": "Audi", "model": "A8"},
+        },
+    )
+
+    conflicts = {item["field"]: item for item in result["conflicts"]}
+    assert conflicts["make"]["severity"] == "high"
+    assert conflicts["make"]["crm_value"] == "Toyota"
+    assert conflicts["make"]["decoded_value"] == "Audi"
+    assert set(conflicts["make"]["evidence_sources"]) == {"NHTSA vPIC", "audi_a8_d4_4h"}
+    assert conflicts["model"]["severity"] == "high"
+    assert result["confidence_label"] == "medium"
+    assert result["parts_lookup_readiness"]["ready_for_oem_lookup"] is False
+    assert "high_severity_identity_conflict" in result["parts_lookup_readiness"]["blocking_reasons"]
+
+
+def test_decode_vehicle_identity_does_not_block_on_partial_vpic_against_crm():
+    result = decode_vehicle_identity(
+        "WAUZZZ4H" + "A" * 9,
+        crm_context={"make": "Toyota", "model": "Camry"},
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result={
+            "ok": True,
+            "error_code": "5",
+            "vehicle": {"make": "Audi", "model": "A8"},
+        },
+    )
+
+    assert not any(item["severity"] == "high" for item in result["conflicts"])
+    assert "high_severity_identity_conflict" not in result["parts_lookup_readiness"]["blocking_reasons"]
+
+
 def test_classify_identifier_keeps_existing_market_code_behavior_for_unhyphenated_frame():
     identifier = classify_identifier("MR41S123456")
 
