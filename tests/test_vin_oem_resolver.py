@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager.vin_oem_resolver import resolve_vin_oem_parts
 
 
@@ -356,3 +358,139 @@ def test_resolver_blocks_high_identity_conflict(monkeypatch):
 
     assert result["status"] == "needs_identity_confirmation"
     assert result["readiness"]["ready_for_identity_crosscheck"] is False
+
+
+def test_resolver_dry_run_does_not_call_live_wmi_lookup(monkeypatch):
+    def fail_wmi(*_args, **_kwargs):
+        raise AssertionError("dry_run must not call the live WMI endpoint")
+
+    monkeypatch.setattr("autostop_manager.vehicle_identity.decode_wmi_vpic", fail_wmi)
+    monkeypatch.setattr(
+        "autostop_manager.vin_oem_resolver.partsapi_catalog_lookup",
+        lambda **kwargs: {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": kwargs["operation"],
+            "dry_run": kwargs.get("dry_run", False),
+            "outcome": "ready",
+            "attempt_count": 0,
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+        },
+    )
+
+    result = resolve_vin_oem_parts(
+        identifier="WBA00000000000000",
+        requested_part="передние колодки",
+        live_vpic=True,
+        live_partsapi_oem=True,
+        dry_run=True,
+    )
+
+    assert result["ok"] is True
+    assert all(call["dry_run"] is True for call in result["calls"])
+
+
+def test_resolver_does_not_present_rear_candidate_as_front_or_promote_false_fitment(monkeypatch):
+    identity = _medium_identity()
+    identity["confidence_label"] = "high"
+    identity["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] = True
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: identity)
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        operation = kwargs["operation"]
+        base = {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": operation,
+            "dry_run": kwargs.get("dry_run", False),
+            "attempt_count": 0 if kwargs.get("dry_run", False) else 1,
+            "outcome": "success",
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+        }
+        if operation == "parts_by_vin":
+            return {
+                **base,
+                "oem_candidates": [
+                    {
+                        "provider": "partsapi_ru",
+                        "part_number": "P-REAR",
+                        "name": "Rear brake pads",
+                        "source_operation": "parts_by_vin",
+                        "fitment_evidence": {"is_fit_for_this_vin": "false"},
+                        "confidence": 0.95,
+                    }
+                ],
+            }
+        return {**base, "oem_candidates": [], "vehicle_profiles": []}
+
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+    result = resolve_vin_oem_parts(
+        identifier="1HGCM82633A004352",
+        requested_part="передние колодки",
+        live_vpic=False,
+        live_partsapi_oem=True,
+        max_live_calls=1,
+        max_candidates=1,
+    )
+
+    candidate = result["oem_candidates"][0]
+    assert candidate["position_match"] == "conflict"
+    assert candidate["requested_axle"] == "front"
+    assert candidate["candidate_axle_hints"] == ["rear"]
+    assert candidate["fitment_scope"] == "not_vin_specific"
+    assert candidate["confidence_label"] == "low"
+    assert "candidate_position_conflicts_requested_position" in candidate["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "retryable"),
+    [("provider_http_5xx", True), ("timeout", True)],
+)
+def test_resolver_surfaces_provider_failure_separately_from_empty_result(monkeypatch, failure_class, retryable):
+    identity = _medium_identity()
+    identity["confidence_label"] = "high"
+    identity["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] = True
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: identity)
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        if kwargs["operation"] == "parts_by_vin":
+            return {
+                "ok": False,
+                "provider": "partsapi_ru",
+                "operation": "parts_by_vin",
+                "dry_run": False,
+                "outcome": failure_class,
+                "failure_class": failure_class,
+                "retryable": retryable,
+                "requires_fallback": True,
+                "attempt_count": 1,
+                "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+            }
+        return {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": kwargs["operation"],
+            "dry_run": kwargs.get("dry_run", False),
+            "outcome": "ready",
+            "attempt_count": 0,
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+        }
+
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+    result = resolve_vin_oem_parts(
+        identifier="1HGCM82633A004352",
+        requested_part="передние колодки",
+        live_vpic=False,
+        live_partsapi_oem=True,
+        max_live_calls=1,
+    )
+
+    assert result["status"] == "oem_lookup_provider_failed"
+    assert result["oem_lookup_outcome"] == {
+        "outcome": "provider_failed",
+        "provider_outcome": failure_class,
+        "failure_class": failure_class,
+        "retryable": retryable,
+        "requires_fallback": True,
+    }
+    assert any(action["code"] == "retry_or_manual_epc" for action in result["manual_actions"])

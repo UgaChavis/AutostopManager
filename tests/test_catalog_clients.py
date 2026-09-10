@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from urllib.error import HTTPError
 
 from autostop_manager import config as manager_config
 from autostop_manager.catalog_clients import (
@@ -782,8 +783,26 @@ def test_extract_partsapi_parts_by_vin_candidates_splits_brand_article_pairs():
     assert candidates[0]["brand"] == "CITROEN"
     assert candidates[0]["name"] == "Windshield"
     assert candidates[0]["fitment_evidence"]["group"] == "Body"
-    assert candidates[0]["fitment_evidence"]["is_fit_for_this_vin"] is True
-    assert candidates[0]["confidence"] == 0.95
+    assert candidates[0]["fitment_evidence"]["vin_query_scoped"] is True
+    assert candidates[0]["fitment_evidence"]["fitment_status"] == "unconfirmed"
+    assert "is_fit_for_this_vin" not in candidates[0]["fitment_evidence"]
+    assert candidates[0]["confidence"] == 0.72
+
+
+def test_partsapi_parts_by_vin_preserves_explicit_negative_fitment():
+    candidates = extract_partsapi_parts_by_vin_candidates(
+        payload=[
+            {
+                "group": "Brake",
+                "name": "Rear brake pads",
+                "parts": "TEST|P-REAR",
+                "is_fit_for_this_vin": "false",
+            }
+        ]
+    )
+
+    assert candidates[0]["fitment_evidence"]["is_fit_for_this_vin"] is False
+    assert candidates[0]["confidence"] == 0.72
 
 
 def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
@@ -817,7 +836,8 @@ def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
     assert result["ok"] is True
     assert result["oem_candidates"][0]["part_number"] == "5610106660"
     assert result["oem_candidates"][0]["brand"] == "CITROEN"
-    assert result["oem_candidates"][0]["fitment_evidence"]["is_fit_for_this_vin"] is True
+    assert result["oem_candidates"][0]["fitment_evidence"]["fitment_status"] == "unconfirmed"
+    assert "is_fit_for_this_vin" not in result["oem_candidates"][0]["fitment_evidence"]
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
@@ -876,6 +896,29 @@ def test_partsapi_retry_is_bounded_to_three_attempts(monkeypatch):
     assert result["attempt_count"] == 3
     assert result["max_attempts"] == 3
     assert len(calls) == 3
+
+
+def test_partsapi_5xx_is_not_reported_as_empty_result(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def fail_urlopen(request, timeout=20.0):
+        raise HTTPError(request.full_url, 500, "server error", hdrs=None, fp=None)
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+    result = partsapi_catalog_lookup(
+        operation="parts_by_vin",
+        identifier="XW7BF4FK60S145161",
+        part_type="oem",
+        category="1191",
+    )
+
+    assert result["ok"] is False
+    assert result["outcome"] == "provider_http_5xx"
+    assert result["failure_class"] == "provider_http_5xx"
+    assert result["retryable"] is True
+    assert result["empty_payload"] is False
 
 
 def test_partsapi_declared_error_is_not_reported_as_empty_success(monkeypatch):

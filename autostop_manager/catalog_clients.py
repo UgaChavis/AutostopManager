@@ -1494,8 +1494,30 @@ def _iter_oem_candidate_dicts(value: Any) -> list[dict[str, Any]]:
     return candidates
 
 
+def _vin_fitment_state(value: Any) -> bool | None:
+    """Return only an explicit provider fitment assertion.
+
+    Provider payloads are inconsistent here: in particular, strings such as
+    ``"false"`` and ``"unknown"`` are truthy in Python.  Treat anything
+    other than an explicit affirmative/negative assertion as unknown, rather
+    than turning a VIN-scoped search result into a confirmed fitment.
+    """
+
+    if value is True or value == 1:
+        return True
+    if value is False or value == 0:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes"}:
+            return True
+        if normalized in {"0", "false", "no"}:
+            return False
+    return None
+
+
 def _candidate_confidence(raw: dict[str, Any], evidence: dict[str, Any]) -> float:
-    if raw.get("is_fit_for_this_vin") in (1, "1", True):
+    if _vin_fitment_state(raw.get("is_fit_for_this_vin")) is True:
         return 0.95
     if evidence.get("applicability"):
         return 0.82
@@ -1513,11 +1535,12 @@ def extract_oem_candidates(
         part_number = _first_value(item, _OEM_PART_NUMBER_KEYS)
         if part_number in (None, ""):
             continue
+        fitment_state = _vin_fitment_state(item.get("is_fit_for_this_vin"))
         evidence = {
             "group": _first_value(item, _OEM_GROUP_KEYS),
             "applicability": _first_value(item, _OEM_APPLICABILITY_KEYS),
             "quantity": _first_value(item, _OEM_QUANTITY_KEYS),
-            "is_fit_for_this_vin": item.get("is_fit_for_this_vin"),
+            "is_fit_for_this_vin": fitment_state,
         }
         evidence = {key: value for key, value in evidence.items() if value not in (None, "")}
         normalized = {
@@ -1791,12 +1814,21 @@ def extract_partsapi_parts_by_vin_candidates(
             if len(tokens) % 2:
                 pairs.append((None, tokens[-1]))
 
+        fitment_state = _vin_fitment_state(item.get("is_fit_for_this_vin"))
         evidence = {
             "group": item.get("group"),
             "category_name": item.get("name"),
             "shortname": item.get("shortname"),
-            "is_fit_for_this_vin": True,
+            # getPartsbyVIN is scoped by the query VIN, but a returned row
+            # without an explicit fitment flag still needs position/EPC
+            # confirmation.  Do not promote missing, false, or unknown data
+            # into a positive VIN-fitment assertion.
+            "vin_query_scoped": True,
         }
+        if fitment_state is None:
+            evidence["fitment_status"] = "unconfirmed"
+        else:
+            evidence["is_fit_for_this_vin"] = fitment_state
         evidence = {key: value for key, value in evidence.items() if value not in (None, "")}
         for brand, part_number in pairs:
             normalized_part_number = str(part_number or "").strip()
@@ -1814,7 +1846,7 @@ def extract_partsapi_parts_by_vin_candidates(
                     "name": item.get("shortname") or item.get("name"),
                     "source_operation": operation,
                     "fitment_evidence": evidence,
-                    "confidence": _candidate_confidence({"is_fit_for_this_vin": True}, evidence),
+                    "confidence": _candidate_confidence({"is_fit_for_this_vin": fitment_state}, evidence),
                     "raw_keys": sorted(str(key) for key in item),
                 }
             )
@@ -2244,6 +2276,10 @@ def partsapi_catalog_lookup(
             "failure_class": last_failure_class,
             "retryable": last_retryable,
             "requires_fallback": True,
+            # A transport/provider failure is not an empty catalog result.
+            # Keep this explicit for callers deciding whether to retry or
+            # route the request to a manual EPC check.
+            "empty_payload": False,
         }
 
     payload_shape = _response_shape(payload)

@@ -19,6 +19,92 @@ def _normalize_compare_value(value: Any) -> str:
     return re.sub(r"[^0-9a-zа-яё]+", "", str(value or "").casefold())
 
 
+def _vin_fitment_state(value: Any) -> bool | None:
+    """Accept only an explicit affirmative/negative VIN-fitment assertion."""
+
+    if value is True or value == 1:
+        return True
+    if value is False or value == 0:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes"}:
+            return True
+        if normalized in {"0", "false", "no"}:
+            return False
+    return None
+
+
+def _axle_hints(value: Any) -> set[str]:
+    text = re.sub(r"[_/\\-]+", " ", str(value or "").casefold())
+    hints: set[str] = set()
+    if re.search(r"\b(?:front|передн\w*)\b", text):
+        hints.add("front")
+    if re.search(r"\b(?:rear|задн\w*)\b", text):
+        hints.add("rear")
+    return hints
+
+
+def _requested_axle(part_profile: dict[str, Any]) -> str | None:
+    intent_id = str(part_profile.get("intent_id") or "")
+    if intent_id == "front_brake_pads":
+        return "front"
+    if intent_id == "rear_brake_pads":
+        return "rear"
+    hints: set[str] = set()
+    for value in [
+        *(part_profile.get("explicit_positions") or []),
+        *(part_profile.get("positions") or []),
+        part_profile.get("raw"),
+    ]:
+        hints.update(_axle_hints(value))
+    return next(iter(hints)) if len(hints) == 1 else None
+
+
+def _candidate_position_assessment(candidate: dict[str, Any], part_profile: dict[str, Any]) -> dict[str, Any]:
+    """Compare explicit candidate axle evidence with the requested part axle.
+
+    Absence of a position is deliberately not treated as a match.  This keeps
+    a rear-only candidate from being presented as a front part just because
+    the input request was for the front axle.
+    """
+
+    requested_axle = _requested_axle(part_profile)
+    if requested_axle is None:
+        return {"requested_axle": None, "candidate_axle_hints": [], "position_match": "not_required"}
+
+    fitment = candidate.get("fitment_evidence") or {}
+    candidate_values = [
+        candidate.get("name"),
+        candidate.get("position"),
+        candidate.get("axle"),
+        candidate.get("group"),
+        candidate.get("category"),
+    ]
+    if isinstance(fitment, dict):
+        candidate_values.extend(
+            fitment.get(key)
+            for key in ("group", "category_name", "shortname", "applicability", "position", "axle", "name")
+        )
+    hints: set[str] = set()
+    for value in candidate_values:
+        hints.update(_axle_hints(value))
+
+    if not hints:
+        match = "not_proved"
+    elif hints == {requested_axle}:
+        match = "matched"
+    elif requested_axle not in hints:
+        match = "conflict"
+    else:
+        match = "ambiguous"
+    return {
+        "requested_axle": requested_axle,
+        "candidate_axle_hints": sorted(hints),
+        "position_match": match,
+    }
+
+
 def _redact_identifier(identifier: str) -> dict[str, Any]:
     compact = "".join(str(identifier or "").split()).upper()
     if not compact:
@@ -192,6 +278,8 @@ def _rank_oem_candidate(
     source_operation = candidate.get("source_operation")
     fitment = candidate.get("fitment_evidence") or {}
     blockers: list[str] = []
+    position_assessment = _candidate_position_assessment(candidate, part_profile)
+    position_match = position_assessment["position_match"]
     if part_profile.get("clarification_required"):
         blockers.append("part_position_clarification_required")
     if category_resolution.get("category_unresolved"):
@@ -200,19 +288,30 @@ def _rank_oem_candidate(
         blockers.append("high_severity_identity_conflict")
     if category_resolution.get("validation_required"):
         blockers.append("category_validation_required")
+    if position_match == "conflict":
+        blockers.append("candidate_position_conflicts_requested_position")
+    elif position_match == "ambiguous":
+        blockers.append("candidate_position_ambiguous")
+    elif position_match == "not_proved":
+        blockers.append("candidate_position_not_confirmed")
 
-    source_is_vin_specific = source_operation == "parts_by_vin" and bool(fitment.get("is_fit_for_this_vin"))
-    position_match = "blocked" if part_profile.get("clarification_required") else "matched_or_not_required"
+    source_is_vin_specific = (
+        source_operation == "parts_by_vin" and _vin_fitment_state(fitment.get("is_fit_for_this_vin")) is True
+    )
+    requested_position_confirmed = source_is_vin_specific and position_match in {"matched", "not_required"}
     base_score = float(candidate.get("confidence") or 0.55)
-    if source_is_vin_specific and not blockers:
+    if requested_position_confirmed and not blockers:
         confidence_label = "high"
         score = max(base_score, 0.92)
-    elif source_is_vin_specific:
+    elif source_is_vin_specific and position_match not in {"conflict", "ambiguous", "not_proved"}:
         confidence_label = "medium"
         score = max(min(base_score, 0.86), 0.72)
     else:
         confidence_label = "low"
         score = min(base_score, 0.6)
+    if position_match == "conflict":
+        confidence_label = "low"
+        score = min(score, 0.35)
 
     part_number = str(candidate.get("part_number") or "").strip()
     brand = candidate.get("brand")
@@ -226,8 +325,14 @@ def _rank_oem_candidate(
         "category_id": category_resolution.get("category")
         if category_resolution.get("category_kind") == "numeric_id"
         else None,
-        "fitment_scope": "vin_specific" if source_is_vin_specific else "not_vin_specific",
+        "fitment_scope": (
+            "vin_specific"
+            if requested_position_confirmed
+            else ("vin_specific_position_unconfirmed" if source_is_vin_specific else "not_vin_specific")
+        ),
         "position_match": position_match,
+        "requested_axle": position_assessment["requested_axle"],
+        "candidate_axle_hints": position_assessment["candidate_axle_hints"],
         "quantity_basis": part_profile.get("quantity_basis"),
         "confidence_label": confidence_label,
         "confidence_score": round(score, 4),
@@ -250,7 +355,9 @@ def _with_applicability(candidate: dict[str, Any], call: dict[str, Any]) -> dict
         status, blocker = "check_failed", "applicability_check_failed"
     elif not matches:
         status, blocker = "not_found", "applicability_not_confirmed"
-    elif any((item.get("fitment_evidence") or {}).get("is_fit_for_this_vin") in (False, 0, "0") for item in matches):
+    elif any(
+        _vin_fitment_state((item.get("fitment_evidence") or {}).get("is_fit_for_this_vin")) is False for item in matches
+    ):
         status, blocker = "rejected", "applicability_rejected"
     else:
         status, blocker = "catalog_evidence_found", None
@@ -313,7 +420,78 @@ def _manual_action(code: str, message: str | None = None, *, priority: int = 1, 
     return {"code": code, "priority": priority, **({"message": message} if message else {}), **context}
 
 
-def _status(readiness: dict[str, Any], *, candidates: list[dict[str, Any]], live_partsapi_oem: bool) -> str:
+def _oem_lookup_outcome(call: dict[str, Any] | None) -> dict[str, Any]:
+    """Summarise the OEM lookup without turning provider failure into no-result."""
+
+    if call is None:
+        return {"outcome": "not_attempted", "provider_outcome": None, "retryable": False}
+    if call.get("dry_run"):
+        return {"outcome": "not_run", "provider_outcome": call.get("outcome"), "retryable": False}
+    if not call.get("ok"):
+        return {
+            "outcome": "provider_failed",
+            "provider_outcome": call.get("outcome") or call.get("failure_class") or "provider_failed",
+            "failure_class": call.get("failure_class") or call.get("outcome"),
+            "retryable": bool(call.get("retryable")),
+            "requires_fallback": bool(call.get("requires_fallback")),
+        }
+    if call.get("outcome") == "empty_result":
+        return {"outcome": "empty_result", "provider_outcome": "empty_result", "retryable": False}
+    return {
+        "outcome": "candidates_found" if call.get("oem_candidates") else "response_received",
+        "provider_outcome": call.get("outcome") or "success",
+        "retryable": False,
+    }
+
+
+def _append_oem_failure_blocker(blockers: list[dict[str, Any]], oem_lookup: dict[str, Any]) -> None:
+    if oem_lookup["outcome"] == "provider_failed":
+        blockers.append(
+            {
+                "stage": "partsapi_oem_lookup",
+                "operation": "parts_by_vin",
+                "outcome": oem_lookup["provider_outcome"],
+                "failure_class": oem_lookup.get("failure_class"),
+                "retryable": oem_lookup["retryable"],
+                "requires_fallback": oem_lookup.get("requires_fallback", True),
+            }
+        )
+
+
+def _append_no_candidate_manual_action(
+    manual_actions: list[dict[str, Any]],
+    *,
+    oem_lookup: dict[str, Any],
+    readiness: dict[str, Any],
+    live_partsapi_oem: bool,
+    category_resolution: dict[str, Any],
+) -> None:
+    if oem_lookup["outcome"] == "provider_failed":
+        manual_actions.append(
+            _manual_action(
+                "retry_or_manual_epc",
+                "getPartsbyVIN did not return a usable result; retry only if marked retryable, otherwise use EPC.",
+                priority=2,
+                provider_outcome=oem_lookup["provider_outcome"],
+                retryable=oem_lookup["retryable"],
+            )
+        )
+    elif readiness["ready_for_oem_candidate_lookup"] and live_partsapi_oem:
+        manual_actions.append(
+            _manual_action("manual_epc_fallback", "OEM-кандидаты не найдены: проверить брендовый EPC/17VIN вручную.")
+        )
+    elif readiness["ready_for_oem_candidate_lookup"]:
+        manual_actions.append(
+            _manual_action(
+                "run_live_get_parts_by_vin",
+                f"Вызвать getPartsbyVIN cat={category_resolution.get('category')} с лимитом live-запросов.",
+            )
+        )
+
+
+def _status(
+    readiness: dict[str, Any], *, candidates: list[dict[str, Any]], live_partsapi_oem: bool, oem_lookup: dict[str, Any]
+) -> str:
     if not readiness.get("has_identifier"):
         return "needs_vin_or_frame"
     if not readiness.get("ready_for_identity_crosscheck"):
@@ -327,6 +505,8 @@ def _status(readiness: dict[str, Any], *, candidates: list[dict[str, Any]], live
     if candidates:
         return "oem_candidates_found_needs_manual_confirmation"
     if live_partsapi_oem:
+        if oem_lookup.get("outcome") == "provider_failed":
+            return "oem_lookup_provider_failed"
         return "no_oem_candidate_found_needs_manual_epc"
     return "ready_for_live_oem_candidate_lookup"
 
@@ -389,6 +569,9 @@ def resolve_vin_oem_parts(
             model_year=model_year,
             make_hint=make,
             live_vpic=live_vpic and not dry_run,
+            # WMI is another live vPIC endpoint.  A resolver dry-run must not
+            # leak into it when the full VIN decoder has been disabled.
+            live_wmi=live_vpic and not dry_run,
         )
         if raw_identifier
         else {
@@ -526,6 +709,8 @@ def resolve_vin_oem_parts(
     raw_candidates = [
         candidate for candidate in (parts_call or {}).get("oem_candidates", []) if isinstance(candidate, dict)
     ]
+    oem_lookup = _oem_lookup_outcome(parts_call)
+    _append_oem_failure_blocker(blockers, oem_lookup)
     ranked_candidates = [
         _rank_oem_candidate(
             candidate,
@@ -547,16 +732,13 @@ def resolve_vin_oem_parts(
                 "Проверить OEM-кандидаты, применимость, quantity basis и выбрать строку для ручного подтверждения.",
             )
         )
-    elif readiness["ready_for_oem_candidate_lookup"] and live_partsapi_oem:
-        manual_actions.append(
-            _manual_action("manual_epc_fallback", "OEM-кандидаты не найдены: проверить брендовый EPC/17VIN вручную.")
-        )
-    elif readiness["ready_for_oem_candidate_lookup"]:
-        manual_actions.append(
-            _manual_action(
-                "run_live_get_parts_by_vin",
-                f"Вызвать getPartsbyVIN cat={category_resolution.get('category')} с лимитом live-запросов.",
-            )
+    else:
+        _append_no_candidate_manual_action(
+            manual_actions,
+            oem_lookup=oem_lookup,
+            readiness=readiness,
+            live_partsapi_oem=live_partsapi_oem,
+            category_resolution=category_resolution,
         )
 
     article_enrichment: list[dict[str, Any]] = []
@@ -616,7 +798,10 @@ def resolve_vin_oem_parts(
         )
 
     current_status = _status(
-        readiness, candidates=ranked_candidates, live_partsapi_oem=live_partsapi_oem and not dry_run
+        readiness,
+        candidates=ranked_candidates,
+        live_partsapi_oem=live_partsapi_oem and not dry_run,
+        oem_lookup=oem_lookup,
     )
     return {
         "ok": True,
@@ -635,6 +820,7 @@ def resolve_vin_oem_parts(
         "readiness": readiness,
         "oem_candidates": ranked_candidates,
         "candidate_count": len(ranked_candidates),
+        "oem_lookup_outcome": oem_lookup,
         "enrichment": {
             "applicability_evidence": applicability_evidence[:max_candidates],
             "article_enrichment": article_enrichment[:max_candidates],
