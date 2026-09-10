@@ -15,5 +15,6 @@
   and deploy require an explicit current request.
 - For FST.KZ first read `/root/.codex/CODEX_VPN_FST_ACCESS.md`, use
   `autostop-vpn-fst`, expose no secrets and never route CRM through the VPN.
-- Publish with `git push origin HEAD:AutostopManager`; release and rollback use
-  `docs/agent/deployment_runbook.md` and a disposable Manager database.
+- Publish the exact reviewed tree to the tracked Manager branch and verify the
+  remote readback. Use `docs/agent/deployment_runbook.md` for release/rollback
+  and a disposable Manager database for gates.
