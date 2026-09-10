@@ -77,6 +77,34 @@ def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeyp
     assert captured["live_wmi"] is False
 
 
+def test_public_aftermarket_tool_forwards_fapi_brand_and_demo_access(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_public_aftermarket_catalog_lookup(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "public_aftermarket_catalog_lookup", fake_public_aftermarket_catalog_lookup)
+    server = _FakeServer()
+    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+
+    register_manager_memory_tools(server, store)
+    result = server.tools["public_aftermarket_catalog_lookup"](
+        provider="fapi",
+        brand="MANN-FILTER",
+        part_number="W 75/3",
+        page_size=7,
+        demo_access=True,
+    )
+
+    assert result["ok"] is True
+    assert captured["provider"] == "fapi"
+    assert captured["brand"] == "MANN-FILTER"
+    assert captured["part_number"] == "W 75/3"
+    assert captured["page_size"] == 7
+    assert captured["demo_access"] is True
+
+
 def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
     server = _FakeServer()
     register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))

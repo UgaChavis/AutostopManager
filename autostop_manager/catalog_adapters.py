@@ -135,6 +135,18 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         docs_url="https://www.denso-am.eu/catalog/vin",
     ),
     CatalogProvider(
+        source_id="fapi_catalog",
+        name="FAPI Catalog",
+        stage="catalog_cross",
+        access_mode="api_key_or_demo",
+        env_names=("FAPI_API_KEY",),
+        capabilities=("brand_article_search", "part_details", "explicit_oe_references", "cross_candidates"),
+        priority="medium",
+        role="Additional brand/article source for part facts and cross candidates; demo access is explicit and evaluation-only.",
+        limits="FAPI cross ratings do not prove OEM status or VIN fitment. Its standard analog response may not provide OEM references; verify before order.",
+        docs_url="https://github.com/fapi-dev/catalog-openapi",
+    ),
+    CatalogProvider(
         source_id="vin17_api",
         name="17VIN API",
         stage="oem_catalog",

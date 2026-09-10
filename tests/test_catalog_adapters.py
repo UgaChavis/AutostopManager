@@ -98,6 +98,19 @@ def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypa
     assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_PARTS_BY_VIN_KEY"]
 
 
+def test_catalog_provider_status_reports_fapi_as_optional_cross_source(monkeypatch):
+    _clear_partsapi_env(monkeypatch)
+    monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
+
+    status = catalog_provider_status(stage="catalog_cross")
+    fapi = next(provider for provider in status["providers"] if provider["source_id"] == "fapi_catalog")
+
+    assert fapi["configured"] is True
+    assert fapi["live_callable_now"] is True
+    assert fapi["present_env_names"] == ["FAPI_API_KEY"]
+    assert "cross_candidates" in fapi["capabilities"]
+
+
 def test_partsapi_identity_key_does_not_claim_oem_candidate_lookup(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_VINDECODE_OE_KEY", "test-secret")

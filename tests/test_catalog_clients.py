@@ -9,6 +9,7 @@ from autostop_manager.catalog_clients import (
     build_17vin_token,
     build_denso_aftermarket_search_request,
     build_exist_price_lookup_request,
+    build_fapi_catalog_request,
     build_mann_filter_catalog_request,
     build_partsapi_request,
     denso_aftermarket_catalog_lookup,
@@ -20,6 +21,7 @@ from autostop_manager.catalog_clients import (
     extract_partsapi_search_tree_rows,
     extract_partsapi_parts_by_vin_candidates,
     extract_partsapi_vehicle_profiles,
+    fapi_catalog_lookup,
     mann_filter_catalog_lookup,
     parse_exist_catalog_candidates,
     parse_exist_price_page,
@@ -61,6 +63,12 @@ def _clear_partsapi_method_env(monkeypatch):
     monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
     for name in PARTSAPI_METHOD_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
+
+
+def _clear_fapi_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    monkeypatch.delenv("FAPI_API_KEY", raising=False)
 
 
 class _FakeResponse:
@@ -1428,6 +1436,179 @@ def test_denso_lookup_rejects_malformed_payload_without_crashing(monkeypatch):
     assert result["error"] == "DENSO returned a malformed search data payload."
 
 
+def test_fapi_request_redacts_api_key_and_keeps_brand_article_context():
+    request = build_fapi_catalog_request(
+        brand="MANN-FILTER",
+        part_number="W 75/3",
+        api_key="fapi-test-secret",
+        credential_mode="runtime_env",
+        manufacturer_id=11617,
+    )
+
+    assert request["ok"] is True
+    assert request["provider"] == "fapi_catalog"
+    assert request["params"] == {
+        "brand": "MANN-FILTER",
+        "part_number": "W 75/3",
+        "manufacturer_id": 11617,
+        "minimum_cross_rating": 1,
+    }
+    assert "fapi-test-secret" not in request["redacted_url"]
+    assert "ui=***" in request["redacted_url"]
+    assert request["secret_exposed"] is False
+
+
+def test_fapi_lookup_normalizes_source_part_and_cross_candidates(monkeypatch):
+    _clear_fapi_env(monkeypatch)
+    monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
+
+    def fake_urlopen(request, timeout=20.0):
+        url = request.full_url
+        if "/manufacturerList?" in url:
+            return _FakeResponse(
+                {
+                    "mf": [
+                        {"i": 0, "ds": "MANN-FILTER", "da": "mann-filter", "dbi": 11617},
+                    ]
+                }
+            )
+        assert "/analogList?" in url
+        assert "mfi=11617" in url
+        assert "r=1" in url
+        return _FakeResponse(
+            {
+                "manufacturerList": {
+                    "mf": [
+                        {"i": 0, "ds": "MANN-FILTER", "da": "mann-filter", "dbi": 11617},
+                        {"i": 1, "ds": "BOSCH", "da": "bosch", "dbi": 30},
+                    ]
+                },
+                "productList": {
+                    "p": [
+                        {
+                            "i": 10,
+                            "mfi": 0,
+                            "n": "W 75/3",
+                            "ns": "w753",
+                            "d": "Oil filter",
+                            "sr": 4,
+                        },
+                        {
+                            "i": 11,
+                            "mfi": 1,
+                            "n": "F 026 407 336",
+                            "ns": "f026407336",
+                            "d": "Oil filter",
+                            "sr": 3,
+                        },
+                    ]
+                },
+                "analogList": {
+                    "a": [
+                        {"pi": 10, "pai": 11, "mfi": 0, "mfai": 1, "rp": 4, "rm": 0},
+                    ]
+                },
+            }
+        )
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = fapi_catalog_lookup(brand="mann filter", part_number="W75/3", max_analogs=5)
+
+    assert result["ok"] is True
+    assert result["outcome"] == "found"
+    assert result["matched_brand"] == "MANN-FILTER"
+    assert result["source_parts"] == [
+        {
+            "brand": "MANN-FILTER",
+            "part_number": "W 75/3",
+            "description": "Oil filter",
+            "aggregate_rating": 4,
+            "fitment_confirmed": False,
+        }
+    ]
+    assert result["oem_references"] == []
+    assert result["oem_references_available"] is False
+    assert result["analog_candidates"][0]["brand"] == "BOSCH"
+    assert result["analog_candidates"][0]["part_number"] == "F 026 407 336"
+    assert result["analog_candidates"][0]["fitment_confirmed"] is False
+    assert result["analog_candidates"][0]["cross_evidence"]["positive_ratings"] == 4
+    assert "fapi-test-secret" not in result["request_plan"]["redacted_url"]
+
+
+def test_fapi_empty_response_is_nonfatal_and_requires_fallback(monkeypatch):
+    _clear_fapi_env(monkeypatch)
+    monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
+
+    def fake_urlopen(request, timeout=20.0):
+        if "/manufacturerList?" in request.full_url:
+            return _FakeResponse({"mf": [{"i": 0, "ds": "KILEN", "da": "kilen", "dbi": 777}]})
+        return _FakeResponse(
+            {
+                "manufacturerList": {"mf": []},
+                "productList": {"p": []},
+                "analogList": {"a": []},
+            }
+        )
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = fapi_catalog_lookup(brand="KILEN", part_number="NOT-A-REAL-ARTICLE")
+
+    assert result["ok"] is True
+    assert result["outcome"] == "empty_result"
+    assert result["requires_fallback"] is True
+    assert result["source_parts"] == []
+    assert result["analog_candidates"] == []
+
+
+def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch):
+    import json
+
+    _clear_fapi_env(monkeypatch)
+    monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
+
+    def fake_urlopen(request, timeout=20.0):
+        raise HTTPError(request.full_url, 503, "Service unavailable", {}, None)
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = fapi_catalog_lookup(brand="MANN-FILTER", part_number="W 75/3")
+
+    assert result["ok"] is False
+    assert result["failure_class"] == "provider_http_5xx"
+    assert result["retryable"] is True
+    assert result["requires_fallback"] is True
+    assert "fapi-test-secret" not in json.dumps(result)
+
+
+def test_fapi_demo_access_is_explicit_and_never_returns_demo_key(monkeypatch):
+    import json
+
+    _clear_fapi_env(monkeypatch)
+
+    def fake_urlopen(request, timeout=20.0):
+        if request.full_url.startswith("https://gist.githubusercontent.com/"):
+            return _FakeRawResponse("fapi-demo-test-secret")
+        if "/manufacturerList?" in request.full_url:
+            return _FakeResponse({"mf": [{"i": 0, "ds": "KILEN", "da": "kilen", "dbi": 777}]})
+        return _FakeResponse(
+            {
+                "manufacturerList": {"mf": []},
+                "productList": {"p": []},
+                "analogList": {"a": []},
+            }
+        )
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = fapi_catalog_lookup(brand="KILEN", part_number="10100", demo_access=True)
+
+    assert result["ok"] is True
+    assert result["request_plan"]["credential_mode"] == "demo_ephemeral"
+    assert "fapi-demo-test-secret" not in json.dumps(result)
+
+
 def test_public_aftermarket_catalog_lookup_rejects_unknown_provider():
     result = public_aftermarket_catalog_lookup(provider="unknown", part_number="123")
 
@@ -1460,3 +1641,32 @@ def test_public_aftermarket_all_reports_aggregate_provider_failures(monkeypatch)
     assert partial["ok"] is True
     assert partial["success_count"] == 1
     assert partial["failure_count"] == 1
+
+
+def test_public_aftermarket_all_continues_when_fapi_fails(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.mann_filter_catalog_lookup",
+        lambda **_kwargs: {"ok": True, "provider": "mann_filter_catalog"},
+    )
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.denso_aftermarket_catalog_lookup",
+        lambda **_kwargs: {"ok": True, "provider": "denso_aftermarket_catalog"},
+    )
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.fapi_catalog_lookup",
+        lambda **_kwargs: {"ok": False, "provider": "fapi_catalog", "requires_fallback": True},
+    )
+
+    result = public_aftermarket_catalog_lookup(
+        provider="all", brand="MANN-FILTER", part_number="W 75/3", demo_access=True
+    )
+
+    assert result["ok"] is True
+    assert result["success_count"] == 2
+    assert result["failure_count"] == 1
+    assert result["requires_fallback"] is True
+    assert [item["provider"] for item in result["results"]] == [
+        "mann_filter_catalog",
+        "denso_aftermarket_catalog",
+        "fapi_catalog",
+    ]

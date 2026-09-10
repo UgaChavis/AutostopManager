@@ -1431,25 +1431,30 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="public_aftermarket_catalog_lookup",
         description=(
-            "Call public aftermarket catalogs by part/OE number. Supports MANN-FILTER and DENSO live public endpoints; "
-            "use as catalog enrichment, not as VIN-specific OEM EPC proof or procurement pricing."
+            "Call public aftermarket catalogs by part/OE number. Supports MANN-FILTER, DENSO, and FAPI brand/article "
+            "cross lookup; FAPI uses brand and can use explicit demo_access for evaluation. Catalog data enriches a search "
+            "but is not VIN-specific OEM EPC proof, fitment proof, or procurement pricing."
         ),
     )
     def public_aftermarket_catalog_lookup_tool(
         provider: str,
         part_number: str,
+        brand: str | None = None,
         page_size: int = 5,
         country: str = "europe",
         include_detail: bool = True,
         dry_run: bool = False,
+        demo_access: bool = False,
     ) -> dict[str, Any]:
         return public_aftermarket_catalog_lookup(
             provider=provider,
             part_number=part_number,
+            brand=brand,
             page_size=page_size,
             country=country,
             include_detail=include_detail,
             dry_run=dry_run,
+            demo_access=demo_access,
         )
 
     @server.tool(

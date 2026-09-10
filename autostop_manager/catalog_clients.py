@@ -20,6 +20,8 @@ VIN17_BASE_URL = "http://api.17vin.com:8080"
 MANN_FILTER_GRAPHQL_ENDPOINT = "https://www.mann-filter.com/api/graphql/catalog-prod"
 MANN_FILTER_STORE = "pcat_mf_us_store_en"
 DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"
+FAPI_CATALOG_BASE_URL = "https://fapi.iisis.ru/fapi/v2"
+FAPI_DEMO_KEY_URL = "https://gist.githubusercontent.com/serp83/652d191745773ef6d8b5a0a689479cd6/raw/demo-key.txt"
 EXIST_BASE_URL = "https://www.exist.ru"
 EXIST_OPEN_SEARCH_DOCS_URL = "https://s.exist.ru/xml/osd.xml"
 EXIST_DEFAULT_OFFICE_ID = 905
@@ -619,15 +621,482 @@ def denso_aftermarket_catalog_lookup(
     }
 
 
+def _fapi_normalize(value: Any) -> str:
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
+
+
+def _fapi_integer(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _fapi_explicit_oem_references(products: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Return only references labelled explicitly as OE/OEM by FAPI payload fields."""
+
+    oem_field_names = {
+        "oe",
+        "oenumber",
+        "oenumbers",
+        "oem",
+        "oemnumber",
+        "oemnumbers",
+        "originalnumber",
+        "originalnumbers",
+    }
+    references: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def append_values(value: Any, *, source_field: str) -> None:
+        if isinstance(value, str):
+            clean_value = value.strip()
+            if clean_value and (source_field, clean_value) not in seen:
+                seen.add((source_field, clean_value))
+                references.append({"part_number": clean_value, "source_field": source_field})
+            return
+        if isinstance(value, list):
+            for nested in value:
+                append_values(nested, source_field=source_field)
+            return
+        if isinstance(value, dict):
+            for nested_key in ("value", "values", "number", "part_number"):
+                if nested_key in value:
+                    append_values(value[nested_key], source_field=source_field)
+
+    for product in products:
+        for key, value in product.items():
+            normalized_key = _fapi_normalize(key)
+            if normalized_key in oem_field_names:
+                append_values(value, source_field=str(key))
+    return references
+
+
+def _fapi_manufacturer_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return _dict_list(payload.get("mf"))
+
+
+def _fapi_find_manufacturer(rows: list[dict[str, Any]], brand: str) -> dict[str, Any] | None:
+    normalized_brand = _fapi_normalize(brand)
+    if not normalized_brand:
+        return None
+    for row in rows:
+        if normalized_brand in {_fapi_normalize(row.get("ds")), _fapi_normalize(row.get("da"))}:
+            return row
+    return None
+
+
+def _fapi_source_parts(
+    products: list[dict[str, Any]],
+    manufacturers_by_index: dict[str, dict[str, Any]],
+    *,
+    brand: str,
+    part_number: str,
+) -> list[dict[str, Any]]:
+    normalized_brand = _fapi_normalize(brand)
+    normalized_part_number = _fapi_normalize(part_number)
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for product in products:
+        manufacturer = manufacturers_by_index.get(str(product.get("mfi")), {})
+        product_brand = str(manufacturer.get("ds") or "").strip()
+        product_number = str(product.get("n") or "").strip()
+        if (
+            _fapi_normalize(product_brand) != normalized_brand
+            or _fapi_normalize(product_number) != normalized_part_number
+        ):
+            continue
+        key = (product_brand, product_number, str(product.get("d") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(
+            {
+                "brand": product_brand,
+                "part_number": product_number,
+                "description": product.get("d") or None,
+                "aggregate_rating": _fapi_integer(product.get("sr"), default=0),
+                "fitment_confirmed": False,
+            }
+        )
+    return candidates[:3]
+
+
+def _fapi_analog_candidates(
+    analogs: list[dict[str, Any]],
+    products_by_index: dict[str, dict[str, Any]],
+    manufacturers_by_index: dict[str, dict[str, Any]],
+    *,
+    brand: str,
+    part_number: str,
+    max_analogs: int,
+) -> list[dict[str, Any]]:
+    normalized_brand = _fapi_normalize(brand)
+    normalized_part_number = _fapi_normalize(part_number)
+    candidates: dict[tuple[str, str], dict[str, Any]] = {}
+    for analog in analogs:
+        source_product = products_by_index.get(str(analog.get("pi")), {})
+        cross_product = products_by_index.get(str(analog.get("pai")), {})
+        source_manufacturer = manufacturers_by_index.get(str(analog.get("mfi")), {})
+        cross_manufacturer = manufacturers_by_index.get(str(analog.get("mfai")), {})
+        source_brand = str(source_manufacturer.get("ds") or "").strip()
+        source_part_number = str(source_product.get("n") or analog.get("ns") or "").strip()
+        cross_brand = str(cross_manufacturer.get("ds") or "").strip()
+        cross_part_number = str(cross_product.get("n") or analog.get("nsa") or "").strip()
+        if (
+            _fapi_normalize(source_brand) != normalized_brand
+            or _fapi_normalize(source_part_number) != normalized_part_number
+            or not cross_brand
+            or not cross_part_number
+        ):
+            continue
+        positive_ratings = _fapi_integer(analog.get("rp"), default=0)
+        negative_ratings = _fapi_integer(analog.get("rm"), default=0)
+        key = (_fapi_normalize(cross_brand), _fapi_normalize(cross_part_number))
+        candidate = {
+            "brand": cross_brand,
+            "part_number": cross_part_number,
+            "description": cross_product.get("d") or None,
+            "relationship": "cross_candidate",
+            "cross_evidence": {
+                "positive_ratings": positive_ratings,
+                "negative_ratings": negative_ratings,
+                "meaning": "FAPI cross-rating signal; it is not OEM or vehicle-fitment proof.",
+            },
+            "fitment_confirmed": False,
+        }
+        previous = candidates.get(key)
+        if previous is None or (
+            positive_ratings,
+            -negative_ratings,
+        ) > (
+            previous["cross_evidence"]["positive_ratings"],
+            -previous["cross_evidence"]["negative_ratings"],
+        ):
+            candidates[key] = candidate
+    ordered = sorted(
+        candidates.values(),
+        key=lambda candidate: (
+            -candidate["cross_evidence"]["positive_ratings"],
+            candidate["cross_evidence"]["negative_ratings"],
+            _fapi_normalize(candidate["brand"]),
+            _fapi_normalize(candidate["part_number"]),
+        ),
+    )
+    return ordered[: _clamp_page_size(max_analogs, default=10, maximum=25)]
+
+
+def build_fapi_catalog_request(
+    *,
+    brand: str,
+    part_number: str,
+    api_key: str | None = None,
+    credential_mode: str = "missing",
+    base_url: str | None = None,
+    manufacturer_id: int | str | None = None,
+    min_cross_rating: int = 1,
+) -> dict[str, Any]:
+    clean_brand = str(brand or "").strip()
+    clean_part_number = str(part_number or "").strip()
+    actual_base_url = (base_url or FAPI_CATALOG_BASE_URL).rstrip("/")
+    try:
+        clean_min_rating = max(0, min(int(min_cross_rating), 10))
+    except (TypeError, ValueError):
+        clean_min_rating = 1
+    manufacturer_params = {"ui": str(api_key or "")}
+    analog_params: dict[str, Any] = {
+        "ui": str(api_key or ""),
+        "n": clean_part_number,
+        "r": clean_min_rating,
+    }
+    if manufacturer_id not in (None, ""):
+        analog_params["mfi"] = manufacturer_id
+    manufacturer_url = f"{actual_base_url}/manufacturerList?{urlencode(manufacturer_params)}"
+    analog_url = f"{actual_base_url}/analogList?{urlencode(analog_params)}"
+    return {
+        "ok": bool(clean_brand and clean_part_number),
+        "provider": "fapi_catalog",
+        "method": "GET",
+        "manufacturer_endpoint": f"{actual_base_url}/manufacturerList",
+        "analog_endpoint": f"{actual_base_url}/analogList",
+        "params": {
+            "brand": clean_brand,
+            "part_number": clean_part_number,
+            "manufacturer_id": manufacturer_id,
+            "minimum_cross_rating": clean_min_rating,
+        },
+        "credential_mode": credential_mode,
+        "credentials_configured": bool(api_key),
+        "manufacturer_url": manufacturer_url,
+        "analog_url": analog_url,
+        "manufacturer_redacted_url": _without_secret_query(manufacturer_url, {"ui"}),
+        "redacted_url": _without_secret_query(analog_url, {"ui"}),
+        "secret_exposed": False,
+    }
+
+
+def _fapi_api_key(*, demo_access: bool, timeout: float) -> tuple[str | None, str, str | None]:
+    load_runtime_env()
+    configured_key = os.getenv("FAPI_API_KEY", "").strip()
+    if configured_key:
+        return configured_key, "runtime_env", None
+    if not demo_access:
+        return None, "missing", None
+    try:
+        request = Request(FAPI_DEMO_KEY_URL, headers={"User-Agent": "AutostopManager/0.1"})
+        with urlopen(request, timeout=timeout) as response:
+            demo_key = response.read().decode("utf-8").strip()
+    except (HTTPError, URLError, TimeoutError, UnicodeDecodeError, ValueError):
+        return None, "demo_ephemeral", "FAPI demo access is unavailable."
+    if not demo_key:
+        return None, "demo_ephemeral", "FAPI demo access returned no key."
+    return demo_key, "demo_ephemeral", None
+
+
+def _fapi_failure_details(exc: Exception) -> tuple[str, bool, str]:
+    if isinstance(exc, HTTPError):
+        if exc.code >= 500:
+            return "provider_http_5xx", True, f"FAPI returned HTTP {exc.code}."
+        if exc.code in {401, 403}:
+            return "credentials_rejected", False, "FAPI credentials were rejected."
+        return "provider_http_4xx", False, f"FAPI returned HTTP {exc.code}."
+    if isinstance(exc, (URLError, TimeoutError)):
+        return "network_error", True, "FAPI network request failed."
+    return "malformed_response", False, "FAPI returned an unsupported response."
+
+
+def _fapi_result_base(request_plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "provider": "fapi_catalog",
+        "operation": "brand_article_cross_lookup",
+        "docs_url": "https://github.com/fapi-dev/catalog-openapi",
+        "role": "Additional brand/article catalog source for part facts and cross candidates.",
+        "request_plan": _safe_request_plan(request_plan, omit={"manufacturer_url", "analog_url"}),
+        "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
+        "fitment_confirmed": False,
+        "requires_human_fitment_check": True,
+        "oem_references": [],
+        "source_parts": [],
+        "analog_candidates": [],
+    }
+
+
+def fapi_catalog_lookup(
+    *,
+    brand: str,
+    part_number: str,
+    max_analogs: int = 10,
+    timeout: float = 20.0,
+    dry_run: bool = False,
+    demo_access: bool = False,
+) -> dict[str, Any]:
+    """Look up one branded article without treating FAPI crosses as OEM evidence."""
+
+    clean_brand = str(brand or "").strip()
+    clean_part_number = str(part_number or "").strip()
+    if not clean_brand or not clean_part_number:
+        request_plan = build_fapi_catalog_request(brand=clean_brand, part_number=clean_part_number)
+        return {
+            **_fapi_result_base(request_plan),
+            "ok": False,
+            "outcome": "invalid_input",
+            "failure_class": "invalid_input",
+            "retryable": False,
+            "requires_fallback": False,
+            "error": "brand and part_number are required for FAPI lookup.",
+        }
+
+    load_runtime_env()
+    configured_key = os.getenv("FAPI_API_KEY", "").strip()
+    planned_mode = "runtime_env" if configured_key else ("demo_ephemeral" if demo_access else "missing")
+    planned_request = build_fapi_catalog_request(
+        brand=clean_brand,
+        part_number=clean_part_number,
+        api_key=configured_key or None,
+        credential_mode=planned_mode,
+    )
+    if dry_run:
+        return {
+            **_fapi_result_base(planned_request),
+            "ok": True,
+            "outcome": "dry_run",
+            "retryable": False,
+            "requires_fallback": not bool(configured_key or demo_access),
+            "demo_access_opt_in": bool(demo_access and not configured_key),
+        }
+
+    api_key, credential_mode, credential_error = _fapi_api_key(demo_access=demo_access, timeout=timeout)
+    request_plan = build_fapi_catalog_request(
+        brand=clean_brand,
+        part_number=clean_part_number,
+        api_key=api_key,
+        credential_mode=credential_mode,
+    )
+    base = _fapi_result_base(request_plan)
+    if not api_key:
+        return {
+            **base,
+            "ok": False,
+            "outcome": "credentials_missing" if credential_error is None else "demo_access_unavailable",
+            "failure_class": "credentials_missing" if credential_error is None else "network_error",
+            "retryable": credential_error is not None,
+            "requires_fallback": True,
+            "error": credential_error
+            or "FAPI_API_KEY is not configured; use explicit demo_access only for evaluation.",
+        }
+
+    try:
+        manufacturers_payload = _read_json_url(
+            request_plan["manufacturer_url"], headers={"Accept": "application/json"}, timeout=timeout
+        )
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        failure_class, retryable, error = _fapi_failure_details(exc)
+        return {
+            **base,
+            "ok": False,
+            "outcome": "provider_error",
+            "failure_class": failure_class,
+            "retryable": retryable,
+            "requires_fallback": True,
+            "error": error,
+        }
+    manufacturers = _fapi_manufacturer_rows(manufacturers_payload)
+    if not manufacturers:
+        return {
+            **base,
+            "ok": False,
+            "outcome": "malformed_response",
+            "failure_class": "malformed_response",
+            "retryable": False,
+            "requires_fallback": True,
+            "error": "FAPI returned no manufacturer list.",
+        }
+    manufacturer = _fapi_find_manufacturer(manufacturers, clean_brand)
+    if manufacturer is None or manufacturer.get("dbi") in (None, ""):
+        return {
+            **base,
+            "ok": True,
+            "outcome": "brand_not_found",
+            "retryable": False,
+            "requires_fallback": True,
+            "matched_brand": None,
+            "selection_explanation": "FAPI did not find an exact normalized brand match; no brand was guessed.",
+            "oem_references_available": False,
+        }
+
+    request_plan = build_fapi_catalog_request(
+        brand=clean_brand,
+        part_number=clean_part_number,
+        api_key=api_key,
+        credential_mode=credential_mode,
+        manufacturer_id=manufacturer.get("dbi"),
+    )
+    base = _fapi_result_base(request_plan)
+    try:
+        payload = _read_json_url(request_plan["analog_url"], headers={"Accept": "application/json"}, timeout=timeout)
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        failure_class, retryable, error = _fapi_failure_details(exc)
+        return {
+            **base,
+            "ok": False,
+            "outcome": "provider_error",
+            "failure_class": failure_class,
+            "retryable": retryable,
+            "requires_fallback": True,
+            "error": error,
+        }
+
+    manufacturer_section = payload.get("manufacturerList")
+    product_section = payload.get("productList")
+    analog_section = payload.get("analogList")
+    if not all(isinstance(section, dict) for section in (manufacturer_section, product_section, analog_section)):
+        return {
+            **base,
+            "ok": False,
+            "outcome": "malformed_response",
+            "failure_class": "malformed_response",
+            "retryable": False,
+            "requires_fallback": True,
+            "error": "FAPI returned an incomplete analog response.",
+        }
+    response_manufacturers = _fapi_manufacturer_rows(manufacturer_section)
+    products = _dict_list(product_section.get("p"))
+    analogs = _dict_list(analog_section.get("a"))
+    if not response_manufacturers and (products or analogs):
+        return {
+            **base,
+            "ok": False,
+            "outcome": "malformed_response",
+            "failure_class": "malformed_response",
+            "retryable": False,
+            "requires_fallback": True,
+            "error": "FAPI analog response has no manufacturer index.",
+        }
+    manufacturers_by_index = {str(row.get("i")): row for row in response_manufacturers if row.get("i") is not None}
+    products_by_index = {str(row.get("i")): row for row in products if row.get("i") is not None}
+    source_parts = _fapi_source_parts(
+        products,
+        manufacturers_by_index,
+        brand=clean_brand,
+        part_number=clean_part_number,
+    )
+    analog_candidates = _fapi_analog_candidates(
+        analogs,
+        products_by_index,
+        manufacturers_by_index,
+        brand=clean_brand,
+        part_number=clean_part_number,
+        max_analogs=max_analogs,
+    )
+    source_product_records = [
+        product
+        for product in products
+        if _fapi_normalize((manufacturers_by_index.get(str(product.get("mfi")), {}) or {}).get("ds"))
+        == _fapi_normalize(clean_brand)
+        and _fapi_normalize(product.get("n")) == _fapi_normalize(clean_part_number)
+    ]
+    oem_references = _fapi_explicit_oem_references(source_product_records)
+    if not source_parts and not analog_candidates:
+        return {
+            **base,
+            "ok": True,
+            "outcome": "empty_result",
+            "retryable": False,
+            "requires_fallback": True,
+            "matched_brand": manufacturer.get("ds") or clean_brand,
+            "oem_references_available": bool(oem_references),
+            "oem_references": oem_references,
+            "selection_explanation": "FAPI returned no matching part or cross candidate for this exact brand/article.",
+        }
+    return {
+        **base,
+        "ok": True,
+        "outcome": "found",
+        "retryable": False,
+        "requires_fallback": False,
+        "matched_brand": manufacturer.get("ds") or clean_brand,
+        "source_parts": source_parts,
+        "oem_references_available": bool(oem_references),
+        "oem_references": oem_references,
+        "analog_candidates": analog_candidates,
+        "selection_explanation": (
+            "Brand was matched after case/punctuation normalization. Cross candidates are ranked by FAPI ratings, "
+            "which do not prove OEM status or vehicle fitment."
+        ),
+    }
+
+
 def public_aftermarket_catalog_lookup(
     *,
     provider: str,
     part_number: str,
+    brand: str | None = None,
     page_size: int = 5,
     country: str = "europe",
     include_detail: bool = True,
     timeout: float = 20.0,
     dry_run: bool = False,
+    demo_access: bool = False,
 ) -> dict[str, Any]:
     normalized_provider = str(provider or "").strip().lower()
     if normalized_provider in {"mann", "mann_filter", "mann_filter_catalog"}:
@@ -643,6 +1112,15 @@ def public_aftermarket_catalog_lookup(
             timeout=timeout,
             dry_run=dry_run,
         )
+    if normalized_provider in {"fapi", "fapi_catalog"}:
+        return fapi_catalog_lookup(
+            brand=brand or "",
+            part_number=part_number,
+            max_analogs=page_size,
+            timeout=timeout,
+            dry_run=dry_run,
+            demo_access=demo_access,
+        )
     if normalized_provider == "all":
         results = [
             mann_filter_catalog_lookup(part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run),
@@ -655,6 +1133,17 @@ def public_aftermarket_catalog_lookup(
                 dry_run=dry_run,
             ),
         ]
+        if str(brand or "").strip():
+            results.append(
+                fapi_catalog_lookup(
+                    brand=str(brand),
+                    part_number=part_number,
+                    max_analogs=page_size,
+                    timeout=timeout,
+                    dry_run=dry_run,
+                    demo_access=demo_access,
+                )
+            )
         success_count = sum(result.get("ok") is True for result in results)
         return {
             "ok": success_count > 0,
@@ -663,13 +1152,16 @@ def public_aftermarket_catalog_lookup(
             "success_count": success_count,
             "failure_count": len(results) - success_count,
             "results": results,
+            "requires_fallback": any(
+                result.get("requires_fallback") is True or result.get("ok") is not True for result in results
+            ),
             "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
         }
     return {
         "ok": False,
         "provider": normalized_provider,
         "error": "Unknown public aftermarket catalog provider.",
-        "available_providers": ["mann_filter_catalog", "denso_aftermarket_catalog", "all"],
+        "available_providers": ["mann_filter_catalog", "denso_aftermarket_catalog", "fapi_catalog", "all"],
     }
 
 
