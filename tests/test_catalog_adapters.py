@@ -109,6 +109,7 @@ def test_catalog_provider_status_reports_fapi_as_optional_cross_source(monkeypat
     assert fapi["live_callable_now"] is True
     assert fapi["present_env_names"] == ["FAPI_API_KEY"]
     assert "cross_candidates" in fapi["capabilities"]
+    assert "explicit_oe_references" not in fapi["capabilities"]
 
 
 def test_partsapi_identity_key_does_not_claim_oem_candidate_lookup(monkeypatch):
@@ -235,6 +236,7 @@ def test_catalog_provider_status_marks_partsouq_and_amayama_as_manual_oem_routes
         assert provider["live_callable_now"] is False
         assert provider["access_mode"] == "public_site_manual"
         assert "diagram_link_capture" in provider["capabilities"]
+        assert f"{source_id}_manual" in provider["aliases"]
 
     # Synthetic frame: this checks routing, not a real vehicle's applicability.
     plan = build_oem_parts_provider_plan(identifier="NZE141-0000001", requested_part="воздушный фильтр")
@@ -258,9 +260,7 @@ def test_oem_provider_plan_accepts_vehicle_parameters_without_identifier():
         },
     )
 
-    partsouq = next(
-        item for item in plan["manual_public_search_queries"] if item["source_id"] == "partsouq_catalog_manual"
-    )
+    partsouq = next(item for item in plan["manual_public_search_queries"] if item["source_id"] == "partsouq_catalog")
     assert partsouq["url"] == "https://partsouq.com/en/"
     assert "Toyota Corolla 2008 1NZ-FE" in partsouq["query"]
     assert plan["identifier"]["kind"] == "unknown"
@@ -295,10 +295,8 @@ def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeyp
     assert any(step["step"] == "lookup_public_aftermarket_catalogs" for step in plan["pipeline"])
     assert plan["manual_public_search_queries"]
     assert any(item["source_id"] == "euroauto_catalog_manual" for item in plan["manual_public_search_queries"])
-    assert any(item["source_id"] == "partsouq_catalog_manual" for item in plan["manual_public_search_queries"])
-    amayama = next(
-        item for item in plan["manual_public_search_queries"] if item["source_id"] == "amayama_catalog_manual"
-    )
+    assert any(item["source_id"] == "partsouq_catalog" for item in plan["manual_public_search_queries"])
+    amayama = next(item for item in plan["manual_public_search_queries"] if item["source_id"] == "amayama_catalog")
     assert "direct diagram or part-page URL" in amayama["capture_fields"]
     combined_queries = "\n".join(item["query"] + "\n" + item["url"] for item in plan["manual_public_search_queries"])
     assert "MR41S123456" not in combined_queries

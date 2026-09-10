@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import partsapi_catalog_lookup, vin17_decode_vehicle
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import decode_vehicle_identities
+from .vehicle_identity import decode_vehicle_identities, identity_values_agree
 from .vin_oem_resolver import resolve_vin_oem_parts
 from .vin_lookup import classify_identifier, normalize_vin
 
@@ -101,10 +101,6 @@ def _contains_identifier(value: Any, identifier: str) -> bool:
     return any(variant in text for variant in _identifier_variants(identifier))
 
 
-def _normalize_compare_value(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
-
-
 def _first_nonempty(*values: Any) -> Any:
     for value in values:
         if value not in (None, ""):
@@ -156,11 +152,7 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
         if left in (None, "") or right in (None, ""):
             continue
         compared_fields.append(field)
-        left_norm = _normalize_compare_value(left)
-        right_norm = _normalize_compare_value(right)
-        if left_norm == right_norm or (
-            field == "transmission" and (left_norm in right_norm or right_norm in left_norm)
-        ):
+        if identity_values_agree(field, left, right):
             matched_fields.append(field)
         else:
             conflicting_fields.append({"field": field, "identity_value": left, "partsapi_value": right})
@@ -467,6 +459,7 @@ def benchmark_vin_parts_lookup(
             axle=_compact(item.get("axle") or context.get("axle")),
             side=_compact(item.get("side") or context.get("side")),
             position=_compact(item.get("position") or context.get("position")),
+            inner_outer=_compact(item.get("inner_outer") or context.get("inner_outer")),
         )
         partsapi_identity_call = None
         if live_partsapi_identity and not resolve_oem:
@@ -491,6 +484,7 @@ def benchmark_vin_parts_lookup(
                 axle=_compact(item.get("axle") or context.get("axle")),
                 side=_compact(item.get("side") or context.get("side")),
                 position=_compact(item.get("position") or context.get("position")),
+                inner_outer=_compact(item.get("inner_outer") or context.get("inner_outer")),
                 live_vpic=live_vpic,
                 live_partsapi_identity=live_partsapi_identity,
                 live_partsapi_oem=live_partsapi_oem,

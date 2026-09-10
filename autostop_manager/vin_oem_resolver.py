@@ -45,63 +45,151 @@ def _axle_hints(value: Any) -> set[str]:
     return hints
 
 
-def _requested_axle(part_profile: dict[str, Any]) -> str | None:
-    intent_id = str(part_profile.get("intent_id") or "")
-    if intent_id == "front_brake_pads":
-        return "front"
-    if intent_id == "rear_brake_pads":
-        return "rear"
+def _side_hints(value: Any) -> set[str]:
+    text = re.sub(r"[_/\\-]+", " ", str(value or "").casefold())
     hints: set[str] = set()
-    for value in [
-        *(part_profile.get("explicit_positions") or []),
-        *(part_profile.get("positions") or []),
-        part_profile.get("raw"),
-    ]:
-        hints.update(_axle_hints(value))
+    if re.search(r"\b(?:left|lh|лев\w*)\b", text):
+        hints.add("left")
+    if re.search(r"\b(?:right|rh|прав\w*)\b", text):
+        hints.add("right")
+    return hints
+
+
+def _inner_outer_hints(value: Any) -> set[str]:
+    text = re.sub(r"[_/\\-]+", " ", str(value or "").casefold())
+    hints: set[str] = set()
+    if re.search(r"\b(?:inner|internal|inboard|внутрен\w*)\b", text):
+        hints.add("inner")
+    if re.search(r"\b(?:outer|external|outboard|наружн\w*)\b", text):
+        hints.add("outer")
+    return hints
+
+
+def _single_coordinate_hint(value: Any, parser: Callable[[Any], set[str]]) -> str | None:
+    hints = parser(value)
     return next(iter(hints)) if len(hints) == 1 else None
 
 
-def _candidate_position_assessment(candidate: dict[str, Any], part_profile: dict[str, Any]) -> dict[str, Any]:
-    """Compare explicit candidate axle evidence with the requested part axle.
+def _requested_position_coordinates(part_profile: dict[str, Any]) -> dict[str, str]:
+    context = part_profile.get("explicit_position_context")
+    explicit = context if isinstance(context, dict) else {}
+    intent_id = str(part_profile.get("intent_id") or "")
+    raw = part_profile.get("raw")
 
-    Absence of a position is deliberately not treated as a match.  This keeps
-    a rear-only candidate from being presented as a front part just because
-    the input request was for the front axle.
+    axle = _single_coordinate_hint(explicit.get("axle"), _axle_hints)
+    if axle is None and intent_id == "front_brake_pads":
+        axle = "front"
+    elif axle is None and intent_id == "rear_brake_pads":
+        axle = "rear"
+    if axle is None:
+        axle = _single_coordinate_hint(raw, _axle_hints)
+
+    side = _single_coordinate_hint(explicit.get("side"), _side_hints)
+    if side is None:
+        side = _single_coordinate_hint(raw, _side_hints)
+
+    inner_outer = _single_coordinate_hint(explicit.get("inner_outer"), _inner_outer_hints)
+    if inner_outer is None and intent_id == "inner_cv_joint":
+        inner_outer = "inner"
+    elif inner_outer is None and intent_id == "outer_cv_joint":
+        inner_outer = "outer"
+    if inner_outer is None:
+        inner_outer = _single_coordinate_hint(raw, _inner_outer_hints)
+
+    return {
+        key: value for key, value in (("axle", axle), ("side", side), ("inner_outer", inner_outer)) if value is not None
+    }
+
+
+def _coordinate_match(requested: str, hints: set[str]) -> str:
+    if not hints:
+        return "not_proved"
+    if hints == {requested}:
+        return "matched"
+    if requested not in hints:
+        return "conflict"
+    return "ambiguous"
+
+
+def _candidate_position_assessment(candidate: dict[str, Any], part_profile: dict[str, Any]) -> dict[str, Any]:
+    """Compare independent requested and candidate position coordinates.
+
+    Absence of any requested coordinate is deliberately not treated as a match.
+    Requirement labels such as ``front_or_rear_required`` are schema metadata,
+    not position evidence.
     """
 
-    requested_axle = _requested_axle(part_profile)
-    if requested_axle is None:
-        return {"requested_axle": None, "candidate_axle_hints": [], "position_match": "not_required"}
+    requested = _requested_position_coordinates(part_profile)
+    if not requested:
+        return {
+            "requested_coordinates": {},
+            "candidate_coordinate_hints": {},
+            "coordinate_matches": {},
+            "requested_axle": None,
+            "candidate_axle_hints": [],
+            "position_match": "not_required",
+        }
 
     fitment = candidate.get("fitment_evidence") or {}
     candidate_values = [
         candidate.get("name"),
+        candidate.get("description"),
+        candidate.get("part_name"),
         candidate.get("position"),
         candidate.get("axle"),
+        candidate.get("side"),
+        candidate.get("inner_outer"),
         candidate.get("group"),
         candidate.get("category"),
     ]
     if isinstance(fitment, dict):
         candidate_values.extend(
             fitment.get(key)
-            for key in ("group", "category_name", "shortname", "applicability", "position", "axle", "name")
+            for key in (
+                "group",
+                "category_name",
+                "shortname",
+                "applicability",
+                "position",
+                "axle",
+                "side",
+                "inner_outer",
+                "name",
+                "description",
+            )
         )
-    hints: set[str] = set()
-    for value in candidate_values:
-        hints.update(_axle_hints(value))
 
-    if not hints:
-        match = "not_proved"
-    elif hints == {requested_axle}:
-        match = "matched"
-    elif requested_axle not in hints:
-        match = "conflict"
+    parsers: dict[str, Callable[[Any], set[str]]] = {
+        "axle": _axle_hints,
+        "side": _side_hints,
+        "inner_outer": _inner_outer_hints,
+    }
+    candidate_hints: dict[str, set[str]] = {coordinate: set() for coordinate in requested}
+    for value in candidate_values:
+        for coordinate, parser in parsers.items():
+            if coordinate in candidate_hints:
+                candidate_hints[coordinate].update(parser(value))
+
+    matches = {
+        coordinate: _coordinate_match(requested_value, candidate_hints[coordinate])
+        for coordinate, requested_value in requested.items()
+    }
+    if "conflict" in matches.values():
+        overall_match = "conflict"
+    elif "ambiguous" in matches.values():
+        overall_match = "ambiguous"
+    elif "not_proved" in matches.values():
+        overall_match = "not_proved"
     else:
-        match = "ambiguous"
+        overall_match = "matched"
+
     return {
-        "requested_axle": requested_axle,
-        "candidate_axle_hints": sorted(hints),
-        "position_match": match,
+        "requested_coordinates": requested,
+        "candidate_coordinate_hints": {coordinate: sorted(hints) for coordinate, hints in candidate_hints.items()},
+        "coordinate_matches": matches,
+        "requested_axle": requested.get("axle"),
+        "candidate_axle_hints": sorted(candidate_hints.get("axle", set())),
+        "position_match": overall_match,
     }
 
 
@@ -333,6 +421,9 @@ def _rank_oem_candidate(
         "position_match": position_match,
         "requested_axle": position_assessment["requested_axle"],
         "candidate_axle_hints": position_assessment["candidate_axle_hints"],
+        "requested_position_coordinates": position_assessment["requested_coordinates"],
+        "candidate_position_hints": position_assessment["candidate_coordinate_hints"],
+        "position_coordinate_matches": position_assessment["coordinate_matches"],
         "quantity_basis": part_profile.get("quantity_basis"),
         "confidence_label": confidence_label,
         "confidence_score": round(score, 4),
@@ -525,6 +616,7 @@ def resolve_vin_oem_parts(
     axle: str | None = None,
     side: str | None = None,
     position: str | None = None,
+    inner_outer: str | None = None,
     live_vpic: bool = True,
     live_partsapi_identity: bool = False,
     live_partsapi_oem: bool = False,
@@ -549,9 +641,16 @@ def resolve_vin_oem_parts(
         "axle": _compact(axle),
         "side": _compact(side),
         "position": _compact(position),
+        "inner_outer": _compact(inner_outer),
         "requested_part": part_text,
     }
-    part_profile = normalize_part_intent(part_text, axle=axle, side=side, position=position)
+    part_profile = normalize_part_intent(
+        part_text,
+        axle=axle,
+        side=side,
+        position=position,
+        inner_outer=inner_outer,
+    )
     category_resolution = resolve_partsapi_category(
         part_text,
         category_index_path=partsapi_category_index,

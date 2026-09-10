@@ -39,6 +39,8 @@ def test_build_lookup_plan_uses_make_specific_sources(monkeypatch):
     assert any(step["source_name"] == "Toyota Japan EPC Help" for step in plan["steps"])
     assert any(step["source_name"] == "PartSouq manual catalog" for step in plan["steps"])
     amayama = next(step for step in plan["steps"] if step["source_name"] == "Amayama public catalog")
+    assert amayama["source_id"] == "amayama_catalog"
+    assert "amayama_catalog_manual" in amayama["aliases"]
     assert "diagram_url" in amayama["outputs"]
     assert amayama["adapter_status"] == ["manual_capture"]
     assert plan["catalog_routes"] == plan["steps"]
@@ -195,11 +197,12 @@ def test_public_web_catalog_capture_stays_preliminary_and_requests_cross_check()
         live_vpic=False,
         part_name="воздушный фильтр",
         captured_oem_number="TEST-OEM-001",
-        captured_source="PartSouq manual catalog",
+        captured_source="partsouq_catalog_manual",
     )
 
     candidate = plan["oem_candidates"][0]
     assert candidate["confidence"] == "low"
+    assert candidate["source_id"] == "partsouq_catalog"
     assert candidate["source_access_mode"] == "public"
     assert any("preliminary" in action for action in plan["next_actions"])
     assert any("FAPI cross candidates" in action for action in plan["next_actions"])
@@ -225,5 +228,7 @@ def test_japanese_source_registry_adds_public_diagram_routes_without_duplicates(
     assert names.count("PartSouq manual catalog") == 1
     assert names.count("Amayama public catalog") == 1
     partsouq = next(source for source in toyota_sources if source["name"] == "PartSouq manual catalog")
+    assert partsouq["source_id"] == "partsouq_catalog"
+    assert "partsouq_catalog_manual" in partsouq["aliases"]
     assert "applicability_conditions" in partsouq["outputs"]
     assert partsouq["access_mode"] == "public"

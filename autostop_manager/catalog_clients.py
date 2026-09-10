@@ -4,8 +4,10 @@ import hashlib
 from html import unescape
 from html.parser import HTMLParser
 import json
+import math
 import os
 import re
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
@@ -22,10 +24,15 @@ MANN_FILTER_STORE = "pcat_mf_us_store_en"
 DENSO_AFTERMARKET_BASE_URL = "https://www.denso-am.eu"
 FAPI_CATALOG_BASE_URL = "https://fapi.iisis.ru/fapi/v2"
 FAPI_DEMO_KEY_URL = "https://gist.githubusercontent.com/serp83/652d191745773ef6d8b5a0a689479cd6/raw/demo-key.txt"
+FAPI_MANUFACTURER_CACHE_MAX_ENTRIES = 4
+FAPI_MANUFACTURER_CACHE_TTL_SECONDS = 3600.0
+PUBLIC_AFTERMARKET_MCP_BUDGET_SECONDS = 20.0
 EXIST_BASE_URL = "https://www.exist.ru"
 EXIST_OPEN_SEARCH_DOCS_URL = "https://s.exist.ru/xml/osd.xml"
 EXIST_DEFAULT_OFFICE_ID = 905
 EXIST_DEFAULT_OFFICE_NAME = "Красноярск, ул. Гайдашовка, д.3"
+
+_FAPI_MANUFACTURER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 MANN_FILTER_PART_SEARCH_QUERY = """
 query ($search: String!, $currentPage: Int!, $pageSize: Int!) {
@@ -563,6 +570,7 @@ def denso_aftermarket_catalog_lookup(
     detail_limit: int = 3,
     timeout: float = 20.0,
     dry_run: bool = False,
+    _deadline: float | None = None,
 ) -> dict[str, Any]:
     request_plan = build_denso_aftermarket_search_request(part_number=part_number, country=country)
     base = {
@@ -578,8 +586,11 @@ def denso_aftermarket_catalog_lookup(
     if dry_run:
         return {**base, "ok": True, "dry_run": True}
 
+    request_timeout = timeout if _deadline is None else _remaining_timeout(_deadline)
+    if request_timeout is None:
+        return {**base, **_catalog_deadline_failure("denso_aftermarket_catalog")}
     try:
-        payload = _read_json_url(request_plan["url"], headers={"Accept": "application/json"}, timeout=timeout)
+        payload = _read_json_url(request_plan["url"], headers={"Accept": "application/json"}, timeout=request_timeout)
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
@@ -591,14 +602,21 @@ def denso_aftermarket_catalog_lookup(
         return {**base, "ok": False, "error": "DENSO returned a malformed search data payload."}
     items = [_denso_catalog_item(item) for item in _dict_list(data.get("parts"))]
     details = []
+    deadline_exhausted = False
     if include_detail:
         for item in items[: _clamp_page_size(detail_limit, default=3, maximum=10)]:
             part_key = item.get("part_name") or item.get("key")
             if not part_key:
                 continue
             detail_url = _denso_detail_url(part_key=str(part_key), country=request_plan["country"])
+            request_timeout = timeout if _deadline is None else _remaining_timeout(_deadline)
+            if request_timeout is None:
+                deadline_exhausted = True
+                break
             try:
-                detail_payload = _read_json_url(detail_url, headers={"Accept": "application/json"}, timeout=timeout)
+                detail_payload = _read_json_url(
+                    detail_url, headers={"Accept": "application/json"}, timeout=request_timeout
+                )
             except (HTTPError, URLError, TimeoutError, ValueError) as exc:
                 details.append({"part_key": part_key, "ok": False, "error": str(exc)})
                 continue
@@ -618,6 +636,8 @@ def denso_aftermarket_catalog_lookup(
         "offset": payload.get("offset", 0),
         "items": items,
         "details": details,
+        "partial": deadline_exhausted,
+        "requires_fallback": deadline_exhausted,
     }
 
 
@@ -676,14 +696,103 @@ def _fapi_manufacturer_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return _dict_list(payload.get("mf"))
 
 
-def _fapi_find_manufacturer(rows: list[dict[str, Any]], brand: str) -> dict[str, Any] | None:
+def _fapi_alias_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return _dict_list(payload.get("al"))
+
+
+def _fapi_find_manufacturer(
+    rows: list[dict[str, Any]], brand: str, *, aliases: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
     normalized_brand = _fapi_normalize(brand)
     if not normalized_brand:
         return None
     for row in rows:
         if normalized_brand in {_fapi_normalize(row.get("ds")), _fapi_normalize(row.get("da"))}:
             return row
-    return None
+    alias = next(
+        (row for row in aliases or [] if _fapi_normalize(row.get("da")) == normalized_brand),
+        None,
+    )
+    if alias is None or alias.get("mfi") in (None, ""):
+        return None
+    alias_manufacturer_index = str(alias["mfi"])
+    return next(
+        (
+            row
+            for row in rows
+            if str(row.get("i")) == alias_manufacturer_index or str(row.get("dbi")) == alias_manufacturer_index
+        ),
+        None,
+    )
+
+
+def _fapi_message_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    section = payload.get("messageList")
+    if isinstance(section, dict):
+        return _dict_list(section.get("m"))
+    if set(payload).issubset({"m", "messageList"}):
+        return _dict_list(payload.get("m"))
+    return []
+
+
+def _fapi_application_failure(payload: dict[str, Any]) -> dict[str, Any] | None:
+    messages = _fapi_message_rows(payload)
+    if not messages:
+        return None
+    return {
+        "ok": False,
+        "outcome": "provider_error",
+        "failure_class": "provider_application_error",
+        "retryable": False,
+        "requires_fallback": True,
+        "error": "FAPI rejected the application request.",
+        "provider_message_count": len(messages),
+        "provider_message_levels": sorted({_fapi_integer(message.get("l"), default=0) for message in messages}),
+    }
+
+
+def _fapi_manufacturer_payload(request_plan: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+    cache_key = hashlib.sha256(str(request_plan["manufacturer_url"]).encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    cached = _FAPI_MANUFACTURER_CACHE.get(cache_key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    if cached is not None:
+        _FAPI_MANUFACTURER_CACHE.pop(cache_key, None)
+
+    payload = _read_json_url(request_plan["manufacturer_url"], headers={"Accept": "application/json"}, timeout=timeout)
+    if _fapi_application_failure(payload) is None and _fapi_manufacturer_rows(payload):
+        while len(_FAPI_MANUFACTURER_CACHE) >= FAPI_MANUFACTURER_CACHE_MAX_ENTRIES:
+            _FAPI_MANUFACTURER_CACHE.pop(next(iter(_FAPI_MANUFACTURER_CACHE)))
+        _FAPI_MANUFACTURER_CACHE[cache_key] = (now + FAPI_MANUFACTURER_CACHE_TTL_SECONDS, payload)
+    return payload
+
+
+def _remaining_timeout(deadline: float) -> float | None:
+    remaining = deadline - time.monotonic()
+    return remaining if remaining > 0 else None
+
+
+def _bounded_public_aftermarket_timeout(value: Any) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = PUBLIC_AFTERMARKET_MCP_BUDGET_SECONDS
+    if not math.isfinite(seconds):
+        seconds = PUBLIC_AFTERMARKET_MCP_BUDGET_SECONDS
+    return max(0.0, min(seconds, PUBLIC_AFTERMARKET_MCP_BUDGET_SECONDS))
+
+
+def _catalog_deadline_failure(provider: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "provider": provider,
+        "outcome": "deadline_exceeded",
+        "failure_class": "timeout",
+        "retryable": True,
+        "requires_fallback": True,
+        "error": "The shared public catalog deadline was exhausted before this provider completed.",
+    }
 
 
 def _fapi_source_parts(
@@ -853,16 +962,43 @@ def _fapi_api_key(*, demo_access: bool, timeout: float) -> tuple[str | None, str
     return demo_key, "demo_ephemeral", None
 
 
-def _fapi_failure_details(exc: Exception) -> tuple[str, bool, str]:
+def _fapi_retry_after_seconds(exc: HTTPError) -> int | None:
+    headers = getattr(exc, "headers", None)
+    raw_value = headers.get("Retry-After") if headers is not None else None
+    clean_value = str(raw_value or "").strip()
+    if not re.fullmatch(r"\d{1,10}", clean_value):
+        return None
+    return min(int(clean_value), 3600)
+
+
+def _fapi_failure_details(exc: Exception) -> tuple[str, bool, str, int | None]:
     if isinstance(exc, HTTPError):
+        if exc.code == 429:
+            return "rate_limited", True, "FAPI rate limit reached.", _fapi_retry_after_seconds(exc)
         if exc.code >= 500:
-            return "provider_http_5xx", True, f"FAPI returned HTTP {exc.code}."
+            return "provider_http_5xx", True, f"FAPI returned HTTP {exc.code}.", None
         if exc.code in {401, 403}:
-            return "credentials_rejected", False, "FAPI credentials were rejected."
-        return "provider_http_4xx", False, f"FAPI returned HTTP {exc.code}."
+            return "credentials_rejected", False, "FAPI credentials were rejected.", None
+        return "provider_http_4xx", False, f"FAPI returned HTTP {exc.code}.", None
     if isinstance(exc, (URLError, TimeoutError)):
-        return "network_error", True, "FAPI network request failed."
-    return "malformed_response", False, "FAPI returned an unsupported response."
+        return "network_error", True, "FAPI network request failed.", None
+    return "malformed_response", False, "FAPI returned an unsupported response.", None
+
+
+def _fapi_provider_failure(base: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    failure_class, retryable, error, retry_after_seconds = _fapi_failure_details(exc)
+    result = {
+        **base,
+        "ok": False,
+        "outcome": "provider_error",
+        "failure_class": failure_class,
+        "retryable": retryable,
+        "requires_fallback": True,
+        "error": error,
+    }
+    if retry_after_seconds is not None:
+        result["retry_after_seconds"] = retry_after_seconds
+    return result
 
 
 def _fapi_result_base(request_plan: dict[str, Any]) -> dict[str, Any]:
@@ -889,6 +1025,7 @@ def fapi_catalog_lookup(
     timeout: float = 20.0,
     dry_run: bool = False,
     demo_access: bool = False,
+    _deadline: float | None = None,
 ) -> dict[str, Any]:
     """Look up one branded article without treating FAPI crosses as OEM evidence."""
 
@@ -925,7 +1062,19 @@ def fapi_catalog_lookup(
             "demo_access_opt_in": bool(demo_access and not configured_key),
         }
 
-    api_key, credential_mode, credential_error = _fapi_api_key(demo_access=demo_access, timeout=timeout)
+    if _deadline is None:
+        try:
+            operation_timeout = float(timeout)
+        except (TypeError, ValueError):
+            operation_timeout = PUBLIC_AFTERMARKET_MCP_BUDGET_SECONDS
+        if not math.isfinite(operation_timeout):
+            operation_timeout = PUBLIC_AFTERMARKET_MCP_BUDGET_SECONDS
+        _deadline = time.monotonic() + max(0.0, operation_timeout)
+    request_timeout = _remaining_timeout(_deadline)
+    if request_timeout is None:
+        return {**_fapi_result_base(planned_request), **_catalog_deadline_failure("fapi_catalog")}
+
+    api_key, credential_mode, credential_error = _fapi_api_key(demo_access=demo_access, timeout=request_timeout)
     request_plan = build_fapi_catalog_request(
         brand=clean_brand,
         part_number=clean_part_number,
@@ -945,21 +1094,16 @@ def fapi_catalog_lookup(
             or "FAPI_API_KEY is not configured; use explicit demo_access only for evaluation.",
         }
 
+    request_timeout = _remaining_timeout(_deadline)
+    if request_timeout is None:
+        return {**base, **_catalog_deadline_failure("fapi_catalog")}
     try:
-        manufacturers_payload = _read_json_url(
-            request_plan["manufacturer_url"], headers={"Accept": "application/json"}, timeout=timeout
-        )
+        manufacturers_payload = _fapi_manufacturer_payload(request_plan, timeout=request_timeout)
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        failure_class, retryable, error = _fapi_failure_details(exc)
-        return {
-            **base,
-            "ok": False,
-            "outcome": "provider_error",
-            "failure_class": failure_class,
-            "retryable": retryable,
-            "requires_fallback": True,
-            "error": error,
-        }
+        return _fapi_provider_failure(base, exc)
+    application_failure = _fapi_application_failure(manufacturers_payload)
+    if application_failure is not None:
+        return {**base, **application_failure}
     manufacturers = _fapi_manufacturer_rows(manufacturers_payload)
     if not manufacturers:
         return {
@@ -971,7 +1115,11 @@ def fapi_catalog_lookup(
             "requires_fallback": True,
             "error": "FAPI returned no manufacturer list.",
         }
-    manufacturer = _fapi_find_manufacturer(manufacturers, clean_brand)
+    manufacturer = _fapi_find_manufacturer(
+        manufacturers,
+        clean_brand,
+        aliases=_fapi_alias_rows(manufacturers_payload),
+    )
     if manufacturer is None or manufacturer.get("dbi") in (None, ""):
         return {
             **base,
@@ -992,24 +1140,28 @@ def fapi_catalog_lookup(
         manufacturer_id=manufacturer.get("dbi"),
     )
     base = _fapi_result_base(request_plan)
+    request_timeout = _remaining_timeout(_deadline)
+    if request_timeout is None:
+        return {**base, **_catalog_deadline_failure("fapi_catalog")}
     try:
-        payload = _read_json_url(request_plan["analog_url"], headers={"Accept": "application/json"}, timeout=timeout)
+        payload = _read_json_url(
+            request_plan["analog_url"], headers={"Accept": "application/json"}, timeout=request_timeout
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        failure_class, retryable, error = _fapi_failure_details(exc)
-        return {
-            **base,
-            "ok": False,
-            "outcome": "provider_error",
-            "failure_class": failure_class,
-            "retryable": retryable,
-            "requires_fallback": True,
-            "error": error,
-        }
+        return _fapi_provider_failure(base, exc)
+
+    application_failure = _fapi_application_failure(payload)
+    if application_failure is not None:
+        return {**base, **application_failure}
 
     manufacturer_section = payload.get("manufacturerList")
     product_section = payload.get("productList")
     analog_section = payload.get("analogList")
-    if not all(isinstance(section, dict) for section in (manufacturer_section, product_section, analog_section)):
+    if (
+        not isinstance(manufacturer_section, dict)
+        or not isinstance(product_section, dict)
+        or not isinstance(analog_section, dict)
+    ):
         return {
             **base,
             "ok": False,
@@ -1034,17 +1186,18 @@ def fapi_catalog_lookup(
         }
     manufacturers_by_index = {str(row.get("i")): row for row in response_manufacturers if row.get("i") is not None}
     products_by_index = {str(row.get("i")): row for row in products if row.get("i") is not None}
+    matched_brand = str(manufacturer.get("ds") or clean_brand)
     source_parts = _fapi_source_parts(
         products,
         manufacturers_by_index,
-        brand=clean_brand,
+        brand=matched_brand,
         part_number=clean_part_number,
     )
     analog_candidates = _fapi_analog_candidates(
         analogs,
         products_by_index,
         manufacturers_by_index,
-        brand=clean_brand,
+        brand=matched_brand,
         part_number=clean_part_number,
         max_analogs=max_analogs,
     )
@@ -1052,7 +1205,7 @@ def fapi_catalog_lookup(
         product
         for product in products
         if _fapi_normalize((manufacturers_by_index.get(str(product.get("mfi")), {}) or {}).get("ds"))
-        == _fapi_normalize(clean_brand)
+        == _fapi_normalize(matched_brand)
         and _fapi_normalize(product.get("n")) == _fapi_normalize(clean_part_number)
     ]
     oem_references = _fapi_explicit_oem_references(source_product_records)
@@ -1063,7 +1216,7 @@ def fapi_catalog_lookup(
             "outcome": "empty_result",
             "retryable": False,
             "requires_fallback": True,
-            "matched_brand": manufacturer.get("ds") or clean_brand,
+            "matched_brand": matched_brand,
             "oem_references_available": bool(oem_references),
             "oem_references": oem_references,
             "selection_explanation": "FAPI returned no matching part or cross candidate for this exact brand/article.",
@@ -1074,7 +1227,7 @@ def fapi_catalog_lookup(
         "outcome": "found",
         "retryable": False,
         "requires_fallback": False,
-        "matched_brand": manufacturer.get("ds") or clean_brand,
+        "matched_brand": matched_brand,
         "source_parts": source_parts,
         "oem_references_available": bool(oem_references),
         "oem_references": oem_references,
@@ -1122,28 +1275,60 @@ def public_aftermarket_catalog_lookup(
             demo_access=demo_access,
         )
     if normalized_provider == "all":
-        results = [
-            mann_filter_catalog_lookup(part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run),
-            denso_aftermarket_catalog_lookup(
-                part_number=part_number,
-                country=country,
-                include_detail=include_detail,
-                detail_limit=page_size,
-                timeout=timeout,
-                dry_run=dry_run,
-            ),
-        ]
-        if str(brand or "").strip():
+        budget = _bounded_public_aftermarket_timeout(timeout)
+        deadline = time.monotonic() + budget
+        results = []
+        deadline_exhausted = False
+
+        request_timeout = budget if dry_run else _remaining_timeout(deadline)
+        if request_timeout is None:
+            deadline_exhausted = True
+            results.append(_catalog_deadline_failure("mann_filter_catalog"))
+        else:
             results.append(
-                fapi_catalog_lookup(
-                    brand=str(brand),
+                mann_filter_catalog_lookup(
                     part_number=part_number,
-                    max_analogs=page_size,
-                    timeout=timeout,
+                    page_size=page_size,
+                    timeout=request_timeout,
                     dry_run=dry_run,
-                    demo_access=demo_access,
                 )
             )
+
+        request_timeout = budget if dry_run else _remaining_timeout(deadline)
+        if request_timeout is None:
+            deadline_exhausted = True
+            results.append(_catalog_deadline_failure("denso_aftermarket_catalog"))
+        else:
+            results.append(
+                denso_aftermarket_catalog_lookup(
+                    part_number=part_number,
+                    country=country,
+                    include_detail=include_detail,
+                    detail_limit=page_size,
+                    timeout=request_timeout,
+                    dry_run=dry_run,
+                    _deadline=None if dry_run else deadline,
+                )
+            )
+        if str(brand or "").strip():
+            request_timeout = budget if dry_run else _remaining_timeout(deadline)
+            if request_timeout is None:
+                deadline_exhausted = True
+                results.append(_catalog_deadline_failure("fapi_catalog"))
+            else:
+                results.append(
+                    fapi_catalog_lookup(
+                        brand=str(brand),
+                        part_number=part_number,
+                        max_analogs=page_size,
+                        timeout=request_timeout,
+                        dry_run=dry_run,
+                        demo_access=demo_access,
+                        _deadline=None if dry_run else deadline,
+                    )
+                )
+        if not dry_run and _remaining_timeout(deadline) is None:
+            deadline_exhausted = True
         success_count = sum(result.get("ok") is True for result in results)
         return {
             "ok": success_count > 0,
@@ -1152,9 +1337,12 @@ def public_aftermarket_catalog_lookup(
             "success_count": success_count,
             "failure_count": len(results) - success_count,
             "results": results,
+            "partial": deadline_exhausted,
+            "deadline_seconds": budget,
             "requires_fallback": any(
                 result.get("requires_fallback") is True or result.get("ok") is not True for result in results
-            ),
+            )
+            or deadline_exhausted,
             "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
         }
     return {

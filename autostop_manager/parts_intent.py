@@ -30,10 +30,8 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         canonical_name_ru="тормозные колодки на обе оси",
         canonical_name_en="front and rear brake pads",
         patterns=(
-            r"\bпередн\w*\b.*\bзадн\w*\b.*\bколод",
-            r"\bзадн\w*\b.*\bпередн\w*\b.*\bколод",
-            r"\bfront\b.*\brear\b.*\bbrake\s+pads?",
-            r"\brear\b.*\bfront\b.*\bbrake\s+pads?",
+            r"^(?=.*\bпередн\w*)(?=.*\bзадн\w*)(?=.*\bколод\w*)",
+            r"^(?=.*\bfront\b)(?=.*\brear\b)(?=.*\b(?:brake\s+)?pads?\b)",
         ),
         catalog_groups_ru=("тормозная система", "колодки тормозные"),
         catalog_groups_en=("brake system", "brake pads"),
@@ -187,7 +185,7 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         catalog_groups_ru=("привод", "шрус", "приводной вал"),
         catalog_groups_en=("driveshaft", "cv joint", "inner joint"),
         positions=("front_or_rear_required", "left_right_required"),
-        critical_vehicle_fields=("side", "drivetrain", "transmission", "production_date"),
+        critical_vehicle_fields=("axle", "side", "drivetrain", "transmission", "production_date"),
         quantity_basis="piece",
         partsapi_cat_candidates=("inner cv joint", "шрус внутренний"),
         confidence=0.88,
@@ -200,7 +198,7 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         catalog_groups_ru=("привод", "шрус", "приводной вал"),
         catalog_groups_en=("driveshaft", "cv joint", "outer joint"),
         positions=("front_or_rear_required", "left_right_required"),
-        critical_vehicle_fields=("side", "drivetrain", "abs_ring", "transmission", "production_date"),
+        critical_vehicle_fields=("axle", "side", "drivetrain", "abs_ring", "transmission", "production_date"),
         quantity_basis="piece",
         partsapi_cat_candidates=("outer cv joint", "шрус наружный"),
         confidence=0.84,
@@ -213,7 +211,15 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         catalog_groups_ru=("привод", "шрус", "приводной вал"),
         catalog_groups_en=("driveshaft", "cv joint"),
         positions=("front_or_rear_required", "left_right_required", "inner_outer_required"),
-        critical_vehicle_fields=("side", "inner_outer", "drivetrain", "abs_ring", "transmission", "production_date"),
+        critical_vehicle_fields=(
+            "axle",
+            "side",
+            "inner_outer",
+            "drivetrain",
+            "abs_ring",
+            "transmission",
+            "production_date",
+        ),
         quantity_basis="piece after inner/outer confirmation",
         partsapi_cat_candidates=("cv joint", "drive shaft joint", "шрус"),
         confidence=0.72,
@@ -566,13 +572,39 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
 )
 
 
+def _legacy_position_coordinates(position: str | None) -> tuple[str | None, str | None]:
+    """Map a legacy position value to at most one structured coordinate."""
+
+    if not position:
+        return None, None
+    lowered = position.casefold()
+    axle_hint = bool(
+        re.search(r"(?:^|[\s_/-])(?:front(?:_axle)?|rear(?:_axle)?|передн\w*|задн\w*)(?:$|[\s_/-])", lowered)
+    )
+    inner_outer_hint = bool(
+        re.search(r"(?:^|[\s_/-])(?:inner|outer|internal|external|внутрен\w*|наружн\w*)(?:$|[\s_/-])", lowered)
+    )
+    if axle_hint == inner_outer_hint:
+        return None, None
+    return (position, None) if axle_hint else (None, position)
+
+
 def normalize_part_intent(
-    raw: str | None, *, axle: str | None = None, side: str | None = None, position: str | None = None
+    raw: str | None,
+    *,
+    axle: str | None = None,
+    side: str | None = None,
+    position: str | None = None,
+    inner_outer: str | None = None,
 ) -> dict[str, Any]:
     text = str(raw or "").strip()
     axle = axle.strip() if axle else None
     side = side.strip() if side else None
     position = position.strip() if position else None
+    inner_outer = inner_outer.strip() if inner_outer else None
+    legacy_axle, legacy_inner_outer = _legacy_position_coordinates(position)
+    effective_axle = axle or legacy_axle
+    effective_inner_outer = inner_outer or legacy_inner_outer
     lowered = text.casefold()
     matched = next((rule for rule in PART_INTENT_RULES if rule.matches(lowered)), None)
 
@@ -585,7 +617,7 @@ def normalize_part_intent(
             "intent_id": "unknown",
             "confidence": 0.2 if text else 0.0,
             "catalog_search_terms": [text] if text else [],
-            "positions": [value for value in [axle, side, position] if value],
+            "positions": list(dict.fromkeys(value for value in [axle, side, position, inner_outer] if value)),
             "critical_vehicle_fields": ["make", "model", "market", "production_date", "engine", "drivetrain"],
             "required_position_fields": ["part_group", "axle", "side"],
             "partsapi_category_candidates": [],
@@ -596,7 +628,7 @@ def normalize_part_intent(
         }
 
     payload = asdict(matched)
-    explicit_positions = [value for value in [axle, side, position] if value]
+    explicit_positions = list(dict.fromkeys(value for value in [axle, side, position, inner_outer] if value))
     required_position_tokens = {
         "axle": any(
             "front_or_rear_required" in value or "front_axle_or_rear_axle_required" in value or value == "axle_required"
@@ -606,17 +638,17 @@ def normalize_part_intent(
         "inner_outer": any("inner_outer_required" in value for value in matched.positions),
     }
     supplied_context = {
-        "axle": axle,
+        "axle": effective_axle,
         "side": side,
         "position": position,
-        "inner_outer": position,
+        "inner_outer": effective_inner_outer,
     }
     missing_fields = [field for field in matched.clarification_fields if not supplied_context.get(field)]
-    if required_position_tokens["axle"] and not any(value for value in [axle, position] if value):
+    if required_position_tokens["axle"] and not effective_axle:
         missing_fields.append("axle")
     if required_position_tokens["side"] and not side:
         missing_fields.append("side")
-    if required_position_tokens["inner_outer"] and not position:
+    if required_position_tokens["inner_outer"] and not effective_inner_outer:
         missing_fields.append("inner_outer")
     missing_fields = list(dict.fromkeys(missing_fields))
     terms = (
@@ -648,6 +680,16 @@ def normalize_part_intent(
             "required_position_fields": derived_required_fields,
             "risk_fields": list(matched.critical_vehicle_fields),
             "explicit_positions": explicit_positions,
+            "explicit_position_context": {
+                key: value
+                for key, value in (
+                    ("axle", effective_axle),
+                    ("side", side),
+                    ("position", position),
+                    ("inner_outer", effective_inner_outer),
+                )
+                if value
+            },
             "clarification_required": bool(missing_fields),
             "clarification_fields": missing_fields,
         }

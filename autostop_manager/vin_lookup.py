@@ -9,7 +9,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from .vin_sources import load_source_registry, normalize_make, sources_for_inputs, sources_for_make
+from .vin_sources import (
+    AMAYAMA_SOURCE_ID,
+    PARTSOUQ_SOURCE_ID,
+    canonical_source_id,
+    load_source_registry,
+    normalize_make,
+    sources_for_inputs,
+    sources_for_make,
+)
 
 LookupKind = Literal["vin", "vin_partial", "frame_number", "market_code", "unknown"]
 ConfidenceLevel = Literal["high", "medium", "low", "blocked"]
@@ -80,6 +88,7 @@ class IdentifierClassification:
 
 @dataclass(frozen=True)
 class LookupStep:
+    source_id: str
     source_name: str
     kind: str
     authority: str
@@ -95,6 +104,7 @@ class LookupStep:
     requires_login: bool = False
     adapter_status: list[str] = field(default_factory=list)
     preferred_for: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
 
 
 def _compact_text(raw: str) -> str:
@@ -545,6 +555,7 @@ def _step_from_source(source: dict[str, Any], query: str, notes_prefix: str = ""
     adapter_status = _as_list(source.get("adapter_status") or ["route_only"])
     return asdict(
         LookupStep(
+            source_id=canonical_source_id(source.get("source_id") or source.get("name")),
             source_name=str(source.get("name") or "").strip(),
             kind=str(source.get("kind") or "").strip(),
             authority=str(source.get("authority") or "").strip(),
@@ -560,6 +571,7 @@ def _step_from_source(source: dict[str, Any], query: str, notes_prefix: str = ""
             requires_login=bool(source.get("requires_login")),
             adapter_status=adapter_status,
             preferred_for=_as_list(source.get("preferred_for")),
+            aliases=_as_list(source.get("aliases")),
         )
     )
 
@@ -666,9 +678,10 @@ def _provider_adapters(
 def _source_by_name(catalog_routes: list[dict[str, Any]], source_name: str | None) -> dict[str, Any] | None:
     if not source_name:
         return None
-    normalized = source_name.casefold().strip()
+    normalized = canonical_source_id(source_name).casefold()
     for route in catalog_routes:
-        if str(route.get("source_name") or "").casefold().strip() == normalized:
+        references = [route.get("source_id"), route.get("source_name"), *_as_list(route.get("aliases"))]
+        if any(canonical_source_id(reference).casefold() == normalized for reference in references if reference):
             return route
     return None
 
@@ -739,6 +752,8 @@ def _build_oem_candidates(
             "position": position or "",
             "old_part_reference": old_part_number or "",
             "source": captured_source or "manual_capture",
+            "source_id": canonical_source_id((source or {}).get("source_id") or captured_source or "manual_capture"),
+            "source_aliases": _as_list((source or {}).get("aliases")),
             "source_authority": str((source or {}).get("authority") or "manual"),
             "source_access_mode": str((source or {}).get("access_mode") or ""),
             "fitment_basis": "manual EPC capture for the given identifier and part request",
@@ -897,7 +912,8 @@ def _next_actions(
     public_web_routes = [
         route
         for route in catalog_routes
-        if route.get("source_name") in {"PartSouq manual catalog", "Amayama public catalog"}
+        if canonical_source_id(route.get("source_id") or route.get("source_name"))
+        in {PARTSOUQ_SOURCE_ID, AMAYAMA_SOURCE_ID}
     ]
     if not part_name:
         actions.append("Add part_name/part_group before OEM lookup.")

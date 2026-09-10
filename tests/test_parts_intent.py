@@ -43,10 +43,17 @@ def test_normalize_part_intent_recognizes_unspecified_brake_pads_as_clarificatio
 
 
 def test_normalize_part_intent_blocks_single_lookup_for_brake_pads_on_both_axles():
-    for phrase in ["передние и задние колодки", "задние / передние колодки"]:
+    for phrase in [
+        "передние и задние колодки",
+        "задние / передние колодки",
+        "колодки передние и задние",
+        "колодки задние и передние",
+        "передние колодки и задние",
+    ]:
         result = normalize_part_intent(phrase)
 
         assert result["intent_id"] == "brake_pads_multiple_axles"
+        assert result["positions"] == ("front_and_rear_axles",)
         assert result["clarification_required"] is True
         assert result["clarification_fields"] == ["split_by_axle"]
         assert result["partsapi_category_candidates"] == []
@@ -62,6 +69,31 @@ def test_normalize_part_intent_distinguishes_inner_outer_and_unspecified_cv_join
     assert unspecified["intent_id"] == "cv_joint_unspecified"
     assert unspecified["clarification_required"] is True
     assert "inner_outer" in unspecified["clarification_fields"]
+
+
+def test_cv_joint_axle_and_inner_outer_are_independent_coordinates():
+    axle_only = normalize_part_intent("ШРУС", side="left", position="front")
+    joint_type_only = normalize_part_intent("ШРУС", side="left", position="inner")
+    ambiguous_legacy_position = normalize_part_intent("ШРУС", side="left", position="front outer")
+    compatible_legacy_pair = normalize_part_intent("ШРУС", axle="front", side="left", position="outer")
+    complete = normalize_part_intent("ШРУС", axle="front", side="left", inner_outer="outer")
+
+    assert axle_only["clarification_fields"] == ["inner_outer"]
+    assert axle_only["explicit_position_context"] == {"axle": "front", "side": "left", "position": "front"}
+    assert joint_type_only["clarification_fields"] == ["axle"]
+    assert joint_type_only["explicit_position_context"] == {
+        "side": "left",
+        "position": "inner",
+        "inner_outer": "inner",
+    }
+    assert ambiguous_legacy_position["clarification_fields"] == ["axle", "inner_outer"]
+    assert compatible_legacy_pair["clarification_required"] is False
+    assert complete["clarification_required"] is False
+    assert complete["explicit_position_context"] == {
+        "axle": "front",
+        "side": "left",
+        "inner_outer": "outer",
+    }
 
 
 def test_normalize_part_intent_does_not_classify_glow_plugs_as_spark_plugs():

@@ -300,6 +300,25 @@ def test_resolver_blocks_generic_part_before_live_catalog_search(monkeypatch):
     assert "message" not in clarification
 
 
+def test_resolver_accepts_independent_cv_joint_coordinates():
+    result = resolve_vin_oem_parts(
+        identifier="",
+        requested_part="ШРУС",
+        axle="front",
+        side="left",
+        inner_outer="outer",
+        live_vpic=False,
+        dry_run=True,
+    )
+
+    assert result["part_intent"]["clarification_required"] is False
+    assert result["part_intent"]["explicit_position_context"] == {
+        "axle": "front",
+        "side": "left",
+        "inner_outer": "outer",
+    }
+
+
 def test_resolver_blocks_live_oem_when_category_is_unresolved(monkeypatch):
     identity = _medium_identity()
     identity["confidence_label"] = "high"
@@ -439,6 +458,84 @@ def test_resolver_does_not_present_rear_candidate_as_front_or_promote_false_fitm
     assert candidate["candidate_axle_hints"] == ["rear"]
     assert candidate["fitment_scope"] == "not_vin_specific"
     assert candidate["confidence_label"] == "low"
+    assert "candidate_position_conflicts_requested_position" in candidate["blocking_reasons"]
+
+
+def test_resolver_blocks_vin_candidate_with_conflicting_cv_joint_coordinates(monkeypatch):
+    identity = _medium_identity()
+    identity["confidence_label"] = "high"
+    identity["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] = True
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: identity)
+    monkeypatch.setattr(
+        "autostop_manager.vin_oem_resolver.resolve_partsapi_category",
+        lambda *_args, **_kwargs: {
+            "category": 123,
+            "category_kind": "numeric_id",
+            "category_unresolved": False,
+            "validation_required": False,
+        },
+    )
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        operation = kwargs["operation"]
+        base = {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": operation,
+            "dry_run": kwargs.get("dry_run", False),
+            "attempt_count": 1,
+            "outcome": "success",
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+        }
+        if operation == "parts_by_vin":
+            return {
+                **base,
+                "oem_candidates": [
+                    {
+                        "provider": "partsapi_ru",
+                        "part_number": "CV-WRONG",
+                        "name": "Rear right inner CV joint",
+                        "source_operation": "parts_by_vin",
+                        "fitment_evidence": {"is_fit_for_this_vin": True},
+                        "confidence": 0.95,
+                    }
+                ],
+            }
+        return {**base, "oem_candidates": [], "vehicle_profiles": []}
+
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+    result = resolve_vin_oem_parts(
+        identifier="1HGCM82633A004352",
+        requested_part="CV joint",
+        axle="front",
+        side="left",
+        inner_outer="outer",
+        live_vpic=False,
+        live_partsapi_oem=True,
+        max_live_calls=1,
+        max_candidates=1,
+    )
+
+    candidate = result["oem_candidates"][0]
+    assert candidate["position_match"] == "conflict"
+    assert candidate["requested_position_coordinates"] == {
+        "axle": "front",
+        "side": "left",
+        "inner_outer": "outer",
+    }
+    assert candidate["candidate_position_hints"] == {
+        "axle": ["rear"],
+        "side": ["right"],
+        "inner_outer": ["inner"],
+    }
+    assert candidate["position_coordinate_matches"] == {
+        "axle": "conflict",
+        "side": "conflict",
+        "inner_outer": "conflict",
+    }
+    assert candidate["fitment_scope"] == "vin_specific_position_unconfirmed"
+    assert candidate["confidence_label"] == "low"
+    assert candidate["confidence_score"] <= 0.35
     assert "candidate_position_conflicts_requested_position" in candidate["blocking_reasons"]
 
 

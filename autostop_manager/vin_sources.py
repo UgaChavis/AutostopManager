@@ -10,6 +10,42 @@ from .storage import _string_list
 
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 
+PARTSOUQ_SOURCE_ID = "partsouq_catalog"
+AMAYAMA_SOURCE_ID = "amayama_catalog"
+PUBLIC_CATALOG_SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
+    PARTSOUQ_SOURCE_ID: (
+        "partsouq_catalog_manual",
+        "PartSouq manual catalog",
+        "PartSouq public catalog",
+        "PartSouq",
+    ),
+    AMAYAMA_SOURCE_ID: (
+        "amayama_catalog_manual",
+        "Amayama public catalog",
+        "Amayama manual catalog",
+        "Amayama",
+    ),
+}
+
+
+def _source_reference_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+_PUBLIC_CATALOG_ALIAS_INDEX = {
+    _source_reference_key(reference): source_id
+    for source_id, aliases in PUBLIC_CATALOG_SOURCE_ALIASES.items()
+    for reference in (source_id, *aliases)
+}
+
+
+def canonical_source_id(value: Any) -> str:
+    """Collapse public-catalog legacy names/IDs onto one stable source ID."""
+
+    raw = str(value or "").strip()
+    return _PUBLIC_CATALOG_ALIAS_INDEX.get(_source_reference_key(raw), raw)
+
+
 _JAPANESE_MAKES = frozenset(
     {
         "TOYOTA",
@@ -28,6 +64,8 @@ _JAPANESE_MAKES = frozenset(
 )
 _PUBLIC_JAPANESE_WEB_CATALOGS: tuple[dict[str, Any], ...] = (
     {
+        "source_id": PARTSOUQ_SOURCE_ID,
+        "aliases": list(PUBLIC_CATALOG_SOURCE_ALIASES[PARTSOUQ_SOURCE_ID]),
         "name": "PartSouq manual catalog",
         "kind": "portal",
         "authority": "public_commercial_catalog_store",
@@ -58,6 +96,8 @@ _PUBLIC_JAPANESE_WEB_CATALOGS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "source_id": AMAYAMA_SOURCE_ID,
+        "aliases": list(PUBLIC_CATALOG_SOURCE_ALIASES[AMAYAMA_SOURCE_ID]),
         "name": "Amayama public catalog",
         "kind": "portal",
         "authority": "public_commercial_catalog_store",
@@ -88,7 +128,12 @@ _PUBLIC_JAPANESE_WEB_CATALOGS: tuple[dict[str, Any], ...] = (
         ),
     },
 )
-_PUBLIC_JAPANESE_WEB_CATALOG_NAMES = tuple(source["name"] for source in _PUBLIC_JAPANESE_WEB_CATALOGS)
+_PUBLIC_JAPANESE_WEB_CATALOG_IDS = tuple(source["source_id"] for source in _PUBLIC_JAPANESE_WEB_CATALOGS)
+
+_CANONICAL_MAKE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("TOYOTAMOTOR", "TOYOTA"),
+    ("MITSUBISHIMOTORS", "MITSUBISHI"),
+)
 
 _MAKE_SOURCE_MAP: dict[str, list[str]] = {
     "BMW": [
@@ -160,7 +205,11 @@ def load_source_registry() -> dict[str, Any]:
 def normalize_make(make: str | None) -> str:
     if not make:
         return ""
-    return re.sub(r"[^A-Z0-9]+", "", make.upper())
+    key = re.sub(r"[^A-Z0-9]+", "", make.upper())
+    for prefix, canonical in _CANONICAL_MAKE_PREFIXES:
+        if key.startswith(prefix):
+            return canonical
+    return key
 
 
 def _runtime_sources() -> list[dict[str, Any]]:
@@ -175,17 +224,26 @@ def _runtime_sources() -> list[dict[str, Any]]:
     registry_sources = [
         dict(source) for source in load_source_registry().get("sources", []) if isinstance(source, dict)
     ]
-    source_names = {str(source.get("name") or "").strip() for source in registry_sources}
-    if "PartSouq manual catalog" not in source_names:
+    public_source_ids = {
+        canonical_source_id(source.get("source_id") or source.get("name")) for source in registry_sources
+    }
+    if PARTSOUQ_SOURCE_ID not in public_source_ids:
         return registry_sources
 
-    enrichments = {source["name"]: source for source in _PUBLIC_JAPANESE_WEB_CATALOGS}
+    enrichments = {source["source_id"]: source for source in _PUBLIC_JAPANESE_WEB_CATALOGS}
     result: list[dict[str, Any]] = []
+    emitted_public_ids: set[str] = set()
     for source in registry_sources:
-        name = str(source.get("name") or "").strip()
-        result.append({**source, **enrichments[name]} if name in enrichments else source)
+        source_id = canonical_source_id(source.get("source_id") or source.get("name"))
+        if source_id in enrichments:
+            if source_id in emitted_public_ids:
+                continue
+            result.append({**source, **enrichments[source_id]})
+            emitted_public_ids.add(source_id)
+        else:
+            result.append(source)
     for source in _PUBLIC_JAPANESE_WEB_CATALOGS:
-        if source["name"] not in source_names:
+        if source["source_id"] not in emitted_public_ids:
             result.append(dict(source))
     return result
 
@@ -193,9 +251,12 @@ def _runtime_sources() -> list[dict[str, Any]]:
 def source_index() -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
     for source in _runtime_sources():
-        name = str(source.get("name") or "").strip()
-        if name:
-            index[name] = source
+        references = [source.get("source_id"), source.get("name"), *_string_list(source.get("aliases"))]
+        for reference in references:
+            raw = str(reference or "").strip()
+            if raw:
+                index[raw] = source
+                index[canonical_source_id(raw)] = source
     return index
 
 
@@ -209,17 +270,23 @@ def source_names_for_make(make: str | None) -> list[str]:
             names = list(mapped_names)
             break
     if key in _JAPANESE_MAKES:
-        names.extend(_PUBLIC_JAPANESE_WEB_CATALOG_NAMES)
+        names.extend(_PUBLIC_JAPANESE_WEB_CATALOG_IDS)
     return list(dict.fromkeys(names))
 
 
 def sources_for_make(make: str | None) -> list[dict[str, Any]]:
     index = source_index()
     result: list[dict[str, Any]] = []
-    for name in source_names_for_make(make):
-        source = index.get(name)
-        if source is not None:
-            result.append(source)
+    emitted_source_ids: set[str] = set()
+    for reference in source_names_for_make(make):
+        source = index.get(reference)
+        if source is None:
+            continue
+        source_id = canonical_source_id(source.get("source_id") or source.get("name"))
+        if source_id in emitted_source_ids:
+            continue
+        emitted_source_ids.add(source_id)
+        result.append(source)
     return result
 
 

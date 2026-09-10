@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from autostop_manager import config as manager_config
-from autostop_manager.vin_parts_benchmark import benchmark_vin_parts_lookup
+from autostop_manager.vin_parts_benchmark import _assess_partsapi_oe_agreement, benchmark_vin_parts_lookup
 
 
 PARTSAPI_ENV_NAMES = [
@@ -24,6 +24,28 @@ PARTSAPI_ENV_NAMES = [
     "PARTSAPI_ARTICLE_CRITERIA_KEY",
     "PARTSAPI_BASE_URL",
 ]
+
+
+def test_partsapi_agreement_accepts_make_alias_but_rejects_model_prefix():
+    agreement = _assess_partsapi_oe_agreement(
+        {"vehicle_profile": {"make": "VW", "model": "3"}},
+        {"ok": True, "vehicle_profiles": [{"make": "VOLKSWAGEN", "model": "320"}]},
+    )
+
+    assert agreement["status"] == "conflict"
+    assert agreement["matched_fields"] == ["make"]
+    assert agreement["conflicting_fields"] == [{"field": "model", "identity_value": "3", "partsapi_value": "320"}]
+
+
+def test_partsapi_agreement_accepts_compatible_transmission_description():
+    agreement = _assess_partsapi_oe_agreement(
+        {"vehicle_profile": {"make": "Toyota", "transmission": "Automatic"}},
+        {"ok": True, "vehicle_profiles": [{"make": "Toyota", "transmission": "8-speed automatic"}]},
+    )
+
+    assert agreement["status"] == "matched"
+    assert agreement["matched_fields"] == ["make", "transmission"]
+    assert agreement["conflicting_fields"] == []
 
 
 def _clear_partsapi_env(monkeypatch):

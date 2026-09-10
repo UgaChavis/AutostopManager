@@ -329,6 +329,13 @@ def _compact(value: Any) -> str:
 def _normalize_make(value: Any) -> Any:
     text = _compact(value)
     key = re.sub(r"[^a-z0-9]+", "", text.casefold())
+    for corporate_prefix, canonical_key in (
+        ("toyotamotor", "toyota"),
+        ("mitsubishimotors", "mitsubishi"),
+    ):
+        if key.startswith(corporate_prefix):
+            key = canonical_key
+            break
     aliases = {
         "volkskwagen": "Volkswagen",
         "volkswagen": "Volkswagen",
@@ -526,18 +533,100 @@ def _uses_strict_north_american_vin(profile: dict[str, Any]) -> bool:
     )
 
 
-def _normalized_identity_value(value: Any) -> str:
-    return re.sub(r"[^0-9a-zа-яё]+", "", _compact(value).casefold())
+def _normalized_identity_value(field: str, value: Any) -> str:
+    normalized_value = _normalize_make(value) if field == "make" else value
+    return re.sub(r"[^0-9a-zа-яё]+", "", _compact(normalized_value).casefold())
 
 
-def _identity_values_agree(left: Any, right: Any) -> bool:
-    left_normalized = _normalized_identity_value(left)
-    right_normalized = _normalized_identity_value(right)
-    return bool(left_normalized and right_normalized) and (
-        left_normalized == right_normalized
-        or left_normalized in right_normalized
-        or right_normalized in left_normalized
-    )
+def _identity_tokens(value: Any) -> tuple[str, ...]:
+    return tuple(re.findall(r"[0-9a-zа-яё]+", _compact(value).casefold()))
+
+
+def _model_family_values_agree(left: Any, right: Any) -> bool:
+    left_tokens = _identity_tokens(left)
+    right_tokens = _identity_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    if left_tokens == right_tokens:
+        return True
+    if len(left_tokens) == len(right_tokens):
+        return False
+    shorter, longer = sorted((left_tokens, right_tokens), key=len)
+    # A multi-token family emitted by one decoder may be refined with a
+    # platform/generation suffix by another.  Single-token prefixes such as
+    # Corolla/Cross, A8/A80 or 3/320 remain deliberately incompatible.
+    return len(shorter) >= 2 and longer[: len(shorter)] == shorter
+
+
+def _transmission_signature(value: Any) -> tuple[str | None, frozenset[int], frozenset[str]]:
+    tokens = _identity_tokens(value)
+    kinds: set[str] = set()
+    gear_counts: set[int] = set()
+    gearbox_codes: set[str] = set()
+
+    for index, token in enumerate(tokens):
+        if token in {"cvt", "вариатор"} or token.startswith("вариатор"):
+            kinds.add("cvt")
+        elif token in {"dct", "dsg", "amt", "robot"} or token.startswith("робот"):
+            kinds.add("dual_clutch_or_robot")
+        elif token in {"manual", "mt", "мкпп"} or token.startswith("механ"):
+            kinds.add("manual")
+        elif token in {"automatic", "auto", "at", "акпп"} or token.startswith("автомат"):
+            kinds.add("automatic")
+
+        compact_match = re.fullmatch(r"(\d{1,2})(at|mt|dct|dsg)", token)
+        if compact_match:
+            gear_counts.add(int(compact_match.group(1)))
+            kinds.add(
+                {
+                    "at": "automatic",
+                    "mt": "manual",
+                    "dct": "dual_clutch_or_robot",
+                    "dsg": "dual_clutch_or_robot",
+                }[compact_match.group(2)]
+            )
+        if token.isdigit() and 3 <= int(token) <= 10:
+            neighbours = tokens[max(0, index - 1) : index] + tokens[index + 1 : index + 3]
+            if any(
+                neighbour in {"speed", "speeds", "automatic", "auto", "at", "manual", "mt", "dct", "dsg"}
+                or neighbour.startswith(("ступ", "автомат", "механ"))
+                for neighbour in neighbours
+            ):
+                gear_counts.add(int(token))
+        if re.fullmatch(r"dq\d{3}", token):
+            kinds.add("dual_clutch_or_robot")
+            gearbox_codes.add(token)
+
+    kind = next(iter(kinds)) if len(kinds) == 1 else None
+    return kind, frozenset(gear_counts), frozenset(gearbox_codes)
+
+
+def _transmission_values_agree(left: Any, right: Any) -> bool:
+    left_kind, left_gears, left_codes = _transmission_signature(left)
+    right_kind, right_gears, right_codes = _transmission_signature(right)
+    if not left_kind or left_kind != right_kind:
+        return False
+    if left_gears and right_gears and left_gears != right_gears:
+        return False
+    if left_codes and right_codes and left_codes != right_codes:
+        return False
+    return True
+
+
+def identity_values_agree(field: str, left: Any, right: Any) -> bool:
+    """Compare identity facts conservatively without substring-prefix matches."""
+
+    left_normalized = _normalized_identity_value(field, left)
+    right_normalized = _normalized_identity_value(field, right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+    if field == "model":
+        return _model_family_values_agree(left, right)
+    if field == "transmission":
+        return _transmission_values_agree(left, right)
+    return False
 
 
 def _consensus_vin_evidence_conflicts(
@@ -566,11 +655,13 @@ def _consensus_vin_evidence_conflicts(
         ]
         for item in decoded:
             value = item.get("value")
-            agreeing = [candidate for candidate in decoded if _identity_values_agree(value, candidate.get("value"))]
+            agreeing = [
+                candidate for candidate in decoded if identity_values_agree(field, value, candidate.get("value"))
+            ]
             evidence_sources = sorted(
                 {str(candidate.get("source") or "") for candidate in agreeing if candidate.get("source")}
             )
-            if len(evidence_sources) < 2 or _identity_values_agree(crm_value, value):
+            if len(evidence_sources) < 2 or identity_values_agree(field, crm_value, value):
                 continue
             conflicts.append(
                 {

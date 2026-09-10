@@ -20,13 +20,28 @@ def test_public_routes_do_not_replace_a_missing_registry(monkeypatch):
 
 
 def test_public_route_enrichment_preserves_registry_and_deduplicates(monkeypatch):
-    registry = {"sources": [{"name": "PartSouq manual catalog"}, {"name": "Amayama public catalog"}]}
+    registry = {
+        "sources": [
+            {"name": "PartSouq manual catalog"},
+            {"source_id": "partsouq_catalog_manual", "name": "PartSouq legacy duplicate"},
+            {"name": "Amayama public catalog"},
+        ]
+    }
     original = deepcopy(registry)
     monkeypatch.setattr(vin_sources, "load_source_registry", lambda: registry)
     for make in ("Toyota", "Suzuki", "Mitsubishi"):
-        names = [row["name"] for row in vin_sources.sources_for_make(make)]
+        sources = vin_sources.sources_for_make(make)
+        names = [row["name"] for row in sources]
+        source_ids = [row["source_id"] for row in sources]
         assert names.count("PartSouq manual catalog") == names.count("Amayama public catalog") == 1
+        assert source_ids.count("partsouq_catalog") == source_ids.count("amayama_catalog") == 1
     assert registry == original
+
+
+def test_corporate_make_names_keep_japanese_public_fallbacks():
+    for make in ("Toyota Motor Corporation", "Mitsubishi Motors Corporation"):
+        source_ids = {source.get("source_id") for source in vin_sources.sources_for_make(make)}
+        assert {"partsouq_catalog", "amayama_catalog"} <= source_ids
 
 
 def test_decoder_timeout_keeps_public_routes_and_no_confirmed_fitment(monkeypatch):
@@ -53,23 +68,25 @@ def test_registered_mcp_plan_runs_without_network_or_emex(tmp_path, monkeypatch)
     def forbidden(*_args, **_kwargs):
         raise AssertionError("planning must not open a network connection")
 
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
     server = build_server()
     assert "emex_price_lookup" not in server._tool_manager._tools
-    result = asyncio.run(
-        server.call_tool(
-            "plan_oem_parts_providers",
-            {
-                "identifier": "",
-                "requested_part": "воздушный фильтр",
-                "vehicle_identity": {"vehicle_profile": {"make": "Toyota", "model": "Corolla", "model_year": 2008}},
-            },
+    with asyncio.Runner() as runner:
+        runner.get_loop()
+        monkeypatch.setattr(socket.socket, "connect", forbidden)
+        result = runner.run(
+            server.call_tool(
+                "plan_oem_parts_providers",
+                {
+                    "identifier": "",
+                    "requested_part": "воздушный фильтр",
+                    "vehicle_identity": {"vehicle_profile": {"make": "Toyota", "model": "Corolla", "model_year": 2008}},
+                },
+            )
         )
-    )
     # FastMCP returns textual and structured content from the real registered callable.
     payload = result[1]
     ids = {row["source_id"] for row in payload["manual_public_search_queries"]}
-    assert {"partsouq_catalog_manual", "amayama_catalog_manual"} <= ids
+    assert {"partsouq_catalog", "amayama_catalog"} <= ids
 
 
 def test_current_parts_skill_is_loaded_into_disposable_knowledge_index(tmp_path):

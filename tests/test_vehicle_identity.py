@@ -2,8 +2,33 @@ from __future__ import annotations
 
 import json
 
-from autostop_manager.vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
+from autostop_manager.vehicle_identity import (
+    decode_vehicle_identities,
+    decode_vehicle_identity,
+    identity_values_agree,
+)
 from autostop_manager.vin_lookup import classify_identifier
+
+
+def test_identity_comparison_is_field_aware_and_never_uses_model_prefixes():
+    assert identity_values_agree("make", "VW", "VOLKSWAGEN") is True
+    assert identity_values_agree("make", "Toyota", "Toyota Motor Corporation") is True
+    assert identity_values_agree("make", "Mitsubishi", "Mitsubishi Motors Corporation") is True
+    assert identity_values_agree("make", "Toyota", "Mitsubishi") is False
+    assert identity_values_agree("model", "Land Cruiser", "Land Cruiser Prado 120") is True
+    assert identity_values_agree("model", "Land Cruiser Prado 120", "Land Cruiser Prado 150") is False
+    assert identity_values_agree("model", "A8", "A80") is False
+    assert identity_values_agree("model", "3", "320") is False
+    assert identity_values_agree("model", "Corolla", "Corolla Cross") is False
+    assert identity_values_agree("model", "Corolla Altis", "Corolla Cross") is False
+
+
+def test_identity_comparison_preserves_safe_transmission_compatibility():
+    assert identity_values_agree("transmission", "Automatic", "8-speed automatic") is True
+    assert identity_values_agree("transmission", "АКПП", "6AT") is True
+    assert identity_values_agree("transmission", "6AT", "8AT") is False
+    assert identity_values_agree("transmission", "CVT", "Automatic") is False
+    assert identity_values_agree("transmission", "DQ200", "DQ250") is False
 
 
 def test_decode_vehicle_identity_builds_high_confidence_clean_us_vin(monkeypatch):
@@ -104,6 +129,25 @@ def test_decode_vehicle_identity_blocks_clean_vin_consensus_conflicting_with_crm
     assert result["confidence_label"] == "medium"
     assert result["parts_lookup_readiness"]["ready_for_oem_lookup"] is False
     assert "high_severity_identity_conflict" in result["parts_lookup_readiness"]["blocking_reasons"]
+
+
+def test_decode_vehicle_identity_blocks_compatible_model_family_consensus_against_crm():
+    result = decode_vehicle_identity(
+        "JTEBU29J" + "A" * 9,
+        crm_context={"make": "Toyota", "model": "Camry"},
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result={
+            "ok": True,
+            "error_code": "0",
+            "vehicle": {"make": "Toyota", "model": "Land Cruiser"},
+        },
+    )
+
+    model_conflict = next(item for item in result["conflicts"] if item["field"] == "model")
+    assert model_conflict["severity"] == "high"
+    assert set(model_conflict["evidence_sources"]) == {"NHTSA vPIC", "toyota_prado_120_jtebu29j"}
+    assert result["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] is False
 
 
 def test_decode_vehicle_identity_does_not_block_on_partial_vpic_against_crm():

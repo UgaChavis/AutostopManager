@@ -8,6 +8,7 @@ from urllib.parse import quote_plus
 from .catalog_clients import PARTSAPI_OPERATIONS, partsapi_operation_status
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
+from .vin_sources import AMAYAMA_SOURCE_ID, PARTSOUQ_SOURCE_ID, PUBLIC_CATALOG_SOURCE_ALIASES
 from .vin_lookup import classify_identifier
 
 
@@ -25,6 +26,7 @@ class CatalogProvider:
     docs_url: str
     manual_allowed: bool = False
     env_any_groups: tuple[tuple[str, ...], ...] = ()
+    aliases: tuple[str, ...] = ()
 
 
 PROVIDERS: tuple[CatalogProvider, ...] = (
@@ -140,7 +142,7 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         stage="catalog_cross",
         access_mode="api_key_or_demo",
         env_names=("FAPI_API_KEY",),
-        capabilities=("brand_article_search", "part_details", "explicit_oe_references", "cross_candidates"),
+        capabilities=("brand_article_search", "part_details", "cross_candidates"),
         priority="medium",
         role="Additional brand/article source for part facts and cross candidates; demo access is explicit and evaluation-only.",
         limits="FAPI cross ratings do not prove OEM status or VIN fitment. Its standard analog response may not provide OEM references; verify before order.",
@@ -160,7 +162,7 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         docs_url="https://en.17vin.com/doc.html",
     ),
     CatalogProvider(
-        source_id="partsouq_catalog",
+        source_id=PARTSOUQ_SOURCE_ID,
         name="PartSouq public catalog",
         stage="oem_catalog",
         access_mode="public_site_manual",
@@ -178,9 +180,10 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         limits="Manual public-site use only. Do not automate login, cart, checkout, private/mobile endpoints, or bypass JavaScript, cookie, rate-limit, or anti-bot checks. Capture the diagram/page link and model/period/engine/transmission/position evidence; a returned number is preliminary until fitment is independently checked.",
         docs_url="https://partsouq.com/en/",
         manual_allowed=True,
+        aliases=PUBLIC_CATALOG_SOURCE_ALIASES[PARTSOUQ_SOURCE_ID],
     ),
     CatalogProvider(
-        source_id="amayama_catalog",
+        source_id=AMAYAMA_SOURCE_ID,
         name="Amayama public catalog",
         stage="oem_catalog",
         access_mode="public_site_manual",
@@ -198,6 +201,7 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         limits="Manual public-site use only. Do not automate login, cart, checkout, private/mobile endpoints, or bypass JavaScript, cookie, rate-limit, or anti-bot checks. Treat the site's compatibility information as a reference and verify model code, period, engine, transmission, market, and position before order.",
         docs_url="https://www.amayama.com/en/genuine-catalogs",
         manual_allowed=True,
+        aliases=PUBLIC_CATALOG_SOURCE_ALIASES[AMAYAMA_SOURCE_ID],
     ),
     CatalogProvider(
         source_id="autopoisk",
@@ -486,7 +490,8 @@ def _manual_public_search_queries(
     ]
     return [
         {
-            "source_id": "partsouq_catalog_manual",
+            "source_id": PARTSOUQ_SOURCE_ID,
+            "aliases": list(PUBLIC_CATALOG_SOURCE_ALIASES[PARTSOUQ_SOURCE_ID]),
             "role": "Public preliminary OEM-candidate and diagram route for VIN, frame, or vehicle-parameter lookup.",
             "query": query,
             "url": "https://partsouq.com/en/",
@@ -494,7 +499,8 @@ def _manual_public_search_queries(
             "capture_fields": catalog_capture_fields,
         },
         {
-            "source_id": "amayama_catalog_manual",
+            "source_id": AMAYAMA_SOURCE_ID,
+            "aliases": list(PUBLIC_CATALOG_SOURCE_ALIASES[AMAYAMA_SOURCE_ID]),
             "role": "Public preliminary Japanese OEM-candidate and diagram route for VIN, frame, article, or vehicle-parameter lookup.",
             "query": query,
             "url": "https://www.amayama.com/en/genuine-catalogs",
