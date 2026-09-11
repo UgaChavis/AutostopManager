@@ -145,7 +145,9 @@ sudo -u autostop-work-telegram env \
 
 The result must report `enabled: true` and `retention: memory_only`. A test
 message may then be checked with `monitor-events`; inspect a single opaque event
-only when the owner explicitly requests it. The monitor must not send, acknowledge,
+only when the owner explicitly requests it. The monitor keeps only a private
+chat/message reference, so a first message from an unknown contact does not
+require resolving or persisting a Telegram entity. It must not send, acknowledge,
 download, or persist conversation content or Telegram entity records.
 Telegram may retain its technical update cursor and existing session authorization;
 neither is a dialogue or contact journal.

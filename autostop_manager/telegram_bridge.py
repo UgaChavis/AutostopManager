@@ -194,7 +194,6 @@ class InboundMonitorEvent:
     sequence: int
     peer_id: int
     message_id: int
-    input_peer: Any
     received_at: str
 
 
@@ -221,8 +220,7 @@ class InboundMonitor:
             message_id = int(getattr(event, "id", 0) or 0)
         except (TypeError, ValueError):
             return
-        input_peer = getattr(event, "input_chat", None)
-        if peer_id <= 0 or message_id <= 0 or input_peer is None or (peer_id, message_id) in self._seen:
+        if peer_id <= 0 or message_id <= 0 or (peer_id, message_id) in self._seen:
             return
         if len(self._events) == self._max_events:
             removed = self._events.popleft()
@@ -233,7 +231,6 @@ class InboundMonitor:
                 sequence=self._next_sequence,
                 peer_id=peer_id,
                 message_id=message_id,
-                input_peer=input_peer,
                 received_at=datetime.now(UTC).isoformat(),
             )
         )
@@ -1312,7 +1309,10 @@ async def _handle_send_text_to_entity(
 async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
     event = monitor.resolve(event_id)
     try:
-        message = await client.get_messages(event.input_peer, ids=event.message_id)
+        # A first private update may not have an access hash.  Requesting a
+        # single non-channel message by ID avoids resolving or persisting its
+        # contact/entity; the checks below bind the result back to this ref.
+        message = await client.get_messages(None, ids=event.message_id)
     except Exception as exc:  # avoid exposing live Telegram transport details.
         raise BridgeError("inbound_message_unavailable") from exc
     if (

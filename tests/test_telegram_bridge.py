@@ -923,38 +923,50 @@ def test_normal_message_text_is_unchanged() -> None:
 def test_inbound_monitor_keeps_only_bounded_private_message_references() -> None:
     monitor = telegram_bridge.InboundMonitor(max_events=2)
 
-    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=99))
+    class EventWithoutInputPeer:
+        is_private = True
+        out = False
+        chat_id = 20
+        id = 99
+        message = "private text must never enter monitor state"
+        title = "private title must never enter monitor state"
+
+        @property
+        def input_chat(self):
+            pytest.fail("monitor must not resolve or retain Telegram input peers")
+
+    monitor.record(EventWithoutInputPeer())
     monitor.record(
         SimpleNamespace(
             is_private=True,
             out=False,
             chat_id=20,
             id=100,
-            input_chat=object(),
             message="private text must never enter monitor state",
             title="private title must never enter monitor state",
         )
     )
-    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100, input_chat=object()))
-    monitor.record(SimpleNamespace(is_private=True, out=True, chat_id=20, id=101, input_chat=object()))
-    monitor.record(SimpleNamespace(is_private=False, out=False, chat_id=20, id=101, input_chat=object()))
-    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101, input_chat=object()))
-    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=102, input_chat=object()))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+    monitor.record(SimpleNamespace(is_private=True, out=True, chat_id=20, id=101))
+    monitor.record(SimpleNamespace(is_private=False, out=False, chat_id=20, id=101))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=102))
 
     status = monitor.status()
     events = monitor.events()
 
     assert status["pending_events"] == 2
-    assert status["dropped_events"] == 1
+    assert status["dropped_events"] == 2
     assert status["retention"] == "memory_only"
-    assert [event["event_id"] for event in events] == ["inbound-2", "inbound-3"]
+    assert [event["event_id"] for event in events] == ["inbound-3", "inbound-4"]
     assert "private text" not in json.dumps({"status": status, "events": events})
     assert "private title" not in json.dumps({"status": status, "events": events})
-    assert monitor.resolve("inbound-2").message_id == 101
+    assert monitor.resolve("inbound-3").message_id == 101
+    assert not hasattr(monitor.resolve("inbound-3"), "input_peer")
     with pytest.raises(BridgeError, match="inbound_event_invalid"):
         monitor.resolve("20")
     with pytest.raises(BridgeError, match="inbound_event_unavailable"):
-        monitor.resolve("inbound-1")
+        monitor.resolve("inbound-2")
 
 
 def test_inbound_monitor_callback_discards_bad_provider_events() -> None:
@@ -972,8 +984,7 @@ def test_inbound_monitor_callback_discards_bad_provider_events() -> None:
 
 def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatch, tmp_path) -> None:
     monitor = telegram_bridge.InboundMonitor()
-    input_peer = object()
-    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100, input_chat=input_peer))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     config = _runtime_config(tmp_path)
     message = SimpleNamespace(
         id=100,
@@ -987,7 +998,7 @@ def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatc
 
     class Client:
         async def get_messages(self, actual_entity, *, ids):
-            assert actual_entity is input_peer
+            assert actual_entity is None
             assert ids == 100
             return message
 
