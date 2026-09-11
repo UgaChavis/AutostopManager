@@ -3,6 +3,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from .config import get_mcp_host, get_mcp_path, get_mcp_port
+from .mcp_contract import assert_manager_mcp_surface
 from .mcp_tools import register_manager_memory_tools
 
 
@@ -21,6 +22,9 @@ def build_server() -> FastMCP:
         log_level="WARNING",
     )
     register_manager_memory_tools(server)
+    # The native endpoint must never advertise a stale subset or a schema that
+    # differs from the reviewed manifest.  Fail before opening the listener.
+    assert_manager_mcp_surface(server)
     return server
 
 

@@ -58,6 +58,55 @@ If integration-audit units changed, run
 verify the enabled timer and a finite next elapse rather than expecting its
 oneshot service to stay active.
 
+## Native Manager MCP endpoint
+
+The native Manager surface is a loopback-only service at
+`http://127.0.0.1:41931/mcp`. It is intentionally separate from the public CRM
+Gateway: CRM keeps its own published CRM catalog and must not advertise Manager
+tools that it does not route.
+
+After the immutable Manager snapshot is active, install or update the unit from
+that exact snapshot and run its safe transport probe:
+
+```bash
+sudo /opt/autostop-manager-releases/current/scripts/install-manager-mcp.sh --activate
+sudo systemctl status --no-pager autostop-manager-mcp.service
+```
+
+The installer refuses to overwrite a divergent installed unit unless
+`--replace-unit` is supplied deliberately. Its activation probe validates native
+`ping`, `tools/list`, catalog status, category search, a synthetic dry-run VIN
+resolver, and a structured forced provider failure. It sends no customer VIN,
+token, correspondence, order, price, reserve, or write request. Repeat the
+same probe manually when diagnosing an already active service:
+
+```bash
+PYTHONPATH=/opt/autostop-manager-releases/current \
+  PYTHONSAFEPATH=1 \
+  AUTOSTOP_MANAGER_ENV_FILE=/dev/null \
+  AUTOSTOP_MANAGER_DB=/opt/AutostopManager/data/autostop_manager.sqlite3 \
+  /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe \
+    --url http://127.0.0.1:41931/mcp --provider-failure-check
+```
+
+Do not add this endpoint to nginx or the CRM Gateway. Codex connects to the
+loopback Manager endpoint through its separate `autostopmanager` MCP entry;
+the active Manager `tools/list` must match
+`docs/agent/manager_mcp_catalog.json`.
+
+For an initial endpoint failure, stop and disable only the native service; this
+does not alter CRM, Store, network, or business data:
+
+```bash
+sudo systemctl disable --now autostop-manager-mcp.service
+```
+
+For a failure while `/opt/autostopcrm/deploy.sh` is still running, let its
+armed rollback restore the previous immutable Manager snapshot and CRM state;
+do not manually repoint `current`. After a source rollback or restoration of a
+known-good Manager snapshot, run the installer with `--activate` again and
+repeat the transport probe before reopening the endpoint.
+
 ## Readback
 
 Use the CRM deploy output as its Gateway, connector and OAuth evidence. From

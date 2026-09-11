@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -10,6 +9,7 @@ from typing import Any
 from .cleanup_audit import build_cleanup_audit
 from .config import PROJECT_ROOT
 from .knowledge_base import audit_knowledge_base
+from .mcp_contract import mcp_schema_fingerprint
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore, _now
 
@@ -177,9 +177,9 @@ def audit_manager_mcp_catalog(
 
 
 def _mcp_schema_fingerprint(tool_schemas: dict[str, Any]) -> str:
-    surface = [{"name": name, "inputSchema": tool_schemas[name]} for name in sorted(tool_schemas)]
-    canonical = json.dumps(surface, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    """Backward-compatible import point for existing audit consumers."""
+
+    return mcp_schema_fingerprint(tool_schemas)
 
 
 def _local_memory_sections(memory: ManagerMemoryStore) -> dict[str, int]:

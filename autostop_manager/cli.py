@@ -16,6 +16,7 @@ from .knowledge_base import (
     sync_knowledge_base,
 )
 from .memory_curator import audit_memory
+from .mcp_probe import DEFAULT_MANAGER_MCP_URL, probe_manager_mcp
 from .skill_registry import audit_skill_registry
 from .storage import ManagerMemoryStore
 from .system_audit import build_system_audit
@@ -138,6 +139,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("memory-review", help="Generate rule-based, non-destructive memory review proposals")
 
+    mcp_probe = sub.add_parser(
+        "mcp-probe",
+        help="Probe the loopback-native Manager MCP transport with synthetic read-only inputs",
+    )
+    mcp_probe.add_argument("--url", default=DEFAULT_MANAGER_MCP_URL)
+    mcp_probe.add_argument("--timeout", type=float, default=10.0)
+    mcp_probe.add_argument(
+        "--provider-failure-check",
+        action="store_true",
+        help="Force one synthetic zero-timeout provider adapter failure and verify its structured classification",
+    )
+
     return parser
 
 
@@ -189,6 +202,14 @@ def main(argv: list[str] | None = None) -> int:
         return _print_checked_json(audit_skill_registry())
     elif args.command == "memory-review":
         _print_json(audit_memory(store))
+    elif args.command == "mcp-probe":
+        return _print_checked_json(
+            probe_manager_mcp(
+                args.url,
+                timeout=args.timeout,
+                provider_failure_check=args.provider_failure_check,
+            )
+        )
     elif args.command == "agent-brief":
         _print_json(build_agent_brief(store, args.query, intent=args.intent, limit=args.limit))
     return 0

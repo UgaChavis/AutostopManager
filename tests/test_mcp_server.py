@@ -19,6 +19,7 @@ def test_build_server_uses_runtime_transport_config_and_registers_tools(monkeypa
     monkeypatch.setattr(mcp_server, "get_mcp_port", lambda: 41931)
     monkeypatch.setattr(mcp_server, "get_mcp_path", lambda: "/manager-mcp")
     monkeypatch.setattr(mcp_server, "register_manager_memory_tools", registered.append)
+    monkeypatch.setattr(mcp_server, "assert_manager_mcp_surface", lambda server: {"ok": True})
 
     server = mcp_server.build_server()
 

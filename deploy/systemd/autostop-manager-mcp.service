@@ -1,0 +1,45 @@
+[Unit]
+Description=AutoStop Manager native MCP endpoint
+Wants=network-online.target
+After=network-online.target
+ConditionPathIsDirectory=/opt/autostop-manager-releases/current
+ConditionPathExists=/opt/AutostopManager/.venv/bin/python
+ConditionPathExists=/opt/AutostopManager/.env
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/autostop-manager-releases/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONSAFEPATH=1
+Environment=PYTHONPATH=/opt/autostop-manager-releases/current
+Environment=AUTOSTOP_MANAGER_ENV_FILE=/dev/null
+Environment=AUTOSTOP_MANAGER_DB=/opt/AutostopManager/data/autostop_manager.sqlite3
+Environment=AUTOSTOP_MANAGER_MCP_HOST=127.0.0.1
+Environment=AUTOSTOP_MANAGER_MCP_PORT=41931
+Environment=AUTOSTOP_MANAGER_MCP_PATH=/mcp
+EnvironmentFile=/opt/AutostopManager/.env
+UMask=0077
+ExecStartPre=/usr/bin/test -x /opt/AutostopManager/.venv/bin/python
+ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.mcp_server
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/AutostopManager/data
+
+[Install]
+WantedBy=multi-user.target

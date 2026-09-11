@@ -6,6 +6,11 @@ url = "https://crm.autostopcrm.ru/mcp"
 enabled = true
 tool_timeout_sec = 90
 
+[mcp_servers.autostopmanager]
+url = "http://127.0.0.1:41931/mcp"
+enabled = true
+tool_timeout_sec = 90
+
 [mcp_servers.autostop_remote_diagnostics]
 command = "/usr/local/libexec/autostop-remote-staging-mcp"
 enabled = true

@@ -1,6 +1,6 @@
 {
   "format": "mcp_surface_manifest_v1",
-  "source": "internal standalone autostop_manager.mcp_server.build_server registry; production CRM imports only its required Gateway subset; not a separate Codex App surface; fingerprint=sha256(canonical sorted [{name,inputSchema}])",
+  "source": "native loopback AutoStopManager MCP from autostop_manager.mcp_server.build_server; CRM Gateway is a separate CRM-only surface and must not advertise this registry; fingerprint=sha256(canonical sorted [{name,inputSchema}])",
   "expected_tool_count": 66,
   "expected_tool_names": [
     "add_manager_task",
