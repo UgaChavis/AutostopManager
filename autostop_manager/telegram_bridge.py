@@ -42,6 +42,8 @@ MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
 PHONE_RESOLVE_INTERVAL_SECONDS = 3.0
 MAX_INBOUND_MONITOR_EVENTS = 32
+MAX_INBOUND_MONITOR_CONTEXT_MESSAGES = 5
+INBOUND_MONITOR_CONTEXT_WINDOW_SECONDS = 5 * 60
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -258,6 +260,24 @@ class InboundMonitor:
             if event.sequence == sequence:
                 return event
         raise BridgeError("inbound_event_unavailable")
+
+    def context(self, event_id: str, *, limit: int) -> list[InboundMonitorEvent]:
+        """Return a small, anchor-centred window of one private chat's pending refs."""
+
+        anchor = self.resolve(event_id)
+        anchor_time = datetime.fromisoformat(anchor.received_at)
+        peer_events = [
+            event
+            for event in self._events
+            if event.peer_id == anchor.peer_id
+            and abs((datetime.fromisoformat(event.received_at) - anchor_time).total_seconds())
+            <= INBOUND_MONITOR_CONTEXT_WINDOW_SECONDS
+        ]
+        anchor_index = peer_events.index(anchor)
+        start = max(0, anchor_index - limit // 2)
+        end = min(len(peer_events), start + limit)
+        start = max(0, end - limit)
+        return peer_events[start:end]
 
 
 def _config_for_account(account: str) -> TelegramConfig:
@@ -1306,6 +1326,73 @@ async def _handle_send_text_to_entity(
     }
 
 
+def _monitor_context_limit(value: Any) -> int:
+    if isinstance(value, bool):
+        raise BridgeError("inbound_context_limit_invalid")
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise BridgeError("inbound_context_limit_invalid") from exc
+    if not 1 <= limit <= MAX_INBOUND_MONITOR_CONTEXT_MESSAGES:
+        raise BridgeError("inbound_context_limit_invalid")
+    return limit
+
+
+async def _load_inbound_monitor_context_messages(client: Any, events: list[InboundMonitorEvent]) -> list[Any]:
+    if not events:
+        return []
+    message_ids = [event.message_id for event in events]
+    requested_ids: int | list[int] = message_ids[0] if len(message_ids) == 1 else message_ids
+    try:
+        # A first private update may not have an access hash.  Requesting a
+        # bounded set of non-channel message IDs avoids resolving or persisting
+        # a contact/entity; the checks below bind each result back to its ref.
+        result = await client.get_messages(None, ids=requested_ids)
+    except Exception as exc:  # avoid exposing live Telegram transport details.
+        raise BridgeError("inbound_message_unavailable") from exc
+    messages = [result] if len(events) == 1 else list(result or [])
+    if len(messages) != len(events):
+        raise BridgeError("inbound_message_unavailable")
+    for event, message in zip(events, messages, strict=True):
+        if (
+            message is None
+            or int(getattr(message, "id", 0) or 0) != event.message_id
+            or bool(getattr(message, "out", False))
+            or not bool(getattr(message, "is_private", False))
+            or int(getattr(message, "chat_id", 0) or 0) != event.peer_id
+        ):
+            raise BridgeError("inbound_message_unavailable")
+    return messages
+
+
+def _monitor_context_media_kind(message: Any) -> str | None:
+    if getattr(message, "media", None) is None:
+        return None
+    if getattr(message, "photo", None) is not None:
+        return "photo"
+    if _message_media_metadata(message)["voice"]:
+        return "voice"
+    return "media"
+
+
+def _monitor_context_payload(message: Any) -> dict[str, Any]:
+    text, sensitive_content_redacted = redact_sensitive_message_text(str(getattr(message, "message", "") or ""))
+    return {
+        "date": message.date.isoformat() if getattr(message, "date", None) else None,
+        "text": text,
+        "sensitive_content_redacted": sensitive_content_redacted,
+        "has_media": bool(getattr(message, "media", None)),
+        "media_kind": _monitor_context_media_kind(message),
+    }
+
+
+def _monitor_context_message(event: InboundMonitorEvent, message: Any) -> dict[str, Any]:
+    return {
+        "event_id": f"inbound-{event.sequence}",
+        "message": _monitor_context_payload(message),
+    }
+
+
 async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
     event = monitor.resolve(event_id)
     try:
@@ -1336,13 +1423,28 @@ async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: s
     }
 
 
+async def _handle_monitor_context(
+    client: Any,
+    monitor: InboundMonitor,
+    event_id: str,
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    events = monitor.context(event_id, limit=limit)
+    messages = [
+        _monitor_context_message(event, message)
+        for event, message in zip(events, await _load_inbound_monitor_context_messages(client, events), strict=True)
+    ]
+    return {"ok": True, "event_id": event_id, "messages": messages}
+
+
 async def _handle_monitor_operation(
     client: Any,
     request: dict[str, Any],
     inbound_monitor: InboundMonitor | None,
 ) -> dict[str, Any] | None:
     operation = str(request.get("operation") or "")
-    if operation not in {"monitor_status", "monitor_events", "monitor_read"}:
+    if operation not in {"monitor_status", "monitor_events", "monitor_read", "monitor_context"}:
         return None
     if inbound_monitor is None:
         raise BridgeError("inbound_monitor_disabled")
@@ -1350,6 +1452,13 @@ async def _handle_monitor_operation(
         return {"ok": True, "monitor": inbound_monitor.status()}
     if operation == "monitor_events":
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
+    if operation == "monitor_context":
+        return await _handle_monitor_context(
+            client,
+            inbound_monitor,
+            str(request.get("event_id") or ""),
+            limit=_monitor_context_limit(request.get("limit", MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)),
+        )
     return await _handle_monitor_read(client, inbound_monitor, str(request.get("event_id") or ""))
 
 
@@ -1664,6 +1773,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("monitor-events")
     monitor_read = subparsers.add_parser("monitor-read")
     monitor_read.add_argument("--event-id", required=True)
+    monitor_context = subparsers.add_parser("monitor-context")
+    monitor_context.add_argument("--event-id", required=True)
+    monitor_context.add_argument("--limit", type=int, default=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
     dialogs = subparsers.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
     search = subparsers.add_parser("search")
@@ -1716,6 +1828,8 @@ def main(argv: list[str] | None = None) -> int:
                 request["operation"] = "monitor_events"
             elif args.command == "monitor-read":
                 request.update({"operation": "monitor_read", "event_id": args.event_id})
+            elif args.command == "monitor-context":
+                request.update({"operation": "monitor_context", "event_id": args.event_id, "limit": args.limit})
             elif args.command == "dialogs":
                 request["limit"] = args.limit
             elif args.command == "search":

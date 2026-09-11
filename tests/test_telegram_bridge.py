@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from datetime import UTC, datetime
 import json
 import os
@@ -982,6 +983,37 @@ def test_inbound_monitor_callback_discards_bad_provider_events() -> None:
     assert monitor.status()["pending_events"] == 0
 
 
+def test_inbound_monitor_context_excludes_stale_same_peer_refs() -> None:
+    monitor = telegram_bridge.InboundMonitor()
+    anchor_time = datetime(2026, 9, 11, 12, tzinfo=UTC)
+    monitor._events = deque(
+        [
+            telegram_bridge.InboundMonitorEvent(
+                sequence=1,
+                peer_id=20,
+                message_id=100,
+                received_at=(anchor_time.replace(hour=11, minute=54)).isoformat(),
+            ),
+            telegram_bridge.InboundMonitorEvent(
+                sequence=2,
+                peer_id=20,
+                message_id=101,
+                received_at=anchor_time.isoformat(),
+            ),
+            telegram_bridge.InboundMonitorEvent(
+                sequence=3,
+                peer_id=20,
+                message_id=102,
+                received_at=anchor_time.isoformat(),
+            ),
+        ]
+    )
+
+    context = monitor.context("inbound-2", limit=5)
+
+    assert [event.sequence for event in context] == [2, 3]
+
+
 def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatch, tmp_path) -> None:
     monitor = telegram_bridge.InboundMonitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
@@ -1038,6 +1070,103 @@ def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatc
                 Client(),
                 config,
                 {"operation": "monitor_read", "event_id": "inbound-1"},
+                inbound_monitor=monitor,
+            )
+        )
+
+
+def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(tmp_path) -> None:
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=30, id=200))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101))
+
+    voice_attribute = type("DocumentAttributeAudio", (), {})()
+    voice_attribute.voice = True
+    voice_attribute.duration = 8
+    photo = SimpleNamespace(
+        id=100,
+        out=False,
+        is_private=True,
+        chat_id=20,
+        date=datetime(2026, 9, 11, tzinfo=UTC),
+        message="VIN photo",
+        media=SimpleNamespace(),
+        photo=SimpleNamespace(),
+    )
+    voice = SimpleNamespace(
+        id=101,
+        out=False,
+        is_private=True,
+        chat_id=20,
+        date=datetime(2026, 9, 11, tzinfo=UTC),
+        message="voice request",
+        media=SimpleNamespace(),
+        photo=None,
+        file=SimpleNamespace(mime_type="audio/ogg", name="", size=32),
+        document=SimpleNamespace(attributes=[voice_attribute]),
+    )
+
+    class Client:
+        def __init__(self) -> None:
+            self.requested_ids: list[list[int]] = []
+
+        async def get_messages(self, actual_entity, *, ids):
+            assert actual_entity is None
+            self.requested_ids.append(ids)
+            return [{100: photo, 101: voice}[message_id] for message_id in ids]
+
+        async def get_entity(self, *_args, **_kwargs):
+            pytest.fail("monitor context must not resolve a Telegram entity")
+
+        async def iter_dialogs(self, *_args, **_kwargs):
+            pytest.fail("monitor context must not enumerate dialogs")
+
+        async def send_message(self, *_args, **_kwargs):
+            pytest.fail("monitor context must not send")
+
+        async def send_read_acknowledge(self, *_args, **_kwargs):
+            pytest.fail("monitor context must not acknowledge")
+
+        async def download_media(self, *_args, **_kwargs):
+            pytest.fail("monitor context must not download")
+
+    client = Client()
+    context = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            _runtime_config(tmp_path),
+            {"operation": "monitor_context", "event_id": "inbound-1", "limit": 5},
+            inbound_monitor=monitor,
+        )
+    )
+
+    assert client.requested_ids == [[100, 101]]
+    assert [row["event_id"] for row in context["messages"]] == ["inbound-1", "inbound-3"]
+    assert [row["message"]["media_kind"] for row in context["messages"]] == ["photo", "voice"]
+    assert "peer_id" not in json.dumps(context)
+    assert telegram_bridge._requires_mutation_lock({"operation": "monitor_context"}) is False
+    with pytest.raises(BridgeError, match="inbound_context_limit_invalid"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                _runtime_config(tmp_path),
+                {"operation": "monitor_context", "event_id": "inbound-1", "limit": 6},
+                inbound_monitor=monitor,
+            )
+        )
+
+    class MissingVoiceClient(Client):
+        async def get_messages(self, actual_entity, *, ids):
+            assert actual_entity is None
+            return [photo, None]
+
+    with pytest.raises(BridgeError, match="inbound_message_unavailable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                MissingVoiceClient(),
+                _runtime_config(tmp_path),
+                {"operation": "monitor_context", "event_id": "inbound-1", "limit": 5},
                 inbound_monitor=monitor,
             )
         )
@@ -2026,14 +2155,18 @@ def test_monitor_cli_commands_use_read_only_monitor_operations(monkeypatch, caps
     assert telegram_bridge.main(["--account", "work", "monitor-status"]) == 0
     assert telegram_bridge.main(["--account", "work", "monitor-events"]) == 0
     assert telegram_bridge.main(["--account", "work", "monitor-read", "--event-id", "inbound-3"]) == 0
+    assert (
+        telegram_bridge.main(["--account", "work", "monitor-context", "--event-id", "inbound-3", "--limit", "2"]) == 0
+    )
 
     assert requests == [
         {"operation": "monitor_status"},
         {"operation": "monitor_events"},
         {"operation": "monitor_read", "event_id": "inbound-3"},
+        {"operation": "monitor_context", "event_id": "inbound-3", "limit": 2},
     ]
     assert all("send" not in request["operation"] for request in requests)
-    assert capsys.readouterr().out.count('"ok": true') == 3
+    assert capsys.readouterr().out.count('"ok": true') == 4
 
 
 def test_main_enables_inbound_monitor_for_work_only(monkeypatch) -> None:
