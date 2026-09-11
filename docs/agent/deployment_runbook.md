@@ -133,6 +133,23 @@ sudo ./scripts/deploy_telegram_bridge.sh --account work "$revision"
 They use an immutable account release and roll back that account on failure.
 They do not change CRM, Store, VPN, nginx, another account or the working tree.
 
+For an explicitly authorized work-Telegram inbound-monitor release, verify the
+same account after deployment without exposing dialogue content:
+
+```bash
+sudo -u autostop-work-telegram env \
+  PYTHONPATH=/opt/autostop-work-telegram-releases/current \
+  /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge \
+    --account work monitor-status
+```
+
+The result must report `enabled: true` and `retention: memory_only`. A test
+message may then be checked with `monitor-events`; inspect a single opaque event
+only when the owner explicitly requests it. The monitor must not send, acknowledge,
+download, or persist conversation content or Telegram entity records.
+Telegram may retain its technical update cursor and existing session authorization;
+neither is a dialogue or contact journal.
+
 ## Failure and rollback
 
 Stop on unmatched checkouts, failed backup, schema drift, missing rollback proof

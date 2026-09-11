@@ -15,8 +15,10 @@ import socket
 import stat
 import sys
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,7 @@ TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
 PHONE_RESOLVE_INTERVAL_SECONDS = 3.0
+MAX_INBOUND_MONITOR_EVENTS = 32
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -182,6 +185,82 @@ class TelegramConfig:
             state_dir=state_dir,
             socket_path=socket_path,
         )
+
+
+@dataclass(frozen=True)
+class InboundMonitorEvent:
+    """One private incoming message reference kept only in daemon memory."""
+
+    sequence: int
+    peer_id: int
+    message_id: int
+    input_peer: Any
+    received_at: str
+
+
+class InboundMonitor:
+    """Bounded, content-free monitor for explicitly enabled work Telegram."""
+
+    def __init__(self, *, max_events: int = MAX_INBOUND_MONITOR_EVENTS) -> None:
+        if max_events < 1:
+            raise ValueError("inbound_monitor_limit_invalid")
+        self.started_at = datetime.now(UTC).isoformat()
+        self._max_events = max_events
+        self._events: deque[InboundMonitorEvent] = deque()
+        self._seen: set[tuple[int, int]] = set()
+        self._next_sequence = 1
+        self._dropped_events = 0
+
+    def record(self, event: Any) -> None:
+        """Remember only an incoming private message locator; never its body or media."""
+
+        if not bool(getattr(event, "is_private", False)) or bool(getattr(event, "out", False)):
+            return
+        try:
+            peer_id = int(getattr(event, "chat_id", 0) or 0)
+            message_id = int(getattr(event, "id", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        input_peer = getattr(event, "input_chat", None)
+        if peer_id <= 0 or message_id <= 0 or input_peer is None or (peer_id, message_id) in self._seen:
+            return
+        if len(self._events) == self._max_events:
+            removed = self._events.popleft()
+            self._seen.discard((removed.peer_id, removed.message_id))
+            self._dropped_events += 1
+        self._events.append(
+            InboundMonitorEvent(
+                sequence=self._next_sequence,
+                peer_id=peer_id,
+                message_id=message_id,
+                input_peer=input_peer,
+                received_at=datetime.now(UTC).isoformat(),
+            )
+        )
+        self._seen.add((peer_id, message_id))
+        self._next_sequence += 1
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "started_at": self.started_at,
+            "pending_events": len(self._events),
+            "dropped_events": self._dropped_events,
+            "retention": "memory_only",
+        }
+
+    def events(self) -> list[dict[str, Any]]:
+        return [{"event_id": f"inbound-{event.sequence}", "received_at": event.received_at} for event in self._events]
+
+    def resolve(self, event_id: str) -> InboundMonitorEvent:
+        match = re.fullmatch(r"inbound-([1-9][0-9]{0,11})", event_id)
+        if match is None:
+            raise BridgeError("inbound_event_invalid")
+        sequence = int(match.group(1))
+        for event in self._events:
+            if event.sequence == sequence:
+                return event
+        raise BridgeError("inbound_event_unavailable")
 
 
 def _config_for_account(account: str) -> TelegramConfig:
@@ -686,6 +765,14 @@ def _load_telethon() -> tuple[Any, Any, Any]:
     except ImportError as exc:
         raise BridgeError("telethon_not_installed") from exc
     return TelegramClient, utils, SessionPasswordNeededError
+
+
+def _load_telegram_events() -> Any:
+    try:
+        from telethon import events
+    except ImportError as exc:
+        raise BridgeError("telethon_not_installed") from exc
+    return events
 
 
 def _load_telegram_functions() -> tuple[Any, Any]:
@@ -1222,7 +1309,57 @@ async def _handle_send_text_to_entity(
     }
 
 
-async def _handle_operation(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
+    event = monitor.resolve(event_id)
+    try:
+        message = await client.get_messages(event.input_peer, ids=event.message_id)
+    except Exception as exc:  # avoid exposing live Telegram transport details.
+        raise BridgeError("inbound_message_unavailable") from exc
+    if (
+        message is None
+        or int(getattr(message, "id", 0) or 0) != event.message_id
+        or bool(getattr(message, "out", False))
+        or not bool(getattr(message, "is_private", False))
+        or int(getattr(message, "chat_id", 0) or 0) != event.peer_id
+    ):
+        raise BridgeError("inbound_message_unavailable")
+    text, sensitive_content_redacted = redact_sensitive_message_text(str(getattr(message, "message", "") or ""))
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "message": {
+            "date": message.date.isoformat() if getattr(message, "date", None) else None,
+            "text": text,
+            "sensitive_content_redacted": sensitive_content_redacted,
+            "has_media": bool(getattr(message, "media", None)),
+        },
+    }
+
+
+async def _handle_monitor_operation(
+    client: Any,
+    request: dict[str, Any],
+    inbound_monitor: InboundMonitor | None,
+) -> dict[str, Any] | None:
+    operation = str(request.get("operation") or "")
+    if operation not in {"monitor_status", "monitor_events", "monitor_read"}:
+        return None
+    if inbound_monitor is None:
+        raise BridgeError("inbound_monitor_disabled")
+    if operation == "monitor_status":
+        return {"ok": True, "monitor": inbound_monitor.status()}
+    if operation == "monitor_events":
+        return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
+    return await _handle_monitor_read(client, inbound_monitor, str(request.get("event_id") or ""))
+
+
+async def _handle_operation(
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+    *,
+    inbound_monitor: InboundMonitor | None = None,
+) -> dict[str, Any]:
     operation = str(request.get("operation") or "")
     if operation == "probe":
         return {"ok": True, "authorized": bool(await client.get_me())}
@@ -1242,6 +1379,10 @@ async def _handle_operation(client: Any, config: TelegramConfig, request: dict[s
             if me
             else None,
         }
+
+    monitor_response = await _handle_monitor_operation(client, request, inbound_monitor)
+    if monitor_response is not None:
+        return monitor_response
 
     if operation == "dialogs":
         limit = max(1, min(int(request.get("limit") or 20), 100))
@@ -1337,7 +1478,12 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
 
 
 async def _serve_client(
-    client: Any, config: TelegramConfig, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    client: Any,
+    config: TelegramConfig,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    inbound_monitor: InboundMonitor | None = None,
 ) -> None:
     response: dict[str, Any]
     try:
@@ -1349,9 +1495,9 @@ async def _serve_client(
             raise BridgeError("request_invalid")
         if _requires_mutation_lock(request):
             async with _MUTATION_LOCK:
-                response = await _handle_operation(client, config, request)
+                response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
         else:
-            response = await _handle_operation(client, config, request)
+            response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
     except BridgeError as exc:
         response = {"ok": False, "error": exc.code}
     except (json.JSONDecodeError, UnicodeError, ValueError):
@@ -1364,7 +1510,14 @@ async def _serve_client(
     await writer.wait_closed()
 
 
-async def run_daemon(config: TelegramConfig) -> None:
+async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
+    try:
+        monitor.record(event)
+    except Exception:  # noqa: BLE001 - one malformed provider update must not stop the bridge.
+        return
+
+
+async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) -> None:
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
     config.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1375,13 +1528,23 @@ async def run_daemon(config: TelegramConfig) -> None:
     inbox_dir.mkdir(mode=0o700, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
     config.socket_path.unlink(missing_ok=True)
-    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
+    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=False)
+    inbound_monitor = InboundMonitor() if monitor_incoming else None
+    if inbound_monitor is not None:
+        # Telethon otherwise persists entity names, phones and usernames while processing updates.
+        client.session.save_entities = False
+        events = _load_telegram_events()
+
+        async def capture(event: Any) -> None:
+            await _capture_incoming_event(inbound_monitor, event)
+
+        client.add_event_handler(capture, events.NewMessage(incoming=True))
     await client.connect()
     if not await client.is_user_authorized():
         await client.disconnect()
         raise BridgeError("account_not_authorized")
     server = await asyncio.start_unix_server(
-        lambda reader, writer: _serve_client(client, config, reader, writer),
+        lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
         path=str(config.socket_path),
     )
     os.chmod(config.socket_path, 0o600)
@@ -1497,6 +1660,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("code-login")
     subparsers.add_parser("probe")
     subparsers.add_parser("status")
+    subparsers.add_parser("monitor-status")
+    subparsers.add_parser("monitor-events")
+    monitor_read = subparsers.add_parser("monitor-read")
+    monitor_read.add_argument("--event-id", required=True)
     dialogs = subparsers.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
     search = subparsers.add_parser("search")
@@ -1537,13 +1704,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "daemon":
             config = _config_from_args(args)
-            asyncio.run(run_daemon(config))
+            asyncio.run(run_daemon(config, monitor_incoming=args.account == "work"))
             return 0
         if args.command == "code-login":
             payload = asyncio.run(run_code_login(_config_from_args(args)))
         else:
             request: dict[str, Any] = {"operation": args.command}
-            if args.command == "dialogs":
+            if args.command == "monitor-status":
+                request["operation"] = "monitor_status"
+            elif args.command == "monitor-events":
+                request["operation"] = "monitor_events"
+            elif args.command == "monitor-read":
+                request.update({"operation": "monitor_read", "event_id": args.event_id})
+            elif args.command == "dialogs":
                 request["limit"] = args.limit
             elif args.command == "search":
                 request.update({"query": args.query, "limit": args.limit})
