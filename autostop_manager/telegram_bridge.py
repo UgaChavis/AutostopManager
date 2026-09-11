@@ -44,6 +44,7 @@ PHONE_RESOLVE_INTERVAL_SECONDS = 3.0
 MAX_INBOUND_MONITOR_EVENTS = 32
 MAX_INBOUND_MONITOR_CONTEXT_MESSAGES = 5
 INBOUND_MONITOR_CONTEXT_WINDOW_SECONDS = 5 * 60
+MAX_INBOUND_MONITOR_FALLBACK_DIALOGS = 20
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -1338,18 +1339,12 @@ def _monitor_context_limit(value: Any) -> int:
     return limit
 
 
-async def _load_inbound_monitor_context_messages(client: Any, events: list[InboundMonitorEvent]) -> list[Any]:
+def _validate_inbound_monitor_messages(
+    events: list[InboundMonitorEvent],
+    result: Any,
+) -> list[Any]:
     if not events:
         return []
-    message_ids = [event.message_id for event in events]
-    requested_ids: int | list[int] = message_ids[0] if len(message_ids) == 1 else message_ids
-    try:
-        # A first private update may not have an access hash.  Requesting a
-        # bounded set of non-channel message IDs avoids resolving or persisting
-        # a contact/entity; the checks below bind each result back to its ref.
-        result = await client.get_messages(None, ids=requested_ids)
-    except Exception as exc:  # avoid exposing live Telegram transport details.
-        raise BridgeError("inbound_message_unavailable") from exc
     messages = [result] if len(events) == 1 else list(result or [])
     if len(messages) != len(events):
         raise BridgeError("inbound_message_unavailable")
@@ -1363,6 +1358,57 @@ async def _load_inbound_monitor_context_messages(client: Any, events: list[Inbou
         ):
             raise BridgeError("inbound_message_unavailable")
     return messages
+
+
+async def _load_global_inbound_monitor_messages(
+    client: Any,
+    events: list[InboundMonitorEvent],
+    requested_ids: int | list[int],
+) -> list[Any]:
+    try:
+        result = await client.get_messages(None, ids=requested_ids)
+    except Exception as exc:  # avoid exposing live Telegram transport details.
+        raise BridgeError("inbound_message_unavailable") from exc
+    return _validate_inbound_monitor_messages(events, result)
+
+
+async def _load_inbound_monitor_context_messages(client: Any, events: list[InboundMonitorEvent]) -> list[Any]:
+    if not events:
+        return []
+    message_ids = [event.message_id for event in events]
+    requested_ids: int | list[int] = message_ids[0] if len(message_ids) == 1 else message_ids
+    try:
+        # A first private update may not have an access hash.  Requesting a
+        # bounded set of non-channel message IDs avoids resolving or persisting
+        # a contact/entity; the checks below bind each result back to its ref.
+        return await _load_global_inbound_monitor_messages(client, events, requested_ids)
+    except BridgeError:  # Try the bounded exact-peer fallback below.
+        pass
+
+    peer_id = events[0].peer_id
+    if any(event.peer_id != peer_id for event in events):
+        raise BridgeError("inbound_message_unavailable")
+    try:
+        # The work monitor has entity persistence disabled.  This fallback does
+        # not serialize dialog details and touches at most 20 recent dialogs to
+        # find the exact peer already held by the content-free monitor ref.
+        entity = None
+        async for dialog in client.iter_dialogs(limit=MAX_INBOUND_MONITOR_FALLBACK_DIALOGS):
+            try:
+                dialog_id = int(getattr(dialog, "id", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if dialog_id == peer_id:
+                entity = getattr(dialog, "entity", None)
+                break
+        if entity is None:
+            raise BridgeError("inbound_message_unavailable")
+        result = await client.get_messages(entity, ids=requested_ids)
+        return _validate_inbound_monitor_messages(events, result)
+    except BridgeError:
+        raise
+    except Exception as exc:  # avoid exposing live Telegram transport details.
+        raise BridgeError("inbound_message_unavailable") from exc
 
 
 def _monitor_context_media_kind(message: Any) -> str | None:
@@ -1395,21 +1441,7 @@ def _monitor_context_message(event: InboundMonitorEvent, message: Any) -> dict[s
 
 async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
     event = monitor.resolve(event_id)
-    try:
-        # A first private update may not have an access hash.  Requesting a
-        # single non-channel message by ID avoids resolving or persisting its
-        # contact/entity; the checks below bind the result back to this ref.
-        message = await client.get_messages(None, ids=event.message_id)
-    except Exception as exc:  # avoid exposing live Telegram transport details.
-        raise BridgeError("inbound_message_unavailable") from exc
-    if (
-        message is None
-        or int(getattr(message, "id", 0) or 0) != event.message_id
-        or bool(getattr(message, "out", False))
-        or not bool(getattr(message, "is_private", False))
-        or int(getattr(message, "chat_id", 0) or 0) != event.peer_id
-    ):
-        raise BridgeError("inbound_message_unavailable")
+    message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
     text, sensitive_content_redacted = redact_sensitive_message_text(str(getattr(message, "message", "") or ""))
     return {
         "ok": True,

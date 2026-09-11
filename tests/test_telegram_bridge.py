@@ -1075,6 +1075,127 @@ def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatc
         )
 
 
+def test_monitor_read_uses_bounded_exact_dialog_fallback_after_global_failure(tmp_path) -> None:
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+    message = SimpleNamespace(
+        id=100,
+        out=False,
+        is_private=True,
+        chat_id=20,
+        date=datetime(2026, 9, 11, tzinfo=UTC),
+        message="hello",
+        media=None,
+    )
+
+    class Client:
+        def __init__(self) -> None:
+            self.global_ids: list[int] = []
+            self.fallback_ids: list[int] = []
+            self.dialog_limits: list[int] = []
+            self.exact_entity = object()
+
+        async def get_messages(self, actual_entity, *, ids):
+            if actual_entity is None:
+                self.global_ids.append(ids)
+                raise RuntimeError("global message lookup unavailable")
+            assert actual_entity is self.exact_entity
+            self.fallback_ids.append(ids)
+            return message
+
+        async def iter_dialogs(self, *, limit):
+            self.dialog_limits.append(limit)
+            yield SimpleNamespace(id=30, entity=object())
+            yield SimpleNamespace(id=20, entity=self.exact_entity)
+
+        async def get_entity(self, *_args, **_kwargs):
+            pytest.fail("monitor fallback must not resolve a Telegram entity")
+
+        async def send_message(self, *_args, **_kwargs):
+            pytest.fail("monitor fallback must not send")
+
+        async def send_read_acknowledge(self, *_args, **_kwargs):
+            pytest.fail("monitor fallback must not acknowledge")
+
+        async def download_media(self, *_args, **_kwargs):
+            pytest.fail("monitor fallback must not download")
+
+    client = Client()
+    read = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            _runtime_config(tmp_path),
+            {"operation": "monitor_read", "event_id": "inbound-1"},
+            inbound_monitor=monitor,
+        )
+    )
+
+    assert read["message"]["text"] == "hello"
+    assert client.global_ids == [100]
+    assert client.fallback_ids == [100]
+    assert client.dialog_limits == [20]
+    assert "peer_id" not in json.dumps(read)
+
+
+def test_monitor_fallback_fails_closed_without_exact_dialog_or_message_binding(tmp_path) -> None:
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+
+    class MissingDialogClient:
+        async def get_messages(self, actual_entity, *, ids):
+            if actual_entity is None:
+                raise RuntimeError("global message lookup unavailable")
+            pytest.fail("fallback must not read a non-matching dialog")
+
+        async def iter_dialogs(self, *, limit):
+            assert limit == 20
+            yield SimpleNamespace(id=21, entity=object())
+
+    with pytest.raises(BridgeError, match="inbound_message_unavailable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                MissingDialogClient(),
+                _runtime_config(tmp_path),
+                {"operation": "monitor_read", "event_id": "inbound-1"},
+                inbound_monitor=monitor,
+            )
+        )
+
+    mismatched_message = SimpleNamespace(
+        id=100,
+        out=False,
+        is_private=True,
+        chat_id=21,
+        date=datetime(2026, 9, 11, tzinfo=UTC),
+        message="wrong chat",
+        media=None,
+    )
+
+    class MismatchedMessageClient:
+        exact_entity = object()
+
+        async def get_messages(self, actual_entity, *, ids):
+            if actual_entity is None:
+                raise RuntimeError("global message lookup unavailable")
+            assert actual_entity is self.exact_entity
+            assert ids == 100
+            return mismatched_message
+
+        async def iter_dialogs(self, *, limit):
+            assert limit == 20
+            yield SimpleNamespace(id=20, entity=self.exact_entity)
+
+    with pytest.raises(BridgeError, match="inbound_message_unavailable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                MismatchedMessageClient(),
+                _runtime_config(tmp_path),
+                {"operation": "monitor_read", "event_id": "inbound-1"},
+                inbound_monitor=monitor,
+            )
+        )
+
+
 def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(tmp_path) -> None:
     monitor = telegram_bridge.InboundMonitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
@@ -1090,7 +1211,7 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
         is_private=True,
         chat_id=20,
         date=datetime(2026, 9, 11, tzinfo=UTC),
-        message="VIN photo",
+        message="photo caption",
         media=SimpleNamespace(),
         photo=SimpleNamespace(),
     )
@@ -1109,18 +1230,26 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
 
     class Client:
         def __init__(self) -> None:
-            self.requested_ids: list[list[int]] = []
+            self.global_ids: list[list[int]] = []
+            self.fallback_ids: list[list[int]] = []
+            self.dialog_limits: list[int] = []
+            self.exact_entity = object()
 
         async def get_messages(self, actual_entity, *, ids):
-            assert actual_entity is None
-            self.requested_ids.append(ids)
+            if actual_entity is None:
+                self.global_ids.append(ids)
+                raise RuntimeError("global message lookup unavailable")
+            assert actual_entity is self.exact_entity
+            self.fallback_ids.append(ids)
             return [{100: photo, 101: voice}[message_id] for message_id in ids]
+
+        async def iter_dialogs(self, *, limit):
+            self.dialog_limits.append(limit)
+            yield SimpleNamespace(id=30, entity=object())
+            yield SimpleNamespace(id=20, entity=self.exact_entity)
 
         async def get_entity(self, *_args, **_kwargs):
             pytest.fail("monitor context must not resolve a Telegram entity")
-
-        async def iter_dialogs(self, *_args, **_kwargs):
-            pytest.fail("monitor context must not enumerate dialogs")
 
         async def send_message(self, *_args, **_kwargs):
             pytest.fail("monitor context must not send")
@@ -1141,7 +1270,9 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
         )
     )
 
-    assert client.requested_ids == [[100, 101]]
+    assert client.global_ids == [[100, 101]]
+    assert client.fallback_ids == [[100, 101]]
+    assert client.dialog_limits == [20]
     assert [row["event_id"] for row in context["messages"]] == ["inbound-1", "inbound-3"]
     assert [row["message"]["media_kind"] for row in context["messages"]] == ["photo", "voice"]
     assert "peer_id" not in json.dumps(context)
@@ -1158,7 +1289,9 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
 
     class MissingVoiceClient(Client):
         async def get_messages(self, actual_entity, *, ids):
-            assert actual_entity is None
+            if actual_entity is None:
+                raise RuntimeError("global message lookup unavailable")
+            assert actual_entity is self.exact_entity
             return [photo, None]
 
     with pytest.raises(BridgeError, match="inbound_message_unavailable"):
