@@ -54,7 +54,6 @@ case "${account}" in
     venv_root="/opt/autostop-work-telegram-venv"
     work_runtime_root="/opt/autostop-work-telegram-runtimes"
     work_model_link="/opt/autostop-work-telegram-models/faster-whisper-small"
-    session_file="/var/lib/autostop-work-telegram/account.session"
     media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"
     ;;
   *)
@@ -120,19 +119,13 @@ work_runtime_switched=0
 current_link="${release_root}/current"
 previous_release="$(readlink -f "${current_link}" 2>/dev/null || true)"
 
-was_active=0
-if systemctl is-active --quiet "${service_unit}"; then
-  was_active=1
-fi
 if [[ "${account}" == "work" ]]; then
   work_load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${work_load_state}" == "not-found" ]]; then
-    [[ "${no_start}" -eq 1 && -z "${previous_release}" && ! -e "${current_link}" && ! -L "${current_link}" ]] || {
+    [[ -z "${previous_release}" && ! -e "${current_link}" && ! -L "${current_link}" ]] || {
       echo "ERROR: missing work Telegram service requires a clean first paused release" >&2
       exit 1
     }
-    work_active_state="inactive"
-    work_unit_file_state="not-found"
   else
     [[ "${work_load_state}" == "loaded" ]] || {
       echo "ERROR: work Telegram service lifecycle must be recovered before release" >&2
@@ -140,25 +133,11 @@ if [[ "${account}" == "work" ]]; then
     }
     work_active_state="$(systemctl show --property=ActiveState --value "${service_unit}")"
     work_unit_file_state="$(systemctl show --property=UnitFileState --value "${service_unit}")"
-    if [[ "${was_active}" -eq 0 && "${work_active_state}" != "inactive" ]]; then
-      echo "ERROR: work Telegram service lifecycle must be recovered before release" >&2
-      exit 1
-    fi
-    if [[ "${no_start}" -eq 1 && ( "${work_active_state}" != "inactive" \
-      || ( "${work_unit_file_state}" != "disabled" && "${work_unit_file_state}" != "disabled-runtime" ) ) ]]; then
+    if [[ "${work_active_state}" != "inactive" \
+      || ( "${work_unit_file_state}" != "disabled" && "${work_unit_file_state}" != "disabled-runtime" ) ]]; then
       echo "ERROR: --no-start requires an inactive disabled work Telegram service" >&2
       exit 1
     fi
-  fi
-fi
-if [[ "${account}" == "work" && "${was_active}" -eq 0 ]]; then
-  if [[ "${work_unit_file_state}" == "enabled" || "${work_unit_file_state}" == "enabled-runtime" ]]; then
-    echo "ERROR: inactive enabled work Telegram service must be recovered before release" >&2
-    exit 1
-  fi
-  if [[ "${no_start}" -eq 0 && ( -e "${session_file}" || -L "${session_file}" ) ]]; then
-    echo "ERROR: inactive existing work Telegram profile must be recovered before release" >&2
-    exit 1
   fi
 fi
 
@@ -437,9 +416,7 @@ if ! activate_new_release_assets; then
 fi
 
 if ! install_current_media_wrapper; then
-  if [[ "${was_active}" -eq 1 ]] && rollback; then
-    echo "ERROR: work media sandbox wrapper install failed; previous release restored" >&2
-  elif [[ "${was_active}" -eq 0 ]] && restore_previous_release_assets; then
+  if restore_previous_release_assets; then
     echo "ERROR: work media sandbox wrapper install failed; previous release assets restored" >&2
   else
     echo "ERROR: work media sandbox wrapper install failed; no previous Telegram release exists" >&2
@@ -447,7 +424,7 @@ if ! install_current_media_wrapper; then
   exit 1
 fi
 
-if [[ "${account}" == "work" && "${was_active}" -eq 0 ]]; then
+if [[ "${account}" == "work" ]]; then
   if ! transcription_runtime_ready; then
     if restore_previous_release_assets; then
       echo "ERROR: local Telegram transcription runtime failed; previous release assets restored" >&2
@@ -458,11 +435,7 @@ if [[ "${account}" == "work" && "${was_active}" -eq 0 ]]; then
   fi
   echo "telegram_bridge_deployed=true"
   echo "account=work"
-  if [[ "${no_start}" -eq 1 ]]; then
-    echo "activation=paused"
-  else
-    echo "authorization_required=true"
-  fi
+  echo "activation=paused"
   cleanup_initial_release_backups
   exit 0
 fi

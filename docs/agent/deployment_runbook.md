@@ -155,7 +155,8 @@ sudo ./scripts/deploy_telegram_bridge.sh --account work --no-start "$revision"
 
 The duty command is the lifecycle interface: `--disable` stops and disables the
 service and clears monitor intent; `--enable` writes explicit intent, starts the
-bridge and checks only its content-free status. Do not replace either command
+bridge and waits for its content-free ready status, disabling duty on failure.
+Do not replace either command
 with a raw restart: authorization clears prior monitor intent before start.
 
 For an explicitly authorized work-Telegram inbound-monitor release, verify the

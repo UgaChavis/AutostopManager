@@ -47,7 +47,7 @@ disable_duty() {
 }
 
 enable_duty() {
-  local monitor_env_dir monitor_status release_dir
+  local monitor_env_dir monitor_status release_dir attempt
   release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
   [[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/* && -d "${release_dir}" && ! -L "${release_dir}" && -x "${venv_python}" ]] || return 1
   monitor_env_dir="$(dirname -- "${monitor_env}")"
@@ -59,40 +59,42 @@ enable_duty() {
   mv -T -- "${pending_monitor_env}" "${monitor_env}" || return 1
   pending_monitor_env=""
   if systemctl is-active --quiet "${service_unit}"; then
-    systemctl enable "${service_unit}" || { disable_duty || true; return 1; }
-    systemctl restart "${service_unit}" || { disable_duty || true; return 1; }
+    systemctl enable "${service_unit}" || return 1
+    systemctl restart "${service_unit}" || return 1
   else
-    systemctl enable --now "${service_unit}" || { disable_duty || true; return 1; }
+    systemctl enable --now "${service_unit}" || return 1
   fi
-  systemctl is-active --quiet "${service_unit}" || { disable_duty || true; return 1; }
-  monitor_status="$(sudo -u "${service_user}" env PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work monitor-status)" || { disable_duty || true; return 1; }
-  if ! grep -Eq '"enabled": true' <<<"${monitor_status}" || ! grep -Eq '"retention": "memory_only"' <<<"${monitor_status}"; then disable_duty || true; return 1; fi
+  # Type=simple becomes active before the bridge connects and opens its socket.
+  for attempt in {1..15}; do
+    if systemctl is-active --quiet "${service_unit}" \
+      && monitor_status="$(sudo -u "${service_user}" env PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work monitor-status)" \
+      && grep -Eq '"enabled": true' <<<"${monitor_status}" \
+      && grep -Eq '"retention": "memory_only"' <<<"${monitor_status}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
-cleanup_incomplete_enable() {
+cleanup_incomplete_duty() {
   local exit_code="$?"
   if [[ -n "${pending_monitor_env}" && -f "${pending_monitor_env}" && ! -L "${pending_monitor_env}" ]]; then unlink -- "${pending_monitor_env}" || true; fi
-  [[ "${enable_completed:-0}" -eq 1 ]] || disable_duty || true
-  return "${exit_code}"
-}
-
-cleanup_incomplete_disable() {
-  local exit_code="$?"
-  [[ "${disable_completed:-0}" -eq 1 ]] || disable_duty || true
+  disable_duty || true
   return "${exit_code}"
 }
 
 case "$1" in
   --disable)
-    disable_completed=0; trap cleanup_incomplete_disable EXIT
+    trap cleanup_incomplete_duty EXIT
     disable_duty || { echo "work_telegram_duty_disable_failed=true" >&2; exit 1; }
-    disable_completed=1; trap - EXIT
+    trap - EXIT
     printf '%s\n' "work_telegram_duty=disabled" "monitoring=off"
     ;;
   --enable)
-    enable_completed=0; trap cleanup_incomplete_enable EXIT
+    trap cleanup_incomplete_duty EXIT
     enable_duty || { echo "work_telegram_duty_enable_failed=true" >&2; exit 1; }
-    enable_completed=1; trap - EXIT
+    trap - EXIT
     printf '%s\n' "work_telegram_duty=enabled" "monitoring=enabled" "retention=memory_only"
     ;;
   *)
