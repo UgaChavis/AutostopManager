@@ -82,6 +82,10 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert "inactive existing work Telegram profile must be recovered" in text
     assert 'if [[ "${account}" == "work" ]]; then' in text
     assert '"${media_wrapper_path}" self-check' in text
+    assert '"${current_link}/scripts/run-work-telegram-monitor-voice.sh" --help >/dev/null' in text
+    assert text.index('"${media_wrapper_path}" self-check') < text.index(
+        '"${current_link}/scripts/run-work-telegram-monitor-voice.sh" --help >/dev/null'
+    )
     assert "-m autostop_manager.telegram_transcribe --account personal --self-check" in text
     assert "/usr/bin/timeout --signal=TERM --kill-after=10s 120s" in text
     inactive_start = text.index("if ! install_current_media_wrapper; then")

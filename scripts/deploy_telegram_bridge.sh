@@ -193,6 +193,7 @@ install_current_media_wrapper() {
 transcription_runtime_ready() {
   if [[ "${account}" == "work" ]]; then
     "${media_wrapper_path}" self-check
+    "${current_link}/scripts/run-work-telegram-monitor-voice.sh" --help >/dev/null
     return
   fi
   sudo -u "${service_user}" env PYTHONPATH="${current_link}" HF_HUB_OFFLINE=1 \
