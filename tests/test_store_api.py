@@ -5,6 +5,8 @@ import json
 import threading
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.client import IncompleteRead
+from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
@@ -332,10 +334,17 @@ def test_valid_409_envelope_is_preserved_and_does_not_trip_circuit(monkeypatch):
     assert client.local_status()["consecutive_failures"] == 0
 
 
-def test_repeated_403_without_valid_body_never_opens_circuit(monkeypatch):
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_repeated_403_without_valid_body_never_opens_circuit(monkeypatch, interrupted):
+    responses = []
+
     def fake_urlopen(_request, timeout):
         assert timeout > 0
-        raise HTTPError("http://store/search", 403, "forbidden", hdrs=None, fp=io.BytesIO(b"not-json"))
+        response = HTTPError("http://store/search", 403, "forbidden", hdrs=None, fp=io.BytesIO(b"not-json"))
+        if interrupted:
+            monkeypatch.setattr(response, "read", Mock(side_effect=IncompleteRead(b"", 1)))
+        responses.append(response)
+        raise response
 
     monkeypatch.setattr(store_api_module, "urlopen", fake_urlopen)
     client = _client(failure_threshold=1)
@@ -347,16 +356,18 @@ def test_repeated_403_without_valid_body_never_opens_circuit(monkeypatch):
 
     assert client.local_status()["circuit_open"] is False
     assert client.local_status()["consecutive_failures"] == 0
+    assert all(response.closed for response in responses)
 
 
-def test_transport_failures_open_circuit_and_prevent_further_calls(monkeypatch):
+@pytest.mark.parametrize("failure", [URLError("offline"), ConnectionResetError("offline"), IncompleteRead(b"", 1)])
+def test_transport_failures_open_circuit_and_prevent_further_calls(monkeypatch, failure):
     calls = 0
 
     def fake_urlopen(_request, timeout):
         assert timeout > 0
         nonlocal calls
         calls += 1
-        raise URLError("offline")
+        raise failure
 
     monkeypatch.setattr(store_api_module, "urlopen", fake_urlopen)
     client = _client(max_read_attempts=1, failure_threshold=2)
@@ -365,6 +376,30 @@ def test_transport_failures_open_circuit_and_prevent_further_calls(monkeypatch):
     assert client.digest()["summary"]["error_code"] == "store_timeout_or_network_error"
     assert client.digest()["summary"]["error_code"] == "store_circuit_open"
     assert calls == 2
+
+
+@pytest.mark.parametrize("failure", [ConnectionResetError("offline"), IncompleteRead(b"", 1)])
+@pytest.mark.parametrize("during_body", [False, True])
+@pytest.mark.parametrize("surface", ["digest", "photo"])
+def test_store_read_recovers_after_interrupted_response(monkeypatch, failure, during_body, surface):
+    first = failure
+    if during_body:
+        first = _Response(b"")
+        monkeypatch.setattr(first, "read", Mock(side_effect=failure))
+    success = (
+        _Response(_envelope()) if surface == "digest" else _Response(b"jpeg", headers={"Content-Type": "image/jpeg"})
+    )
+    opener = Mock(side_effect=[first, success])
+    monkeypatch.setattr(store_api_module, "urlopen", opener)
+    client = _client(max_read_attempts=2, quote_token="quote-secret")
+    result = (
+        client.digest()
+        if surface == "digest"
+        else client.quote_vin_photo_preview(quote_request_id="quote-1", expected_photo_sha256="c" * 64)
+    )
+    assert result["ok"] is True
+    assert result["meta"]["attempt_count"] == 2
+    assert opener.call_count == 2
 
 
 def test_redirect_is_rejected_without_forwarding_bearer_to_target():
@@ -938,7 +973,7 @@ def test_all_five_real_app_action_envelopes_have_independent_change_limits(
 
 @pytest.mark.parametrize(
     "failure_kind",
-    ["network", "http_500", "invalid_json", "oversize", "schema_invalid"],
+    ["network", "incomplete", "http_500", "invalid_json", "oversize", "schema_invalid"],
 )
 def test_post_unknown_outcomes_are_classified_uncertain_and_never_retried(monkeypatch, failure_kind):
     calls = 0
@@ -949,6 +984,10 @@ def test_post_unknown_outcomes_are_classified_uncertain_and_never_retried(monkey
         assert timeout > 0
         if failure_kind == "network":
             raise URLError("connection reset")
+        if failure_kind == "incomplete":
+            response = _Response(b"")
+            monkeypatch.setattr(response, "read", Mock(side_effect=IncompleteRead(b"", 1)))
+            return response
         if failure_kind == "http_500":
             raise HTTPError(
                 "http://store/actions/mark_order_ready",

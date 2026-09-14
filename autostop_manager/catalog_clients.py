@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from http.client import HTTPException
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -10,7 +11,7 @@ import os
 import re
 import time
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request, urlopen
 from .config import load_runtime_env
@@ -483,7 +484,7 @@ def mann_filter_catalog_lookup(
             headers={"Accept": "application/json", "Store": request_plan["store"]},
             timeout=timeout,
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
     if payload.get("errors"):
@@ -592,7 +593,7 @@ def denso_aftermarket_catalog_lookup(
         return {**base, **_catalog_deadline_failure("denso_aftermarket_catalog")}
     try:
         payload = _read_json_url(request_plan["url"], headers={"Accept": "application/json"}, timeout=request_timeout)
-    except (OSError, ValueError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
     if payload.get("status") != "success":
@@ -618,7 +619,7 @@ def denso_aftermarket_catalog_lookup(
                 detail_payload = _read_json_url(
                     detail_url, headers={"Accept": "application/json"}, timeout=request_timeout
                 )
-            except (OSError, ValueError) as exc:
+            except (OSError, HTTPException, ValueError) as exc:
                 details.append({"part_key": part_key, "ok": False, "error": str(exc)})
                 continue
             detail_data = _dict_list(detail_payload.get("data"))
@@ -956,7 +957,7 @@ def _fapi_api_key(*, demo_access: bool, timeout: float) -> tuple[str | None, str
         request = Request(FAPI_DEMO_KEY_URL, headers={"User-Agent": "AutostopManager/0.1"})
         with urlopen(request, timeout=timeout) as response:
             demo_key = response.read().decode("utf-8").strip()
-    except (OSError, ValueError):
+    except (OSError, HTTPException, ValueError):
         return None, "demo_ephemeral", "FAPI demo access is unavailable."
     if not demo_key:
         return None, "demo_ephemeral", "FAPI demo access returned no key."
@@ -981,7 +982,7 @@ def _fapi_failure_details(exc: Exception) -> tuple[str, bool, str, int | None]:
         if exc.code in {401, 403}:
             return "credentials_rejected", False, "FAPI credentials were rejected.", None
         return "provider_http_4xx", False, f"FAPI returned HTTP {exc.code}.", None
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, HTTPException)):
         return "network_error", True, "FAPI network request failed.", None
     return "malformed_response", False, "FAPI returned an unsupported response.", None
 
@@ -1100,7 +1101,7 @@ def fapi_catalog_lookup(
         return {**base, **_catalog_deadline_failure("fapi_catalog")}
     try:
         manufacturers_payload = _fapi_manufacturer_payload(request_plan, timeout=request_timeout)
-    except (OSError, ValueError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         return _fapi_provider_failure(base, exc)
     application_failure = _fapi_application_failure(manufacturers_payload)
     if application_failure is not None:
@@ -1148,7 +1149,7 @@ def fapi_catalog_lookup(
         payload = _read_json_url(
             request_plan["analog_url"], headers={"Accept": "application/json"}, timeout=request_timeout
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         return _fapi_provider_failure(base, exc)
 
     application_failure = _fapi_application_failure(payload)
@@ -1983,7 +1984,7 @@ def exist_price_lookup(
             "total_offers": parsed_price.get("total_offers"),
             "error": parsed_price.get("error"),
         }
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         return {**base, "ok": False, "search_suggestions": suggestions, "candidates": candidates, "error": str(exc)}
 
 
@@ -2057,9 +2058,7 @@ def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
     if isinstance(exc, TimeoutError):
         detail = str(exc).strip()
         return "timeout", True, f"PartsAPI request timed out: {detail}" if detail else "PartsAPI request timed out."
-    if isinstance(exc, URLError):
-        return "network_error", True, "PartsAPI network request failed."
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, HTTPException)):
         return "network_error", True, "PartsAPI network request failed."
     if isinstance(exc, ValueError):
         return "adapter_malformed_payload", False, "PartsAPI returned malformed JSON."
@@ -2896,7 +2895,7 @@ def partsapi_catalog_lookup(
             attempts.append({"attempt": attempt, "ok": True})
             request_succeeded = True
             break
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        except (OSError, HTTPException, ValueError) as exc:
             failure_class, retryable, error = _partsapi_failure_details(exc)
             attempts.append(
                 {
@@ -3105,7 +3104,7 @@ def _vin17_failure_details(exc: BaseException) -> tuple[str, bool, str]:
         return "provider_http_4xx", False, f"17VIN returned HTTP {code}."
     if isinstance(exc, TimeoutError):
         return "timeout", True, "17VIN request timed out."
-    if isinstance(exc, (URLError, OSError)):
+    if isinstance(exc, (OSError, HTTPException)):
         return "network_error", True, "17VIN network request failed."
     if isinstance(exc, ValueError):
         return "adapter_malformed_payload", False, "17VIN returned malformed JSON."
@@ -3145,7 +3144,7 @@ def vin17_decode_vehicle(identifier: str, *, timeout: float = 20.0, dry_run: boo
     try:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         failure_class, retryable, error = _vin17_failure_details(exc)
         return {
             "ok": False,
@@ -3302,7 +3301,7 @@ def vin17_search_part_number_by_vin(
     try:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+    except (OSError, HTTPException, ValueError) as exc:
         failure_class, retryable, error = _vin17_failure_details(exc)
         return {
             "ok": False,

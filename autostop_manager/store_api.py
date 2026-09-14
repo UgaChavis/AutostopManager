@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from http.client import HTTPException
 import json
 import math
 import re
 import threading
 import time
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -851,6 +852,7 @@ class StoreApiClient:
                     },
                 }
             except HTTPError as exc:
+                exc.close()
                 code = "store_attachment_not_found" if int(exc.code) == 404 else "store_attachment_request_rejected"
                 if int(exc.code) == 409:
                     code = "store_attachment_stale"
@@ -863,9 +865,9 @@ class StoreApiClient:
                     outcome_uncertain=False,
                     http_status=int(exc.code),
                 )
-            except (TimeoutError, URLError):
+            except (OSError, HTTPException):
                 continue
-            except (OSError, TypeError, ValueError):
+            except (TypeError, ValueError):
                 self._record_failure()
                 return self._error(
                     "store_attachment_response_invalid",
@@ -1010,6 +1012,8 @@ class StoreApiClient:
                 return redacted
             except HTTPError as exc:
                 status_code = int(exc.code)
+                if not 400 <= status_code < 500:
+                    exc.close()
                 http_status = status_code
                 last_error = f"store_http_{status_code}"
                 if 300 <= status_code < 400:
@@ -1037,7 +1041,7 @@ class StoreApiClient:
                         outcome_uncertain=False,
                         http_status=status_code,
                     )
-            except (TimeoutError, URLError):
+            except (OSError, HTTPException):
                 last_error = "store_timeout_or_network_error"
             except UnicodeDecodeError:
                 last_error = "store_response_encoding_invalid"
@@ -1045,7 +1049,7 @@ class StoreApiClient:
             except json.JSONDecodeError:
                 last_error = "store_response_json_invalid"
                 break
-            except (OSError, RecursionError, TypeError, ValueError):
+            except (RecursionError, TypeError, ValueError):
                 last_error = "store_response_schema_invalid"
                 break
 
@@ -1071,7 +1075,8 @@ class StoreApiClient:
         expected_operation: str | None,
     ) -> dict[str, Any] | None:
         try:
-            raw = error.read(self.max_response_bytes + 1)
+            with error:
+                raw = error.read(self.max_response_bytes + 1)
             if len(raw) > self.max_response_bytes:
                 return None
             payload = json.loads(raw.decode("utf-8"))
@@ -1084,7 +1089,7 @@ class StoreApiClient:
                 expected_detail=expected_detail,
                 expected_operation=expected_operation,
             )
-        except (OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        except (OSError, HTTPException, RecursionError, TypeError, ValueError):
             return None
         redacted = _redact_payload(payload)
         meta = redacted.setdefault("meta", {})

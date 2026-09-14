@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from http.client import IncompleteRead
+from unittest.mock import Mock
 import pytest
 from urllib.error import HTTPError
 
@@ -869,7 +871,8 @@ def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
-def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch):
+@pytest.mark.parametrize("failure", [TimeoutError("network timeout"), IncompleteRead(b"secret-key", 1)])
+def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch, failure):
     _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
@@ -878,8 +881,7 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
 
     def fake_urlopen(request, timeout=20.0):
         calls.append(request.full_url)
-        message = "network timeout"
-        raise TimeoutError(message)
+        raise failure
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
@@ -895,7 +897,8 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
     assert result["attempt_count"] == 2
     assert result["max_attempts"] == 2
     assert [attempt["ok"] for attempt in result["attempts"]] == [False, False]
-    assert "network timeout" in result["error"]
+    assert result["outcome"] == ("timeout" if isinstance(failure, TimeoutError) else "network_error")
+    assert "secret-key" not in result["error"]
     assert "secret-key" not in result["request_plan"]["redacted_url"]
     assert len(calls) == 2
 
@@ -996,12 +999,13 @@ def test_vin17_non_object_payload_is_structured_not_an_exception(monkeypatch):
     assert result["requires_fallback"] is True
 
 
-def test_vin17_connection_reset_is_structured_for_fallback(monkeypatch):
+@pytest.mark.parametrize("failure", [ConnectionResetError("connection reset"), IncompleteRead(b"", 1)])
+def test_vin17_connection_reset_is_structured_for_fallback(monkeypatch, failure):
     monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
     monkeypatch.setenv("VIN17_SECRET", "test-secret")
 
     def fail_urlopen(request, timeout=20.0):
-        raise ConnectionResetError("connection reset")
+        raise failure
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
 
@@ -1574,15 +1578,19 @@ def test_fapi_empty_response_is_nonfatal_and_requires_fallback(monkeypatch):
     assert result["analog_candidates"] == []
 
 
-@pytest.mark.parametrize("connection_reset", [False, True])
-def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch, connection_reset):
+@pytest.mark.parametrize("failure_kind", ["http_503", "reset", "incomplete"])
+def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch, failure_kind):
     import json
 
     _clear_fapi_env(monkeypatch)
     monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
 
     def fake_urlopen(request, timeout=20.0):
-        if connection_reset:
+        if failure_kind == "incomplete":
+            response = _FakeResponse({})
+            monkeypatch.setattr(response, "read", Mock(side_effect=IncompleteRead(b"fapi-test-secret", 1)))
+            return response
+        if failure_kind == "reset":
             raise ConnectionResetError("synthetic failure containing fapi-test-secret")
         raise HTTPError(request.full_url, 503, "Service unavailable", {}, None)
 
@@ -1591,7 +1599,7 @@ def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch, connecti
     result = fapi_catalog_lookup(brand="MANN-FILTER", part_number="W 75/3")
 
     assert result["ok"] is False
-    assert result["failure_class"] == ("network_error" if connection_reset else "provider_http_5xx")
+    assert result["failure_class"] == ("provider_http_5xx" if failure_kind == "http_503" else "network_error")
     assert result["retryable"] is True
     assert result["requires_fallback"] is True
     assert "fapi-test-secret" not in json.dumps(result)
