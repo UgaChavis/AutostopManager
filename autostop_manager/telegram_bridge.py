@@ -45,6 +45,9 @@ MAX_INBOUND_MONITOR_EVENTS = 32
 MAX_INBOUND_MONITOR_CONTEXT_MESSAGES = 5
 INBOUND_MONITOR_CONTEXT_WINDOW_SECONDS = 5 * 60
 MAX_INBOUND_MONITOR_FALLBACK_DIALOGS = 20
+INBOUND_EVENT_OPEN = "open"
+INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
+INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -210,8 +213,28 @@ class InboundMonitor:
         self._max_events = max_events
         self._events: deque[InboundMonitorEvent] = deque()
         self._seen: set[tuple[int, int]] = set()
+        self._states: dict[int, str] = {}
         self._next_sequence = 1
         self._dropped_events = 0
+        self._dropped_open_events = 0
+
+    @staticmethod
+    def _event_id(event: InboundMonitorEvent) -> str:
+        return f"inbound-{event.sequence}"
+
+    def _state(self, event: InboundMonitorEvent) -> str:
+        return self._states.get(event.sequence, INBOUND_EVENT_OPEN)
+
+    def _evict_for_new_event(self) -> None:
+        """Keep unresolved opaque refs ahead of already closed refs when bounded."""
+
+        removed = next((event for event in self._events if self._state(event) != INBOUND_EVENT_OPEN), self._events[0])
+        if self._state(removed) == INBOUND_EVENT_OPEN:
+            self._dropped_open_events += 1
+        self._events.remove(removed)
+        self._seen.discard((removed.peer_id, removed.message_id))
+        self._states.pop(removed.sequence, None)
+        self._dropped_events += 1
 
     def record(self, event: Any) -> None:
         """Remember only an incoming private message locator; never its body or media."""
@@ -226,31 +249,45 @@ class InboundMonitor:
         if peer_id <= 0 or message_id <= 0 or (peer_id, message_id) in self._seen:
             return
         if len(self._events) == self._max_events:
-            removed = self._events.popleft()
-            self._seen.discard((removed.peer_id, removed.message_id))
-            self._dropped_events += 1
-        self._events.append(
-            InboundMonitorEvent(
-                sequence=self._next_sequence,
-                peer_id=peer_id,
-                message_id=message_id,
-                received_at=datetime.now(UTC).isoformat(),
-            )
+            self._evict_for_new_event()
+        event_ref = InboundMonitorEvent(
+            sequence=self._next_sequence,
+            peer_id=peer_id,
+            message_id=message_id,
+            received_at=datetime.now(UTC).isoformat(),
         )
+        self._events.append(event_ref)
         self._seen.add((peer_id, message_id))
+        self._states[event_ref.sequence] = INBOUND_EVENT_OPEN
         self._next_sequence += 1
 
     def status(self) -> dict[str, Any]:
+        state_counts = {
+            state: sum(1 for event in self._events if self._state(event) == state)
+            for state in (INBOUND_EVENT_OPEN, INBOUND_EVENT_REPLY_VERIFIED, INBOUND_EVENT_NO_REPLY_NEEDED)
+        }
         return {
             "enabled": True,
             "started_at": self.started_at,
-            "pending_events": len(self._events),
+            "pending_events": state_counts[INBOUND_EVENT_OPEN],
+            "retained_events": len(self._events),
+            "open_events": state_counts[INBOUND_EVENT_OPEN],
+            "reply_verified_events": state_counts[INBOUND_EVENT_REPLY_VERIFIED],
+            "no_reply_needed_events": state_counts[INBOUND_EVENT_NO_REPLY_NEEDED],
             "dropped_events": self._dropped_events,
+            "dropped_open_events": self._dropped_open_events,
             "retention": "memory_only",
         }
 
     def events(self) -> list[dict[str, Any]]:
-        return [{"event_id": f"inbound-{event.sequence}", "received_at": event.received_at} for event in self._events]
+        return [
+            {
+                "event_id": self._event_id(event),
+                "received_at": event.received_at,
+                "state": self._state(event),
+            }
+            for event in self._events
+        ]
 
     def resolve(self, event_id: str) -> InboundMonitorEvent:
         match = re.fullmatch(r"inbound-([1-9][0-9]{0,11})", event_id)
@@ -261,6 +298,42 @@ class InboundMonitor:
             if event.sequence == sequence:
                 return event
         raise BridgeError("inbound_event_unavailable")
+
+    def mark_reply_verified(self, *, peer_id: int, message_id: int) -> bool:
+        """Close an active opaque ref only after a verified direct reply."""
+
+        for event in self._events:
+            if event.peer_id == peer_id and event.message_id == message_id:
+                state = self._state(event)
+                if state == INBOUND_EVENT_REPLY_VERIFIED:
+                    return True
+                if state != INBOUND_EVENT_OPEN:
+                    return False
+                self._states[event.sequence] = INBOUND_EVENT_REPLY_VERIFIED
+                return True
+        return False
+
+    def has_reply_verified(self, *, peer_id: int, message_id: int) -> bool:
+        """Report only a previously verified lifecycle transition; never infer one."""
+
+        return any(
+            event.peer_id == peer_id
+            and event.message_id == message_id
+            and self._state(event) == INBOUND_EVENT_REPLY_VERIFIED
+            for event in self._events
+        )
+
+    def mark_no_reply_needed(self, event_id: str) -> dict[str, str]:
+        """Allow an explicit operator decision without recording its rationale."""
+
+        event = self.resolve(event_id)
+        state = self._state(event)
+        if state == INBOUND_EVENT_NO_REPLY_NEEDED:
+            return {"event_id": self._event_id(event), "state": state}
+        if state != INBOUND_EVENT_OPEN:
+            raise BridgeError("inbound_event_already_closed")
+        self._states[event.sequence] = INBOUND_EVENT_NO_REPLY_NEEDED
+        return {"event_id": self._event_id(event), "state": self._state(event)}
 
     def context(self, event_id: str, *, limit: int) -> list[InboundMonitorEvent]:
         """Return a small, anchor-centred window of one private chat's pending refs."""
@@ -1235,6 +1308,7 @@ async def _handle_send_text_to_entity(
     mode: str,
     idempotency_key: str,
     reply_to_message_id: int = 0,
+    inbound_monitor: InboundMonitor | None = None,
 ) -> dict[str, Any]:
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
@@ -1289,7 +1363,7 @@ async def _handle_send_text_to_entity(
             or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
-        return {
+        response = {
             "ok": True,
             "mode": "apply",
             "replayed": True,
@@ -1298,6 +1372,14 @@ async def _handle_send_text_to_entity(
             "reply_to_message_id": reply_to_message_id or None,
             "reply_verified": bool(reply_to_message_id),
         }
+        if reply_to_message_id and inbound_monitor is not None:
+            # An idempotency record is intentionally not proof that the old
+            # attempt completed its Telegram readback.  Reflect a lifecycle
+            # closure only if this daemon already holds that verified state.
+            response["monitor_event_closed"] = inbound_monitor.has_reply_verified(
+                peer_id=int(target["id"]), message_id=reply_to_message_id
+            )
+        return response
 
     if reply_to_message_id:
         sent = await client.send_message(entity, text, reply_to=reply_to_message_id)
@@ -1315,7 +1397,14 @@ async def _handle_send_text_to_entity(
     readback = await client.get_messages(entity, ids=int(sent.id))
     if readback is None or str(readback.message or "") != text or _message_reply_to_id(readback) != reply_to_message_id:
         raise BridgeError("send_readback_failed")
-    return {
+    monitor_event_closed: bool | None = None
+    if reply_to_message_id and inbound_monitor is not None:
+        # This is intentionally after Telegram readback: a dry run, failed send,
+        # or unverified replay must not close a client-facing monitor event.
+        monitor_event_closed = inbound_monitor.mark_reply_verified(
+            peer_id=int(target["id"]), message_id=reply_to_message_id
+        )
+    response = {
         "ok": True,
         "mode": "apply",
         "replayed": False,
@@ -1325,6 +1414,9 @@ async def _handle_send_text_to_entity(
         "reply_verified": bool(reply_to_message_id),
         "verified": True,
     }
+    if monitor_event_closed is not None:
+        response["monitor_event_closed"] = monitor_event_closed
+    return response
 
 
 def _monitor_context_limit(value: Any) -> int:
@@ -1476,7 +1568,7 @@ async def _handle_monitor_operation(
     inbound_monitor: InboundMonitor | None,
 ) -> dict[str, Any] | None:
     operation = str(request.get("operation") or "")
-    if operation not in {"monitor_status", "monitor_events", "monitor_read", "monitor_context"}:
+    if operation not in {"monitor_status", "monitor_events", "monitor_read", "monitor_context", "monitor_mark"}:
         return None
     if inbound_monitor is None:
         raise BridgeError("inbound_monitor_disabled")
@@ -1484,6 +1576,10 @@ async def _handle_monitor_operation(
         return {"ok": True, "monitor": inbound_monitor.status()}
     if operation == "monitor_events":
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
+    if operation == "monitor_mark":
+        if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
+            raise BridgeError("inbound_disposition_invalid")
+        return {"ok": True, "event": inbound_monitor.mark_no_reply_needed(str(request.get("event_id") or ""))}
     if operation == "monitor_context":
         return await _handle_monitor_context(
             client,
@@ -1595,6 +1691,7 @@ async def _handle_operation(
             mode=mode,
             idempotency_key=idempotency_key,
             reply_to_message_id=reply_to_message_id,
+            inbound_monitor=inbound_monitor,
         )
 
     if operation == "send_photo":
@@ -1613,9 +1710,10 @@ async def _handle_operation(
 
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     operation = request.get("operation")
-    return (
-        operation in {"send", "send_photo", "download"} and request.get("mode") == "apply"
-    ) or operation == "discard_download"
+    return (operation in {"send", "send_photo", "download"} and request.get("mode") == "apply") or operation in {
+        "discard_download",
+        "monitor_mark",
+    }
 
 
 async def _serve_client(
@@ -1808,6 +1906,9 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_context = subparsers.add_parser("monitor-context")
     monitor_context.add_argument("--event-id", required=True)
     monitor_context.add_argument("--limit", type=int, default=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
+    monitor_mark = subparsers.add_parser("monitor-mark")
+    monitor_mark.add_argument("--event-id", required=True)
+    monitor_mark.add_argument("--disposition", choices=[INBOUND_EVENT_NO_REPLY_NEEDED], required=True)
     dialogs = subparsers.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
     search = subparsers.add_parser("search")
@@ -1862,6 +1963,14 @@ def main(argv: list[str] | None = None) -> int:
                 request.update({"operation": "monitor_read", "event_id": args.event_id})
             elif args.command == "monitor-context":
                 request.update({"operation": "monitor_context", "event_id": args.event_id, "limit": args.limit})
+            elif args.command == "monitor-mark":
+                request.update(
+                    {
+                        "operation": "monitor_mark",
+                        "event_id": args.event_id,
+                        "disposition": args.disposition,
+                    }
+                )
             elif args.command == "dialogs":
                 request["limit"] = args.limit
             elif args.command == "search":

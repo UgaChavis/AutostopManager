@@ -741,6 +741,7 @@ def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "discard_download"}) is True
+    assert _requires_mutation_lock({"operation": "monitor_mark"}) is True
     assert _requires_mutation_lock({"operation": "read"}) is False
 
 
@@ -957,9 +958,15 @@ def test_inbound_monitor_keeps_only_bounded_private_message_references() -> None
     events = monitor.events()
 
     assert status["pending_events"] == 2
+    assert status["retained_events"] == 2
+    assert status["open_events"] == 2
+    assert status["reply_verified_events"] == 0
+    assert status["no_reply_needed_events"] == 0
     assert status["dropped_events"] == 2
+    assert status["dropped_open_events"] == 2
     assert status["retention"] == "memory_only"
     assert [event["event_id"] for event in events] == ["inbound-3", "inbound-4"]
+    assert all(event["state"] == "open" for event in events)
     assert "private text" not in json.dumps({"status": status, "events": events})
     assert "private title" not in json.dumps({"status": status, "events": events})
     assert monitor.resolve("inbound-3").message_id == 101
@@ -968,6 +975,25 @@ def test_inbound_monitor_keeps_only_bounded_private_message_references() -> None
         monitor.resolve("20")
     with pytest.raises(BridgeError, match="inbound_event_unavailable"):
         monitor.resolve("inbound-2")
+
+
+def test_inbound_monitor_evicts_closed_refs_before_open_refs() -> None:
+    monitor = telegram_bridge.InboundMonitor(max_events=2)
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101))
+
+    assert monitor.mark_no_reply_needed("inbound-1") == {"event_id": "inbound-1", "state": "no_reply_needed"}
+
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=102))
+
+    status = monitor.status()
+    events = monitor.events()
+    assert [event["event_id"] for event in events] == ["inbound-2", "inbound-3"]
+    assert all(event["state"] == "open" for event in events)
+    assert status["pending_events"] == 2
+    assert status["dropped_events"] == 1
+    assert status["dropped_open_events"] == 0
+    assert "peer_id" not in json.dumps({"status": status, "events": events})
 
 
 def test_inbound_monitor_callback_discards_bad_provider_events() -> None:
@@ -1070,6 +1096,40 @@ def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatc
                 Client(),
                 config,
                 {"operation": "monitor_read", "event_id": "inbound-1"},
+                inbound_monitor=monitor,
+            )
+        )
+
+
+def test_monitor_mark_requires_explicit_no_reply_disposition_and_keeps_payload_opaque(tmp_path) -> None:
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+
+    marked = asyncio.run(
+        telegram_bridge._handle_operation(
+            object(),
+            _runtime_config(tmp_path),
+            {"operation": "monitor_mark", "event_id": "inbound-1", "disposition": "no_reply_needed"},
+            inbound_monitor=monitor,
+        )
+    )
+
+    assert marked == {"ok": True, "event": {"event_id": "inbound-1", "state": "no_reply_needed"}}
+    assert monitor.status()["pending_events"] == 0
+    assert monitor.status()["no_reply_needed_events"] == 1
+    assert monitor.mark_no_reply_needed("inbound-1") == {"event_id": "inbound-1", "state": "no_reply_needed"}
+    assert monitor.mark_reply_verified(peer_id=20, message_id=100) is False
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101))
+    assert monitor.mark_reply_verified(peer_id=20, message_id=101) is True
+    with pytest.raises(BridgeError, match="inbound_event_already_closed"):
+        monitor.mark_no_reply_needed("inbound-2")
+    assert "peer_id" not in json.dumps(marked)
+    with pytest.raises(BridgeError, match="inbound_disposition_invalid"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(),
+                _runtime_config(tmp_path),
+                {"operation": "monitor_mark", "event_id": "inbound-1", "disposition": "reply_verified"},
                 inbound_monitor=monitor,
             )
         )
@@ -1851,6 +1911,8 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
     config = _runtime_config(tmp_path)
     entity = object()
     target = {"id": 10, "title": "Target", "username": None, "kind": "private"}
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=5))
 
     async def resolve(_client, _peer):
         return entity, target
@@ -1910,6 +1972,7 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
                 "contract_token": dry["contract_token"],
                 "idempotency_key": "reply-key",
             },
+            inbound_monitor=monitor,
         )
     )
 
@@ -1917,6 +1980,128 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
     assert applied["verified"] is True
     assert applied["reply_verified"] is True
     assert applied["reply_to_message_id"] == 5
+    assert applied["monitor_event_closed"] is True
+    assert monitor.status()["pending_events"] == 0
+    assert monitor.status()["reply_verified_events"] == 1
+    assert monitor.events()[0]["state"] == "reply_verified"
+
+
+def test_unverified_reply_does_not_close_inbound_monitor_event(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=5))
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    async def last_message(_client, _entity):
+        return 20
+
+    class Client:
+        async def send_message(self, _entity, _text, *, reply_to):
+            assert reply_to == 5
+            return SimpleNamespace(id=30)
+
+        async def get_messages(self, _entity, *, ids):
+            if ids == 5:
+                return SimpleNamespace(id=5, message="question", out=False, date=None)
+            assert ids == 30
+            return SimpleNamespace(message="wrong reply", reply_to_msg_id=5)
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
+    client = Client()
+    dry = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {"operation": "send", "peer": "10", "text": "answer", "mode": "dry_run", "reply_to_message_id": 5},
+            inbound_monitor=monitor,
+        )
+    )
+
+    apply_request = {
+        "operation": "send",
+        "peer": "10",
+        "text": "answer",
+        "mode": "apply",
+        "reply_to_message_id": 5,
+        "contract_token": dry["contract_token"],
+        "idempotency_key": "reply-key",
+    }
+    with pytest.raises(BridgeError, match="send_readback_failed"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                config,
+                apply_request,
+                inbound_monitor=monitor,
+            )
+        )
+
+    replayed = asyncio.run(telegram_bridge._handle_operation(client, config, apply_request, inbound_monitor=monitor))
+    assert replayed["replayed"] is True
+    assert replayed["monitor_event_closed"] is False
+    assert monitor.status()["pending_events"] == 1
+    assert monitor.status()["reply_verified_events"] == 0
+
+
+def test_verified_reply_reports_when_its_monitor_ref_was_evicted(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    entity = object()
+    monitor = telegram_bridge.InboundMonitor(max_events=1)
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=5))
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=6))
+
+    async def resolve(_client, _peer):
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    async def last_message(_client, _entity):
+        return 20
+
+    class Client:
+        async def send_message(self, _entity, _text, *, reply_to):
+            assert reply_to == 5
+            return SimpleNamespace(id=30)
+
+        async def get_messages(self, _entity, *, ids):
+            if ids == 5:
+                return SimpleNamespace(id=5, message="question", out=False, date=None)
+            assert ids == 30
+            return SimpleNamespace(message="answer", reply_to_msg_id=5)
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
+    client = Client()
+    dry = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {"operation": "send", "peer": "10", "text": "answer", "mode": "dry_run", "reply_to_message_id": 5},
+            inbound_monitor=monitor,
+        )
+    )
+    applied = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "send",
+                "peer": "10",
+                "text": "answer",
+                "mode": "apply",
+                "reply_to_message_id": 5,
+                "contract_token": dry["contract_token"],
+                "idempotency_key": "reply-key",
+            },
+            inbound_monitor=monitor,
+        )
+    )
+
+    assert applied["reply_verified"] is True
+    assert applied["monitor_event_closed"] is False
+    assert monitor.status()["dropped_open_events"] == 1
 
 
 def test_text_reply_rejects_source_changed_after_dry_run(monkeypatch, tmp_path) -> None:
@@ -2276,7 +2461,7 @@ def test_probe_requires_authorization_for_success(monkeypatch, tmp_path, capsys)
     assert json.loads(capsys.readouterr().out) == {"ok": True, "authorized": False}
 
 
-def test_monitor_cli_commands_use_read_only_monitor_operations(monkeypatch, capsys) -> None:
+def test_monitor_cli_commands_map_opaque_operations(monkeypatch, capsys) -> None:
     requests: list[dict[str, object]] = []
 
     def local_request(_socket, request):
@@ -2291,15 +2476,22 @@ def test_monitor_cli_commands_use_read_only_monitor_operations(monkeypatch, caps
     assert (
         telegram_bridge.main(["--account", "work", "monitor-context", "--event-id", "inbound-3", "--limit", "2"]) == 0
     )
+    assert (
+        telegram_bridge.main(
+            ["--account", "work", "monitor-mark", "--event-id", "inbound-3", "--disposition", "no_reply_needed"]
+        )
+        == 0
+    )
 
     assert requests == [
         {"operation": "monitor_status"},
         {"operation": "monitor_events"},
         {"operation": "monitor_read", "event_id": "inbound-3"},
         {"operation": "monitor_context", "event_id": "inbound-3", "limit": 2},
+        {"operation": "monitor_mark", "event_id": "inbound-3", "disposition": "no_reply_needed"},
     ]
     assert all("send" not in request["operation"] for request in requests)
-    assert capsys.readouterr().out.count('"ok": true') == 4
+    assert capsys.readouterr().out.count('"ok": true') == 5
 
 
 def test_main_enables_inbound_monitor_for_work_only(monkeypatch) -> None:

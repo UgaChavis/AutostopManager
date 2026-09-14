@@ -45,10 +45,13 @@ The standalone MCP input-schema manifest remains unchanged. Production CRM
 loads a separate subset: local registration/tests do not prove current gateway
 availability. Activation/release requires its own authorization and live readback.
 
-## Emex excluded from this change
+## Emex: no automated adapter
 
-The unregistered experimental Emex module was preserved in the protected
-pre-review backup and removed from the working package. This commit neither
-registers Emex nor reads its credentials/session. Its browser behavior,
-authentication expiry, offer extraction and end-to-end fallback remain unfinished;
-do not release or advertise it as a working integration.
+Emex is not registered as an automated adapter in the current Manager package.
+That does not prove the supplier is unavailable and does not establish that its
+browser route works. If the owner explicitly authorizes manual browser use for
+the current task, and an already accessible permitted browser session can access
+it, treat it as a temporary research source rather than an integration. This
+document neither requests, records, recovers nor supplies credentials or
+sessions, and does not advertise manual access as a working automation. Cart,
+order and CRM/Store writes remain outside this document.
