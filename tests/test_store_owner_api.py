@@ -4,6 +4,8 @@ import base64
 import io
 import json
 from datetime import UTC, datetime, timedelta
+from http.client import IncompleteRead
+from unittest.mock import Mock
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
@@ -1154,6 +1156,72 @@ def test_write_post_dispatch_failures_are_always_uncertain(monkeypatch, failure_
     assert result["meta"]["outcome_uncertain"] is True
     assert result["meta"]["readback_required"] is True
     assert "secret" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("stage", ["openapi", "revision", "read", "dry_run", "apply"])
+@pytest.mark.parametrize("location", ["open", "body", "error_body"])
+@pytest.mark.parametrize("failure", [IncompleteRead(b"secret", 1), ConnectionResetError("secret")])
+def test_interrupted_http_response_preserves_write_uncertainty(monkeypatch, stage, location, failure):
+    capability = _json_write_capability()
+    client = _client_with_capability(capability)
+    if stage == "read":
+        capability = OwnerCapability("get_part", "GET", "/api/v1/parts/{id}", "read", (), False, ("id",))
+        client = _client_with_capability(capability)
+    parameters, planned = (
+        _planned_json_write(client, capability, monkeypatch) if stage == "apply" else ({"id": "part-1"}, {})
+    )
+    if location == "open":
+        response = failure
+    elif location == "error_body":
+        response = HTTPError("http://127.0.0.1/fixture", 503, "unavailable", {}, io.BytesIO())
+        monkeypatch.setattr(response, "read", Mock(side_effect=failure))
+    else:
+        response = _Response({})
+        monkeypatch.setattr(response, "read", Mock(side_effect=failure))
+    # A dry run first reads the current revision; interrupt the subsequent request.
+    responses = (
+        [_revision_response(capability, concrete_path="/api/v1/parts/part-1", current_revision="rev-1")]
+        if stage == "dry_run"
+        else []
+    )
+    opener = _Opener([*responses, response])
+    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    if stage == "openapi":
+        client._capabilities.clear()
+        result = client.list_capabilities()
+    else:
+        result = client.invoke(
+            operation_id=capability.operation_id,
+            mode=stage,
+            path_parameters=parameters,
+            body=None if stage == "read" else {"name": "Updated"},
+            owner_intent="Synthetic transport regression",
+            idempotency_key="interrupted-request-001",
+            correlation_id="interrupted-request-001",
+            expected_revision="rev-1" if stage != "apply" else "2026-07-21T00:00:00Z",
+            dry_run_proof=planned.get("summary", {}).get("dry_run_proof"),
+        )
+    assert result["ok"] is False
+    assert "secret" not in json.dumps(result)
+    assert len(opener.requests) == len(responses) + 1  # No automatic retry after dispatch.
+    if stage == "apply":
+        assert result["status"] == "compensating"
+        assert result["meta"]["outcome_uncertain"] is True
+        assert result["meta"]["request_dispatched"] is True
+        assert result["meta"]["readback_required"] is True
+    else:
+        assert result["meta"].get("outcome_uncertain") is not True
+        assert (
+            result["error"]["code"]
+            == {
+                "openapi": "store_owner_openapi_unavailable",
+                "revision": "store_owner_revision_read_failed",
+                "read": "store_owner_read_failed",
+                "dry_run": "store_owner_dry_run_failed",
+            }[stage]
+        )
+    if location == "error_body":
+        assert response.closed
 
 
 def test_http_validation_error_after_apply_is_uncertain_and_error_body_is_never_returned(monkeypatch):

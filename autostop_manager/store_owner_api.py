@@ -10,8 +10,9 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from http.client import HTTPException
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -75,6 +76,14 @@ SAFE_REVERSIBLE_COLLECTION_CREATE_PATHS = frozenset(
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def _open_response(request: Request, *, timeout: float) -> Any:
+    """Read and close HTTP error streams through the same path as other responses."""
+    try:
+        return build_opener(_NoRedirect()).open(request, timeout=timeout)
+    except HTTPError as response:
+        return response
 
 
 @dataclass(frozen=True)
@@ -468,7 +477,7 @@ class StoreOwnerApiClient:
         try:
             payload = self._read_openapi()
             capabilities = _parse_capabilities(payload)
-        except (OSError, TypeError, UnicodeError, ValueError, URLError):
+        except (OSError, HTTPException, TypeError, UnicodeError, ValueError):
             return _error("store_owner_openapi_unavailable")
         with self._cache_lock:
             self._capabilities = capabilities
@@ -486,7 +495,9 @@ class StoreOwnerApiClient:
             },
             method="GET",
         )
-        with build_opener(_NoRedirect()).open(request, timeout=self.timeout) as response:
+        with _open_response(request, timeout=self.timeout) as response:
+            if not 200 <= int(getattr(response, "status", 200)) < 300:
+                raise ValueError("openapi_http_rejected")
             raw = response.read(MAX_OPENAPI_BYTES + 1)
         if len(raw) > MAX_OPENAPI_BYTES:
             raise ValueError("openapi_response_too_large")
@@ -512,18 +523,15 @@ class StoreOwnerApiClient:
             method="GET",
         )
         try:
-            with build_opener(_NoRedirect()).open(request, timeout=self.timeout) as response:
+            with _open_response(request, timeout=self.timeout) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 status_code = int(getattr(response, "status", 200))
-        except HTTPError as exc:
-            raw = exc.read(MAX_RESPONSE_BYTES + 1)
-            return _http_error(exc.code, raw, is_write=False)
-        except (TimeoutError, URLError, OSError):
+        except (OSError, HTTPException):
             return _error("store_owner_revision_read_failed", request_dispatched=True)
-        if len(raw) > MAX_RESPONSE_BYTES:
-            return _error("store_owner_revision_response_too_large", request_dispatched=True)
         if not 200 <= status_code < 300:
             return _http_error(status_code, raw, is_write=False)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            return _error("store_owner_revision_response_too_large", request_dispatched=True)
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeError, ValueError, TypeError):
@@ -609,68 +617,46 @@ class StoreOwnerApiClient:
             method=capability.method,
         )
         try:
-            with build_opener(_NoRedirect()).open(request, timeout=self.timeout) as response:
+            with _open_response(request, timeout=self.timeout) as response:
+                status_code = int(getattr(response, "status", 200))
                 content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].casefold()
                 response_limit = (
                     MAX_BINARY_RESPONSE_BYTES
                     if allow_binary_response
+                    and 200 <= status_code < 300
                     and content_type != "application/json"
                     and not content_type.endswith("+json")
                     else MAX_RESPONSE_BYTES
                 )
                 raw = response.read(response_limit + 1)
-                status_code = int(getattr(response, "status", 200))
                 response_headers = response.headers
-        except HTTPError as exc:
-            raw = exc.read(MAX_RESPONSE_BYTES + 1)
-            return _http_error(
-                exc.code,
-                raw,
-                is_write=capability.method != "GET" and action_mode == "apply",
+        except (OSError, HTTPException):
+            code = "store_owner_outcome_uncertain" if capability.method != "GET" else "store_owner_read_failed"
+            return _dispatch_error(
+                "store_owner_dry_run_failed" if action_mode == "dry_run" else code,
+                method=capability.method,
+                action_mode=action_mode,
             )
-        except (TimeoutError, URLError, OSError):
-            if action_mode == "dry_run":
-                return _error(
-                    "store_owner_dry_run_failed",
-                    request_dispatched=True,
-                    outcome_uncertain=False,
-                )
-            return _error(
-                "store_owner_outcome_uncertain" if capability.method != "GET" else "store_owner_read_failed",
-                status="compensating" if capability.method != "GET" else "failed",
-                outcome_uncertain=capability.method != "GET",
-            )
-        if len(raw) > response_limit:
-            if action_mode == "dry_run":
-                return _error(
-                    "store_owner_dry_run_response_too_large",
-                    request_dispatched=True,
-                    outcome_uncertain=False,
-                )
-            if capability.method != "GET":
-                return _uncertain_after_dispatch("store_owner_response_too_large")
-            return _error("store_owner_response_too_large")
         if not 200 <= status_code < 300:
             return _http_error(
                 status_code,
                 raw,
                 is_write=capability.method != "GET" and action_mode == "apply",
             )
+        if len(raw) > response_limit:
+            return _dispatch_error(
+                "store_owner_dry_run_response_too_large"
+                if action_mode == "dry_run"
+                else "store_owner_response_too_large",
+                method=capability.method,
+                action_mode=action_mode,
+            )
         decoded = _decode_response(raw, content_type, allow_binary=allow_binary_response)
         if decoded.get("ok") is False:
-            if action_mode == "dry_run":
-                return _error(
-                    str(decoded.get("error", {}).get("code") or "store_owner_dry_run_response_invalid"),
-                    request_dispatched=True,
-                    outcome_uncertain=False,
-                )
-            if capability.method != "GET":
-                return _uncertain_after_dispatch(
-                    str(decoded.get("error", {}).get("code") or "store_owner_response_invalid")
-                )
-            return decoded
+            return _dispatch_error(str(decoded["error"]["code"]), method=capability.method, action_mode=action_mode)
         if _contains_sensitive_response_data(decoded.get("data")):
-            return _sensitive_response_error(
+            return _dispatch_error(
+                "store_owner_sensitive_response_blocked",
                 method=capability.method,
                 action_mode=action_mode,
             )
@@ -692,13 +678,7 @@ class StoreOwnerApiClient:
                 value=decoded.get("data"),
             )
         except ValueError as exc:
-            if capability.method != "GET":
-                return _uncertain_after_dispatch(str(exc))
-            return _error(
-                str(exc),
-                request_dispatched=True,
-                outcome_uncertain=False,
-            )
+            return _dispatch_error(str(exc), method=capability.method, action_mode=action_mode)
         idempotency_replay = _idempotency_replay(response_headers)
         return {
             "ok": True,
@@ -2105,14 +2085,14 @@ def _contains_sensitive_response_data(value: Any, *, depth: int = 0) -> bool:
     return False
 
 
-def _sensitive_response_error(*, method: str, action_mode: str) -> dict[str, Any]:
+def _dispatch_error(code: str, *, method: str, action_mode: str) -> dict[str, Any]:
     if action_mode == "dry_run" or method == "GET":
         return _error(
-            "store_owner_sensitive_response_blocked",
+            code,
             request_dispatched=True,
             outcome_uncertain=False,
         )
-    return _uncertain_after_dispatch("store_owner_sensitive_response_blocked")
+    return _uncertain_after_dispatch(code)
 
 
 def _idempotency_replay(headers: Any) -> bool:

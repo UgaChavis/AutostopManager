@@ -270,6 +270,45 @@ def test_conductor_accepts_owner_canonical_draft_and_store_owned_warranty(tmp_pa
     assert persisted["item"]["checkpoint"]["phase"] == "published"
 
 
+@pytest.mark.parametrize("readback_available", [True, False])
+def test_conductor_reconciles_uncertain_write_without_repeating_it(tmp_path, monkeypatch, readback_available):
+    conductor, gateway, _store = _conductor(tmp_path)
+    ready = _evidence_ready(conductor)
+    replace = gateway.replace_estimate_draft
+
+    def interrupted_replace(**kwargs):
+        result = replace(**kwargs)
+        if kwargs["mode"] == "apply":
+            if not readback_available:
+                monkeypatch.setattr(gateway, "get_estimate_draft", lambda **_: {"ok": False})
+            return {"ok": False, "meta": {"outcome_uncertain": True, "readback_required": True}}
+        return result
+
+    monkeypatch.setattr(gateway, "replace_estimate_draft", interrupted_replace)
+    request = {
+        "operation": "draft",
+        "quote_request_id": "quote-1",
+        "run_id": ready["run_id"],
+        "expected_state_version": ready["summary"]["state_version"],
+        "expected_revision": "revision-1",
+        "idempotency_key": "quote-draft-001",
+        "correlation_id": "quote-correlation-001",
+        "entries": deepcopy(_ENTRIES),
+        "coverage": deepcopy(_COVERAGE),
+    }
+    result = conductor.execute(**request)
+    assert result["ok"] is readback_available
+    assert result["summary"]["phase"] == ("draft_saved" if readback_available else "compensating")
+    assert gateway.estimate is not None
+    assert gateway.estimate["entries"][0]["catalogNumber"] == "TEST-001"
+    assert gateway.status == "WAITING_FOR_QUOTE"
+    assert gateway.converted_order_id is None
+    # The old revision cannot be dispatched again, including with fresh ledger state.
+    request["expected_state_version"] = result["summary"]["state_version"]
+    assert conductor.execute(**request)["ok"] is False
+    assert [args["mode"] for name, args in gateway.calls if name == "replace"] == ["dry_run", "apply"]
+
+
 @pytest.mark.parametrize(
     ("operation", "unexpected"),
     [
