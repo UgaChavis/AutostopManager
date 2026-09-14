@@ -3202,7 +3202,11 @@ def resolve_partsapi_category(
     text_candidates = [value for value in raw_candidates if not value.isdigit()]
     index_result = search_partsapi_category_index(
         requested_part,
-        intent_id=str(part_profile.get("intent_id") or "") if part_profile.get("recognized") else None,
+        intent_id=(
+            str(part_profile.get("intent_id") or "")
+            if part_profile.get("recognized") and part_profile.get("intent_id") != "multiple_parts"
+            else None
+        ),
         path=category_index_path,
         limit=5,
     )
@@ -3212,80 +3216,40 @@ def resolve_partsapi_category(
         if str(row.get("cat_id") or "").strip().isdigit()
     ]
 
-    def _profile_digest() -> dict[str, Any]:
-        return {
+    explicit = str(explicit_category or "").strip()
+    extra: dict[str, Any] = {}
+    category: str | None
+    if explicit:
+        category, source = explicit, "explicit"
+    elif part_profile.get("intent_id") == "multiple_parts":
+        category, source = None, "none"
+    elif index_numeric_candidates:
+        category, source = index_numeric_candidates[0], "partsapi_category_index"
+        selected = index_result["matches"][0]
+        numeric_candidates = list(dict.fromkeys(numeric_candidates + index_numeric_candidates))
+        extra = {"selected_index_match": selected, "validation_required": bool(selected.get("validation_required"))}
+    elif numeric_candidates:
+        category, source = numeric_candidates[0], "parts_intent_numeric_candidate"
+    elif text_candidates:
+        category, source = text_candidates[0], "parts_intent_text_candidate"
+    else:
+        category, source = None, "none"
+    kind = "unresolved" if category is None else "numeric_id" if category.isdigit() else "text_candidate"
+    return {
+        "category": category,
+        "category_kind": kind,
+        "category_unresolved": kind != "numeric_id",
+        "source": source,
+        "numeric_candidates": numeric_candidates,
+        "index_numeric_candidates": index_numeric_candidates,
+        "text_candidates": text_candidates,
+        "part_intent": {
             "recognized": bool(part_profile.get("recognized")),
             "intent_id": part_profile.get("intent_id"),
             "canonical_name_ru": part_profile.get("canonical_name_ru"),
-        }
-
-    explicit = str(explicit_category or "").strip()
-    if explicit:
-        kind = "numeric_id" if explicit.isdigit() else "text_candidate"
-        return {
-            "category": explicit,
-            "category_kind": kind,
-            "category_unresolved": kind != "numeric_id",
-            "source": "explicit",
-            "numeric_candidates": numeric_candidates,
-            "index_numeric_candidates": index_numeric_candidates,
-            "text_candidates": text_candidates,
-            "part_intent": _profile_digest(),
-            "index_matches": index_result.get("matches", []),
-        }
-
-    if index_numeric_candidates:
-        selected = index_result["matches"][0]
-        return {
-            "category": index_numeric_candidates[0],
-            "category_kind": "numeric_id",
-            "category_unresolved": False,
-            "source": "partsapi_category_index",
-            "numeric_candidates": list(dict.fromkeys(numeric_candidates + index_numeric_candidates)),
-            "index_numeric_candidates": index_numeric_candidates,
-            "text_candidates": text_candidates,
-            "part_intent": _profile_digest(),
-            "index_matches": index_result.get("matches", []),
-            "selected_index_match": selected,
-            "validation_required": bool(selected.get("validation_required")),
-        }
-
-    if numeric_candidates:
-        return {
-            "category": numeric_candidates[0],
-            "category_kind": "numeric_id",
-            "category_unresolved": False,
-            "source": "parts_intent_numeric_candidate",
-            "numeric_candidates": numeric_candidates,
-            "index_numeric_candidates": index_numeric_candidates,
-            "text_candidates": text_candidates,
-            "part_intent": _profile_digest(),
-            "index_matches": index_result.get("matches", []),
-        }
-
-    if text_candidates:
-        return {
-            "category": text_candidates[0],
-            "category_kind": "text_candidate",
-            "category_unresolved": True,
-            "source": "parts_intent_text_candidate",
-            "numeric_candidates": numeric_candidates,
-            "index_numeric_candidates": index_numeric_candidates,
-            "text_candidates": text_candidates,
-            "part_intent": _profile_digest(),
-            "index_matches": index_result.get("matches", []),
-        }
-
-    return {
-        "category": None,
-        "category_kind": "unresolved",
-        "category_unresolved": True,
-        "source": "none",
-        "numeric_candidates": [],
-        "index_numeric_candidates": index_numeric_candidates,
-        "text_candidates": [],
-        "part_intent": _profile_digest(),
+        },
         "index_matches": index_result.get("matches", []),
+        **extra,
     }
 
 

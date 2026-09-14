@@ -731,6 +731,16 @@ def test_resolve_partsapi_category_does_not_map_brake_disc_to_brake_pad_numeric_
     assert result["category_kind"] == "text_candidate"
 
 
+def test_compound_part_request_does_not_automatically_select_one_index_category():
+    phrase = "передние колодки и задние амортизаторы"
+    result = resolve_partsapi_category(phrase)
+    assert result["part_intent"]["intent_id"] == "multiple_parts"
+    assert result["index_matches"]  # Retain useful hints without selecting one for the whole request.
+    assert result["category"] is None
+    assert result["category_unresolved"] is True
+    assert resolve_partsapi_category(phrase, explicit_category="1191")["category"] == "1191"
+
+
 def test_extract_partsapi_vehicle_profiles_handles_vin_decode_payload():
     profiles = extract_partsapi_vehicle_profiles(
         operation="vin_decode",

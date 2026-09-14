@@ -264,7 +264,11 @@ def test_resolver_does_not_spend_live_budget_on_missing_credentials(monkeypatch)
     assert result["live_call_count"] == 1
 
 
-def test_resolver_blocks_generic_part_before_live_catalog_search(monkeypatch):
+@pytest.mark.parametrize(
+    ("part", "fields"),
+    [("тормозные колодки", ["axle"]), ("передние колодки и задние амортизаторы", ["split_by_part"])],
+)
+def test_resolver_blocks_ambiguous_part_before_live_catalog_search(monkeypatch, part, fields):
     identity = _medium_identity()
     identity["confidence_label"] = "high"
     identity["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] = True
@@ -286,7 +290,7 @@ def test_resolver_blocks_generic_part_before_live_catalog_search(monkeypatch):
 
     result = resolve_vin_oem_parts(
         identifier="1HGCM82633A004352",
-        requested_part="тормозные колодки",
+        requested_part=part,
         live_vpic=False,
         live_partsapi_identity=False,
         live_partsapi_oem=True,
@@ -296,7 +300,7 @@ def test_resolver_blocks_generic_part_before_live_catalog_search(monkeypatch):
     assert result["readiness"]["ready_for_category_lookup"] is False
     assert "parts_by_vin" not in operations
     clarification = next(action for action in result["manual_actions"] if action["code"] == "clarify_part_position")
-    assert clarification["fields"] == ["axle"]
+    assert clarification["fields"] == fields
     assert "message" not in clarification
 
 

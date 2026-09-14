@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from autostop_manager.parts_intent import normalize_part_intent
 
 
@@ -49,6 +51,15 @@ def test_normalize_part_intent_blocks_single_lookup_for_brake_pads_on_both_axles
         "колодки передние и задние",
         "колодки задние и передние",
         "передние колодки и задние",
+        "передние колодки и задние колодки",
+        "передние, а также задние колодки",
+        "передние и также задние колодки",
+        "front and rear brake pads",
+        "front and also rear brake pads",
+        "rear / front pads",
+        "brake pads front and rear",
+        "front brake pads and rear",
+        "front brake pads, rear brake pads",
     ]:
         result = normalize_part_intent(phrase)
 
@@ -57,6 +68,44 @@ def test_normalize_part_intent_blocks_single_lookup_for_brake_pads_on_both_axles
         assert result["clarification_required"] is True
         assert result["clarification_fields"] == ["split_by_axle"]
         assert result["partsapi_category_candidates"] == []
+
+
+@pytest.mark.parametrize(
+    ("phrase", "intents"),
+    [
+        ("передние колодки и задние амортизаторы", {"front_brake_pads", "shock_absorber"}),
+        ("задние амортизаторы, передние колодки", {"front_brake_pads", "shock_absorber"}),
+        ("front brake pads and rear shock absorbers", {"front_brake_pads", "shock_absorber"}),
+        ("колодки и задние амортизаторы", {"brake_pads_unspecified_axle", "shock_absorber"}),
+        ("масляный фильтр и салонный фильтр", {"oil_filter", "cabin_filter"}),
+        ("свечи накаливания и свечи зажигания", {"glow_plug", "spark_plug"}),
+    ],
+)
+def test_compound_request_preserves_distinct_parts_without_single_category(phrase, intents):
+    result = normalize_part_intent(phrase)
+
+    assert result["intent_id"] == "multiple_parts"
+    assert result["recognized"] is True
+    assert set(result["matched_intents"]) == intents
+    assert result["raw"] == phrase
+    assert result["catalog_search_terms"] == [phrase]
+    assert result["clarification_fields"] == ["split_by_part"]
+    assert result["clarification_required"] is True
+    assert result["partsapi_category_candidates"] == []
+
+
+@pytest.mark.parametrize(
+    ("phrase", "intent"),
+    [
+        ("внутренний ШРУС", "inner_cv_joint"),
+        ("injector washer", "injector_seal_washer"),
+        ("ремень генератора", "belt_tensioner_or_roller"),
+    ],
+)
+def test_specific_part_name_does_not_create_an_extra_part(phrase, intent):
+    result = normalize_part_intent(phrase)
+    assert result["intent_id"] == intent
+    assert result["recognized"] is True
 
 
 def test_normalize_part_intent_distinguishes_inner_outer_and_unspecified_cv_joints():
