@@ -17,6 +17,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +46,13 @@ MAX_INBOUND_MONITOR_EVENTS = 32
 MAX_INBOUND_MONITOR_CONTEXT_MESSAGES = 5
 INBOUND_MONITOR_CONTEXT_WINDOW_SECONDS = 5 * 60
 MAX_INBOUND_MONITOR_FALLBACK_DIALOGS = 20
+MONITOR_VOICE_STAGE_TIMEOUT_SECONDS = 120
+MONITOR_VOICE_STAGE_TTL_SECONDS = 10 * 60
+MONITOR_VOICE_STAGE_CLEANUP_RETRIES = 3
+MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS = 15
+DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
+MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
+WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 INBOUND_EVENT_OPEN = "open"
 INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
 INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
@@ -65,6 +73,8 @@ DOWNLOAD_MIME_SUFFIXES = {
 }
 SENSITIVE_URI_PATTERN = re.compile(r"(?i)\b(?:tg|vpn)://[^\s]+")
 _MUTATION_LOCK = asyncio.Lock()
+_MONITOR_VOICE_LOCK = asyncio.Lock()
+_MONITOR_VOICE_EXPIRY_TASKS: set[asyncio.Task[None]] = set()
 _PHONE_RESOLVE_LAST_AT = 0.0
 
 
@@ -207,7 +217,10 @@ class InboundMonitorEvent:
 class InboundVoiceStage:
     """One transient, opaque work-inbox file awaiting local transcription."""
 
+    event_sequence: int
     path: Path
+    duration_seconds: int
+    suffix: str
 
 
 class InboundMonitor:
@@ -222,6 +235,8 @@ class InboundMonitor:
         self._seen: set[tuple[int, int]] = set()
         self._states: dict[int, str] = {}
         self._voice_stages: dict[str, InboundVoiceStage] = {}
+        self._voice_stage_by_event: dict[int, str] = {}
+        self._voice_stage_reservations: set[int] = set()
         self._next_sequence = 1
         self._dropped_events = 0
         self._dropped_open_events = 0
@@ -242,6 +257,8 @@ class InboundMonitor:
         self._events.remove(removed)
         self._seen.discard((removed.peer_id, removed.message_id))
         self._states.pop(removed.sequence, None)
+        self._voice_stage_reservations.discard(removed.sequence)
+        self._voice_stage_by_event.pop(removed.sequence, None)
         self._dropped_events += 1
 
     def record(self, event: Any) -> None:
@@ -315,17 +332,80 @@ class InboundMonitor:
             raise BridgeError("inbound_event_not_open")
         return event
 
-    def stage_voice(self, handle: str, path: Path) -> None:
+    def voice_stage_for(self, event: InboundMonitorEvent) -> tuple[str, InboundVoiceStage] | None:
+        """Return the one active opaque stage for an event, if it has one."""
+
+        handle = self._voice_stage_by_event.get(event.sequence)
+        if handle is None:
+            return None
+        stage = self._voice_stages.get(handle)
+        if stage is None:
+            self._voice_stage_by_event.pop(event.sequence, None)
+            return None
+        return handle, stage
+
+    def reserve_voice_stage(self, event: InboundMonitorEvent) -> None:
+        """Claim an open event before an awaited Telegram media download."""
+
+        if self._state(event) != INBOUND_EVENT_OPEN:
+            raise BridgeError("inbound_event_not_open")
+        if self.voice_stage_for(event) is not None or event.sequence in self._voice_stage_reservations:
+            raise BridgeError("inbound_voice_stage_active")
+        self._voice_stage_reservations.add(event.sequence)
+
+    def release_voice_stage_reservation(self, event: InboundMonitorEvent) -> None:
+        """Forget an unfinished stage claim after a failed or cancelled download."""
+
+        self._voice_stage_reservations.discard(event.sequence)
+
+    def stage_voice(
+        self,
+        event: InboundMonitorEvent,
+        handle: str,
+        path: Path,
+        *,
+        duration_seconds: int,
+        suffix: str,
+    ) -> InboundVoiceStage:
         """Keep an opaque handle for one transient voice file, never its source IDs."""
 
-        if re.fullmatch(r"[A-Za-z0-9_-]{24,128}", handle) is None:
-            raise BridgeError("inbound_voice_handle_invalid")
-        self._voice_stages[handle] = InboundVoiceStage(path=path)
+        if (
+            re.fullmatch(r"[A-Za-z0-9_-]{24,128}", handle) is None
+            or not isinstance(duration_seconds, int)
+            or duration_seconds <= 0
+            or suffix not in {".m4a", ".mp3", ".ogg", ".opus"}
+        ):
+            raise BridgeError("inbound_voice_stage_invalid")
+        if self._state(event) != INBOUND_EVENT_OPEN:
+            self.release_voice_stage_reservation(event)
+            raise BridgeError("inbound_event_not_open")
+        if self.voice_stage_for(event) is not None:
+            raise BridgeError("inbound_voice_stage_active")
+        if event.sequence not in self._voice_stage_reservations:
+            raise BridgeError("inbound_voice_stage_reservation_lost")
+        stage = InboundVoiceStage(
+            event_sequence=event.sequence,
+            path=path,
+            duration_seconds=duration_seconds,
+            suffix=suffix,
+        )
+        self._voice_stage_reservations.discard(event.sequence)
+        self._voice_stages[handle] = stage
+        self._voice_stage_by_event[event.sequence] = handle
+        return stage
 
     def consume_voice_stage(self, handle: str) -> InboundVoiceStage | None:
-        """Forget a staged file handle before its deletion is attempted."""
+        """Forget a staged file handle after deletion has been verified."""
 
-        return self._voice_stages.pop(handle, None)
+        stage = self._voice_stages.pop(handle, None)
+        if stage is not None:
+            self._voice_stage_by_event.pop(stage.event_sequence, None)
+        return stage
+
+    def voice_stage(self, handle: str) -> InboundVoiceStage | None:
+        """Find one opaque stage without relinquishing its cleanup retry handle."""
+
+        return self._voice_stages.get(handle)
 
     def mark_reply_verified(self, *, peer_id: int, message_id: int) -> bool:
         """Close an active opaque ref only after a verified direct reply."""
@@ -337,6 +417,7 @@ class InboundMonitor:
                     return True
                 if state != INBOUND_EVENT_OPEN:
                     return False
+                self._voice_stage_reservations.discard(event.sequence)
                 self._states[event.sequence] = INBOUND_EVENT_REPLY_VERIFIED
                 return True
         return False
@@ -360,6 +441,7 @@ class InboundMonitor:
             return {"event_id": self._event_id(event), "state": state}
         if state != INBOUND_EVENT_OPEN:
             raise BridgeError("inbound_event_already_closed")
+        self._voice_stage_reservations.discard(event.sequence)
         self._states[event.sequence] = INBOUND_EVENT_NO_REPLY_NEEDED
         return {"event_id": self._event_id(event), "state": self._state(event)}
 
@@ -1427,6 +1509,7 @@ async def _handle_send_text_to_entity(
             or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
+        readback_verified = previous.get("readback_verified") is True
         response = {
             "ok": True,
             "mode": "apply",
@@ -1434,7 +1517,8 @@ async def _handle_send_text_to_entity(
             "target": response_target,
             "message_id": previous.get("message_id"),
             "reply_to_message_id": reply_to_message_id or None,
-            "reply_verified": bool(reply_to_message_id),
+            "reply_verified": bool(reply_to_message_id) and readback_verified,
+            "verified": readback_verified,
         }
         if reply_to_message_id and inbound_monitor is not None:
             # An idempotency record is intentionally not proof that the old
@@ -1456,11 +1540,14 @@ async def _handle_send_text_to_entity(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": reply_to_message_id,
         "text_sha256": text_sha256,
+        "readback_verified": False,
     }
     _save_idempotency(idempotency_path, idempotency)
     readback = await client.get_messages(entity, ids=int(sent.id))
     if readback is None or str(readback.message or "") != text or _message_reply_to_id(readback) != reply_to_message_id:
         raise BridgeError("send_readback_failed")
+    idempotency[idempotency_key]["readback_verified"] = True
+    _save_idempotency(idempotency_path, idempotency)
     monitor_event_closed: bool | None = None
     if reply_to_message_id and inbound_monitor is not None:
         # This is intentionally after Telegram readback: a dry run, failed send,
@@ -1626,13 +1713,16 @@ async def _handle_monitor_context(
     return {"ok": True, "event_id": event_id, "messages": messages}
 
 
-def _monitor_voice_public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Return only harmless media facts needed by the local voice runner."""
-
+def _monitor_voice_stage_response(event_id: str, handle: str, stage: InboundVoiceStage) -> dict[str, Any]:
     return {
-        "kind": "voice",
-        "duration_seconds": metadata["duration_seconds"],
-        "suffix": metadata["suffix"],
+        "ok": True,
+        "event_id": event_id,
+        "media": {
+            "kind": "voice",
+            "duration_seconds": stage.duration_seconds,
+            "suffix": stage.suffix,
+        },
+        "media_handle": handle,
     }
 
 
@@ -1645,6 +1735,47 @@ def _require_monitor_voice_metadata(message: Any) -> dict[str, Any]:
     return metadata
 
 
+async def _expire_monitor_voice_stage(
+    config: TelegramConfig,
+    monitor: InboundMonitor,
+    handle: str,
+) -> None:
+    """Bound an abandoned local voice hand-off without retaining its content."""
+
+    try:
+        await asyncio.sleep(MONITOR_VOICE_STAGE_TTL_SECONDS)
+        for cleanup_attempt in range(MONITOR_VOICE_STAGE_CLEANUP_RETRIES):
+            async with _MONITOR_VOICE_LOCK:
+                staged = monitor.voice_stage(handle)
+                if staged is None:
+                    return
+                try:
+                    removed = _discard_private_download(staged.path, inbox_dir=config.socket_path.parent / "inbox")
+                except BridgeError:
+                    pass
+                else:
+                    if removed:
+                        monitor.consume_voice_stage(handle)
+                        return
+            if cleanup_attempt + 1 < MONITOR_VOICE_STAGE_CLEANUP_RETRIES:
+                await asyncio.sleep(MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - an expiry task must not leak an unhandled exception.
+        # Expiry is only a best-effort orphan cleanup.  The service shutdown
+        # also removes its RuntimeDirectory, and no dialogue data is logged.
+        return
+
+
+def _schedule_monitor_voice_stage_expiry(config: TelegramConfig, monitor: InboundMonitor, handle: str) -> None:
+    task = asyncio.create_task(
+        _expire_monitor_voice_stage(config, monitor, handle),
+        name="autostop-monitor-voice-expiry",
+    )
+    _MONITOR_VOICE_EXPIRY_TASKS.add(task)
+    task.add_done_callback(_MONITOR_VOICE_EXPIRY_TASKS.discard)
+
+
 async def _handle_monitor_voice_stage(
     client: Any,
     config: TelegramConfig,
@@ -1653,28 +1784,43 @@ async def _handle_monitor_voice_stage(
     event_id: str,
 ) -> dict[str, Any]:
     event = monitor.require_open(event_id)
-    message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
-    metadata = _require_monitor_voice_metadata(message)
-    content = await client.download_media(message, file=bytes)
-    if not isinstance(content, bytes):
-        raise BridgeError("download_failed")
-    if metadata["size_bytes"] != len(content):
-        raise BridgeError("download_size_mismatch")
-    _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
-    handle = secrets.token_urlsafe(24)
-    path = _save_monitor_voice_stage(
-        content,
-        handle=handle,
-        suffix=metadata["suffix"],
-        inbox_dir=config.socket_path.parent / "inbox",
-    )
-    monitor.stage_voice(handle, path)
-    return {
-        "ok": True,
-        "event_id": event_id,
-        "media": _monitor_voice_public_metadata(metadata),
-        "media_handle": handle,
-    }
+    monitor.reserve_voice_stage(event)
+    path: Path | None = None
+    try:
+        async with asyncio.timeout(MONITOR_VOICE_STAGE_TIMEOUT_SECONDS):
+            message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
+            metadata = _require_monitor_voice_metadata(message)
+            content = await client.download_media(message, file=bytes)
+        if not isinstance(content, bytes):
+            raise BridgeError("download_failed")
+        if metadata["size_bytes"] != len(content):
+            raise BridgeError("download_size_mismatch")
+        _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
+        handle = secrets.token_urlsafe(24)
+        path = _save_monitor_voice_stage(
+            content,
+            handle=handle,
+            suffix=metadata["suffix"],
+            inbox_dir=config.socket_path.parent / "inbox",
+        )
+        stage = monitor.stage_voice(
+            event,
+            handle,
+            path,
+            duration_seconds=metadata["duration_seconds"],
+            suffix=metadata["suffix"],
+        )
+    except TimeoutError as exc:
+        monitor.release_voice_stage_reservation(event)
+        raise BridgeError("inbound_voice_download_timeout") from exc
+    except BaseException:
+        monitor.release_voice_stage_reservation(event)
+        if path is not None:
+            with suppress(BridgeError):
+                _discard_private_download(path, inbox_dir=config.socket_path.parent / "inbox")
+        raise
+    _schedule_monitor_voice_stage_expiry(config, monitor, handle)
+    return _monitor_voice_stage_response(event_id, handle, stage)
 
 
 async def _handle_monitor_voice_discard(
@@ -1682,11 +1828,15 @@ async def _handle_monitor_voice_discard(
     monitor: InboundMonitor,
     *,
     handle: str,
+    runner_cleanup_verified: bool = False,
 ) -> dict[str, Any]:
-    staged = monitor.consume_voice_stage(handle)
+    staged = monitor.voice_stage(handle)
     if staged is None:
         raise BridgeError("inbound_voice_stage_unavailable")
-    _discard_private_download(staged.path, inbox_dir=config.socket_path.parent / "inbox")
+    removed = _discard_private_download(staged.path, inbox_dir=config.socket_path.parent / "inbox")
+    if not removed and runner_cleanup_verified is not True:
+        raise BridgeError("inbound_voice_cleanup_unverified")
+    monitor.consume_voice_stage(handle)
     return {"ok": True, "cleanup_verified": True}
 
 
@@ -1729,6 +1879,7 @@ async def _handle_monitor_operation(
             config,
             inbound_monitor,
             handle=str(request.get("media_handle") or ""),
+            runner_cleanup_verified=request.get("runner_cleanup_verified") is True,
         )
     if operation == "monitor_context":
         return await _handle_monitor_context(
@@ -1863,9 +2014,14 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     return (operation in {"send", "send_photo", "download"} and request.get("mode") == "apply") or operation in {
         "discard_download",
         "monitor_mark",
-        "monitor_voice_stage",
-        "monitor_voice_discard",
     }
+
+
+def _requires_monitor_voice_lock(request: dict[str, Any]) -> bool:
+    # Staging reserves its event before the first await, so different voice
+    # downloads need not queue behind one another.  Serializing the full
+    # download here would let a second local caller outlive its RPC deadline.
+    return request.get("operation") == "monitor_voice_discard"
 
 
 async def _serve_client(
@@ -1886,6 +2042,9 @@ async def _serve_client(
             raise BridgeError("request_invalid")
         if _requires_mutation_lock(request):
             async with _MUTATION_LOCK:
+                response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
+        elif _requires_monitor_voice_lock(request):
+            async with _MONITOR_VOICE_LOCK:
                 response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
         else:
             response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
@@ -2007,13 +2166,26 @@ async def run_code_login(
             os.umask(previous_umask)
 
 
-def send_local_request(socket_path: Path, request: dict[str, Any]) -> dict[str, Any]:
+def send_local_request(
+    socket_path: Path,
+    request: dict[str, Any],
+    *,
+    timeout_seconds: float = DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    if isinstance(timeout_seconds, bool):
+        raise BridgeError("bridge_timeout_invalid")
+    try:
+        timeout_value = float(timeout_seconds)
+    except (TypeError, ValueError) as exc:
+        raise BridgeError("bridge_timeout_invalid") from exc
+    if not 1 <= timeout_value <= MAX_LOCAL_REQUEST_TIMEOUT_SECONDS:
+        raise BridgeError("bridge_timeout_invalid")
     encoded = _canonical_json(request) + b"\n"
     if len(encoded) > MAX_REQUEST_BYTES:
         raise BridgeError("request_size_invalid")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(30)
+            connection.settimeout(timeout_value)
             connection.connect(str(socket_path))
             connection.sendall(encoded)
             chunks = bytearray()
@@ -2043,11 +2215,20 @@ def _socket_from_args(args: Any) -> Path:
     return ACCOUNT_PATHS[args.account].socket_path
 
 
+def _monitor_incoming_from_args(args: Any) -> bool:
+    """Keep work-message intake explicitly opt-in, including on service restart."""
+
+    return args.account == "work" and (
+        bool(getattr(args, "monitor_incoming", False)) or os.environ.get(WORK_MONITOR_ENVIRONMENT, "").strip() == "1"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-telegram")
     parser.add_argument("--account", choices=tuple(ACCOUNT_PATHS), required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("daemon")
+    daemon = subparsers.add_parser("daemon")
+    daemon.add_argument("--monitor-incoming", action="store_true")
     subparsers.add_parser("code-login")
     subparsers.add_parser("probe")
     subparsers.add_parser("status")
@@ -2101,7 +2282,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "daemon":
             config = _config_from_args(args)
-            asyncio.run(run_daemon(config, monitor_incoming=args.account == "work"))
+            asyncio.run(run_daemon(config, monitor_incoming=_monitor_incoming_from_args(args)))
             return 0
         if args.command == "code-login":
             payload = asyncio.run(run_code_login(_config_from_args(args)))

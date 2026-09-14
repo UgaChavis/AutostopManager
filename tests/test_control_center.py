@@ -32,6 +32,7 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "stale_app_server_processes" in report["codex_readiness"]["runtime"]
     assert "runtime_readiness" in report
     assert "production_ops" in report
+    assert "work_telegram_bridge" in report["production_ops"]
     assert "open_risk" in report
     assert "risks" in report
     assert report["summary"]["knowledge_documents"] > 0
@@ -49,6 +50,7 @@ def test_control_report_schema_and_markdown(tmp_path):
     assert "Runtime Readiness" in markdown
     assert "Stale app-server processes" in markdown
     assert "Production Ops" in markdown
+    assert "Work Telegram bridge" in markdown
     assert "Provider Matrix" in markdown
     assert "python -m autostop_manager.cli control-report" in markdown
     assert "autostop-" + "manager control-report" not in markdown
@@ -188,7 +190,16 @@ def test_missing_external_provider_access_is_not_server_open_risk():
     assert result == {"score": 0, "level": "green", "items": []}
 
 
-def _production_ops_with_watchdog(monkeypatch, tmp_path, *, timer, service):
+_OWNER_DISABLED_WORK_TELEGRAM = {
+    "ok": True,
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "unit_file_state": "disabled",
+}
+
+
+def _production_ops_with_watchdog(monkeypatch, tmp_path, *, timer, service, work_telegram=None):
     compose_path = tmp_path / "docker-compose.yml"
     monkeypatch.setattr(control_center_module, "_first_existing", lambda _paths: compose_path)
     monkeypatch.setattr(
@@ -204,6 +215,7 @@ def _production_ops_with_watchdog(monkeypatch, tmp_path, *, timer, service):
     statuses = {
         "autostopcrm-watchdog.timer": timer,
         "autostopcrm-watchdog.service": service,
+        "autostop-work-telegram.service": work_telegram or _OWNER_DISABLED_WORK_TELEGRAM,
     }
     monkeypatch.setattr(
         control_center_module,
@@ -233,12 +245,57 @@ def test_production_ops_accepts_absent_watchdog_units(monkeypatch, tmp_path):
         "installed_units": [],
         "active_units": [],
     }
+    assert production_ops["work_telegram_bridge"]["ok"] is True
+    assert production_ops["work_telegram_bridge"]["state"] == "owner_disabled"
+    assert production_ops["work_telegram_bridge"]["monitoring"] == "off"
     assert production_ops["warnings"] == []
     assert production_health["watchdog_timer_active"] is False
     assert production_health["watchdog_policy_ok"] is True
     assert production_health["watchdog_policy_state"] == "absent"
     assert "watchdog installation or enablement" in production_ops["forbidden_without_explicit_owner_command"]
     assert all("watchdog" not in gate["operation"] for gate in production_ops["safe_operation_gates"])
+
+
+def test_work_telegram_lifecycle_flags_enabled_but_inactive(monkeypatch, tmp_path):
+    enabled_but_inactive = {**_OWNER_DISABLED_WORK_TELEGRAM, "unit_file_state": "enabled"}
+    lifecycle = control_center_module._work_telegram_bridge_lifecycle(enabled_but_inactive)
+    orphan_worker = control_center_module._work_telegram_bridge_lifecycle(
+        _OWNER_DISABLED_WORK_TELEGRAM,
+        media_workers={"ok": True, "state": "active", "active_count": 1},
+    )
+    production_ops = _production_ops_with_watchdog(
+        monkeypatch,
+        tmp_path,
+        timer={"ok": False, "load_state": "not-found", "active_state": "inactive"},
+        service={"ok": False, "load_state": "not-found", "active_state": "inactive"},
+        work_telegram=enabled_but_inactive,
+    )
+    assert (lifecycle["ok"], lifecycle["state"], lifecycle["monitoring"]) == (
+        False,
+        "enabled_but_inactive",
+        "not_probed",
+    )
+    assert (orphan_worker["ok"], orphan_worker["state"]) == (False, "media_worker_active")
+    assert (production_ops["ok"], production_ops["warnings"]) == (False, ["work_telegram_bridge_enabled_but_inactive"])
+
+
+def test_work_media_worker_status_counts_a_deactivating_worker(monkeypatch, tmp_path):
+    monkeypatch.setattr(control_center_module.shutil, "which", lambda _command: "/bin/systemctl")
+    monkeypatch.setattr(
+        control_center_module,
+        "_run",
+        lambda _command, **_kwargs: {
+            "returncode": 0,
+            "stdout": "autostop-work-telegram-media-1.service loaded deactivating stop\n",
+            "stderr": "",
+        },
+    )
+
+    assert control_center_module._work_telegram_media_worker_status(cwd=tmp_path) == {
+        "ok": True,
+        "state": "active",
+        "active_count": 1,
+    }
 
 
 def test_production_ops_rejects_active_watchdog_and_adds_risk(monkeypatch, tmp_path):

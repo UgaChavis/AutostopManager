@@ -446,7 +446,7 @@ def test_cli_delete_after_removes_exact_private_audio(monkeypatch, tmp_path, cap
 
     assert telegram_transcribe.main(["--account", "work", "--file", str(audio), "--delete-after"]) == 0
     assert not audio.exists()
-    assert json.loads(capsys.readouterr().out)["text"] == "готово"
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "text": "готово", "cleanup_verified": True}
 
 
 def test_cli_delete_after_reports_cleanup_failure(monkeypatch, tmp_path, capsys) -> None:
@@ -486,7 +486,11 @@ def test_cli_delete_after_preserves_processing_error_after_removing_valid_audio(
 
     assert telegram_transcribe.main(["--account", "work", "--file", str(audio), "--delete-after"]) == 1
     assert not audio.exists()
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "transcription_failed"}
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": False,
+        "error": "transcription_failed",
+        "cleanup_verified": True,
+    }
 
 
 def test_cli_delete_after_keeps_processing_error_when_audio_cleanup_fails(monkeypatch, tmp_path, capsys) -> None:

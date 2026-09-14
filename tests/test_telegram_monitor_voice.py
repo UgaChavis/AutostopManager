@@ -5,6 +5,29 @@ import pytest
 from autostop_manager import telegram_monitor_voice
 
 
+def test_monitored_voice_self_check_exercises_media_runner(monkeypatch, tmp_path) -> None:
+    runner = tmp_path / "run-work-telegram-media.sh"
+    monkeypatch.setattr(telegram_monitor_voice.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(telegram_monitor_voice, "_media_runner_path", lambda: runner)
+    assert telegram_monitor_voice.self_check() == {"ok": True, "check": "media_runner_ready"}
+
+
+def test_monitored_voice_stage_uses_a_timeout_longer_than_the_server_deadline(monkeypatch) -> None:
+    timeouts: list[float] = []
+    monkeypatch.setattr(
+        telegram_monitor_voice,
+        "send_local_request",
+        lambda *_args, timeout_seconds: timeouts.append(timeout_seconds) or {"ok": True},
+    )
+    assert telegram_monitor_voice._request({"operation": "monitor_voice_stage"}) == {"ok": True}
+    assert telegram_monitor_voice._request({"operation": "monitor_voice_discard"}) == {"ok": True}
+    assert timeouts == [
+        telegram_monitor_voice._MONITOR_VOICE_STAGE_RPC_TIMEOUT_SECONDS,
+        telegram_monitor_voice.DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+    ]
+    assert timeouts[0] > telegram_monitor_voice.MONITOR_VOICE_STAGE_TIMEOUT_SECONDS
+
+
 def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
     handle = "b" * 32
     requests: list[dict[str, object]] = []
@@ -32,7 +55,8 @@ def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
         telegram_monitor_voice,
         "_run_transcriber",
         lambda path, *, language: (
-            seen.update(path=path, language=language) or {"transcript": "Готово", "language": "ru"}
+            seen.update(path=path, language=language)
+            or {"transcript": "Готово", "language": "ru", "cleanup_verified": True}
         ),
     )
 
@@ -49,7 +73,7 @@ def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
     assert seen == {"path": expected_path, "language": "ru"}
     assert requests == [
         {"operation": "monitor_voice_stage", "event_id": "inbound-1"},
-        {"operation": "monitor_voice_discard", "media_handle": handle},
+        {"operation": "monitor_voice_discard", "media_handle": handle, "runner_cleanup_verified": True},
     ]
     serialized = str(result)
     assert handle not in serialized

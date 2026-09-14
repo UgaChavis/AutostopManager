@@ -94,7 +94,11 @@ command=(
   --account
   work
 )
-runtime_properties=()
+runtime_properties=(
+  --property="RuntimeMaxSec=180s"
+  --property="TimeoutStopSec=10s"
+  --property="PartOf=autostop-work-telegram.service"
+)
 path_properties=()
 # CTranslate2 speech inference needs executable JIT memory on the production runtime.
 if [[ "${action}" == "preview" ]]; then
@@ -102,10 +106,6 @@ if [[ "${action}" == "preview" ]]; then
 fi
 if [[ "${self_check}" -eq 1 ]]; then
   command+=(--self-check)
-  runtime_properties+=(
-    --property="RuntimeMaxSec=120s"
-    --property="TimeoutStopSec=10s"
-  )
   path_properties+=(
     --property="InaccessiblePaths=-/var/lib/autostop-work-telegram -/etc/autostop-work-telegram -/run/autostop-work-telegram/bridge.sock -/run/autostop-work-telegram/outbox"
   )

@@ -240,6 +240,7 @@ def format_control_report_markdown(report: dict[str, Any]) -> str:
             f"- Nginx config: `{((production_ops.get('nginx') or {}).get('config') or {}).get('ok', False)}`",
             f"- Watchdog timer: `{(((production_ops.get('watchdog') or {}).get('timer') or {}).get('active_state', 'unknown'))}`",
             f"- Watchdog policy: `{(((production_ops.get('watchdog') or {}).get('policy') or {}).get('state', 'unknown'))}`",
+            f"- Work Telegram bridge: `{((production_ops.get('work_telegram_bridge') or {}).get('state', 'unknown'))}`",
             f"- Container health: `{(((production_ops.get('container') or {}).get('autostopcrm') or {}).get('health', 'unknown'))}`",
         ]
     )
@@ -676,6 +677,10 @@ def _production_ops(root: Path) -> dict[str, Any]:
         "service": watchdog_service,
         "policy": _watchdog_policy_status(timer=watchdog_timer, service=watchdog_service),
     }
+    work_telegram_bridge = _work_telegram_bridge_lifecycle(
+        _systemd_unit_status("autostop-work-telegram.service", cwd=root),
+        media_workers=_work_telegram_media_worker_status(cwd=root),
+    )
     safe_operation_gates = [
         {
             "operation": "nginx_reload",
@@ -701,6 +706,7 @@ def _production_ops(root: Path) -> dict[str, Any]:
         and container.get("state") == "running"
         and container.get("health") in {"healthy", "none", "unknown"}
         and watchdog["policy"].get("ok")
+        and work_telegram_bridge.get("ok")
     )
     warnings: list[str] = []
     if not compose_config.get("ok"):
@@ -715,6 +721,8 @@ def _production_ops(root: Path) -> dict[str, Any]:
         warnings.append("autostopcrm_watchdog_legacy_units_present")
     if watchdog["policy"].get("state") == "unknown":
         warnings.append("autostopcrm_watchdog_policy_unknown")
+    if not work_telegram_bridge.get("ok"):
+        warnings.append(f"work_telegram_bridge_{work_telegram_bridge.get('state', 'unknown')}")
     return {
         "ok": bool(ok),
         "mode": "read_only_ops_readiness",
@@ -731,6 +739,7 @@ def _production_ops(root: Path) -> dict[str, Any]:
             }
         },
         "watchdog": watchdog,
+        "work_telegram_bridge": work_telegram_bridge,
         "container": {"autostopcrm": container},
         "read_only_smoke_commands": [
             "curl -fsS https://crm.autostopcrm.ru/",
@@ -1104,6 +1113,125 @@ def _watchdog_policy_status(*, timer: dict[str, Any], service: dict[str, Any]) -
         "absent_units": absent_units,
         "installed_units": installed_units,
         "active_units": active_units,
+    }
+
+
+def _work_telegram_media_worker_status(*, cwd: Path) -> dict[str, Any]:
+    """Return aggregate transient-worker state without reading any Telegram data."""
+
+    if not shutil.which("systemctl"):
+        return {"ok": False, "state": "unknown", "active_count": 0, "error": "systemctl_missing"}
+    result = _run(
+        [
+            "systemctl",
+            "list-units",
+            "--type=service",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+            "autostop-work-telegram-media-*",
+        ],
+        cwd=cwd,
+        timeout=5.0,
+    )
+    if result["returncode"] != 0:
+        return {"ok": False, "state": "unknown", "active_count": 0}
+    active_count = sum(
+        1
+        for row in result["stdout"].splitlines()
+        if len(fields := row.split()) >= 3 and fields[2] in {"active", "activating", "deactivating"}
+    )
+    return {"ok": True, "state": "active" if active_count else "none", "active_count": active_count}
+
+
+def _work_telegram_bridge_lifecycle(
+    unit: dict[str, Any], *, media_workers: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Classify the work bridge from safe systemd metadata only.
+
+    The owner can intentionally stop and disable duty.  That lifecycle is
+    healthy, but it is not evidence that the inbound monitor is running.
+    """
+
+    load_state = str(unit.get("load_state") or "unknown")
+    active_state = str(unit.get("active_state") or "unknown")
+    sub_state = str(unit.get("sub_state") or "unknown")
+    unit_file_state = str(unit.get("unit_file_state") or "unknown")
+    metadata = {
+        "load_state": load_state,
+        "active_state": active_state,
+        "sub_state": sub_state,
+        "unit_file_state": unit_file_state,
+    }
+    media = media_workers or {"ok": True, "state": "not_checked", "active_count": 0}
+
+    if (
+        load_state == "loaded"
+        and active_state == "inactive"
+        and unit_file_state
+        in {
+            "disabled",
+            "disabled-runtime",
+        }
+    ):
+        if not media.get("ok"):
+            return {
+                "ok": False,
+                "state": "media_worker_state_unknown",
+                "monitoring": "not_probed",
+                "read_mode": "systemd_metadata_only",
+                "unit": metadata,
+                "media_workers": media,
+            }
+        if int(media.get("active_count") or 0) > 0:
+            return {
+                "ok": False,
+                "state": "media_worker_active",
+                "monitoring": "not_probed",
+                "read_mode": "systemd_metadata_only",
+                "unit": metadata,
+                "media_workers": media,
+            }
+        return {
+            "ok": True,
+            "state": "owner_disabled",
+            "monitoring": "off",
+            "read_mode": "systemd_metadata_only",
+            "unit": metadata,
+            "media_workers": media,
+        }
+    if load_state == "loaded" and active_state == "active":
+        return {
+            "ok": True,
+            "state": "bridge_active",
+            "monitoring": "not_probed",
+            "read_mode": "systemd_metadata_only",
+            "unit": metadata,
+            "media_workers": media,
+        }
+    if (
+        load_state == "loaded"
+        and active_state == "inactive"
+        and unit_file_state
+        in {
+            "enabled",
+            "enabled-runtime",
+        }
+    ):
+        state = "enabled_but_inactive"
+    elif load_state == "loaded" and active_state == "failed":
+        state = "bridge_failed"
+    elif load_state == "not-found":
+        state = "unit_missing"
+    else:
+        state = "unexpected_lifecycle"
+    return {
+        "ok": False,
+        "state": state,
+        "monitoring": "not_probed",
+        "read_mode": "systemd_metadata_only",
+        "unit": metadata,
+        "media_workers": media,
     }
 
 

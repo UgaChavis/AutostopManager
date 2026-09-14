@@ -10,6 +10,9 @@ Group=autostop-work-telegram
 WorkingDirectory=/opt/autostop-work-telegram-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
+# The file is absent by default: inbound monitoring stays off unless the owner
+# explicitly enables it for a supervised work cycle.
+EnvironmentFile=-/etc/autostop-work-telegram/monitor.env
 UMask=0077
 RuntimeDirectory=autostop-work-telegram
 RuntimeDirectoryMode=0700

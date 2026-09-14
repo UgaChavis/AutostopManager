@@ -8,7 +8,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .telegram_bridge import BridgeError, WORK_SOCKET_PATH, account_inbox_dir, send_local_request
+from .telegram_bridge import (
+    DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+    MONITOR_VOICE_STAGE_TIMEOUT_SECONDS,
+    BridgeError,
+    WORK_SOCKET_PATH,
+    account_inbox_dir,
+    send_local_request,
+)
 
 
 _HANDLE_PATTERN = re.compile(r"[A-Za-z0-9_-]{24,128}")
@@ -16,12 +23,14 @@ _SUFFIXES = frozenset({".m4a", ".mp3", ".ogg", ".opus"})
 _LANGUAGE_PATTERN = re.compile(r"[a-z]{2,8}")
 _ERROR_PATTERN = re.compile(r"[a-z0-9_]{3,96}")
 _MAX_RUNNER_OUTPUT_BYTES = 64 * 1024
+_MONITOR_VOICE_STAGE_RPC_TIMEOUT_SECONDS = MONITOR_VOICE_STAGE_TIMEOUT_SECONDS + 15
 
 
 class MonitorVoiceError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, cleanup_verified: bool = False) -> None:
         super().__init__(code)
         self.code = code
+        self.cleanup_verified = cleanup_verified
 
 
 def _safe_error(value: Any, *, fallback: str = "monitor_voice_failed") -> str:
@@ -35,8 +44,13 @@ def _require_root() -> None:
 
 
 def _request(payload: dict[str, Any]) -> dict[str, Any]:
+    timeout_seconds = (
+        _MONITOR_VOICE_STAGE_RPC_TIMEOUT_SECONDS
+        if payload.get("operation") == "monitor_voice_stage"
+        else DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS
+    )
     try:
-        response = send_local_request(WORK_SOCKET_PATH, payload)
+        response = send_local_request(WORK_SOCKET_PATH, payload, timeout_seconds=timeout_seconds)
     except BridgeError as exc:
         raise MonitorVoiceError(exc.code) from exc
     if response.get("ok") is not True:
@@ -84,15 +98,29 @@ def _run_transcriber(path: Path, *, language: str) -> dict[str, Any]:
         raise MonitorVoiceError("monitor_voice_transcription_invalid") from exc
     if not isinstance(payload, dict):
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
+    cleanup_verified = payload.get("cleanup_verified") is True
     if completed.returncode != 0 or payload.get("ok") is not True:
-        raise MonitorVoiceError(_safe_error(payload.get("error"), fallback="monitor_voice_transcription_failed"))
+        raise MonitorVoiceError(
+            _safe_error(payload.get("error"), fallback="monitor_voice_transcription_failed"),
+            cleanup_verified=cleanup_verified,
+        )
     transcript = payload.get("text")
     language_value = payload.get("language")
     if not isinstance(transcript, str) or not transcript or len(transcript) > 32 * 1024:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
     if not isinstance(language_value, str) or _LANGUAGE_PATTERN.fullmatch(language_value) is None:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
-    return {"transcript": transcript, "language": language_value}
+    if not cleanup_verified:
+        raise MonitorVoiceError("monitor_voice_cleanup_failed")
+    return {"transcript": transcript, "language": language_value, "cleanup_verified": True}
+
+
+def self_check() -> dict[str, Any]:
+    """Prove that the local monitored-voice route can reach its media runner."""
+
+    _require_root()
+    _media_runner_path()
+    return {"ok": True, "check": "media_runner_ready"}
 
 
 def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[str, Any]:
@@ -103,6 +131,7 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
         raise MonitorVoiceError("monitor_voice_language_invalid")
     handle = ""
     cleanup_verified = False
+    runner_cleanup_verified = False
     try:
         staged = _request(
             {
@@ -119,10 +148,20 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
             raise MonitorVoiceError("monitor_voice_stage_invalid")
         path = _staged_voice_path(handle, str(staged_media.get("suffix") or ""))
         transcription = _run_transcriber(path, language=language)
+        runner_cleanup_verified = transcription.get("cleanup_verified") is True
+    except MonitorVoiceError as exc:
+        runner_cleanup_verified = exc.cleanup_verified
+        raise
     finally:
         if _HANDLE_PATTERN.fullmatch(handle) is not None:
             try:
-                cleanup = _request({"operation": "monitor_voice_discard", "media_handle": handle})
+                cleanup = _request(
+                    {
+                        "operation": "monitor_voice_discard",
+                        "media_handle": handle,
+                        "runner_cleanup_verified": runner_cleanup_verified,
+                    }
+                )
                 cleanup_verified = cleanup.get("cleanup_verified") is True
             except MonitorVoiceError:
                 cleanup_verified = False
@@ -140,7 +179,9 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-work-telegram-monitor-voice")
-    parser.add_argument("--event-id", required=True)
+    request = parser.add_mutually_exclusive_group(required=True)
+    request.add_argument("--event-id")
+    request.add_argument("--self-check", action="store_true")
     parser.add_argument("--language", default="ru")
     return parser
 
@@ -148,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        payload = transcribe_monitored_voice(args.event_id, language=args.language)
+        payload = self_check() if args.self_check else transcribe_monitored_voice(args.event_id, language=args.language)
     except MonitorVoiceError as exc:
         payload = {"ok": False, "error": exc.code}
     print(json.dumps(payload, ensure_ascii=False, indent=2))

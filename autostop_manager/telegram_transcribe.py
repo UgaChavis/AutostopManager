@@ -439,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
                     payload = {"ok": False, "error": "audio_cleanup_failed"}
                 else:
                     payload["cleanup_failed"] = True
+            else:
+                payload["cleanup_verified"] = True
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload.get("ok") is True else 1
 

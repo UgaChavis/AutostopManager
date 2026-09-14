@@ -14,6 +14,11 @@ pyaes_wheel_sha256="3770d63e03f319be0ea540d35a65ed928eef8c2574b689810ed927a441c0
 model_manifest_source="${PROJECT_ROOT}/deploy/telegram/faster-whisper-small.sha256"
 model_manifest_dir="/etc/autostop-telegram-transcription-models"
 model_manifest_path="${model_manifest_dir}/faster-whisper-small.sha256"
+work_runtime_root="/opt/autostop-work-telegram-runtimes"
+work_runtime_dir=""
+work_runtime_staging_dir=""
+work_runtime_ready_marker=""
+work_candidate_reused=0
 temporary_manifest=""
 wheel_staging_dir=""
 wheelhouse_staging=""
@@ -31,16 +36,13 @@ case "${account}" in
     service_user="autostop-telegram"
     state_dir="/var/lib/autostop-telegram"
     config_dir="/etc/autostop-telegram"
-    unit_source="${PROJECT_ROOT}/deploy/systemd/autostop-telegram.service"
-    unit_path="/etc/systemd/system/autostop-telegram.service"
     venv_root="/opt/autostop-telegram-venv"
     ;;
   work)
+    service_unit="autostop-work-telegram.service"
     service_user="autostop-work-telegram"
     state_dir="/var/lib/autostop-work-telegram"
     config_dir="/etc/autostop-work-telegram"
-    unit_source="${PROJECT_ROOT}/deploy/systemd/autostop-work-telegram.service"
-    unit_path="/etc/systemd/system/autostop-work-telegram.service"
     venv_root="/opt/autostop-work-telegram-venv"
     ;;
   *)
@@ -54,6 +56,27 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+require_work_runtime_paused() {
+  local active_state unit_file_state
+  active_state="$(systemctl show --property=ActiveState --value "${service_unit}" 2>/dev/null || true)"
+  unit_file_state="$(systemctl show --property=UnitFileState --value "${service_unit}" 2>/dev/null || true)"
+  if [[ -z "${active_state}" && -z "${unit_file_state}" ]]; then
+    return 0
+  fi
+  [[ "${active_state}" == "inactive" ]] \
+    && [[ "${unit_file_state}" == "disabled" || "${unit_file_state}" == "disabled-runtime" ]]
+}
+
+if [[ "${account}" == "work" ]]; then
+  control_lock="/run/autostop-work-telegram-control.lock"
+  exec 9>"${control_lock}"
+  flock -x 9
+  if ! require_work_runtime_paused; then
+    echo "work_telegram_runtime_must_be_paused_before_dependency_update=true" >&2
+    exit 1
+  fi
+fi
+
 cleanup() {
   if [[ -n "${temporary_manifest}" && -f "${temporary_manifest}" && ! -L "${temporary_manifest}" ]]; then
     unlink -- "${temporary_manifest}"
@@ -65,6 +88,11 @@ cleanup() {
     && [[ -d "${wheel_staging_dir}" && ! -L "${wheel_staging_dir}" ]]; then
     find -P "${wheel_staging_dir}" -mindepth 1 -delete
     rmdir -- "${wheel_staging_dir}"
+  fi
+  if [[ "${work_runtime_staging_dir}" == "${work_runtime_root}"/.*.partial.* ]] \
+    && [[ -d "${work_runtime_staging_dir}" && ! -L "${work_runtime_staging_dir}" ]]; then
+    find -P "${work_runtime_staging_dir}" -mindepth 1 -delete
+    rmdir -- "${work_runtime_staging_dir}"
   fi
 }
 trap cleanup EXIT
@@ -81,10 +109,69 @@ validate_release_sources() {
   [[ -z "${worktree_status}" ]]
 }
 
+prepare_work_legacy_venv() {
+  local legacy_dir legacy_venv resolved_target
+  [[ "${account}" == "work" ]] || return 0
+  if [[ -L "${work_runtime_root}" || ( -e "${work_runtime_root}" && ! -d "${work_runtime_root}" ) ]]; then
+    return 1
+  fi
+  install -d -m 0755 -o root -g root "${work_runtime_root}"
+  if [[ -L "${venv_root}" ]]; then
+    resolved_target="$(readlink -f -- "${venv_root}" 2>/dev/null || true)"
+    [[ "${resolved_target}" == "${work_runtime_root}/"* && -d "${resolved_target}" && ! -L "${resolved_target}" ]]
+    return
+  fi
+  [[ ! -e "${venv_root}" ]] && return 0
+  [[ -d "${venv_root}" && ! -L "${venv_root}" ]] || return 1
+  legacy_dir="${work_runtime_root}/legacy"
+  legacy_venv="${legacy_dir}/venv"
+  [[ ! -e "${legacy_venv}" && ! -L "${legacy_venv}" ]] || return 1
+  install -d -m 0755 -o root -g root "${legacy_dir}"
+  mv -- "${venv_root}" "${legacy_venv}" || return 1
+  if ! ln -s "${legacy_venv}" "${venv_root}"; then
+    mv -- "${legacy_venv}" "${venv_root}" || true
+    return 1
+  fi
+}
+
+prepare_work_candidate_runtime() {
+  [[ "${account}" == "work" ]] || return 0
+  [[ "${release_revision}" =~ ^[0-9a-f]{40}$ ]] || return 1
+  work_runtime_dir="${work_runtime_root}/${release_revision}"
+  work_runtime_ready_marker="${work_runtime_dir}/.dependencies-ready"
+  if [[ -e "${work_runtime_dir}" || -L "${work_runtime_dir}" ]]; then
+    [[ -d "${work_runtime_dir}" && ! -L "${work_runtime_dir}" \
+      && -f "${work_runtime_ready_marker}" && ! -L "${work_runtime_ready_marker}" \
+      && "$(stat -c '%U:%G:%a' "${work_runtime_ready_marker}")" == "root:root:600" \
+      && -x "${work_runtime_dir}/venv/bin/python" ]] || return 1
+    work_candidate_reused=1
+    venv_root="${work_runtime_dir}/venv"
+    model_manifest_dir="${work_runtime_dir}"
+    model_manifest_path="${model_manifest_dir}/faster-whisper-small.sha256"
+    return 0
+  fi
+  work_runtime_staging_dir="$(mktemp -d "${work_runtime_root}/.${release_revision}.partial.XXXXXX")"
+  chmod 0755 "${work_runtime_staging_dir}"
+  venv_root="${work_runtime_staging_dir}/venv"
+  model_manifest_dir="${work_runtime_staging_dir}"
+  model_manifest_path="${model_manifest_dir}/faster-whisper-small.sha256"
+}
+
+finalize_work_candidate_runtime() {
+  [[ "${account}" == "work" && "${work_candidate_reused}" -eq 0 ]] || return 0
+  install -m 0600 -o root -g root /dev/null "${work_runtime_staging_dir}/.dependencies-ready"
+  chmod 0755 "${work_runtime_staging_dir}"
+  mv -T -- "${work_runtime_staging_dir}" "${work_runtime_dir}"
+  work_runtime_staging_dir=""
+  venv_root="${work_runtime_dir}/venv"
+  model_manifest_dir="${work_runtime_dir}"
+  model_manifest_path="${model_manifest_dir}/faster-whisper-small.sha256"
+}
+
 install_model_manifest() {
   local expected_payloads=(config.json model.bin tokenizer.json vocabulary.txt)
   local -a actual_payloads=()
-  local payload
+  local payload manifest_dir_mode="0700"
   [[ -f "${model_manifest_source}" && ! -L "${model_manifest_source}" ]] || return 1
   mapfile -t actual_payloads < <(awk '/^[0-9a-f]{64}  / { print $2 }' "${model_manifest_source}")
   [[ "${#actual_payloads[@]}" -eq "${#expected_payloads[@]}" ]] || return 1
@@ -94,8 +181,16 @@ install_model_manifest() {
   if [[ -L "${model_manifest_dir}" || ( -e "${model_manifest_dir}" && ! -d "${model_manifest_dir}" ) ]]; then
     return 1
   fi
-  install -d -m 0700 -o root -g root "${model_manifest_dir}"
-  [[ "$(stat -c '%U:%G:%a' "${model_manifest_dir}")" == "root:root:700" ]] || return 1
+  if [[ "${account}" == "work" && "${work_candidate_reused}" -eq 1 ]]; then
+    [[ -f "${model_manifest_path}" && ! -L "${model_manifest_path}" ]] \
+      && cmp -s "${model_manifest_source}" "${model_manifest_path}"
+    return
+  fi
+  if [[ "${account}" == "work" ]]; then
+    manifest_dir_mode="0755"
+  fi
+  install -d -m "${manifest_dir_mode}" -o root -g root "${model_manifest_dir}"
+  [[ "$(stat -c '%U:%G:%a' "${model_manifest_dir}")" == "root:root:${manifest_dir_mode#0}" ]] || return 1
   if [[ -L "${model_manifest_path}" || ( -e "${model_manifest_path}" && ! -f "${model_manifest_path}" ) ]]; then
     return 1
   fi
@@ -160,6 +255,12 @@ if ! validate_release_sources; then
   echo "telegram_release_source_invalid=true" >&2
   exit 1
 fi
+if [[ "${account}" == "work" ]]; then
+  if ! prepare_work_legacy_venv || ! prepare_work_candidate_runtime; then
+    echo "work_telegram_runtime_candidate_invalid=true" >&2
+    exit 1
+  fi
+fi
 if ! install_model_manifest; then
   echo "transcription_model_manifest_invalid=true" >&2
   exit 1
@@ -223,6 +324,14 @@ if [[ -f "${config_dir}/credentials" ]] \
   exit 1
 fi
 
+if [[ "${account}" == "work" && "${work_candidate_reused}" -eq 1 ]]; then
+  echo "telegram_bridge_installed=true"
+  echo "account=work"
+  echo "runtime_candidate=reused"
+  echo "credentials_present=$([[ -f "${config_dir}/credentials" ]] && echo true || echo false)"
+  exit 0
+fi
+
 if [[ ! -x "${venv_root}/bin/python" ]]; then
   python3 -m venv "${venv_root}"
 fi
@@ -250,10 +359,14 @@ if [[ "${account}" == "work" ]]; then
   chmod -R go-w "${venv_root}"
 fi
 chmod -R a+rX "${venv_root}"
-
-install -m 0644 "${unit_source}" "${unit_path}"
-systemctl daemon-reload
+if ! finalize_work_candidate_runtime; then
+  echo "work_telegram_runtime_candidate_invalid=true" >&2
+  exit 1
+fi
 
 echo "telegram_bridge_installed=true"
 echo "account=${account}"
+if [[ "${account}" == "work" ]]; then
+  echo "runtime_candidate=${release_revision}"
+fi
 echo "credentials_present=$([[ -f "${config_dir}/credentials" ]] && echo true || echo false)"

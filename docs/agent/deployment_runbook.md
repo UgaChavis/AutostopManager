@@ -120,23 +120,49 @@ rollback refs. Container health alone is not enough.
 ## Telegram-only release
 
 After normal gates and explicit authority, deploy only the selected isolated
-account. The scripts verify the clean checkout and exact published revision:
+account. For the personal account, the scripts verify the clean checkout and
+exact published revision:
 
 ```bash
 git fetch origin AutostopManager --prune
 revision="$(git rev-parse origin/AutostopManager)"
-sudo ./scripts/install-telegram-bridge.sh --account work --revision "$revision"
-sudo ./scripts/provision-telegram-transcription-model.sh --account work --revision "$revision"
-sudo ./scripts/deploy_telegram_bridge.sh --account work "$revision"
+sudo ./scripts/install-telegram-bridge.sh --account personal --revision "$revision"
+sudo ./scripts/deploy_telegram_bridge.sh --account personal "$revision"
 ```
 
-They use an immutable account release and roll back that account on failure.
-They do not change CRM, Store, VPN, nginx, another account or the working tree.
+The installer only prepares dependencies; deploy atomically publishes the unit
+and immutable release and restores prior account assets on activation failure.
+Neither changes CRM, Store, VPN, nginx, another account or the working tree.
+
+Update work dependencies and its transcription model only while duty is paused.
+The installer and provisioner build a revision-named candidate under
+`/opt/autostop-work-telegram-runtimes/<revision>`; they do not replace the
+stable venv/model paths. During the paused deploy, both stable links move to the
+candidate together with the source release. If activation or the local voice
+check fails, deploy restores the previous source, unit, wrappers and both
+runtime links. The first transition moves a legacy direct runtime under the
+same runtime root while duty is paused.
+
+Work-only `--no-start` is required for a work release. It validates and
+publishes the local voice route without enabling or starting the service.
+
+```bash
+sudo ./scripts/set-work-telegram-duty.sh --disable
+sudo ./scripts/install-telegram-bridge.sh --account work --revision "$revision"
+sudo ./scripts/provision-telegram-transcription-model.sh --account work --revision "$revision"
+sudo ./scripts/deploy_telegram_bridge.sh --account work --no-start "$revision"
+```
+
+The duty command is the lifecycle interface: `--disable` stops and disables the
+service and clears monitor intent; `--enable` writes explicit intent, starts the
+bridge and checks only its content-free status. Do not replace either command
+with a raw restart: authorization clears prior monitor intent before start.
 
 For an explicitly authorized work-Telegram inbound-monitor release, verify the
 same account after deployment without exposing dialogue content:
 
 ```bash
+sudo ./scripts/set-work-telegram-duty.sh --enable
 sudo -u autostop-work-telegram env \
   PYTHONPATH=/opt/autostop-work-telegram-releases/current \
   /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge \
@@ -166,4 +192,6 @@ neither is a dialogue or contact journal.
 
 Stop on unmatched checkouts, failed backup, schema drift, missing rollback proof
 or unhealthy preflight. Use the deploy script's rollback assets, then reread the
-affected endpoint and service checks before claiming restoration.
+affected endpoint and service checks before claiming restoration. Do not point a
+stable work runtime link at a candidate manually: deployment owns the paired
+source/runtime switch and rollback.

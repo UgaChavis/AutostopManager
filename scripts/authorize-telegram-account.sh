@@ -26,12 +26,19 @@ case "${account}" in
     release_link="/opt/autostop-work-telegram-releases/current"
     venv_python="/opt/autostop-work-telegram-venv/bin/python"
     session_base="/var/lib/autostop-work-telegram/account.session"
+    monitor_env="/etc/autostop-work-telegram/monitor.env"
     ;;
   *)
     echo "usage: $0 --account personal|work" >&2
     exit 2
     ;;
 esac
+
+if [[ "${account}" == "work" ]]; then
+  control_lock="/run/autostop-work-telegram-control.lock"
+  exec 9>"${control_lock}"
+  flock -x 9
+fi
 
 if [[ ! -x "${venv_python}" || ! -d "${release_link}" ]]; then
   echo "${account}_release_unavailable=true" >&2
@@ -50,6 +57,7 @@ was_enabled=0
 if systemctl is-enabled --quiet "${service_unit}"; then
   was_enabled=1
 fi
+monitor_intent_clear_failed=0
 
 bridge_authorized() {
   systemctl is-active --quiet "${service_unit}" \
@@ -58,8 +66,27 @@ bridge_authorized() {
       | grep -Eq '"authorized": true'
 }
 
+clear_work_monitor_intent() {
+  if [[ "${account}" != "work" ]]; then
+    return 0
+  fi
+  if [[ -e "${monitor_env}" || -L "${monitor_env}" ]]; then
+    if ! unlink -- "${monitor_env}"; then
+      monitor_intent_clear_failed=1
+      return 1
+    fi
+  fi
+}
+
 # shellcheck disable=SC2317  # Called only by the EXIT-trap cleanup.
 restore_original_service_state() {
+  if [[ "${account}" == "work" && "${monitor_intent_clear_failed}" -eq 1 ]]; then
+    # Do not revive an active bridge with a monitor intent that could not be
+    # cleared. The owner can repair the path and explicitly enable duty later.
+    systemctl disable "${service_unit}" || true
+    systemctl stop "${service_unit}" || true
+    return 0
+  fi
   systemctl stop "${service_unit}" || true
   if [[ "${was_enabled}" -eq 1 ]]; then
     systemctl enable "${service_unit}" || true
@@ -123,6 +150,7 @@ fi
 trap cleanup_failed_authorization EXIT
 
 enable_and_verify_bridge() {
+  clear_work_monitor_intent || return 1
   systemctl enable --now "${service_unit}"
   for _attempt in $(seq 1 15); do
     if bridge_authorized; then
@@ -134,7 +162,17 @@ enable_and_verify_bridge() {
 }
 
 if bridge_authorized; then
-  systemctl enable "${service_unit}"
+  if [[ "${account}" == "work" ]]; then
+    # A running work bridge loads its EnvironmentFile only at exec time. Stop
+    # it before clearing a stale opt-in monitor intent, then bring the same
+    # authorized bridge back with the default no-monitor environment.
+    if ! systemctl stop "${service_unit}" || ! enable_and_verify_bridge; then
+      echo "${account}_telegram_existing_authorization_unverified=true" >&2
+      exit 1
+    fi
+  else
+    systemctl enable "${service_unit}"
+  fi
   echo "${account}_telegram_already_authorized=true"
   trap - EXIT
   exit 0
