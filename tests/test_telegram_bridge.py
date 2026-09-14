@@ -1303,17 +1303,19 @@ def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path)
         return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
 
     async def last_message_id(_client, _entity):
-        return 20
+        return 30 if _client.uploaded else 20
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message_id)
 
     class Client:
         uploaded = b""
+        send_count = 0
 
         async def send_file(self, _entity, upload, **_kwargs):
             photo.write_bytes(b"\xff\xd8swapped-frame\xff\xd9")
             self.uploaded = upload.read()
+            self.send_count += 1
             return SimpleNamespace(id=30)
 
         async def get_messages(self, _entity, *, ids):
@@ -1346,6 +1348,24 @@ def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path)
     assert result["verified"] is True
     assert client.uploaded == original
 
+    photo.write_bytes(original)
+    replayed = asyncio.run(
+        telegram_bridge._handle_send_photo(
+            client,
+            config,
+            {
+                "peer": "10",
+                "photo": str(photo),
+                "caption": "caption",
+                "mode": "apply",
+                "contract_token": dry_run["contract_token"],
+                "idempotency_key": "photo-test-key",
+            },
+        )
+    )
+    assert replayed["replayed"] is True and replayed["verified"] is True
+    assert client.send_count == 1
+
 
 def test_send_request_rejects_empty_or_oversized_text() -> None:
     with pytest.raises(BridgeError, match="message_length_invalid"):
@@ -1372,8 +1392,14 @@ def test_normal_message_text_is_unchanged() -> None:
     assert redacted is False
 
 
+def _inbound_monitor(**kwargs):
+    monitor = telegram_bridge.InboundMonitor(**kwargs)
+    monitor._next_sequence = 1  # Stable refs for lifecycle fixtures; epoch isolation is tested separately.
+    return monitor
+
+
 def test_inbound_monitor_keeps_only_bounded_private_message_references() -> None:
-    monitor = telegram_bridge.InboundMonitor(max_events=2)
+    monitor = _inbound_monitor(max_events=2)
 
     class EventWithoutInputPeer:
         is_private = True
@@ -1427,8 +1453,20 @@ def test_inbound_monitor_keeps_only_bounded_private_message_references() -> None
         monitor.resolve("inbound-2")
 
 
+def test_inbound_monitor_restart_does_not_rebind_old_event_to_another_client() -> None:
+    old, current = telegram_bridge.InboundMonitor(), telegram_bridge.InboundMonitor()
+    for monitor, peer in ((old, 10), (current, 20)):
+        monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=peer, id=1))
+    old_ref = old.events()[0]["event_id"]
+    current_ref = current.events()[0]["event_id"]
+    assert current.resolve(current_ref).peer_id == 20
+    with pytest.raises(BridgeError, match="inbound_event_unavailable"):
+        current.mark_no_reply_needed(old_ref)
+    assert current.status()["open_events"] == 1
+
+
 def test_inbound_monitor_evicts_closed_refs_before_open_refs() -> None:
-    monitor = telegram_bridge.InboundMonitor(max_events=2)
+    monitor = _inbound_monitor(max_events=2)
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101))
 
@@ -1447,7 +1485,7 @@ def test_inbound_monitor_evicts_closed_refs_before_open_refs() -> None:
 
 
 def test_inbound_monitor_callback_discards_bad_provider_events() -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
 
     class BadEvent:
         @property
@@ -1460,7 +1498,7 @@ def test_inbound_monitor_callback_discards_bad_provider_events() -> None:
 
 
 def test_inbound_monitor_context_excludes_stale_same_peer_refs() -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     anchor_time = datetime(2026, 9, 11, 12, tzinfo=UTC)
     monitor._events = deque(
         [
@@ -1491,7 +1529,7 @@ def test_inbound_monitor_context_excludes_stale_same_peer_refs() -> None:
 
 
 def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatch, tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     config = _runtime_config(tmp_path)
     message = SimpleNamespace(
@@ -1552,7 +1590,7 @@ def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatc
 
 
 def test_monitor_mark_requires_explicit_no_reply_disposition_and_keeps_payload_opaque(tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
 
     marked = asyncio.run(
@@ -1586,7 +1624,7 @@ def test_monitor_mark_requires_explicit_no_reply_disposition_and_keeps_payload_o
 
 
 def test_monitor_read_uses_bounded_exact_dialog_fallback_after_global_failure(tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     message = SimpleNamespace(
         id=100,
@@ -1648,7 +1686,7 @@ def test_monitor_read_uses_bounded_exact_dialog_fallback_after_global_failure(tm
 
 
 def test_monitor_fallback_fails_closed_without_exact_dialog_or_message_binding(tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
 
     class MissingDialogClient:
@@ -1707,7 +1745,7 @@ def test_monitor_fallback_fails_closed_without_exact_dialog_or_message_binding(t
 
 
 def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=30, id=200))
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=101))
@@ -1816,7 +1854,7 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
 
 
 def test_monitor_voice_stages_one_exact_voice_without_exposing_source_refs(monkeypatch, tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     config = _runtime_config(tmp_path)
     monkeypatch.setattr(telegram_bridge, "_schedule_monitor_voice_stage_expiry", lambda *_args: None)
@@ -1927,7 +1965,7 @@ def test_monitor_voice_stages_one_exact_voice_without_exposing_source_refs(monke
 
 
 def test_monitor_voice_stage_cleans_up_when_event_closes_while_download_is_awaited(tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     config = _runtime_config(tmp_path)
     audio = b"OggSprivate-voice"
@@ -1982,7 +2020,7 @@ def test_monitor_voice_stage_cleans_up_when_event_closes_while_download_is_await
 
 
 def test_monitor_voice_stage_timeout_releases_its_reservation(monkeypatch, tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     config = _runtime_config(tmp_path)
     audio = b"OggSprivate-voice"
@@ -2027,7 +2065,7 @@ def test_monitor_voice_stage_timeout_releases_its_reservation(monkeypatch, tmp_p
 
 
 def test_monitor_voice_stage_expiry_removes_an_abandoned_file(monkeypatch, tmp_path) -> None:
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     config = _runtime_config(tmp_path)
     event = monitor.require_open("inbound-1")
@@ -2535,7 +2573,7 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
         return entity, target
 
     async def last_message(_client, _entity):
-        return 20
+        return 30 if _client.sent else 20
 
     class Client:
         def __init__(self):
@@ -2596,7 +2634,7 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
     config = _runtime_config(tmp_path)
     entity = object()
     target = {"id": 10, "title": "Target", "username": None, "kind": "private"}
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=5))
 
     async def resolve(_client, _peer):
@@ -2674,25 +2712,29 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
 def test_unverified_reply_does_not_close_inbound_monitor_event(monkeypatch, tmp_path) -> None:
     config = _runtime_config(tmp_path)
     entity = object()
-    monitor = telegram_bridge.InboundMonitor()
+    monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=5))
 
     async def resolve(_client, _peer):
         return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
 
     async def last_message(_client, _entity):
-        return 20
+        return 30 if _client.sent_count else 20
 
     class Client:
+        sent_count = 0
+        reply_text = "wrong reply"
+
         async def send_message(self, _entity, _text, *, reply_to):
             assert reply_to == 5
+            self.sent_count += 1
             return SimpleNamespace(id=30)
 
         async def get_messages(self, _entity, *, ids):
             if ids == 5:
                 return SimpleNamespace(id=5, message="question", out=False, date=None)
             assert ids == 30
-            return SimpleNamespace(message="wrong reply", reply_to_msg_id=5)
+            return SimpleNamespace(message=self.reply_text, reply_to_msg_id=5)
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
@@ -2725,19 +2767,23 @@ def test_unverified_reply_does_not_close_inbound_monitor_event(monkeypatch, tmp_
             )
         )
 
-    replayed = asyncio.run(telegram_bridge._handle_operation(client, config, apply_request, inbound_monitor=monitor))
-    assert replayed["replayed"] is True
-    assert replayed["reply_verified"] is False
-    assert replayed["verified"] is False
-    assert replayed["monitor_event_closed"] is False
+    with pytest.raises(BridgeError, match="send_readback_failed"):
+        asyncio.run(telegram_bridge._handle_operation(client, config, apply_request, inbound_monitor=monitor))
     assert monitor.status()["pending_events"] == 1
     assert monitor.status()["reply_verified_events"] == 0
+    client.reply_text = "answer"
+    replayed = asyncio.run(telegram_bridge._handle_operation(client, config, apply_request, inbound_monitor=monitor))
+    assert replayed["replayed"] is True
+    assert replayed["verified"] is True
+    assert replayed["monitor_event_closed"] is True
+    assert monitor.status()["pending_events"] == 0
+    assert client.sent_count == 1
 
 
 def test_verified_reply_reports_when_its_monitor_ref_was_evicted(monkeypatch, tmp_path) -> None:
     config = _runtime_config(tmp_path)
     entity = object()
-    monitor = telegram_bridge.InboundMonitor(max_events=1)
+    monitor = _inbound_monitor(max_events=1)
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=5))
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=10, id=6))
 
@@ -3346,7 +3392,7 @@ def test_work_daemon_registers_inbound_handler_before_connect(monkeypatch, tmp_p
     assert state["disconnected"] is True
     monitor_events = captured_monitors[0].events()
     assert len(monitor_events) == 1
-    assert monitor_events[0]["event_id"] == "inbound-1"
+    assert captured_monitors[0].resolve(monitor_events[0]["event_id"]).message_id == 100
 
 
 def test_rpc_boundary_maps_invalid_and_supported_requests(monkeypatch, tmp_path) -> None:

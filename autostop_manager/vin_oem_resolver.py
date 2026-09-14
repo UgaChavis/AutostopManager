@@ -7,7 +7,7 @@ from typing import Any
 
 from .catalog_clients import partsapi_catalog_lookup, resolve_partsapi_category
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import decode_vehicle_identity
+from .vehicle_identity import decode_vehicle_identity, identity_values_agree
 from .vin_lookup import classify_identifier
 
 
@@ -300,7 +300,7 @@ def _assess_partsapi_oe_agreement(identity: dict[str, Any], call: dict[str, Any]
         right_norm = _normalize_compare_value(right)
         if not left_norm or not right_norm:
             continue
-        if left_norm in right_norm or right_norm in left_norm:
+        if identity_values_agree(field, left, right):
             matched.append(field)
         else:
             conflicts.append({"field": field, "identity": left, "partsapi_oe": right})

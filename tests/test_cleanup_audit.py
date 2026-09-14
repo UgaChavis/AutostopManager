@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
-from unittest.mock import patch
 
 import autostop_manager.cleanup_audit as cleanup_audit_module
 from autostop_manager.cleanup_audit import build_cleanup_audit
@@ -28,11 +26,6 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (root / ".pytest_cache").mkdir(parents=True)
     (root / "autostop_manager" / "__pycache__").mkdir(parents=True)
     (root / ".venv" / "Lib" / "site-packages" / "demo" / "__pycache__").mkdir(parents=True)
-    source_pack = root / "docs" / "agent" / "automotive_sources" / "source_cache" / "pack"
-    (source_pack / "pdf").mkdir(parents=True)
-    (source_pack / "md").mkdir(parents=True)
-    (source_pack / "pdf" / "module_ru.pdf").write_bytes(b"%PDF-1.4")
-    (source_pack / "md" / "module_ru.md").write_text("# Module\n", encoding="utf-8")
     docs_agent = root / "docs" / "agent"
     docs_agent.mkdir(parents=True, exist_ok=True)
     (docs_agent / "knowledge_map.json").write_text(
@@ -46,8 +39,6 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     (docs_agent / "reference_only.md").write_text("# Reference\n", encoding="utf-8")
     (docs_agent / "partsapi_category_index.json").write_text('{"categories":[]}\n', encoding="utf-8")
     (docs_agent / "unused.md").write_text("# Unused\n", encoding="utf-8")
-    (root / "autostopcrm-invoice-test.pdf").write_bytes(b"%PDF-1.4")
-    (root / "Заказ-наряд 246 ВашАвто Mercedes E200.pdf").write_bytes(b"%PDF-1.4")
     workspace_pdf = root / "out" / "repair-orders" / "sample.pdf"
     workspace_pdf.parent.mkdir(parents=True, exist_ok=True)
     workspace_pdf.write_bytes(b"%PDF-1.4")
@@ -63,32 +54,22 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     store = ManagerMemoryStore(root / "data" / "autostop_manager.sqlite3")
     store.initialize()
 
-    with patch(
-        "autostop_manager.cleanup_audit._git_untracked_paths",
-        return_value=["autostopcrm-invoice-test.pdf", "Заказ-наряд 246 ВашАвто Mercedes E200.pdf"],
-    ):
-        result = build_cleanup_audit(
-            project_root=root,
-            store=store,
-        )
+    result = build_cleanup_audit(project_root=root, store=store)
 
     assert result["ok"] is True
     categories = {item["category"] for item in result["candidates"]}
     assert {
         "ignored_cache",
-        "tracked_pdf_duplicate",
         "generated_workspace_artifact",
         "unreferenced_agent_doc",
-        "untracked_generated_artifact",
     }.issubset(categories)
     retained_categories = {item["category"] for item in result["retained_items"]}
     assert "local_db" in retained_categories
     allowed_actions = {
         "keep",
         "link_to_knowledge_map",
-        "keep_text_equivalent",
         "delete_after_approval",
-        "delete",
+        "review",
     }
     assert ("ob" + "sidian_duplicate") not in categories
     assert all(item["requires_approval"] is True for item in result["candidates"])
@@ -98,37 +79,12 @@ def test_cleanup_audit_reports_safe_dry_run_candidates(tmp_path):
     assert not any(path.startswith(".venv/") for path in ignored_cache_paths)
     assert not any(item["path"] == "docs/agent/reference_only.md" for item in result["candidates"])
     assert not any(item["path"] == "docs/agent/partsapi_category_index.json" for item in result["candidates"])
-    generated_artifacts = [item for item in result["candidates"] if item["category"] == "untracked_generated_artifact"]
-    assert {item["path"] for item in generated_artifacts} == {
-        "autostopcrm-invoice-test.pdf",
-        "Заказ-наряд 246 ВашАвто Mercedes E200.pdf",
-    }
-    assert all(item["recommended_action"] == "delete" for item in generated_artifacts)
     workspace_artifacts = [item for item in result["candidates"] if item["category"] == "generated_workspace_artifact"]
-    assert {item["path"] for item in workspace_artifacts} == {"out", "reports", "tmp", "data/backups"}
-    assert all(item["recommended_action"] == "delete" for item in workspace_artifacts)
-
-
-def test_cleanup_audit_flags_source_pack_overindexed_routes(tmp_path):
-    root = tmp_path / "repo"
-    docs_agent = root / "docs" / "agent"
-    docs_agent.mkdir(parents=True)
-    primary_files = [f"docs/agent/source_cache/file_{index}.md" for index in range(26)]
-    for raw_path in primary_files:
-        path = root / Path(raw_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# File\n", encoding="utf-8")
-    (docs_agent / "knowledge_map.json").write_text(
-        '{"domains":{"parts_sourcing":{"primary_files":' + repr(primary_files).replace("'", '"') + "}}}",
-        encoding="utf-8",
-    )
-
-    result = build_cleanup_audit(project_root=root, store=ManagerMemoryStore(root / "data.sqlite3"))
-
-    overindexed = [item for item in result["candidates"] if item["category"] == "source_pack_overindexed"]
-    assert overindexed
-    assert overindexed[0]["path"] == "knowledge_map:parts_sourcing"
-    assert overindexed[0]["recommended_action"] == "link_to_knowledge_map"
+    assert {item["path"] for item in workspace_artifacts} == {"out", "reports", "tmp"}
+    assert all(item["recommended_action"] == "review" for item in workspace_artifacts)
+    backup = next(item for item in result["retained_items"] if item["path"] == "data/backups")
+    assert backup["risk"] == "high" and backup["recommended_action"] == "keep"
+    assert backup_artifact.read_bytes() == b"SQLite 3\x00"
 
 
 def test_cleanup_audit_handles_invalid_knowledge_map_structure(tmp_path):

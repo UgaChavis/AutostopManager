@@ -5,7 +5,7 @@ import os
 import sqlite3
 import subprocess
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -42,15 +42,7 @@ class CleanupCandidate:
     matched_by: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "category": self.category,
-            "path": self.path,
-            "size_bytes": self.size_bytes,
-            "risk": self.risk,
-            "recommended_action": self.recommended_action,
-            "requires_approval": self.requires_approval,
-            "matched_by": self.matched_by,
-        }
+        return asdict(self)
 
 
 def build_cleanup_audit(
@@ -63,14 +55,12 @@ def build_cleanup_audit(
     candidates: list[CleanupCandidate] = []
     retained_items: list[CleanupCandidate] = []
     candidates.extend(_ignored_cache_candidates(root))
-    candidates.extend(_untracked_generated_artifact_candidates(root))
-    candidates.extend(_workspace_output_tree_candidates(root))
-    candidates.extend(_tracked_pdf_duplicate_candidates(root))
+    for item in _workspace_artifacts(root):
+        (retained_items if item.recommended_action == "keep" else candidates).append(item)
     candidates.extend(_unreferenced_agent_doc_candidates(root))
     local_db = _local_db_candidate(memory)
     if local_db is not None:
         retained_items.append(local_db)
-    candidates.extend(_source_pack_overindexed_candidates(root))
     project_footprint = _project_footprint(root)
 
     category_counts = Counter(candidate.category for candidate in candidates)
@@ -98,25 +88,26 @@ def build_cleanup_audit(
 
 def _ignored_cache_candidates(root: Path) -> list[CleanupCandidate]:
     candidates: list[CleanupCandidate] = []
-    project_bytecode_caches = [
-        cache_path
-        for cache_path in sorted(root.rglob("__pycache__"))
-        if not _is_under_ignored_cache_root(cache_path, root)
-    ]
-    for cache_path in [root / ".pytest_cache", root / ".ruff_cache", *project_bytecode_caches]:
-        if not cache_path.exists():
-            continue
-        candidates.append(
-            CleanupCandidate(
-                category="ignored_cache",
-                path=_display_path(cache_path, root),
-                size_bytes=_path_size(cache_path),
-                risk="low",
-                recommended_action="delete_after_approval",
-                requires_approval=True,
-                matched_by="ignored cache directory",
-            )
-        )
+    for parent, dirs, _files in os.walk(root, followlinks=False):
+        if Path(parent) == root:
+            dirs[:] = [name for name in dirs if name not in IGNORED_CACHE_SCAN_ROOTS]
+        for name in list(dirs):
+            if name not in {"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}:
+                continue
+            dirs.remove(name)
+            path = Path(parent) / name
+            if not path.is_symlink():
+                candidates.append(
+                    CleanupCandidate(
+                        category="ignored_cache",
+                        path=_display_path(path, root),
+                        size_bytes=_path_size(path),
+                        risk="low",
+                        recommended_action="delete_after_approval",
+                        requires_approval=True,
+                        matched_by="reproducible tool cache",
+                    )
+                )
     return candidates
 
 
@@ -228,7 +219,7 @@ def _git_diff_numstat(root: Path) -> list[tuple[str, int, int]]:
         if Path(repo_root).resolve() != root.resolve():
             raise subprocess.CalledProcessError(1, "git-root-mismatch")
         completed = subprocess.run(
-            ["git", "-C", str(root), "diff", "--numstat", "-z", "HEAD"],
+            ["git", "-C", str(root), "diff", "--numstat", "--no-renames", "-z", "HEAD"],
             check=True,
             capture_output=True,
         )
@@ -263,52 +254,7 @@ def _file_line_count(path: Path) -> int:
     return data.count(b"\n") + int(bool(data) and not data.endswith(b"\n"))
 
 
-def _is_under_ignored_cache_root(path: Path, root: Path) -> bool:
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        return True
-    return bool(relative.parts and relative.parts[0] in IGNORED_CACHE_SCAN_ROOTS)
-
-
-def _untracked_generated_artifact_candidates(root: Path) -> list[CleanupCandidate]:
-    candidates: list[CleanupCandidate] = []
-    for relative_path in _git_untracked_paths(root):
-        path = root / relative_path
-        normalized = relative_path.replace("\\", "/")
-        if "/" in normalized:
-            continue
-        if path.suffix.lower() not in {".html", ".pdf"}:
-            continue
-        name = path.name.lower()
-        generated_name_markers = (
-            "autostopcrm-",
-            "egrul-",
-            "invoice",
-            "repair-order",
-            "заказ-наряд",
-            "счет",
-            "счёт",
-            "акт",
-            "кп",
-        )
-        if not any(name.startswith(marker) for marker in generated_name_markers):
-            continue
-        candidates.append(
-            CleanupCandidate(
-                category="untracked_generated_artifact",
-                path=normalized,
-                size_bytes=_path_size(path),
-                risk="low",
-                recommended_action="delete",
-                requires_approval=True,
-                matched_by="untracked generated business document at project root",
-            )
-        )
-    return candidates
-
-
-def _workspace_output_tree_candidates(root: Path) -> list[CleanupCandidate]:
+def _workspace_artifacts(root: Path) -> list[CleanupCandidate]:
     candidates: list[CleanupCandidate] = []
     for relative_path in ("out", "reports", "tmp", "data/backups"):
         path = root / relative_path
@@ -322,34 +268,12 @@ def _workspace_output_tree_candidates(root: Path) -> list[CleanupCandidate]:
                 category="generated_workspace_artifact",
                 path=relative_path,
                 size_bytes=size_bytes,
-                risk="low",
-                recommended_action="delete",
+                risk="high" if relative_path == "data/backups" else "unknown",
+                recommended_action="keep" if relative_path == "data/backups" else "review",
                 requires_approval=True,
-                matched_by="generated output tree",
+                matched_by="directory name alone does not prove that contents are disposable",
             )
         )
-    return candidates
-
-
-def _tracked_pdf_duplicate_candidates(root: Path) -> list[CleanupCandidate]:
-    source_cache = root / "docs" / "agent" / "automotive_sources" / "source_cache"
-    if not source_cache.exists():
-        return []
-    candidates: list[CleanupCandidate] = []
-    for pdf_path in sorted(source_cache.rglob("*.pdf")):
-        pack_root = _source_pack_root(source_cache, pdf_path)
-        if _has_text_equivalent(pack_root, pdf_path):
-            candidates.append(
-                CleanupCandidate(
-                    category="tracked_pdf_duplicate",
-                    path=_display_path(pdf_path, root),
-                    size_bytes=_path_size(pdf_path),
-                    risk="medium",
-                    recommended_action="keep_text_equivalent",
-                    requires_approval=True,
-                    matched_by="source_cache PDF with Markdown or JSONL equivalent",
-                )
-            )
     return candidates
 
 
@@ -401,40 +325,6 @@ def _local_db_candidate(store: ManagerMemoryStore) -> CleanupCandidate | None:
     )
 
 
-def _source_pack_overindexed_candidates(root: Path) -> list[CleanupCandidate]:
-    map_path = root / "docs" / "agent" / "knowledge_map.json"
-    if not map_path.exists():
-        return []
-    try:
-        payload = json.loads(map_path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return []
-    if not isinstance(payload, dict):
-        return []
-    candidates: list[CleanupCandidate] = []
-    domains = payload.get("domains")
-    if not isinstance(domains, dict):
-        return []
-    for domain, route in domains.items():
-        if not isinstance(route, dict):
-            continue
-        primary_files = _string_list(route.get("primary_files"))
-        source_pack_files = [item for item in primary_files if "source_cache" in item.replace("\\", "/")]
-        if len(primary_files) >= 25 or len(source_pack_files) >= 20:
-            candidates.append(
-                CleanupCandidate(
-                    category="source_pack_overindexed",
-                    path=f"knowledge_map:{domain}",
-                    size_bytes=0,
-                    risk="low",
-                    recommended_action="link_to_knowledge_map",
-                    requires_approval=True,
-                    matched_by=f"{len(primary_files)} primary files, {len(source_pack_files)} source_cache files",
-                )
-            )
-    return candidates
-
-
 def _referenced_agent_paths(root: Path) -> set[str]:
     referenced: set[str] = set()
     map_path = root / "docs" / "agent" / "knowledge_map.json"
@@ -473,22 +363,6 @@ def _git_untracked_paths(root: Path) -> list[str]:
 
 def _git_nul_paths(output: bytes) -> list[str]:
     return [os.fsdecode(path) for path in output.split(b"\0") if path]
-
-
-def _source_pack_root(source_cache: Path, path: Path) -> Path:
-    try:
-        relative = path.relative_to(source_cache)
-    except ValueError:
-        return path.parent
-    first = relative.parts[0] if relative.parts else ""
-    return source_cache / first if first else path.parent
-
-
-def _has_text_equivalent(pack_root: Path, pdf_path: Path) -> bool:
-    stem = pdf_path.stem
-    return any(candidate.stem == stem for candidate in pack_root.rglob("*.md")) or any(
-        candidate.stem == stem for candidate in pack_root.rglob("*.jsonl")
-    )
 
 
 def _sqlite_table_counts(db_path: Path) -> dict[str, int]:

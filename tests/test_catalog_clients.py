@@ -1564,13 +1564,16 @@ def test_fapi_empty_response_is_nonfatal_and_requires_fallback(monkeypatch):
     assert result["analog_candidates"] == []
 
 
-def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch):
+@pytest.mark.parametrize("connection_reset", [False, True])
+def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch, connection_reset):
     import json
 
     _clear_fapi_env(monkeypatch)
     monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
 
     def fake_urlopen(request, timeout=20.0):
+        if connection_reset:
+            raise ConnectionResetError("synthetic failure containing fapi-test-secret")
         raise HTTPError(request.full_url, 503, "Service unavailable", {}, None)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
@@ -1578,7 +1581,7 @@ def test_fapi_provider_error_is_safe_and_requires_fallback(monkeypatch):
     result = fapi_catalog_lookup(brand="MANN-FILTER", part_number="W 75/3")
 
     assert result["ok"] is False
-    assert result["failure_class"] == "provider_http_5xx"
+    assert result["failure_class"] == ("network_error" if connection_reset else "provider_http_5xx")
     assert result["retryable"] is True
     assert result["requires_fallback"] is True
     assert "fapi-test-secret" not in json.dumps(result)

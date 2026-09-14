@@ -638,7 +638,7 @@ class StoreQuoteConductor:
         if not readback["ok"]:
             return self._compensating(run, operation=operation, error_code="store_quote_conductor_readback_failed")
         after: QuoteEstimateSnapshot = readback["snapshot"]
-        if not _write_readback_matches(operation, after, request):
+        if not _write_readback_matches(operation, before, after, request):
             return self._compensating(run, operation=operation, error_code="store_quote_conductor_readback_mismatch")
         if not applied.get("ok") and not _apply_outcome_uncertain(applied):
             return _error(_result_error_code(applied, "store_quote_conductor_apply_failed"), run=run)
@@ -1069,7 +1069,12 @@ def _write_request(
 ) -> dict[str, Any]:
     saved = _mapping(checkpoint)
     if operation == "draft":
-        if entries is None or coverage is None or not _valid_entries(entries) or not _valid_coverage(coverage):
+        if (
+            entries is None
+            or coverage is None
+            or not _valid_estimate_rows(entries)
+            or not _valid_estimate_rows(coverage)
+        ):
             return {"ok": False, "error_code": "store_quote_conductor_estimate_draft_invalid"}
         evidence_hash = str(saved.get("evidence_hash") or "")
         if _HASH.fullmatch(evidence_hash) is None:
@@ -1178,12 +1183,23 @@ def _snapshot_from_data(value: Any, *, quote_request_id: str) -> QuoteEstimateSn
     )
 
 
-def _write_readback_matches(operation: str, snapshot: QuoteEstimateSnapshot, request: dict[str, Any]) -> bool:
+def _write_readback_matches(
+    operation: str, before: QuoteEstimateSnapshot, snapshot: QuoteEstimateSnapshot, request: dict[str, Any]
+) -> bool:
+    if snapshot.has_quote_offers or (operation != "order" and snapshot.converted_order_ref_sha256 is not None):
+        return False
+    if operation != "draft" and (
+        snapshot.entries_hash != before.entries_hash
+        or snapshot.coverage_hash != before.coverage_hash
+        or snapshot.provenance != before.provenance
+    ):
+        return False
     if operation == "draft":
         changes = _mapping(request.get("contract_changes"))
         return (
             snapshot.provenance == "AUTOSTOP_MANAGER"
-            and not snapshot.has_quote_offers
+            and snapshot.status == "WAITING_FOR_QUOTE"
+            and snapshot.published_snapshot_hash is None
             and snapshot.entries_hash == changes.get("entries_sha256")
             and snapshot.coverage_hash == changes.get("coverage_sha256")
         )
@@ -1271,11 +1287,7 @@ def _safe_quote_identifier(value: str) -> bool:
     )
 
 
-def _valid_entries(value: Any) -> bool:
-    return isinstance(value, list) and 1 <= len(value) <= 50 and all(isinstance(item, dict) for item in value)
-
-
-def _valid_coverage(value: Any) -> bool:
+def _valid_estimate_rows(value: Any) -> bool:
     return isinstance(value, list) and 1 <= len(value) <= 50 and all(isinstance(item, dict) for item in value)
 
 

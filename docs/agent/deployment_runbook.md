@@ -169,24 +169,14 @@ sudo -u autostop-work-telegram env \
     --account work monitor-status
 ```
 
-The result must report `enabled: true` and `retention: memory_only`. Its
-`pending_events`/`open_events` describe unresolved opaque refs, while
-`retained_events` is only the bounded in-memory buffer; check
-`dropped_open_events` before claiming that no work was missed. A verified direct
-reply can move a matching retained ref to `reply_verified`; it does not retain
-reply text. `monitor-mark --disposition no_reply_needed` is an explicit operator
-decision for one opaque event, never a bulk cleanup or an inference from silence.
-If `started_at` changed since the last observation, continuity before that
-memory-only daemon epoch is unknown: an empty buffer does not prove that earlier
-events were handled. Do not solve this by enabling a durable dialogue journal;
-report the gap and use only an authorized bounded reconciliation.
-A test message may then be checked with `monitor-events`; inspect a single opaque
-event only when the owner explicitly requests it. The monitor keeps only a
-private chat/message reference, so a first message from an unknown contact does
-not require resolving or persisting a Telegram entity. It must not send,
-acknowledge, download, or persist conversation content or Telegram entity records.
-Telegram may retain its technical update cursor and existing session authorization;
-neither is a dialogue or contact journal.
+The result must report `enabled: true` and `retention: memory_only`.
+`open_events` counts unresolved refs; `retained_events` is the bounded buffer,
+not completed work. Check `dropped_open_events` and `started_at` for overflow
+or an epoch change before assessing continuity. Old event refs cannot identify
+messages in a new daemon epoch. The monitor stores neither content nor contact
+entities; only the technical Telegram update cursor may persist. For bounded
+intake and reply semantics see the
+[Telegram skill](../../.agents/skills/manage-owner-telegram/SKILL.md).
 
 ## Failure and rollback
 

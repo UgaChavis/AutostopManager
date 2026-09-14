@@ -19,21 +19,19 @@ def test_public_routes_do_not_replace_a_missing_registry(monkeypatch):
     assert vin_sources.sources_for_inputs("frame_number") == []
 
 
-def test_public_route_enrichment_preserves_registry_and_deduplicates(monkeypatch):
-    registry = {
-        "sources": [
-            {"name": "PartSouq manual catalog"},
-            {"source_id": "partsouq_catalog_manual", "name": "PartSouq legacy duplicate"},
-            {"name": "Amayama public catalog"},
-        ]
-    }
+def test_public_route_metadata_has_one_registry_source(monkeypatch):
+    registry = deepcopy(vin_sources.load_source_registry())
     original = deepcopy(registry)
     monkeypatch.setattr(vin_sources, "load_source_registry", lambda: registry)
+    index = vin_sources.source_index()
+    for source_id, aliases in vin_sources.PUBLIC_CATALOG_SOURCE_ALIASES.items():
+        stored = next(row for row in registry["sources"] if row.get("source_id") == source_id)
+        assert index[source_id] == stored
+        assert "diagram_url" in stored["outputs"]
+        for alias in aliases:
+            assert index[alias] == stored
     for make in ("Toyota", "Suzuki", "Mitsubishi"):
-        sources = vin_sources.sources_for_make(make)
-        names = [row["name"] for row in sources]
-        source_ids = [row["source_id"] for row in sources]
-        assert names.count("PartSouq manual catalog") == names.count("Amayama public catalog") == 1
+        source_ids = [row.get("source_id") for row in vin_sources.sources_for_make(make)]
         assert source_ids.count("partsouq_catalog") == source_ids.count("amayama_catalog") == 1
     assert registry == original
 
@@ -98,7 +96,6 @@ def test_current_parts_skill_is_loaded_into_disposable_knowledge_index(tmp_path)
     assert any(item["path"] == skill_path for item in items)
     root = Path(__file__).resolve().parents[1]
     skill = root / skill_path
-    # The maintained reference is reachable from the actual skill, not an orphan report.
-    target = "../../../docs/agent/public_parts_catalogs.md"
-    assert target in skill.read_text(encoding="utf-8")
-    assert (skill.parent / target).resolve().is_file()
+    text = skill.read_text(encoding="utf-8")
+    assert "catalog_provider_status" in text
+    assert "manual_allowed=true" in text and "live_callable_now=false" in text

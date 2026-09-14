@@ -56,6 +56,7 @@ WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 INBOUND_EVENT_OPEN = "open"
 INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
 INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
+INBOUND_EVENT_ID_PATTERN = re.compile(r"inbound-([1-9][0-9]{0,38})")
 DOWNLOAD_MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -237,7 +238,8 @@ class InboundMonitor:
         self._voice_stages: dict[str, InboundVoiceStage] = {}
         self._voice_stage_by_event: dict[int, str] = {}
         self._voice_stage_reservations: set[int] = set()
-        self._next_sequence = 1
+        # A fresh in-memory epoch must never rebind a caller's old event ref.
+        self._next_sequence = secrets.randbits(128) or 1
         self._dropped_events = 0
         self._dropped_open_events = 0
 
@@ -315,7 +317,7 @@ class InboundMonitor:
         ]
 
     def resolve(self, event_id: str) -> InboundMonitorEvent:
-        match = re.fullmatch(r"inbound-([1-9][0-9]{0,11})", event_id)
+        match = INBOUND_EVENT_ID_PATTERN.fullmatch(event_id)
         if match is None:
             raise BridgeError("inbound_event_invalid")
         sequence = int(match.group(1))
@@ -421,16 +423,6 @@ class InboundMonitor:
                 self._states[event.sequence] = INBOUND_EVENT_REPLY_VERIFIED
                 return True
         return False
-
-    def has_reply_verified(self, *, peer_id: int, message_id: int) -> bool:
-        """Report only a previously verified lifecycle transition; never infer one."""
-
-        return any(
-            event.peer_id == peer_id
-            and event.message_id == message_id
-            and self._state(event) == INBOUND_EVENT_REPLY_VERIFIED
-            for event in self._events
-        )
 
     def mark_no_reply_needed(self, event_id: str) -> dict[str, str]:
         """Allow an explicit operator decision without recording its rationale."""
@@ -1291,9 +1283,6 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
         caption=caption,
         photo_sha256=photo_sha256,
     )
-    if contract["last_message_id"] != last_message_id:
-        raise BridgeError("conversation_changed_since_dry_run")
-
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
@@ -1305,34 +1294,30 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
             or previous.get("photo_sha256") != photo_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
-        return {
-            "ok": True,
-            "mode": "apply",
-            "replayed": True,
-            "target": target,
-            "message_id": previous.get("message_id"),
+    else:
+        if contract["last_message_id"] != last_message_id:
+            raise BridgeError("conversation_changed_since_dry_run")
+        upload = io.BytesIO(photo_content)
+        upload.name = photo_path.name
+        sent = await client.send_file(entity, upload, caption=caption, force_document=False)
+        idempotency[idempotency_key] = {
+            "operation": "send_photo",
+            "message_id": int(sent.id),
+            "peer_id": target["id"],
+            "caption_sha256": caption_sha256,
+            "photo_sha256": photo_sha256,
         }
-
-    upload = io.BytesIO(photo_content)
-    upload.name = photo_path.name
-    sent = await client.send_file(entity, upload, caption=caption, force_document=False)
-    idempotency[idempotency_key] = {
-        "operation": "send_photo",
-        "message_id": int(sent.id),
-        "peer_id": target["id"],
-        "caption_sha256": caption_sha256,
-        "photo_sha256": photo_sha256,
-    }
-    _save_idempotency(idempotency_path, idempotency)
-    readback = await client.get_messages(entity, ids=int(sent.id))
+        _save_idempotency(idempotency_path, idempotency)
+    message_id = int(idempotency[idempotency_key]["message_id"])
+    readback = await client.get_messages(entity, ids=message_id)
     if readback is None or str(readback.message or "") != caption or readback.media is None:
         raise BridgeError("send_readback_failed")
     return {
         "ok": True,
         "mode": "apply",
-        "replayed": False,
+        "replayed": previous is not None,
         "target": target,
-        "message_id": int(sent.id),
+        "message_id": message_id,
         "verified": True,
     }
 
@@ -1463,12 +1448,11 @@ async def _handle_send_text_to_entity(
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    response_target = target
     if mode == "dry_run":
         return {
             "ok": True,
             "mode": "dry_run",
-            "target": response_target,
+            "target": target,
             "message_chars": len(text),
             "text_sha256": text_sha256,
             "last_message_id": last_message_id,
@@ -1494,9 +1478,6 @@ async def _handle_send_text_to_entity(
         reply_to_message_id=reply_to_message_id,
         reply_message_sha256=reply_message_sha256,
     )
-    if contract["last_message_id"] != last_message_id:
-        raise BridgeError("conversation_changed_since_dry_run")
-
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
@@ -1509,58 +1490,39 @@ async def _handle_send_text_to_entity(
             or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
-        readback_verified = previous.get("readback_verified") is True
-        response = {
-            "ok": True,
-            "mode": "apply",
-            "replayed": True,
-            "target": response_target,
-            "message_id": previous.get("message_id"),
-            "reply_to_message_id": reply_to_message_id or None,
-            "reply_verified": bool(reply_to_message_id) and readback_verified,
-            "verified": readback_verified,
-        }
-        if reply_to_message_id and inbound_monitor is not None:
-            # An idempotency record is intentionally not proof that the old
-            # attempt completed its Telegram readback.  Reflect a lifecycle
-            # closure only if this daemon already holds that verified state.
-            response["monitor_event_closed"] = inbound_monitor.has_reply_verified(
-                peer_id=int(target["id"]), message_id=reply_to_message_id
-            )
-        return response
-
-    if reply_to_message_id:
-        sent = await client.send_message(entity, text, reply_to=reply_to_message_id)
     else:
-        sent = await client.send_message(entity, text)
-    idempotency[idempotency_key] = {
-        "operation": "send_text",
-        "message_id": int(sent.id),
-        "peer_id": target["id"],
-        "reply_message_sha256": reply_message_sha256,
-        "reply_to_message_id": reply_to_message_id,
-        "text_sha256": text_sha256,
-        "readback_verified": False,
-    }
-    _save_idempotency(idempotency_path, idempotency)
-    readback = await client.get_messages(entity, ids=int(sent.id))
+        if contract["last_message_id"] != last_message_id:
+            raise BridgeError("conversation_changed_since_dry_run")
+        sent = await client.send_message(
+            entity, text, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
+        )
+        idempotency[idempotency_key] = {
+            "operation": "send_text",
+            "message_id": int(sent.id),
+            "peer_id": target["id"],
+            "reply_message_sha256": reply_message_sha256,
+            "reply_to_message_id": reply_to_message_id,
+            "text_sha256": text_sha256,
+            "readback_verified": False,
+        }
+        _save_idempotency(idempotency_path, idempotency)
+    message_id = int(idempotency[idempotency_key]["message_id"])
+    readback = await client.get_messages(entity, ids=message_id)
     if readback is None or str(readback.message or "") != text or _message_reply_to_id(readback) != reply_to_message_id:
         raise BridgeError("send_readback_failed")
     idempotency[idempotency_key]["readback_verified"] = True
     _save_idempotency(idempotency_path, idempotency)
     monitor_event_closed: bool | None = None
     if reply_to_message_id and inbound_monitor is not None:
-        # This is intentionally after Telegram readback: a dry run, failed send,
-        # or unverified replay must not close a client-facing monitor event.
         monitor_event_closed = inbound_monitor.mark_reply_verified(
             peer_id=int(target["id"]), message_id=reply_to_message_id
         )
     response = {
         "ok": True,
         "mode": "apply",
-        "replayed": False,
-        "target": response_target,
-        "message_id": int(sent.id),
+        "replayed": previous is not None,
+        "target": target,
+        "message_id": message_id,
         "reply_to_message_id": reply_to_message_id or None,
         "reply_verified": bool(reply_to_message_id),
         "verified": True,
@@ -1685,16 +1647,10 @@ def _monitor_context_message(event: InboundMonitorEvent, message: Any) -> dict[s
 async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
     event = monitor.resolve(event_id)
     message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
-    text, sensitive_content_redacted = redact_sensitive_message_text(str(getattr(message, "message", "") or ""))
     return {
         "ok": True,
         "event_id": event_id,
-        "message": {
-            "date": message.date.isoformat() if getattr(message, "date", None) else None,
-            "text": text,
-            "sensitive_content_redacted": sensitive_content_redacted,
-            "has_media": bool(getattr(message, "media", None)),
-        },
+        "message": _monitor_context_payload(message),
     }
 
 

@@ -10,6 +10,7 @@ from typing import Any
 
 from .telegram_bridge import (
     DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS,
+    INBOUND_EVENT_ID_PATTERN,
     MONITOR_VOICE_STAGE_TIMEOUT_SECONDS,
     BridgeError,
     WORK_SOCKET_PATH,
@@ -125,13 +126,14 @@ def self_check() -> dict[str, Any]:
 
 def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[str, Any]:
     _require_root()
-    if re.fullmatch(r"inbound-[1-9][0-9]{0,11}", event_id) is None:
+    if INBOUND_EVENT_ID_PATTERN.fullmatch(event_id) is None:
         raise MonitorVoiceError("inbound_event_invalid")
     if _LANGUAGE_PATTERN.fullmatch(language) is None:
         raise MonitorVoiceError("monitor_voice_language_invalid")
     handle = ""
     cleanup_verified = False
     runner_cleanup_verified = False
+    error: MonitorVoiceError | None = None
     try:
         staged = _request(
             {
@@ -151,7 +153,7 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
         runner_cleanup_verified = transcription.get("cleanup_verified") is True
     except MonitorVoiceError as exc:
         runner_cleanup_verified = exc.cleanup_verified
-        raise
+        error = exc
     finally:
         if _HANDLE_PATTERN.fullmatch(handle) is not None:
             try:
@@ -165,6 +167,8 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
                 cleanup_verified = cleanup.get("cleanup_verified") is True
             except MonitorVoiceError:
                 cleanup_verified = False
+    if error is not None:
+        raise MonitorVoiceError(error.code, cleanup_verified=cleanup_verified) from error
     if not cleanup_verified:
         raise MonitorVoiceError("monitor_voice_cleanup_failed")
     return {
@@ -191,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = self_check() if args.self_check else transcribe_monitored_voice(args.event_id, language=args.language)
     except MonitorVoiceError as exc:
-        payload = {"ok": False, "error": exc.code}
+        payload = {"ok": False, "error": exc.code, "cleanup_verified": exc.cleanup_verified}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload.get("ok") is True else 1
 

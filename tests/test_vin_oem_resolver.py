@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from autostop_manager.vin_oem_resolver import resolve_vin_oem_parts
+from autostop_manager.vin_oem_resolver import _assess_partsapi_oe_agreement, resolve_vin_oem_parts
 
 
 def _medium_identity() -> dict:
@@ -591,3 +591,21 @@ def test_resolver_surfaces_provider_failure_separately_from_empty_result(monkeyp
         "requires_fallback": True,
     }
     assert any(action["code"] == "retry_or_manual_epc" for action in result["manual_actions"])
+
+
+@pytest.mark.parametrize(
+    ("field", "left", "right", "status"),
+    [
+        ("model", "A8", "A80", "conflict"),
+        ("model", "Corolla", "Corolla Cross", "conflict"),
+        ("transmission", "6AT", "6MT", "conflict"),
+        ("transmission", "6AT", "6 speed automatic", "matched"),
+        ("make", "VW", "Volkswagen", "matched"),
+    ],
+)
+def test_oe_profile_uses_shared_identity_comparison(field, left, right, status):
+    result = _assess_partsapi_oe_agreement(
+        {"vehicle_profile": {field: left}},
+        {"ok": True, "vehicle_profiles": [{field: right}]},
+    )
+    assert result["status"] == status

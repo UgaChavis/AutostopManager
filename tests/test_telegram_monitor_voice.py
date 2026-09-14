@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from autostop_manager import telegram_monitor_voice
@@ -109,3 +111,28 @@ def test_monitored_voice_requires_root(monkeypatch) -> None:
 
     with pytest.raises(telegram_monitor_voice.MonitorVoiceError, match="monitor_voice_root_required"):
         telegram_monitor_voice.transcribe_monitored_voice("inbound-1")
+
+
+@pytest.mark.parametrize("cleanup_verified", [True, False])
+def test_monitored_voice_reports_cleanup_after_transcriber_failure(monkeypatch, capsys, cleanup_verified):
+    monkeypatch.setattr(telegram_monitor_voice.os, "geteuid", lambda: 0)
+    calls = []
+
+    def request(payload):
+        calls.append(payload["operation"])
+        if payload["operation"] == "monitor_voice_stage":
+            return {"media_handle": "b" * 32, "media": {"kind": "voice", "duration_seconds": 8, "suffix": ".ogg"}}
+        return {"cleanup_verified": cleanup_verified}
+
+    def transcribe(*_args, **_kwargs):
+        raise telegram_monitor_voice.MonitorVoiceError("monitor_voice_transcription_unavailable")
+
+    monkeypatch.setattr(telegram_monitor_voice, "_request", request)
+    monkeypatch.setattr(telegram_monitor_voice, "_run_transcriber", transcribe)
+    assert telegram_monitor_voice.main(["--event-id", "inbound-1"]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": False,
+        "error": "monitor_voice_transcription_unavailable",
+        "cleanup_verified": cleanup_verified,
+    }
+    assert calls == ["monitor_voice_stage", "monitor_voice_discard"]

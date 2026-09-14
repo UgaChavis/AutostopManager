@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -482,7 +483,7 @@ def mann_filter_catalog_lookup(
             headers={"Accept": "application/json", "Store": request_plan["store"]},
             timeout=timeout,
         )
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
     if payload.get("errors"):
@@ -591,7 +592,7 @@ def denso_aftermarket_catalog_lookup(
         return {**base, **_catalog_deadline_failure("denso_aftermarket_catalog")}
     try:
         payload = _read_json_url(request_plan["url"], headers={"Accept": "application/json"}, timeout=request_timeout)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         return {**base, "ok": False, "error": str(exc)}
 
     if payload.get("status") != "success":
@@ -617,7 +618,7 @@ def denso_aftermarket_catalog_lookup(
                 detail_payload = _read_json_url(
                     detail_url, headers={"Accept": "application/json"}, timeout=request_timeout
                 )
-            except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            except (OSError, ValueError) as exc:
                 details.append({"part_key": part_key, "ok": False, "error": str(exc)})
                 continue
             detail_data = _dict_list(detail_payload.get("data"))
@@ -955,7 +956,7 @@ def _fapi_api_key(*, demo_access: bool, timeout: float) -> tuple[str | None, str
         request = Request(FAPI_DEMO_KEY_URL, headers={"User-Agent": "AutostopManager/0.1"})
         with urlopen(request, timeout=timeout) as response:
             demo_key = response.read().decode("utf-8").strip()
-    except (HTTPError, URLError, TimeoutError, UnicodeDecodeError, ValueError):
+    except (OSError, ValueError):
         return None, "demo_ephemeral", "FAPI demo access is unavailable."
     if not demo_key:
         return None, "demo_ephemeral", "FAPI demo access returned no key."
@@ -980,7 +981,7 @@ def _fapi_failure_details(exc: Exception) -> tuple[str, bool, str, int | None]:
         if exc.code in {401, 403}:
             return "credentials_rejected", False, "FAPI credentials were rejected.", None
         return "provider_http_4xx", False, f"FAPI returned HTTP {exc.code}.", None
-    if isinstance(exc, (URLError, TimeoutError)):
+    if isinstance(exc, OSError):
         return "network_error", True, "FAPI network request failed.", None
     return "malformed_response", False, "FAPI returned an unsupported response.", None
 
@@ -1099,7 +1100,7 @@ def fapi_catalog_lookup(
         return {**base, **_catalog_deadline_failure("fapi_catalog")}
     try:
         manufacturers_payload = _fapi_manufacturer_payload(request_plan, timeout=request_timeout)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         return _fapi_provider_failure(base, exc)
     application_failure = _fapi_application_failure(manufacturers_payload)
     if application_failure is not None:
@@ -1147,7 +1148,7 @@ def fapi_catalog_lookup(
         payload = _read_json_url(
             request_plan["analog_url"], headers={"Accept": "application/json"}, timeout=request_timeout
         )
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         return _fapi_provider_failure(base, exc)
 
     application_failure = _fapi_application_failure(payload)
@@ -1251,105 +1252,72 @@ def public_aftermarket_catalog_lookup(
     dry_run: bool = False,
     demo_access: bool = False,
 ) -> dict[str, Any]:
+    aliases = {
+        "mann": "mann_filter_catalog",
+        "mann_filter": "mann_filter_catalog",
+        "denso": "denso_aftermarket_catalog",
+        "denso_aftermarket": "denso_aftermarket_catalog",
+        "fapi": "fapi_catalog",
+    }
     normalized_provider = str(provider or "").strip().lower()
-    if normalized_provider in {"mann", "mann_filter", "mann_filter_catalog"}:
-        return mann_filter_catalog_lookup(
-            part_number=part_number, page_size=page_size, timeout=timeout, dry_run=dry_run
-        )
-    if normalized_provider in {"denso", "denso_aftermarket", "denso_aftermarket_catalog"}:
-        return denso_aftermarket_catalog_lookup(
-            part_number=part_number,
-            country=country,
-            include_detail=include_detail,
-            detail_limit=page_size,
-            timeout=timeout,
-            dry_run=dry_run,
-        )
-    if normalized_provider in {"fapi", "fapi_catalog"}:
-        return fapi_catalog_lookup(
-            brand=brand or "",
-            part_number=part_number,
-            max_analogs=page_size,
-            timeout=timeout,
-            dry_run=dry_run,
-            demo_access=demo_access,
-        )
-    if normalized_provider == "all":
-        budget = _bounded_public_aftermarket_timeout(timeout)
-        deadline = time.monotonic() + budget
-        results = []
-        deadline_exhausted = False
+    normalized_provider = aliases.get(normalized_provider, normalized_provider)
+    lookups: dict[str, tuple[Callable[..., dict[str, Any]], dict[str, Any]]] = {
+        "mann_filter_catalog": (mann_filter_catalog_lookup, {"page_size": page_size}),
+        "denso_aftermarket_catalog": (
+            denso_aftermarket_catalog_lookup,
+            {
+                "country": country,
+                "include_detail": include_detail,
+                "detail_limit": page_size,
+            },
+        ),
+        "fapi_catalog": (
+            fapi_catalog_lookup,
+            {
+                "brand": brand or "",
+                "max_analogs": page_size,
+                "demo_access": demo_access,
+            },
+        ),
+    }
+    if normalized_provider != "all":
+        if normalized_provider not in lookups:
+            return {
+                "ok": False,
+                "provider": normalized_provider,
+                "error": "Unknown public aftermarket catalog provider.",
+                "available_providers": [*lookups, "all"],
+            }
+        lookup, params = lookups[normalized_provider]
+        return lookup(part_number=part_number, timeout=timeout, dry_run=dry_run, **params)
 
+    budget = _bounded_public_aftermarket_timeout(timeout)
+    deadline = time.monotonic() + budget
+    results = []
+    for name, (lookup, params) in lookups.items():
+        if name == "fapi_catalog" and not str(brand or "").strip():
+            continue
         request_timeout = budget if dry_run else _remaining_timeout(deadline)
         if request_timeout is None:
-            deadline_exhausted = True
-            results.append(_catalog_deadline_failure("mann_filter_catalog"))
-        else:
-            results.append(
-                mann_filter_catalog_lookup(
-                    part_number=part_number,
-                    page_size=page_size,
-                    timeout=request_timeout,
-                    dry_run=dry_run,
-                )
-            )
-
-        request_timeout = budget if dry_run else _remaining_timeout(deadline)
-        if request_timeout is None:
-            deadline_exhausted = True
-            results.append(_catalog_deadline_failure("denso_aftermarket_catalog"))
-        else:
-            results.append(
-                denso_aftermarket_catalog_lookup(
-                    part_number=part_number,
-                    country=country,
-                    include_detail=include_detail,
-                    detail_limit=page_size,
-                    timeout=request_timeout,
-                    dry_run=dry_run,
-                    _deadline=None if dry_run else deadline,
-                )
-            )
-        if str(brand or "").strip():
-            request_timeout = budget if dry_run else _remaining_timeout(deadline)
-            if request_timeout is None:
-                deadline_exhausted = True
-                results.append(_catalog_deadline_failure("fapi_catalog"))
-            else:
-                results.append(
-                    fapi_catalog_lookup(
-                        brand=str(brand),
-                        part_number=part_number,
-                        max_analogs=page_size,
-                        timeout=request_timeout,
-                        dry_run=dry_run,
-                        demo_access=demo_access,
-                        _deadline=None if dry_run else deadline,
-                    )
-                )
-        if not dry_run and _remaining_timeout(deadline) is None:
-            deadline_exhausted = True
-        success_count = sum(result.get("ok") is True for result in results)
-        return {
-            "ok": success_count > 0,
-            "provider": "public_aftermarket_catalogs",
-            "operation": "part_number_search",
-            "success_count": success_count,
-            "failure_count": len(results) - success_count,
-            "results": results,
-            "partial": deadline_exhausted,
-            "deadline_seconds": budget,
-            "requires_fallback": any(
-                result.get("requires_fallback") is True or result.get("ok") is not True for result in results
-            )
-            or deadline_exhausted,
-            "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
-        }
+            results.append(_catalog_deadline_failure(name))
+            continue
+        if name != "mann_filter_catalog":
+            params = {**params, "_deadline": None if dry_run else deadline}
+        results.append(lookup(part_number=part_number, timeout=request_timeout, dry_run=dry_run, **params))
+    deadline_exhausted = not dry_run and _remaining_timeout(deadline) is None
+    success_count = sum(result.get("ok") is True for result in results)
     return {
-        "ok": False,
-        "provider": normalized_provider,
-        "error": "Unknown public aftermarket catalog provider.",
-        "available_providers": ["mann_filter_catalog", "denso_aftermarket_catalog", "fapi_catalog", "all"],
+        "ok": success_count > 0,
+        "provider": "public_aftermarket_catalogs",
+        "operation": "part_number_search",
+        "success_count": success_count,
+        "failure_count": len(results) - success_count,
+        "results": results,
+        "partial": deadline_exhausted,
+        "deadline_seconds": budget,
+        "requires_fallback": deadline_exhausted
+        or any(result.get("requires_fallback") is True or result.get("ok") is not True for result in results),
+        "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
     }
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 
+import pytest
+
 from autostop_manager.storage import ManagerMemoryStore
 from autostop_manager.store_quote_conductor import (
     StoreQuoteConductor,
@@ -266,6 +268,56 @@ def test_conductor_accepts_owner_canonical_draft_and_store_owned_warranty(tmp_pa
     persisted = store.get_manager_run(published["run_id"], include_events=False, include_external_steps=True)
     assert persisted["item"]["status"] == "executing"
     assert persisted["item"]["checkpoint"]["phase"] == "published"
+
+
+@pytest.mark.parametrize(
+    ("operation", "unexpected"),
+    [
+        ("draft", "published"),
+        ("draft", "ordered"),
+        ("publish", "ordered"),
+        ("publish", "coverage"),
+        ("reopen", "ordered"),
+        ("reopen", "entries"),
+        ("reopen", "coverage"),
+    ],
+)
+def test_conductor_rejects_unrequested_readback_changes(tmp_path, monkeypatch, operation, unexpected):
+    conductor, gateway, _store = _conductor(tmp_path)
+    ready = {"draft": _evidence_ready, "publish": _draft_saved, "reopen": _published}[operation](conductor)
+    method = {"draft": "replace_estimate_draft", "publish": "submit_estimate", "reopen": "reopen_estimate"}[operation]
+    original = getattr(gateway, method)
+
+    def changed(**kwargs):
+        result = original(**kwargs)
+        if kwargs["mode"] == "apply":
+            if unexpected == "published":
+                gateway.status = "WAITING_FOR_APPROVAL"
+                gateway.estimate["publishedSnapshotHash"] = _SNAPSHOT_HASH
+            elif unexpected == "ordered":
+                gateway.converted_order_id = "unexpected-order"
+            else:
+                gateway.estimate[unexpected] = []
+        return result
+
+    monkeypatch.setattr(gateway, method, changed)
+    result = conductor.execute(
+        operation=operation,
+        quote_request_id="quote-1",
+        run_id=ready["run_id"],
+        expected_state_version=ready["summary"]["state_version"],
+        expected_revision=gateway.revision,
+        idempotency_key="quote-write-anomaly",
+        correlation_id="quote-correlation-001",
+        entries=deepcopy(_ENTRIES),
+        coverage=deepcopy(_COVERAGE),
+        customer_response="client-visible response",
+    )
+    assert result["ok"] is False
+    assert (
+        result["summary"]["phase"]
+        != {"draft": "draft_saved", "publish": "published", "reopen": "revision_needed"}[operation]
+    )
 
 
 def test_conductor_reopen_requires_full_guard_and_verified_readback(tmp_path):
