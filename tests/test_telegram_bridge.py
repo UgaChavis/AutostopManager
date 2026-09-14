@@ -94,6 +94,8 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert "rm -rf" not in text
     assert "autostop-work-telegram-media" in text
     assert "run-work-telegram-media.sh" in text
+    assert "run-work-telegram-monitor-voice.sh" in text
+    assert 'chmod 0755 "${monitor_voice_wrapper_source}"' in text
     assert "restore_previous_release_assets" in text
     assert "restore_media_wrapper" in text
     assert 'unlink -- "${media_wrapper_path}"' in text

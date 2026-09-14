@@ -113,10 +113,16 @@ find "${staging_dir}" -type d -exec chmod 0755 {} +
 find "${staging_dir}" -type f -exec chmod 0644 {} +
 if [[ "${account}" == "work" ]]; then
   media_wrapper_source="${staging_dir}/scripts/run-work-telegram-media.sh"
+  monitor_voice_wrapper_source="${staging_dir}/scripts/run-work-telegram-monitor-voice.sh"
   if [[ ! -f "${media_wrapper_source}" || -L "${media_wrapper_source}" ]]; then
     echo "ERROR: work media sandbox wrapper missing from release" >&2
     exit 1
   fi
+  if [[ ! -f "${monitor_voice_wrapper_source}" || -L "${monitor_voice_wrapper_source}" ]]; then
+    echo "ERROR: work monitored-voice wrapper missing from release" >&2
+    exit 1
+  fi
+  chmod 0755 "${monitor_voice_wrapper_source}"
 fi
 mv -- "${staging_dir}" "${release_dir}"
 
