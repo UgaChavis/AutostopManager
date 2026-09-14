@@ -203,6 +203,13 @@ class InboundMonitorEvent:
     received_at: str
 
 
+@dataclass(frozen=True)
+class InboundVoiceStage:
+    """One transient, opaque work-inbox file awaiting local transcription."""
+
+    path: Path
+
+
 class InboundMonitor:
     """Bounded, content-free monitor for explicitly enabled work Telegram."""
 
@@ -214,6 +221,7 @@ class InboundMonitor:
         self._events: deque[InboundMonitorEvent] = deque()
         self._seen: set[tuple[int, int]] = set()
         self._states: dict[int, str] = {}
+        self._voice_stages: dict[str, InboundVoiceStage] = {}
         self._next_sequence = 1
         self._dropped_events = 0
         self._dropped_open_events = 0
@@ -298,6 +306,26 @@ class InboundMonitor:
             if event.sequence == sequence:
                 return event
         raise BridgeError("inbound_event_unavailable")
+
+    def require_open(self, event_id: str) -> InboundMonitorEvent:
+        """Resolve one event only when it has not been deliberately closed."""
+
+        event = self.resolve(event_id)
+        if self._state(event) != INBOUND_EVENT_OPEN:
+            raise BridgeError("inbound_event_not_open")
+        return event
+
+    def stage_voice(self, handle: str, path: Path) -> None:
+        """Keep an opaque handle for one transient voice file, never its source IDs."""
+
+        if re.fullmatch(r"[A-Za-z0-9_-]{24,128}", handle) is None:
+            raise BridgeError("inbound_voice_handle_invalid")
+        self._voice_stages[handle] = InboundVoiceStage(path=path)
+
+    def consume_voice_stage(self, handle: str) -> InboundVoiceStage | None:
+        """Forget a staged file handle before its deletion is attempted."""
+
+        return self._voice_stages.pop(handle, None)
 
     def mark_reply_verified(self, *, peer_id: int, message_id: int) -> bool:
         """Close an active opaque ref only after a verified direct reply."""
@@ -728,6 +756,42 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
     finally:
         temp_path.unlink(missing_ok=True)
     return output_path, digest
+
+
+def _monitor_voice_stage_path(handle: str, *, suffix: str, inbox_dir: Path) -> Path:
+    if re.fullmatch(r"[A-Za-z0-9_-]{24,128}", handle) is None:
+        raise BridgeError("inbound_voice_handle_invalid")
+    if suffix not in {".m4a", ".mp3", ".ogg", ".opus"}:
+        raise BridgeError("inbound_voice_media_invalid")
+    return inbox_dir / f"monitor-{handle}{suffix}"
+
+
+def _save_monitor_voice_stage(content: bytes, *, handle: str, suffix: str, inbox_dir: Path) -> Path:
+    """Save one monitored voice under an opaque runtime-only name."""
+
+    inbox_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(inbox_dir, 0o700)
+    inbox_stat = inbox_dir.stat()
+    if inbox_stat.st_uid != os.geteuid() or stat.S_IMODE(inbox_stat.st_mode) != 0o700:
+        raise BridgeError("download_inbox_permissions_invalid")
+    output_path = _monitor_voice_stage_path(handle, suffix=suffix, inbox_dir=inbox_dir)
+    if output_path.exists() or output_path.is_symlink():
+        raise BridgeError("inbound_voice_stage_conflict")
+    temp_path = inbox_dir / f".monitor-{secrets.token_urlsafe(18)}.tmp"
+    try:
+        descriptor = os.open(
+            temp_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, output_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return output_path
 
 
 def _read_private_download(path: Path, *, inbox_dir: Path) -> bytes:
@@ -1562,13 +1626,86 @@ async def _handle_monitor_context(
     return {"ok": True, "event_id": event_id, "messages": messages}
 
 
+def _monitor_voice_public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return only harmless media facts needed by the local voice runner."""
+
+    return {
+        "kind": "voice",
+        "duration_seconds": metadata["duration_seconds"],
+        "suffix": metadata["suffix"],
+    }
+
+
+def _require_monitor_voice_metadata(message: Any) -> dict[str, Any]:
+    metadata = _message_media_metadata(message)
+    if not metadata["voice"] or not metadata["downloadable"]:
+        raise BridgeError("inbound_voice_media_invalid")
+    if metadata["suffix"] not in {".m4a", ".mp3", ".ogg", ".opus"}:
+        raise BridgeError("inbound_voice_media_invalid")
+    return metadata
+
+
+async def _handle_monitor_voice_stage(
+    client: Any,
+    config: TelegramConfig,
+    monitor: InboundMonitor,
+    *,
+    event_id: str,
+) -> dict[str, Any]:
+    event = monitor.require_open(event_id)
+    message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
+    metadata = _require_monitor_voice_metadata(message)
+    content = await client.download_media(message, file=bytes)
+    if not isinstance(content, bytes):
+        raise BridgeError("download_failed")
+    if metadata["size_bytes"] != len(content):
+        raise BridgeError("download_size_mismatch")
+    _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
+    handle = secrets.token_urlsafe(24)
+    path = _save_monitor_voice_stage(
+        content,
+        handle=handle,
+        suffix=metadata["suffix"],
+        inbox_dir=config.socket_path.parent / "inbox",
+    )
+    monitor.stage_voice(handle, path)
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "media": _monitor_voice_public_metadata(metadata),
+        "media_handle": handle,
+    }
+
+
+async def _handle_monitor_voice_discard(
+    config: TelegramConfig,
+    monitor: InboundMonitor,
+    *,
+    handle: str,
+) -> dict[str, Any]:
+    staged = monitor.consume_voice_stage(handle)
+    if staged is None:
+        raise BridgeError("inbound_voice_stage_unavailable")
+    _discard_private_download(staged.path, inbox_dir=config.socket_path.parent / "inbox")
+    return {"ok": True, "cleanup_verified": True}
+
+
 async def _handle_monitor_operation(
     client: Any,
+    config: TelegramConfig,
     request: dict[str, Any],
     inbound_monitor: InboundMonitor | None,
 ) -> dict[str, Any] | None:
     operation = str(request.get("operation") or "")
-    if operation not in {"monitor_status", "monitor_events", "monitor_read", "monitor_context", "monitor_mark"}:
+    if operation not in {
+        "monitor_status",
+        "monitor_events",
+        "monitor_read",
+        "monitor_context",
+        "monitor_mark",
+        "monitor_voice_stage",
+        "monitor_voice_discard",
+    }:
         return None
     if inbound_monitor is None:
         raise BridgeError("inbound_monitor_disabled")
@@ -1580,6 +1717,19 @@ async def _handle_monitor_operation(
         if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
             raise BridgeError("inbound_disposition_invalid")
         return {"ok": True, "event": inbound_monitor.mark_no_reply_needed(str(request.get("event_id") or ""))}
+    if operation == "monitor_voice_stage":
+        return await _handle_monitor_voice_stage(
+            client,
+            config,
+            inbound_monitor,
+            event_id=str(request.get("event_id") or ""),
+        )
+    if operation == "monitor_voice_discard":
+        return await _handle_monitor_voice_discard(
+            config,
+            inbound_monitor,
+            handle=str(request.get("media_handle") or ""),
+        )
     if operation == "monitor_context":
         return await _handle_monitor_context(
             client,
@@ -1617,7 +1767,7 @@ async def _handle_operation(
             else None,
         }
 
-    monitor_response = await _handle_monitor_operation(client, request, inbound_monitor)
+    monitor_response = await _handle_monitor_operation(client, config, request, inbound_monitor)
     if monitor_response is not None:
         return monitor_response
 
@@ -1713,6 +1863,8 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     return (operation in {"send", "send_photo", "download"} and request.get("mode") == "apply") or operation in {
         "discard_download",
         "monitor_mark",
+        "monitor_voice_stage",
+        "monitor_voice_discard",
     }
 
 

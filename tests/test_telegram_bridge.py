@@ -1365,6 +1365,81 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
         )
 
 
+def test_monitor_voice_stages_one_exact_voice_without_exposing_source_refs(tmp_path) -> None:
+    monitor = telegram_bridge.InboundMonitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+    config = _runtime_config(tmp_path)
+    audio = b"OggSprivate-voice"
+    voice_attribute = type("DocumentAttributeAudio", (), {})()
+    voice_attribute.voice = True
+    voice_attribute.duration = 8
+    voice = SimpleNamespace(
+        id=100,
+        out=False,
+        is_private=True,
+        chat_id=20,
+        date=datetime(2026, 9, 11, tzinfo=UTC),
+        message="voice body must not enter the monitor response",
+        media=SimpleNamespace(),
+        file=SimpleNamespace(mime_type="audio/ogg", name="", size=len(audio)),
+        document=SimpleNamespace(attributes=[voice_attribute]),
+    )
+
+    class Client:
+        async def get_messages(self, actual_entity, *, ids):
+            assert actual_entity is None
+            assert ids == 100
+            return voice
+
+        async def download_media(self, message, *, file):
+            assert message is voice
+            assert file is bytes
+            return audio
+
+        async def send_message(self, *_args, **_kwargs):
+            pytest.fail("monitor voice must not send")
+
+        async def send_read_acknowledge(self, *_args, **_kwargs):
+            pytest.fail("monitor voice must not acknowledge")
+
+        async def iter_dialogs(self, **_kwargs):
+            pytest.fail("exact monitor lookup must not enumerate dialogs")
+            yield None
+
+    staged = asyncio.run(
+        telegram_bridge._handle_operation(
+            Client(),
+            config,
+            {
+                "operation": "monitor_voice_stage",
+                "event_id": "inbound-1",
+            },
+            inbound_monitor=monitor,
+        )
+    )
+    staged_json = json.dumps(staged)
+    assert staged["event_id"] == "inbound-1"
+    assert "media_handle" in staged
+    assert all(marker not in staged_json for marker in ("peer_id", "message_id", "saved_path", "voice body"))
+    path = config.socket_path.parent / "inbox" / f"monitor-{staged['media_handle']}.ogg"
+    assert path.read_bytes() == audio
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not (config.state_dir / "idempotency.json").exists()
+    assert monitor.events()[0]["state"] == "open"
+
+    discarded = asyncio.run(
+        telegram_bridge._handle_operation(
+            Client(),
+            config,
+            {"operation": "monitor_voice_discard", "media_handle": staged["media_handle"]},
+            inbound_monitor=monitor,
+        )
+    )
+    assert discarded == {"ok": True, "cleanup_verified": True}
+    assert not path.exists()
+    assert telegram_bridge._requires_mutation_lock({"operation": "monitor_voice_stage"}) is True
+
+
 def _runtime_config(tmp_path) -> TelegramConfig:
     runtime_dir = tmp_path / "run"
     state_dir = tmp_path / "state"
