@@ -1198,6 +1198,6 @@ def estimate_repair_work_cost(
             "search_queries": research.get("search_queries", {}),
             "warnings": research.get("warnings", []),
         },
-        "playbook": ".agents/skills/resolve-autostop-service-case/SKILL.md",
+        "playbook": ".agents/skills/manage-autostop-store/SKILL.md",
         "source_catalog": "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
     }

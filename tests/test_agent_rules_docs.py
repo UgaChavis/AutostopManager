@@ -53,12 +53,22 @@ def _string_list(value: object) -> list[str]:
 
 def test_agent_startup_contract_is_small_and_has_no_legacy_entrypoint():
     assert AGENTS_PATH.is_file()
-    assert AGENTS_PATH.stat().st_size <= 32 * 1024
+    assert AGENTS_PATH.stat().st_size <= 1024
     assert not (ROOT / "agent.md").exists()
 
 
+def test_instruction_budget_and_local_markdown_links():
+    paths = [AGENTS_PATH, *_skill_paths(), *sorted((ROOT / "docs/agent").glob("*.md"))]
+    assert len(paths) <= 8
+    assert sum(path.stat().st_size for path in paths) <= 20 * 1024
+    for path in paths:
+        for target in re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
+            if "://" not in target and not target.startswith("#"):
+                assert (path.parent / target.split("#", 1)[0]).resolve().is_file(), (path, target)
+
+
 def test_remote_access_playbook_keeps_remote_targets_separate():
-    text = (ROOT / "docs/agent/codex_home_pc_reverse_ssh.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs/agent/operations.md").read_text(encoding="utf-8")
 
     assert "/opt/autostop-managed-pc/README.md" in text
     assert "FST.KZ" in text and "AGENTS.md" in text

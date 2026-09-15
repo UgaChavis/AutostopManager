@@ -11,6 +11,7 @@ from .agent_case_resolver import agent_case_resolver
 from .agent_gateway import agent_envelope, build_agent_bootstrap, list_agent_workflows
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
+    PARTSAPI_OPERATIONS,
     exist_price_lookup,
     partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
@@ -1358,11 +1359,11 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="partsapi_catalog_lookup",
         description=(
-            "Call or dry-run PartsAPI VIN/plate/OE/applicability/cross/part-name/AUTONORMS lookup. Live calls require PARTSAPI_BASE_URL plus "
-            "PARTSAPI_KEY or a method-specific PARTSAPI_*_KEY; supports VINdecode, VINdecodeOE, getPartsbyVIN, "
-            "getOEApplicability, getCrosses, getCrossesWithBrand, getCrossesTitle, getArticleCrosses, searchArticles, getEngine, "
-            "gosnomer2vin, getPartnameByBrandNumber, and GetNormsMakes/GetNormsModels/GetNormsMotors/GetNormsTimes/GetFillVolumes. For getPartsbyVIN, "
-            "part_type defaults to oem; use omit/non-oem to skip the type query parameter."
+            "Read-only PartsAPI lookup; dry_run sends no request. Valid operation values: "
+            + ", ".join(PARTSAPI_OPERATIONS)
+            + ". Check catalog_provider_status.operation_status for each operation's credentials and required parameters; "
+            "configured access does not prove provider success. For parts_by_vin, part_type defaults to oem; "
+            "use omit/non-oem to skip the type parameter."
         ),
         annotations=ToolAnnotations(
             title="PartsAPI Catalog Lookup",

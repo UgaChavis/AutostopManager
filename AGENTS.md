@@ -1,22 +1,12 @@
-# AutostopManager Codex Instructions
+# AutoStop Manager
 
-- Answer the owner concisely in Russian. Solve for the outcome and evidence; ask
-  only when the answer changes the next useful move.
-- `agent-brief`, `knowledge-probe`, routes and skills are optional starting
-  points. Choose, combine, replace or invent steps; explore safely when unsure.
-- Work by default. Learn only in effective `learning` mode or at owner request.
-- Автоматический рабочий Telegram — `.agents/skills/manage-owner-telegram/SKILL.md`;
-  правила магазина и CRM-кейса — `.agents/skills/manage-autostop-store/SKILL.md`.
-- CRM, AutoStop App, Gmail and Telegram own live data. Read the minimum; keep
-  business data, correspondence, identifiers and secrets out of Manager memory,
-  Git and docs.
-- `docs/agent/manager_rules.json` contains the hard boundaries; routes never
-  authorize effects. Load only needed sources from `knowledge_map.json`; live
-  registration owns schemas and execution gates.
-- Preserve user work and remote history. Reset, rebase, force-push, live restart
-  and deploy require an explicit current request.
-- For FST.KZ first read `/root/.codex/CODEX_VPN_FST_ACCESS.md`, use
-  `autostop-vpn-fst`, expose no secrets and never route CRM through the VPN.
-- Publish the exact reviewed tree to the tracked Manager branch and verify the
-  remote readback. Use `docs/agent/deployment_runbook.md` for release/rollback
-  and a disposable Manager database for gates.
+Answer concisely in Russian. Load [scope and privacy rules](docs/agent/manager_rules.json);
+[knowledge_map.json](docs/agent/knowledge_map.json) locates task-specific guidance.
+Routes suggest sources, not a mandatory sequence; live tool schemas own arguments.
+Work by default; use learning only in effective `learning` mode or at owner request.
+
+- Telegram: [.agents/skills/manage-owner-telegram/SKILL.md](.agents/skills/manage-owner-telegram/SKILL.md).
+- Client cases, repairs and parts: [.agents/skills/manage-autostop-store/SKILL.md](.agents/skills/manage-autostop-store/SKILL.md).
+- Release, only when requested: [deployment_runbook.md](docs/agent/deployment_runbook.md).
+- FST.KZ: first read `/root/.codex/CODEX_VPN_FST_ACCESS.md`; use `autostop-vpn-fst`,
+  expose no secrets and never route CRM through the VPN.

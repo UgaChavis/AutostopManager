@@ -58,10 +58,7 @@ def test_agent_brief_selects_relevant_sources_for_multi_domain_suggestion(tmp_pa
 
     route = result["route"]
     assert [step["command_id"] for step in route["steps"]] == ["documents_and_mail"]
-    assert {
-        "docs/agent/business_document_quality_playbook.md",
-        "docs/agent/gmail_workflow_playbook.md",
-    } <= set(route["source_of_truth"] + route["reference_files"])
+    assert "docs/agent/operations.md" in route["source_of_truth"] + route["reference_files"]
 
 
 def test_agent_brief_does_not_load_unrelated_sibling_domain(tmp_path):
@@ -84,7 +81,7 @@ def test_agent_brief_preserves_exact_sources_for_legacy_intents(tmp_path):
     assert gmail["route"]["steps"][0]["knowledge_domains"] == ["gmail_operations"]
     assert gmail["route"]["external_connectors"] == ["gmail"]
     assert cleanup["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
-    assert cleanup["route"]["steps"][0]["open_first"] == "docs/agent/board_cleanup_autopilot_playbook.md"
+    assert cleanup["route"]["steps"][0]["open_first"] == "docs/agent/operations.md"
     assert inbox["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
     assert remote["route"]["steps"][0]["knowledge_domains"] == ["remote_codex_access", "deployment"]
 

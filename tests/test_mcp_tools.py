@@ -280,6 +280,15 @@ def test_manager_mcp_catalog_fingerprint_matches_live_input_schemas():
     assert catalog["schema_fingerprint"] == _mcp_schema_fingerprint(schemas)
 
 
+def test_partsapi_description_advertises_only_accepted_operations():
+    from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
+
+    server = build_server()
+    description = server._tool_manager._tools["partsapi_catalog_lookup"].description
+    advertised = description.split("Valid operation values: ", 1)[1].split(".", 1)[0]
+    assert set(advertised.split(", ")) == set(PARTSAPI_OPERATIONS)
+
+
 def test_manager_journal_appends_bounded_generic_event(tmp_path):
     server = _FakeServer()
     store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
