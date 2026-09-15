@@ -13,8 +13,6 @@ from .catalog_clients import (
     exist_price_lookup,
     partsapi_catalog_lookup,
     public_aftermarket_catalog_lookup,
-    vin17_decode_vehicle,
-    vin17_search_part_number_by_vin,
 )
 from .config import (
     get_store_api_url,
@@ -30,7 +28,7 @@ from .partsapi_category_index import (
 )
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .source_catalog import recommend_automotive_sources
-from .storage import ManagerMemoryStore
+from .storage import StoreState
 from .store_api import StoreApiClient
 from .store_analytics import get_store_analytics_report
 from .store_integration import StoreIntegration
@@ -44,9 +42,9 @@ from .work_pricing import estimate_repair_work_cost
 
 
 # Registration is intentionally declarative; each nested tool delegates to tested domain functions or storage methods.
-def register_manager_memory_tools(  # noqa: C901
+def register_manager_tools(  # noqa: C901
     server: Any,
-    store: ManagerMemoryStore | None = None,
+    store: StoreState | None = None,
     store_client: StoreApiClient | None = None,
     include_tools: Collection[str] | None = None,
 ) -> None:
@@ -60,7 +58,7 @@ def register_manager_memory_tools(  # noqa: C901
             return lambda function: function
 
         server.tool = filtered_tool
-    memory = store or ManagerMemoryStore()
+    memory = store or StoreState()
     store_adapter = StoreIntegration(
         client=store_client
         or StoreApiClient(
@@ -675,38 +673,6 @@ def register_manager_memory_tools(  # noqa: C901
     )(build_oem_parts_provider_plan)
 
     @server.tool(
-        name="vin17_decode_vehicle",
-        description=(
-            "Call or dry-run the configured 17VIN API vehicle decoder. Requires VIN17_ACCOUNT/VIN17_SECRET; "
-            "returns redacted request evidence and never exposes the token or secret."
-        ),
-    )
-    def vin17_decode_vehicle_tool(identifier: str, dry_run: bool = False) -> dict[str, Any]:
-        return vin17_decode_vehicle(identifier, dry_run=dry_run)
-
-    @server.tool(
-        name="vin17_search_part_number_by_vin",
-        description=(
-            "Call or dry-run 17VIN search_part_number by VIN after a 17VIN decode returns an EPC code. "
-            "Use only for read-only fitment checks; no supplier order is created."
-        ),
-    )
-    def vin17_search_part_number_by_vin_tool(
-        identifier: str,
-        epc: str,
-        query_part_number: str,
-        query_match_type: str = "exact",
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        return vin17_search_part_number_by_vin(
-            epc=epc,
-            identifier=identifier,
-            query_part_number=query_part_number,
-            query_match_type=query_match_type,
-            dry_run=dry_run,
-        )
-
-    @server.tool(
         name="partsapi_catalog_lookup",
         description=(
             "Read-only PartsAPI lookup; dry_run sends no request. Valid operation values: "
@@ -786,30 +752,26 @@ def register_manager_memory_tools(  # noqa: C901
     @server.tool(
         name="public_aftermarket_catalog_lookup",
         description=(
-            "Call public aftermarket catalogs by part/OE number. Supports MANN-FILTER, DENSO, and FAPI brand/article "
-            "cross lookup; FAPI uses brand and can use explicit demo_access for evaluation. Catalog data enriches a search "
+            "Call public aftermarket catalogs by part/OE number. Supports MANN-FILTER and DENSO. "
+            "Catalog data enriches a search "
             "but is not VIN-specific OEM EPC proof, fitment proof, or procurement pricing."
         ),
     )
     def public_aftermarket_catalog_lookup_tool(
         provider: str,
         part_number: str,
-        brand: str | None = None,
         page_size: int = 5,
         country: str = "europe",
         include_detail: bool = True,
         dry_run: bool = False,
-        demo_access: bool = False,
     ) -> dict[str, Any]:
         return public_aftermarket_catalog_lookup(
             provider=provider,
             part_number=part_number,
-            brand=brand,
             page_size=page_size,
             country=country,
             include_detail=include_detail,
             dry_run=dry_run,
-            demo_access=demo_access,
         )
 
     @server.tool(
@@ -857,7 +819,7 @@ def register_manager_memory_tools(  # noqa: C901
         name="benchmark_vin_parts_lookup",
         description=(
             "Read-only benchmark for a batch of CRM VIN/frame/body-number items: identity confidence, part-intent recognition, "
-            "safe public search templates, provider blockers, and PartsAPI/17VIN dry-run readiness. Raw identifiers are redacted from output."
+            "safe public search templates, provider blockers, and PartsAPI dry-run readiness. Raw identifiers are redacted from output."
         ),
     )(benchmark_vin_parts_lookup)
 

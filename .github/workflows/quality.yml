@@ -29,10 +29,7 @@ jobs:
 
       - name: Audit knowledge and documentation contracts
         run: |
-          python -m autostop_manager.cli knowledge-sync
-          python -m autostop_manager.cli knowledge-audit
-          python -m autostop_manager.cli skills-audit
-          python -m autostop_manager.cli cleanup-audit
+          python -m autostop_manager.cli doctor
 
       - name: Lint, format, and type check
         run: |

@@ -1,102 +1,47 @@
 # Release and rollback
 
-Only for an explicitly requested release. Shared authority/privacy rules:
-[manager_rules.json](manager_rules.json). Preserve runtime data, credentials and
-verified backups; stop on failed preflight, dirty/divergent checkouts or missing
-rollback assets. Record previous Manager/work/runtime targets before activation.
+[Boundaries](../../AGENTS.md). GitHub-only changes use a separate worktree:
+the installed learning hook imports the original checkout. Do not change runtime.
 
 ## Verify and publish
 
-`./scripts/release-gates.sh` owns local audits, tests and disposable databases.
-Run on the final tree, commit that exact tree, then publish without force:
+Run `./scripts/release-gates.sh` with disposable data; coverage stays >=82%.
+Commit the tested tree, fetch `origin/AutostopManager`, integrate concurrent changes
+without force and rerun gates. Push `git push origin HEAD:AutostopManager`;
+compare HEAD with `git ls-remote origin refs/heads/AutostopManager`; require green CI.
 
-```bash
-test -z "$(git status --porcelain=v1 --untracked-files=all)"
-git fetch origin AutostopManager --prune
-git merge-base --is-ancestor origin/AutostopManager HEAD
-git push origin HEAD:AutostopManager
-test "$(git rev-parse HEAD)" = \
-  "$(git ls-remote origin refs/heads/AutostopManager | awk 'NR == 1 { print $1 }')"
-revision="$(git rev-parse HEAD)"
-```
+## Future authorized server migration
 
-Integrate concurrent work intentionally and rerun affected gates.
+Back up runtime targets, configuration and databases. Pause work Telegram and verify
+no active automatic turn. Before activating Manager run
+`scripts/remove-learning-hooks.py --apply` with Python 3.11+: it preserves unrelated
+hooks and prints a backup path. Keep old hook files/database for rollback.
+`--restore BACKUP --apply` requires an unchanged replacement configuration.
 
-## Coupled Manager/CRM release
+`/opt/autostopcrm/deploy.sh` also restarts CRM. First run the CLI
+`store-conductor-release-gate` against persistent Store state; reconcile blocked
+legacy runs. Its `knowledge-sync`/`knowledge-audit` calls now only check documents.
 
-Read-only preflight against the persistent database must return `ok: true`:
+Deploy owns activation/rollback; never manually repoint `current`. Run the active
+snapshot's `scripts/install-manager-mcp.sh --activate`; verify MCP schema parity.
+Explicitly retire the integration-audit timer. `doctor --integrations --full`
+includes CRM/Store/Gmail; local `doctor` has no timer. Old watchdog units must be absent.
 
-```bash
-AUTOSTOP_MANAGER_DB=/opt/AutostopManager/data/autostop_manager.sqlite3 \
-  .venv/bin/python -m autostop_manager.cli store-conductor-release-gate
-```
+## Telegram and rollback
 
-Incompatible legacy conductor state needs exact-run reconciliation before release.
-`/opt/autostopcrm/deploy.sh` owns immutable Manager snapshots and coupled activation:
-it replaces CRM too, including for a Manager-only revision. During failure let its
-armed rollback restore assets; never manually repoint `current`. Preserve uploads
-and database volumes; smoke creates no business records. Watchdog enablement is separate.
+Preserve the work task and root-only wake configuration. With work paused, use
+the published revision with `install-telegram-bridge.sh --account work --revision`,
+`provision-telegram-transcription-model.sh --account work --revision`, then
+`deploy_telegram_bridge.sh --account work --no-start REVISION`. Install wake via
+the active Telegram snapshot's `scripts/install-codex-wake.sh`. These installers
+own paired source/venv/model activation; do not switch links manually.
 
-After snapshot activation:
-```bash
-sudo /opt/autostop-manager-releases/current/scripts/install-manager-mcp.sh --activate
-```
+Run `python -m autostop_manager.telegram_wake probe` with active Telegram PYTHONPATH;
+no client sends. Verify CRM/MCP, voice, systemd and versions. Enable through the
+[Telegram skill](../../.agents/skills/manage-owner-telegram/SKILL.md) only after
+checks pass. Personal Telegram is a separate account release; preserve its session.
 
-The installer validates native transport, tool schemas, synthetic VIN and provider
-failure without customer data. `--replace-unit` requires intentional replacement
-of a divergent unit. Manager MCP stays loopback-only at `http://127.0.0.1:41931/mcp`,
-separate from CRM/nginx; registration must match `docs/agent/manager_mcp_catalog.json`.
-On initial native-endpoint failure disable only `autostop-manager-mcp.service`;
-after restoring a known-good snapshot rerun its installer/probe.
-
-If changed, install integration-audit units from the active snapshot with
-`scripts/install-integration-audit-timer.sh`; verify timer enablement and finite
-next elapse. Use deploy output, `integration-audit --full` and
-`scripts/doctor.sh --full` only for the authorized coupled scope: these include
-Store checks. Verify live Git/schema parity, public/internal smoke, required services
-and readable rollback assets; container health alone is insufficient.
-
-## Telegram-only release
-
-Use the exact published `revision` above. Personal account:
-```bash
-sudo ./scripts/install-telegram-bridge.sh --account personal --revision "$revision"
-sudo ./scripts/deploy_telegram_bridge.sh --account personal "$revision"
-```
-
-Work account must be paused; `--no-start` publishes without starting it:
-```bash
-sudo ./scripts/set-work-telegram-duty.sh --disable
-sudo ./scripts/install-telegram-bridge.sh --account work --revision "$revision"
-sudo ./scripts/provision-telegram-transcription-model.sh --account work --revision "$revision"
-sudo ./scripts/deploy_telegram_bridge.sh --account work --no-start "$revision"
-```
-
-Installer/provisioner prepare revision-named candidates; deploy owns paired
-source/venv/model link activation and rollback. Never switch those links manually.
-Account-only releases must not restart CRM/Store or the other account.
-
-## Work wake service
-
-Behavior, pause and queue-loss handling live only in the
-[Telegram skill](../../.agents/skills/manage-owner-telegram/SKILL.md).
-With work paused and its published source installed, ensure the Manager venv has
-the pinned `websockets` dependency from `pyproject.toml`, then:
-```bash
-sudo bash /opt/autostop-work-telegram-releases/current/scripts/install-codex-wake.sh
-PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-work-telegram-releases/current \
-  /opt/AutostopManager/.venv/bin/python -m autostop_manager.telegram_wake probe
-```
-
-Installation keeps one task/config in root-only
-`/etc/autostop-work-telegram/wake.json` outside Git; probe uses a separate
-read-only synthetic task and never sends Telegram. Boot starter is oneshot and
-must not stop the shared Codex daemon. Check unit validity/boot enablement,
-source and Codex version parity, CRM/MCP health and the local voice route.
-A reboot/customer test is separate. Enable through the skill's duty command only
-after the probe passes; verify wake connected and bridge retention/status.
-
-Wake rollback assets are `/etc/autostop-work-telegram/wake-rollback.*`.
-Pause before restoring exact saved assets; preserve task/config, keep wake disabled
-with old bridge code, then independently verify affected services. Unknown outcome
-is not confirmed pause or restoration.
+On failure keep work paused, roll back the release and reinstall its MCP endpoint.
+Restore learning hooks only with the old Manager available. Preserve volumes/uploads;
+never overwrite new business operations with an old database. Verify restored
+components before enabling work. Reconnect Codex tools; test in a new task.

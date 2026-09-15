@@ -3,13 +3,10 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import json
-from pathlib import Path
 import socket
 
 from autostop_manager import vin_sources
-from autostop_manager.knowledge_base import search_knowledge_base, sync_knowledge_base
 from autostop_manager.mcp_server import build_server
-from autostop_manager.storage import ManagerMemoryStore
 from autostop_manager.vin_lookup import build_lookup_plan
 
 
@@ -85,16 +82,3 @@ def test_registered_mcp_plan_runs_without_network_or_emex(tmp_path, monkeypatch)
     payload = result[1]
     ids = {row["source_id"] for row in payload["manual_public_search_queries"]}
     assert {"partsouq_catalog", "amayama_catalog"} <= ids
-
-
-def test_current_parts_skill_is_loaded_into_disposable_knowledge_index(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "knowledge.sqlite3")
-    result = sync_knowledge_base(store)
-    assert result["ok"] is True
-    items = search_knowledge_base(store, "PartSouq Amayama", limit=50)["items"]
-    skill_path = ".agents/skills/manage-autostop-store/SKILL.md"
-    assert any(item["path"] == skill_path for item in items)
-    root = Path(__file__).resolve().parents[1]
-    skill = root / skill_path
-    text = skill.read_text(encoding="utf-8")
-    assert "docs/agent/vin_oem_sources.json" in text

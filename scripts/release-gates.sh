@@ -76,10 +76,7 @@ if problems:
 PY
 }
 
-json_gate knowledge-sync "$PYTHON" -m autostop_manager.cli knowledge-sync
-json_gate knowledge-audit "$PYTHON" -m autostop_manager.cli knowledge-audit
-json_gate skills-audit "$PYTHON" -m autostop_manager.cli skills-audit
-json_gate cleanup-audit "$PYTHON" -m autostop_manager.cli cleanup-audit
+json_gate local-checks "$PYTHON" -m autostop_manager.cli doctor
 
 "$PYTHON" -m ruff check .
 "$PYTHON" -m ruff format --check autostop_manager tests

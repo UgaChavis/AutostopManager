@@ -327,21 +327,3 @@ def test_gateway_check_retries_once_and_reports_safe_recovery(tmp_path):
     assert gateway["recovered_after_retry"] is True
     assert gateway["warnings"] == ["crm_gateway_check_recovered_after_retry"]
     assert "retry-secret" not in json.dumps(result)
-
-
-def test_systemd_monitor_is_hardened_and_hourly():
-    root = Path(__file__).resolve().parents[1]
-    service = (root / "deploy/systemd/autostop-integration-audit.service").read_text()
-    timer = (root / "deploy/systemd/autostop-integration-audit.timer").read_text()
-    installer = (root / "scripts/install-integration-audit-timer.sh").read_text()
-
-    assert "NoNewPrivileges=true" in service
-    assert "ProtectSystem=strict" in service
-    assert "--output /var/lib/autostop-manager/integration/latest.json" in service
-    assert "Store excluded" not in service
-    assert "OnBootSec=5min" in timer
-    assert "OnCalendar=hourly" in timer
-    assert "Persistent=true" in timer
-    assert "systemctl enable --now autostop-integration-audit.timer" in installer
-    assert "WorkingDirectory=/opt/autostop-manager-releases/current" in service
-    assert "WorkingDirectory=/opt/AutostopManager" not in service

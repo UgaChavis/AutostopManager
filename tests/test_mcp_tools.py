@@ -7,9 +7,9 @@ from pathlib import Path
 from autostop_manager import config as manager_config
 import autostop_manager.mcp_tools as mcp_tools_module
 from autostop_manager.mcp_server import build_server
-from autostop_manager.mcp_tools import register_manager_memory_tools
-from autostop_manager.storage import ManagerMemoryStore
-from autostop_manager.system_audit import _mcp_schema_fingerprint
+from autostop_manager.mcp_tools import register_manager_tools
+from autostop_manager.storage import StoreState
+from autostop_manager.mcp_contract import mcp_schema_fingerprint as _mcp_schema_fingerprint
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,9 +66,9 @@ def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeyp
 
     monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity", fake_decode_vehicle_identity)
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
 
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
     result = server.tools["decode_vehicle_identity"]("WBA00000000000000", live_vpic=False, live_wmi=False)
 
     assert result["ok"] is True
@@ -77,37 +77,9 @@ def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeyp
     assert captured["live_wmi"] is False
 
 
-def test_public_aftermarket_tool_forwards_fapi_brand_and_demo_access(tmp_path, monkeypatch):
-    captured = {}
-
-    def fake_public_aftermarket_catalog_lookup(**kwargs):
-        captured.update(kwargs)
-        return {"ok": True}
-
-    monkeypatch.setattr(mcp_tools_module, "public_aftermarket_catalog_lookup", fake_public_aftermarket_catalog_lookup)
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-    result = server.tools["public_aftermarket_catalog_lookup"](
-        provider="fapi",
-        brand="MANN-FILTER",
-        part_number="W 75/3",
-        page_size=7,
-        demo_access=True,
-    )
-
-    assert result["ok"] is True
-    assert captured["provider"] == "fapi"
-    assert captured["brand"] == "MANN-FILTER"
-    assert captured["part_number"] == "W 75/3"
-    assert captured["page_size"] == 7
-    assert captured["demo_access"] is True
-
-
 def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
     server = _FakeServer()
-    register_manager_memory_tools(server, ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
 
     for name in (
         "decode_vehicle_identity",
@@ -122,33 +94,14 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
         assert annotations.destructiveHint is False
 
 
-def test_control_center_and_review_tools_are_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    expected = {"control_report", "audit_memory", "curate_memory", "audit_knowledge_base", "catalog_provider_status"}
-    assert expected.issubset(server.tools)
-
-    control = server.tools["control_report"]()
-    assert control["schema"] == "ControlReportV1"
-    assert control["privacy"]["secrets_redacted"] is True
-    assert "server_environment" in control
-    assert "codex_readiness" in control
-    assert "runtime_readiness" in control
-    assert "production_ops" in control
-    assert control["provider_readiness"]["safety"]["orders_blocked"] is True
-
-
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
     monkeypatch.delenv("VIN17_SECRET", raising=False)
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
 
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
 
     assert "benchmark_vin_parts_lookup" in server.tools
     result = server.tools["benchmark_vin_parts_lookup"](
@@ -175,9 +128,9 @@ def test_benchmark_vin_parts_lookup_tool_forwards_timeout(tmp_path, monkeypatch)
 
     monkeypatch.setattr(mcp_tools_module, "benchmark_vin_parts_lookup", fake_benchmark_vin_parts_lookup)
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
 
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
     result = server.tools["benchmark_vin_parts_lookup"](
         [{"identifier": "MR41S123456"}],
         requested_part="передние колодки",
@@ -190,14 +143,14 @@ def test_benchmark_vin_parts_lookup_tool_forwards_timeout(tmp_path, monkeypatch)
 
 def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypatch):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     monkeypatch.setattr(
         mcp_tools_module,
         "lookup_public_automotive_evidence",
         lambda **kwargs: {"ok": True, "input_context": kwargs, "evidence": []},
     )
 
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
 
     assert "lookup_public_automotive_evidence" in server.tools
     result = server.tools["lookup_public_automotive_evidence"](
@@ -211,41 +164,13 @@ def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypa
     assert result["input_context"]["topics"] == ["recalls"]
 
 
-def test_knowledge_base_tools_are_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "sync_knowledge_base" in server.tools
-    assert "probe_knowledge_base" in server.tools
-    assert "search_knowledge_base" in server.tools
-    assert "audit_knowledge_base" in server.tools
-
-    sync_result = server.tools["sync_knowledge_base"]()
-    assert sync_result["ok"] is True
-
-    probe_result = server.tools["probe_knowledge_base"]("clutch gearbox", limit=3)
-    assert probe_result["ok"] is True
-    assert probe_result["best_domain"] == "service_case"
-
-    search_result = server.tools["search_knowledge_base"]("BMW F15 N63", domain="service_case", limit=5)
-    assert search_result["ok"] is True
-    assert search_result["items"]
-
-    audit_result = server.tools["audit_knowledge_base"]()
-    assert audit_result["ok"] is True
-    assert not (ROOT / "docs/agent/knowledge_annotations.jsonl").exists()
-
-
 def test_selective_registration_keeps_only_requested_tools(tmp_path):
     server = _FakeServer()
 
-    register_manager_memory_tools(
+    register_manager_tools(
         server,
-        ManagerMemoryStore(tmp_path / "memory.sqlite3"),
+        StoreState(tmp_path / "memory.sqlite3"),
         include_tools={
-            "agent_bootstrap",
             "store_owner_api",
             "store_owner_capabilities",
             "store_runtime_status",
@@ -253,7 +178,6 @@ def test_selective_registration_keeps_only_requested_tools(tmp_path):
     )
 
     assert set(server.tools) == {
-        "agent_bootstrap",
         "store_owner_api",
         "store_owner_capabilities",
         "store_runtime_status",
@@ -262,9 +186,9 @@ def test_selective_registration_keeps_only_requested_tools(tmp_path):
 
 def test_manager_mcp_catalog_matches_registered_tools(tmp_path):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
 
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
 
     catalog = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
     assert catalog["expected_tool_count"] == len(catalog["expected_tool_names"]) == len(server.tools)
@@ -289,66 +213,10 @@ def test_partsapi_description_advertises_only_accepted_operations():
     assert set(advertised.split(", ")) == set(PARTSAPI_OPERATIONS)
 
 
-def test_manager_journal_appends_bounded_generic_event(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    register_manager_memory_tools(server, store)
-
-    appended = server.tools["manager_journal"](
-        event="обнаружен повторяющийся обезличенный операционный сигнал",
-        source="test",
-        tags=["operations"],
-    )
-
-    assert appended["ok"] is True
-    context = store.today_context()
-    assert context["recent_journal"][0]["event"] == "обнаружен повторяющийся обезличенный операционный сигнал"
-
-
-def test_manager_context_skill_and_gateway_tools_are_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    assert "prepare_manager_context" in server.tools
-    context = server.tools["prepare_manager_context"]("Приберись", intent="board_cleanup", limit=5)
-    assert context["ok"] is True
-    assert [route["command_id"] for route in context["command_routes"]] == ["crm_operations"]
-
-    assert "agent_brief" in server.tools
-    brief = server.tools["agent_brief"]("Приберись", intent="board_cleanup", limit=5)
-    assert brief["ok"] is True
-    assert brief["format"] == "agent_brief_v1"
-    assert [step["workflow_id"] for step in brief["route"]["steps"]] == ["crm_operations"]
-    assert brief["route"]["steps"][0]["domain"] == "board_cleanup_autopilot"
-    assert brief["route"]["steps"][0]["effects"] == []
-    assert brief["route"]["steps"][0]["knowledge_domains"] == ["board_cleanup_autopilot"]
-
-    assert "audit_skill_registry" in server.tools
-    skills = server.tools["audit_skill_registry"]()
-    assert skills["ok"] is True
-
-    assert "cleanup_audit" in server.tools
-    assert "system_audit" in server.tools
-    cleanup = server.tools["cleanup_audit"]()
-    assert cleanup["ok"] is True
-    assert cleanup["mode"] == "dry_run"
-    system = server.tools["system_audit"]()
-    assert system["ok"] is True
-    for retired_tool in {
-        "start_manager_run",
-        "record_manager_run_event",
-        "finish_manager_run",
-        "list_manager_runs",
-    }:
-        assert retired_tool not in server.tools
-
-
 def test_internal_store_adapter_tools_are_registered_with_stable_schemas(tmp_path):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    register_manager_memory_tools(server, store)
+    store = StoreState(tmp_path / "memory.sqlite3")
+    register_manager_tools(server, store)
 
     expected_parameters = {
         "store_runtime_status": ["live", "bootstrap_snapshot"],
@@ -400,7 +268,7 @@ def test_store_analytics_tool_is_registered_as_read_only_raw_and_uses_internal_r
     monkeypatch,
 ):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     captured = {}
 
     monkeypatch.setattr(
@@ -415,7 +283,7 @@ def test_store_analytics_tool_is_registered_as_read_only_raw_and_uses_internal_r
         return {"ok": True, "format": "store_analytics_report_v1"}
 
     monkeypatch.setattr(mcp_tools_module, "get_store_analytics_report", fake_report)
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
 
     result = server.tools["get_store_analytics_report"](
         query="сколько посетителей сегодня",
@@ -438,7 +306,7 @@ def test_store_analytics_tool_is_registered_as_read_only_raw_and_uses_internal_r
 
 def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_path, monkeypatch):
     server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     captured = {}
 
     class FakeOwnerClient:
@@ -489,7 +357,7 @@ def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_pat
         lambda: "http://autostop-app:8000/internal/agent/v1",
     )
     monkeypatch.setattr(mcp_tools_module, "get_store_owner_token", lambda: "owner-runtime-secret")
-    register_manager_memory_tools(server, store)
+    register_manager_tools(server, store)
 
     assert "READ_ONLY RAW_CAPABILITY" in server.descriptions["store_owner_capabilities"]
     assert "OWNER_SCOPED RAW_CAPABILITY" in server.descriptions["store_owner_api"]
@@ -624,132 +492,6 @@ def test_store_owner_tools_are_guarded_and_forward_schema_bound_contract(tmp_pat
     assert write["meta"]["request_sha256"] == "c" * 64
     assert write["meta"]["schema_hash"] == "a" * 64
     assert captured["invoke"][-1]["dry_run_proof"] == "b" * 64
-
-
-def test_agent_gateway_v2_tools_are_registered_and_use_compact_envelopes(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    register_manager_memory_tools(server, store)
-
-    expected = {
-        "agent_bootstrap",
-        "list_agent_workflows",
-        "prepare_action_contract",
-        "start_workflow",
-        "workflow_status",
-        "workflow_transition",
-        "workflow_checkpoint",
-        "workflow_wait_for_external",
-        "complete_external_step",
-        "workflow_resume",
-        "workflow_cancel",
-    }
-    assert expected.issubset(server.tools)
-
-    bootstrap = server.tools["agent_bootstrap"](
-        "проведи оплату в CRM",
-        intent="crm_finance_operation",
-    )
-    assert bootstrap["format"] == "agent_envelope_v2"
-    assert bootstrap["summary"]["selected_workflows"][0]["workflow_id"] == "crm_operations"
-
-    started = server.tools["start_workflow"](
-        workflow_id="crm_finance_operation",
-        intent="crm_finance_operation",
-        idempotency_key="mcp-finance-v2",
-        query="проведи оплату в CRM",
-    )
-    assert started["ok"] is True
-    assert started["status"] == "planned"
-    run_id = started["run_id"]
-    status = server.tools["workflow_status"](run_id)
-    assert status["format"] == "agent_envelope_v2"
-    assert status["summary"]["idempotency_key"] == "mcp-finance-v2"
-
-    for tool_name in {
-        "workflow_transition",
-        "workflow_checkpoint",
-        "workflow_wait_for_external",
-        "complete_external_step",
-        "workflow_resume",
-        "workflow_cancel",
-    }:
-        assert "expected_state_version" in inspect.signature(server.tools[tool_name]).parameters
-
-
-def test_memory_curator_tools_are_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-    store.remember("Duplicate operational memory", tags=["ops"])
-    store.remember("Duplicate operational memory", tags=["ops"])
-
-    register_manager_memory_tools(server, store)
-
-    assert "audit_memory" in server.tools
-    audit = server.tools["audit_memory"]()
-    assert audit["ok"] is True
-    assert audit["duplicates"]
-
-    assert "curate_memory" in server.tools
-    curated = server.tools["curate_memory"](apply=True)
-    assert curated["ok"] is True
-    assert curated["archived_duplicates"]
-
-
-def test_memory_tools_support_relevance_filters_and_confidence(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    created = server.tools["remember"](
-        "В карточках писать живым человеческим языком.",
-        kind="fact",
-        category="style",
-        tags=["карточки"],
-        confidence=0.9,
-    )
-    assert created["confidence"] == 0.9
-
-    result = server.tools["recall"]("живым языком", kind="fact", category="style", tags=["карточки"])
-
-    assert result["ok"] is True
-    assert result["total_matches"] == 1
-    assert result["items"][0]["kind"] == "fact"
-    assert result["items"][0]["score"] > 0
-
-
-def test_learning_and_navigation_tools_are_registered(tmp_path):
-    server = _FakeServer()
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
-
-    register_manager_memory_tools(server, store)
-
-    for name in [
-        "learn_from_feedback",
-        "recall_lessons",
-        "memory_map",
-        "memory_topics",
-        "memory_context_for",
-        "memory_gaps",
-    ]:
-        assert name in server.tools
-
-    lesson = server.tools["learn_from_feedback"](
-        "Писать карточки живее",
-        applies_to="crm_cleanup",
-        signal="owner_praise",
-        recommendation="Оставлять короткий человеческий следующий шаг.",
-        avoid="Не писать длинный шаблон.",
-        tags=["карточки"],
-    )
-    assert lesson["kind"] == "lesson"
-
-    assert server.tools["recall_lessons"]("человеческий", applies_to="crm_cleanup")["items"]
-    assert server.tools["memory_map"]()["sections"]["lessons"]["count"] == 1
-    assert server.tools["memory_topics"]()["tags"]["карточки"]["count"] == 1
-    assert server.tools["memory_context_for"]("crm карточки")["lessons"]
-    assert "empty_sections" in server.tools["memory_gaps"]()
 
 
 def test_crm_mcp_catalog_counts_are_current():

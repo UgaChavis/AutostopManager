@@ -1,6 +1,6 @@
 # Operations reference
 
-Use only the relevant section. Shared scope/privacy rules live in [manager_rules.json](manager_rules.json).
+Use only the relevant section. Shared boundaries live in [AGENTS.md](../../AGENTS.md).
 
 ## CRM cleanup
 
@@ -21,23 +21,3 @@ and rendered output before delivery, not just extracted text.
 Use the active Gmail connector for the requested scope; inspect attachment metadata
 before downloading. Confirm the recipient and artifact before sending. For requested
 mail cleanup, archive to retain mail; Trash only when deletion was requested.
-
-## Remote access
-
-Resolve one authorized target; `ssh -G <alias>` shows configuration, not reachability.
-Stop on an unexpected host, user or key; recovery and key changes need separate scope.
-
-- Main VPS: `autostop-vps27560`; no silent fallback alias.
-- Managed PCs/printing: `/opt/autostop-managed-pc/README.md`, then one exact alias.
-- FST.KZ: follow [AGENTS.md](../../AGENTS.md); never reuse home-PC credentials.
-- Legacy `home-pc`: verify hostname `DESKTOP-BUSO4I8`. Bootstrap is a separate
-  recovery action; verify its `ServerHost`, never infer access from old instructions.
-
-## Private home camera
-
-Only an owner-requested photo, short silent clip or bounded PTZ action; no monitoring,
-audio, archive, tracking or identification. Use `scripts/capture_home_camera.py` or
-`scripts/control_home_camera_ptz.py`; they own the temporary `home-pc` SSH forward.
-Inspect only configuration metadata/validation, not its credentials. Use a new private
-output path, inspect and deliver the requested artifact. For PTZ, observe the starting
-position, make small verified moves and restore it; stop on uncertainty. Keep media temporary.
