@@ -1656,6 +1656,22 @@ async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: s
     }
 
 
+async def _handle_monitor_target(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
+    """Resolve an explicit live event for guarded read/send, never infer a recipient."""
+
+    event = monitor.resolve(event_id)
+    await _load_inbound_monitor_context_messages(client, [event])
+    _entity, target = await _resolve_peer(client, str(event.peer_id))
+    if target["kind"] != "private" or target["id"] != event.peer_id:
+        raise BridgeError("inbound_target_mismatch")
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "target": {"id": target["id"], "kind": target["kind"]},
+        "reply_to_message_id": event.message_id,
+    }
+
+
 async def _handle_monitor_context(
     client: Any,
     monitor: InboundMonitor,
@@ -1809,6 +1825,7 @@ async def _handle_monitor_operation(
         "monitor_status",
         "monitor_events",
         "monitor_read",
+        "monitor_target",
         "monitor_context",
         "monitor_mark",
         "monitor_voice_stage",
@@ -1821,6 +1838,8 @@ async def _handle_monitor_operation(
         return {"ok": True, "monitor": inbound_monitor.status()}
     if operation == "monitor_events":
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
+    if operation == "monitor_target":
+        return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""))
     if operation == "monitor_mark":
         if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
             raise BridgeError("inbound_disposition_invalid")
@@ -2206,6 +2225,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("monitor-events")
     monitor_read = subparsers.add_parser("monitor-read")
     monitor_read.add_argument("--event-id", required=True)
+    monitor_target = subparsers.add_parser("monitor-target")
+    monitor_target.add_argument("--event-id", required=True)
     monitor_context = subparsers.add_parser("monitor-context")
     monitor_context.add_argument("--event-id", required=True)
     monitor_context.add_argument("--limit", type=int, default=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
@@ -2264,6 +2285,8 @@ def main(argv: list[str] | None = None) -> int:
                 request["operation"] = "monitor_events"
             elif args.command == "monitor-read":
                 request.update({"operation": "monitor_read", "event_id": args.event_id})
+            elif args.command == "monitor-target":
+                request.update({"operation": "monitor_target", "event_id": args.event_id})
             elif args.command == "monitor-context":
                 request.update({"operation": "monitor_context", "event_id": args.event_id, "limit": args.limit})
             elif args.command == "monitor-mark":
