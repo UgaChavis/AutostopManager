@@ -1,13 +1,13 @@
 # Release and rollback
 
-[Boundaries](../../AGENTS.md). GitHub-only changes use a separate worktree:
-the installed learning hook imports the original checkout. Do not change runtime.
+[Boundaries](../../AGENTS.md). Work in a separate worktree: live hooks import the original.
+CRM keeps its selective Python registrar and guarded ledger; native MCP omits these tools.
 
 ## Verify and publish
 
 Run `./scripts/release-gates.sh` with disposable data; coverage stays >=82%.
-Commit the tested tree, fetch `origin/AutostopManager`, integrate concurrent changes
-without force and rerun gates. Push `git push origin HEAD:AutostopManager`;
+Commit, fetch `origin/AutostopManager`, integrate changes without force and rerun gates.
+Push `git push origin HEAD:AutostopManager`;
 compare HEAD with `git ls-remote origin refs/heads/AutostopManager`; require green CI.
 
 ## Future authorized server migration

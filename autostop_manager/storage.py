@@ -388,7 +388,7 @@ def _verification_failure_paths(value: Any, *, prefix: str = "") -> list[str]:
             if nested is False and (
                 key in _VERIFICATION_FAILURE_BOOL_KEYS
                 or bool(set(key.split("_")) & _VERIFICATION_FAILURE_CONTEXT_TOKENS)
-                or (failure_context and key in {"ok", "passed", "success", "verified"})
+                or ((failure_context or not prefix) and key in {"ok", "passed", "success", "verified"})
             ):
                 failures.append(path)
             elif (

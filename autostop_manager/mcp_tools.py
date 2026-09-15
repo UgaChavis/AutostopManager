@@ -849,3 +849,18 @@ def register_manager_tools(  # noqa: C901
 
     if include_tools is not None:
         server.tool = original_tool
+
+
+def register_manager_memory_tools(
+    server: Any,
+    store: StoreState | None = None,
+    store_client: StoreApiClient | None = None,
+    include_tools: Collection[str] | None = None,
+) -> None:
+    """Keep CRM's Python import contract, not its former Manager MCP surface."""
+    from .crm_compat import register_crm_workflow_tools
+
+    state = store or StoreState()
+    register_manager_tools(server, store=state, store_client=store_client, include_tools=include_tools)
+    if include_tools is not None:
+        register_crm_workflow_tools(server, state, include_tools)
