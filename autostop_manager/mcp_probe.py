@@ -50,10 +50,10 @@ def classify_transport_exception(exc: BaseException) -> str:
     message = str(exc).casefold()
     if any(token in message for token in ("401", "403", "unauthorized", "forbidden")):
         return "transport_auth_failure"
-    if any(token in message for token in ("404", "connection refused", "not found", "no route to host")):
-        return "transport_route_unavailable"
     if "-32601" in message or "unknown tool" in message or "tool not found" in message:
         return "tool_not_registered"
+    if any(token in message for token in ("404", "connection refused", "not found", "no route to host")):
+        return "transport_route_unavailable"
     return "transport_failure"
 
 
@@ -108,6 +108,7 @@ async def async_probe_manager_mcp(
     *,
     timeout: float = 10.0,
     provider_failure_check: bool = False,
+    store_check: bool = False,
 ) -> dict[str, Any]:
     """Probe a native Manager MCP endpoint using only synthetic, read-only data.
 
@@ -285,6 +286,21 @@ async def async_probe_manager_mcp(
                         if not provider_ok or raw_provider_identifier:
                             report["diagnostic"] = "provider_failure" if provider_ok else "tool_invocation_failure"
                             return report
+                    if store_check:
+                        for name, arguments in (
+                            ("store_runtime_status", {"live": True}),
+                            ("store_owner_capabilities", {"limit": 1}),
+                        ):
+                            tool_error, payload = await _call(session, name, arguments, timeout=timeout)
+                            report["checks"][name] = {
+                                "ok": _tool_error_check(tool_error, payload) and (payload or {}).get("ok") is True
+                            }
+                        if not all(
+                            report["checks"][name]["ok"]
+                            for name in ("store_runtime_status", "store_owner_capabilities")
+                        ):
+                            report["diagnostic"] = "store_connection_unavailable"
+                            return report
     except Exception as exc:  # noqa: BLE001 - error text can contain transport details; report only its safe class.
         report["diagnostic"] = classify_transport_exception(exc)
         report["checks"]["transport"] = {"ok": False, "exception_type": type(exc).__name__}
@@ -300,7 +316,12 @@ def probe_manager_mcp(
     *,
     timeout: float = 10.0,
     provider_failure_check: bool = False,
+    store_check: bool = False,
 ) -> dict[str, Any]:
     """Synchronous CLI entry point for the safe native endpoint probe."""
 
-    return asyncio.run(async_probe_manager_mcp(url, timeout=timeout, provider_failure_check=provider_failure_check))
+    return asyncio.run(
+        async_probe_manager_mcp(
+            url, timeout=timeout, provider_failure_check=provider_failure_check, store_check=store_check
+        )
+    )

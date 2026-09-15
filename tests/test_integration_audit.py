@@ -5,6 +5,7 @@ import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import pytest
 
 from autostop_manager.integration_audit import (
     DEFAULT_STORE_ROOT,
@@ -14,6 +15,16 @@ from autostop_manager.integration_audit import (
     audit_gmail_connector,
     build_integration_audit,
 )
+
+
+@pytest.fixture(autouse=True)
+def native_manager_probe(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "autostop_manager.integration_audit.probe_manager_mcp",
+        lambda **kwargs: calls.append(kwargs) or {"ok": True, "diagnostic": "ok"},
+    )
+    return calls
 
 
 def test_default_store_root_uses_current_publisher_checkout() -> None:
@@ -170,7 +181,13 @@ def test_gmail_connector_rejects_incomplete_app_only_plugin_contract(tmp_path):
     assert result["checks"]["gmail_connector_contract_present"] is False
 
 
-def test_full_integration_audit_always_includes_store_and_never_exposes_token(tmp_path):
+@pytest.mark.parametrize("native_ok", [False, True])
+def test_full_integration_audit_always_includes_store_and_never_exposes_token(tmp_path, monkeypatch, native_ok):
+    native_calls = []
+    monkeypatch.setattr(
+        "autostop_manager.integration_audit.probe_manager_mcp",
+        lambda **kwargs: native_calls.append(kwargs) or {"ok": native_ok, "diagnostic": "synthetic"},
+    )
     manager_root = tmp_path / "manager"
     crm_root = tmp_path / "crm"
     store_root = tmp_path / "store"
@@ -215,7 +232,9 @@ def test_full_integration_audit_always_includes_store_and_never_exposes_token(tm
         command_runner=runner,
     )
 
-    assert result["ok"] is True
+    assert result["ok"] is native_ok
+    assert native_calls == [{"store_check": True}]
+    assert result["checks"]["manager_native_mcp"]["ok"] is native_ok
     assert result["scope"]["store"] is True
     assert len(calls) == 4
     gateway_calls = [(command, kwargs) for command, kwargs in calls if "--mcp-url" in command]

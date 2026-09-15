@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--url", default=DEFAULT_MANAGER_MCP_URL)
     probe.add_argument("--timeout", type=float, default=10)
     probe.add_argument("--provider-failure-check", action="store_true")
+    probe.add_argument("--store-check", action="store_true", help="Also verify the direct Manager-to-Store connection")
     return parser
 
 
@@ -49,7 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "doctor":
         result = diagnose(integrations=args.integrations, full=args.full)
     elif args.command == "mcp-probe":
-        result = probe_manager_mcp(args.url, timeout=args.timeout, provider_failure_check=args.provider_failure_check)
+        result = probe_manager_mcp(
+            args.url,
+            timeout=args.timeout,
+            provider_failure_check=args.provider_failure_check,
+            store_check=args.store_check,
+        )
     else:
         store = StoreState()
         if args.command == "store-conductor-release-gate":

@@ -120,6 +120,6 @@ env \
   AUTOSTOP_MANAGER_DB="${RUNTIME_DB}" \
   "${RUNTIME_PYTHON}" -m autostop_manager.cli mcp-probe \
     --url http://127.0.0.1:41931/mcp \
-    --provider-failure-check
+    --provider-failure-check --store-check
 
 echo "manager_mcp_active=true"

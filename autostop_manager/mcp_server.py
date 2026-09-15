@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import get_mcp_host, get_mcp_path, get_mcp_port
+from .config import get_mcp_host, get_mcp_path, get_mcp_port, load_runtime_env
 from .mcp_contract import assert_manager_mcp_surface
 from .mcp_tools import register_manager_tools
 
 
 def build_server() -> FastMCP:
+    load_runtime_env()
     server = FastMCP(
         name="AutostopManager",
         instructions=(

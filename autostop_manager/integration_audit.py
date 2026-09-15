@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .mcp_probe import probe_manager_mcp
 
 
 INTEGRATION_AUDIT_FORMAT = "autostop_integration_audit_v1"
@@ -73,6 +74,7 @@ def build_integration_audit(
     checks: dict[str, dict[str, Any]] = {}
 
     checks["docs_runtime_contract"] = audit_docs_runtime_contract(manager_path)
+    checks["manager_native_mcp"] = probe_manager_mcp(store_check=True)
     checks["gmail_connector"] = audit_gmail_connector(
         plugin_root=Path(gmail_plugin_root),
         proof_path=Path(gmail_proof_path),
