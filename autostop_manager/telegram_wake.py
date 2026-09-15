@@ -39,6 +39,10 @@ class WakeError(RuntimeError):
     """Only fixed technical codes cross the logging boundary."""
 
 
+class RPCRejected(WakeError):
+    """The server explicitly rejected a request; distinct from a lost response."""
+
+
 @dataclass(frozen=True)
 class WakeConfig:
     thread_id: str
@@ -73,6 +77,7 @@ class AppServer:
         self.start_lock = asyncio.Lock()
         self.pausing = False
         self.outcome_unknown = False
+        self.last_rpc_error_code: int | None = None
 
     async def connect(self) -> None:
         from websockets.asyncio.client import unix_connect
@@ -127,7 +132,9 @@ class AppServer:
                     future = self.pending.get(message["id"])
                     if future is not None and not future.done():
                         if "error" in message:
-                            future.set_exception(WakeError("codex_rpc_rejected"))
+                            code = message["error"].get("code")
+                            self.last_rpc_error_code = code if type(code) is int else None
+                            future.set_exception(RPCRejected("codex_rpc_rejected"))
                         else:
                             future.set_result(message.get("result"))
                 elif "id" in message:
@@ -149,7 +156,10 @@ class AppServer:
 
     async def resume(self) -> None:
         params = {"threadId": self.config.thread_id, "cwd": self.config.project_dir}
-        result = await self.request("thread/resume", params)
+        try:
+            result = await self.request("thread/resume", params)
+        except RPCRejected as exc:
+            raise WakeError("codex_thread_resume_rejected") from exc
         thread = result["thread"]
         if thread.get("ephemeral") or thread.get("cwd") != self.config.project_dir:
             raise WakeError("codex_thread_target_invalid")
@@ -161,15 +171,25 @@ class AppServer:
         async with self.start_lock:
             if self.pausing:
                 raise WakeError("codex_paused")
+            # A persisted task can be unloaded between messages. Reopen it for
+            # each event, without retrying any generation or changing its id.
+            self.last_rpc_error_code = None
+            await self.resume()
+            if self.pausing:
+                raise WakeError("codex_paused")
             self.outcome_unknown = True
-            result = await self.request(
-                "turn/start",
-                {
-                    "threadId": self.config.thread_id,
-                    "cwd": self.config.project_dir,
-                    "input": [{"type": "text", "text": text}],
-                },
-            )
+            try:
+                result = await self.request(
+                    "turn/start",
+                    {
+                        "threadId": self.config.thread_id,
+                        "cwd": self.config.project_dir,
+                        "input": [{"type": "text", "text": text}],
+                    },
+                )
+            except RPCRejected as exc:
+                self.outcome_unknown = False
+                raise WakeError("codex_turn_start_rejected") from exc
             self.active_turn = result["turn"]["id"]
         while True:
             message = await self.events.get()
@@ -234,6 +254,7 @@ class WakeDispatcher:
             "completed": self.completed,
             "failed": self.failed,
             "last_error": self.last_error,
+            "rpc_error_code": getattr(self.app, "last_rpc_error_code", None),
             "retention": "memory_only",
             "trigger": "telegram_event",
             "polling": False,
@@ -267,10 +288,10 @@ class WakeDispatcher:
             try:
                 await self.app.run_turn(WAKE_INSTRUCTION.format(event_id=event_id))
                 self.completed += 1
-            except (WakeError, OSError, TimeoutError):
+            except (WakeError, OSError, TimeoutError) as exc:
                 if self.enabled or self.app.outcome_unknown:
                     self.failed += 1
-                    self.last_error = "codex_turn_failed_or_unknown"
+                    self.last_error = str(exc) if isinstance(exc, WakeError) else "codex_transport_failed_or_unknown"
                 # Unknown side effects are not replayed and no new turn overlaps them.
                 self.enabled = False
             finally:

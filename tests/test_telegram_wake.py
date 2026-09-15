@@ -30,6 +30,9 @@ class MockServer:
         self.release_start = asyncio.Event()
         self.release_start.set()
         self.counter = 0
+        self.loaded = False
+        self.unload_after_turn = False
+        self.reject_method = None
 
     async def handle(self, socket):
         async for raw in socket:
@@ -38,7 +41,14 @@ class MockServer:
             method = msg.get("method")
             if "id" not in msg:
                 continue
+            if method == self.reject_method or (method == "turn/start" and not self.loaded):
+                await socket.send(
+                    json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "private error details"}})
+                )
+                continue
             result = {}
+            if method in {"thread/start", "thread/resume"}:
+                self.loaded = True
             if method in {"thread/start", "thread/resume", "thread/read"}:
                 result = {
                     "thread": {
@@ -66,6 +76,8 @@ class MockServer:
             if (method == "turn/start" and self.complete) or method == "turn/interrupt":
                 status = "interrupted" if method == "turn/interrupt" else self.status
                 params = {"threadId": THREAD, "turn": {"id": str(self.counter), "status": status}}
+                if self.unload_after_turn:
+                    self.loaded = False
                 await socket.send(json.dumps({"method": "turn/completed", "params": params}))
 
 
@@ -87,10 +99,61 @@ def test_app_server_lifecycle_and_idle_has_no_model_or_telegram_calls(tmp_path):
                     "initialize",
                     "initialized",
                     "thread/resume",
+                    "thread/resume",
                     "turn/start",
                 ]
                 with pytest.raises(wake.WakeError, match=r"^codex_rpc_rejected$"):
                     await app.request("reject", {})
+            finally:
+                await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_each_event_resumes_task_after_previous_turn_unloaded_it(tmp_path):
+    async def scenario():
+        server = MockServer()
+        server.unload_after_turn = True
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
+            try:
+                await app.connect()
+                for _ in range(2):
+                    await app.run_turn("synthetic event")
+                    assert app.last_turn_started and not server.loaded
+                methods = [c["method"] for c in server.calls][2:]
+                assert methods == ["thread/resume", "turn/start", "thread/resume", "turn/start"]
+                assert server.counter == 2
+                assert all(c["params"]["threadId"] == THREAD for c in server.calls if c["method"] == "turn/start")
+            finally:
+                await app.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("method", ["thread/resume", "turn/start"])
+def test_explicit_rejection_is_visible_and_pauseable_without_retry(tmp_path, method):
+    async def scenario():
+        server = MockServer()
+        server.reject_method = method
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
+            try:
+                await app.connect()
+                dispatcher = wake.WakeDispatcher(app, 123)
+                dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
+                await asyncio.wait_for(dispatcher.work(), 2)
+                assert not dispatcher.enabled and not app.outcome_unknown
+                assert dispatcher.last_error == (
+                    "codex_thread_resume_rejected" if method == "thread/resume" else "codex_turn_start_rejected"
+                )
+                assert dispatcher.status()["rpc_error_code"] == -32600
+                assert "private" not in json.dumps(dispatcher.status())
+                assert server.counter == 0
+                await dispatcher.pause()
+                assert sum(c["method"] == method for c in server.calls) == 1
             finally:
                 await app.close()
 
