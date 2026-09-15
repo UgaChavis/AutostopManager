@@ -500,12 +500,6 @@ def _source_requirements(identifier_kind: str, profile: dict[str, Any]) -> list[
             "reason": "Needed for VINdecodeOE/OE applicability and cross/analog confidence before parts writeback.",
         }
     )
-    requirements.append(
-        {
-            "source_id": "vin17_api",
-            "reason": "Useful second source for all/common parts by VIN and OE search, especially ROW/KDM/JDM coverage.",
-        }
-    )
     if make in {"mercedes-benz", "volkswagen", "skoda", "bmw", "audi"}:
         requirements.append(
             {

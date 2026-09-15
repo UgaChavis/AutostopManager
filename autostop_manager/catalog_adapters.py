@@ -137,31 +137,6 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         docs_url="https://www.denso-am.eu/catalog/vin",
     ),
     CatalogProvider(
-        source_id="fapi_catalog",
-        name="FAPI Catalog",
-        stage="catalog_cross",
-        access_mode="api_key_or_demo",
-        env_names=("FAPI_API_KEY",),
-        capabilities=("brand_article_search", "part_details", "cross_candidates"),
-        priority="medium",
-        role="Additional brand/article source for part facts and cross candidates; demo access is explicit and evaluation-only.",
-        limits="FAPI cross ratings do not prove OEM status or VIN fitment. Its standard analog response may not provide OEM references; verify before order.",
-        docs_url="https://github.com/fapi-dev/catalog-openapi",
-    ),
-    CatalogProvider(
-        source_id="vin17_api",
-        name="17VIN API",
-        stage="oem_catalog",
-        access_mode="account_token",
-        env_names=(),
-        env_any_groups=(("VIN17_ACCOUNT", "VIN17_SECRET"),),
-        capabilities=("vin_decode", "common_parts_by_vin", "part_search_by_vin", "oe_search", "replacement_numbers"),
-        priority="medium",
-        role="Second-source EPC candidate, useful for common-wear parts and replacement chains.",
-        limits="Commercial account; confirm language, latency, market coverage, and legal terms.",
-        docs_url="https://en.17vin.com/doc.html",
-    ),
-    CatalogProvider(
         source_id=PARTSOUQ_SOURCE_ID,
         name="PartSouq public catalog",
         stage="oem_catalog",
@@ -204,70 +179,6 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         aliases=PUBLIC_CATALOG_SOURCE_ALIASES[AMAYAMA_SOURCE_ID],
     ),
     CatalogProvider(
-        source_id="autopoisk",
-        name="AUTOPOISK",
-        stage="catalog_cross",
-        access_mode="subscription_or_manual",
-        env_names=("AUTOPOISK_TOKEN",),
-        capabilities=("vin_frame_identification", "oem_catalog", "cross_tab", "supplier_statistics"),
-        priority="medium",
-        role="Professional manual/semiautomatic EPC and cross verification candidate.",
-        limits="Business subscription/demo required; do not assume API until terms are confirmed.",
-        docs_url="https://autopoisk.su/en",
-        manual_allowed=True,
-    ),
-    CatalogProvider(
-        source_id="partslink24_or_oem_epc",
-        name="partslink24 or brand EPC",
-        stage="oem_catalog",
-        access_mode="manual_subscription",
-        env_names=(),
-        capabilities=("brand_epc_by_vin", "options_pr_codes", "production_date", "genuine_parts"),
-        priority="high",
-        role="Dealer-grade route for VAG, Mercedes, BMW, and other European VINs.",
-        limits="Manual subscription/login outside Git; no password storage; use only authorized access.",
-        docs_url="https://www.partslink24.com/en",
-        manual_allowed=True,
-    ),
-    CatalogProvider(
-        source_id="rossko",
-        name="ROSSKO",
-        stage="procurement_price",
-        access_mode="account_api",
-        env_names=(),
-        env_any_groups=(("ROSSKO_KEY1", "ROSSKO_KEY2"), ("ROSSKO_API_KEY1", "ROSSKO_API_KEY2")),
-        capabilities=("supplier_search", "stock", "procurement_price", "delivery", "order_status"),
-        priority="high",
-        role="Krasnoyarsk-first procurement price/stock source after account keys are available.",
-        limits="Do not order without explicit owner command; analog settings and no-stock behavior need testing.",
-        docs_url="https://api.rossko.ru/",
-    ),
-    CatalogProvider(
-        source_id="autoeuro_api",
-        name="AutoEuro API",
-        stage="procurement_price",
-        access_mode="api_key",
-        env_names=("AUTOEURO_API_KEY",),
-        capabilities=("brand_article_search", "stock", "delivery", "order_status"),
-        priority="high",
-        role="Supplier API for price/stock confirmation after account activation.",
-        limits="Daily limits for new accounts; broad price-list export may be better for bulk проценка.",
-        docs_url="https://api.autoeuro.ru/doc/v2",
-    ),
-    CatalogProvider(
-        source_id="zzap",
-        name="ZZap",
-        stage="market_price",
-        access_mode="partner_or_manual",
-        env_names=("ZZAP_API_KEY",),
-        capabilities=("retail_market_range", "seller_offers", "replacement_visibility"),
-        priority="medium",
-        role="RF market benchmark and replacement visibility.",
-        limits="Benchmark/retail source, not confirmed закупка unless contracted supplier result is visible.",
-        docs_url="https://www.zzap.ru/",
-        manual_allowed=True,
-    ),
-    CatalogProvider(
         source_id="euroauto_catalog",
         name="EuroAuto public catalog",
         stage="market_price",
@@ -286,30 +197,6 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         limits="EuroAuto is distinct from AutoEuro. No buyer API has been approved for AutoStop: use only the public catalog, do not automate login, basket, checkout, messages, private/mobile endpoints, or bypass anti-bot protection. Verify listing, condition, delivery, warranty, and return terms live.",
         docs_url="https://krasnoyarsk.euroauto.ru/",
         manual_allowed=True,
-    ),
-    CatalogProvider(
-        source_id="armtek",
-        name="Armtek",
-        stage="procurement_price",
-        access_mode="account_or_etp",
-        env_names=("ARMTEK_LOGIN", "ARMTEK_PASSWORD"),
-        capabilities=("brand_article_search", "stock", "lead_time", "procurement_price"),
-        priority="high",
-        role="B2B procurement and stock/lead-time benchmark candidate.",
-        limits="Use only approved account/API/export route; do not scrape private cabinet.",
-        docs_url="https://etp.armtek.ru/",
-    ),
-    CatalogProvider(
-        source_id="autopiter",
-        name="Autopiter",
-        stage="procurement_price",
-        access_mode="account_webservice",
-        env_names=("AUTOPITER_USER_ID", "AUTOPITER_PASSWORD"),
-        capabilities=("brand_article_search", "brand_disambiguation", "stock", "delivery"),
-        priority="medium",
-        role="Russia-wide wholesale/order benchmark candidate.",
-        limits="Wholesale terms require account; public website is retail/benchmark only.",
-        docs_url="https://autopiter.ru/opt",
     ),
     CatalogProvider(
         source_id="exist",
@@ -584,12 +471,7 @@ def build_oem_parts_provider_plan(
         if bool((partsapi_operation_statuses.get(operation) or {}).get("live_callable_now"))
     ]
     partsapi_live_oem = bool(partsapi_live_oem_candidate_operations)
-    oem_capable_source_ids = {"vin17_api"}
-    live_oem = [
-        provider
-        for provider in oem_providers + cross_providers
-        if provider["live_callable_now"] and provider["source_id"] in oem_capable_source_ids
-    ]
+    live_oem: list[dict[str, Any]] = []
     if partsapi_provider and partsapi_live_oem:
         live_oem.append(partsapi_provider)
     oem_candidate_providers = list(oem_providers)
@@ -666,10 +548,7 @@ def build_oem_parts_provider_plan(
             "identity_ready_for_oem_candidate_lookup": identity_ready,
             "identity_ready_for_crm_writeback": writeback_ready,
             "live_oem_catalog_available": bool(live_oem),
-            "live_oem_candidate_lookup_available": bool(
-                partsapi_live_oem_candidate_operations
-                or any(provider["source_id"] == "vin17_api" for provider in live_oem)
-            ),
+            "live_oem_candidate_lookup_available": bool(partsapi_live_oem_candidate_operations),
             "live_oem_applicability_available": bool(
                 (partsapi_operation_statuses.get("oe_applicability") or {}).get("live_callable_now")
             ),

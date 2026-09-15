@@ -1,7 +1,7 @@
 [project]
 name = "autostop-manager"
 version = "0.1.0"
-description = "Headless manager memory layer for AutoStop CRM agents"
+description = "AutoStop customer operations and parts research tools"
 requires-python = ">=3.11"
 dependencies = [
     "av>=14,<17",
@@ -15,7 +15,6 @@ dependencies = [
 dev = [
     "coverage[toml]>=7.6",
     "mypy>=1.14",
-    "playwright>=1.60",
     "pre-commit>=4.0",
     "pytest>=8.0",
     "ruff>=0.8",

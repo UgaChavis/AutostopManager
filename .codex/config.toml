@@ -10,12 +10,3 @@ tool_timeout_sec = 90
 url = "http://127.0.0.1:41931/mcp"
 enabled = true
 tool_timeout_sec = 90
-
-[mcp_servers.autostop_remote_diagnostics]
-command = "/usr/local/libexec/autostop-remote-staging-mcp"
-enabled = true
-required = false
-startup_timeout_sec = 10
-tool_timeout_sec = 15
-default_tools_approval_mode = "prompt"
-enabled_tools = ["device_status", "observe", "activate_node", "tap", "swipe", "back", "stop_session"]

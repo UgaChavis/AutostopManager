@@ -126,7 +126,7 @@ def test_bmw_lookup_without_part_name_returns_route_only_dossier(monkeypatch):
 
     assert plan["identifier"]["kind"] == "vin"
     assert plan["catalog_vehicle"]["family"] == "bmw"
-    assert plan["catalog_routes"][0]["source_name"] == "partslink24 Mobile"
+    assert plan["catalog_routes"][0]["source_name"] == "BMW AIR/ETK via AOS"
     assert plan["oem_candidates"] == []
     assert plan["fitment_confidence"]["level"] == "blocked"
     assert "part_name or part_group" in plan["missing_context"]
@@ -147,7 +147,7 @@ def test_vag_dsg_part_requires_epc_capture_and_gearbox_context(monkeypatch):
     plan = build_lookup_plan("WVW00000000000000", part_name="мехатроник DSG")
 
     route_names = [route["source_name"] for route in plan["catalog_routes"]]
-    assert "Volkswagen Group ETKA" in route_names
+    assert "Volkswagen Group ETKA" not in route_names  # Removed unconnected Partslink24 route.
     assert plan["catalog_vehicle"]["family"] == "vag"
     assert plan["oem_candidates"] == []
     assert plan["fitment_confidence"]["level"] == "blocked"
@@ -211,7 +211,7 @@ def test_public_web_catalog_capture_stays_preliminary_and_requests_cross_check()
     assert candidate["source_id"] == "partsouq_catalog"
     assert candidate["source_access_mode"] == "public"
     assert any("preliminary" in action for action in plan["next_actions"])
-    assert any("FAPI cross candidates" in action for action in plan["next_actions"])
+    assert any("available cross references" in action for action in plan["next_actions"])
     assert "NZE141-0000001" not in json.dumps(plan, ensure_ascii=False)
 
 
@@ -219,10 +219,10 @@ def test_bmw_and_vag_source_registry_has_preferred_paid_routes():
     bmw_sources = sources_for_make("BMW")
     audi_sources = sources_for_make("Audi")
 
-    assert bmw_sources[0]["name"] == "partslink24 Mobile"
-    assert audi_sources[0]["name"] == "partslink24 Mobile"
+    assert bmw_sources[0]["name"] == "BMW AIR/ETK via AOS"
+    assert all("partslink24.com" not in source.get("url", "") for source in bmw_sources + audi_sources)
     assert any(source["name"] == "BMW AIR/ETK via AOS" for source in bmw_sources)
-    assert any(source["name"] == "Volkswagen Group ETKA" for source in audi_sources)
+    assert not any(source["name"] == "Volkswagen Group ETKA" for source in audi_sources)
     assert bmw_sources[0]["requires_login"] is True
     assert "oem_part_numbers" in bmw_sources[0]["outputs"]
 

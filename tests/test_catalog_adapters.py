@@ -98,20 +98,6 @@ def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypa
     assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_PARTS_BY_VIN_KEY"]
 
 
-def test_catalog_provider_status_reports_fapi_as_optional_cross_source(monkeypatch):
-    _clear_partsapi_env(monkeypatch)
-    monkeypatch.setenv("FAPI_API_KEY", "fapi-test-secret")
-
-    status = catalog_provider_status(stage="catalog_cross")
-    fapi = next(provider for provider in status["providers"] if provider["source_id"] == "fapi_catalog")
-
-    assert fapi["configured"] is True
-    assert fapi["live_callable_now"] is True
-    assert fapi["present_env_names"] == ["FAPI_API_KEY"]
-    assert "cross_candidates" in fapi["capabilities"]
-    assert "explicit_oe_references" not in fapi["capabilities"]
-
-
 def test_partsapi_identity_key_does_not_claim_oem_candidate_lookup(monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_VINDECODE_OE_KEY", "test-secret")
@@ -168,32 +154,6 @@ def test_applicability_key_alone_does_not_claim_oem_candidate_readiness(monkeypa
     assert capability["live_oem_candidate_lookup_available"] is False
     assert capability["live_oem_catalog_available"] is False
     assert capability["can_complete_full_auto_lookup_now"] is False
-
-
-def test_catalog_provider_status_detects_configured_17vin_account(monkeypatch):
-    monkeypatch.setenv("VIN17_ACCOUNT", "test-user")
-    monkeypatch.setenv("VIN17_SECRET", "test-secret")
-
-    status = catalog_provider_status(stage="oem_catalog")
-    vin17 = next(provider for provider in status["providers"] if provider["source_id"] == "vin17_api")
-
-    assert vin17["configured"] is True
-    assert vin17["live_callable_now"] is True
-    assert vin17["present_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
-
-
-def test_catalog_provider_status_accepts_rossko_app_key_aliases(monkeypatch):
-    monkeypatch.delenv("ROSSKO_KEY1", raising=False)
-    monkeypatch.delenv("ROSSKO_KEY2", raising=False)
-    monkeypatch.setenv("ROSSKO_API_KEY1", "test-key-1")
-    monkeypatch.setenv("ROSSKO_API_KEY2", "test-key-2")
-
-    status = catalog_provider_status(stage="procurement_price")
-    rossko = next(provider for provider in status["providers"] if provider["source_id"] == "rossko")
-
-    assert rossko["configured"] is True
-    assert rossko["live_callable_now"] is True
-    assert rossko["present_env_names"] == ["ROSSKO_API_KEY1", "ROSSKO_API_KEY2"]
 
 
 def test_catalog_provider_status_marks_exist_public_route_live(monkeypatch):

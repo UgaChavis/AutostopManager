@@ -104,7 +104,6 @@ def test_vin_parts_benchmark_reports_coverage_without_raw_identifier(monkeypatch
     assert "PARTSAPI_KEY" in result["summary"]["missing_env_names"]
     assert "PARTSAPI_BASE_URL" in result["summary"]["missing_env_names"]
     assert result["items"][0]["prepared_calls"]["partsapi"][0]["request_param_names"] == ["vin"]
-    assert result["items"][0]["prepared_calls"]["vin17"]["missing_env_names"] == ["VIN17_ACCOUNT", "VIN17_SECRET"]
 
     rendered = json.dumps(result, ensure_ascii=False)
     assert "MR41S123456" not in rendered
@@ -204,7 +203,6 @@ def test_vin_parts_benchmark_allows_read_only_lookup_after_partsapi_oe_agreement
         requested_part="передние колодки",
         live_vpic=False,
         use_vpic_batch=False,
-        include_vin17_dry_run=False,
         live_partsapi_identity=True,
     )
 
@@ -266,7 +264,6 @@ def test_vin_parts_benchmark_blocks_read_only_lookup_after_partsapi_oe_conflict(
         requested_part="передние колодки",
         live_vpic=False,
         use_vpic_batch=False,
-        include_vin17_dry_run=False,
         live_partsapi_identity=True,
     )
 
@@ -302,7 +299,6 @@ def test_vin_parts_benchmark_can_attach_oem_resolution(monkeypatch):
         requested_part="передние колодки",
         live_vpic=False,
         use_vpic_batch=False,
-        include_vin17_dry_run=False,
         resolve_oem=True,
     )
 
@@ -381,7 +377,6 @@ def test_vin_parts_benchmark_counts_raw_identifier_queries_and_canonical_blocker
         live_vpic=False,
         use_vpic_batch=False,
         include_partsapi_dry_run=False,
-        include_vin17_dry_run=False,
     )
 
     assert result["summary"]["manual_public_search_count"] == 2

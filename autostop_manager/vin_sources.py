@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .storage import _string_list
+
 
 REGISTRY_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 
@@ -193,4 +193,24 @@ def sources_for_inputs(*inputs: str) -> list[dict[str, Any]]:
         source_inputs = set(_string_list(source.get("inputs")))
         if wanted & source_inputs:
             result.append(source)
+    return result
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values: list[Any] = [value]
+    elif isinstance(value, dict):
+        return []
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        values = list(value)
+    else:
+        text = str(value).strip()
+        return [text] if text else []
+    result: list[str] = []
+    for item in values:
+        text = str(item).strip()
+        if text:
+            result.append(text)
     return result

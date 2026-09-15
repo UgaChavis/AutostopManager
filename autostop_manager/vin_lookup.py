@@ -935,7 +935,7 @@ def _next_actions(
     if family == "bmw" and not oem_candidates:
         actions.append("For BMW, verify the result in AOS/AIR/ETK with VIN and SA/options before purchase search.")
     if family == "vag" and not oem_candidates:
-        actions.append("For VAG, verify ETKA/partslink24 result with VIN, PR/options, and gearbox/body code.")
+        actions.append("For VAG, verify the OEM catalog result with VIN, PR/options, and gearbox/body code.")
     if oem_candidates:
         if all(candidate.get("confidence") == "high" for candidate in oem_candidates):
             actions.append("Use the verified OEM number as the starting point for market/price search.")
@@ -946,7 +946,7 @@ def _next_actions(
             )
         actions.append(
             "After a brand and article are captured, compare manufacturer, web-search, and clearly labelled forum evidence "
-            "with FAPI cross candidates when available; analogs and forum matches remain unconfirmed until applicability "
+            "with available cross references; analogs and forum matches remain unconfirmed until applicability "
             "is checked."
         )
         actions.append("Keep full EPC evidence outside CRM; write only concise OEM/result/next-action summary.")
