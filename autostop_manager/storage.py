@@ -1340,7 +1340,7 @@ def _sanitize_external_refs(value: dict[str, Any] | None) -> tuple[dict[str, Any
 
 
 @dataclass(frozen=True)
-class ManagerMemoryStore:
+class StoreState:
     db_path: Path | None = None
 
     @property
@@ -1508,10 +1508,6 @@ class ManagerMemoryStore:
             for column, definition in columns.items():
                 if column not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
-    # Agent learning is intentionally a separate technical ledger.  It is not
-    # a second CRM, Store, or Gmail cache: turns use a one-way task hash and
-    # events/reviews accept only allowlisted status metadata.
 
     def get_store_checkpoint(self, stream: str = "store_digest") -> dict[str, Any]:
         self.initialize()

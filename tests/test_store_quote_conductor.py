@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from autostop_manager.storage import ManagerMemoryStore
+from autostop_manager.storage import StoreState
 from autostop_manager.store_quote_conductor import (
     StoreQuoteConductor,
     StoreQuoteOwnerApi,
@@ -144,9 +144,9 @@ class _QuoteGateway:
 def _conductor(
     tmp_path,
     gateway: _QuoteGateway | None = None,
-) -> tuple[StoreQuoteConductor, _QuoteGateway, ManagerMemoryStore]:
+) -> tuple[StoreQuoteConductor, _QuoteGateway, StoreState]:
     fake = gateway or _QuoteGateway()
-    store = ManagerMemoryStore(tmp_path / "manager.sqlite3")
+    store = StoreState(tmp_path / "manager.sqlite3")
     return (
         StoreQuoteConductor(
             store=store,

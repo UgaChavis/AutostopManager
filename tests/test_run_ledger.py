@@ -11,12 +11,12 @@ from autostop_manager.storage import (
     STORE_QUOTE_CONDUCTOR_LEDGER_INTENT,
     STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION,
     STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID,
-    ManagerMemoryStore,
+    StoreState,
 )
 
 
 def test_v2_workflow_is_idempotent_resumable_and_keeps_external_steps_refs_only(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     started = store.start_workflow_run(
         workflow_id="crm_gmail_workflow",
         intent="crm_gmail_workflow",
@@ -94,7 +94,7 @@ def test_v2_workflow_is_idempotent_resumable_and_keeps_external_steps_refs_only(
 
 
 def test_store_quote_conductor_uses_one_active_target_and_guarded_ledger(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     target_hash = "a" * 64
     revision_hash = "b" * 64
     scope = {
@@ -205,7 +205,7 @@ def test_store_quote_conductor_uses_one_active_target_and_guarded_ledger(tmp_pat
 
 def test_store_workflow_ledger_accepts_compact_refs_and_rejects_raw_business_payload(tmp_path):
     db_path = tmp_path / "memory.sqlite3"
-    store = ManagerMemoryStore(db_path)
+    store = StoreState(db_path)
     rejected = store.start_workflow_run(
         workflow_id="store_management_workflow",
         intent="store_management",
@@ -275,7 +275,7 @@ def test_store_workflow_ledger_accepts_compact_refs_and_rejects_raw_business_pay
 
 
 def test_store_workflow_transition_rejects_raw_verification_and_oversized_summary(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     started = store.start_workflow_run(
         workflow_id="store_management_workflow",
         intent="store_management",
@@ -305,7 +305,7 @@ def test_store_workflow_transition_rejects_raw_verification_and_oversized_summar
 
 
 def test_gateway_inventory_workflow_is_detected_as_store_and_rejects_free_text_channels(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     operation = "mark_order_ready"
 
     query_rejected = store.start_workflow_run(
@@ -329,7 +329,7 @@ def test_gateway_inventory_workflow_is_detected_as_store_and_rejects_free_text_c
 
 
 def test_gateway_inventory_workflow_blocks_raw_lifecycle_text(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     operation = "set_quote_request_status"
     started = store.start_workflow_run(
         workflow_id=f"inventory:{operation}",
@@ -375,7 +375,7 @@ def test_gateway_inventory_workflow_blocks_raw_lifecycle_text(tmp_path):
 
 
 def test_crm_store_workflow_envelope_is_accepted_across_verified_and_compensating_paths(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     operation = "mark_order_ready"
     scope = {
         "operation": operation,
@@ -481,7 +481,7 @@ def test_crm_store_workflow_envelope_is_accepted_across_verified_and_compensatin
 def test_raw_store_owner_ledger_accepts_refs_only_dry_run_and_requires_bound_apply_readback(
     tmp_path,
 ):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     operation = "store_owner_api"
     request_fingerprint = "a" * 64
     target_ref_hash = hashlib.sha256(b"target:part-1").hexdigest()
@@ -740,7 +740,7 @@ def test_raw_store_owner_ledger_accepts_refs_only_dry_run_and_requires_bound_app
 
 
 def test_raw_store_owner_ledger_rejects_missing_binding_and_private_payload(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     rejected = store.start_workflow_run(
         workflow_id="raw:store_owner_api",
         intent="raw_store_owner_api",
@@ -777,7 +777,7 @@ def test_raw_store_owner_ledger_rejects_missing_binding_and_private_payload(tmp_
 
 
 def test_raw_store_owner_ledger_requires_state_version_on_every_mutation(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     started = store.start_workflow_run(
         workflow_id="raw:store_owner_api",
         intent="raw_store_owner_api",
@@ -839,7 +839,7 @@ def test_raw_store_owner_ledger_requires_state_version_on_every_mutation(tmp_pat
 
 
 def test_rossko_owner_apply_closes_after_secret_safe_operation_state_readback(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     target_id = "path:/api/v1/warehouse/rossko-settings"
     target_hash = hashlib.sha256(f"target:{target_id}".encode()).hexdigest()
     expected_revision_hash = "b" * 64
@@ -933,7 +933,7 @@ def test_rossko_owner_apply_closes_after_secret_safe_operation_state_readback(tm
 
 
 def test_raw_store_owner_ledger_retention_is_bounded_and_cascades_events(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
 
     def start(key: str, correlation: str):
         return store.start_workflow_run(
@@ -1001,7 +1001,7 @@ def test_raw_store_owner_ledger_retention_is_bounded_and_cascades_events(tmp_pat
 
 
 def test_store_workflow_rejects_pii_or_secret_values_in_structured_refs(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     operation = "assign_quote_request"
 
     private_id = store.start_workflow_run(
@@ -1044,7 +1044,7 @@ def test_store_workflow_rejects_pii_or_secret_values_in_structured_refs(tmp_path
 
 
 def test_v2_idempotency_rejects_changed_scope_selected_ids_or_mode(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     first = store.start_workflow_run(
         workflow_id="finance:create_cash_transaction",
         intent="finance_create_cash_transaction",
@@ -1089,7 +1089,7 @@ def test_v2_idempotency_rejects_changed_scope_selected_ids_or_mode(tmp_path):
 
 
 def test_v2_concurrent_idempotent_starts_deduplicate_without_integrity_errors(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     store.initialize()
     workers = 24
     barrier = Barrier(workers)
@@ -1114,7 +1114,7 @@ def test_v2_concurrent_idempotent_starts_deduplicate_without_integrity_errors(tm
 
 
 def test_v2_rejects_invalid_state_transition(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     started = store.start_workflow_run(
         workflow_id="timer_floor_control",
         intent="timer_floor",
@@ -1130,7 +1130,7 @@ def test_v2_rejects_invalid_state_transition(tmp_path):
 
 
 def test_v2_completed_rejects_explicit_executor_or_verification_failure(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     failure_evidence = [
         ({"executor_ok": False, "passed": True}, ["executor_ok"]),
         ({"executor": False, "passed": True}, ["executor"]),
@@ -1170,7 +1170,7 @@ def test_v2_completed_rejects_explicit_executor_or_verification_failure(tmp_path
 
 
 def test_v2_completed_dedup_still_rejects_new_failed_evidence(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     started = store.start_workflow_run(
         workflow_id="board",
         intent="board_write",
@@ -1200,7 +1200,7 @@ def test_v2_completed_dedup_still_rejects_new_failed_evidence(tmp_path):
 
 
 def test_v2_mutable_lifecycle_calls_enforce_expected_state_version_cas(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     started = store.start_workflow_run(
         workflow_id="crm_gmail_workflow",
         intent="crm_gmail_workflow",
@@ -1312,7 +1312,7 @@ def test_initialize_migrates_current_manager_run_schema_without_losing_legacy_ro
             """
         )
 
-    store = ManagerMemoryStore(db_path)
+    store = StoreState(db_path)
     store.initialize()
 
     with sqlite3.connect(db_path) as conn:

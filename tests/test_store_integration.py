@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 
-from autostop_manager.storage import ManagerMemoryStore
+from autostop_manager.storage import StoreState
 from autostop_manager.store_integration import StoreIntegration, _merge_compact_refs
 
 
@@ -92,7 +92,7 @@ class _ActionClient:
         return deepcopy(self.action_result)
 
 
-def _seed_checkpoint(store: ManagerMemoryStore, *, stream: str = "store_digest", cursor: str = "cursor-0") -> None:
+def _seed_checkpoint(store: StoreState, *, stream: str = "store_digest", cursor: str = "cursor-0") -> None:
     result = store.commit_store_checkpoint(
         stream=stream,
         cursor=cursor,
@@ -104,7 +104,7 @@ def _seed_checkpoint(store: ManagerMemoryStore, *, stream: str = "store_digest",
 
 
 def test_bootstrap_snapshot_is_stateless_and_does_not_touch_digest_checkpoints(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store, stream="store_digest", cursor="owner-digest")
     _seed_checkpoint(store, stream="store_bootstrap", cursor="legacy-bootstrap")
     expected = {
@@ -132,7 +132,7 @@ def test_bootstrap_snapshot_is_stateless_and_does_not_touch_digest_checkpoints(t
 
 
 def test_first_read_creates_baseline_without_returning_historical_items(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     client = _DigestClient(
         [
             _digest_page(
@@ -158,7 +158,7 @@ def test_first_read_creates_baseline_without_returning_historical_items(tmp_path
 
 
 def test_digest_exposes_only_manager_cursor_and_strips_raw_store_cursors(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     page = _digest_page(
         items=[{"entity": "store_order", "id": "order-1", "updated_at": "v1"}],
@@ -186,7 +186,7 @@ def test_digest_exposes_only_manager_cursor_and_strips_raw_store_cursors(tmp_pat
 
 
 def test_incremental_pages_above_limit_are_returned_without_advancing_until_final_page(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     first_items = [
         {"entity": "store_order", "id": "order-1", "updated_at": "v1"},
@@ -241,7 +241,7 @@ def test_incremental_pages_above_limit_are_returned_without_advancing_until_fina
 
 
 def test_unacknowledged_page_is_replayed_from_fixed_window_and_raw_cursor_is_rejected(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     client = _DigestClient(
         [
@@ -279,7 +279,7 @@ def test_unacknowledged_page_is_replayed_from_fixed_window_and_raw_cursor_is_rej
 
 
 def test_intermediate_ack_response_loss_replays_current_unacknowledged_next_page(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     page_one = _digest_page(
         items=[{"entity": "store_order", "id": "order-1", "updated_at": "v1"}],
@@ -315,7 +315,7 @@ def test_intermediate_ack_response_loss_replays_current_unacknowledged_next_page
 
 
 def test_final_ack_is_idempotent_after_commit_response_loss(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     client = _DigestClient(
         [
@@ -354,7 +354,7 @@ def test_final_ack_is_idempotent_after_commit_response_loss(tmp_path):
 
 
 def test_delivery_ack_is_bound_to_stream_but_not_rotated_by_volatile_replay_snapshot(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     first_page = _digest_page(
         items=[{"entity": "store_order", "id": "order-1", "updated_at": "v1"}],
@@ -387,7 +387,7 @@ def test_delivery_ack_is_bound_to_stream_but_not_rotated_by_volatile_replay_snap
 
 
 def test_nonempty_page_without_fixed_replay_cursor_fails_closed(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     page = _digest_page(
         items=[{"entity": "store_order", "id": "order-1"}],
@@ -406,7 +406,7 @@ def test_nonempty_page_without_fixed_replay_cursor_fails_closed(tmp_path):
 
 
 def test_replay_reuses_original_limit_token_and_refs_after_current_entity_version_changes(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     original = _digest_page(
         items=[{"entity": "store_order", "id": "order-1", "updated_at": "v1"}],
@@ -438,7 +438,7 @@ def test_replay_reuses_original_limit_token_and_refs_after_current_entity_versio
 
 
 def test_replay_page_membership_mismatch_fails_without_replacing_pending_delivery(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     original = _digest_page(
         items=[{"entity": "store_order", "id": "order-1"}],
@@ -467,7 +467,7 @@ def test_replay_page_membership_mismatch_fails_without_replacing_pending_deliver
 
 def test_intermediate_ack_compare_and_swap_allows_only_one_traversal_advance(tmp_path):
     db_path = tmp_path / "memory.sqlite3"
-    store = ManagerMemoryStore(db_path)
+    store = StoreState(db_path)
     _seed_checkpoint(store)
     page = StoreIntegration(
         client=_DigestClient(
@@ -483,7 +483,7 @@ def test_intermediate_ack_compare_and_swap_allows_only_one_traversal_advance(tmp
         store=store,
     ).digest(limit=1)
     checkpoint = store.get_store_checkpoint()
-    competing_store = ManagerMemoryStore(db_path)
+    competing_store = StoreState(db_path)
 
     first = store.acknowledge_store_checkpoint_page(
         stream="store_digest",
@@ -518,7 +518,7 @@ def test_compact_refs_replace_older_versions_per_entity_and_keep_latest_bounded(
 
 
 def test_failed_resume_preserves_committed_and_pending_cursors(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store)
     client = _DigestClient(
         [
@@ -553,7 +553,7 @@ def test_failed_resume_preserves_committed_and_pending_cursors(tmp_path):
 
 
 def test_bootstrap_stream_does_not_consume_primary_digest_cursor(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store, stream="store_digest", cursor="primary-cursor")
     client = _DigestClient([_digest_page(next_cursor="bootstrap-cursor", has_more=False)])
 
@@ -565,7 +565,7 @@ def test_bootstrap_stream_does_not_consume_primary_digest_cursor(tmp_path):
 
 
 def test_bootstrap_stream_auto_resumes_pending_page_before_committing_cursor(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     client = _DigestClient(
         [
             _digest_page(
@@ -612,7 +612,7 @@ def test_bootstrap_stream_auto_resumes_pending_page_before_committing_cursor(tmp
 
 
 def test_digest_rejects_arbitrary_checkpoint_stream(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     client = _DigestClient([])
 
     result = StoreIntegration(client=client, store=store).digest(stream="attacker-controlled")
@@ -630,7 +630,7 @@ def test_management_action_runs_contract_pre_read_and_dry_run_with_correlation(t
         "updated_at": "2026-07-16T10:00:00+07:00",
     }
     client = _ActionClient(before=before)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_order",
@@ -663,7 +663,7 @@ def test_management_apply_requires_exact_readback_match(tmp_path):
         before=before,
         after={**before, "status": "WAITING_FOR_APPROVAL", "updated_at": "version-2"},
     )
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -694,7 +694,7 @@ def test_management_sends_and_verifies_the_same_canonical_store_changes(tmp_path
         before=before,
         after={**before, "status": "WAITING_FOR_APPROVAL", "updated_at": "version-2"},
     )
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -725,7 +725,7 @@ def test_management_apply_enters_compensating_when_readback_mismatches(tmp_path)
         "updated_at": "version-1",
     }
     client = _ActionClient(before=before, after={**before, "storage_location": "A-1", "updated_at": "version-2"})
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_batch",
@@ -752,7 +752,7 @@ def test_management_dry_run_blocks_stale_version_before_write(tmp_path):
         "updated_at": "current-version",
     }
     client = _ActionClient(before=before)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -790,7 +790,7 @@ def test_management_apply_replays_original_request_when_preread_revision_is_alre
         "meta": {"idempotency_replay": True},
     }
     client = _ActionClient(before=current, after=current, action_result=replay_result)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -833,7 +833,7 @@ def test_management_apply_with_stale_preread_and_no_receipt_returns_app_conflict
         "meta": {"request_dispatched": True, "outcome_uncertain": False, "http_status": 409},
     }
     client = _ActionClient(before=current, action_result=conflict)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -863,7 +863,7 @@ def test_management_readback_maps_assignment_to_assigned_user_id(tmp_path):
     }
     after = {**before, "assigned_user_id": "employee-7", "updated_at": "version-2"}
     client = _ActionClient(before=before, after=after)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -892,7 +892,7 @@ def test_management_readback_verifies_internal_comment_by_canonical_hash_only(tm
     }
     after = {**before, "internal_comment_sha256": comment_hash, "updated_at": "version-2"}
     client = _ActionClient(before=before, after=after)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -924,7 +924,7 @@ def test_management_readback_verifies_quote_note_by_exact_manager_origin(tmp_pat
         "updated_at": "version-2",
     }
     client = _ActionClient(before=before, after=after)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -966,7 +966,7 @@ def test_management_apply_unknown_outcome_always_rereads_and_enters_compensating
         ("mismatching", {**before, "updated_at": "version-2"}, ["status"]),
     ):
         client = _ActionClient(before=before, after=after, action_result=unknown)
-        integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / suffix))
+        integration = StoreIntegration(client=client, store=StoreState(tmp_path / suffix))
         result = integration.management_action(
             domain="store_quote_request",
             action="set_quote_request_status",
@@ -1005,7 +1005,7 @@ def test_management_blocks_missing_or_mismatched_pre_read_identity_and_version(t
 
     for before, expected_error in cases:
         client = _ActionClient(before=before)
-        integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / expected_error))
+        integration = StoreIntegration(client=client, store=StoreState(tmp_path / expected_error))
 
         result = integration.management_action(
             domain="store_quote_request",
@@ -1049,7 +1049,7 @@ def test_management_apply_requires_matching_target_and_advanced_version(tmp_path
 
     for after, expected_error in cases:
         client = _ActionClient(before=before, after=after)
-        integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / expected_error))
+        integration = StoreIntegration(client=client, store=StoreState(tmp_path / expected_error))
 
         result = integration.management_action(
             domain="store_quote_request",
@@ -1086,7 +1086,7 @@ def test_management_apply_accepts_same_version_only_for_idempotency_replay(tmp_p
         "meta": {"idempotency_replay": True},
     }
     client = _ActionClient(before=state, after=state, action_result=replay_result)
-    integration = StoreIntegration(client=client, store=ManagerMemoryStore(tmp_path / "memory.sqlite3"))
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
 
     result = integration.management_action(
         domain="store_quote_request",
@@ -1107,7 +1107,7 @@ def test_management_apply_accepts_same_version_only_for_idempotency_replay(tmp_p
 
 def test_store_checkpoint_cas_rejects_stale_writer_and_never_persists_raw_payload(tmp_path):
     db_path = tmp_path / "memory.sqlite3"
-    store = ManagerMemoryStore(db_path)
+    store = StoreState(db_path)
     _seed_checkpoint(store)
     pending = store.record_store_checkpoint_pending(
         stream="store_digest",
@@ -1133,7 +1133,7 @@ def test_store_checkpoint_cas_rejects_stale_writer_and_never_persists_raw_payloa
 
 
 def test_scoped_store_checkpoint_reset_requires_cas_and_rebaselines_only_selected_stream(tmp_path):
-    store = ManagerMemoryStore(tmp_path / "memory.sqlite3")
+    store = StoreState(tmp_path / "memory.sqlite3")
     _seed_checkpoint(store, stream="store_digest", cursor="digest-old-epoch")
     _seed_checkpoint(store, stream="store_bootstrap", cursor="bootstrap-stable")
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from .action_contract import prepare_action_contract
-from .storage import ManagerMemoryStore, _now
+from .storage import StoreState, _now
 from .store_api import MAX_STORE_LIMIT, STORE_AGENT_FORMAT, StoreApiClient, clamp_store_limit
 
 
@@ -41,7 +41,7 @@ class _DigestRequest:
 class StoreIntegration:
     """Store API orchestration, compact cursor persistence, and safe writes."""
 
-    def __init__(self, *, client: StoreApiClient, store: ManagerMemoryStore) -> None:
+    def __init__(self, *, client: StoreApiClient, store: StoreState) -> None:
         self.client = client
         self.store = store
 

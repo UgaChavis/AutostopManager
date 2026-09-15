@@ -13,7 +13,7 @@ from .storage import (
     STORE_QUOTE_CONDUCTOR_LEDGER_INTENT,
     STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION,
     STORE_QUOTE_CONDUCTOR_LEDGER_WORKFLOW_ID,
-    ManagerMemoryStore,
+    StoreState,
 )
 from .store_owner_api import StoreOwnerApiClient
 
@@ -341,7 +341,7 @@ class StoreQuoteConductor:
     def __init__(
         self,
         *,
-        store: ManagerMemoryStore,
+        store: StoreState,
         gateway: StoreQuoteGateway,
     ) -> None:
         self.store = store

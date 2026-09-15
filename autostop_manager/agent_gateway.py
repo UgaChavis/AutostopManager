@@ -2,11 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import PROJECT_ROOT
-
-
-COMMAND_ROUTES_PATH = PROJECT_ROOT / "docs" / "agent" / "command_routes.json"
-
 
 def agent_envelope(
     *,
