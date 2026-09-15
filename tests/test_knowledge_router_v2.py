@@ -44,6 +44,18 @@ def test_service_case_uses_one_broad_route():
     assert routes[0]["knowledge_domains"] == ["service_case"]
 
 
+@pytest.mark.parametrize("query", ["Встань на дежурство", "Включи рабочее дежурство", "Останови дежурство"])
+def test_duty_reuses_store_rules_without_new_workflow(query):
+    routes = _routes(query)
+    assert routes[0]["command_id"] == "store_operations"
+    assert routes[0]["knowledge_domains"] == ["store_management"]
+    assert routes[0]["effects"] == []
+
+
+def test_discussing_duty_does_not_select_start_route():
+    assert "store_operations" not in _ids("Давай обсудим рабочее дежурство")
+
+
 def test_store_quote_and_telegram_can_be_combined_without_authorizing_actions():
     routes = _routes("Обработай новую заявку на проценку и ответь клиенту в Telegram")
 

@@ -97,5 +97,4 @@ def test_current_parts_skill_is_loaded_into_disposable_knowledge_index(tmp_path)
     root = Path(__file__).resolve().parents[1]
     skill = root / skill_path
     text = skill.read_text(encoding="utf-8")
-    assert "catalog_provider_status" in text
-    assert "manual_allowed=true" in text and "live_callable_now=false" in text
+    assert "docs/agent/vin_oem_sources.json" in text

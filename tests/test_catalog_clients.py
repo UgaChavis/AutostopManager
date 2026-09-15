@@ -797,6 +797,33 @@ def test_extract_partsapi_vehicle_profiles_handles_vin_decode_oe_payload():
     assert profiles[0]["redacted_identifier"] == "FNN***358"
 
 
+def test_extract_partsapi_vehicle_profiles_handles_top_level_vin_decode_oe_payload():
+    profiles = extract_partsapi_vehicle_profiles(
+        operation="vin_decode_oe",
+        payload={
+            "brand": "HONDA",
+            "name": "ACCORD",
+            "commonAttributes": [
+                {"key": "country", "value": "USA"},
+                {"key": "manufactured", "value": "2003"},
+                {"key": "transmission", "value": "5AT"},
+            ],
+            "modifications": [
+                {"vehicleId": 989},
+                {"vehicleId": 990},
+            ],
+        },
+    )
+
+    assert len(profiles) == 1
+    assert profiles[0]["make"] == "HONDA"
+    assert profiles[0]["model"] == "ACCORD"
+    assert profiles[0]["market"] == "USA"
+    assert profiles[0]["production_date"] == "2003"
+    assert profiles[0]["transmission"] == "5AT"
+    assert "modification" not in profiles[0]
+
+
 def test_extract_partsapi_parts_by_vin_candidates_splits_brand_article_pairs():
     candidates = extract_partsapi_parts_by_vin_candidates(
         payload=[

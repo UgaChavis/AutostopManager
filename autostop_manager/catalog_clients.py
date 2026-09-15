@@ -2276,6 +2276,44 @@ def _partsapi_plate_vin_records(payload: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _partsapi_vin_decode_oe_top_level_record(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize the current top-level VINdecodeOE response without selecting a modification.
+
+    PartsAPI has returned both the legacy ``data.array`` shape and a top-level
+    catalog identity shape.  The latter carries shared attributes plus several
+    possible modifications, so keep only the shared vehicle profile and never
+    infer one of the modifications as the exact fitment.
+    """
+
+    if _first_value(payload, ("brand", "brend")) in (None, ""):
+        return None
+    if not any(payload.get(key) not in (None, "") for key in ("name", "commonAttributes", "modifications")):
+        return None
+
+    record = dict(payload)
+    if record.get("model") in (None, "") and record.get("name") not in (None, ""):
+        record["model"] = record["name"]
+
+    attribute_keys = {
+        "transmission": "kpp",
+        "manufactured": "data_vypuska",
+        "country": "rynok",
+        "countrydecode": "rynok",
+        "region": "rynok",
+    }
+    attributes = payload.get("commonAttributes")
+    if isinstance(attributes, list):
+        for attribute in attributes:
+            if not isinstance(attribute, dict):
+                continue
+            source_key = str(attribute.get("key") or "").strip().casefold()
+            target_key = attribute_keys.get(source_key)
+            value = attribute.get("value")
+            if target_key and value not in (None, ""):
+                record.setdefault(target_key, value)
+    return record
+
+
 def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str | None = None) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -2294,6 +2332,10 @@ def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str
             items.append(array)
         elif isinstance(array, list):
             items.extend(item for item in array if isinstance(item, dict))
+        else:
+            top_level = _partsapi_vin_decode_oe_top_level_record(payload)
+            if top_level is not None:
+                items.append(top_level)
     elif operation == "engine_info":
         for key in ("data", "result", "array"):
             value = payload.get(key)

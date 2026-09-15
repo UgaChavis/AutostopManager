@@ -5,6 +5,9 @@
 - `agent-brief`, `knowledge-probe`, routes and skills are optional starting
   points. Choose, combine, replace or invent steps; explore safely when unsure.
 - Work by default. Learn only in effective `learning` mode or at owner request.
+- «Встать на дежурство» — режим из
+  `.agents/skills/manage-autostop-store/SKILL.md`; CRM-карточка хранит обращение
+  и результаты подбора, Telegram skill отвечает за общение.
 - CRM, AutoStop App, Gmail and Telegram own live data. Read the minimum; keep
   business data, correspondence, identifiers and secrets out of Manager memory,
   Git and docs.
