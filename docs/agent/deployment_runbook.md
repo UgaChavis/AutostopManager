@@ -167,7 +167,7 @@ After gates, publication, Manager/CRM/MCP activation and paused work deployment,
 install the pinned `websockets` dependency in the Manager venv, then:
 
 ```bash
-sudo /opt/autostop-work-telegram-releases/current/scripts/install-codex-wake.sh
+sudo bash /opt/autostop-work-telegram-releases/current/scripts/install-codex-wake.sh
 PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-work-telegram-releases/current \
   /opt/AutostopManager/.venv/bin/python -m autostop_manager.telegram_wake probe
 ```

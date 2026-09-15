@@ -331,6 +331,8 @@ def test_service_and_instructions_are_event_only():
         assert "120" not in text
     skill = (ROOT / ".agents/skills/manage-owner-telegram/SKILL.md").read_text()
     assert "--enable|--disable|--status" in skill
+    runbook = (ROOT / "docs/agent/deployment_runbook.md").read_text()
+    assert "sudo bash /opt/autostop-work-telegram-releases/current/scripts/install-codex-wake.sh" in runbook
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="control script root gate")
