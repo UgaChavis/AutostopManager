@@ -153,24 +153,52 @@ sudo ./scripts/provision-telegram-transcription-model.sh --account work --revisi
 sudo ./scripts/deploy_telegram_bridge.sh --account work --no-start "$revision"
 ```
 
-The duty command is the lifecycle interface: `--disable` stops and disables the
-service and clears monitor intent; `--enable` writes explicit intent, starts the
-bridge and waits for its content-free ready status, disabling duty on failure.
-Do not replace either command
-with a raw restart: authorization clears prior monitor intent before start.
+For the event-triggered work mode, continue with the wake installation below
+before enabling Telegram. The duty command is its lifecycle interface; do not
+replace it with a raw restart.
 
-For an explicitly authorized work-Telegram inbound-monitor release, verify the
-same account after deployment without exposing dialogue content:
+## Event-triggered work Telegram and Codex
+
+The wake service receives opaque refs from the work bridge uid only; root owns
+control/configuration. It uses the existing Codex Unix WebSocket directly, with
+compression disabled for 0.153.4 (the proxy is a byte tunnel, not JSON-lines).
+Behavior and loss limits have one source: the Telegram skill linked below.
+After gates, publication, Manager/CRM/MCP activation and paused work deployment,
+install the pinned `websockets` dependency in the Manager venv, then:
+
+```bash
+sudo /opt/autostop-work-telegram-releases/current/scripts/install-codex-wake.sh
+PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-work-telegram-releases/current \
+  /opt/AutostopManager/.venv/bin/python -m autostop_manager.telegram_wake probe
+```
+
+Setup creates one task with existing model/auth/tools and a root-only 0600
+`/etc/autostop-work-telegram/wake.json`, outside Git. Probe verifies started,
+exact synthetic output and completed, then archives its separate read-only task;
+it never sends Telegram or changes business data.
+`autostop-codex-start.service` is a oneshot boot starter; it never stops the shared
+daemon. It handles the existing unmanaged daemon that rejects `daemon bootstrap`.
+Verify both units with `systemd-analyze verify` and confirm boot enablement.
+A real server reboot is a separate test. Activation and content-free readback:
 
 ```bash
 sudo ./scripts/set-work-telegram-duty.sh --enable
+sudo ./scripts/set-work-telegram-duty.sh --status
 sudo -u autostop-work-telegram env \
   PYTHONPATH=/opt/autostop-work-telegram-releases/current \
   /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge \
     --account work monitor-status
 ```
 
-The result must report `enabled: true` and `retention: memory_only`.
+Wake status must report `enabled: true`, `connected: true`, `polling: false`.
+Bridge status must report `enabled: true` and `retention: memory_only`.
+Repeat `--enable`: the bridge PID, monitor epoch and wake queue must not change.
+`--disable` interrupts the automatic turn before stopping wake/bridge; an unknown
+outcome is an error, never a confirmed pause. Failure/overflow is visible in status.
+Do not manually run overlapping turns in the dedicated automation task.
+Before enabling, verify published/installed source parity, Codex version parity,
+CRM/MCP health, voice tools and the server probe. No customer test is implied.
+
 `open_events` counts unresolved refs; `retained_events` is the bounded buffer,
 not completed work. Check `dropped_open_events` and `started_at` for overflow
 or an epoch change before assessing continuity. Old event refs cannot identify
@@ -180,6 +208,11 @@ intake and reply semantics see the
 [Telegram skill](../../.agents/skills/manage-owner-telegram/SKILL.md).
 
 ## Failure and rollback
+
+Record previous Manager/work/runtime targets and verified database backups.
+Wake unit/config backups are root-only `/etc/autostop-work-telegram/wake-rollback.*`.
+Pause before restoring exact assets; retain the task/config for reuse. Keep wake
+disabled with old bridge code. Business data and unrelated files are not cleanup targets.
 
 Stop on unmatched checkouts, failed backup, schema drift, missing rollback proof
 or unhealthy preflight. Use the deploy script's rollback assets, then reread the

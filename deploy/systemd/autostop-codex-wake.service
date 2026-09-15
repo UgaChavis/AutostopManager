@@ -1,0 +1,33 @@
+[Unit]
+Description=AutoStop work Telegram event wake for Codex
+After=network-online.target autostop-codex-start.service
+Requires=autostop-codex-start.service
+
+[Service]
+Type=notify
+User=root
+Group=autostop-work-telegram
+WorkingDirectory=/opt/AutostopManager
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONSAFEPATH=1
+Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
+RuntimeDirectory=autostop-codex-wake
+RuntimeDirectoryMode=0750
+UMask=0077
+ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.telegram_wake daemon
+TimeoutStopSec=60
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/autostop-codex-wake
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

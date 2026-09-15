@@ -318,6 +318,7 @@ def test_work_telegram_duty_disable_clears_intent_and_stops_inflight_media(tmp_p
     script_text = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
     for old, new in (
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
+        ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
     ):
         script_text = script_text.replace(old, new, 1)
@@ -364,6 +365,7 @@ def test_work_telegram_duty_disable_allows_a_missing_unit_before_first_release(t
     script_text = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
     for old, new in (
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
+        ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
     ):
         script_text = script_text.replace(old, new, 1)
@@ -434,6 +436,7 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
         ('release_link="/opt/autostop-work-telegram-releases/current"', f'release_link="{current_link}"'),
         ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
+        ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
         ("/opt/autostop-work-telegram-releases/*", f"{release_root}/*"),
     ):

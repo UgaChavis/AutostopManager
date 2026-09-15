@@ -53,6 +53,7 @@ MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS = 15
 DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
+WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
 INBOUND_EVENT_OPEN = "open"
 INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
 INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
@@ -263,18 +264,18 @@ class InboundMonitor:
         self._voice_stage_by_event.pop(removed.sequence, None)
         self._dropped_events += 1
 
-    def record(self, event: Any) -> None:
+    def record(self, event: Any) -> str | None:
         """Remember only an incoming private message locator; never its body or media."""
 
         if not bool(getattr(event, "is_private", False)) or bool(getattr(event, "out", False)):
-            return
+            return None
         try:
             peer_id = int(getattr(event, "chat_id", 0) or 0)
             message_id = int(getattr(event, "id", 0) or 0)
         except (TypeError, ValueError):
-            return
+            return None
         if peer_id <= 0 or message_id <= 0 or (peer_id, message_id) in self._seen:
-            return
+            return None
         if len(self._events) == self._max_events:
             self._evict_for_new_event()
         event_ref = InboundMonitorEvent(
@@ -287,6 +288,7 @@ class InboundMonitor:
         self._seen.add((peer_id, message_id))
         self._states[event_ref.sequence] = INBOUND_EVENT_OPEN
         self._next_sequence += 1
+        return self._event_id(event_ref)
 
     def status(self) -> dict[str, Any]:
         state_counts = {
@@ -2018,9 +2020,21 @@ async def _serve_client(
 
 async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
     try:
-        monitor.record(event)
+        event_id = monitor.record(event)
     except Exception:  # noqa: BLE001 - one malformed provider update must not stop the bridge.
         return
+    wake_socket = os.environ.get(WORK_WAKE_ENVIRONMENT)
+    if event_id is not None and wake_socket:
+        try:
+            from autostop_manager.telegram_wake import local_request
+
+            result = await asyncio.wait_for(
+                local_request({"operation": "event", "event_id": event_id}, Path(wake_socket)), 3
+            )
+            if not result.get("ok"):
+                print("work_telegram_wake_delivery_failed=true", file=sys.stderr, flush=True)
+        except (OSError, ValueError, TimeoutError):
+            print("work_telegram_wake_delivery_failed=true", file=sys.stderr, flush=True)
 
 
 async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) -> None:

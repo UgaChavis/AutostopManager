@@ -8,8 +8,12 @@ venv_python="/opt/autostop-work-telegram-venv/bin/python"
 monitor_env="/etc/autostop-work-telegram/monitor.env"
 control_lock="/run/autostop-work-telegram-control.lock"
 pending_monitor_env=""
+wake_unit="autostop-codex-wake.service"
+wake_config="/etc/autostop-work-telegram/wake.json"
+wake_python="/opt/AutostopManager/.venv/bin/python"
+export PYTHONSAFEPATH=1
 
-usage() { echo "usage: $0 --enable|--disable" >&2; }
+usage() { echo "usage: $0 --enable|--disable|--status" >&2; }
 if [[ "${EUID}" -ne 0 ]]; then echo "run_as_root_required=true" >&2; exit 1; fi
 if [[ $# -ne 1 ]]; then usage; exit 2; fi
 exec 9>"${control_lock}"
@@ -31,6 +35,12 @@ stop_active_media_workers() {
 
 disable_duty() {
   local workers load_state
+  if [[ -f "${wake_config}" ]]; then
+    if systemctl is-active --quiet "${wake_unit}"; then
+      PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake pause || return 1
+    fi
+    systemctl disable --now "${wake_unit}" || return 1
+  fi
   [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || unlink -- "${monitor_env}" || return 1
   load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${load_state}" == "loaded" ]]; then
@@ -47,20 +57,39 @@ disable_duty() {
 }
 
 enable_duty() {
-  local monitor_env_dir monitor_status release_dir attempt
+  local monitor_env_dir monitor_status release_dir attempt intent_changed=0 wake_ready=0
   release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
   [[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/* && -d "${release_dir}" && ! -L "${release_dir}" && -x "${venv_python}" ]] || return 1
   monitor_env_dir="$(dirname -- "${monitor_env}")"
   [[ -d "${monitor_env_dir}" && ! -L "${monitor_env_dir}" ]] || return 1
   pending_monitor_env="$(mktemp "${monitor_env_dir}/.monitor.env.XXXXXX")" || return 1
   printf '%s\n' 'AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1' > "${pending_monitor_env}" || return 1
+  if [[ -f "${wake_config}" ]]; then
+    printf '%s\n' 'AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET=/run/autostop-codex-wake/wake.sock' >> "${pending_monitor_env}" || return 1
+    systemctl start autostop-codex-start.service || return 1
+    systemctl enable --now "${wake_unit}" || return 1
+    for attempt in {1..15}; do
+      if PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status \
+        | "${venv_python}" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(not(s.get("enabled") and s.get("connected")))'; then
+        wake_ready=1
+        break
+      fi
+      sleep 1
+    done
+    [[ "${wake_ready}" -eq 1 ]] || return 1
+  fi
   chown root:root "${pending_monitor_env}" || return 1
   chmod 0644 "${pending_monitor_env}" || return 1
+  if [[ ! -f "${monitor_env}" ]] || ! cmp -s "${pending_monitor_env}" "${monitor_env}"; then
+    intent_changed=1
+  fi
   mv -T -- "${pending_monitor_env}" "${monitor_env}" || return 1
   pending_monitor_env=""
   if systemctl is-active --quiet "${service_unit}"; then
     systemctl enable "${service_unit}" || return 1
-    systemctl restart "${service_unit}" || return 1
+    if [[ "${intent_changed}" -eq 1 ]]; then
+      systemctl restart "${service_unit}" || return 1
+    fi
   else
     systemctl enable --now "${service_unit}" || return 1
   fi
@@ -85,6 +114,17 @@ cleanup_incomplete_duty() {
 }
 
 case "$1" in
+  --status)
+    if [[ -f "${wake_config}" ]] && systemctl is-active --quiet "${wake_unit}"; then
+      PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status
+    elif [[ -f "${wake_config}" ]]; then
+      printf '%s\n' '{"ok":false,"enabled":false,"error":"wake_service_not_running","polling":false}'
+      exit 1
+    else
+      printf '%s\n' '{"ok":false,"error":"wake_not_installed"}'
+      exit 1
+    fi
+    ;;
   --disable)
     trap cleanup_incomplete_duty EXIT
     disable_duty || { echo "work_telegram_duty_disable_failed=true" >&2; exit 1; }

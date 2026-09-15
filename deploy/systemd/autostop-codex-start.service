@@ -1,0 +1,17 @@
+[Unit]
+Description=Start the existing Codex daemon at server boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/AutostopManager
+ExecStart=/usr/local/bin/codex app-server daemon start
+RemainAfterExit=yes
+# Codex also serves interactive tasks; stopping this bootstrap unit must not kill it.
+KillMode=process
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target
