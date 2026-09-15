@@ -16,6 +16,18 @@ usage() {
   echo "usage: $0 [--activate] [--replace-unit]" >&2
 }
 
+wait_for_mcp_socket() {
+  local attempt
+  for attempt in {1..50}; do
+    systemctl is-active --quiet "${UNIT_NAME}" || return 1
+    if (exec 3<>/dev/tcp/127.0.0.1/41931) 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --activate)
@@ -95,6 +107,10 @@ else
   systemctl enable --now "${UNIT_NAME}"
 fi
 systemctl is-active --quiet "${UNIT_NAME}"
+if ! wait_for_mcp_socket; then
+  echo "manager_mcp_listener_not_ready=true" >&2
+  exit 1
+fi
 
 env \
   PYTHONPATH="${RELEASE_ROOT}" \

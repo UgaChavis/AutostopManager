@@ -113,10 +113,25 @@ cleanup_incomplete_duty() {
   return "${exit_code}"
 }
 
+duty_is_paused() {
+  local unit value
+  [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || return 1
+  for unit in "${wake_unit}" "${service_unit}"; do
+    value="$(systemctl show --property=LoadState --value "${unit}")" || return 1
+    [[ "${value}" == "loaded" ]] || return 1
+    value="$(systemctl show --property=ActiveState --value "${unit}")" || return 1
+    [[ "${value}" == "inactive" ]] || return 1
+    value="$(systemctl show --property=UnitFileState --value "${unit}")" || return 1
+    [[ "${value}" == "disabled" ]] || return 1
+  done
+}
+
 case "$1" in
   --status)
     if [[ -f "${wake_config}" ]] && systemctl is-active --quiet "${wake_unit}"; then
       PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status
+    elif [[ -f "${wake_config}" ]] && duty_is_paused; then
+      printf '%s\n' '{"ok":true,"enabled":false,"connected":false,"state":"paused","polling":false}'
     elif [[ -f "${wake_config}" ]]; then
       printf '%s\n' '{"ok":false,"enabled":false,"error":"wake_service_not_running","polling":false}'
       exit 1

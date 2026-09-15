@@ -446,3 +446,75 @@ def test_repeated_enable_with_wake_preserves_bridge_and_queue(tmp_path):
     assert "restart" not in calls and "stop " not in calls
     assert calls.count("enable --now autostop-codex-wake.service") == 2
     assert calls.count("enable autostop-work-telegram.service") == 2
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="control script root gate")
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "paused",
+        "enabled",
+        "failed",
+        "bridge_active",
+        "missing_unit",
+        "show_error",
+        "monitor",
+        "monitor_link",
+        "no_config",
+    ],
+)
+def test_duty_status_distinguishes_pause_from_failure(tmp_path, scenario):
+    config = tmp_path / "wake.json"
+    if scenario != "no_config":
+        config.write_text("{}")
+    monitor = tmp_path / "monitor.env"
+    if scenario == "monitor":
+        monitor.write_text("AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n")
+    elif scenario == "monitor_link":
+        monitor.symlink_to(tmp_path / "missing-monitor")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    systemctl = fake_bin / "systemctl"
+    systemctl.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$FAKE_LOG"\n'
+        '[ "$1" != is-active ] || exit 3\n'
+        '[ "$1" = show ] || exit 90\n'
+        '[ "$FAKE_SCENARIO" != show_error ] || exit 1\n'
+        'case "$2" in\n'
+        '  --property=LoadState) value=loaded; [ "$FAKE_SCENARIO" != missing_unit ] || value=not-found ;;\n'
+        '  --property=UnitFileState) value=disabled; [ "$FAKE_SCENARIO" != enabled ] || value=enabled ;;\n'
+        "  --property=ActiveState) value=inactive\n"
+        '    [ "$FAKE_SCENARIO" != failed ] || value=failed\n'
+        '    if [ "$FAKE_SCENARIO" = bridge_active ] && [ "$4" = autostop-work-telegram.service ]; then value=active; fi ;;\n'
+        "  *) exit 91 ;;\n"
+        "esac\nprintf '%s\\n' \"$value\"\n"
+    )
+    systemctl.chmod(0o755)
+    source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
+    for old, new in (
+        ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
+        ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
+        ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
+    ):
+        assert old in source
+        source = source.replace(old, new, 1)
+    script = tmp_path / "control.sh"
+    script.write_text(source)
+    log = tmp_path / "calls"
+    result = subprocess.run(
+        ["bash", str(script), "--status"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "FAKE_LOG": str(log), "FAKE_SCENARIO": scenario},
+        timeout=10,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is (scenario == "paused")
+    assert result.returncode == (0 if scenario == "paused" else 1)
+    if scenario == "paused":
+        assert payload == {"ok": True, "enabled": False, "connected": False, "state": "paused", "polling": False}
+    else:
+        assert payload["error"] == ("wake_not_installed" if scenario == "no_config" else "wake_service_not_running")
+    if log.exists():
+        assert all(line.startswith(("is-active ", "show ")) for line in log.read_text().splitlines())
