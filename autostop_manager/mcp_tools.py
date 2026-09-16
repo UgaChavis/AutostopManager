@@ -27,6 +27,7 @@ from .partsapi_category_index import (
     validate_partsapi_category_index,
 )
 from .oem_candidate_web_evidence import verify_oem_candidates_web
+from .part_market_assessment import assess_part_market
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .source_catalog import recommend_automotive_sources
 from .storage import StoreState
@@ -837,6 +838,24 @@ def register_manager_tools(  # noqa: C901
             openWorldHint=True,
         ),
     )(verify_oem_candidates_web)
+
+    server.tool(
+        name="assess_part_market",
+        description=(
+            "Assess supplied public part offers without fetching or writing. Each observation must include article, brand, "
+            "price, source excerpt, HTTPS URL, observation date, condition, offer kind and region. It verifies the "
+            "article, brand, price and condition against the excerpt; separates original/analog, new/used/unknown and "
+            "Krasnoyarsk/RF, deduplicates domains, excludes stale pages from the current median, and returns a median "
+            "only after three independent offers in one segment."
+        ),
+        annotations=ToolAnnotations(
+            title="Part Market Assessment",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )(assess_part_market)
 
     server.tool(
         name="benchmark_vin_parts_lookup",
