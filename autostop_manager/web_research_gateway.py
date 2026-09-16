@@ -29,6 +29,8 @@ _MAX_PART_EVIDENCE_LIMIT = 5
 _MAX_PART_EVIDENCE_PAGES = 2
 _MAX_TIMEOUT_SECONDS = 60
 _VIN_LIKE_TOKEN = re.compile(r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){17}(?![A-HJ-NPR-Z0-9])", re.I)
+_PRIVATE_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w.-])", re.I)
+_PRIVATE_PHONE = re.compile(r"(?<!\w)(?:\+7|8|7(?=9\d{2}))[\s().-]*\d{3}(?:[\s().-]*\d){7}(?!\d)")
 _SOURCE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 _SOURCE_TYPES = frozenset({"oem_catalog", "price_catalog"})
 
@@ -87,9 +89,14 @@ def _compact(value: Any, *, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _contains_private_contact(value: Any) -> bool:
+    decoded = unquote(unquote(str(value or "")))
+    return bool(_PRIVATE_EMAIL.search(decoded) or _PRIVATE_PHONE.search(decoded))
+
+
 def _public_page_url(value: Any) -> str:
     url = str(value or "").strip()
-    if not url or len(url) > 2048 or _VIN_LIKE_TOKEN.search(unquote(unquote(url))):
+    if not url or len(url) > 2048 or _VIN_LIKE_TOKEN.search(unquote(unquote(url))) or _contains_private_contact(url):
         return ""
     try:
         parsed = urlparse(url)
@@ -288,6 +295,22 @@ def _invalid_query_response(
     )
 
 
+def _contact_query_failure(*, capability: str, adapter: str) -> dict[str, Any]:
+    return _gateway_response(
+        ok=False,
+        query="",
+        results=[],
+        allowed_domains=[],
+        provider_order=[],
+        providers=[],
+        fallback_used=False,
+        adapter=adapter,
+        capability=capability,
+        vin_redacted=False,
+        error={"code": "web_research_personal_contact_rejected", "retryable": False},
+    )
+
+
 def normalize_web_research_response(
     payload: Any,
     *,
@@ -457,6 +480,8 @@ class CapabilityWebResearchGatewayAdapter:
         timeout_seconds: float,
         max_pages: int | None = None,
     ) -> dict[str, Any]:
+        if _contains_private_contact(query):
+            return _contact_query_failure(capability=capability, adapter="capability_adapter")
         safe_query, removed = _sanitize_query(query)
         normalized_domains = _normalize_domains(allowed_domains)
         normalized_providers = _normalize_providers(providers)
@@ -583,6 +608,8 @@ class DuckDuckGoWebResearchGateway:
         providers: Sequence[str] | None,
         timeout_seconds: float,
     ) -> dict[str, Any]:
+        if _contains_private_contact(query):
+            return _contact_query_failure(capability=capability, adapter="local_duckduckgo_fallback")
         safe_query, removed = _sanitize_query(query)
         normalized_domains = _normalize_domains(allowed_domains)
         if not safe_query:
@@ -748,6 +775,8 @@ def search_web_multi(
 ) -> dict[str, Any]:
     """Call generic E8 search through the installed read-only adapter."""
 
+    if _contains_private_contact(query):
+        return _contact_query_failure(capability=SEARCH_WEB_MULTI_CAPABILITY, adapter="gateway_boundary")
     safe_query, removed = _sanitize_query(query)
     domains = _normalize_domains(allowed_domains)
     provider_order = _normalize_providers(providers)
@@ -839,6 +868,8 @@ def research_part_public_evidence(
 ) -> dict[str, Any]:
     """Prefer E8 part evidence; use generic search only for a legacy adapter."""
 
+    if _contains_private_contact(query):
+        return _contact_query_failure(capability=RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY, adapter="gateway_boundary")
     safe_query, removed = _sanitize_query(query)
     domains = _normalize_domains(allowed_domains)
     provider_order = _normalize_providers(providers)

@@ -290,6 +290,32 @@ def test_page_adapter_rejects_vin_url_and_unconfigured_page_fails_closed():
     assert result["error"]["code"] == "web_page_gateway_unavailable"
 
 
+def test_generic_web_research_rejects_contact_data_before_any_external_call():
+    calls = []
+
+    def invoke(name, arguments):
+        calls.append((name, arguments))
+        return {"ok": True, "data": {"results": []}}
+
+    install_web_research_gateway(CapabilityWebResearchGatewayAdapter(invoke))
+    try:
+        for query in ("pads owner@example.com", "pads +7 (999) 123-45-67"):
+            result = search_web_multi(query=query)
+            assert result["ok"] is False
+            assert result["error"]["code"] == "web_research_personal_contact_rejected"
+            assert query not in str(result)
+        page = fetch_page_excerpt(url="https://example.com/part?email=owner%40example.com")
+        phone_page = fetch_page_browser(url="https://example.com/part?phone=%2B79991234567")
+        valid_part = search_web_multi(query="7700100008")
+    finally:
+        install_web_research_gateway(None)
+
+    assert page["error"]["code"] == "web_page_url_invalid"
+    assert phone_page["error"]["code"] == "web_page_url_invalid"
+    assert valid_part["ok"] is True
+    assert calls == [("search_web_multi", {"query": "7700100008", "limit": 5})]
+
+
 def test_installed_page_gateway_returns_excerpt_and_browser_without_private_errors():
     calls = []
 
