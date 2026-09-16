@@ -225,8 +225,11 @@ def _validated_observation(
         return None, _reject(index, "article_not_in_source_excerpt")
     if not _contains_brand(excerpt, row.get("brand")):
         return None, _reject(index, "brand_not_in_source_excerpt")
-    if price_rub not in _prices_in_excerpt(excerpt):
+    excerpt_prices = _prices_in_excerpt(excerpt)
+    if price_rub not in excerpt_prices:
         return None, _reject(index, "price_not_in_source_excerpt")
+    if len(excerpt_prices) != 1:
+        return None, _reject(index, "price_ambiguous_in_source_excerpt")
     if not _condition_supported(excerpt, condition):
         return None, _reject(index, "condition_not_in_source_excerpt")
     if kind == "original" and (article != target_article or (target_brand and brand != target_brand)):
@@ -331,7 +334,7 @@ def assess_part_market(
     safe_target_region = _compact(target_region, limit=100)
     if (
         not target_article
-        or not safe_target_region
+        or safe_target_region.casefold() != "красноярск"
         or (brand is not None and _compact(brand, limit=80) and not target_brand)
     ):
         return {"ok": False, "schema": "PartMarketAssessmentV1", "error_code": "market_target_invalid"}

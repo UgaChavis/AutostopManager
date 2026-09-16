@@ -303,6 +303,35 @@ def test_assessment_rejects_unverified_article_brand_price_and_condition_claims(
     }
 
 
+def test_assessment_rejects_price_from_another_product_on_the_same_page():
+    observations = [
+        _observation(source=f"Catalog {index}", host=f"catalog-{index}.example", price_rub=1_000) for index in range(3)
+    ]
+    for observation in observations:
+        observation["source_excerpt"] = "Ford 1712024 новый 7 000 ₽; Ford 1712025 новый 1 000 ₽"
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    assert result["ok"] is False
+    assert result["status"] == "no_valid_public_evidence"
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [
+        {"observation_index": index, "code": "price_ambiguous_in_source_excerpt"} for index in range(3)
+    ]
+    assert all(segment["median_price_rub"] is None for segment in result["segments"])
+
+
+def test_assessment_cannot_label_another_target_city_as_krasnoyarsk():
+    result = assess_part_market(
+        article="1712024",
+        brand="Ford",
+        target_region="Москва",
+        observations=[_observation(source="Moscow", host="moscow.example", price_rub=1_000, region="Москва")],
+    )
+
+    assert result == {"ok": False, "schema": "PartMarketAssessmentV1", "error_code": "market_target_invalid"}
+
+
 def test_assessment_rejects_original_brand_or_article_mismatch_and_unsafe_url():
     wrong_original = _observation(source="A", host="a.example", price_rub=5_000, article="1712025")
     unsafe_url = _observation(source="B", host="b.example", price_rub=5_000)
