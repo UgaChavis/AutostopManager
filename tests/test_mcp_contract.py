@@ -36,8 +36,8 @@ def test_native_manager_contract_matches_the_real_registered_source_surface():
 
     assert report["ok"] is True
     assert report["diagnostic"] == "ok"
-    assert report["expected_tool_count"] == 28
-    assert report["registered_tool_count"] == 28
+    assert report["expected_tool_count"] == 29
+    assert report["registered_tool_count"] == 29
     assert assert_manager_mcp_surface(server)["ok"] is True
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Collection
-from typing import Any
+from typing import Any, Literal
 
 from mcp.types import ToolAnnotations
 
@@ -21,6 +21,7 @@ from .config import (
     get_store_quote_token,
     get_store_read_token,
 )
+from .crm_parts_store import parts_store_cards
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
     search_partsapi_category_index,
@@ -869,6 +870,47 @@ def register_manager_tools(  # noqa: C901
             openWorldHint=True,
         ),
     )(lookup_public_automotive_evidence)
+
+    @server.tool(
+        name="parts_store_cards",
+        description=(
+            "CRM column 'Магазин автозапчастей' only: list or read its cards, create a card, "
+            "or append a note to one exact card. Create and append require an idempotency key. "
+            "Updates preserve all other card fields and use the CRM card revision and guarded Gateway readback. "
+            "This tool cannot place orders, publish offers, or change other CRM columns."
+        ),
+        annotations=ToolAnnotations(
+            title="Parts Store CRM Cards",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def parts_store_cards_tool(
+        operation: Literal["list", "get", "create", "append_note"],
+        query: str = "",
+        limit: int = 30,
+        card_id: str = "",
+        title: str = "",
+        vehicle: str = "",
+        description: str = "",
+        note: str = "",
+        expected_updated_at: str = "",
+        idempotency_key: str = "",
+    ) -> dict[str, Any]:
+        return parts_store_cards(
+            operation,
+            query=query,
+            limit=limit,
+            card_id=card_id,
+            title=title,
+            vehicle=vehicle,
+            description=description,
+            note=note,
+            expected_updated_at=expected_updated_at,
+            idempotency_key=idempotency_key,
+        )
 
     if include_tools is not None:
         server.tool = original_tool

@@ -137,7 +137,7 @@ def _normalize_crm_mcp_bearer(value: str) -> str:
 
 
 def get_crm_mcp_connection_config() -> CrmMcpConnectionConfig:
-    """Read the optional E8 route from Manager's runtime environment only."""
+    """Read the optional loopback CRM Gateway route from Manager's runtime environment."""
 
     raw_url = os.environ.get(CRM_MCP_URL_ENV, "")
     raw_bearer = os.environ.get(CRM_MCP_BEARER_TOKEN_ENV, "")
