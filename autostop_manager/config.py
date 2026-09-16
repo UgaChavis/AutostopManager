@@ -2,15 +2,28 @@ from __future__ import annotations
 
 import ipaddress
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "autostop_manager.sqlite3"
 STORE_AGENT_API_PREFIX = "/internal/agent/v1"
+CRM_MCP_URL_ENV = "AUTOSTOP_CRM_MCP_URL"
+CRM_MCP_BEARER_TOKEN_ENV = "AUTOSTOP_CRM_MCP_BEARER_TOKEN"
 _ENV_LOADED = False
+
+
+@dataclass(frozen=True)
+class CrmMcpConnectionConfig:
+    """One optional Manager-owned, loopback-only CRM MCP connection."""
+
+    configured: bool
+    url: str = ""
+    bearer_token: str = field(default="", repr=False)
+    error_code: str | None = None
 
 
 def _strip_env_value(value: str) -> str:
@@ -78,6 +91,64 @@ def get_mcp_port() -> int:
 def get_mcp_path() -> str:
     path = os.environ.get("AUTOSTOP_MANAGER_MCP_PATH", "/mcp")
     return path if path.startswith("/") else f"/{path}"
+
+
+def normalize_crm_mcp_url(value: str) -> str:
+    """Normalize a literal-loopback CRM MCP endpoint or fail closed.
+
+    Manager must not resolve a hostname or follow a redirect while carrying the
+    CRM bearer.  The source endpoint therefore has to be a plain HTTP URL with
+    a literal loopback address and a deliberate MCP path.
+    """
+
+    configured = str(value or "").strip()
+    if not configured:
+        return ""
+    try:
+        parsed = urlsplit(configured)
+        host = parsed.hostname or ""
+        port = parsed.port
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme != "http"
+        or not parsed.netloc
+        or not address.is_loopback
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"/mcp", "/mcp/"}
+        or port != 8001
+    ):
+        return ""
+    authority = f"[{address.compressed}]" if address.version == 6 else address.compressed
+    if port is not None:
+        authority = f"{authority}:{port}"
+    return urlunsplit(("http", authority, "/mcp", "", ""))
+
+
+def _normalize_crm_mcp_bearer(value: str) -> str:
+    token = str(value or "").strip()
+    if not token or len(token) > 512 or any(char.isspace() or ord(char) < 33 or ord(char) > 126 for char in token):
+        return ""
+    return token
+
+
+def get_crm_mcp_connection_config() -> CrmMcpConnectionConfig:
+    """Read the optional E8 route from Manager's runtime environment only."""
+
+    raw_url = os.environ.get(CRM_MCP_URL_ENV, "")
+    raw_bearer = os.environ.get(CRM_MCP_BEARER_TOKEN_ENV, "")
+    configured = bool(str(raw_url or "").strip() or str(raw_bearer or "").strip())
+    if not configured:
+        return CrmMcpConnectionConfig(configured=False)
+    url = normalize_crm_mcp_url(raw_url)
+    bearer_token = _normalize_crm_mcp_bearer(raw_bearer)
+    if not url or not bearer_token:
+        return CrmMcpConnectionConfig(configured=True, error_code="crm_mcp_configuration_invalid")
+    return CrmMcpConnectionConfig(configured=True, url=url, bearer_token=bearer_token)
 
 
 def get_store_api_url() -> str:

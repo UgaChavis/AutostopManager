@@ -20,6 +20,7 @@ Environment=AUTOSTOP_MANAGER_MCP_HOST=127.0.0.1
 Environment=AUTOSTOP_MANAGER_MCP_PORT=41931
 Environment=AUTOSTOP_MANAGER_MCP_PATH=/mcp
 EnvironmentFile=/opt/AutostopManager/.env
+EnvironmentFile=-/opt/AutostopManager/.crm-mcp.env
 UMask=0077
 ExecStartPre=/usr/bin/test -x /opt/AutostopManager/.venv/bin/python
 ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.mcp_server

@@ -3,12 +3,17 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from .config import get_mcp_host, get_mcp_path, get_mcp_port, load_runtime_env
+from .crm_mcp_web_research import build_crm_mcp_web_research_gateway
 from .mcp_contract import assert_manager_mcp_surface
 from .mcp_tools import register_manager_tools
+from .web_research_gateway import install_web_research_gateway
 
 
 def build_server() -> FastMCP:
     load_runtime_env()
+    # No CRM MCP configuration keeps the explicit bounded local fallback.  A
+    # configured but broken route installs a structured-failure gateway instead.
+    install_web_research_gateway(build_crm_mcp_web_research_gateway())
     server = FastMCP(
         name="AutostopManager",
         instructions=(

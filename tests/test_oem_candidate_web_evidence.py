@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from urllib.error import URLError
-
 import autostop_manager.oem_candidate_web_evidence as evidence
+import autostop_manager.web_research_gateway as web_gateway
 
 
 _VIN_LIKE = "WBA00000000000000"
 _VIN_LIKE_WITH_SEPARATORS = "WBA/000000/00000000"
+_VIN_LIKE_WITH_MIXED_SEPARATORS = "WBA 000000/00000000"
 
 
 def _candidate(**overrides):
@@ -30,7 +30,7 @@ def test_default_mode_builds_safe_profile_query_without_network(monkeypatch):
         calls.append((args, kwargs))
         raise AssertionError("default mode must not search the public web")
 
-    monkeypatch.setattr(evidence, "_ddg_search", forbidden)
+    monkeypatch.setattr(evidence, "research_part_public_evidence", forbidden)
 
     result = evidence.verify_oem_candidates_web(
         candidates=[_candidate()],
@@ -76,12 +76,18 @@ def test_default_mode_builds_safe_profile_query_without_network(monkeypatch):
     assert not any(route["source_id"] == "audi_erwin_na" for route in result["source_routes"])
 
 
-def test_live_search_returns_only_weak_public_candidate_reference(monkeypatch):
+def test_live_search_uses_gateway_with_vin_free_query_and_returns_only_weak_public_candidate_reference(monkeypatch):
     captured = []
 
-    def fake_search(query, *, timeout_seconds):
-        captured.append((query, timeout_seconds))
+    def fake_gateway(*, query, **kwargs):
+        captured.append((query, kwargs))
         return {
+            "ok": True,
+            "schema": "WebResearchGatewayV1",
+            "capability": "research_part_public_evidence",
+            "adapter": "e8_capability_adapter",
+            "provider_order": ["searxng", "duckduckgo"],
+            "fallback_used": True,
             "results": [
                 {
                     "source": "NHTSA",
@@ -89,16 +95,16 @@ def test_live_search_returns_only_weak_public_candidate_reference(monkeypatch):
                     "title": "AUDI 4H0 615 301",
                     "snippet": "Reference for brake pad set.",
                 }
-            ]
+            ],
         }
 
-    monkeypatch.setattr(evidence, "_ddg_search", fake_search)
+    monkeypatch.setattr(evidence, "research_part_public_evidence", fake_gateway)
 
     result = evidence.verify_oem_candidates_web(
         candidates=[_candidate()],
-        requested_part="передние колодки",
+        requested_part=f"передние колодки {_VIN_LIKE}",
         make="Audi",
-        model="A8",
+        model=f"A8 {_VIN_LIKE}",
         model_year=2016,
         engine="3.0 TDI",
         axle="front",
@@ -111,6 +117,14 @@ def test_live_search_returns_only_weak_public_candidate_reference(monkeypatch):
     assert captured and _VIN_LIKE not in captured[0][0]
     assert {"2016", "FRONT", "LEFT", "INNER"} <= set(captured[0][0].split())
     assert "3.0 TDI" in captured[0][0]
+    assert captured[0][1]["max_pages"] == 1
+    assert item["research_gateway"] == {
+        "schema": "WebResearchGatewayV1",
+        "capability": "research_part_public_evidence",
+        "adapter": "e8_capability_adapter",
+        "provider_order": ["searxng", "duckduckgo"],
+        "fallback_used": True,
+    }
     assert item["status"] == "кандидат"
     assert item["evidence_status"] == "public_reference_found"
     assert item["fitment_confirmed"] is False
@@ -131,8 +145,9 @@ def test_live_search_returns_only_weak_public_candidate_reference(monkeypatch):
 def test_unallowlisted_search_result_is_not_used_as_evidence(monkeypatch):
     monkeypatch.setattr(
         evidence,
-        "_ddg_search",
-        lambda *_args, **_kwargs: {
+        "research_part_public_evidence",
+        lambda **_kwargs: {
+            "ok": True,
             "results": [
                 {
                     "source": "unknown catalog",
@@ -140,7 +155,7 @@ def test_unallowlisted_search_result_is_not_used_as_evidence(monkeypatch):
                     "title": "4H0 615 301",
                     "snippet": "Unverified result",
                 }
-            ]
+            ],
         },
     )
 
@@ -156,8 +171,8 @@ def test_unallowlisted_search_result_is_not_used_as_evidence(monkeypatch):
 def test_claimed_catalog_state_without_link_stays_candidate(monkeypatch):
     monkeypatch.setattr(
         evidence,
-        "_ddg_search",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("default mode must not search")),
+        "research_part_public_evidence",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("default mode must not search")),
     )
 
     result = evidence.verify_oem_candidates_web(
@@ -206,8 +221,8 @@ def test_linked_vin_specific_catalog_evidence_stays_candidate_until_trusted_epc_
 def test_vin_like_part_number_is_rejected_before_search(monkeypatch):
     monkeypatch.setattr(
         evidence,
-        "_ddg_search",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("VIN must never be searched")),
+        "research_part_public_evidence",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("VIN must never be searched")),
     )
 
     result = evidence.verify_oem_candidates_web(candidates=[_candidate(part_number=_VIN_LIKE)], live_search=True)
@@ -230,8 +245,25 @@ def test_separator_formatted_vin_is_removed_before_query():
     assert _VIN_LIKE not in rendered
 
 
+def test_mixed_separator_vin_is_removed_from_e7_query_and_search_url():
+    result = evidence.verify_oem_candidates_web(
+        candidates=[_candidate()],
+        requested_part=f"brake pad {_VIN_LIKE_WITH_MIXED_SEPARATORS}",
+        make=_VIN_LIKE_WITH_MIXED_SEPARATORS,
+    )
+
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert _VIN_LIKE_WITH_MIXED_SEPARATORS not in rendered
+    assert _VIN_LIKE not in rendered
+    assert result["privacy"]["full_vin_in_search_queries"] is False
+
+
 def test_existing_fitment_conflict_is_retained_as_not_confirmed(monkeypatch):
-    monkeypatch.setattr(evidence, "_ddg_search", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline")))
+    monkeypatch.setattr(
+        evidence,
+        "research_part_public_evidence",
+        lambda **_kwargs: {"ok": False, "error": {"code": "web_search_provider_failed", "retryable": True}},
+    )
 
     result = evidence.verify_oem_candidates_web(
         candidates=[_candidate(position_match="conflict", fitment_scope="not_vin_specific", confidence_label="low")],
@@ -248,3 +280,95 @@ def test_existing_fitment_conflict_is_retained_as_not_confirmed(monkeypatch):
     assert item["next_manual_step"]["code"] == "resolve_candidate_conflicts"
     assert any(action["code"] == "retry_or_use_registry_route" for action in result["manual_actions"])
     assert any(action["code"] == "resolve_candidate_conflicts" for action in result["manual_actions"])
+
+
+def test_e8_authorized_part_source_is_accepted_after_gateway_domain_policy():
+    def invoke(_name, _arguments):
+        return {
+            "ok": True,
+            "results": [
+                {
+                    "title": "Ford 1712024 brake pad set",
+                    "url": "https://partsouq.com/en/catalog/genuine/parts?number=1712024",
+                    "snippet": "1712024 front brake pad set",
+                    "domain": "partsouq.com",
+                    "provider": "searxng",
+                    "source_id": "partsouq_catalog",
+                    "source_type": "oem_catalog",
+                    "source_authorized": True,
+                }
+            ],
+        }
+
+    web_gateway.install_web_research_gateway(web_gateway.CapabilityWebResearchGatewayAdapter(invoke))
+    try:
+        result = evidence.verify_oem_candidates_web(
+            candidates=[_candidate(part_number="1712024", brand="FORD")],
+            requested_part="передние колодки",
+            live_search=True,
+        )
+    finally:
+        web_gateway.install_web_research_gateway(None)
+
+    item = result["candidate_evidence"][0]
+    assert item["evidence_status"] == "public_reference_found"
+    assert item["sources"] == [
+        {
+            "source": "partsouq.com",
+            "source_id": "partsouq_catalog",
+            "source_type": "oem_catalog",
+            "url": "https://partsouq.com/en/catalog/genuine/parts?number=1712024",
+        }
+    ]
+
+
+def test_e8_authorized_source_rejects_unregistered_declared_domain(monkeypatch):
+    monkeypatch.setattr(
+        evidence,
+        "research_part_public_evidence",
+        lambda **_kwargs: {
+            "ok": True,
+            "results": [
+                {
+                    "title": "Ford 1712024 brake pad set",
+                    "url": "https://unregistered.invalid/catalog/1712024",
+                    "snippet": "1712024 front brake pad set",
+                    "domain": "unregistered.invalid",
+                    "source_id": "partsouq_catalog",
+                    "source_type": "oem_catalog",
+                    "source_authorized": True,
+                }
+            ],
+        },
+    )
+
+    result = evidence.verify_oem_candidates_web(
+        candidates=[_candidate(part_number="1712024", brand="FORD")],
+        requested_part="передние колодки",
+        live_search=True,
+    )
+
+    item = result["candidate_evidence"][0]
+    assert item["evidence_status"] == "public_reference_not_found"
+    assert item["sources"] == []
+
+
+def test_installed_gateway_exception_becomes_e7_search_failed_without_leak():
+    class FailingGateway:
+        def research_part_public_evidence(self, **_kwargs):
+            raise KeyError("private upstream details")
+
+    web_gateway.install_web_research_gateway(FailingGateway())
+    try:
+        result = evidence.verify_oem_candidates_web(
+            candidates=[_candidate(part_number="1712024", brand="FORD")],
+            requested_part="передние колодки",
+            live_search=True,
+        )
+    finally:
+        web_gateway.install_web_research_gateway(None)
+
+    item = result["candidate_evidence"][0]
+    assert item["evidence_status"] == "search_failed"
+    assert result["status"] == "public_search_provider_failed"
+    assert "private upstream details" not in json.dumps(result, ensure_ascii=False)

@@ -12,26 +12,30 @@ from datetime import UTC, datetime
 from functools import lru_cache
 import re
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 from .source_catalog import load_source_catalog, recommend_automotive_sources
 from .vin_lookup import normalize_part_number
-from .work_pricing_research import PUBLIC_RESEARCH_TIMEOUT_SECONDS, _ddg_search
+from .web_research_gateway import redact_vin_like_text, research_part_public_evidence
+from .work_pricing_research import PUBLIC_RESEARCH_TIMEOUT_SECONDS
 
 
 _MAX_CANDIDATES = 3
 _MAX_RESULTS_PER_CANDIDATE = 3
 _MAX_TIMEOUT_SECONDS = 6
 _SAFE_PART_NUMBER = re.compile(r"^[A-Z0-9][A-Z0-9 .\-/]{2,47}$")
-# Deliberately no word boundaries: an embedded full VIN must not reach a public
-# query either, even when a caller prefixes or suffixes it with arbitrary text.
-_VIN_LIKE_TOKEN = re.compile(r"(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){17}", re.I)
 _FITMENT_SCOPES = {"vin_specific", "vin_specific_position_unconfirmed", "not_vin_specific"}
 _POSITION_MATCHES = {"matched", "not_required", "conflict", "ambiguous", "not_proved"}
 _CONFIDENCE_LABELS = {"high", "medium", "low", "blocked"}
 _APPLICABILITY_STATUSES = {"catalog_evidence_found", "not_checked", "check_failed", "not_found", "rejected"}
 _NONPUBLIC_ACCESS_TOKENS = ("login", "registration", "subscription", "paid", "mixed")
+_E8_AUTHORIZED_PART_SOURCES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("partsouq_catalog", "oem_catalog"): ("partsouq.com",),
+    ("amayama_catalog", "oem_catalog"): ("amayama.com",),
+    ("emex_public", "price_catalog"): ("emex.ru",),
+    ("exist", "price_catalog"): ("exist.ru",),
+}
+_SAFE_DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.I)
 
 
 def _bounded(value: int, *, minimum: int, maximum: int) -> int:
@@ -58,9 +62,8 @@ def _known_value(value: Any, allowed: set[str]) -> str:
 
 
 def _strip_vin_like_text(value: Any, *, limit: int = 128) -> tuple[str, int]:
-    text = _compact(unquote(str(value or "")), limit=limit)
-    sanitized, removed = _VIN_LIKE_TOKEN.subn(" ", text.upper())
-    return re.sub(r"\s+", " ", sanitized).strip(), removed
+    sanitized, removed = redact_vin_like_text(value, limit=limit)
+    return sanitized.upper(), removed
 
 
 def _looks_like_full_vin(value: str) -> bool:
@@ -89,17 +92,24 @@ def _safe_https_url(value: Any, *, _allow_ddg_unwrap: bool = True) -> tuple[str 
     raw = str(value or "").strip()
     if not raw:
         return None, False
-    parsed = urlparse(raw)
-    if not parsed.scheme and raw.startswith("//"):
-        parsed = urlparse("https:" + raw)
-    if _allow_ddg_unwrap and parsed.hostname and parsed.hostname.casefold() in {"duckduckgo.com", "www.duckduckgo.com"}:
-        wrapped_urls = parse_qs(parsed.query).get("uddg", [])
-        if parsed.path.startswith("/l/") and len(wrapped_urls) == 1:
-            return _safe_https_url(wrapped_urls[0], _allow_ddg_unwrap=False)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    try:
+        parsed = urlparse(raw)
+        if not parsed.scheme and raw.startswith("//"):
+            parsed = urlparse("https:" + raw)
+        if (
+            _allow_ddg_unwrap
+            and parsed.hostname
+            and parsed.hostname.casefold() in {"duckduckgo.com", "www.duckduckgo.com"}
+        ):
+            wrapped_urls = parse_qs(parsed.query).get("uddg", [])
+            if parsed.path.startswith("/l/") and len(wrapped_urls) == 1:
+                return _safe_https_url(wrapped_urls[0], _allow_ddg_unwrap=False)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            return None, False
+        if _url_contains_vin_like_token(parsed):
+            return None, True
+    except ValueError:
         return None, False
-    if _url_contains_vin_like_token(parsed):
-        return None, True
     return raw, False
 
 
@@ -414,6 +424,48 @@ def _candidate_next_manual_step(status: str, contradictions: list[dict[str, Any]
     }
 
 
+def _registered_domain(value: str, domains: tuple[str, ...]) -> bool:
+    return any(value == domain or value.endswith("." + domain) for domain in domains)
+
+
+def _gateway_authorized_source(row: Mapping[str, Any], url: str) -> dict[str, str] | None:
+    """Accept E8 metadata only when it intersects the local static registry."""
+
+    if row.get("source_authorized") is not True:
+        return None
+    source_id, source_id_removed = _strip_vin_like_text(row.get("source_id"), limit=80)
+    source_type, source_type_removed = _strip_vin_like_text(row.get("source_type"), limit=40)
+    source_id = source_id.casefold()
+    source_type = source_type.casefold()
+    declared_domain, domain_removed = _strip_vin_like_text(row.get("domain"), limit=253)
+    if source_id_removed or source_type_removed or domain_removed:
+        return None
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}", source_id):
+        return None
+    registered_domains = _E8_AUTHORIZED_PART_SOURCES.get((source_id, source_type))
+    if registered_domains is None:
+        return None
+    hostname = str(urlparse(url).hostname or "").casefold().rstrip(".")
+    declared_domain = declared_domain.casefold().rstrip(".")
+    if not hostname or not _SAFE_DOMAIN.fullmatch(declared_domain):
+        return None
+    if not _registered_domain(hostname, registered_domains) or not _registered_domain(
+        declared_domain, registered_domains
+    ):
+        return None
+    if (
+        hostname != declared_domain
+        and not hostname.endswith("." + declared_domain)
+        and not declared_domain.endswith("." + hostname)
+    ):
+        return None
+    return {
+        "source": hostname,
+        "source_id": source_id,
+        "source_type": source_type,
+    }
+
+
 def _safe_search_result(row: Any, *, candidate: Mapping[str, Any]) -> tuple[dict[str, Any] | None, int]:
     if not isinstance(row, Mapping):
         return None, 0
@@ -424,15 +476,15 @@ def _safe_search_result(row: Any, *, candidate: Mapping[str, Any]) -> tuple[dict
     removed = int(url_removed) + title_removed + snippet_removed + source_removed
     if not url:
         return None, removed
-    allowlisted_source = _allowlisted_source_for_url(url)
-    if allowlisted_source is None:
+    allowed_source = _gateway_authorized_source(row, url) or _allowlisted_source_for_url(url)
+    if allowed_source is None:
         return None, removed
     reference_text = normalize_part_number(" ".join((title, snippet, url)))
     return (
         {
-            "source": allowlisted_source["source"],
-            "source_id": allowlisted_source["source_id"],
-            "source_type": allowlisted_source["source_type"],
+            "source": allowed_source["source"],
+            "source_id": allowed_source["source_id"],
+            "source_type": allowed_source["source_type"],
             "url": url,
             "title": title,
             "snippet": snippet,
@@ -639,10 +691,29 @@ def verify_oem_candidates_web(
             "warnings": ["Публичный поиск не подтверждает VIN-специфичную применимость."],
         }
         if live_search:
-            try:
-                search = _ddg_search(query, timeout_seconds=timeout_seconds)
+            gateway = research_part_public_evidence(
+                query=query,
+                limit=result_limit,
+                max_pages=1,
+                timeout_seconds=timeout_seconds,
+            )
+            item["research_gateway"] = {
+                "schema": _compact(gateway.get("schema"), limit=80),
+                "capability": _compact(gateway.get("capability"), limit=80),
+                "adapter": _compact(gateway.get("adapter"), limit=80),
+                "provider_order": [
+                    _compact(provider, limit=40)
+                    for provider in gateway.get("provider_order") or []
+                    if _compact(provider, limit=40)
+                ][:5],
+                "fallback_used": bool(gateway.get("fallback_used")),
+            }
+            if not gateway.get("ok"):
+                item["evidence_status"] = "search_failed"
+                item["warnings"].append("Публичный поиск временно недоступен; это не означает отсутствия детали.")
+            else:
                 safe_results: list[dict[str, Any]] = []
-                for row in (search.get("results") or [])[:result_limit]:
+                for row in (gateway.get("results") or [])[:result_limit]:
                     safe_row, removed = _safe_search_result(row, candidate=candidate)
                     redaction_count += removed
                     if safe_row is not None:
@@ -662,9 +733,6 @@ def verify_oem_candidates_web(
                     if any(row["part_number_reference_found"] for row in safe_results)
                     else "public_reference_not_found"
                 )
-            except (HTTPError, URLError, TimeoutError, ValueError, OSError):
-                item["evidence_status"] = "search_failed"
-                item["warnings"].append("Публичный поиск временно недоступен; это не означает отсутствия детали.")
         candidate_status, status_reason = _candidate_status(
             candidate=candidate,
             search_status=str(item["evidence_status"]),
