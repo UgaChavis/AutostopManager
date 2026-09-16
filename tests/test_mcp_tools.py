@@ -86,6 +86,7 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
         "partsapi_catalog_lookup",
         "resolve_vin_oem_parts",
         "lookup_original_parts",
+        "verify_oem_candidates_web",
         "catalog_provider_status",
         "plan_oem_parts_providers",
     ):
@@ -162,6 +163,37 @@ def test_lookup_public_automotive_evidence_tool_is_registered(tmp_path, monkeypa
     assert result["ok"] is True
     assert result["input_context"]["make"] == "Mercedes-Benz"
     assert result["input_context"]["topics"] == ["recalls"]
+
+
+def test_verify_oem_candidates_web_tool_is_registered_and_read_only(tmp_path, monkeypatch):
+    server = _FakeServer()
+    store = StoreState(tmp_path / "memory.sqlite3")
+    captured = {}
+    monkeypatch.setattr(
+        mcp_tools_module,
+        "verify_oem_candidates_web",
+        lambda **kwargs: captured.update(kwargs) or {"ok": True, "status": "prepared_no_network"},
+    )
+
+    register_manager_tools(server, store)
+    result = server.tools["verify_oem_candidates_web"](
+        candidates=[{"part_number": "4H0 615 301", "brand": "AUDI"}],
+        make="Audi",
+        model_year=2016,
+        engine="3.0 TDI",
+        axle="front",
+        side="left",
+        position="inner",
+    )
+
+    assert result["ok"] is True
+    assert captured["candidates"][0]["part_number"] == "4H0 615 301"
+    assert captured["axle"] == "front"
+    assert captured["side"] == "left"
+    assert captured["position"] == "inner"
+    annotations = server.options["verify_oem_candidates_web"]["annotations"]
+    assert annotations.readOnlyHint is True
+    assert annotations.destructiveHint is False
 
 
 def test_selective_registration_keeps_only_requested_tools(tmp_path):

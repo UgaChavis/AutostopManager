@@ -26,6 +26,7 @@ from .partsapi_category_index import (
     search_partsapi_category_index,
     validate_partsapi_category_index,
 )
+from .oem_candidate_web_evidence import verify_oem_candidates_web
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .source_catalog import recommend_automotive_sources
 from .storage import StoreState
@@ -819,6 +820,23 @@ def register_manager_tools(  # noqa: C901
             destructiveHint=False,
         ),
     )(resolve_vin_oem_parts)
+
+    server.tool(
+        name="verify_oem_candidates_web",
+        description=(
+            "Prepare or run a bounded public-web corroboration of already-found OEM part-number candidates. "
+            "It accepts no VIN, removes VIN-like text before any search, returns weak public references and legal source "
+            "routes limited to public/free no-login sources, and never treats snippets as fitment proof or writes CRM/orders. "
+            "Network search is disabled by default."
+        ),
+        annotations=ToolAnnotations(
+            title="Public OEM Candidate Verification",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )(verify_oem_candidates_web)
 
     server.tool(
         name="benchmark_vin_parts_lookup",
