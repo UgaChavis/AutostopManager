@@ -357,13 +357,56 @@ def test_resume_rejects_foreign_or_busy_task():
     async def scenario():
         app = wake.AppServer(wake.WakeConfig(THREAD))
         for thread, error in [
-            ({"ephemeral": True, "cwd": wake.PROJECT_DIR}, "target_invalid"),
-            ({"cwd": "/tmp"}, "target_invalid"),
-            ({"cwd": wake.PROJECT_DIR, "status": {"type": "active"}}, "thread_busy"),
+            ({"id": THREAD, "ephemeral": True, "cwd": wake.PROJECT_DIR}, "target_invalid"),
+            ({"id": THREAD, "cwd": "/tmp"}, "target_invalid"),
+            ({"id": "another-task", "cwd": wake.PROJECT_DIR}, "target_invalid"),
+            ({"id": THREAD, "cwd": wake.PROJECT_DIR, "status": {"type": "active"}}, "thread_busy"),
         ]:
             app.request = AsyncMock(return_value={"thread": thread})
             with pytest.raises(wake.WakeError, match=error):
                 await app.resume()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("result", [None, {}, {"turn": None}, {"turn": {}}, {"turn": {"id": 123}}])
+def test_malformed_start_stops_queue_and_preserves_unknown_outcome(result):
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.connected = True
+        app.resume = AsyncMock()
+        app.request = AsyncMock(return_value=result)
+        dispatcher = wake.WakeDispatcher(app, 123)
+        for event_id in ("inbound-1", "inbound-2"):
+            dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
+        await asyncio.wait_for(dispatcher.work(), 2)
+        assert not dispatcher.enabled and not dispatcher.active
+        assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
+        assert dispatcher.last_error == "codex_rpc_response_invalid"
+        assert app.outcome_unknown
+        app.request.assert_awaited_once()
+        with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
+            await dispatcher.pause()
+
+    asyncio.run(scenario())
+
+
+def test_unexpected_worker_failure_disables_without_leaking_payload_or_replaying():
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.connected = True
+        app.run_turn = AsyncMock(side_effect=TypeError("private RPC payload"))
+        dispatcher = wake.WakeDispatcher(app, 123)
+        for event_id in ("inbound-1", "inbound-2"):
+            dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
+        await asyncio.wait_for(dispatcher.work(), 2)
+        assert not dispatcher.enabled and dispatcher.failed == 1
+        assert dispatcher.queue.qsize() == 1
+        assert dispatcher.last_error == "wake_worker_failed"
+        assert "private" not in json.dumps(dispatcher.status())
+        app.run_turn.assert_awaited_once()
+        with pytest.raises(wake.WakeError, match="wake_not_ready"):
+            dispatcher.accept({"operation": "event", "event_id": "inbound-3"}, 123)
 
     asyncio.run(scenario())
 

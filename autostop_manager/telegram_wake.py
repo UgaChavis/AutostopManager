@@ -43,6 +43,14 @@ class RPCRejected(WakeError):
     """The server explicitly rejected a request; distinct from a lost response."""
 
 
+def rpc_entity(result: Any, key: str) -> dict[str, Any]:
+    """Validate response entities before using them to route or track a turn."""
+    entity = result.get(key) if isinstance(result, dict) else None
+    if not isinstance(entity, dict) or not isinstance(entity.get("id"), str) or not entity["id"]:
+        raise WakeError("codex_rpc_response_invalid")
+    return entity
+
+
 @dataclass(frozen=True)
 class WakeConfig:
     thread_id: str
@@ -160,8 +168,12 @@ class AppServer:
             result = await self.request("thread/resume", params)
         except RPCRejected as exc:
             raise WakeError("codex_thread_resume_rejected") from exc
-        thread = result["thread"]
-        if thread.get("ephemeral") or thread.get("cwd") != self.config.project_dir:
+        thread = rpc_entity(result, "thread")
+        if (
+            thread["id"] != self.config.thread_id
+            or thread.get("ephemeral")
+            or thread.get("cwd") != self.config.project_dir
+        ):
             raise WakeError("codex_thread_target_invalid")
         if thread.get("status", {}).get("type") == "active":
             raise WakeError("codex_thread_busy")
@@ -190,7 +202,7 @@ class AppServer:
             except RPCRejected as exc:
                 self.outcome_unknown = False
                 raise WakeError("codex_turn_start_rejected") from exc
-            self.active_turn = result["turn"]["id"]
+            self.active_turn = rpc_entity(result, "turn")["id"]
         while True:
             message = await self.events.get()
             if message["method"] == "connection_lost":
@@ -288,10 +300,15 @@ class WakeDispatcher:
             try:
                 await self.app.run_turn(WAKE_INSTRUCTION.format(event_id=event_id))
                 self.completed += 1
-            except (WakeError, OSError, TimeoutError) as exc:
+            except Exception as exc:  # noqa: BLE001 - fail closed without exposing private RPC payloads.
                 if self.enabled or self.app.outcome_unknown:
                     self.failed += 1
-                    self.last_error = str(exc) if isinstance(exc, WakeError) else "codex_transport_failed_or_unknown"
+                    if isinstance(exc, WakeError):
+                        self.last_error = str(exc)
+                    elif isinstance(exc, (OSError, TimeoutError)):
+                        self.last_error = "codex_transport_failed_or_unknown"
+                    else:
+                        self.last_error = "wake_worker_failed"
                 # Unknown side effects are not replayed and no new turn overlaps them.
                 self.enabled = False
             finally:
