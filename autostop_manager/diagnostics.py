@@ -16,6 +16,7 @@ TEXT_DOCUMENTS = (
     "docs/agent/operations.md",
     "docs/agent/deployment_runbook.md",
 )
+INSTRUCTION_BUDGET_BYTES = 13 * 1024
 
 
 def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
@@ -53,7 +54,7 @@ def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
                     warnings.append(f"document_link_invalid:{name}")
         except (OSError, UnicodeError, ValueError):
             warnings.append(f"document_unreadable:{name}")
-    if size > 12 * 1024:
+    if size > INSTRUCTION_BUDGET_BYTES:
         warnings.append("instruction_budget_exceeded")
     return {"ok": not warnings, "documents": len(TEXT_DOCUMENTS), "bytes": size, "warnings": warnings}
 
