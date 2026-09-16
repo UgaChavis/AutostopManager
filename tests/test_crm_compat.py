@@ -53,7 +53,7 @@ def test_crm_import_signature_and_selective_registration(crm, tmp_path):
     assert not (tmp_path / "crm.sqlite3").exists()
     plain = FastMCP("native-compatible")
     register_manager_memory_tools(plain, store=StoreState(tmp_path / "plain.sqlite3"))
-    assert len(plain._tool_manager._tools) == 27
+    assert len(plain._tool_manager._tools) == 28
     assert "agent_bootstrap" not in plain._tool_manager._tools
     limited = FastMCP("limited")
     register_manager_memory_tools(limited, include_tools={"workflow_status"})
