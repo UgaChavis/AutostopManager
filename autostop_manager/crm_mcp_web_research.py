@@ -30,7 +30,7 @@ from .web_research_gateway import (
 CRM_MCP_E8_TIMEOUT_SECONDS = 8.0
 _MAX_TIMEOUT_SECONDS = 10.0
 _SYNC_GRACE_SECONDS = 1.0
-_SCHEMA_HASH = re.compile(r"[0-9a-f]{64}")
+_SCHEMA_HASH = re.compile(r"[0-9a-f]{16}")
 _SUPPORTED_CAPABILITIES = frozenset({RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY})
 
 

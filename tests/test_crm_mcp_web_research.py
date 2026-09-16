@@ -84,7 +84,7 @@ def test_transport_discovers_schema_then_calls_only_part_evidence_with_hash(monk
                         "summary": {
                             "name": "research_part_public_evidence",
                             "risk": "read",
-                            "schema_hash": "a" * 64,
+                            "schema_hash": "a" * 16,
                         },
                         "data": {"input_schema": {"type": "object"}},
                     },
@@ -127,7 +127,7 @@ def test_transport_discovers_schema_then_calls_only_part_evidence_with_hash(monk
             {
                 "name": "research_part_public_evidence",
                 "arguments": {"query": "FORD 1712024", "limit": 3},
-                "schema_hash": "a" * 64,
+                "schema_hash": "a" * 16,
                 "allow_large_output": False,
             },
             captured["calls"][1][2],
