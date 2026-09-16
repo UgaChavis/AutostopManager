@@ -228,6 +228,32 @@ def test_verify_oem_candidates_web_tool_is_registered_and_read_only(tmp_path, mo
     assert annotations.destructiveHint is False
 
 
+def test_assess_part_market_tool_is_registered_and_read_only(tmp_path, monkeypatch):
+    server = _FakeServer()
+    captured = {}
+    monkeypatch.setattr(
+        mcp_tools_module,
+        "assess_part_market",
+        lambda **kwargs: captured.update(kwargs) or {"ok": True, "schema": "PartMarketAssessmentV1"},
+    )
+
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"), include_tools={"assess_part_market"})
+    result = server.tools["assess_part_market"](
+        article="1712024",
+        brand="Ford",
+        observations=[{"source": "synthetic"}],
+        target_region="Красноярск",
+    )
+
+    assert result["ok"] is True
+    assert captured["article"] == "1712024"
+    assert captured["brand"] == "Ford"
+    assert captured["target_region"] == "Красноярск"
+    annotations = server.options["assess_part_market"]["annotations"]
+    assert annotations.readOnlyHint is True
+    assert annotations.destructiveHint is False
+
+
 def test_selective_registration_keeps_only_requested_tools(tmp_path):
     server = _FakeServer()
 
