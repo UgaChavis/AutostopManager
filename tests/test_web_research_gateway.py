@@ -3,6 +3,8 @@ from __future__ import annotations
 from autostop_manager.web_research_gateway import (
     CapabilityWebResearchGatewayAdapter,
     DuckDuckGoWebResearchGateway,
+    fetch_page_browser,
+    fetch_page_excerpt,
     install_web_research_gateway,
     research_part_public_evidence,
     search_web_multi,
@@ -240,3 +242,77 @@ def test_vin_only_query_is_rejected_without_invoking_gateway():
     assert result["query"] == ""
     assert result["vin_redacted"] is True
     assert result["error"] == {"code": "vin_like_query_rejected", "retryable": False}
+
+
+def test_page_adapter_forwards_bounded_browser_request_and_sanitizes_evidence():
+    calls = []
+
+    def invoke(name, arguments):
+        calls.append((name, arguments))
+        return {
+            "ok": True,
+            "data": {
+                "ok": True,
+                "final_url": "https://example.com/part",
+                "title": "Part WBA00000000000000",
+                "excerpt": "Price 4200 RUB; VIN WBA00000000000000",
+                "status_code": 200,
+                "access_flags": ["login_required"],
+                "requires_human": True,
+                "links": [
+                    {"url": "https://example.com/next", "text": "Next"},
+                    {"url": "https://example.com/WBA00000000000000", "text": "Private"},
+                ],
+            },
+        }
+
+    result = CapabilityWebResearchGatewayAdapter(invoke).fetch_page_browser(
+        url="https://example.com/part", max_chars=99999, wait_ms=99999
+    )
+
+    assert calls == [("fetch_page_browser", {"url": "https://example.com/part", "max_chars": 8000, "wait_ms": 5000})]
+    assert result["ok"] is True
+    assert result["vin_redacted"] is True
+    assert result["requires_human"] is True
+    assert result["links"] == [{"url": "https://example.com/next", "text": "Next", "domain": "example.com"}]
+    assert "WBA00000000000000" not in str(result)
+
+
+def test_page_adapter_rejects_vin_url_and_unconfigured_page_fails_closed():
+    calls = []
+    adapter = CapabilityWebResearchGatewayAdapter(lambda *args: calls.append(args))
+    rejected = adapter.fetch_page_excerpt(url="https://example.com/WBA00000000000000")
+    assert rejected["error"]["code"] == "web_page_url_invalid"
+    assert calls == []
+
+    install_web_research_gateway(None)
+    result = fetch_page_excerpt(url="https://example.com/part")
+    assert result["error"]["code"] == "web_page_gateway_unavailable"
+
+
+def test_installed_page_gateway_returns_excerpt_and_browser_without_private_errors():
+    calls = []
+
+    def invoke(name, arguments):
+        calls.append((name, arguments))
+        return {
+            "ok": True,
+            "data": {
+                "ok": True,
+                "url": arguments["url"],
+                "final_url": arguments["url"],
+                "excerpt": "Public price 4200 RUB",
+            },
+        }
+
+    install_web_research_gateway(CapabilityWebResearchGatewayAdapter(invoke))
+    try:
+        excerpt = fetch_page_excerpt(url="https://example.com/part")
+        browser = fetch_page_browser(url="https://example.com/part", wait_ms=0)
+    finally:
+        install_web_research_gateway(None)
+
+    assert excerpt["ok"] is True
+    assert browser["ok"] is True
+    assert excerpt["excerpt"] == "Public price 4200 RUB"
+    assert [name for name, _ in calls] == ["fetch_page_excerpt", "fetch_page_browser"]

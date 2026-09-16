@@ -2,7 +2,7 @@
 
 The Manager process owns the optional endpoint and bearer in its own runtime
 environment.  This module never reads CRM configuration files, never follows
-redirects, and exposes only the one read-only capability E7 needs.
+redirects, and exposes only the four read-only E8 capabilities Manager needs.
 """
 
 from __future__ import annotations
@@ -21,7 +21,10 @@ from mcp.client.streamable_http import streamable_http_client
 
 from .config import CrmMcpConnectionConfig, get_crm_mcp_connection_config
 from .web_research_gateway import (
+    FETCH_PAGE_BROWSER_CAPABILITY,
+    FETCH_PAGE_EXCERPT_CAPABILITY,
     RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY,
+    SEARCH_WEB_MULTI_CAPABILITY,
     CapabilityWebResearchGatewayAdapter,
     WebResearchGateway,
 )
@@ -31,7 +34,19 @@ CRM_MCP_E8_TIMEOUT_SECONDS = 8.0
 _MAX_TIMEOUT_SECONDS = 10.0
 _SYNC_GRACE_SECONDS = 1.0
 _SCHEMA_HASH = re.compile(r"[0-9a-f]{16}")
-_SUPPORTED_CAPABILITIES = frozenset({RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY})
+_SUPPORTED_CAPABILITIES = frozenset(
+    {
+        RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY,
+        SEARCH_WEB_MULTI_CAPABILITY,
+        FETCH_PAGE_EXCERPT_CAPABILITY,
+        FETCH_PAGE_BROWSER_CAPABILITY,
+    }
+)
+_GENERIC_WEB_TIMEOUT_SECONDS = {
+    SEARCH_WEB_MULTI_CAPABILITY: 30.0,
+    FETCH_PAGE_EXCERPT_CAPABILITY: 20.0,
+    FETCH_PAGE_BROWSER_CAPABILITY: 35.0,
+}
 
 
 def _bounded_timeout(value: Any) -> float:
@@ -113,7 +128,7 @@ def _run_sync(factory: Callable[[], Any], *, timeout_seconds: float) -> Any:
 
 
 class LoopbackCrmMcpWebResearchTransport:
-    """A narrow synchronous transport for one discovered E8 raw capability."""
+    """A narrow synchronous transport for discovered read-only E8 raw capabilities."""
 
     def __init__(
         self,
@@ -132,24 +147,27 @@ class LoopbackCrmMcpWebResearchTransport:
             return _failure(self._config.error_code, retryable=False)
         if capability not in _SUPPORTED_CAPABILITIES or not isinstance(arguments, dict):
             return _failure("crm_mcp_capability_not_allowed", retryable=False)
+        timeout_seconds = max(self._timeout_seconds, _GENERIC_WEB_TIMEOUT_SECONDS.get(capability, 0.0))
         try:
             return _run_sync(
-                lambda: self._invoke_async(capability, dict(arguments)),
-                timeout_seconds=self._timeout_seconds,
+                lambda: self._invoke_async(capability, dict(arguments), timeout_seconds),
+                timeout_seconds=timeout_seconds,
             )
         except Exception:  # noqa: BLE001 - do not expose URL, bearer, or upstream exceptions.
             return _failure("crm_mcp_transport_failed", retryable=True)
 
-    async def _invoke_async(self, capability: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _invoke_async(self, capability: str, arguments: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
         return await asyncio.wait_for(
-            self._invoke_session(capability, arguments),
-            timeout=self._timeout_seconds,
+            self._invoke_session(capability, arguments, timeout_seconds),
+            timeout=timeout_seconds,
         )
 
-    async def _invoke_session(self, capability: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _invoke_session(
+        self, capability: str, arguments: dict[str, Any], timeout_seconds: float
+    ) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self._config.bearer_token}"}
         async with httpx.AsyncClient(
-            timeout=self._timeout_seconds,
+            timeout=timeout_seconds,
             follow_redirects=False,
             headers=headers,
             trust_env=False,
@@ -160,7 +178,7 @@ class LoopbackCrmMcpWebResearchTransport:
                     schema_result = await session.call_tool(
                         "get_raw_capability_schema",
                         {"name": capability},
-                        read_timeout_seconds=timedelta(seconds=self._timeout_seconds),
+                        read_timeout_seconds=timedelta(seconds=timeout_seconds),
                     )
                     schema = _payload_from_tool_result(schema_result)
                     schema_hash = (
@@ -178,7 +196,7 @@ class LoopbackCrmMcpWebResearchTransport:
                             "schema_hash": schema_hash,
                             "allow_large_output": False,
                         },
-                        read_timeout_seconds=timedelta(seconds=self._timeout_seconds),
+                        read_timeout_seconds=timedelta(seconds=timeout_seconds),
                     )
                     payload = _payload_from_tool_result(result)
                     if bool(getattr(result, "isError", False)) or not isinstance(payload, Mapping):

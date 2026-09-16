@@ -95,6 +95,38 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
         assert annotations.destructiveHint is False
 
 
+def test_native_e8_tools_forward_public_research_without_writes(tmp_path, monkeypatch):
+    calls = []
+
+    def record(name):
+        def invoke(**kwargs):
+            calls.append((name, kwargs))
+            return {"ok": True, "capability": name}
+
+        return invoke
+
+    names = ("search_web_multi", "fetch_page_excerpt", "fetch_page_browser")
+    for name in names:
+        monkeypatch.setattr(mcp_tools_module, name, record(name))
+    server = _FakeServer()
+    register_manager_tools(
+        server,
+        StoreState(tmp_path / "memory.sqlite3"),
+        include_tools=set(names),
+    )
+
+    assert set(server.tools) == set(names)
+    assert server.tools["search_web_multi"]("pads price", limit=4)["ok"] is True
+    assert server.tools["fetch_page_excerpt"]("https://example.com/part")["ok"] is True
+    assert server.tools["fetch_page_browser"]("https://example.com/part", wait_ms=0)["ok"] is True
+    assert [name for name, _ in calls] == list(names)
+    for name in names:
+        annotations = server.options[name]["annotations"]
+        assert annotations.readOnlyHint is True
+        assert annotations.destructiveHint is False
+        assert annotations.openWorldHint is True
+
+
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)

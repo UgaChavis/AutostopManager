@@ -4,6 +4,8 @@ import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import pytest
+
 from autostop_manager import config, crm_mcp_web_research as crm_transport, mcp_server
 
 
@@ -151,6 +153,33 @@ def test_configured_transport_error_is_structured_and_never_uses_local_fallback(
     assert result["fallback_used"] is False
     assert result["error"] == {"code": "crm_mcp_transport_failed", "retryable": True}
     assert "private bearer" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("capability", "minimum_timeout"),
+    [
+        ("search_web_multi", 30.0),
+        ("fetch_page_excerpt", 20.0),
+        ("fetch_page_browser", 35.0),
+    ],
+)
+def test_generic_e8_capabilities_are_allowed_with_page_appropriate_timeout(monkeypatch, capability, minimum_timeout):
+    captured = {}
+
+    async def fake_invoke(self, name, arguments, timeout_seconds):
+        captured.update(name=name, arguments=arguments, timeout_seconds=timeout_seconds)
+        return {"ok": True, "data": {"ok": True}}
+
+    monkeypatch.setattr(crm_transport.LoopbackCrmMcpWebResearchTransport, "_invoke_async", fake_invoke)
+    transport = crm_transport.LoopbackCrmMcpWebResearchTransport(_connection())
+    args = {"query": "front pads"} if capability == "search_web_multi" else {"url": "https://example.com/part"}
+
+    assert transport.invoke(capability, args)["ok"] is True
+    assert captured == {"name": capability, "arguments": args, "timeout_seconds": minimum_timeout}
+    assert transport.invoke("store_management_action", args) == {
+        "ok": False,
+        "error": {"code": "crm_mcp_capability_not_allowed", "retryable": False},
+    }
 
 
 def test_mcp_server_installs_optional_crm_gateway(monkeypatch):
