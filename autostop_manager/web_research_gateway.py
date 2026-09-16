@@ -28,7 +28,14 @@ _MAX_LIMIT = 10
 _MAX_PART_EVIDENCE_LIMIT = 5
 _MAX_PART_EVIDENCE_PAGES = 2
 _MAX_TIMEOUT_SECONDS = 60
-_VIN_LIKE_TOKEN = re.compile(r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){17}(?![A-HJ-NPR-Z0-9])", re.I)
+_VIN_LIKE_TOKEN = re.compile(
+    r"(?<![A-HJ-NPR-Z0-9])(?:"
+    r"[A-HJ-NPR-Z0-9]{17}"
+    r"|[A-HJ-NPR-Z0-9]{3}[ ._/\\-][A-HJ-NPR-Z0-9]{14}"
+    r"|[A-HJ-NPR-Z0-9]{3}[ ._/\\-][A-HJ-NPR-Z0-9]{6}[ ._/\\-][A-HJ-NPR-Z0-9]{8}"
+    r")(?![A-HJ-NPR-Z0-9])",
+    re.I,
+)
 _PRIVATE_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w.-])", re.I)
 _PRIVATE_PHONE = re.compile(r"(?<!\w)(?:\+7|8|7(?=9\d{2}))[\s().-]*\d{3}(?:[\s().-]*\d){7}(?!\d)")
 _SOURCE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")

@@ -82,6 +82,20 @@ def test_assessment_returns_median_only_for_three_independent_exact_original_off
     assert _segment(result, "analog", "new", "rf")["median_price_rub"] is None
 
 
+def test_brand_and_article_survive_vin_redaction_in_source_excerpt():
+    observation = _observation(
+        source="Catalog", host="catalog.example", price_rub=5_000, article="7700100008", brand="Renault"
+    )
+    observation["source_excerpt"] = f"{observation['source_excerpt']}; VIN WBA 000000/00000000"
+
+    result = assess_part_market(article="7700100008", brand="Renault", observations=[observation])
+
+    assert result["accepted_offer_count"] == 1
+    excerpt = _segment(result, "original", "new", "krasnoyarsk")["offers"][0]["source_excerpt"]
+    assert "Renault 7700100008" in excerpt
+    assert "WBA 000000/00000000" not in excerpt
+
+
 def test_assessment_never_combines_three_different_analog_skus_into_one_median():
     observations = [
         _observation(

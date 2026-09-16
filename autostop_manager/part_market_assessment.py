@@ -21,7 +21,14 @@ _PRICE_IN_RUB = re.compile(
     re.IGNORECASE,
 )
 _DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
-_VIN_LIKE = re.compile(r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){17}(?![A-HJ-NPR-Z0-9])", re.I)
+_VIN_LIKE = re.compile(
+    r"(?<![A-HJ-NPR-Z0-9])(?:"
+    r"[A-HJ-NPR-Z0-9]{17}"
+    r"|[A-HJ-NPR-Z0-9]{3}[ ._/\\-][A-HJ-NPR-Z0-9]{14}"
+    r"|[A-HJ-NPR-Z0-9]{3}[ ._/\\-][A-HJ-NPR-Z0-9]{6}[ ._/\\-][A-HJ-NPR-Z0-9]{8}"
+    r")(?![A-HJ-NPR-Z0-9])",
+    re.I,
+)
 _KIND_ALIASES = {
     "original": "original",
     "оригинал": "original",

@@ -244,6 +244,25 @@ def test_vin_only_query_is_rejected_without_invoking_gateway():
     assert result["error"] == {"code": "vin_like_query_rejected", "retryable": False}
 
 
+def test_brand_and_ten_digit_article_are_not_redacted_as_vin():
+    calls = []
+
+    def invoke(name, arguments):
+        calls.append((name, arguments))
+        return {"ok": True, "data": {"results": []}}
+
+    adapter = CapabilityWebResearchGatewayAdapter(invoke)
+    part = adapter.search_web_multi(query="Renault 7700100008 цена Красноярск")
+    vin = adapter.search_web_multi(query="WBA 000000/00000000")
+
+    assert part["ok"] is True
+    assert part["query"] == "Renault 7700100008 цена Красноярск"
+    assert part["vin_redacted"] is False
+    assert calls == [("search_web_multi", {"query": "Renault 7700100008 цена Красноярск", "limit": 5})]
+    assert vin["ok"] is False
+    assert vin["vin_redacted"] is True
+
+
 def test_page_adapter_forwards_bounded_browser_request_and_sanitizes_evidence():
     calls = []
 
