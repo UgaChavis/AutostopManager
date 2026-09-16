@@ -542,8 +542,8 @@ def verify_oem_candidates_web(
     raw_candidates = candidates if isinstance(candidates, list) else []
     prepared: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for index, item in enumerate(raw_candidates[:limit], start=1):
-        candidate, rejection, removed = _safe_candidate(item, index)
+    for index, raw_candidate in enumerate(raw_candidates[:limit], start=1):
+        candidate, rejection, removed = _safe_candidate(raw_candidate, index)
         redaction_count += removed
         if candidate is not None:
             prepared.append(candidate)
