@@ -137,6 +137,85 @@ def test_transport_discovers_schema_then_calls_only_part_evidence_with_hash(monk
     ]
 
 
+@pytest.mark.parametrize(
+    ("capability", "upstream_failure"),
+    [("search_web_multi", False), ("fetch_page_excerpt", False), ("search_web_multi", True)],
+)
+def test_transport_unwraps_nested_crm_raw_envelope_for_search_and_page(monkeypatch, capability, upstream_failure):
+    class FakeHttpClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    @asynccontextmanager
+    async def fake_stream(*_args, **_kwargs):
+        yield object(), object(), lambda: None
+
+    raw_data = (
+        {
+            "results": [{"url": "https://example.com/part", "title": "Public part"}],
+            "providers": [{"provider": "searxng", "status": "success"}],
+        }
+        if capability == "search_web_multi"
+        else {"ok": True, "final_url": "https://example.com/part", "excerpt": "Public price 4200 RUB"}
+    )
+
+    class FakeSession:
+        def __init__(self, *_args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def initialize(self):
+            pass
+
+        async def call_tool(self, name, _arguments, **_kwargs):
+            if name == "get_raw_capability_schema":
+                return SimpleNamespace(
+                    isError=False,
+                    structuredContent={
+                        "ok": True,
+                        "summary": {"name": capability, "risk": "read", "schema_hash": "a" * 16},
+                        "data": {"input_schema": {"type": "object"}},
+                    },
+                )
+            inner = (
+                {"ok": False, "error": {"code": "web_search_provider_failed", "retryable": True}}
+                if upstream_failure
+                else {"ok": True, "data": raw_data}
+            )
+            return SimpleNamespace(isError=False, structuredContent={"ok": True, "data": inner})
+
+    monkeypatch.setattr(crm_transport.httpx, "AsyncClient", FakeHttpClient)
+    monkeypatch.setattr(crm_transport, "streamable_http_client", fake_stream)
+    monkeypatch.setattr(crm_transport, "ClientSession", FakeSession)
+    gateway = crm_transport.build_crm_mcp_web_research_gateway(_connection())
+    assert gateway is not None
+
+    if upstream_failure:
+        result = gateway.search_web_multi(query="front pads")
+        assert result["ok"] is False
+        assert result["error"] == {"code": "web_search_provider_failed", "retryable": True}
+        return
+    if capability == "search_web_multi":
+        result = gateway.search_web_multi(query="front pads")
+        assert len(result["results"]) == 1
+        assert result["providers"][0]["provider"] == "searxng"
+    else:
+        result = gateway.fetch_page_excerpt(url="https://example.com/part")
+        assert result["excerpt"] == "Public price 4200 RUB"
+    assert result["ok"] is True
+
+
 def test_configured_transport_error_is_structured_and_never_uses_local_fallback(monkeypatch):
     @asynccontextmanager
     async def failed_stream(*_args, **_kwargs):

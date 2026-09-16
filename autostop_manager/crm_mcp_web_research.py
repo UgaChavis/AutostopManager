@@ -204,7 +204,23 @@ class LoopbackCrmMcpWebResearchTransport:
                     data = payload.get("data")
                     if payload.get("ok") is not True or not isinstance(data, Mapping):
                         return _failure("crm_mcp_capability_failed", retryable=True)
-                    return {"ok": True, "data": dict(data)}
+                    raw_data = dict(data)
+                    # Gateway v2 may wrap a raw capability result in its own
+                    # {ok, data} envelope. The adapter expects the capability
+                    # body here, not another gateway envelope.
+                    for _ in range(3):
+                        if raw_data.get("ok") is False:
+                            error = raw_data.get("error")
+                            if isinstance(error, Mapping):
+                                code = error.get("code")
+                                if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+                                    return _failure(code, retryable=bool(error.get("retryable", True)))
+                            return _failure("crm_mcp_capability_failed", retryable=True)
+                        nested = raw_data.get("data")
+                        if raw_data.get("ok") is not True or not isinstance(nested, Mapping):
+                            break
+                        raw_data = dict(nested)
+                    return {"ok": True, "data": raw_data}
 
 
 def build_crm_mcp_web_research_gateway(
