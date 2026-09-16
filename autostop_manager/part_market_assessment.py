@@ -89,6 +89,34 @@ def _prices_in_excerpt(excerpt: str) -> set[int]:
     return prices
 
 
+def _sku_like_token(token: str) -> bool:
+    normalized = _normalize_article(token)
+    if not normalized or sum(character.isdigit() for character in normalized) < 3:
+        return False
+    return not (normalized.isdigit() and len(normalized) == 4 and 1900 <= int(normalized) <= 2099)
+
+
+def _price_tied_to_article(excerpt: str, *, article: str, target_article: str, kind: str, price_rub: int) -> bool:
+    allowed_articles = {article, target_article} if kind == "analog" else {article}
+    for price_match in _PRICE_IN_RUB.finditer(excerpt):
+        if int(re.sub(r"\D", "", price_match.group(1))) != price_rub:
+            continue
+        preceding_tokens = [
+            (match.start(), _normalize_article(match.group()))
+            for match in _ARTICLE_TOKEN.finditer(excerpt, 0, price_match.start())
+        ]
+        article_positions = [position for position, token in preceding_tokens if token == article]
+        if not article_positions:
+            continue
+        last_article_position = article_positions[-1]
+        if not any(
+            position > last_article_position and token not in allowed_articles and _sku_like_token(token)
+            for position, token in preceding_tokens
+        ):
+            return True
+    return False
+
+
 def _price(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -230,6 +258,10 @@ def _validated_observation(
         return None, _reject(index, "price_not_in_source_excerpt")
     if len(excerpt_prices) != 1:
         return None, _reject(index, "price_ambiguous_in_source_excerpt")
+    if not _price_tied_to_article(
+        excerpt, article=article, target_article=target_article, kind=kind, price_rub=price_rub
+    ):
+        return None, _reject(index, "price_not_tied_to_article_in_source_excerpt")
     if not _condition_supported(excerpt, condition):
         return None, _reject(index, "condition_not_in_source_excerpt")
     if kind == "original" and (article != target_article or (target_brand and brand != target_brand)):

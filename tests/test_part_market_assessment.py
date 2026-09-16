@@ -321,6 +321,34 @@ def test_assessment_rejects_price_from_another_product_on_the_same_page():
     assert all(segment["median_price_rub"] is None for segment in result["segments"])
 
 
+def test_assessment_rejects_single_price_after_another_sku():
+    observations = [
+        _observation(source=f"Catalog {index}", host=f"adjacent-{index}.example", price_rub=1_000) for index in range(3)
+    ]
+    for observation in observations:
+        observation["source_excerpt"] = "Ford 1712024 новый; Ford 1712025 новый 1 000 ₽"
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    assert result["ok"] is False
+    assert result["status"] == "no_valid_public_evidence"
+    assert result["rejected_observations"] == [
+        {"observation_index": index, "code": "price_not_tied_to_article_in_source_excerpt"} for index in range(3)
+    ]
+    assert all(segment["median_price_rub"] is None for segment in result["segments"])
+
+
+def test_assessment_accepts_one_price_after_the_requested_sku():
+    observation = _observation(source="Single item", host="single.example", price_rub=1_000)
+    observation["source_excerpt"] = "Другая деталь Ford 1712025; Ford 1712024 новый 1 000 ₽"
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=[observation])
+
+    assert result["ok"] is True
+    assert result["accepted_offer_count"] == 1
+    assert result["rejected_observations"] == []
+
+
 def test_assessment_cannot_label_another_target_city_as_krasnoyarsk():
     result = assess_part_market(
         article="1712024",
