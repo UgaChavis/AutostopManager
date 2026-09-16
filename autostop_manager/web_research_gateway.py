@@ -19,6 +19,8 @@ from .work_pricing_research import PUBLIC_RESEARCH_TIMEOUT_SECONDS, _ddg_search
 
 WEB_RESEARCH_GATEWAY_SCHEMA = "WebResearchGatewayV1"
 SEARCH_WEB_MULTI_CAPABILITY = "search_web_multi"
+FETCH_PAGE_EXCERPT_CAPABILITY = "fetch_page_excerpt"
+FETCH_PAGE_BROWSER_CAPABILITY = "fetch_page_browser"
 RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY = "research_part_public_evidence"
 _LOCAL_DDG_PROVIDER = "duckduckgo"
 _DEFAULT_LIMIT = 5
@@ -32,7 +34,7 @@ _SOURCE_TYPES = frozenset({"oem_catalog", "price_catalog"})
 
 
 class WebResearchGateway(Protocol):
-    """Minimal, read-only E8 capability surface used by Manager E7."""
+    """Read-only E8 surface for public search, pages, and E7 evidence."""
 
     def search_web_multi(
         self,
@@ -54,6 +56,10 @@ class WebResearchGateway(Protocol):
         max_pages: int = 1,
         timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_SECONDS,
     ) -> dict[str, Any]: ...
+
+    def fetch_page_excerpt(self, *, url: str, max_chars: int = 2500) -> dict[str, Any]: ...
+
+    def fetch_page_browser(self, *, url: str, max_chars: int = 2500, wait_ms: int = 750) -> dict[str, Any]: ...
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
@@ -79,6 +85,28 @@ def _bounded_timeout(value: Any) -> int:
 
 def _compact(value: Any, *, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def _public_page_url(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url or len(url) > 2048 or _VIN_LIKE_TOKEN.search(unquote(unquote(url))):
+        return ""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        username = parsed.username
+        password = parsed.password
+    except ValueError:
+        return ""
+    if parsed.scheme.casefold() not in {"http", "https"} or not host or username is not None or password is not None:
+        return ""
+    return url
+
+
+def _public_page_text(value: Any, *, limit: int) -> tuple[str, bool]:
+    text = _compact(value, limit=limit)
+    redacted, count = _VIN_LIKE_TOKEN.subn("[vin-redacted]", text)
+    return redacted, bool(count)
 
 
 def redact_vin_like_text(value: Any, *, limit: int = 1000) -> tuple[str, int]:
@@ -168,12 +196,14 @@ def _compact_results(raw_results: Any, *, allowed_domains: Sequence[str], limit:
         if not isinstance(row, Mapping):
             continue
         url = _compact(row.get("url"), limit=2048)
-        if not url or not _domain_allowed(url, allowed_domains):
+        if not _public_page_url(url) or not _domain_allowed(url, allowed_domains):
             continue
+        title, _ = _public_page_text(row.get("title"), limit=140)
+        snippet, _ = _public_page_text(row.get("snippet"), limit=240)
         result: dict[str, Any] = {
-            "title": _compact(row.get("title"), limit=140),
+            "title": title,
             "url": url,
-            "snippet": _compact(row.get("snippet"), limit=240),
+            "snippet": snippet,
             "provider": _compact(row.get("provider"), limit=40) or _LOCAL_DDG_PROVIDER,
         }
         source = _compact(row.get("source") or row.get("domain") or _result_hostname(url), limit=100)
@@ -323,6 +353,93 @@ def normalize_web_research_response(
     )
 
 
+def _page_failure(capability: str, *, code: str, retryable: bool = False) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema": WEB_RESEARCH_GATEWAY_SCHEMA,
+        "capability": capability,
+        "read_only": True,
+        "error": {"code": code, "retryable": retryable},
+    }
+
+
+def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_chars: int) -> dict[str, Any]:
+    """Return only bounded, public page evidence from a CRM E8 raw result."""
+
+    safe_url = _public_page_url(url)
+    if not safe_url:
+        return _page_failure(capability, code="web_page_url_invalid")
+    envelope = payload if isinstance(payload, Mapping) else {}
+    if envelope.get("ok") is False:
+        error = envelope.get("error")
+        raw_code = error.get("code") if isinstance(error, Mapping) else ""
+        code = (
+            raw_code
+            if isinstance(raw_code, str)
+            and raw_code
+            in {
+                "crm_mcp_transport_failed",
+                "crm_mcp_schema_discovery_failed",
+                "crm_mcp_capability_failed",
+                "crm_mcp_configuration_invalid",
+                "crm_mcp_capability_not_allowed",
+                "web_page_gateway_unavailable",
+            }
+            else "web_page_gateway_failed"
+        )
+        return _page_failure(
+            capability,
+            code=code,
+            retryable=code not in {"crm_mcp_configuration_invalid", "web_page_gateway_unavailable"},
+        )
+    data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else envelope
+    if not isinstance(data, Mapping) or data.get("ok") is not True:
+        return _page_failure(capability, code="web_page_response_invalid")
+    final_url = _public_page_url(data.get("final_url") or safe_url)
+    if not final_url:
+        return _page_failure(capability, code="web_page_response_invalid")
+    title, title_redacted = _public_page_text(data.get("title"), limit=200)
+    excerpt, excerpt_redacted = _public_page_text(
+        data.get("excerpt"),
+        limit=_bounded_int(max_chars, default=2500, minimum=1, maximum=8000),
+    )
+    raw_flags = data.get("access_flags")
+    flags = [
+        _compact(flag, limit=40)
+        for flag in (raw_flags[:10] if isinstance(raw_flags, list) else [])
+        if _compact(flag, limit=40)
+    ]
+    links: list[dict[str, str]] = []
+    raw_links = data.get("links")
+    for row in raw_links[:25] if isinstance(raw_links, list) else []:
+        if not isinstance(row, Mapping):
+            continue
+        link_url = _public_page_url(row.get("url"))
+        if not link_url:
+            continue
+        link_text, _ = _public_page_text(row.get("text"), limit=160)
+        links.append({"url": link_url, "text": link_text, "domain": _result_hostname(link_url)})
+    raw_status = data.get("status_code")
+    status_code = raw_status if type(raw_status) is int and 0 <= raw_status <= 599 else 0
+    return {
+        "ok": True,
+        "schema": WEB_RESEARCH_GATEWAY_SCHEMA,
+        "capability": capability,
+        "read_only": True,
+        "url": safe_url,
+        "final_url": final_url,
+        "domain": _result_hostname(final_url),
+        "title": title,
+        "excerpt": excerpt,
+        "links": links,
+        "access_flags": flags,
+        "requires_human": bool(data.get("requires_human")),
+        "status_code": status_code,
+        "mode": "browser" if capability == FETCH_PAGE_BROWSER_CAPABILITY else "http_excerpt",
+        "vin_redacted": bool(data.get("vin_redacted")) or title_redacted or excerpt_redacted,
+    }
+
+
 class CapabilityWebResearchGatewayAdapter:
     """Injectable client for E8 capabilities; it does not create a transport."""
 
@@ -422,6 +539,31 @@ class CapabilityWebResearchGatewayAdapter:
             providers=providers,
             timeout_seconds=timeout_seconds,
             max_pages=_bounded_int(max_pages, default=1, minimum=0, maximum=_MAX_PART_EVIDENCE_PAGES),
+        )
+
+    def _call_page(self, *, capability: str, url: str, max_chars: int, wait_ms: int | None = None) -> dict[str, Any]:
+        safe_url = _public_page_url(url)
+        if not safe_url:
+            return _page_failure(capability, code="web_page_url_invalid")
+        bounded_chars = _bounded_int(max_chars, default=2500, minimum=1, maximum=8000)
+        arguments: dict[str, Any] = {"url": safe_url, "max_chars": bounded_chars}
+        if wait_ms is not None:
+            arguments["wait_ms"] = _bounded_int(wait_ms, default=750, minimum=0, maximum=5000)
+        try:
+            payload = self._invoke(capability, arguments)
+        except Exception:  # noqa: BLE001 - do not expose transport or upstream details.
+            return _page_failure(capability, code="web_page_gateway_failed", retryable=True)
+        return normalize_web_page_response(payload, capability=capability, url=safe_url, max_chars=bounded_chars)
+
+    def fetch_page_excerpt(self, *, url: str, max_chars: int = 2500) -> dict[str, Any]:
+        return self._call_page(capability=FETCH_PAGE_EXCERPT_CAPABILITY, url=url, max_chars=max_chars)
+
+    def fetch_page_browser(self, *, url: str, max_chars: int = 2500, wait_ms: int = 750) -> dict[str, Any]:
+        return self._call_page(
+            capability=FETCH_PAGE_BROWSER_CAPABILITY,
+            url=url,
+            max_chars=max_chars,
+            wait_ms=wait_ms,
         )
 
 
@@ -526,6 +668,12 @@ class DuckDuckGoWebResearchGateway:
             providers=providers,
             timeout_seconds=timeout_seconds,
         )
+
+    def fetch_page_excerpt(self, *, url: str, max_chars: int = 2500) -> dict[str, Any]:
+        return _page_failure(FETCH_PAGE_EXCERPT_CAPABILITY, code="web_page_gateway_unavailable")
+
+    def fetch_page_browser(self, *, url: str, max_chars: int = 2500, wait_ms: int = 750) -> dict[str, Any]:
+        return _page_failure(FETCH_PAGE_BROWSER_CAPABILITY, code="web_page_gateway_unavailable")
 
 
 _DEFAULT_GATEWAY: WebResearchGateway = DuckDuckGoWebResearchGateway()
@@ -638,6 +786,48 @@ def search_web_multi(
         )
 
 
+def _fetch_public_page(*, capability: str, url: str, max_chars: int, wait_ms: int | None = None) -> dict[str, Any]:
+    safe_url = _public_page_url(url)
+    if not safe_url:
+        return _page_failure(capability, code="web_page_url_invalid")
+    method_name = "fetch_page_browser" if capability == FETCH_PAGE_BROWSER_CAPABILITY else "fetch_page_excerpt"
+    method = getattr(_DEFAULT_GATEWAY, method_name, None)
+    if not callable(method):
+        return _page_failure(capability, code="web_page_gateway_unavailable")
+    arguments: dict[str, Any] = {
+        "url": safe_url,
+        "max_chars": _bounded_int(max_chars, default=2500, minimum=1, maximum=8000),
+    }
+    if wait_ms is not None:
+        arguments["wait_ms"] = _bounded_int(wait_ms, default=750, minimum=0, maximum=5000)
+    try:
+        return normalize_web_page_response(
+            method(**arguments),
+            capability=capability,
+            url=safe_url,
+            max_chars=arguments["max_chars"],
+        )
+    except Exception:  # noqa: BLE001 - do not expose gateway or upstream details.
+        return _page_failure(capability, code="web_page_gateway_failed", retryable=True)
+
+
+def fetch_page_excerpt(*, url: str, max_chars: int = 2500) -> dict[str, Any]:
+    """Read one bounded public page through the installed CRM E8 adapter."""
+
+    return _fetch_public_page(capability=FETCH_PAGE_EXCERPT_CAPABILITY, url=url, max_chars=max_chars)
+
+
+def fetch_page_browser(*, url: str, max_chars: int = 2500, wait_ms: int = 750) -> dict[str, Any]:
+    """Render one public page through CRM E8 and return bounded evidence."""
+
+    return _fetch_public_page(
+        capability=FETCH_PAGE_BROWSER_CAPABILITY,
+        url=url,
+        max_chars=max_chars,
+        wait_ms=wait_ms,
+    )
+
+
 def research_part_public_evidence(
     *,
     query: str,
@@ -701,13 +891,18 @@ def research_part_public_evidence(
 
 
 __all__ = [
+    "FETCH_PAGE_BROWSER_CAPABILITY",
+    "FETCH_PAGE_EXCERPT_CAPABILITY",
     "RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY",
     "SEARCH_WEB_MULTI_CAPABILITY",
     "WEB_RESEARCH_GATEWAY_SCHEMA",
     "CapabilityWebResearchGatewayAdapter",
     "DuckDuckGoWebResearchGateway",
     "WebResearchGateway",
+    "fetch_page_browser",
+    "fetch_page_excerpt",
     "install_web_research_gateway",
+    "normalize_web_page_response",
     "normalize_web_research_response",
     "research_part_public_evidence",
     "search_web_multi",
