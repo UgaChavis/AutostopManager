@@ -18,7 +18,11 @@ def build_server() -> FastMCP:
         name="AutostopManager",
         instructions=(
             "Tools for AutoStop customer cases, Store operations and parts research. Drive "
-            "the task to an outcome. CRM, Store, Gmail and Telegram own their current data; Manager coordinates them."
+            "the task to an outcome. CRM, Store, Gmail and Telegram own their current data; Manager coordinates them. "
+            "For E9 market research, use search_web_multi and fetch_page_excerpt or fetch_page_browser, "
+            "then assess_part_market. Quick budget: 2 minutes, 6 searches, 12 pages; deep budget only "
+            "when needed: 5 minutes, 20 searches, 30 pages. The result is a preliminary public market "
+            "reference; do not write CRM or publish an F4 quote from E9 research."
         ),
         host=get_mcp_host(),
         port=get_mcp_port(),
