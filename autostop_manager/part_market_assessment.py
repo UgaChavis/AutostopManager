@@ -214,7 +214,12 @@ def _validated_observation(
     kind = _kind(row.get("offer_kind"))
     condition = _condition(row.get("condition"))
     region_scope = _region_scope(row.get("region"), target_region)
-    if not all((article, brand, source, excerpt, url, observed, publication, price_rub, kind, condition, region_scope)):
+    if (
+        not all((article, brand, source, excerpt, price_rub, kind, condition, region_scope))
+        or url is None
+        or observed is None
+        or publication is None
+    ):
         return None, _reject(index, "observation_fields_invalid")
     if not _contains_article(excerpt, article):
         return None, _reject(index, "article_not_in_source_excerpt")
