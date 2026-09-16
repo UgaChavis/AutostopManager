@@ -26,6 +26,29 @@ unrequested personal-data lookups. Do not commit the export or customer response
 
 VINdecodeOE normalization retains shared build date, model code, production
 period, paint/trim and explicitly labelled engine/transmission/market options.
+Direct shared `engine`, `engine_info`, `market` and `prodrange` attributes are
+also retained. The ambiguous provider `manufactured` year is exposed separately
+as `catalog_year`; it must not replace the explicit `production_date` or be
+assumed to be a model year without other evidence.
 It never selects a modification from an ambiguous modification list. Non-clean
 vPIC results remain partial evidence; their variant/engine/transmission fields
 are not promoted into the normalized vehicle profile.
+
+`engine_info` accepts the current top-level `getEngine` list as well as legacy
+envelopes, retaining engine code, capacity, power, cylinders, valves and torque.
+HTTP 401/403 is `provider_auth_error`, never retried: verify
+`PARTSAPI_GET_ENGINE_KEY` against the current shop export and method access.
+The error suggests `vin_decode_oe` when a VIN/frame is available; it does not
+silently substitute another vehicle or spend quota on an automatic VIN lookup.
+
+For `norms_models`, obtain `makeNameSEO` from `norms_makes`, not a TecDoc make ID.
+These codes are uppercase; surrounding whitespace and letter case are normalized
+for both friendly inputs and `provider_parameters`. Lowercase codes can trigger
+an upstream HTTP 5xx despite valid credentials. Model/motor IDs for further
+AUTONORMS calls must come from that catalog, not TecDoc.
+
+Retries remain opt-in (`max_attempts=2`): AUTONORMS allows at most one retry,
+with a short delay. The default makes one request to conserve test quota.
+Exhausted transient errors return an explicit temporary-unavailability message,
+`requires_fallback=true`, and `empty_payload=false`; they do not mean that a
+vehicle, service operation or part is absent.

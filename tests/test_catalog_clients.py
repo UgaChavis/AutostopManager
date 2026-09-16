@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http.client import IncompleteRead
+import json
 import pytest
 from urllib.error import HTTPError
 
@@ -361,7 +362,7 @@ def test_partsapi_autonorms_operations_use_method_keys_and_documented_params(mon
 
     assert makes["partsapi_method"] == "GetNormsMakes"
     assert makes["request_plan"]["params"] == {}
-    assert models["request_plan"]["params"] == {"makeNameSEO": "toyota"}
+    assert models["request_plan"]["params"] == {"makeNameSEO": "TOYOTA"}
     assert motors["request_plan"]["params"] == {"modelId": "123"}
     assert times["request_plan"]["params"] == {"motorId": "456", "TopCatId": "10", "SubCatId": "20"}
     assert volumes["partsapi_method"] == "GetFillVolumes"
@@ -767,7 +768,8 @@ def test_extract_partsapi_vehicle_profiles_handles_top_level_vin_decode_oe_paylo
     assert profiles[0]["make"] == "HONDA"
     assert profiles[0]["model"] == "ACCORD"
     assert profiles[0]["market"] == "USA"
-    assert profiles[0]["production_date"] == "2003"
+    assert profiles[0]["catalog_year"] == "2003"
+    assert "production_date" not in profiles[0]
     assert profiles[0]["transmission"] == "5AT"
     assert "modification" not in profiles[0]
 
@@ -1546,3 +1548,126 @@ def test_partsapi_returned_different_vin_is_not_exact_confirmation():
     assert profile["identifier_matches_request"] is False
     assert profile["requires_exact_identifier_confirmation"] is True
     assert "SYNTHETIC-OTHER" not in str(profile)
+
+
+@pytest.mark.parametrize("year_first", [False, True])
+def test_partsapi_oe_engine_market_and_year_survive_normalization(year_first):
+    attributes = [
+        {"key": "date", "value": "01.02.2020"},
+        {"key": "manufactured", "value": "2021"},
+        {"key": "engine", "value": "TEST-ENGINE"},
+        {"key": "engine_info", "value": "2000CC / 200hp"},
+        {"key": "market", "value": "TEST-MARKET"},
+        {"key": "prodrange", "value": "2019 - 2022"},
+    ]
+    if year_first:
+        attributes.reverse()
+    result = extract_partsapi_vehicle_profiles(
+        operation="vin_decode_oe",
+        payload={
+            "brand": "TEST",
+            "name": "TEST MODEL",
+            "commonAttributes": attributes,
+            "modifications": [{"engine": "OTHER", "market": "OTHER"}],
+        },
+    )[0]
+    assert result["engine"] == "TEST-ENGINE"
+    assert result["market"] == "TEST-MARKET"
+    assert result["production_date"] == "01.02.2020"
+    assert result["catalog_year"] == "2021"
+    assert result["production_period"] == "2019 - 2022"
+    assert result["engine_description"] == "2000CC / 200hp"
+
+
+def test_partsapi_engine_list_is_a_successful_profile(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(
+        catalog_clients_module,
+        "urlopen",
+        lambda *a, **kw: _FakeResponse(
+            [
+                {
+                    "ENGINE_CODE": "TEST-ENGINE",
+                    "MANUFACTURER": "TEST",
+                    "TYPE_ID": 123,
+                    "ENG_CAPACITY_CCM": "2000.000",
+                    "ENG_NUMBER_OF_CYLINDERS": 4,
+                    "ENG_NUMBER_OF_VALVES": 16,
+                    "ENG_POWER_KW_START": "150.000",
+                    "ENG_TORQUE_NM_START": "300.000",
+                    "ENGINE_MANAGEMENT": "Test timing drive",
+                },
+            ]
+        ),
+    )
+    result = partsapi_catalog_lookup(operation="engine_info", type_id="123")
+    assert result["outcome"] == "success"
+    profile = result["vehicle_profiles"][0]
+    assert profile["engine"] == profile["engine_code"] == "TEST-ENGINE"
+    assert profile["tecdoc_car_id"] == 123
+    assert profile["displacement_cc"] == "2000.000"
+    assert profile["cylinders"] == 4
+    assert profile["valves"] == 16
+    assert profile["power_kw_from"] == "150.000"
+    assert profile["torque_nm_from"] == "300.000"
+    assert profile["timing_drive"] == "Test timing drive"
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_partsapi_auth_failure_does_not_retry_and_names_oe_fallback(monkeypatch, code):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_GET_ENGINE_KEY", "private-method-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    calls = []
+
+    def fail(request, **kwargs):
+        calls.append(request)
+        raise HTTPError(request.full_url, code, "private-method-key", hdrs=None, fp=None)
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", fail)
+    monkeypatch.setattr(catalog_clients_module.time, "sleep", lambda _: pytest.fail("must not retry auth"))
+    result = partsapi_catalog_lookup(operation="engine_info", type_id="123", max_attempts=3)
+    assert len(calls) == 1
+    assert result["failure_class"] == "provider_auth_error"
+    assert result["retryable"] is False
+    assert result["empty_payload"] is False
+    assert result["fallback_operation"] == "vin_decode_oe"
+    assert result["fallback_requires_identifier"] is True
+    assert "private-method-key" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("via_override", [False, True])
+def test_partsapi_norms_models_canonicalizes_make_code(monkeypatch, via_override):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    kwargs = {"provider_parameters": {"makeNameSEO": " audi "}} if via_override else {"make_name_seo": " audi "}
+    result = partsapi_catalog_lookup(operation="norms_models", dry_run=True, **kwargs)
+    assert result["request_plan"]["params"] == {"makeNameSEO": "AUDI"}
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+def test_partsapi_norms_retry_once_with_delay_and_honest_failure(monkeypatch, recovers):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    calls, delays = [], []
+
+    def respond(request, **kwargs):
+        calls.append(request)
+        if recovers and len(calls) == 2:
+            return _FakeResponse([{"makeName": "TEST", "model": "TEST MODEL", "modelId": 1}])
+        raise HTTPError(request.full_url, 503, "unavailable", hdrs=None, fp=None)
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
+    monkeypatch.setattr(catalog_clients_module.time, "sleep", delays.append)
+    result = partsapi_catalog_lookup(operation="norms_models", make_name_seo="TEST", max_attempts=10)
+    assert len(calls) == result["attempt_count"] == result["max_attempts"] == 2
+    assert delays == [0.25]
+    assert result["outcome"] == ("success" if recovers else "provider_http_5xx")
+    if not recovers:
+        assert result["empty_payload"] is False
+        assert result["requires_fallback"] is True
+        assert "временно недоступен" in result["status_message"]

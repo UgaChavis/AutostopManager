@@ -1472,6 +1472,12 @@ def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
         code = int(exc.code)
         if code == 429:
             return "rate_limited", True, "PartsAPI rate limit reached."
+        if code in (401, 403):
+            return (
+                "provider_auth_error",
+                False,
+                f"PartsAPI denied method access (HTTP {code}); check its method-specific key.",
+            )
         if 500 <= code <= 599:
             return "provider_http_5xx", True, f"PartsAPI returned HTTP {code}."
         return "provider_http_4xx", False, f"PartsAPI returned HTTP {code}."
@@ -1631,14 +1637,16 @@ def extract_oem_candidates(
 
 
 _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
-    "make": ("manuName", "manuShortName", "brand", "brend"),
+    "make": ("manuName", "manuShortName", "brand", "brend", "MANUFACTURER"),
     "catalog": ("catalog", "katalog"),
     "model": ("modelName", "model", "modely"),
     "model_code": ("model_code",),
     "production_period": ("prodPeriod",),
+    "catalog_year": ("manufactured",),
+    "engine_description": ("engine_info",),
     "steering": ("steering",),
     "catalog_description": ("catalog_description",),
-    "engine": ("motorCodes", "motorType", "engine", "dvigately"),
+    "engine": ("motorCodes", "motorType", "engine", "dvigately", "ENGINE_CODE"),
     "modification": ("typeName", "modification", "modifikacii"),
     "market": ("market", "rynok"),
     "production_date": ("date", "data_vypuska"),
@@ -1646,7 +1654,7 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "body": ("bodyStyle", "bodystyle", "kuzov", "kuzova"),
     "grade": ("grade", "komplektaciya"),
     "transmission": ("kp", "kpp"),
-    "tecdoc_car_id": ("carId", "typeNumber"),
+    "tecdoc_car_id": ("carId", "typeNumber", "TYPE_ID"),
     "tecdoc_external_id": ("TecDocExternalId",),
     "tecrmi_external_id": ("TecRmiExternalId",),
     "model_year_from": ("yearOfConstrFrom", "modelyearfrom"),
@@ -1655,19 +1663,24 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "frame_color": ("framecolor", "cvet_kuzova"),
     "trim_color": ("trimcolor", "cvet_salona"),
     "paint_type": ("painttype",),
-    "fuel_type": ("fuelType",),
+    "fuel_type": ("fuelType", "FUEL_TYPE"),
     "brake_system": ("brakeSystem", "brakeType"),
-    "displacement_cc": ("cylinderCapacityCcm", "ccmTech"),
-    "power_hp_from": ("powerHpFrom",),
-    "power_hp_to": ("powerHpTo",),
-    "power_kw_from": ("powerKwFrom",),
-    "power_kw_to": ("powerKwTo",),
-    "engine_id": ("ENG_ID", "engineId", "motorId"),
-    "engine_code": ("ENG_CODE", "engineCode"),
+    "displacement_cc": ("cylinderCapacityCcm", "ccmTech", "ENG_CAPACITY_CCM"),
+    "power_hp_from": ("powerHpFrom", "ENG_POWER_PS_START"),
+    "power_hp_to": ("powerHpTo", "ENG_POWER_PS_UPTO"),
+    "power_kw_from": ("powerKwFrom", "ENG_POWER_KW_START"),
+    "power_kw_to": ("powerKwTo", "ENG_POWER_KW_UPTO"),
+    "engine_id": ("ENG_ID", "engineId", "motorId", "TECDOC_ENGINE_NO"),
+    "engine_code": ("ENG_CODE", "engineCode", "ENGINE_CODE"),
     "engine_name": ("ENG_NAME", "engineName", "engineSalesName"),
-    "cylinders": ("ENG_CYLINDERS", "cylinders"),
-    "valves": ("ENG_VALVES", "valves"),
-    "fuel_supply": ("ENG_FUEL_SUPPLY", "fuelSupply"),
+    "cylinders": ("ENG_CYLINDERS", "cylinders", "ENG_NUMBER_OF_CYLINDERS"),
+    "valves": ("ENG_VALVES", "valves", "ENG_NUMBER_OF_VALVES"),
+    "fuel_supply": ("ENG_FUEL_SUPPLY", "fuelSupply", "FUEL_MIXTURE"),
+    "torque_nm_from": ("ENG_TORQUE_NM_START",),
+    "torque_nm_to": ("ENG_TORQUE_NM_UPTO",),
+    "charge_type": ("CHARGE_TYPE",),
+    "timing_drive": ("ENGINE_MANAGEMENT",),
+    "engine_layout": ("ENGINE_CONSTRUCTION",),
 }
 
 
@@ -1724,12 +1737,17 @@ def _partsapi_vin_decode_oe_top_level_record(payload: dict[str, Any]) -> dict[st
         "date": "data_vypuska",
         "model": "model_code",
         "prodperiod": "prodPeriod",
+        "prodrange": "prodPeriod",
+        "engine": "engine",
+        "engine_info": "engine_info",
+        "market": "market",
         "framecolor": "framecolor",
         "trimcolor": "trimcolor",
         "options": "options",
         "description": "catalog_description",
         "transmission": "kpp",
-        "manufactured": "data_vypuska",
+        # Provider year is not necessarily the build date (e.g. next model year).
+        "manufactured": "manufactured",
         "country": "rynok",
         "countrydecode": "rynok",
         "region": "rynok",
@@ -1765,9 +1783,27 @@ def _partsapi_vin_decode_oe_top_level_record(payload: dict[str, Any]) -> dict[st
     return record
 
 
+def _partsapi_engine_records(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items = []
+    for key in ("data", "result", "array"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            nested = value.get("array") if isinstance(value.get("array"), (dict, list)) else value
+            if isinstance(nested, dict):
+                items.append(nested)
+            elif isinstance(nested, list):
+                items.extend(item for item in nested if isinstance(item, dict))
+        elif isinstance(value, list):
+            items.extend(item for item in value if isinstance(item, dict))
+    return items
+
+
 def extract_partsapi_vehicle_profiles(
-    *, payload: dict[str, Any], operation: str | None = None, requested_identifier: str | None = None
+    *, payload: Any, operation: str | None = None, requested_identifier: str | None = None
 ) -> list[dict[str, Any]]:
+    # getEngine currently returns a top-level list; retain legacy envelopes too.
+    if operation == "engine_info" and isinstance(payload, list):
+        payload = {"data": payload}
     if not isinstance(payload, dict):
         return []
 
@@ -1790,16 +1826,7 @@ def extract_partsapi_vehicle_profiles(
             if top_level is not None:
                 items.append(top_level)
     elif operation == "engine_info":
-        for key in ("data", "result", "array"):
-            value = payload.get(key)
-            if isinstance(value, dict):
-                nested = value.get("array") if isinstance(value.get("array"), (dict, list)) else value
-                if isinstance(nested, dict):
-                    items.append(nested)
-                elif isinstance(nested, list):
-                    items.extend(item for item in nested if isinstance(item, dict))
-            elif isinstance(value, list):
-                items.extend(item for item in value if isinstance(item, dict))
+        items.extend(_partsapi_engine_records(payload))
     elif operation == "plate_to_vin":
         items.extend(_partsapi_plate_vin_records(payload))
 
@@ -2213,6 +2240,8 @@ def partsapi_catalog_lookup(
     max_attempts: int = 1,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if operation.startswith("norms_"):
+        max_attempts = _bounded_attempt_count(max_attempts, limit=2)
     if operation not in PARTSAPI_OPERATIONS:
         return {
             "ok": False,
@@ -2280,6 +2309,9 @@ def partsapi_catalog_lookup(
         }
     for api_name, value in overrides.items():
         input_values[spec["params"][api_name]] = value
+    if operation == "norms_models" and isinstance(input_values.get("make_name_seo"), str):
+        # AUTONORMS makeNameSEO uses uppercase codes (GetNormsMakes), unlike TecDoc IDs.
+        input_values["make_name_seo"] = input_values["make_name_seo"].strip().upper()
     params = {api_name: input_values.get(source) for api_name, source in spec["params"].items()}
     missing_params = [name for name in spec["required"] if input_values.get(name) in (None, "")]
     # Required shop fields include defaulted language/type values, too.
@@ -2359,6 +2391,8 @@ def partsapi_catalog_lookup(
     last_error = "PartsAPI request failed."
     last_retryable = False
     for attempt in range(1, attempt_count + 1):
+        if attempt > 1:
+            time.sleep(0.25 * (attempt - 1))
         try:
             with urlopen(request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -2397,6 +2431,15 @@ def partsapi_catalog_lookup(
             # Keep this explicit for callers deciding whether to retry or
             # route the request to a manual EPC check.
             "empty_payload": False,
+            "status_message": (
+                "Доступ к методу отклонён: проверьте ключ и права метода."
+                if last_failure_class == "provider_auth_error"
+                else "Сервис временно недоступен; это не отсутствие данных в каталоге."
+                if last_retryable
+                else "Запрос к каталогу не выполнен."
+            ),
+            "fallback_operation": "vin_decode_oe" if operation == "engine_info" else None,
+            "fallback_requires_identifier": operation == "engine_info",
         }
 
     payload_shape = _response_shape(payload)
