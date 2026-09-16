@@ -453,7 +453,7 @@ def test_partsapi_search_tree_and_article_operations_use_safe_params(monkeypatch
 
     assert tree["ok"] is True
     assert tree["partsapi_method"] == "getSearchTree"
-    assert tree["request_plan"]["params"] == {"TYPE": "PC", "TYPE_ID": "1404", "LANG": 16}
+    assert tree["request_plan"]["params"] == {"carType": "PC", "carId": "1404", "lang": 16}
     assert "tree-secret" not in tree["request_plan"]["redacted_url"]
     assert criteria["ok"] is True
     assert criteria["partsapi_method"] == "getArticleCriteria"
@@ -1460,3 +1460,89 @@ def test_public_aftermarket_all_uses_one_deadline_and_returns_safe_partial(monke
     assert result["partial"] is True
     assert result["requires_fallback"] is True
     assert len(result["results"]) == 2
+
+
+def test_partsapi_oe_shared_details_survive_without_selecting_modification():
+    profile = extract_partsapi_vehicle_profiles(
+        operation="vin_decode_oe",
+        payload={
+            "brand": "TOYOTA",
+            "name": "TEST SERIES",
+            "commonAttributes": [
+                {"key": "date", "value": "02.2016"},
+                {"key": "model", "value": "TEST-MODEL-CODE"},
+                {"key": "prodPeriod", "value": "2014 - 2018"},
+                {"key": "framecolor", "value": "TEST-PAINT"},
+                {"key": "trimcolor", "value": "TEST-TRIM"},
+                {
+                    "key": "options",
+                    "value": "АКПП/МКПП: AUTOMATIC; Тип трансмиссии: 6AT; Двигатель: TEST ENGINE; Расположение руля: LEFT; Тип кузова: WAGON; Комплектация: STANDARD; Рынок сбыта: EUROPE",
+                },
+            ],
+            "modifications": [{"engine": "WRONG ENGINE"}],
+        },
+    )[0]
+    assert profile["model"] == "TEST SERIES"
+    assert profile["model_code"] == "TEST-MODEL-CODE"
+    assert profile["production_date"] == "02.2016"
+    assert profile["production_period"] == "2014 - 2018"
+    assert profile["frame_color"] == "TEST-PAINT"
+    assert profile["trim_color"] == "TEST-TRIM"
+    assert profile["engine"] == "TEST ENGINE"
+    assert profile["transmission"] == "6AT"
+    assert profile["steering"] == "LEFT"
+    assert profile["market"] == "EUROPE"
+    assert "modification" not in profile
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"key": "injected"},
+        {"method": "other"},
+        {"url": "https://invalid.test"},
+        {"carType": True},
+        {"carType": float("nan")},
+    ],
+)
+def test_partsapi_provider_overrides_reject_unknown_or_unsafe_input(monkeypatch, parameters):
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *a, **kw: pytest.fail("network must not run"))
+    result = partsapi_catalog_lookup(operation="getMakes", provider_parameters=parameters)
+    assert result["outcome"] == "invalid_input"
+    assert result["attempt_count"] == 0
+
+
+def test_partsapi_new_shop_methods_use_method_key_and_require_parameters(monkeypatch):
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setenv("PARTSAPI_GET_MAKES_KEY", "private-method-key")
+    monkeypatch.setenv("PARTSAPI_KEY", "wrong-generic-key")
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *a, **kw: pytest.fail("dry run must not spend quota"))
+    missing = partsapi_catalog_lookup(operation="getMakes", dry_run=True)
+    assert missing["missing_params"] == ["carType"]
+    result = partsapi_catalog_lookup(operation="getMakes", provider_parameters={"carType": "PC"}, dry_run=True)
+    assert result["ok"]
+    assert result["request_plan"]["params"] == {"carType": "PC"}
+    assert result["request_plan"]["method_key_env_name"] == "PARTSAPI_GET_MAKES_KEY"
+    assert "private-method-key" not in str(result)
+    assert "wrong-generic-key" not in str(result)
+
+
+def test_partsapi_article_requires_number_and_supplier_not_old_id(monkeypatch):
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setenv("PARTSAPI_ARTICLE_KEY", "private-key")
+    old = partsapi_catalog_lookup(operation="article", article_id="123", dry_run=True)
+    assert old["outcome"] == "invalid_input"
+    result = partsapi_catalog_lookup(operation="article", part_number="TEST-PART", supplier_id=42, dry_run=True)
+    assert result["ok"]
+    assert result["request_plan"]["params"] == {"ART_NUM": "TEST-PART", "SUP_ID": 42, "LANG": 16}
+
+
+def test_partsapi_returned_different_vin_is_not_exact_confirmation():
+    profile = extract_partsapi_vehicle_profiles(
+        operation="vin_decode",
+        requested_identifier="SYNTHETIC-REQUEST",
+        payload={"result": [{"brand": "TEST", "vin": "SYNTHETIC-OTHER", "model": "TEST MODEL"}]},
+    )[0]
+    assert profile["identifier_matches_request"] is False
+    assert profile["requires_exact_identifier_confirmation"] is True
+    assert "SYNTHETIC-OTHER" not in str(profile)

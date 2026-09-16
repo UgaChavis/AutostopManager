@@ -305,3 +305,29 @@ def test_decode_vehicle_identity_redacts_raw_identifier_and_honors_no_live_vpic(
     assert result["normalized_query"] == "JTE***767"
     assert result["privacy"]["raw_identifier_redacted_from_output"] is True
     assert result["lookup_plan"]["identifier"]["redacted"]["display"] == "JTE***767"
+
+
+def test_nonclean_vpic_does_not_promote_unreliable_variant_fields():
+    result = decode_vehicle_identity(
+        "WAUZZZ4H" + "A" * 9,
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result={
+            "ok": True,
+            "error_code": "1,11,400",
+            "vehicle": {
+                "make": "AUDI",
+                "model": "A8",
+                "enginemodel": "UNRELIABLE",
+                "displacementl": "9.9",
+                "enginehp": "999",
+                "transmissionstyle": "WRONG",
+                "modelyear": "2099",
+                "drivetype": "WRONG",
+            },
+        },
+    )
+    profile = result["vehicle_profile"]
+    assert profile["make"] == "Audi"
+    for field in ("engine", "engine_displacement_l", "engine_power_hp", "transmission", "model_year", "drivetrain"):
+        assert not profile.get(field)

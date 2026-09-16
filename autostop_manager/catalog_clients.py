@@ -16,6 +16,7 @@ from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request, urlopen
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
+from .partsapi_methods import PARTSAPI_SHOP_METHODS
 from .partsapi_category_index import search_partsapi_category_index
 
 
@@ -152,27 +153,27 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
     },
     "search_tree": {
         "method": "getSearchTree",
-        "required": ("vehicle_type", "type_id", "lang_id"),
-        "params": {"TYPE": "vehicle_type", "TYPE_ID": "type_id", "LANG": "lang_id"},
+        "required": ("type_id",),
+        "params": {"carType": "vehicle_type", "carId": "type_id", "lang": "lang_id"},
         "defaults": {"vehicle_type": "PC", "lang_id": 16},
         "docs_url": "https://partsapi.ru/method/doc/getSearchTree",
-        "role": "TecDoc/PartsAPI product group tree for a resolved vehicle modification.",
+        "role": "TecDoc search tree for a vehicle.",
     },
     "articles": {
         "method": "getArticles",
-        "required": ("vehicle_type", "type_id", "category", "lang_id"),
-        "params": {"TYPE": "vehicle_type", "TYPE_ID": "type_id", "STR_ID": "category", "LANG": "lang_id"},
+        "required": ("type_id", "category"),
+        "params": {"carType": "vehicle_type", "carId": "type_id", "strId": "category", "lang": "lang_id"},
         "defaults": {"vehicle_type": "PC", "lang_id": 16},
         "docs_url": "https://partsapi.ru/method/doc/getArticles",
-        "role": "TecDoc articles linked to a product group tree node for a resolved vehicle.",
+        "role": "TecDoc articles for a vehicle and search-tree node.",
     },
     "article": {
         "method": "getArticle",
-        "required": ("article_id", "lang_id"),
-        "params": {"ART_ID": "article_id", "LANG": "lang_id"},
+        "required": ("part_number", "supplier_id"),
+        "params": {"ART_NUM": "part_number", "SUP_ID": "supplier_id", "LANG": "lang_id"},
         "defaults": {"lang_id": 16},
         "docs_url": "https://partsapi.ru/method/doc/getArticle",
-        "role": "Full TecDoc article information by article identifier.",
+        "role": "TecDoc article details by article number and supplier ID.",
     },
     "article_criteria": {
         "method": "getArticleCriteria",
@@ -243,6 +244,21 @@ PARTSAPI_METHOD_KEY_ENV_NAMES = {
     "GetFillVolumes": "PARTSAPI_GET_FILL_VOLUMES_KEY",
 }
 
+# Preserve friendly operation names; expose additional shop methods by their API name.
+for _method, _parameters in PARTSAPI_SHOP_METHODS.items():
+    if _method not in PARTSAPI_METHOD_KEY_ENV_NAMES:
+        PARTSAPI_METHOD_KEY_ENV_NAMES[_method] = "PARTSAPI_" + re.sub(r"(?<!^)(?=[A-Z])", "_", _method).upper() + "_KEY"
+    if not any(spec["method"] == _method for spec in PARTSAPI_OPERATIONS.values()):
+        PARTSAPI_OPERATIONS[_method] = {
+            "method": _method,
+            "required": _parameters,
+            "params": {name: name for name in _parameters},
+            "docs_url": "https://partsapi.ru/method/doc/" + _method,
+            "role": "PartsAPI " + _method + "; use provider_parameters with the documented API parameter names.",
+            "generic_response": True,
+        }
+
+
 PARTSAPI_OMIT_PART_TYPE_VALUES = {"omit", "none", "non-oem", "non_oem", "nonoriginal", "non-original", "aftermarket"}
 
 _OEM_PART_NUMBER_KEYS = (
@@ -289,6 +305,9 @@ _SENSITIVE_REQUEST_PARAM_NAMES = {
     "gosnomer",
     "registration_number",
     "identifier",
+    "firstname",
+    "midname",
+    "surname",
 }
 
 
@@ -1493,6 +1512,8 @@ def partsapi_operation_status(operation: str) -> dict[str, Any]:
         "partsapi_method": spec["method"],
         "role": spec["role"],
         "required_params": list(spec["required"]),
+        "provider_params": list(spec["params"]),
+        "defaults": dict(spec.get("defaults", {})),
         "accepted_key_env_names": accepted_key_env_names,
         "missing_key_env_names": missing_key_env_names,
         "base_url_configured": bool(request_plan["base_url_configured"]),
@@ -1613,6 +1634,10 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "make": ("manuName", "manuShortName", "brand", "brend"),
     "catalog": ("catalog", "katalog"),
     "model": ("modelName", "model", "modely"),
+    "model_code": ("model_code",),
+    "production_period": ("prodPeriod",),
+    "steering": ("steering",),
+    "catalog_description": ("catalog_description",),
     "engine": ("motorCodes", "motorType", "engine", "dvigately"),
     "modification": ("typeName", "modification", "modifikacii"),
     "market": ("market", "rynok"),
@@ -1696,6 +1721,13 @@ def _partsapi_vin_decode_oe_top_level_record(payload: dict[str, Any]) -> dict[st
         record["model"] = record["name"]
 
     attribute_keys = {
+        "date": "data_vypuska",
+        "model": "model_code",
+        "prodperiod": "prodPeriod",
+        "framecolor": "framecolor",
+        "trimcolor": "trimcolor",
+        "options": "options",
+        "description": "catalog_description",
         "transmission": "kpp",
         "manufactured": "data_vypuska",
         "country": "rynok",
@@ -1710,12 +1742,32 @@ def _partsapi_vin_decode_oe_top_level_record(payload: dict[str, Any]) -> dict[st
             source_key = str(attribute.get("key") or "").strip().casefold()
             target_key = attribute_keys.get(source_key)
             value = attribute.get("value")
-            if target_key and value not in (None, ""):
-                record.setdefault(target_key, value)
+            if target_key and value not in (None, "") and record.get(target_key) in (None, ""):
+                record[target_key] = value
+    # Parse only explicitly labelled shared attributes; retain the complete options text.
+    labels = {
+        "двигатель": "engine",
+        "тип трансмиссии": "kpp",
+        "акпп/мкпп": "kpp",
+        "расположение руля": "steering",
+        "тип кузова": "bodyStyle",
+        "комплектация": "grade",
+        "рынок сбыта": "rynok",
+    }
+    options = record.get("options")
+    if isinstance(options, str):
+        parsed = dict(part.split(":", 1) for part in options.split(";") if ":" in part)
+        # Specific transmission designation wins over the generic AT/MT description.
+        for label, target in labels.items():
+            value = next((v.strip() for k, v in parsed.items() if k.strip().casefold() == label), "")
+            if value and record.get(target) in (None, ""):
+                record[target] = value
     return record
 
 
-def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str | None = None) -> list[dict[str, Any]]:
+def extract_partsapi_vehicle_profiles(
+    *, payload: dict[str, Any], operation: str | None = None, requested_identifier: str | None = None
+) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
 
@@ -1751,8 +1803,22 @@ def extract_partsapi_vehicle_profiles(*, payload: dict[str, Any], operation: str
     elif operation == "plate_to_vin":
         items.extend(_partsapi_plate_vin_records(payload))
 
-    profiles = [_partsapi_vehicle_profile_from_item(item, operation=operation) for item in items]
-    return [profile for profile in profiles if len(profile) > 3]
+    profiles = []
+    for item in items:
+        profile = _partsapi_vehicle_profile_from_item(item, operation=operation)
+        if len(profile) <= 3:
+            continue
+        returned = _first_value(item, ("vin", "VIN", "frame", "FRAME"))
+        if requested_identifier and returned:
+            matches = str(returned).strip().upper() == requested_identifier.strip().upper()
+            profile["identifier_matches_request"] = matches
+            if not matches:
+                profile["warning"] = (
+                    "Provider returned a different identifier; this is a catalog candidate, not an exact VIN confirmation."
+                )
+                profile["requires_exact_identifier_confirmation"] = True
+        profiles.append(profile)
+    return profiles
 
 
 _AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
@@ -2121,68 +2187,13 @@ def build_partsapi_request(
     }
 
 
-def _partsapi_operation_params(
-    operation: str,
-    *,
-    identifier: str | None = None,
-    part_number: str | None = None,
-    article_id: str | int | None = None,
-    brand: str | None = None,
-    part_type: str | None = None,
-    category: str | None = None,
-    vehicle_type: str | None = None,
-    type_id: str | None = None,
-    lang: str | None = None,
-    lang_id: int | None = None,
-    registration_number: str | None = None,
-    make_name_seo: str | None = None,
-    model_id: str | int | None = None,
-    motor_id: str | int | None = None,
-    top_category_id: str | int | None = None,
-    sub_category_id: str | int | None = None,
-    car_id: str | int | None = None,
-) -> dict[str, Any]:
-    spec = PARTSAPI_OPERATIONS[operation]
-    values = dict(spec.get("defaults", {}))
-    values.update(
-        {
-            key: value
-            for key, value in {
-                "identifier": identifier,
-                "part_number": part_number,
-                "article_id": article_id,
-                "brand": brand,
-                "part_type": part_type,
-                "category": category,
-                "vehicle_type": vehicle_type,
-                "type_id": type_id,
-                "lang": lang,
-                "lang_id": lang_id,
-                "registration_number": registration_number,
-                "make_name_seo": make_name_seo,
-                "model_id": model_id,
-                "motor_id": motor_id,
-                "top_category_id": top_category_id,
-                "sub_category_id": sub_category_id,
-                "car_id": car_id,
-            }.items()
-            if value not in (None, "")
-        }
-    )
-    if operation == "parts_by_vin" and str(part_type or "").strip().lower() in PARTSAPI_OMIT_PART_TYPE_VALUES:
-        values["part_type"] = None
-    params = {}
-    for api_param, source_name in spec["params"].items():
-        params[api_param] = values.get(source_name)
-    return params
-
-
 def partsapi_catalog_lookup(
     *,
     operation: str,
     identifier: str | None = None,
     part_number: str | None = None,
     article_id: str | int | None = None,
+    supplier_id: str | int | None = None,
     brand: str | None = None,
     part_type: str | None = None,
     category: str | None = None,
@@ -2197,6 +2208,7 @@ def partsapi_catalog_lookup(
     top_category_id: str | int | None = None,
     sub_category_id: str | int | None = None,
     car_id: str | int | None = None,
+    provider_parameters: dict[str, str | int | float] | None = None,
     timeout: float = 20.0,
     max_attempts: int = 1,
     dry_run: bool = False,
@@ -2226,6 +2238,7 @@ def partsapi_catalog_lookup(
                 "identifier": identifier,
                 "part_number": part_number,
                 "article_id": article_id,
+                "supplier_id": supplier_id,
                 "brand": brand,
                 "part_type": part_type,
                 "category": category,
@@ -2244,27 +2257,41 @@ def partsapi_catalog_lookup(
             if value not in (None, "")
         }
     )
+    overrides = provider_parameters or {}
+    invalid = [
+        name
+        for name, value in overrides.items()
+        if name not in spec["params"]
+        or isinstance(value, bool)
+        or not isinstance(value, (str, int, float))
+        or (isinstance(value, float) and not math.isfinite(value))
+    ]
+    if invalid:
+        return {
+            "ok": False,
+            "provider": "partsapi_ru",
+            "operation": operation,
+            "outcome": "invalid_input",
+            "failure_class": "invalid_input",
+            "error": "Unsupported provider parameter name or value; use catalog_provider_status.provider_params.",
+            "retryable": False,
+            "requires_fallback": False,
+            "attempt_count": 0,
+        }
+    for api_name, value in overrides.items():
+        input_values[spec["params"][api_name]] = value
+    params = {api_name: input_values.get(source) for api_name, source in spec["params"].items()}
     missing_params = [name for name in spec["required"] if input_values.get(name) in (None, "")]
-    params = _partsapi_operation_params(
-        operation,
-        identifier=identifier,
-        part_number=part_number,
-        article_id=article_id,
-        brand=brand,
-        part_type=part_type,
-        category=category,
-        vehicle_type=vehicle_type,
-        type_id=type_id,
-        lang=lang,
-        lang_id=lang_id,
-        registration_number=registration_number,
-        make_name_seo=make_name_seo,
-        model_id=model_id,
-        motor_id=motor_id,
-        top_category_id=top_category_id,
-        sub_category_id=sub_category_id,
-        car_id=car_id,
-    )
+    # Required shop fields include defaulted language/type values, too.
+    for api_name in PARTSAPI_SHOP_METHODS.get(spec["method"], ()):
+        source = spec["params"].get(api_name, api_name)
+        if params.get(api_name) in (None, "") and source not in missing_params:
+            missing_params.append(source)
+    if (
+        operation == "parts_by_vin"
+        and str(input_values.get("part_type") or "").strip().lower() in PARTSAPI_OMIT_PART_TYPE_VALUES
+    ):
+        params["type"] = None
     request_plan = build_partsapi_request(method=spec["method"], params=params)
     base = {
         "provider": "partsapi_ru",
@@ -2422,12 +2449,15 @@ def partsapi_catalog_lookup(
             "article_criteria",
             "part_name_by_brand_number",
         }
+        or spec.get("generic_response")
         else extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation)
     )
     if operation == "parts_by_vin":
         oem_candidates.extend(extract_partsapi_parts_by_vin_candidates(payload=payload, operation=operation))
 
-    vehicle_profiles = extract_partsapi_vehicle_profiles(payload=payload, operation=operation)
+    vehicle_profiles = extract_partsapi_vehicle_profiles(
+        payload=payload, operation=operation, requested_identifier=str(input_values.get("identifier") or "")
+    )
     autonorms_rows = extract_partsapi_autonorms_rows(payload=payload, operation=operation)
     fill_volumes = extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else []
     search_tree_rows = extract_partsapi_search_tree_rows(payload=payload) if operation == "search_tree" else []

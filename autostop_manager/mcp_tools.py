@@ -679,7 +679,8 @@ def register_manager_tools(  # noqa: C901
             + ", ".join(PARTSAPI_OPERATIONS)
             + ". Check catalog_provider_status.operation_status for each operation's credentials and required parameters; "
             "configured access does not prove provider success. For parts_by_vin, part_type defaults to oem; "
-            "use omit/non-oem to skip the type parameter."
+            "use omit/non-oem to skip the type parameter. Additional shop operations accept provider_parameters "
+            "with API names from operation_status.provider_params. Never pass keys or method in that object."
         ),
         annotations=ToolAnnotations(
             title="PartsAPI Catalog Lookup",
@@ -693,6 +694,8 @@ def register_manager_tools(  # noqa: C901
         registration_number: str | None = None,
         part_number: str | None = None,
         article_id: str | int | None = None,
+        supplier_id: str | int | None = None,
+        provider_parameters: dict[str, str | int | float] | None = None,
         brand: str | None = None,
         part_type: str | None = None,
         category: str | None = None,
@@ -716,6 +719,8 @@ def register_manager_tools(  # noqa: C901
             registration_number=registration_number,
             part_number=part_number,
             article_id=article_id,
+            supplier_id=supplier_id,
+            provider_parameters=provider_parameters,
             brand=brand,
             part_type=part_type,
             category=category,

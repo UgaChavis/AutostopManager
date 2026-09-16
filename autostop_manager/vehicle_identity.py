@@ -815,8 +815,18 @@ def _merge_vpic_result(
         "enginehp": "engine_power_hp",
         "vehicledescriptor": "vehicle_descriptor",
     }
+    variant_fields = {
+        "modelyear",
+        "enginemodel",
+        "enginecylinders",
+        "drivetype",
+        "transmissionstyle",
+        "fueltypeprimary",
+        "displacementl",
+        "enginehp",
+    }
     for source_field, target_field in field_map.items():
-        if source_field != "modelyear" or vpic_clean:
+        if source_field not in variant_fields or vpic_clean:
             _merge_field(
                 profile,
                 field_evidence,
@@ -840,7 +850,9 @@ def _merge_vpic_result(
         }
     )
     if not vpic_clean:
-        warnings.append("vPIC returned non-clean diagnostics; use as partial evidence only.")
+        warnings.append(
+            "vPIC returned non-clean diagnostics; use as partial evidence only. Variant, engine and transmission fields were not promoted to the vehicle profile."
+        )
     if not vehicle.get("make"):
         warnings.append("vPIC returned no make; route to ROW/EPC catalog.")
 
