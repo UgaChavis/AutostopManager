@@ -47,6 +47,21 @@ def _segment(result: dict, kind: str, condition: str, region: str) -> dict:
     )
 
 
+def test_empty_public_study_is_valid_and_never_invents_a_price():
+    result = assess_part_market(article="1712024", observations=[])
+
+    assert result["ok"] is True
+    assert result["status"] == "no_valid_public_evidence"
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observation_count"] == 0
+    assert all(segment["median_price_rub"] is None for segment in result["segments"])
+
+    for malformed in (None, {}, [{}] * 61):
+        invalid = assess_part_market(article="1712024", observations=malformed)
+        assert invalid["ok"] is False
+        assert invalid["error_code"] == "market_observations_invalid"
+
+
 def test_assessment_returns_median_only_for_three_independent_exact_original_offers():
     result = assess_part_market(
         article="1712024",
@@ -65,6 +80,65 @@ def test_assessment_returns_median_only_for_three_independent_exact_original_off
     assert segment["median_price_rub"] == 6_000
     assert segment["median_available"] is True
     assert _segment(result, "analog", "new", "rf")["median_price_rub"] is None
+
+
+def test_assessment_never_combines_three_different_analog_skus_into_one_median():
+    observations = [
+        _observation(
+            source=f"Analog {index}",
+            host=f"analog-{index}.example",
+            price_rub=price,
+            article=article,
+            brand=brand,
+            kind="analog",
+        )
+        for index, (article, brand, price) in enumerate(
+            (("P111", "Brembo", 4_000), ("P222", "TRW", 5_000), ("P333", "ATE", 6_000))
+        )
+    ]
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    segment = _segment(result, "analog", "new", "krasnoyarsk")
+    assert result["accepted_offer_count"] == 3
+    assert result["status"] == "insufficient_independent_offers"
+    assert segment["median_price_rub"] is None
+    assert segment["median_eligible"] is False
+    assert segment["median_input_offer_count"] == 0
+    assert segment["median_exclusion_reasons"] == {"mixed_analog_skus": 3}
+    assert (segment["min_price_rub"], segment["max_price_rub"]) == (4_000, 6_000)
+
+
+def test_assessment_requires_one_brand_for_original_median_without_target_brand():
+    observations = [
+        _observation(source=f"Original {index}", host=f"original-{index}.example", price_rub=price, brand=brand)
+        for index, (brand, price) in enumerate((("Ford", 5_000), ("Motorcraft", 6_000), ("FoMoCo", 7_000)))
+    ]
+    result = assess_part_market(article="1712024", observations=observations, brand=None)
+
+    segment = _segment(result, "original", "new", "krasnoyarsk")
+    assert result["accepted_offer_count"] == 3
+    assert segment["median_price_rub"] is None
+    assert segment["median_exclusion_reasons"] == {"mixed_original_brands": 3}
+    assert (segment["min_price_rub"], segment["max_price_rub"]) == (5_000, 7_000)
+
+
+def test_assessment_keeps_analog_median_for_three_offers_of_same_sku():
+    observations = [
+        _observation(
+            source=f"Analog {index}",
+            host=f"same-analog-{index}.example",
+            price_rub=price,
+            article="P111",
+            brand="Brembo",
+            kind="analog",
+        )
+        for index, price in enumerate((4_000, 5_000, 6_000))
+    ]
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    segment = _segment(result, "analog", "new", "krasnoyarsk")
+    assert segment["median_eligible"] is True
+    assert segment["median_price_rub"] == 5_000
 
 
 def test_assessment_deduplicates_same_domain_and_keeps_krasnoyarsk_rf_and_analog_separate():

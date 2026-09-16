@@ -278,12 +278,19 @@ def _segments(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
             offer for offer in segment_offers if condition != "unknown" and offer["price_freshness"] != "stale"
         ]
         prices = sorted(int(offer["price_rub"]) for offer in current_offers)
-        median_eligible = condition != "unknown"
-        median_price = _median_or_none(prices) if median_eligible else None
+        comparable_skus = {(offer["article"], offer["brand"]) for offer in current_offers}
+        mixed_skus = len(comparable_skus) > 1
+        median_eligible = condition != "unknown" and not mixed_skus
+        median_offers = current_offers if median_eligible else []
+        median_price = _median_or_none([int(offer["price_rub"]) for offer in median_offers])
         freshness = {(str(offer["price_freshness"]), str(offer["observation_freshness"])) for offer in current_offers}
         exclusion_reasons: dict[str, int] = {}
         if condition == "unknown" and segment_offers:
             exclusion_reasons["unknown_condition"] = len(segment_offers)
+        if mixed_skus:
+            exclusion_reasons["mixed_analog_skus" if kind == "analog" else "mixed_original_brands"] = len(
+                current_offers
+            )
         stale_page_count = sum(offer["price_freshness"] == "stale" for offer in segment_offers)
         if stale_page_count:
             exclusion_reasons["stale_published_page"] = stale_page_count
@@ -294,8 +301,8 @@ def _segments(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "region_scope": region_scope,
                 "independent_offer_count": len(segment_offers),
                 "median_eligible": median_eligible,
-                "median_input_offer_count": len(current_offers),
-                "excluded_from_current_median_count": len(segment_offers) - len(current_offers),
+                "median_input_offer_count": len(median_offers),
+                "excluded_from_current_median_count": len(segment_offers) - len(median_offers),
                 "median_exclusion_reasons": exclusion_reasons,
                 "median_price_rub": median_price,
                 "median_available": median_price is not None,
@@ -328,7 +335,7 @@ def assess_part_market(
         or (brand is not None and _compact(brand, limit=80) and not target_brand)
     ):
         return {"ok": False, "schema": "PartMarketAssessmentV1", "error_code": "market_target_invalid"}
-    if not isinstance(observations, list) or not observations or len(observations) > _MAX_OBSERVATIONS:
+    if not isinstance(observations, list) or len(observations) > _MAX_OBSERVATIONS:
         return {"ok": False, "schema": "PartMarketAssessmentV1", "error_code": "market_observations_invalid"}
 
     candidates: list[dict[str, Any]] = []
@@ -361,7 +368,7 @@ def assess_part_market(
     segments = _segments(selected)
     median_count = sum(1 for segment in segments if segment["median_available"])
     return {
-        "ok": bool(selected),
+        "ok": bool(selected) or not observations,
         "schema": "PartMarketAssessmentV1",
         "read_only": True,
         "target": {"article": target_article, "brand": target_brand or None, "target_region": safe_target_region},
@@ -375,7 +382,7 @@ def assess_part_market(
         "segments": segments,
         "rejected_observations": rejected,
         "warnings": [
-            "Медиана показана только при трёх независимых источниках в одном сегменте.",
+            "Медиана показана только при трёх независимых источниках для одного артикула и бренда в одном сегменте.",
             "Оценка не подтверждает применимость детали, наличие, закупочную стоимость или цену продажи.",
         ],
     }
