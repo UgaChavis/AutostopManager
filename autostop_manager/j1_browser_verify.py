@@ -33,6 +33,10 @@ PROXY_CONTROL_IP = "172.31.250.3"
 PROBE_URL = "https://example.com/"
 _DOCKER_TIMEOUT_SECONDS = 25
 _RENDER_TIMEOUT_SECONDS = 20
+_RENDERER_PIDS_LIMIT = 128
+_PROXY_PIDS_LIMIT = 64
+_RENDERER_NOFILE_LIMIT = 1024
+_PROXY_NOFILE_LIMIT = 256
 
 
 class VerificationError(RuntimeError):
@@ -106,6 +110,32 @@ def _hardened_container(container: dict[str, Any]) -> bool:
     )
 
 
+def _has_nofile_limit(host: dict[str, Any], expected: int) -> bool:
+    for limit in host.get("Ulimits") or []:
+        if not isinstance(limit, dict) or str(limit.get("Name") or "") != "nofile":
+            continue
+        soft = limit.get("Soft")
+        hard = limit.get("Hard")
+        if not isinstance(soft, int) or isinstance(soft, bool) or not isinstance(hard, int) or isinstance(hard, bool):
+            return False
+        return soft == expected and hard == expected
+    return False
+
+
+def _renderer_runtime_hardened(container: dict[str, Any]) -> bool:
+    host = container.get("HostConfig") or {}
+    return bool(
+        host.get("Init") is True
+        and host.get("PidsLimit") == _RENDERER_PIDS_LIMIT
+        and _has_nofile_limit(host, _RENDERER_NOFILE_LIMIT)
+    )
+
+
+def _proxy_runtime_hardened(container: dict[str, Any]) -> bool:
+    host = container.get("HostConfig") or {}
+    return bool(host.get("PidsLimit") == _PROXY_PIDS_LIMIT and _has_nofile_limit(host, _PROXY_NOFILE_LIMIT))
+
+
 def _network_is_internal(network: dict[str, Any], *, expected: bool) -> bool:
     return network.get("Internal") is expected
 
@@ -125,6 +155,10 @@ def verify_topology(containers: dict[str, dict[str, Any]], networks: dict[str, d
         raise VerificationError("browser_ports_published")
     if not _hardened_container(renderer) or not _hardened_container(proxy):
         raise VerificationError("browser_container_hardening_invalid")
+    if not _renderer_runtime_hardened(renderer):
+        raise VerificationError("browser_renderer_runtime_invalid")
+    if not _proxy_runtime_hardened(proxy):
+        raise VerificationError("browser_proxy_runtime_invalid")
 
     renderer_networks = _container_networks(renderer)
     proxy_networks = _container_networks(proxy)

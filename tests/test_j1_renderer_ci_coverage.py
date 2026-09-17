@@ -116,6 +116,7 @@ def test_chromium_arguments_and_child_limits_are_fixed(monkeypatch: pytest.Monke
     assert argv[0] == "/safe/chromium"
     assert argv[-1] == "https://example.org/article"
     assert "--dump-dom" in argv
+    assert "--no-sandbox" in argv
     assert "--disable-extensions" in argv
     assert "--proxy-bypass-list=<-loopback>" in argv
     assert all("remote-debugging" not in value for value in argv)
@@ -129,8 +130,8 @@ def test_chromium_arguments_and_child_limits_are_fixed(monkeypatch: pytest.Monke
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
     renderer._child_limits()
     assert calls == [
-        (1, (renderer.MAX_DOM_BYTES + 65_536, renderer.MAX_DOM_BYTES + 65_536)),
-        (2, (256, 256)),
+        (1, (renderer._CHROMIUM_FILE_SIZE_LIMIT, renderer._CHROMIUM_FILE_SIZE_LIMIT)),
+        (2, (renderer._CHROMIUM_NOFILE_LIMIT, renderer._CHROMIUM_NOFILE_LIMIT)),
     ]
 
 

@@ -141,11 +141,20 @@ def test_renderer_uses_same_robots_agent_and_disables_cookie_persistence(tmp_pat
         wait_ms=500,
     )
     assert f"--user-agent={j1_fetch.USER_AGENT}" in argv
-    assert "--disable-quic" in argv and "--incognito" in argv
+    assert "--disable-quic" in argv and "--incognito" in argv and "--no-sandbox" in argv
     renderer._write_ephemeral_preferences(str(tmp_path))
     preferences = json.loads((tmp_path / "Default" / "Preferences").read_text(encoding="utf-8"))
     assert preferences["profile"]["default_content_setting_values"]["cookies"] == 2
     assert preferences["profile"]["default_content_setting_values"]["automatic_downloads"] == 2
+
+
+def test_renderer_gives_chromium_private_writable_runtime_paths(tmp_path: Path) -> None:
+    environment = renderer._chromium_environment(str(tmp_path))
+    for name in ("HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"):
+        path = Path(environment[name])
+        assert path.is_relative_to(tmp_path)
+        assert path.is_dir()
+        assert path.stat().st_mode & 0o777 == 0o700
 
 
 def test_proxy_rejects_mixed_dns_and_wildcard_without_renderer_peer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,6 +243,9 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "172.31.250.3:18890" in compose
     assert "ports:" not in compose
     assert "j1_browser_egress" in compose
+    assert "init: true" in compose
+    assert "pids_limit: 128" in compose
+    assert "soft: 1024" in compose and "hard: 1024" in compose
     assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
     assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation" not in unit
     assert "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser" in unit
