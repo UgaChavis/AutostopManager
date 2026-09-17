@@ -53,15 +53,25 @@ _RATE_LOCK = threading.Lock()
 def contains_sensitive(value: str) -> bool:
     """Reject sensitive user input before sending or persisting it."""
 
-    decoded = _decode_twice(value)
+    decoded = _decode_percent_layers(value)
     return bool(
         any(_looks_like_vin(match.group()) for match in _VIN.finditer(decoded))
         or any(pattern.search(decoded) for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET))
     )
 
 
-def _decode_twice(value: str) -> str:
-    return unquote(unquote(str(value or "")))
+def _decode_percent_layers(value: str) -> str:
+    # URL inputs are bounded to 2048 bytes before this helper is reached.  A
+    # fixed, generously high iteration cap catches nested percent-encoding of
+    # VINs and secrets without permitting an attacker to turn decoding itself
+    # into an unbounded operation.
+    decoded = str(value or "")
+    for _ in range(64):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    return decoded
 
 
 def _looks_like_vin(candidate: str) -> bool:
@@ -90,7 +100,7 @@ def _is_full_url_vin(candidate: str) -> bool:
 def _url_component_contains_sensitive(value: str) -> bool:
     """Check decoded URL data without applying prose-only VIN heuristics."""
 
-    decoded = _decode_twice(value)
+    decoded = _decode_percent_layers(value)
     fields = _URL_FIELD_SEPARATOR.split(decoded)
 
     def has_vin(field: str) -> bool:
@@ -387,8 +397,87 @@ def _pdf_to_text(body: bytes) -> str:
     return redact_sensitive(extracted.decode("utf-8", "replace"))
 
 
-def fetch_document(url: str) -> dict[str, Any]:
-    """Return text only; never retain source HTML/PDF bytes."""
+def _extract_pdf(body: bytes) -> dict[str, Any]:
+    text = _pdf_to_text(body)
+    if text:
+        return {"ok": True, "text": text, "extraction_method": "pdf_text"}
+    # Kept lazy to avoid a module cycle: the OCR helper redacts with this
+    # module's DLP function, but static fetch still works without its runtime.
+    try:
+        from .j1_ocr import extract_scanned_pdf
+
+        ocr = extract_scanned_pdf(body, max_chars=MAX_TEXT_CHARS)
+    except Exception:  # noqa: BLE001 - parser failure is a partial source failure.
+        ocr = {"ok": False, "error": "ocr_unavailable"}
+    if not isinstance(ocr, dict) or ocr.get("ok") is not True:
+        error = ocr.get("error") if isinstance(ocr, dict) else ""
+        return {"ok": False, "error": str(error or "pdf_extract_failed")[:80], "extraction_method": "pdf_ocr"}
+    return {"ok": True, "text": redact_sensitive(str(ocr.get("text") or "")), "extraction_method": "pdf_ocr"}
+
+
+def _extract_static_content(content_type: str, body: bytes, final_url: str, headers: dict[str, str]) -> dict[str, Any]:
+    if "pdf" in content_type or final_url.casefold().endswith(".pdf"):
+        extracted = _extract_pdf(body)
+        if extracted.get("ok") is not True:
+            return extracted
+        return {
+            "ok": True,
+            "kind": "pdf",
+            "title": final_url.rsplit("/", 1)[-1][:200],
+            "text": extracted["text"],
+            "extraction_method": extracted["extraction_method"],
+        }
+    if "html" in content_type or "text/plain" in content_type:
+        if len(body) > MAX_HTML_BYTES:
+            return {"ok": False, "error": "document_too_large"}
+        if "html" in content_type:
+            title, text = _html_to_text(body, headers)
+            kind, method = "html", "html_text"
+        else:
+            title, text, kind, method = "", redact_sensitive(body.decode("utf-8", "replace")), "text", "plain_text"
+        return {"ok": True, "kind": kind, "title": title, "text": text, "extraction_method": method}
+    return {"ok": False, "error": "unsupported_media"}
+
+
+def _browser_fallback(final_url: str, title: str, *, allow_browser: bool) -> dict[str, Any]:
+    if allow_browser is not True:
+        return {"ok": False, "error": "browser_limit_reached"}
+    try:
+        from .j1_browser import isolation_verified, render_page
+    except Exception:  # noqa: BLE001 - the optional client can be unavailable in a minimal release.
+        return {"ok": False, "error": "browser_isolation_unverified"}
+    if not isolation_verified():
+        return {"ok": False, "error": "browser_isolation_unverified"}
+    # The browser makes a second request, so reuse the cached policy and host
+    # delay before giving it the static response's safe final URL.
+    allowed, delay = _robots_policy(final_url)
+    if not allowed:
+        return {"ok": False, "error": "robots_disallowed"}
+    origin = urlsplit(final_url)
+    _rate_limit(f"{origin.scheme}://{origin.netloc}", delay)
+    try:
+        rendered = render_page(final_url, max_chars=MAX_TEXT_CHARS, timeout_seconds=20)
+    except Exception:  # noqa: BLE001 - isolated renderer is an optional partial source.
+        rendered = {"ok": False, "error": "browser_unavailable"}
+    if not isinstance(rendered, dict) or rendered.get("ok") is not True:
+        error = rendered.get("error") if isinstance(rendered, dict) else ""
+        return {"ok": False, "error": str(error or "browser_render_failed")[:80], "browser_attempted": True}
+    rendered_url = public_url(str(rendered.get("url") or ""))
+    rendered_text = redact_sensitive(str(rendered.get("text") or ""))
+    if not rendered_url or len(rendered_text) < 80:
+        return {"ok": False, "error": "browser_response_invalid", "browser_attempted": True}
+    return {
+        "ok": True,
+        "url": rendered_url,
+        "title": redact_sensitive(str(rendered.get("title") or title), limit=200),
+        "text": rendered_text,
+        "extraction_method": "browser_dom",
+        "browser_attempted": True,
+    }
+
+
+def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
+    """Return bounded public text; an isolated browser is only a gated fallback."""
 
     safe_url = public_url(url)
     if not safe_url:
@@ -408,33 +497,43 @@ def fetch_document(url: str) -> dict[str, Any]:
         return {"ok": False, "error": "access_restricted" if status != 429 else "rate_limited"}
     if status != 200:
         return {"ok": False, "error": "http_error"}
-    content_type = headers.get("content-type", "").casefold()
-    if "pdf" in content_type or final_url.casefold().endswith(".pdf"):
-        text = _pdf_to_text(body)
-        if not text:
-            return {"ok": False, "error": "pdf_extract_failed"}
-        kind, title = "pdf", final_url.rsplit("/", 1)[-1][:200]
-    elif "html" in content_type or "text/plain" in content_type:
-        if len(body) > MAX_HTML_BYTES:
-            return {"ok": False, "error": "document_too_large"}
-        if "html" in content_type:
-            title, text = _html_to_text(body, headers)
-        else:
-            title, text = "", redact_sensitive(body.decode("utf-8", "replace"))
-        kind = "html" if "html" in content_type else "text"
-    else:
-        return {"ok": False, "error": "unsupported_media"}
-    if not text or len(text) < 80:
-        return {"ok": False, "error": "empty_or_dynamic"}
-    lowered = text[:3000].casefold()
-    if any(marker in lowered for marker in ("captcha", "введите капчу", "sign in to continue", "please log in")):
-        return {"ok": False, "error": "requires_human"}
+    extracted = _extract_static_content(headers.get("content-type", "").casefold(), body, final_url, headers)
+    if extracted.get("ok") is not True:
+        return extracted
+    if len(extracted["text"]) < 80:
+        if extracted["kind"] != "html":
+            return {"ok": False, "error": "empty_or_dynamic", "extraction_method": extracted["extraction_method"]}
+        fallback = _browser_fallback(final_url, extracted["title"], allow_browser=allow_browser)
+        if fallback.get("ok") is not True:
+            return {
+                "ok": False,
+                "error": fallback["error"],
+                "extraction_method": "browser_dom"
+                if fallback.get("browser_attempted")
+                else extracted["extraction_method"],
+                "browser_attempted": bool(fallback.get("browser_attempted")),
+            }
+        extracted.update(fallback)
+        final_url = fallback["url"]
+    text = extracted["text"]
+    if any(
+        marker in text[:3000].casefold()
+        for marker in ("captcha", "введите капчу", "sign in to continue", "please log in")
+    ):
+        return {
+            "ok": False,
+            "error": "requires_human",
+            "extraction_method": extracted["extraction_method"],
+            "browser_attempted": bool(extracted.get("browser_attempted")),
+        }
     return {
         "ok": True,
         "url": final_url,
-        "title": redact_sensitive(title, limit=200),
+        "title": redact_sensitive(extracted["title"], limit=200),
         "text": text[:MAX_TEXT_CHARS],
-        "kind": kind,
+        "kind": extracted["kind"],
+        "extraction_method": extracted["extraction_method"],
+        "browser_attempted": bool(extracted.get("browser_attempted")),
     }
 
 

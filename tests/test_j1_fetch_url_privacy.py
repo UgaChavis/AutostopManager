@@ -24,6 +24,7 @@ def test_public_bulletin_pdf_is_allowed_and_not_redacted() -> None:
         "https://example.org/WDD2120341A855148",
         "https://example.org/%57DD2120341A855148",
         "https://example.org/%2557DD2120341A855148",
+        "https://example.org/%252557DD2120341A855148",
         "https://example.org/WDD2120341A855148/next",
         "https://example.org/%2557DD2120341A855148/next",
         "https://example.org/WDD%2F212%2F034%2F1A8%2F55148",
@@ -67,7 +68,7 @@ def test_public_request_rejects_vin_redirect_before_next_connection(monkeypatch:
         status = 302
 
         def getheaders(self) -> list[tuple[str, str]]:
-            return [("Location", "/%2557DD2120341A855148")]
+            return [("Location", "/%252557DD2120341A855148")]
 
     class FakeConnection:
         def __init__(self, *_args: object) -> None:

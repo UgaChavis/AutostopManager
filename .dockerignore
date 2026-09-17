@@ -1,0 +1,10 @@
+# J1 browser image needs only its four isolated modules.  Do not send runtime
+# state, deployment secrets, CRM data, tests, or unrelated Manager code to the
+# Docker build context.
+**
+!autostop_manager/
+!autostop_manager/__init__.py
+!autostop_manager/j1_fetch.py
+!autostop_manager/j1_browser.py
+!autostop_manager/j1_browser_renderer.py
+!autostop_manager/j1_browser_proxy.py

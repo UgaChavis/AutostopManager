@@ -1,0 +1,37 @@
+[Unit]
+Description=AutoStop J1 isolated browser and public egress proxy
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/opt/autostop-manager-releases/current
+ConditionPathExists=/usr/bin/docker
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/autostop-manager-releases/current
+RuntimeDirectory=autostop-j1-browser
+RuntimeDirectoryMode=0710
+UMask=0077
+Environment=AUTOSTOP_J1_BROWSER_SOCKET_DIR=/run/autostop-j1-browser
+ExecStartPre=/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser
+ExecStartPre=/usr/bin/rm -f -- /run/autostop-j1-browser/renderer.sock
+# A browser socket alone is not an activation signal: a release-specific
+# isolation attestation is created only by a later controlled verification.
+ExecStartPre=/usr/bin/rm -f -- /run/autostop-j1-browser/isolation-ready
+ExecStart=/usr/bin/docker compose -f /opt/autostop-manager-releases/current/deploy/j1-browser/docker-compose.yml --project-name autostop-j1-browser up --detach --build --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/autostop-manager-releases/current/deploy/j1-browser/docker-compose.yml --project-name autostop-j1-browser down --remove-orphans
+TimeoutStartSec=180s
+TimeoutStopSec=45s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

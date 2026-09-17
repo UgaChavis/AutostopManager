@@ -58,7 +58,7 @@ def test_queue_worker_search_document_incremental_results(monkeypatch: pytest.Mo
     monkeypatch.setattr(
         j1,
         "fetch_document",
-        lambda url: {
+        lambda url, **_kwargs: {
             "ok": True,
             "url": url,
             "title": "Useful case",
@@ -101,7 +101,7 @@ def test_failed_pages_visible_and_restart_recovery(monkeypatch: pytest.MonkeyPat
             "searxng",
         ),
     )
-    monkeypatch.setattr(j1, "fetch_document", lambda _url: {"ok": False, "error": "robots_disallowed"})
+    monkeypatch.setattr(j1, "fetch_document", lambda _url, **_kwargs: {"ok": False, "error": "robots_disallowed"})
     created = j1.start_research("Investigate", ["public query"])
     job_id = created["job_id"]
     with j1._db() as conn:
@@ -225,7 +225,13 @@ def test_capacity_failure_is_visible_to_agent(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         j1,
         "fetch_document",
-        lambda url: {"ok": True, "url": url, "title": "Title", "kind": "html", "text": "public detail " * 100},
+        lambda url, **_kwargs: {
+            "ok": True,
+            "url": url,
+            "title": "Title",
+            "kind": "html",
+            "text": "public detail " * 100,
+        },
     )
     job_id = j1.start_research("Investigate", ["public query"])["job_id"]
     j1.run_worker(once=True)
@@ -244,7 +250,7 @@ def test_stage1_metadata_coverage_and_safe_suggestions(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         j1,
         "fetch_document",
-        lambda _url: {
+        lambda _url, **_kwargs: {
             "ok": True,
             "url": discovered,
             "title": "Steering Bulletin",
@@ -283,7 +289,7 @@ def test_stage1_duplicate_link_preserves_original_source(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         j1,
         "fetch_document",
-        lambda url: {
+        lambda url, **_kwargs: {
             "ok": True,
             "url": url,
             "title": url,
@@ -405,9 +411,9 @@ def test_robots_policy_obeys_rules_and_caches(
         (401, {"content-type": "text/html"}, b"", "access_restricted"),
         (503, {"content-type": "text/html"}, b"", "http_error"),
         (200, {"content-type": "image/png"}, b"image", "unsupported_media"),
-        (200, {"content-type": "text/html"}, b"<p>short</p>", "empty_or_dynamic"),
+        (200, {"content-type": "text/html"}, b"<p>short</p>", "browser_isolation_unverified"),
         (200, {"content-type": "text/plain"}, b"captcha " * 20, "requires_human"),
-        (200, {"content-type": "application/pdf"}, b"bad pdf", "pdf_extract_failed"),
+        (200, {"content-type": "application/pdf"}, b"bad pdf", "ocr_invalid_pdf"),
     ],
 )
 def test_fetch_document_reports_specific_unavailable_reason(
@@ -424,7 +430,7 @@ def test_fetch_document_reports_specific_unavailable_reason(
         "_request_public",
         lambda *_args, **_kwargs: (status, headers, body, "https://example.org/report"),
     )
-    if expected == "pdf_extract_failed":
+    if expected == "ocr_invalid_pdf":
         monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _body: "")
     assert j1_fetch.fetch_document("https://example.org/report")["error"] == expected
 
@@ -604,7 +610,7 @@ def test_stage1_exact_duplicate_links_to_first_fetched_source(monkeypatch: pytes
     monkeypatch.setattr(
         j1,
         "fetch_document",
-        lambda url: {"ok": True, "url": url, "title": url, "kind": "html", "text": body},
+        lambda url, **_kwargs: {"ok": True, "url": url, "title": url, "kind": "html", "text": body},
     )
     job_id = j1.start_research("Public steering evidence", ["steering rack report"], max_pages=3)["job_id"]
     j1.run_worker(once=True)
@@ -614,3 +620,30 @@ def test_stage1_exact_duplicate_links_to_first_fetched_source(monkeypatch: pytes
     assert duplicate["duplicate_of"] == primary["document_id"]
     assert duplicate["duplicate"]["kind"] == "exact"
     assert duplicate["duplicate"]["similarity"] == 1.0
+
+
+def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = [f"https://example.org/dynamic/{index}" for index in range(j1.MAX_BROWSER_PAGES + 1)]
+    attempts: list[bool] = []
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": url, "source": "searxng"} for url in urls], "searxng"),
+    )
+
+    def dynamic_fetch(_url: str, *, allow_browser: bool) -> dict[str, object]:
+        attempts.append(allow_browser)
+        return {
+            "ok": False,
+            "error": "browser_unavailable" if allow_browser else "browser_limit_reached",
+            "extraction_method": "browser_dom" if allow_browser else "html_text",
+        }
+
+    monkeypatch.setattr(j1, "fetch_document", dynamic_fetch)
+    job_id = j1.start_research("Public dynamic material", ["public dynamic material"], max_pages=len(urls))["job_id"]
+    j1.run_worker(once=True)
+    status = j1.research_status(job_id)
+    assert attempts == [True] * j1.MAX_BROWSER_PAGES + [False]
+    assert status["browser_pages_attempted"] == j1.MAX_BROWSER_PAGES
+    assert status["browser_pages_remaining"] == 0
+    assert {item["reason"] for item in status["page_failures"]} == {"browser_unavailable", "browser_limit_reached"}

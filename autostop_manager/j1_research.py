@@ -37,6 +37,7 @@ from .j1_fetch import (
 SCHEMA = "autostop.j1.research.v1"
 MAX_QUERIES = 30
 MAX_PAGES = 300
+MAX_BROWSER_PAGES = 20
 MAX_DOCUMENT_CHARS = 50_000
 MAX_CORPUS_BYTES = 250 * 1024 * 1024
 RETENTION_DAYS = 7
@@ -574,6 +575,9 @@ def research_status(job_id: str) -> dict[str, Any]:
                     (job_id,),
                 )
             ]
+            browser_attempts = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE job_id=? AND extraction_method='browser_dom'", (job_id,)
+            ).fetchone()[0]
             stored_queries = [
                 item["query"]
                 for item in conn.execute("SELECT query FROM queries WHERE job_id=? ORDER BY id", (job_id,))
@@ -594,6 +598,8 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "pages_failed": counts["failed"] or 0,
                 "pages_unavailable": counts["unavailable"] or 0,
                 "pages_duplicates": counts["duplicates"] or 0,
+                "browser_pages_attempted": browser_attempts,
+                "browser_pages_remaining": max(0, MAX_BROWSER_PAGES - browser_attempts),
                 "queries_total": queries["total"],
                 "queries_done": queries["done"] or 0,
                 "queries_failed": queries["failed"] or 0,
@@ -897,9 +903,13 @@ def _work_job(job_id: str) -> None:
                 query_id, query = pending_query["id"], pending_query["query"]
                 phase = "query"
             elif pending_doc:
+                browser_attempts = conn.execute(
+                    "SELECT COUNT(*) FROM documents WHERE job_id=? AND extraction_method='browser_dom'", (job_id,)
+                ).fetchone()[0]
                 conn.execute("UPDATE documents SET status='running' WHERE id=?", (pending_doc["id"],))
                 conn.commit()
                 doc_id, url = pending_doc["id"], pending_doc["url"]
+                allow_browser = browser_attempts < MAX_BROWSER_PAGES
                 phase = "document"
             else:
                 conn.execute("UPDATE jobs SET status='completed',updated_at=? WHERE id=?", (_utcnow(), job_id))
@@ -952,7 +962,7 @@ def _work_job(job_id: str) -> None:
                 conn.commit()
         else:
             try:
-                fetch_result = fetch_document(url)
+                fetch_result = fetch_document(url, allow_browser=allow_browser)
             except Exception:  # noqa: BLE001 - one malformed page must not fail the corpus.
                 fetch_result = {"ok": False, "error": "fetch_failed"}
             with _db() as conn:
@@ -1012,8 +1022,8 @@ def _work_job(job_id: str) -> None:
                             _prune(conn)
                         if _cache_size() + len(body.encode("utf-8")) * 3 > MAX_CORPUS_BYTES:
                             conn.execute(
-                                "UPDATE documents SET status='failed',error='cache_capacity_reached' WHERE id=?",
-                                (doc_id,),
+                                "UPDATE documents SET status='failed',error='cache_capacity_reached',extraction_method=? WHERE id=?",
+                                (extraction_method, doc_id),
                             )
                             conn.execute("UPDATE jobs SET updated_at=? WHERE id=?", (_utcnow(), job_id))
                             conn.commit()
@@ -1044,9 +1054,16 @@ def _work_job(job_id: str) -> None:
                             (job_id, doc_id, title, body),
                         )
                 else:
+                    failure_method = _clean_input(str(fetch_result.get("extraction_method") or ""), limit=40)
                     conn.execute(
-                        "UPDATE documents SET status='failed',error=? WHERE id=?",
-                        (str(fetch_result.get("error") or "fetch_failed")[:80], doc_id),
+                        """UPDATE documents SET status='failed',error=?,
+                           extraction_method=CASE WHEN ?<>'' THEN ? ELSE extraction_method END WHERE id=?""",
+                        (
+                            str(fetch_result.get("error") or "fetch_failed")[:80],
+                            failure_method,
+                            failure_method,
+                            doc_id,
+                        ),
                     )
                 conn.execute("UPDATE jobs SET updated_at=? WHERE id=?", (_utcnow(), job_id))
                 conn.commit()
