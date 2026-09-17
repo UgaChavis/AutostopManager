@@ -26,6 +26,7 @@ from .j1_research import (
     research_add_queries,
     research_cancel,
     research_document,
+    research_report,
     research_results,
     research_status,
     start_research,
@@ -902,13 +903,26 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_start",
         description=(
             "Start an independent, bounded public-web research job. Supply a short objective and Russian/English "
-            "search queries. Reject full VIN, personal contacts and secrets before storage or network use. "
-            "The job only collects untrusted public evidence; it does not verify claims or write CRM records."
+            "search queries, or pass de-identified automotive_context to activate a 12-query/60-page automotive plan. "
+            "Reject full VIN, personal contacts and secrets before storage or network use. The job only collects "
+            "untrusted public evidence; it does not diagnose, confirm fitment or write CRM records."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
     )
-    def j1_research_start_tool(objective: str, queries: list[str], max_pages: int = 300) -> dict[str, Any]:
-        return start_research(objective=objective, queries=queries, max_pages=max_pages)
+    def j1_research_start_tool(
+        objective: str,
+        queries: list[str] | None = None,
+        max_pages: int = 300,
+        automotive_context: dict[str, Any] | None = None,
+        profile: str = "general",
+    ) -> dict[str, Any]:
+        return start_research(
+            objective=objective,
+            queries=queries,
+            max_pages=max_pages,
+            automotive_context=automotive_context,
+            profile=profile,
+        )
 
     @server.tool(
         name="j1_research_status",
@@ -941,6 +955,18 @@ def register_manager_tools(  # noqa: C901
         job_id: str, document_id: str, offset: int = 0, max_chars: int = 8000
     ) -> dict[str, Any]:
         return research_document(job_id=job_id, document_id=document_id, offset=offset, max_chars=max_chars)
+
+    @server.tool(
+        name="j1_research_report",
+        description=(
+            "Build a compact read-only J1 evidence ledger: source tiers, literal context overlap, confidence, "
+            "source-reported frequency measurements, duplicates, unavailable pages and limitations. It does not "
+            "make a diagnosis, confirm fitment or write CRM records."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    )
+    def j1_research_report_tool(job_id: str) -> dict[str, Any]:
+        return research_report(job_id=job_id)
 
     @server.tool(
         name="j1_research_add_queries",

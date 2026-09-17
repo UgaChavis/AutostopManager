@@ -46,6 +46,140 @@ def test_ordinary_english_search_phrase_is_not_mistaken_for_vin() -> None:
     assert j1.start_research(objective, ["SQLite FTS5 official documentation"], max_pages=1)["ok"]
 
 
+def test_automotive_profile_builds_balanced_bounded_plan() -> None:
+    created = j1.start_research(
+        "Investigate intermittent fuel-injection misfire evidence",
+        automotive_context={
+            "make": "Lexus",
+            "model": "RX200T",
+            "year": 2017,
+            "engine": "8AR-FTS",
+            "system": "fuel injection",
+            "symptom": "intermittent misfire",
+            "dtc": "P0300, P0304",
+            "part_number": "23209-36030",
+        },
+    )
+
+    assert created["ok"] is True
+    assert created["profile"] == j1.AUTOMOTIVE_PROFILE
+    assert created["max_pages"] == j1.AUTOMOTIVE_MAX_PAGES
+    assert created["query_count"] == j1.AUTOMOTIVE_MAX_QUERIES
+    status = j1.research_status(created["job_id"])
+    assert status["profile"] == j1.AUTOMOTIVE_PROFILE
+    intents = {item["intent"] for item in status["query_plan"]}
+    assert {"official_bulletin_en", "technical_diagnosis_en", "catalog_fitment_en", "owner_experience_en"}.issubset(
+        intents
+    )
+    assert status["query_suggestions"] == []
+    assert (
+        j1.research_add_queries(created["job_id"], ["one more public query"])["error"]["code"] == "query_limit_reached"
+    )
+
+
+def test_automotive_profile_rejects_sensitive_context_before_cache_write(tmp_path: Path) -> None:
+    private = "WBA" + "0" * 14
+    result = j1.start_research(
+        "Investigate public fuel system evidence",
+        automotive_context={"make": "Lexus", "part_number": "23209-36030", "symptom": private},
+    )
+
+    assert result["ok"] is False
+    assert not (tmp_path / "research.sqlite3").exists()
+
+
+def test_automotive_report_separates_evidence_from_hypotheses_and_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = [
+        "https://static.nhtsa.gov/odi/tsbs/2021/MC-10000000-0001.pdf",
+        "https://www.oemdtc.com/12345/lexus-rx200t-injection-note",
+        "https://club-lexus.ru/forum/index.php?/topic/8ar-fts-injectors/",
+    ]
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": url, "source": "searxng"} for url in urls], "searxng"),
+    )
+
+    def fetch(url: str, **_kwargs: object) -> dict[str, object]:
+        if "nhtsa" in url:
+            text = (
+                "Lexus RX200T 2017 8AR-FTS fuel injection technical bulletin. The symptom may be caused by "
+                "injector seal leakage. The monitored sample found 12 of 100 vehicles with this condition."
+            )
+        elif "oemdtc" in url:
+            text = (
+                "Lexus RX200T 2017 8AR-FTS fuel injection diagnostic reference. The condition may be caused by "
+                "fuel pressure loss during a documented test."
+            )
+        else:
+            text = "Lexus RX200T 2017 8AR-FTS owner forum: one repair experience after injector replacement."
+        return {"ok": True, "url": url, "title": "Research source", "kind": "html", "text": text}
+
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    created = j1.start_research(
+        "Investigate fuel injection evidence",
+        automotive_context={
+            "make": "Lexus",
+            "model": "RX200T",
+            "year": "2017",
+            "engine": "8AR-FTS",
+            "system": "fuel injection",
+            "symptom": "misfire",
+        },
+    )
+    assert created["ok"]
+    j1.run_worker(once=True)
+
+    report = j1.research_report(created["job_id"])
+    assert report["ok"] is True
+    assert report["schema"] == j1.REPORT_SCHEMA
+    payload = report["report"]
+    assert payload["evidence_confidence"]["level"] == "high"
+    assert payload["evidence_confidence"]["source_tiers"] == {"A": 1, "B": 1, "C": 0, "D": 1, "unrated": 0}
+    assert payload["frequency"]["status"] == "measured_in_source"
+    assert payload["confirmed"][0]["source_tier"] == "A"
+    assert payload["confirmed"][0]["applicability"] == "exact"
+    assert payload["alternative_causes"][0]["status"] == "unverified_source_mention"
+    assert payload["crm_written"] is False
+    assert payload["fitment_confirmed"] is False
+
+
+def test_report_does_not_treat_owner_numbers_as_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://club-lexus.ru/forum/index.php?/topic/injection/"
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": "Owner forum", "source": "searxng"}], "searxng"),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda _url, **_kwargs: {
+            "ok": True,
+            "url": url,
+            "title": "Owner forum",
+            "kind": "html",
+            "text": "Lexus RX200T 8AR-FTS fuel injection forum report: 12 of 100 vehicles mentioned by users.",
+        },
+    )
+    created = j1.start_research(
+        "Investigate owner reports",
+        automotive_context={
+            "make": "Lexus",
+            "model": "RX200T",
+            "engine": "8AR-FTS",
+            "system": "fuel injection",
+        },
+    )
+    j1.run_worker(once=True)
+
+    report = j1.research_report(created["job_id"])
+    assert report["report"]["frequency"] == {
+        "status": "not_measured",
+        "reason": "no_qualified_population_measurement",
+    }
+
+
 def test_queue_worker_search_document_incremental_results(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         j1,
