@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_url_context_dlp_allows_bulletin_id_and_rejects_private_values() -> None:
     bulletin = "https://static.nhtsa.gov/odi/tsbs/2014/SB-10063500-2280.pdf"
     assert j1_browser._public_http_url(bulletin) == bulletin
-    assert not j1_browser._public_http_url("https://example.org/WDD2120341A855148")
+    assert not j1_browser._public_http_url("https://example.org/ZZZ00000000000000")
     assert not j1_browser._public_http_url("https://example.org/document/12345678901234567")
     assert not j1_browser._public_http_url("http://127.0.0.1/private")
     assert not j1_browser._public_http_url("https://example.org/?token=very-secret-token")

@@ -13,7 +13,7 @@ def test_public_bulletin_pdf_is_allowed_and_not_redacted() -> None:
     assert j1_fetch.public_url(bulletin) == bulletin
     assert "SB-10063500-2280.pdf" in j1_fetch.redact_sensitive(f"Official bulletin: {bulletin}")
 
-    vin = "WDD2120341A855148"
+    vin = "ZZZ00000000000000"
     assert j1_fetch.contains_sensitive(f"Inspect {vin}")
     assert "[redacted]" in j1_fetch.redact_sensitive(f"Inspect {vin}")
 
@@ -21,17 +21,17 @@ def test_public_bulletin_pdf_is_allowed_and_not_redacted() -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "https://example.org/WDD2120341A855148",
-        "https://example.org/%57DD2120341A855148",
-        "https://example.org/%2557DD2120341A855148",
-        "https://example.org/%252557DD2120341A855148",
-        "https://example.org/WDD2120341A855148/next",
-        "https://example.org/%2557DD2120341A855148/next",
-        "https://example.org/WDD%2F212%2F034%2F1A8%2F55148",
-        "https://WDD2120341A855148.example.com/",
-        "https://example.org/?vin=WDD2120341A855148",
-        "https://example.org/?vin=%2557DD2120341A855148",
-        "https://example.org/#vin=WDD2120341A855148",
+        "https://example.org/ZZZ00000000000000",
+        "https://example.org/%5A%5A%5A00000000000000",
+        "https://example.org/%255A%255A%255A00000000000000",
+        "https://example.org/%25255A%25255A%25255A00000000000000",
+        "https://example.org/ZZZ00000000000000/next",
+        "https://example.org/%255A%255A%255A00000000000000/next",
+        "https://example.org/ZZZ%2F000%2F000%2F000%2F00000",
+        "https://ZZZ00000000000000.example.com/",
+        "https://example.org/?vin=ZZZ00000000000000",
+        "https://example.org/?vin=%255A%255A%255A00000000000000",
+        "https://example.org/#vin=ZZZ00000000000000",
     ],
 )
 def test_public_url_rejects_vin_in_decoded_components(url: str) -> None:
@@ -68,7 +68,7 @@ def test_public_request_rejects_vin_redirect_before_next_connection(monkeypatch:
         status = 302
 
         def getheaders(self) -> list[tuple[str, str]]:
-            return [("Location", "/%252557DD2120341A855148")]
+            return [("Location", "/%25255A%25255A%25255A00000000000000")]
 
     class FakeConnection:
         def __init__(self, *_args: object) -> None:

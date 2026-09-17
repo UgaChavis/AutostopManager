@@ -595,7 +595,7 @@ def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.M
 def test_stage1_url_aware_input_accepts_bulletin_but_rejects_vin_url() -> None:
     bulletin = "https://static.nhtsa.gov/odi/tsbs/2014/SB-10063500-2280.pdf"
     assert j1.start_research("Public bulletin evidence", [bulletin], max_pages=1)["ok"]
-    vin_url = "https://example.org/vehicle/WDD2120341A855148/report.pdf"
+    vin_url = "https://example.org/vehicle/ZZZ00000000000000/report.pdf"
     assert not j1.start_research("Public bulletin evidence", [vin_url], max_pages=1)["ok"]
 
 
