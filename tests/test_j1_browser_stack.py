@@ -217,6 +217,14 @@ def test_ocr_timeout_is_explicit_after_render(monkeypatch: pytest.MonkeyPatch) -
     assert result == {"ok": False, "error": "ocr_timeout", "retryable": True, "extraction_method": "pdf_ocr"}
 
 
+def test_browser_image_includes_renderer_source_dependencies() -> None:
+    dockerfile = (ROOT / "deploy/j1-browser/Dockerfile").read_text(encoding="utf-8")
+
+    assert "autostop_manager/j1_sources.py" in dockerfile
+    assert "autostop_manager/j1_fetch.py" in dockerfile
+    assert "autostop_manager/j1_browser.py" in dockerfile
+
+
 def test_browser_compose_has_bounded_control_network_and_no_public_port() -> None:
     compose = (ROOT / "deploy/j1-browser/docker-compose.yml").read_text(encoding="utf-8")
     unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
