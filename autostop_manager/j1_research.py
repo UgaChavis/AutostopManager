@@ -89,6 +89,20 @@ _FREQUENCY_PERCENT = re.compile(
     r"(?P<unit>vehicles?|cars?|units?|cases?|автомобил\w*|машин\w*|случа\w*)\b",
     re.IGNORECASE,
 )
+_FREQUENCY_DEFECT_MARKERS = (
+    "fault",
+    "failure",
+    "defect",
+    "malfunction",
+    "leak",
+    "misfire",
+    "неисправ",
+    "дефект",
+    "пропуск",
+    "утеч",
+    "отказ",
+    "полом",
+)
 
 # Only parameters whose documented purpose is attribution are removed. In
 # particular, generic names such as ``ref`` and all unknown parameters stay:
@@ -1088,16 +1102,36 @@ def _alternative_cause_mentions(rows: list[sqlite3.Row], sources: list[dict[str,
     return found
 
 
-def _frequency_measurements(rows: list[sqlite3.Row], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Expose only explicit population measurements from stronger evidence tiers."""
+def _frequency_measurements(
+    rows: list[sqlite3.Row], sources: list[dict[str, Any]], context: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Expose a cohort only when its sentence names this investigated defect.
+
+    A source's authority and an exact vehicle match cannot turn a population
+    count about a feature, campaign, or unrelated repair into failure rate.
+    Requiring a technical subject from the profile plus a defect marker is
+    intentionally conservative; ambiguous counts remain unmeasured.
+    """
 
     measurements: list[dict[str, Any]] = []
+    subject_terms = [
+        value.casefold()
+        for key in ("system", "symptom", "dtc", "part_number")
+        if len(value := context.get(key, "").strip()) >= 3
+    ]
+    if not subject_terms:
+        return measurements
     for row, source in zip(rows, sources, strict=True):
         if source["source_tier"] not in {"A", "B"} or source["applicability"] not in {"exact", "analog"}:
             continue
         for sentence in _source_sentences(str(row["body"] or "")):
             match = _FREQUENCY_COUNT.search(sentence) or _FREQUENCY_PERCENT.search(sentence)
             if match is None:
+                continue
+            normalized = sentence.casefold()
+            if not any(term in normalized for term in subject_terms) or not any(
+                marker in normalized for marker in _FREQUENCY_DEFECT_MARKERS
+            ):
                 continue
             measurements.append(
                 {
@@ -1204,22 +1238,26 @@ def research_report(job_id: str) -> dict[str, Any]:
             ]
             unavailable = [
                 {
+                    "document_id": row["id"],
+                    "url": row["url"],
+                    "title": row["title"] or None,
                     "reason": row["error"] or "fetch_failed",
-                    "count": row["count"],
+                    # Kept for consumers of the original grouped form.  Each
+                    # row is now one inspectable unavailable document.
+                    "count": 1,
                     "source_class": row["source_class"] or "unknown",
                     "source_tier": row["source_tier"] or "unclassified",
                 }
                 for row in conn.execute(
-                    """SELECT error,source_class,source_tier,COUNT(*) AS count FROM documents
-                       WHERE job_id=? AND status='failed'
-                       GROUP BY error,source_class,source_tier ORDER BY count DESC,error LIMIT 10""",
+                    """SELECT id,url,title,error,source_class,source_tier FROM documents
+                       WHERE job_id=? AND status='failed' ORDER BY created_at,id LIMIT 20""",
                     (job_id,),
                 )
             ]
     except (OSError, sqlite3.Error):
         return _report_error("j1_store_unavailable", job_id=job_id)
 
-    frequency_measurements = _frequency_measurements(report_rows, sources)
+    frequency_measurements = _frequency_measurements(report_rows, sources, context)
     confirmed = [
         {**source, "evidence_kind": "strong_context_source"}
         for source in sources

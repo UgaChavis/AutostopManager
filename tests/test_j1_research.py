@@ -104,7 +104,7 @@ def test_automotive_report_separates_evidence_from_hypotheses_and_frequency(monk
         if "nhtsa" in url:
             text = (
                 "Lexus RX200T 2017 8AR-FTS fuel injection technical bulletin. The symptom may be caused by "
-                "injector seal leakage. The monitored sample found 12 of 100 vehicles with this condition."
+                "injector seal leakage. The monitored sample found 12 of 100 vehicles with fuel injection leakage."
             )
         elif "denso" in url:
             text = (
@@ -205,9 +205,50 @@ def test_discovery_evidence_survives_fetch_and_inaccessible_official_source(
     assert status["coverage"]["discovered_source_tiers"] == [{"source_tier": "A", "count": 2}]
     report = j1.research_report(created["job_id"])["report"]
     assert report["sources"][0]["search_rank"] == 1
-    assert report["unavailable"] == [
-        {"reason": "requires_human", "count": 1, "source_class": "official_registry", "source_tier": "A"}
-    ]
+    assert len(report["unavailable"]) == 1
+    unavailable = report["unavailable"][0]
+    assert unavailable["url"] == blocked
+    assert unavailable["title"] == "Toyota repair procedure"
+    assert unavailable["reason"] == "requires_human"
+    assert unavailable["source_class"] == "official_registry"
+    assert unavailable["source_tier"] == "A"
+
+
+def test_report_rejects_unrelated_population_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://static.nhtsa.gov/odi/tsbs/2021/MC-10000000-0001.pdf"
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": "Bulletin", "source": "searxng"}], "searxng"),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda _url, **_kwargs: {
+            "ok": True,
+            "url": url,
+            "title": "Bulletin",
+            "kind": "pdf",
+            "text": "Lexus RX200T 2017 8AR-FTS fuel injection bulletin: 12 of 100 vehicles have fuel injection.",
+        },
+    )
+    created = j1.start_research(
+        "Review fuel injection failure evidence",
+        automotive_context={
+            "make": "Lexus",
+            "model": "RX200T",
+            "year": "2017",
+            "engine": "8AR-FTS",
+            "system": "fuel injection",
+            "symptom": "misfire",
+        },
+    )
+    assert created["ok"]
+    j1.run_worker(once=True)
+    assert j1.research_report(created["job_id"])["report"]["frequency"] == {
+        "status": "not_measured",
+        "reason": "no_qualified_population_measurement",
+    }
 
 
 def test_report_keeps_manual_mirror_in_tier_d(monkeypatch: pytest.MonkeyPatch) -> None:
