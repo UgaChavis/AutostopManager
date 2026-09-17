@@ -40,6 +40,10 @@ _SECRET = re.compile(r"(?i)(?:bearer\s+[a-z0-9._~+/-]{12,}|(?:api[_-]?key|token|
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}\b")
 _API_SECRET = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b")
 _EMBEDDED_URL = re.compile(r"(?i)(?<!\w)[a-z][a-z0-9+.-]*://[^\s<>]+")
+_VIN_SEPARATORS = re.compile(r"[ ._/\\-]+")
+_DOCUMENT_SUFFIX = re.compile(r"\.(?:pdf|html?|xhtml|txt|xml|json|csv|docx?|xlsx?|pptx?)$", re.I)
+_URL_FIELD_SEPARATOR = re.compile(r"[?&;=#]+")
+_VIN_TOKEN = re.compile(r"^[A-HJ-NPR-Z0-9 ._/\\-]+$", re.I)
 _ROBOTS: dict[str, tuple[float, RobotFileParser | None, bool, float]] = {}
 _ROBOTS_LOCK = threading.Lock()
 _HOST_NEXT: dict[str, float] = {}
@@ -49,11 +53,15 @@ _RATE_LOCK = threading.Lock()
 def contains_sensitive(value: str) -> bool:
     """Reject sensitive user input before sending or persisting it."""
 
-    decoded = unquote(unquote(str(value or "")))
+    decoded = _decode_twice(value)
     return bool(
         any(_looks_like_vin(match.group()) for match in _VIN.finditer(decoded))
         or any(pattern.search(decoded) for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET))
     )
+
+
+def _decode_twice(value: str) -> str:
+    return unquote(unquote(str(value or "")))
 
 
 def _looks_like_vin(candidate: str) -> bool:
@@ -65,9 +73,61 @@ def _looks_like_vin(candidate: str) -> bool:
     return sum(char.isdigit() for char in candidate) >= 5
 
 
+def _is_full_url_vin(candidate: str) -> bool:
+    """Recognize an actual 17-character VIN token without crossing a file suffix.
+
+    ``_VIN`` intentionally has broad matching for ordinary free text.  Applied
+    to a URL or retrieved document verbatim it can consume the ``.pdf`` suffix
+    of a bulletin ID (for example ``SB-10063500-2280.pdf``) as three VIN
+    characters.  A URL component has structure, so remove a known document
+    suffix before counting the identifier itself.
+    """
+
+    identifier = _DOCUMENT_SUFFIX.sub("", candidate)
+    return len(_VIN_SEPARATORS.sub("", identifier)) == 17
+
+
+def _url_component_contains_sensitive(value: str) -> bool:
+    """Check decoded URL data without applying prose-only VIN heuristics."""
+
+    decoded = _decode_twice(value)
+    fields = _URL_FIELD_SEPARATOR.split(decoded)
+
+    def has_vin(field: str) -> bool:
+        segments = [segment for segment in field.split("/") if segment]
+        if any(_is_full_url_vin(match.group()) for segment in segments for match in _VIN.finditer(segment)):
+            return True
+        # An encoded slash can make a deliberately separated VIN look like a
+        # path.  Join only whole adjacent path segments; this avoids a regex
+        # accidentally treating a following URL segment as a document suffix.
+        for start in range(len(segments)):
+            candidate = ""
+            for end in range(start, len(segments)):
+                candidate = segments[end] if not candidate else candidate + "/" + segments[end]
+                if _VIN_TOKEN.fullmatch(candidate) and _is_full_url_vin(candidate):
+                    return True
+        return False
+
+    return bool(
+        any(has_vin(field) for field in fields)
+        or any(pattern.search(decoded) for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET))
+    )
+
+
+def _hostname_contains_sensitive(host: str) -> bool:
+    """Reject a full VIN used as an individual public DNS label."""
+
+    return any(_VIN_TOKEN.fullmatch(label) and _is_full_url_vin(label) for label in host.casefold().split("."))
+
+
 def redact_sensitive(value: str, *, limit: int = MAX_TEXT_CHARS) -> str:
     text = str(value or "")[: max(0, limit * 2)]
-    text = _VIN.sub(lambda match: "[redacted]" if _looks_like_vin(match.group()) else match.group(), text)
+    text = _VIN.sub(
+        lambda match: (
+            "[redacted]" if _looks_like_vin(match.group()) and _is_full_url_vin(match.group()) else match.group()
+        ),
+        text,
+    )
     for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET):
         text = pattern.sub("[redacted]", text)
     return text[:limit]
@@ -75,7 +135,7 @@ def redact_sensitive(value: str, *, limit: int = MAX_TEXT_CHARS) -> str:
 
 def public_url(value: str) -> str:
     raw = str(value or "").strip()
-    if not raw or len(raw) > 2048 or contains_sensitive(raw):
+    if not raw or len(raw) > 2048:
         return ""
     try:
         parsed = urlsplit(raw)
@@ -91,6 +151,14 @@ def public_url(value: str) -> str:
         or port not in {None, 80, 443}
         or host.casefold() in {"localhost", "localhost.localdomain"}
         or host.casefold().endswith((".localhost", ".local", ".internal", ".onion"))
+    ):
+        return ""
+    # User input is deliberately checked as prose by ``contains_sensitive``.
+    # A direct URL is different: validate its separately decoded components so
+    # a public document name is not mistaken for a separator-heavy VIN while
+    # VINs, contacts and secrets embedded in data remain non-egressable.
+    if _hostname_contains_sensitive(host) or any(
+        _url_component_contains_sensitive(component) for component in (parsed.path, parsed.query, parsed.fragment)
     ):
         return ""
     try:

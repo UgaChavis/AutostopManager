@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 
 import pytest
 
@@ -233,6 +234,143 @@ def test_capacity_failure_is_visible_to_agent(monkeypatch: pytest.MonkeyPatch) -
     assert j1.research_results(job_id)["results"][0]["error"] == "cache_capacity_reached"
 
 
+def test_stage1_metadata_coverage_and_safe_suggestions(monkeypatch: pytest.MonkeyPatch) -> None:
+    discovered = "https://static.nhtsa.gov/odi/tsbs/2014/SB-10063500-2280.pdf?utm_source=test&edition=2014&_ga=ignore"
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": discovered, "title": "Steering bulletin", "source": "searxng"}], "searxng"),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda _url: {
+            "ok": True,
+            "url": discovered,
+            "title": "Steering Bulletin",
+            "kind": "pdf",
+            "text": "Technical steering repair bulletin " * 25,
+        },
+    )
+    created = j1.start_research("Mercedes steering rack evidence", ["W212 steering rack failure"], max_pages=2)
+    assert created["ok"]
+    j1.run_worker(once=True)
+    job_id = created["job_id"]
+    item = j1.research_results(job_id)["results"][0]
+    assert item["canonical_url"] == "https://static.nhtsa.gov/odi/tsbs/2014/SB-10063500-2280.pdf?edition=2014"
+    assert item["source_class"] == "official_registry"
+    assert item["source_basis"].startswith("registry:official:nhtsa.gov:")
+    assert item["language"] == "en"
+    assert item["extraction_method"] == "pdf_text"
+    status = j1.research_status(job_id)
+    assert status["coverage"]["languages"] == [{"language": "en", "count": 1}]
+    assert status["coverage"]["source_classes"] == [{"source_class": "official_registry", "count": 1}]
+    assert status["coverage"]["extraction_methods"] == [{"extraction_method": "pdf_text", "count": 1}]
+    assert status["coverage"]["search_providers"] == [{"provider": "searxng", "queries": 1, "done": 1, "failed": 0}]
+    assert {suggestion["language"] for suggestion in status["query_suggestions"]} == {"ru", "en"}
+    assert all(suggestion["query"] not in ["W212 steering rack failure"] for suggestion in status["query_suggestions"])
+
+
+def test_stage1_duplicate_link_preserves_original_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = ["https://example.org/first", "https://example.net/mirror"]
+    original = "technical steering report " * 120
+    near_copy = original.replace("report", "bulletin", 1)
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": url, "source": "searxng"} for url in urls], "searxng"),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda url: {
+            "ok": True,
+            "url": url,
+            "title": url,
+            "kind": "html",
+            "text": original if url == urls[0] else near_copy,
+        },
+    )
+    job_id = j1.start_research("Public steering evidence", ["steering rack bulletin"], max_pages=3)["job_id"]
+    j1.run_worker(once=True)
+    results = j1.research_results(job_id)["results"]
+    primary = next(item for item in results if item["status"] == "fetched")
+    duplicate = next(item for item in results if item["status"] == "duplicate")
+    assert duplicate["duplicate_of"] == primary["document_id"]
+    assert duplicate["duplicate"]["url"] == primary["url"]
+    assert duplicate["duplicate"]["kind"] == "near"
+    assert duplicate["duplicate"]["similarity"] and duplicate["duplicate"]["similarity"] > 0.9
+    duplicate_read = j1.research_document(job_id, duplicate["document_id"])
+    assert not duplicate_read["ok"]
+    assert duplicate_read["duplicate"]["url"] == primary["url"]
+    status = j1.research_status(job_id)
+    assert (status["pages_fetched"], status["pages_duplicates"], status["pages_unavailable"]) == (1, 1, 0)
+
+
+def test_stage1_migrates_legacy_cache_additively(tmp_path: Path) -> None:
+    database = tmp_path / "research.sqlite3"
+    conn = sqlite3.connect(database)
+    conn.executescript(
+        """
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, objective TEXT NOT NULL, max_pages INTEGER NOT NULL,
+            status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE queries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
+            query TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            provider TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE documents (
+            id TEXT PRIMARY KEY, job_id TEXT NOT NULL, url TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+            body TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+            retrieved_at TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO jobs VALUES(?,?,?,?,?,?,?)",
+        ("a" * 32, "Public evidence", 1, "completed", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", ""),
+    )
+    conn.execute(
+        "INSERT INTO documents VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "b" * 32,
+            "a" * 32,
+            "https://example.org/report?utm_source=x&edition=2",
+            "",
+            "",
+            "html",
+            "fetched",
+            "public body",
+            "x",
+            "",
+            "2026-01-01T00:00:00+00:00",
+            "",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    with j1._db() as migrated:
+        columns = {row[1] for row in migrated.execute("PRAGMA table_info(documents)")}
+        canonical = migrated.execute("SELECT canonical_url,source_class FROM documents").fetchone()
+    assert {
+        "canonical_url",
+        "language",
+        "extraction_method",
+        "source_class",
+        "source_basis",
+        "duplicate_of",
+        "content_simhash",
+    }.issubset(columns)
+    assert canonical["canonical_url"] == "https://example.org/report?edition=2"
+    assert canonical["source_class"] == "unknown"
+
+
 @pytest.mark.parametrize(
     ("status", "body", "expected_allowed", "expected_delay"),
     [
@@ -446,3 +584,33 @@ def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.M
         "!qwant brake pads operation",
         "!yep brake pads operation",
     ]
+
+
+def test_stage1_url_aware_input_accepts_bulletin_but_rejects_vin_url() -> None:
+    bulletin = "https://static.nhtsa.gov/odi/tsbs/2014/SB-10063500-2280.pdf"
+    assert j1.start_research("Public bulletin evidence", [bulletin], max_pages=1)["ok"]
+    vin_url = "https://example.org/vehicle/WDD2120341A855148/report.pdf"
+    assert not j1.start_research("Public bulletin evidence", [vin_url], max_pages=1)["ok"]
+
+
+def test_stage1_exact_duplicate_links_to_first_fetched_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = ["https://example.org/first", "https://example.net/exact-copy"]
+    body = "technical steering report " * 120
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": url, "source": "searxng"} for url in urls], "searxng"),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda url: {"ok": True, "url": url, "title": url, "kind": "html", "text": body},
+    )
+    job_id = j1.start_research("Public steering evidence", ["steering rack report"], max_pages=3)["job_id"]
+    j1.run_worker(once=True)
+    results = j1.research_results(job_id)["results"]
+    primary = next(item for item in results if item["status"] == "fetched")
+    duplicate = next(item for item in results if item["status"] == "duplicate")
+    assert duplicate["duplicate_of"] == primary["document_id"]
+    assert duplicate["duplicate"]["kind"] == "exact"
+    assert duplicate["duplicate"]["similarity"] == 1.0
