@@ -35,6 +35,7 @@ from .j1_fetch import (
 )
 
 SCHEMA = "autostop.j1.research.v1"
+REPORT_SCHEMA = "autostop.j1.report.v1"
 MAX_QUERIES = 30
 MAX_PAGES = 300
 MAX_BROWSER_PAGES = 20
@@ -45,6 +46,48 @@ _IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _URL_TOKEN = re.compile(r"(?i)(?<!\w)[a-z][a-z0-9+.-]*://[^\s<>]+")
 _WORD = re.compile(r"[^\W_]{3,}", flags=re.UNICODE)
 _STOP = False
+
+# The automotive profile remains a small extension of the generic public-web
+# corpus.  It is deliberately bounded more tightly because its automatic plan
+# is intended to be reviewed as one compact evidence bundle.
+GENERAL_PROFILE = "general"
+AUTOMOTIVE_PROFILE = "automotive"
+AUTOMOTIVE_MAX_QUERIES = 12
+AUTOMOTIVE_MAX_PAGES = 60
+AUTOMOTIVE_MAX_MANUAL_QUERIES = 4
+_AUTOMOTIVE_CONTEXT_LIMITS = {
+    "make": 80,
+    "model": 100,
+    "year": 4,
+    "engine": 100,
+    "system": 120,
+    "symptom": 500,
+    "dtc": 120,
+    "part_number": 100,
+}
+_AUTOMOTIVE_DTC = re.compile(r"^[PBCU][0-3A-F][0-9A-F]{3}$", re.IGNORECASE)
+_CAUSE_MARKERS = (
+    "caused by",
+    "due to",
+    "root cause",
+    "because of",
+    "attributed to",
+    "причин",
+    "вызван",
+    "обусловлен",
+    "из-за",
+    "вследствие",
+)
+_FREQUENCY_COUNT = re.compile(
+    r"\b(?P<n>\d{1,6})\s*(?:out\s+of|of|/|из)\s*(?P<d>\d{1,6})\s+"
+    r"(?P<unit>vehicles?|cars?|units?|cases?|автомобил\w*|машин\w*|случа\w*)\b",
+    re.IGNORECASE,
+)
+_FREQUENCY_PERCENT = re.compile(
+    r"\b(?P<percent>\d{1,3}(?:[.,]\d+)?)\s*%\s+(?:of|among|из|среди)\s+"
+    r"(?P<unit>vehicles?|cars?|units?|cases?|автомобил\w*|машин\w*|случа\w*)\b",
+    re.IGNORECASE,
+)
 
 # Only parameters whose documented purpose is attribution are removed. In
 # particular, generic names such as ``ref`` and all unknown parameters stay:
@@ -347,19 +390,40 @@ def _migrate_documents(conn: sqlite3.Connection) -> None:
             conn.execute("UPDATE documents SET canonical_url=? WHERE id=?", (canonical, row["id"]))
 
 
+def _migrate_jobs(conn: sqlite3.Connection) -> None:
+    """Add profile metadata without changing retained generic jobs."""
+
+    required = {
+        "profile": "TEXT NOT NULL DEFAULT 'general'",
+        "automotive_context": "TEXT NOT NULL DEFAULT ''",
+    }
+    present = _schema_columns(conn, "jobs")
+    for name, definition in required.items():
+        if name not in present:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+
+
+def _migrate_queries(conn: sqlite3.Connection) -> None:
+    """Keep a non-sensitive intent label for automatic automotive queries."""
+
+    if "intent" not in _schema_columns(conn, "queries"):
+        conn.execute("ALTER TABLE queries ADD COLUMN intent TEXT NOT NULL DEFAULT 'manual'")
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY, objective TEXT NOT NULL, max_pages INTEGER NOT NULL,
             status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            error TEXT NOT NULL DEFAULT ''
+            error TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT 'general',
+            automotive_context TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
         CREATE TABLE IF NOT EXISTS queries (
             id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
             query TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-            provider TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+            provider TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', intent TEXT NOT NULL DEFAULT 'manual',
             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
             UNIQUE(job_id, query)
         );
@@ -384,6 +448,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    _migrate_jobs(conn)
+    _migrate_queries(conn)
     _migrate_documents(conn)
 
 
@@ -445,17 +511,152 @@ def _validated_queries(queries: list[str], *, allow_empty: bool = False) -> list
     return result
 
 
-def start_research(objective: str, queries: list[str], max_pages: int = MAX_PAGES) -> dict[str, Any]:
+def _validated_automotive_context(value: object) -> tuple[dict[str, str] | None, str | None]:
+    """Accept only de-identified technical fields used to form public queries."""
+
+    if not isinstance(value, dict) or any(key not in _AUTOMOTIVE_CONTEXT_LIMITS for key in value):
+        return None, "automotive_context_invalid"
+    context: dict[str, str] = {}
+    for key, raw in value.items():
+        if raw is None:
+            continue
+        if key == "year":
+            if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+                return None, "automotive_context_invalid"
+            year = str(raw).strip()
+            if not re.fullmatch(r"\d{4}", year) or not 1886 <= int(year) <= 2100:
+                return None, "automotive_context_invalid"
+            context[key] = year
+            continue
+        if not isinstance(raw, str):
+            return None, "automotive_context_invalid"
+        cleaned = _clean_input(raw, limit=_AUTOMOTIVE_CONTEXT_LIMITS[key])
+        if not cleaned:
+            continue
+        if not _input_is_safe(cleaned):
+            return None, "automotive_context_invalid_or_sensitive"
+        if key == "dtc":
+            codes = [item for item in re.split(r"[,;/\s]+", cleaned.upper()) if item]
+            if not codes or len(codes) > 8 or not all(_AUTOMOTIVE_DTC.fullmatch(code) for code in codes):
+                return None, "automotive_context_invalid"
+            cleaned = ", ".join(codes)
+        context[key] = cleaned
+    if not context:
+        return None, "automotive_context_invalid"
+    has_identity = any(context.get(field) for field in ("make", "model", "engine", "part_number"))
+    has_subject = any(context.get(field) for field in ("system", "symptom", "dtc", "part_number"))
+    if not has_identity or not has_subject:
+        return None, "automotive_context_incomplete"
+    return context, None
+
+
+def _context_phrase(context: dict[str, str], *fields: str) -> str:
+    values: list[str] = []
+    seen: set[str] = set()
+    for field in fields:
+        value = context.get(field, "")
+        if value and value.casefold() not in seen:
+            values.append(value)
+            seen.add(value.casefold())
+    return _clean_input(" ".join(values), limit=500)
+
+
+def _automotive_query_plan(context: dict[str, str]) -> list[tuple[str, str]]:
+    """Build a balanced, deterministic public-search plan without network I/O."""
+
+    identity = _context_phrase(context, "make", "model", "year", "engine")
+    technical_identity = _context_phrase(context, "engine", "make", "model") or identity
+    diagnostic = _context_phrase(context, "system", "symptom", "dtc")
+    catalog_subject = _context_phrase(context, "part_number", "system", "engine") or identity
+    subject = diagnostic or catalog_subject
+    templates = (
+        ("official_bulletin_en", f"{identity} {subject} OEM technical service bulletin"),
+        ("technical_diagnosis_en", f"{technical_identity} {subject} diagnostic procedure"),
+        ("catalog_fitment_en", f"{catalog_subject} OEM parts catalog fitment"),
+        ("owner_experience_en", f"{identity} {subject} owner forum repair experience"),
+        ("official_bulletin_ru", f"{identity} {subject} бюллетень производителя"),
+        ("technical_diagnosis_ru", f"{technical_identity} {subject} диагностика техническая документация"),
+        ("catalog_fitment_ru", f"{catalog_subject} каталог оригинальных деталей применимость"),
+        ("owner_experience_ru", f"{identity} {subject} форум владельцев опыт ремонта"),
+        ("alternative_causes_en", f"{technical_identity} {subject} possible causes technical"),
+        ("alternative_causes_ru", f"{technical_identity} {subject} возможные причины техническая информация"),
+        ("technical_context_en", f"{technical_identity} {subject} service manual technical documentation"),
+        ("technical_context_ru", f"{technical_identity} {subject} руководство по ремонту техническое описание"),
+    )
+    planned: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for intent, raw in templates:
+        query = _clean_input(raw, limit=500)
+        normalized = query.casefold()
+        if query and _input_is_safe(query) and normalized not in seen:
+            planned.append((query, intent))
+            seen.add(normalized)
+    return planned[:AUTOMOTIVE_MAX_QUERIES]
+
+
+def _profile_and_queries(
+    *,
+    queries: list[str] | None,
+    automotive_context: object,
+    profile: str,
+    max_pages: int,
+) -> tuple[str, dict[str, str], list[tuple[str, str]], int] | None:
+    if not isinstance(profile, str) or profile not in {GENERAL_PROFILE, AUTOMOTIVE_PROFILE}:
+        return None
+    use_automotive = automotive_context is not None or profile == AUTOMOTIVE_PROFILE
+    if not use_automotive:
+        if automotive_context is not None:
+            return None
+        manual = _validated_queries(queries if queries is not None else [])
+        if manual is None:
+            return None
+        return GENERAL_PROFILE, {}, [(query, "manual") for query in manual], max_pages
+    context, context_error = _validated_automotive_context(automotive_context)
+    if context is None or context_error:
+        return None
+    manual = _validated_queries(queries if queries is not None else [], allow_empty=True)
+    if manual is None or len(manual) > AUTOMOTIVE_MAX_MANUAL_QUERIES:
+        return None
+    planned: list[tuple[str, str]] = [(query, "manual") for query in manual]
+    seen = {query.casefold() for query, _intent in planned}
+    for query, intent in _automotive_query_plan(context):
+        if query.casefold() not in seen:
+            planned.append((query, intent))
+            seen.add(query.casefold())
+        if len(planned) >= AUTOMOTIVE_MAX_QUERIES:
+            break
+    if not planned:
+        return None
+    return AUTOMOTIVE_PROFILE, context, planned, min(max_pages, AUTOMOTIVE_MAX_PAGES)
+
+
+def start_research(
+    objective: str,
+    queries: list[str] | None = None,
+    max_pages: int = MAX_PAGES,
+    automotive_context: dict[str, Any] | None = None,
+    profile: str = GENERAL_PROFILE,
+) -> dict[str, Any]:
     """Queue one de-identified, read-only public research job."""
 
     if not isinstance(objective, str) or len(objective) > 2000 or not _input_is_safe(objective):
         return _error("objective_invalid_or_sensitive")
     clean_objective = _clean_input(objective, limit=2000)
-    clean_queries = _validated_queries(queries)
-    if not clean_objective or clean_queries is None:
+    if not clean_objective:
         return _error("queries_or_objective_invalid")
     if type(max_pages) is not int or not 1 <= max_pages <= MAX_PAGES:
         return _error("max_pages_invalid")
+    configured = _profile_and_queries(
+        queries=queries,
+        automotive_context=automotive_context,
+        profile=profile,
+        max_pages=max_pages,
+    )
+    if configured is None:
+        if automotive_context is None and profile == GENERAL_PROFILE:
+            return _error("queries_or_objective_invalid")
+        return _error("queries_or_automotive_context_invalid")
+    selected_profile, clean_context, planned_queries, effective_max_pages = configured
     job_id = uuid4().hex
     now = _utcnow()
     try:
@@ -464,16 +665,36 @@ def start_research(objective: str, queries: list[str], max_pages: int = MAX_PAGE
             if conn.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
                 return _error("j1_busy")
             conn.execute(
-                "INSERT INTO jobs(id,objective,max_pages,status,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-                (job_id, clean_objective, max_pages, "queued", now, now),
+                """INSERT INTO jobs(id,objective,max_pages,status,created_at,updated_at,profile,automotive_context)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    job_id,
+                    clean_objective,
+                    effective_max_pages,
+                    "queued",
+                    now,
+                    now,
+                    selected_profile,
+                    json.dumps(clean_context, ensure_ascii=False, sort_keys=True) if clean_context else "",
+                ),
             )
             conn.executemany(
-                "INSERT INTO queries(job_id,query) VALUES(?,?)", ((job_id, query) for query in clean_queries)
+                "INSERT INTO queries(job_id,query,intent) VALUES(?,?,?)",
+                ((job_id, query, intent) for query, intent in planned_queries),
             )
             conn.commit()
     except (OSError, sqlite3.Error):
         return _error("j1_store_unavailable")
-    return {"ok": True, "schema": SCHEMA, "job_id": job_id, "status": "queued", "query_count": len(clean_queries)}
+    return {
+        "ok": True,
+        "schema": SCHEMA,
+        "job_id": job_id,
+        "status": "queued",
+        "profile": selected_profile,
+        "max_pages": effective_max_pages,
+        "query_count": len(planned_queries),
+        "automotive_context": clean_context or None,
+    }
 
 
 def _safe_query_suggestions(objective: str, queries: list[str]) -> list[dict[str, str]]:
@@ -505,6 +726,19 @@ def _safe_query_suggestions(objective: str, queries: list[str]) -> list[dict[str
         suggestions.append({"language": language, "query": proposed, "reason": reason})
         existing.add(proposed.casefold())
     return suggestions
+
+
+def _stored_automotive_context(value: object) -> dict[str, str]:
+    """Read retained technical context defensively; never surface malformed data."""
+
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        loaded = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    context, error = _validated_automotive_context(loaded)
+    return context if context is not None and error is None else {}
 
 
 def _coverage_rows(conn: sqlite3.Connection, job_id: str, column: str, key: str) -> list[dict[str, Any]]:
@@ -578,10 +812,14 @@ def research_status(job_id: str) -> dict[str, Any]:
             browser_attempts = conn.execute(
                 "SELECT COUNT(*) FROM documents WHERE job_id=? AND extraction_method='browser_dom'", (job_id,)
             ).fetchone()[0]
-            stored_queries = [
-                item["query"]
-                for item in conn.execute("SELECT query FROM queries WHERE job_id=? ORDER BY id", (job_id,))
+            query_plan = [
+                {"query": item["query"], "intent": item["intent"] or "manual"}
+                for item in conn.execute("SELECT query,intent FROM queries WHERE job_id=? ORDER BY id", (job_id,))
             ]
+            stored_queries = [item["query"] for item in query_plan]
+            profile = row["profile"] or GENERAL_PROFILE
+            context = _stored_automotive_context(row["automotive_context"])
+            query_limit = AUTOMOTIVE_MAX_QUERIES if profile == AUTOMOTIVE_PROFILE else MAX_QUERIES
             return {
                 "ok": True,
                 "schema": SCHEMA,
@@ -591,6 +829,9 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "max_pages": row["max_pages"],
+                "profile": profile,
+                "automotive_context": context or None,
+                "query_plan": query_plan,
                 "pages_total": counts["total"],
                 "pages_fetched": counts["fetched"] or 0,
                 # Kept for compatibility: historical callers treated duplicate
@@ -613,9 +854,13 @@ def research_status(job_id: str) -> dict[str, Any]:
                 },
                 # Suggestions do not consume budget or create queries. They are
                 # capped by the remaining explicit add_queries capacity.
-                "query_suggestions": _safe_query_suggestions(row["objective"], stored_queries)[
-                    : max(0, MAX_QUERIES - queries["total"])
-                ],
+                "query_suggestions": (
+                    []
+                    if profile == AUTOMOTIVE_PROFILE
+                    else _safe_query_suggestions(row["objective"], stored_queries)[
+                        : max(0, query_limit - queries["total"])
+                    ]
+                ),
                 "error": row["error"] or None,
             }
     except (OSError, sqlite3.Error):
@@ -773,6 +1018,310 @@ def research_document(job_id: str, document_id: str, offset: int = 0, max_chars:
         return _error("j1_store_unavailable", job_id=job_id)
 
 
+def _report_error(code: str, *, job_id: str = "") -> dict[str, Any]:
+    result: dict[str, Any] = {"ok": False, "schema": REPORT_SCHEMA, "error": {"code": code}}
+    if job_id:
+        result["job_id"] = job_id
+    return result
+
+
+def _report_source_tier(source_class: str) -> tuple[str, str]:
+    """Map existing collection classes to evidence tiers without reclassifying sources."""
+
+    source_class = str(source_class or "unknown")
+    if source_class in {"official_registry", "official_oem", "official_regulator"}:
+        return "A", "official_or_regulatory"
+    if source_class in {"technical", "technical_manufacturer", "engineering"}:
+        return "B", "technical_or_engineering"
+    if source_class in {"supplier_catalog", "catalog"}:
+        return "C", "catalog_or_fitment"
+    if source_class in {"owner_community", "forum"}:
+        return "D", "owner_experience"
+    return "unrated", "unrated_source"
+
+
+def _context_matches(row: sqlite3.Row, context: dict[str, str]) -> tuple[str, list[str]]:
+    """Describe literal context overlap, never a fitment or diagnostic conclusion."""
+
+    if not context:
+        return "not_assessed", []
+    haystack = " ".join((str(row["title"] or ""), str(row["body"] or ""))).casefold()
+    matched = [field for field, value in context.items() if value.casefold() in haystack]
+    matched_set = set(matched)
+    if (
+        ("model" in matched_set and "engine" in matched_set)
+        or ("part_number" in matched_set and {"make", "model"}.issubset(matched_set))
+        or ({"model", "year"}.issubset(matched_set) and "engine" in matched_set)
+    ):
+        return "exact", matched
+    if matched_set & {"model", "engine", "part_number"}:
+        return "analog", matched
+    if matched_set:
+        return "general", matched
+    return "unknown", []
+
+
+def _evidence_confidence(tier: str, applicability: str) -> str:
+    if tier == "A" and applicability == "exact":
+        return "high"
+    if tier in {"A", "B"} and applicability in {"exact", "analog"}:
+        return "moderate"
+    if tier in {"B", "C", "D"} or applicability == "general":
+        return "low"
+    return "insufficient"
+
+
+def _report_source_item(row: sqlite3.Row, context: dict[str, str]) -> dict[str, Any]:
+    tier, tier_basis = _report_source_tier(row["source_class"])
+    applicability, matched = _context_matches(row, context)
+    return {
+        "document_id": row["id"],
+        "url": row["url"],
+        "canonical_url": row["canonical_url"] or row["url"],
+        "title": row["title"],
+        "source_class": row["source_class"] or "unknown",
+        "source_basis": row["source_basis"] or "fallback:unclassified",
+        "source_tier": tier,
+        "source_tier_basis": tier_basis,
+        "applicability": applicability,
+        "matched_context_fields": matched,
+        "confidence": _evidence_confidence(tier, applicability),
+        "retrieved_at": row["retrieved_at"] or None,
+    }
+
+
+def _report_source_sort_key(item: dict[str, Any]) -> tuple[int, int, str]:
+    tier_order = {"A": 0, "B": 1, "C": 2, "D": 3, "unrated": 4}
+    applicability_order = {"exact": 0, "analog": 1, "general": 2, "unknown": 3, "not_assessed": 4}
+    return (
+        tier_order.get(str(item["source_tier"]), 5),
+        applicability_order.get(str(item["applicability"]), 5),
+        str(item["url"]),
+    )
+
+
+def _report_excerpt(value: str) -> str:
+    return _clean_input(redact_sensitive(value, limit=320), limit=280)
+
+
+def _source_sentences(body: str) -> Iterator[str]:
+    for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", body):
+        compact = _report_excerpt(sentence)
+        if len(compact) >= 24:
+            yield compact
+
+
+def _alternative_cause_mentions(rows: list[sqlite3.Row], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return cited source mentions only; no automatic diagnosis is inferred."""
+
+    found: list[dict[str, Any]] = []
+    for row, source in zip(rows, sources, strict=True):
+        for sentence in _source_sentences(str(row["body"] or "")):
+            if not any(marker in sentence.casefold() for marker in _CAUSE_MARKERS):
+                continue
+            found.append(
+                {
+                    "status": "unverified_source_mention",
+                    "source_document_id": source["document_id"],
+                    "source_url": source["url"],
+                    "source_tier": source["source_tier"],
+                    "applicability": source["applicability"],
+                    "confidence": source["confidence"],
+                    "excerpt": sentence,
+                }
+            )
+            break
+        if len(found) >= 3:
+            break
+    return found
+
+
+def _frequency_measurements(rows: list[sqlite3.Row], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose only explicit population measurements from stronger evidence tiers."""
+
+    measurements: list[dict[str, Any]] = []
+    for row, source in zip(rows, sources, strict=True):
+        if source["source_tier"] not in {"A", "B"} or source["applicability"] not in {"exact", "analog"}:
+            continue
+        for sentence in _source_sentences(str(row["body"] or "")):
+            match = _FREQUENCY_COUNT.search(sentence) or _FREQUENCY_PERCENT.search(sentence)
+            if match is None:
+                continue
+            measurements.append(
+                {
+                    "status": "reported_source_measurement",
+                    "source_document_id": source["document_id"],
+                    "source_url": source["url"],
+                    "source_tier": source["source_tier"],
+                    "applicability": source["applicability"],
+                    "measurement": match.group(0),
+                    "excerpt": sentence,
+                }
+            )
+            break
+        if len(measurements) >= 3:
+            break
+    return measurements
+
+
+def _overall_confidence(sources: list[dict[str, Any]]) -> str:
+    direct = [
+        source for source in sources if source["source_tier"] in {"A", "B"} and source["applicability"] == "exact"
+    ]
+    if len(direct) >= 2 and _source_domains(direct) >= 2:
+        return "high"
+    if direct or any(source["source_tier"] in {"A", "B"} and source["applicability"] == "analog" for source in sources):
+        return "moderate"
+    if sources:
+        return "low"
+    return "insufficient"
+
+
+def _source_domains(sources: list[dict[str, Any]]) -> int:
+    domains: set[str] = set()
+    for source in sources:
+        try:
+            hostname = (urlsplit(str(source["url"])).hostname or "").casefold()
+        except ValueError:
+            hostname = ""
+        if hostname:
+            domains.add(hostname)
+    return len(domains)
+
+
+def _report_limitations(
+    *,
+    status: str,
+    sources: list[dict[str, Any]],
+    unavailable: list[dict[str, Any]],
+    frequency_measurements: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    limitations: list[dict[str, str]] = []
+    if status != "completed":
+        limitations.append({"code": "research_incomplete", "detail": "job_not_completed"})
+    if not sources:
+        limitations.append({"code": "no_retrieved_sources", "detail": "no_fetched_public_evidence"})
+    if not any(source["source_tier"] == "A" for source in sources):
+        limitations.append({"code": "no_official_source", "detail": "no_tier_a_source_retrieved"})
+    if sources and not any(source["applicability"] == "exact" for source in sources):
+        limitations.append(
+            {"code": "no_exact_context_match", "detail": "fitment_and_diagnosis_require_separate_verification"}
+        )
+    if not frequency_measurements:
+        limitations.append({"code": "frequency_not_measured", "detail": "no_qualified_population_measurement"})
+    if unavailable:
+        limitations.append({"code": "source_access_limited", "detail": "one_or_more_public_sources_unavailable"})
+    limitations.append({"code": "no_automatic_diagnosis", "detail": "source_text_requires_human_review"})
+    return limitations
+
+
+def research_report(job_id: str) -> dict[str, Any]:
+    """Build a read-only evidence ledger from a retained J1 research job."""
+
+    if not _valid_id(job_id):
+        return _report_error("job_id_invalid")
+    try:
+        with _db() as conn:
+            job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                return _report_error("job_not_found", job_id=job_id)
+            context = _stored_automotive_context(job["automotive_context"])
+            rows = conn.execute(
+                """SELECT id,url,canonical_url,title,body,source_class,source_basis,retrieved_at
+                   FROM documents WHERE job_id=? AND status='fetched'""",
+                (job_id,),
+            ).fetchall()
+            pairs = [(row, _report_source_item(row, context)) for row in rows]
+            pairs.sort(key=lambda pair: _report_source_sort_key(pair[1]))
+            pairs = pairs[:20]
+            report_rows = [pair[0] for pair in pairs]
+            sources = [pair[1] for pair in pairs]
+            duplicates = [
+                {
+                    "document_id": row["id"],
+                    "url": row["url"],
+                    "duplicate_of": row["duplicate_of"] or None,
+                    "kind": row["duplicate_kind"] or "unknown",
+                }
+                for row in conn.execute(
+                    """SELECT id,url,duplicate_of,duplicate_kind FROM documents
+                       WHERE job_id=? AND status='duplicate' ORDER BY created_at,id LIMIT 20""",
+                    (job_id,),
+                )
+            ]
+            unavailable = [
+                {"reason": row["error"] or "fetch_failed", "count": row["count"]}
+                for row in conn.execute(
+                    """SELECT error,COUNT(*) AS count FROM documents WHERE job_id=? AND status='failed'
+                       GROUP BY error ORDER BY count DESC,error LIMIT 10""",
+                    (job_id,),
+                )
+            ]
+    except (OSError, sqlite3.Error):
+        return _report_error("j1_store_unavailable", job_id=job_id)
+
+    frequency_measurements = _frequency_measurements(report_rows, sources)
+    confirmed = [
+        {**source, "evidence_kind": "strong_context_source"}
+        for source in sources
+        if source["source_tier"] == "A" and source["applicability"] == "exact"
+    ][:5]
+    confirmed_ids = {source["document_id"] for source in confirmed}
+    hypotheses = [
+        {**source, "evidence_kind": "requires_source_review"}
+        for source in sources
+        if source["document_id"] not in confirmed_ids
+    ][:10]
+    tier_counts = {
+        tier: sum(1 for source in sources if source["source_tier"] == tier) for tier in ("A", "B", "C", "D", "unrated")
+    }
+    frequency: dict[str, Any]
+    if frequency_measurements:
+        frequency = {
+            "status": "measured_in_source",
+            "measurements": frequency_measurements,
+            "note": "reported_measurement_is_limited_to_the_source_population",
+        }
+    else:
+        frequency = {
+            "status": "not_measured",
+            "reason": "no_qualified_population_measurement",
+        }
+    limitations = _report_limitations(
+        status=str(job["status"]),
+        sources=sources,
+        unavailable=unavailable,
+        frequency_measurements=frequency_measurements,
+    )
+    return {
+        "ok": True,
+        "schema": REPORT_SCHEMA,
+        "job_id": job_id,
+        "status": job["status"],
+        "profile": job["profile"] or GENERAL_PROFILE,
+        "automotive_context": context or None,
+        "report": {
+            "evidence_confidence": {
+                "level": _overall_confidence(sources),
+                "retrieved_sources": len(sources),
+                "independent_domains": _source_domains(sources),
+                "source_tiers": tier_counts,
+            },
+            "frequency": frequency,
+            "confirmed": confirmed,
+            "hypotheses": hypotheses,
+            "alternative_causes": _alternative_cause_mentions(report_rows, sources),
+            "sources": sources,
+            "duplicates": duplicates,
+            "unavailable": unavailable,
+            "limitations": limitations,
+            "read_only": True,
+            "fitment_confirmed": False,
+            "crm_written": False,
+        },
+    }
+
+
 def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
     if not _valid_id(job_id):
         return _error("job_id_invalid")
@@ -782,7 +1331,7 @@ def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
     try:
         with _db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            job = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            job = conn.execute("SELECT status,profile FROM jobs WHERE id=?", (job_id,)).fetchone()
             if job is None:
                 return _error("job_not_found", job_id=job_id)
             if job["status"] in {"cancelled", "failed"}:
@@ -792,7 +1341,8 @@ def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
                 row[0].casefold() for row in conn.execute("SELECT query FROM queries WHERE job_id=?", (job_id,))
             }
             additions = [item for item in clean_queries if item.casefold() not in existing]
-            if count + len(additions) > MAX_QUERIES:
+            query_limit = AUTOMOTIVE_MAX_QUERIES if job["profile"] == AUTOMOTIVE_PROFILE else MAX_QUERIES
+            if count + len(additions) > query_limit:
                 return _error("query_limit_reached", job_id=job_id)
             if job["status"] == "completed":
                 busy = conn.execute(
@@ -800,7 +1350,10 @@ def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
                 ).fetchone()
                 if busy:
                     return _error("j1_busy", job_id=job_id)
-            conn.executemany("INSERT INTO queries(job_id,query) VALUES(?,?)", ((job_id, item) for item in additions))
+            conn.executemany(
+                "INSERT INTO queries(job_id,query,intent) VALUES(?,?,?)",
+                ((job_id, item, "manual_follow_up") for item in additions),
+            )
             if additions and job["status"] == "completed":
                 conn.execute("UPDATE jobs SET status='queued',updated_at=? WHERE id=?", (_utcnow(), job_id))
             conn.commit()
