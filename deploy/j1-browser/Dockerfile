@@ -12,7 +12,7 @@ RUN groupadd --gid 10001 j1browser \
 
 WORKDIR /app
 RUN mkdir -p /app/autostop_manager
-COPY autostop_manager/__init__.py autostop_manager/j1_fetch.py autostop_manager/j1_browser.py autostop_manager/j1_browser_renderer.py autostop_manager/j1_browser_proxy.py /app/autostop_manager/
+COPY autostop_manager/__init__.py autostop_manager/j1_sources.py autostop_manager/j1_fetch.py autostop_manager/j1_browser.py autostop_manager/j1_browser_renderer.py autostop_manager/j1_browser_proxy.py /app/autostop_manager/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONSAFEPATH=1 \
