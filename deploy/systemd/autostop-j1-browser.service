@@ -10,15 +10,15 @@ ConditionPathExists=/usr/bin/docker
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/autostop-manager-releases/current
-RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation autostop-j1-browser-docker
+RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker
 RuntimeDirectoryMode=0710
 UMask=0077
 Environment=AUTOSTOP_J1_BROWSER_SOCKET_DIR=/run/autostop-j1-browser
 Environment=HOME=/run/autostop-j1-browser-docker
 Environment=DOCKER_CONFIG=/run/autostop-j1-browser-docker
-ExecStartPre=/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser
+ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser
 ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker
-ExecStartPre=/usr/bin/rm -f -- /run/autostop-j1-browser/renderer.sock
+ExecStartPre=+/usr/bin/rm -f -- /run/autostop-j1-browser/renderer.sock
 ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-attestation
 # A browser socket alone is not an activation signal: a release-specific
 # isolation attestation is created only by a later controlled verification.

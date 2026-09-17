@@ -234,13 +234,19 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "172.31.250.3:18890" in compose
     assert "ports:" not in compose
     assert "j1_browser_egress" in compose
-    assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
+    assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
+    assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation" not in unit
+    assert "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser" in unit
+    assert "ExecStartPre=+/usr/bin/rm -f -- /run/autostop-j1-browser/renderer.sock" in unit
     assert "Environment=HOME=/run/autostop-j1-browser-docker" in unit
     assert "Environment=DOCKER_CONFIG=/run/autostop-j1-browser-docker" in unit
     assert "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker" in unit
     assert "ProtectHome=yes" in unit
     assert unit.index(
         "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker"
+    ) < unit.index("ExecStart=/usr/bin/docker compose")
+    assert unit.index(
+        "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser"
     ) < unit.index("ExecStart=/usr/bin/docker compose")
     assert "isolation-ready" in unit
     assert "docker compose" in unit
@@ -252,7 +258,7 @@ def test_browser_attestation_uses_a_sealed_directory_and_release_verifier() -> N
     unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
     installer = (ROOT / "scripts/install-j1-browser-stack.sh").read_text(encoding="utf-8")
 
-    assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation" in unit
+    assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
     assert "install -d -m 0700 -o root -g root /run/autostop-j1-browser-attestation" in unit
     assert "/run/autostop-j1-browser-attestation/isolation-ready" in unit
     assert "--verify" in installer
