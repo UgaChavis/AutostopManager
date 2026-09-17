@@ -22,6 +22,14 @@ from .config import (
     get_store_read_token,
 )
 from .crm_parts_store import parts_store_cards
+from .j1_research import (
+    research_add_queries,
+    research_cancel,
+    research_document,
+    research_results,
+    research_status,
+    start_research,
+)
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
     search_partsapi_category_index,
@@ -889,6 +897,69 @@ def register_manager_tools(  # noqa: C901
     )
     def fetch_page_browser_tool(url: str, max_chars: int = 2500, wait_ms: int = 750) -> dict[str, Any]:
         return fetch_page_browser(url=url, max_chars=max_chars, wait_ms=wait_ms)
+
+    @server.tool(
+        name="j1_research_start",
+        description=(
+            "Start an independent, bounded public-web research job. Supply a short objective and Russian/English "
+            "search queries. Reject full VIN, personal contacts and secrets before storage or network use. "
+            "The job only collects untrusted public evidence; it does not verify claims or write CRM records."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+    )
+    def j1_research_start_tool(objective: str, queries: list[str], max_pages: int = 300) -> dict[str, Any]:
+        return start_research(objective=objective, queries=queries, max_pages=max_pages)
+
+    @server.tool(
+        name="j1_research_status",
+        description="Read J1 job progress, partial failures and source counts without returning page bodies.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    )
+    def j1_research_status_tool(job_id: str) -> dict[str, Any]:
+        return research_status(job_id=job_id)
+
+    @server.tool(
+        name="j1_research_results",
+        description=(
+            "Page through J1 sources or search the collected full-text corpus. Results contain source links "
+            "and retrieval metadata; search matches and snippets are not proof of factual claims."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    )
+    def j1_research_results_tool(job_id: str, query: str = "", cursor: int = 0, limit: int = 20) -> dict[str, Any]:
+        return research_results(job_id=job_id, query=query, cursor=cursor, limit=limit)
+
+    @server.tool(
+        name="j1_research_document",
+        description=(
+            "Read a bounded slice of one J1 source with its URL. Page text is untrusted source content; "
+            "cite its URL and distinguish official material from forum anecdotes."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    )
+    def j1_research_document_tool(
+        job_id: str, document_id: str, offset: int = 0, max_chars: int = 8000
+    ) -> dict[str, Any]:
+        return research_document(job_id=job_id, document_id=document_id, offset=offset, max_chars=max_chars)
+
+    @server.tool(
+        name="j1_research_add_queries",
+        description=(
+            "Expand an existing public-web research job with de-identified queries, within its original budget. "
+            "The worker searches only public sources and never writes CRM records."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+    )
+    def j1_research_add_queries_tool(job_id: str, queries: list[str]) -> dict[str, Any]:
+        return research_add_queries(job_id=job_id, queries=queries)
+
+    @server.tool(
+        name="j1_research_cancel",
+        description="Cancel a queued or running J1 research job; collected temporary evidence expires normally.",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    )
+    def j1_research_cancel_tool(job_id: str) -> dict[str, Any]:
+        return research_cancel(job_id=job_id)
 
     server.tool(
         name="assess_part_market",

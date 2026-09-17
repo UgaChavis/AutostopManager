@@ -15,8 +15,9 @@ TEXT_DOCUMENTS = (
     ".agents/skills/manage-autostop-store/SKILL.md",
     "docs/agent/operations.md",
     "docs/agent/deployment_runbook.md",
+    "docs/agent/j1_web_research.md",
 )
-INSTRUCTION_BUDGET_BYTES = 13 * 1024
+INSTRUCTION_BUDGET_BYTES = 16 * 1024
 
 
 def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:

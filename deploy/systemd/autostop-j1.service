@@ -1,0 +1,51 @@
+[Unit]
+Description=AutoStop J1 public web research worker
+Wants=network-online.target
+After=network-online.target
+ConditionPathIsDirectory=/opt/autostop-manager-releases/current
+ConditionPathExists=/usr/bin/python3
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/autostop-manager-releases/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONSAFEPATH=1
+Environment=PYTHONPATH=/opt/autostop-manager-releases/current
+Environment=AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1
+Environment=AUTOSTOP_J1_SEARXNG_URL=http://127.0.0.1:8890
+CacheDirectory=autostop-j1
+CacheDirectoryMode=0700
+UMask=0077
+ExecStartPre=/usr/bin/test -x /usr/bin/python3
+ExecStart=/usr/bin/python3 -m autostop_manager.j1_research worker
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+# The worker needs these two capabilities only to drop the PDF parser child
+# from root to nobody. The child loses its effective and ambient capabilities.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/opt/AutostopManager/.env -/opt/AutostopManager/.crm-mcp.env -/opt/AutostopManager/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/cache/autostop-j1
+MemoryMax=384M
+TasksMax=32
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

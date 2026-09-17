@@ -25,6 +25,17 @@ legacy runs. Its `knowledge-sync`/`knowledge-audit` calls now only check documen
 Deploy owns activation/rollback; never repoint `current`. Manager's private `.env`
 needs `AUTOSTOP_STORE_API_URL` (host loopback) and Store READ/MANAGE/QUOTE/OWNER tokens;
 CRM's environment is separate. Run the active `scripts/install-manager-mcp.sh --activate`.
+For the first J1 release, invoke the coordinated deploy with
+`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1 AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`.
+The deploy installs and probes the cache-scoped `autostop-j1.service` from the
+immutable Manager snapshot after candidate CRM checks. It restores the previous
+unit and service state on rollback. J1 keeps only a seven-day temporary research
+corpus under `/var/cache/autostop-j1`; inspect `systemctl is-active autostop-j1`
+and run `env PYTHONPATH=/opt/autostop-manager-releases/current
+AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1
+AUTOSTOP_J1_SEARXNG_URL=http://127.0.0.1:8890
+/usr/bin/python3 -m autostop_manager.j1_research probe` before a live
+research job. Never move this cache into Manager's persistent customer memory.
 `doctor --integrations --full` checks CRM, native Manager/Store and Gmail.
 Retire the integration-audit timer explicitly; old watchdog units must be absent.
 

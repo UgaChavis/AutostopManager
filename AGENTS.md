@@ -17,5 +17,6 @@ live restart require a current explicit request. Local tests are not deployment.
 
 - Telegram: [.agents/skills/manage-owner-telegram/SKILL.md](.agents/skills/manage-owner-telegram/SKILL.md).
 - Client cases, repairs and parts: [.agents/skills/manage-autostop-store/SKILL.md](.agents/skills/manage-autostop-store/SKILL.md).
+- General public-web research: [docs/agent/j1_web_research.md](docs/agent/j1_web_research.md).
 - Release, only when requested: [deployment_runbook.md](docs/agent/deployment_runbook.md).
 - CRM documents and Gmail: [operations.md](docs/agent/operations.md).

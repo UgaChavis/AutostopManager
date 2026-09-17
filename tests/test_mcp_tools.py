@@ -127,6 +127,48 @@ def test_native_e8_tools_forward_public_research_without_writes(tmp_path, monkey
         assert annotations.openWorldHint is True
 
 
+def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
+    names = (
+        "j1_research_start",
+        "j1_research_status",
+        "j1_research_results",
+        "j1_research_document",
+        "j1_research_add_queries",
+        "j1_research_cancel",
+    )
+    implementations = (
+        "start_research",
+        "research_status",
+        "research_results",
+        "research_document",
+        "research_add_queries",
+        "research_cancel",
+    )
+    calls = []
+
+    for name in implementations:
+
+        def record(*, _name=name, **kwargs):
+            calls.append((_name, kwargs))
+            return {"ok": True}
+
+        monkeypatch.setattr(mcp_tools_module, name, record)
+
+    server = _FakeServer()
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"), include_tools=set(names))
+
+    assert set(server.tools) == set(names)
+    assert server.tools["j1_research_start"]("public question", ["русский", "english"], 40)["ok"]
+    assert server.tools["j1_research_status"]("job-1")["ok"]
+    assert server.tools["j1_research_results"]("job-1", "term", 2, 5)["ok"]
+    assert server.tools["j1_research_document"]("job-1", "doc-1", 100, 500)["ok"]
+    assert server.tools["j1_research_add_queries"]("job-1", ["another"])["ok"]
+    assert server.tools["j1_research_cancel"]("job-1")["ok"]
+    assert [name for name, _ in calls] == list(implementations)
+    assert calls[0][1] == {"objective": "public question", "queries": ["русский", "english"], "max_pages": 40}
+    assert calls[3][1] == {"job_id": "job-1", "document_id": "doc-1", "offset": 100, "max_chars": 500}
+
+
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
     _clear_partsapi_env(monkeypatch)
     monkeypatch.delenv("VIN17_ACCOUNT", raising=False)
