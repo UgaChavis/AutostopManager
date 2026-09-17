@@ -50,12 +50,25 @@ def contains_sensitive(value: str) -> bool:
     """Reject sensitive user input before sending or persisting it."""
 
     decoded = unquote(unquote(str(value or "")))
-    return bool(any(pattern.search(decoded) for pattern in (_VIN, _EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET)))
+    return bool(
+        any(_looks_like_vin(match.group()) for match in _VIN.finditer(decoded))
+        or any(pattern.search(decoded) for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET))
+    )
+
+
+def _looks_like_vin(candidate: str) -> bool:
+    # Ordinary prose can contain 17 permitted letters across spaces or dashes.
+    # Split VINs have a numeric serial; an uninterrupted 17-character token is
+    # treated conservatively as a VIN even when it has no digits.
+    if len(candidate) == 17:
+        return True
+    return sum(char.isdigit() for char in candidate) >= 5
 
 
 def redact_sensitive(value: str, *, limit: int = MAX_TEXT_CHARS) -> str:
     text = str(value or "")[: max(0, limit * 2)]
-    for pattern in (_VIN, _EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET):
+    text = _VIN.sub(lambda match: "[redacted]" if _looks_like_vin(match.group()) else match.group(), text)
+    for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET):
         text = pattern.sub("[redacted]", text)
     return text[:limit]
 

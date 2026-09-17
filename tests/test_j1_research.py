@@ -38,6 +38,13 @@ def test_private_input_rejected_before_cache_write(tmp_path: Path) -> None:
     assert not (tmp_path / "research.sqlite3").exists()
 
 
+def test_ordinary_english_search_phrase_is_not_mistaken_for_vin() -> None:
+    objective = "Public SQLite full-text search documentation"
+    assert not j1_fetch.contains_sensitive(objective)
+    assert j1_fetch.redact_sensitive(objective) == objective
+    assert j1.start_research(objective, ["SQLite FTS5 official documentation"], max_pages=1)["ok"]
+
+
 def test_queue_worker_search_document_incremental_results(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         j1,
