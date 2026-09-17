@@ -3,22 +3,27 @@ set -Eeuo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RELEASE_ROOT="/opt/autostop-manager-releases/current"
+RUNTIME_PYTHON="/usr/bin/python3"
 UNIT_NAME="autostop-j1-browser.service"
 UNIT_SOURCE="${PROJECT_ROOT}/deploy/systemd/${UNIT_NAME}"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
 COMPOSE_FILE="${PROJECT_ROOT}/deploy/j1-browser/docker-compose.yml"
 SOCKET_DIR="/run/autostop-j1-browser"
-ISOLATION_MARKER="${SOCKET_DIR}/isolation-ready"
+ATTESTATION_DIR="/run/autostop-j1-browser-attestation"
+ISOLATION_MARKER="${ATTESTATION_DIR}/isolation-ready"
+VERIFIER_MODULE="autostop_manager.j1_browser_verify"
 activate=0
+verify=0
 replace_unit=0
 
 usage() {
-  echo "usage: $0 [--activate] [--replace-unit]" >&2
+  echo "usage: $0 [--activate] [--verify] [--replace-unit]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --activate) activate=1 ;;
+    --verify) verify=1 ;;
     --replace-unit) replace_unit=1 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
@@ -34,7 +39,10 @@ if [[ ! -d "${RELEASE_ROOT}" ]] || [[ "$(readlink -f "${PROJECT_ROOT}")" != "$(r
   echo "j1_browser_current_release_source_required=true" >&2
   exit 1
 fi
-if [[ ! -f "${UNIT_SOURCE}" || -L "${UNIT_SOURCE}" || ! -f "${COMPOSE_FILE}" || -L "${COMPOSE_FILE}" ]]; then
+if [[ ! -x "${RUNTIME_PYTHON}" || ! -f "${UNIT_SOURCE}" || -L "${UNIT_SOURCE}" \
+  || ! -f "${COMPOSE_FILE}" || -L "${COMPOSE_FILE}" \
+  || ! -f "${PROJECT_ROOT}/autostop_manager/j1_browser_verify.py" \
+  || -L "${PROJECT_ROOT}/autostop_manager/j1_browser_verify.py" ]]; then
   echo "j1_browser_source_invalid=true" >&2
   exit 1
 fi
@@ -58,22 +66,35 @@ rm -f -- "${ISOLATION_MARKER}"
 echo "j1_browser_isolation_attestation_required=true"
 
 if [[ "${activate}" -ne 1 ]]; then
-  exit 0
-fi
-
-systemctl enable "${UNIT_NAME}"
-if systemctl is-active --quiet "${UNIT_NAME}"; then
-  systemctl restart "${UNIT_NAME}"
-else
-  systemctl start "${UNIT_NAME}"
-fi
-
-for _attempt in {1..50}; do
-  if [[ -S "${SOCKET_DIR}/renderer.sock" ]] && systemctl is-active --quiet "${UNIT_NAME}"; then
-    echo "j1_browser_active=true"
+  if [[ "${verify}" -ne 1 ]]; then
     exit 0
   fi
-  sleep 0.2
-done
-echo "j1_browser_socket_unavailable=true" >&2
-exit 1
+else
+  systemctl enable "${UNIT_NAME}"
+  if systemctl is-active --quiet "${UNIT_NAME}"; then
+    systemctl restart "${UNIT_NAME}"
+  else
+    systemctl start "${UNIT_NAME}"
+  fi
+
+  for _attempt in {1..50}; do
+    if [[ -S "${SOCKET_DIR}/renderer.sock" ]] && systemctl is-active --quiet "${UNIT_NAME}"; then
+      break
+    fi
+    sleep 0.2
+  done
+  if [[ ! -S "${SOCKET_DIR}/renderer.sock" ]] || ! systemctl is-active --quiet "${UNIT_NAME}"; then
+    echo "j1_browser_socket_unavailable=true" >&2
+    exit 1
+  fi
+fi
+
+systemctl is-active --quiet "${UNIT_NAME}"
+env \
+  PYTHONPATH="${RELEASE_ROOT}" \
+  PYTHONSAFEPATH=1 \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "${RUNTIME_PYTHON}" -m "${VERIFIER_MODULE}" attest
+systemctl is-active --quiet "${UNIT_NAME}"
+echo "j1_browser_active=true"
+echo "j1_browser_isolation_attested=true"

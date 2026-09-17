@@ -36,6 +36,12 @@ AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1
 AUTOSTOP_J1_SEARXNG_URL=http://127.0.0.1:8890
 /usr/bin/python3 -m autostop_manager.j1_research probe` before a live
 research job. Never move this cache into Manager's persistent customer memory.
+Browser rendering remains opt-in: add `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY=1`
+only when the host has at least 2 GiB `MemAvailable`, 1 GiB `SwapFree`, and no
+swap I/O for the immediately preceding 60 seconds. The deploy snapshots only
+the browser unit/attestation state, starts the isolated two-container stack and
+runs its immutable-release verifier. A failed verifier rolls back that browser
+state; static J1 remains available. Do not create an attestation marker by hand.
 `doctor --integrations --full` checks CRM, native Manager/Store and Gmail.
 Retire the integration-audit timer explicitly; old watchdog units must be absent.
 
