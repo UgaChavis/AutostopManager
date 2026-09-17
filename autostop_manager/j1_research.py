@@ -1689,7 +1689,19 @@ def probe() -> dict[str, Any]:
             parsed = urlsplit(searxng)
             if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}:
                 return _error("searxng_url_invalid")
-        return {"ok": True, "schema": SCHEMA, "cache_ready": True, "search_configured": bool(searxng)}
+        try:
+            from .j1_browser import browser_status
+
+            browser = browser_status()
+        except Exception:  # noqa: BLE001 - optional browser health must not break static J1.
+            browser = {"browser_ready": False, "browser_reason": "browser_status_unavailable"}
+        return {
+            "ok": True,
+            "schema": SCHEMA,
+            "cache_ready": True,
+            "search_configured": bool(searxng),
+            **browser,
+        }
     except (OSError, sqlite3.Error):
         return _error("j1_store_unavailable")
 

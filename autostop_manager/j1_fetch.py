@@ -469,7 +469,11 @@ def _browser_fallback(final_url: str, title: str, *, allow_browser: bool) -> dic
         from .j1_browser import isolation_verified, render_page
     except Exception:  # noqa: BLE001 - the optional client can be unavailable in a minimal release.
         return {"ok": False, "error": "browser_isolation_unverified"}
-    if not isolation_verified():
+    try:
+        verified = isolation_verified()
+    except Exception:  # noqa: BLE001 - a malformed optional attestation cannot stop static J1.
+        verified = False
+    if not verified:
         return {"ok": False, "error": "browser_isolation_unverified"}
     # The browser makes a second request, so reuse the cached policy and host
     # delay before giving it the static response's safe final URL.

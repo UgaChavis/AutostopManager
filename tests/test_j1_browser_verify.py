@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from autostop_manager import j1_browser, j1_browser_verify as verify
+from autostop_manager import j1_fetch
 
 
 def _container(service: str, identifier: str, networks: dict[str, str]) -> dict[str, object]:
@@ -75,6 +76,31 @@ def test_marker_reader_rejects_non_0600_mode(monkeypatch: pytest.MonkeyPatch) ->
         lambda _descriptor: type("Info", (), {"st_mode": 0o100644, "st_uid": 0})(),
     )
     assert j1_browser._attestation_revision("/run/attestation") == ""
+
+
+def test_marker_reader_rejects_extra_lines_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    revision = "a" * 40
+    monkeypatch.setattr(j1_browser.os, "open", lambda *_args: 7)
+    monkeypatch.setattr(j1_browser.os, "close", lambda *_args: None)
+    monkeypatch.setattr(
+        j1_browser.os,
+        "read",
+        lambda *_args: j1_browser.attestation_content(revision) + b"unexpected\n",
+    )
+    monkeypatch.setattr(
+        j1_browser.os,
+        "fstat",
+        lambda _descriptor: type("Info", (), {"st_mode": 0o100600, "st_uid": 0})(),
+    )
+    assert j1_browser._attestation_revision("/run/attestation") == ""
+
+
+def test_malformed_optional_attestation_cannot_break_static_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(j1_browser, "isolation_verified", lambda: (_ for _ in ()).throw(ValueError("bad marker")))
+    assert j1_fetch._browser_fallback("https://example.org/page", "", allow_browser=True) == {
+        "ok": False,
+        "error": "browser_isolation_unverified",
+    }
 
 
 def test_verifier_accepts_exact_two_container_topology() -> None:

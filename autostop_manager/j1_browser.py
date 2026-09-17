@@ -123,7 +123,7 @@ def _attestation_revision(marker_path: str | None = None) -> str:
         return ""
     try:
         header, revision_line, trailing = payload.decode("ascii").split("\n")
-    except UnicodeDecodeError:
+    except (UnicodeDecodeError, ValueError):
         return ""
     if header != _ATTESTATION_HEADER or trailing or not revision_line.startswith("revision="):
         return ""
