@@ -33,6 +33,7 @@ from .j1_fetch import (
     redact_sensitive,
     search_public,
 )
+from .j1_sources import classify_source
 
 SCHEMA = "autostop.j1.research.v1"
 REPORT_SCHEMA = "autostop.j1.report.v1"
@@ -113,60 +114,6 @@ _TRACKING_PARAMETERS = frozenset(
     }
 )
 
-# ``official_registry`` is deliberately opt-in. Other labels are collection
-# aids, not a credibility verdict, and always include the matching basis.
-_OFFICIAL_DOMAIN_REGISTRY: dict[str, str] = {
-    "nhtsa.gov": "US National Highway Traffic Safety Administration",
-    "safercar.gov": "US National Highway Traffic Safety Administration",
-    "mercedes-benz.com": "Mercedes-Benz",
-    "mbusa.com": "Mercedes-Benz USA",
-    "bmwgroup.com": "BMW Group",
-    "bmw.com": "BMW",
-    "audi.com": "Audi",
-    "volkswagen.com": "Volkswagen",
-    "toyota.com": "Toyota",
-    "honda.com": "Honda",
-    "ford.com": "Ford",
-    "gm.com": "General Motors",
-    "stellantis.com": "Stellantis",
-}
-_SUPPLIER_DOMAINS = frozenset(
-    {
-        "autodoc.de",
-        "autodoc.ru",
-        "exist.ru",
-        "emex.ru",
-        "partsouq.com",
-        "rockauto.com",
-        "partsapi.ru",
-    }
-)
-_OWNER_COMMUNITY_DOMAINS = frozenset(
-    {
-        "drive2.ru",
-        "reddit.com",
-        "mbworld.org",
-        "benzworld.org",
-        "bimmerpost.com",
-        "vwvortex.com",
-    }
-)
-_EDITORIAL_DOMAINS = frozenset(
-    {
-        "caranddriver.com",
-        "motortrend.com",
-        "autonews.ru",
-        "zr.ru",
-    }
-)
-_TECHNICAL_DOMAINS = frozenset(
-    {
-        "oemdtc.com",
-        "workshop-manuals.com",
-        "manualslib.com",
-    }
-)
-
 
 def _utcnow() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -238,44 +185,11 @@ def _canonical_url(value: str) -> str:
     return urlunsplit((parsed.scheme.casefold(), netloc, parsed.path or "/", urlencode(kept, doseq=True), ""))
 
 
-def _same_or_subdomain(hostname: str, domain: str) -> bool:
-    return hostname == domain or hostname.endswith("." + domain)
+def _classify_source(url: str, title: str, kind: str) -> tuple[str, str, str]:
+    """Use the shared, auditable discovery registry after redirects too."""
 
-
-def _classify_source(url: str, title: str, kind: str) -> tuple[str, str]:
-    """Classify collection provenance deterministically; never infer authority."""
-
-    try:
-        parsed = urlsplit(url)
-        host = (parsed.hostname or "").casefold().rstrip(".")
-        path = parsed.path.casefold()
-    except ValueError:
-        return "unknown", "fallback:invalid_url"
-    for domain, label in _OFFICIAL_DOMAIN_REGISTRY.items():
-        if _same_or_subdomain(host, domain):
-            return "official_registry", f"registry:official:{domain}:{label}"
-    for domain in _TECHNICAL_DOMAINS:
-        if _same_or_subdomain(host, domain):
-            return "technical", f"registry:technical:{domain}"
-    for domain in _SUPPLIER_DOMAINS:
-        if _same_or_subdomain(host, domain):
-            return "supplier_catalog", f"registry:supplier:{domain}"
-    for domain in _OWNER_COMMUNITY_DOMAINS:
-        if _same_or_subdomain(host, domain):
-            return "owner_community", f"registry:owner_community:{domain}"
-    for domain in _EDITORIAL_DOMAINS:
-        if _same_or_subdomain(host, domain):
-            return "editorial", f"registry:editorial:{domain}"
-    if host.startswith(("forum.", "forums.")) or any(token in path for token in ("/forum", "/forums/", "/community/")):
-        return "owner_community", "heuristic:community_url"
-    if any(token in host for token in ("catalog", "parts", "autoparts")):
-        return "supplier_catalog", "heuristic:catalog_hostname"
-    title_lower = title.casefold()
-    if kind == "pdf" and any(token in (path + " " + title_lower) for token in ("manual", "workshop", "service", "tsb")):
-        return "technical", "heuristic:technical_pdf"
-    if any(token in host for token in ("news", "media", "journal", "magazine")):
-        return "editorial", "heuristic:editorial_hostname"
-    return "unknown", "fallback:unclassified"
+    classification = classify_source(url, title=title, kind=kind)
+    return classification.source_class, classification.source_basis, classification.source_tier
 
 
 def _detect_language(*values: str) -> str:
@@ -371,6 +285,12 @@ def _migrate_documents(conn: sqlite3.Connection) -> None:
         "extraction_method": "TEXT NOT NULL DEFAULT ''",
         "source_class": "TEXT NOT NULL DEFAULT 'unknown'",
         "source_basis": "TEXT NOT NULL DEFAULT ''",
+        # Discovery fields survive an unavailable page so a report can state
+        # which evidence tiers were found but could not be read.
+        "source_tier": "TEXT NOT NULL DEFAULT 'unclassified'",
+        "search_snippet": "TEXT NOT NULL DEFAULT ''",
+        "search_rank": "INTEGER NOT NULL DEFAULT 0",
+        "search_engines": "TEXT NOT NULL DEFAULT ''",
         "duplicate_of": "TEXT NOT NULL DEFAULT ''",
         "duplicate_kind": "TEXT NOT NULL DEFAULT ''",
         "duplicate_score": "REAL NOT NULL DEFAULT 0",
@@ -382,6 +302,7 @@ def _migrate_documents(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE documents ADD COLUMN {name} {definition}")
     conn.execute("CREATE INDEX IF NOT EXISTS documents_job_canonical ON documents(job_id, canonical_url)")
     conn.execute("CREATE INDEX IF NOT EXISTS documents_duplicate_of ON documents(duplicate_of)")
+    conn.execute("CREATE INDEX IF NOT EXISTS documents_job_search_rank ON documents(job_id, search_rank)")
     # Existing temporary jobs keep their records. Canonical backfill is cheap
     # and does not read the network or alter the original source URL.
     for row in conn.execute("SELECT id,url FROM documents WHERE canonical_url='' LIMIT 1000"):
@@ -435,6 +356,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             body TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '', content_simhash TEXT NOT NULL DEFAULT '',
             language TEXT NOT NULL DEFAULT 'unknown', extraction_method TEXT NOT NULL DEFAULT '',
             source_class TEXT NOT NULL DEFAULT 'unknown', source_basis TEXT NOT NULL DEFAULT '',
+            source_tier TEXT NOT NULL DEFAULT 'unclassified', search_snippet TEXT NOT NULL DEFAULT '',
+            search_rank INTEGER NOT NULL DEFAULT 0, search_engines TEXT NOT NULL DEFAULT '',
             duplicate_of TEXT NOT NULL DEFAULT '', duplicate_kind TEXT NOT NULL DEFAULT '',
             duplicate_score REAL NOT NULL DEFAULT 0,
             error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
@@ -741,11 +664,20 @@ def _stored_automotive_context(value: object) -> dict[str, str]:
     return context if context is not None and error is None else {}
 
 
-def _coverage_rows(conn: sqlite3.Connection, job_id: str, column: str, key: str) -> list[dict[str, Any]]:
-    # All callers use fixed column names; this helper never accepts user input.
+def _coverage_rows(
+    conn: sqlite3.Connection, job_id: str, column: str, key: str, *, fetched_only: bool = True
+) -> list[dict[str, Any]]:
+    """Count fixed document columns without accepting caller-controlled SQL.
+
+    Discovery coverage deliberately includes inaccessible pages: their source
+    tier is part of the evidence gap, even when a public page could not be
+    fetched.
+    """
+
+    where = "job_id=? AND status='fetched'" if fetched_only else "job_id=?"
     rows = conn.execute(
         f"""SELECT COALESCE(NULLIF({column},''),'unknown') AS value, COUNT(*) AS count
-             FROM documents WHERE job_id=? AND status='fetched'
+             FROM documents WHERE {where}
              GROUP BY value ORDER BY count DESC, value""",
         (job_id,),
     )
@@ -849,6 +781,13 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "coverage": {
                     "languages": _coverage_rows(conn, job_id, "language", "language"),
                     "source_classes": _coverage_rows(conn, job_id, "source_class", "source_class"),
+                    "source_tiers": _coverage_rows(conn, job_id, "source_tier", "source_tier"),
+                    "discovered_source_classes": _coverage_rows(
+                        conn, job_id, "source_class", "source_class", fetched_only=False
+                    ),
+                    "discovered_source_tiers": _coverage_rows(
+                        conn, job_id, "source_tier", "source_tier", fetched_only=False
+                    ),
                     "extraction_methods": _coverage_rows(conn, job_id, "extraction_method", "extraction_method"),
                     "search_providers": _provider_coverage(conn, job_id),
                 },
@@ -894,6 +833,10 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
         "source": row["source"],
         "source_class": row["source_class"] or "unknown",
         "source_basis": row["source_basis"] or "fallback:unclassified",
+        "source_tier": row["source_tier"] or "unclassified",
+        "search_snippet": row["search_snippet"] or None,
+        "search_rank": row["search_rank"] or None,
+        "search_engines": [item for item in str(row["search_engines"] or "").split(",") if item] or None,
         "language": row["language"] or "unknown",
         "kind": row["kind"],
         "extraction_method": row["extraction_method"] or "unknown",
@@ -917,7 +860,8 @@ def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int =
     expression = _fts_expression(query)
     if query.strip() and not expression:
         return _error("query_invalid_or_sensitive", job_id=job_id)
-    fields = """d.id,d.url,d.canonical_url,d.title,d.source,d.source_class,d.source_basis,d.language,
+    fields = """d.id,d.url,d.canonical_url,d.title,d.source,d.source_class,d.source_basis,d.source_tier,
+                       d.search_snippet,d.search_rank,d.search_engines,d.language,
                        d.kind,d.extraction_method,d.status,d.error,d.duplicate_of,d.duplicate_kind,d.duplicate_score,
                        d.created_at,d.retrieved_at,primary_doc.url AS duplicate_url"""
     try:
@@ -967,7 +911,8 @@ def research_document(job_id: str, document_id: str, offset: int = 0, max_chars:
     try:
         with _db() as conn:
             row = conn.execute(
-                """SELECT d.url,d.canonical_url,d.title,d.kind,d.body,d.source,d.source_class,d.source_basis,d.language,
+                """SELECT d.url,d.canonical_url,d.title,d.kind,d.body,d.source,d.source_class,d.source_basis,d.source_tier,
+                          d.search_snippet,d.search_rank,d.search_engines,d.language,
                           d.extraction_method,d.status,d.error,d.duplicate_of,d.duplicate_kind,d.duplicate_score,
                           d.created_at,d.retrieved_at,primary_doc.url AS duplicate_url
                    FROM documents AS d LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
@@ -1003,6 +948,10 @@ def research_document(job_id: str, document_id: str, offset: int = 0, max_chars:
                 "source": row["source"],
                 "source_class": row["source_class"] or "unknown",
                 "source_basis": row["source_basis"] or "fallback:unclassified",
+                "source_tier": row["source_tier"] or "unclassified",
+                "search_snippet": row["search_snippet"] or None,
+                "search_rank": row["search_rank"] or None,
+                "search_engines": [item for item in str(row["search_engines"] or "").split(",") if item] or None,
                 "language": row["language"] or "unknown",
                 "extraction_method": row["extraction_method"] or "unknown",
                 "duplicate_of": duplicate_of,
@@ -1025,8 +974,11 @@ def _report_error(code: str, *, job_id: str = "") -> dict[str, Any]:
     return result
 
 
-def _report_source_tier(source_class: str) -> tuple[str, str]:
-    """Map existing collection classes to evidence tiers without reclassifying sources."""
+def _report_source_tier(stored_tier: str, source_class: str) -> tuple[str, str]:
+    """Use the discovery registry tier, with a safe fallback for old jobs."""
+
+    if stored_tier in {"A", "B", "C", "D"}:
+        return stored_tier, "discovery_registry"
 
     source_class = str(source_class or "unknown")
     if source_class in {"official_registry", "official_oem", "official_regulator"}:
@@ -1035,7 +987,7 @@ def _report_source_tier(source_class: str) -> tuple[str, str]:
         return "B", "technical_or_engineering"
     if source_class in {"supplier_catalog", "catalog"}:
         return "C", "catalog_or_fitment"
-    if source_class in {"owner_community", "forum"}:
+    if source_class in {"owner_community", "forum", "technical_reference", "editorial"}:
         return "D", "owner_experience"
     return "unrated", "unrated_source"
 
@@ -1062,8 +1014,6 @@ def _context_matches(row: sqlite3.Row, context: dict[str, str]) -> tuple[str, li
 
 
 def _evidence_confidence(tier: str, applicability: str) -> str:
-    if tier == "A" and applicability == "exact":
-        return "high"
     if tier in {"A", "B"} and applicability in {"exact", "analog"}:
         return "moderate"
     if tier in {"B", "C", "D"} or applicability == "general":
@@ -1072,7 +1022,7 @@ def _evidence_confidence(tier: str, applicability: str) -> str:
 
 
 def _report_source_item(row: sqlite3.Row, context: dict[str, str]) -> dict[str, Any]:
-    tier, tier_basis = _report_source_tier(row["source_class"])
+    tier, tier_basis = _report_source_tier(str(row["source_tier"] or ""), row["source_class"])
     applicability, matched = _context_matches(row, context)
     return {
         "document_id": row["id"],
@@ -1083,6 +1033,8 @@ def _report_source_item(row: sqlite3.Row, context: dict[str, str]) -> dict[str, 
         "source_basis": row["source_basis"] or "fallback:unclassified",
         "source_tier": tier,
         "source_tier_basis": tier_basis,
+        "search_snippet": _report_excerpt(str(row["search_snippet"] or "")) or None,
+        "search_rank": row["search_rank"] or None,
         "applicability": applicability,
         "matched_context_fields": matched,
         "confidence": _evidence_confidence(tier, applicability),
@@ -1227,7 +1179,8 @@ def research_report(job_id: str) -> dict[str, Any]:
                 return _report_error("job_not_found", job_id=job_id)
             context = _stored_automotive_context(job["automotive_context"])
             rows = conn.execute(
-                """SELECT id,url,canonical_url,title,body,source_class,source_basis,retrieved_at
+                """SELECT id,url,canonical_url,title,body,source_class,source_basis,source_tier,
+                          search_snippet,search_rank,retrieved_at
                    FROM documents WHERE job_id=? AND status='fetched'""",
                 (job_id,),
             ).fetchall()
@@ -1250,10 +1203,16 @@ def research_report(job_id: str) -> dict[str, Any]:
                 )
             ]
             unavailable = [
-                {"reason": row["error"] or "fetch_failed", "count": row["count"]}
+                {
+                    "reason": row["error"] or "fetch_failed",
+                    "count": row["count"],
+                    "source_class": row["source_class"] or "unknown",
+                    "source_tier": row["source_tier"] or "unclassified",
+                }
                 for row in conn.execute(
-                    """SELECT error,COUNT(*) AS count FROM documents WHERE job_id=? AND status='failed'
-                       GROUP BY error ORDER BY count DESC,error LIMIT 10""",
+                    """SELECT error,source_class,source_tier,COUNT(*) AS count FROM documents
+                       WHERE job_id=? AND status='failed'
+                       GROUP BY error,source_class,source_tier ORDER BY count DESC,error LIMIT 10""",
                     (job_id,),
                 )
             ]
@@ -1435,6 +1394,31 @@ def _claim_job(conn: sqlite3.Connection) -> str | None:
     return row["id"] if row else None
 
 
+def _discovery_metadata(row: dict[str, Any], url: str, canonical_url: str) -> tuple[str, str, str, str, str, int, str]:
+    """Normalize discovery-only fields before they enter the temporary corpus."""
+
+    title = redact_sensitive(str(row.get("title") or ""), limit=200)
+    classification = classify_source(canonical_url or url, title=title)
+    snippet = _report_excerpt(str(row.get("snippet") or ""))
+    raw_rank = row.get("search_rank")
+    rank = raw_rank if type(raw_rank) is int and 0 < raw_rank <= 100_000 else 0
+    raw_engines = row.get("engines")
+    if not isinstance(raw_engines, (list, tuple, set)):
+        raw_engines = [row.get("engine") or row.get("source") or ""]
+    engines = sorted(
+        {value for item in raw_engines if re.fullmatch(r"[a-z0-9_-]{1,32}", (value := str(item).casefold().strip()))}
+    )[:8]
+    return (
+        title,
+        classification.source_class,
+        classification.source_basis,
+        classification.source_tier,
+        snippet,
+        rank,
+        ",".join(engines),
+    )
+
+
 def _work_job(job_id: str) -> None:
     """Do one bounded unit at a time so cancellation is observed promptly."""
 
@@ -1492,17 +1476,33 @@ def _work_job(job_id: str) -> None:
                         (job_id, canonical_url, url),
                     ).fetchone():
                         continue
+                    (
+                        title,
+                        source_class,
+                        source_basis,
+                        source_tier,
+                        snippet,
+                        search_rank,
+                        search_engines,
+                    ) = _discovery_metadata(row, url, canonical_url)
                     inserted = conn.execute(
                         """INSERT OR IGNORE INTO documents(
-                               id,job_id,url,canonical_url,title,source,created_at
-                           ) VALUES(?,?,?,?,?,?,?)""",
+                               id,job_id,url,canonical_url,title,source,source_class,source_basis,source_tier,
+                               search_snippet,search_rank,search_engines,created_at
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             uuid4().hex,
                             job_id,
                             url,
                             canonical_url,
-                            redact_sensitive(row.get("title", ""), limit=200),
-                            row.get("source", "")[:40],
+                            title,
+                            _clean_input(str(row.get("source") or ""), limit=40),
+                            source_class,
+                            source_basis,
+                            source_tier,
+                            snippet,
+                            search_rank,
+                            search_engines,
                             _utcnow(),
                         ),
                     )
@@ -1535,7 +1535,7 @@ def _work_job(job_id: str) -> None:
                         (job_id, fetched_url, doc_id),
                     ).fetchone()
                     stored_url = url if url_conflict else fetched_url
-                    source_class, source_basis = _classify_source(canonical_url or stored_url, title, kind)
+                    source_class, source_basis, source_tier = _classify_source(canonical_url or stored_url, title, kind)
                     language = _detect_language(title, body)
                     extraction_method = _extraction_method(fetch_result)
                     digest = hashlib.sha256(body.encode()).hexdigest()
@@ -1547,6 +1547,7 @@ def _work_job(job_id: str) -> None:
                         conn.execute(
                             """UPDATE documents SET status='duplicate',url=?,canonical_url=?,title=?,kind=?,body='',
                                content_hash=?,content_simhash=?,language=?,extraction_method=?,source_class=?,source_basis=?,
+                               source_tier=?,
                                duplicate_of=?,duplicate_kind=?,duplicate_score=?,error=?,retrieved_at=? WHERE id=?""",
                             (
                                 stored_url,
@@ -1559,6 +1560,7 @@ def _work_job(job_id: str) -> None:
                                 extraction_method,
                                 source_class,
                                 source_basis,
+                                source_tier,
                                 primary["id"],
                                 duplicate_kind,
                                 duplicate_score,
@@ -1584,6 +1586,7 @@ def _work_job(job_id: str) -> None:
                         conn.execute(
                             """UPDATE documents SET status='fetched',url=?,canonical_url=?,title=?,kind=?,body=?,
                                content_hash=?,content_simhash=?,language=?,extraction_method=?,source_class=?,source_basis=?,
+                               source_tier=?,
                                duplicate_of='',duplicate_kind='',duplicate_score=0,error='',retrieved_at=? WHERE id=?""",
                             (
                                 stored_url,
@@ -1597,6 +1600,7 @@ def _work_job(job_id: str) -> None:
                                 extraction_method,
                                 source_class,
                                 source_basis,
+                                source_tier,
                                 retrieved_at,
                                 doc_id,
                             ),

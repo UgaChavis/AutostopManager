@@ -91,7 +91,7 @@ def test_automotive_profile_rejects_sensitive_context_before_cache_write(tmp_pat
 def test_automotive_report_separates_evidence_from_hypotheses_and_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
     urls = [
         "https://static.nhtsa.gov/odi/tsbs/2021/MC-10000000-0001.pdf",
-        "https://www.oemdtc.com/12345/lexus-rx200t-injection-note",
+        "https://www.denso.com/technical/lexus-rx200t-injection-note",
         "https://club-lexus.ru/forum/index.php?/topic/8ar-fts-injectors/",
     ]
     monkeypatch.setattr(
@@ -106,7 +106,7 @@ def test_automotive_report_separates_evidence_from_hypotheses_and_frequency(monk
                 "Lexus RX200T 2017 8AR-FTS fuel injection technical bulletin. The symptom may be caused by "
                 "injector seal leakage. The monitored sample found 12 of 100 vehicles with this condition."
             )
-        elif "oemdtc" in url:
+        elif "denso" in url:
             text = (
                 "Lexus RX200T 2017 8AR-FTS fuel injection diagnostic reference. The condition may be caused by "
                 "fuel pressure loss during a documented test."
@@ -142,6 +142,98 @@ def test_automotive_report_separates_evidence_from_hypotheses_and_frequency(monk
     assert payload["alternative_causes"][0]["status"] == "unverified_source_mention"
     assert payload["crm_written"] is False
     assert payload["fitment_confirmed"] is False
+
+
+def test_discovery_evidence_survives_fetch_and_inaccessible_official_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    official = "https://static.nhtsa.gov/odi/tsbs/2021/MC-10000000-0001.pdf"
+    blocked = "https://techinfo.toyota.com/8ar/repair-procedure"
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: (
+            [
+                {
+                    "url": official,
+                    "title": "8AR fuel system bulletin",
+                    "snippet": "Public bulletin excerpt for 8AR fuel system.",
+                    "source": "searxng",
+                    "engines": ["brave", "google"],
+                    "search_rank": 1,
+                },
+                {
+                    "url": blocked,
+                    "title": "Toyota repair procedure",
+                    "snippet": "Requires an authorized portal session.",
+                    "source": "searxng",
+                    "engines": ["qwant"],
+                    "search_rank": 2,
+                },
+            ],
+            "searxng",
+        ),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda url, **_kwargs: (
+            {
+                "ok": True,
+                "url": url,
+                "title": "NHTSA bulletin",
+                "kind": "pdf",
+                "text": "Lexus RX200T 2017 8AR-FTS fuel injection bulletin.",
+            }
+            if url == official
+            else {"ok": False, "error": "requires_human"}
+        ),
+    )
+    created = j1.start_research("Review public fuel system evidence", ["8AR fuel system bulletin"], max_pages=3)
+    assert created["ok"]
+    j1.run_worker(once=True)
+
+    results = j1.research_results(created["job_id"])["results"]
+    first = next(item for item in results if item["url"] == official)
+    assert (first["source_tier"], first["search_rank"], first["search_engines"]) == (
+        "A",
+        1,
+        ["brave", "google"],
+    )
+    assert first["search_snippet"] == "Public bulletin excerpt for 8AR fuel system."
+    status = j1.research_status(created["job_id"])
+    assert status["coverage"]["discovered_source_tiers"] == [{"source_tier": "A", "count": 2}]
+    report = j1.research_report(created["job_id"])["report"]
+    assert report["sources"][0]["search_rank"] == 1
+    assert report["unavailable"] == [
+        {"reason": "requires_human", "count": 1, "source_class": "official_registry", "source_tier": "A"}
+    ]
+
+
+def test_report_keeps_manual_mirror_in_tier_d(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://www.oemdtc.com/12345/lexus-rx200t-injection-note"
+    monkeypatch.setattr(
+        j1,
+        "search_public",
+        lambda _query, **_kwargs: ([{"url": url, "title": "Mirror", "source": "searxng"}], "searxng"),
+    )
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda _url, **_kwargs: {
+            "ok": True,
+            "url": url,
+            "title": "Manual mirror",
+            "kind": "html",
+            "text": "Lexus RX200T 2017 8AR-FTS fuel injection reference.",
+        },
+    )
+    created = j1.start_research("Review mirror provenance", ["8AR reference"], max_pages=1)
+    assert created["ok"]
+    j1.run_worker(once=True)
+    report = j1.research_report(created["job_id"])["report"]
+    assert report["sources"][0]["source_tier"] == "D"
+    assert report["sources"][0]["confidence"] == "low"
 
 
 def test_report_does_not_treat_owner_numbers_as_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
