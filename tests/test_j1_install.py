@@ -28,6 +28,18 @@ def test_j1_worker_unit_shares_mcp_cache_owner_and_is_cache_scoped() -> None:
     assert "ReadWritePaths=/opt/AutostopManager" not in unit
 
 
+def test_manager_mcp_can_queue_j1_in_the_shared_cache() -> None:
+    unit = (ROOT / "deploy/systemd/autostop-manager-mcp.service").read_text(encoding="utf-8")
+
+    assert "User=root" in unit
+    assert "Group=root" in unit
+    assert "CacheDirectory=autostop-j1" in unit
+    assert "CacheDirectoryMode=0700" in unit
+    assert "Environment=AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=/opt/AutostopManager/data /var/cache/autostop-j1" in unit
+
+
 def test_j1_installer_probes_after_activation() -> None:
     installer = (ROOT / "scripts/install-j1-worker.sh").read_text(encoding="utf-8")
 

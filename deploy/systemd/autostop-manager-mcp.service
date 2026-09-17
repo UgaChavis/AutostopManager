@@ -11,9 +11,12 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/opt/autostop-manager-releases/current
+CacheDirectory=autostop-j1
+CacheDirectoryMode=0700
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
 Environment=PYTHONPATH=/opt/autostop-manager-releases/current
+Environment=AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1
 Environment=AUTOSTOP_MANAGER_ENV_FILE=/dev/null
 Environment=AUTOSTOP_MANAGER_DB=/opt/AutostopManager/data/autostop_manager.sqlite3
 Environment=AUTOSTOP_MANAGER_MCP_HOST=127.0.0.1
@@ -40,7 +43,7 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/opt/AutostopManager/data
+ReadWritePaths=/opt/AutostopManager/data /var/cache/autostop-j1
 
 [Install]
 WantedBy=multi-user.target
