@@ -231,3 +231,15 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "docker compose" in unit
     assert "config --quiet" in installer
     assert "isolation_attestation_required" in installer
+
+
+def test_browser_attestation_uses_a_sealed_directory_and_release_verifier() -> None:
+    unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
+    installer = (ROOT / "scripts/install-j1-browser-stack.sh").read_text(encoding="utf-8")
+
+    assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation" in unit
+    assert "install -d -m 0700 -o root -g root /run/autostop-j1-browser-attestation" in unit
+    assert "/run/autostop-j1-browser-attestation/isolation-ready" in unit
+    assert "--verify" in installer
+    assert '"${RUNTIME_PYTHON}" -m "${VERIFIER_MODULE}" attest' in installer
+    assert "j1_browser_isolation_attested=true" in installer
