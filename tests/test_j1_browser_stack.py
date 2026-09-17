@@ -227,6 +227,8 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "ports:" not in compose
     assert "j1_browser_egress" in compose
     assert "RuntimeDirectory=autostop-j1-browser" in unit
+    assert "Environment=DOCKER_CONFIG=/run/autostop-j1-browser/docker" in unit
+    assert "install -d -m 0700 -o root -g root /run/autostop-j1-browser/docker" in unit
     assert "isolation-ready" in unit
     assert "docker compose" in unit
     assert "config --quiet" in installer
