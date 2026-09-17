@@ -46,7 +46,7 @@ class PublicTarget:
 def _is_allowed_host(host: str) -> bool:
     normalized = host.casefold().rstrip(".")
     return bool(normalized) and not (
-        normalized in {"localhost", "localhost.localdomain"}
+        normalized in {"localhost", "localhost.localdomain", "local", "internal", "onion"}
         or normalized.endswith((".localhost", ".local", ".internal", ".onion"))
     )
 
