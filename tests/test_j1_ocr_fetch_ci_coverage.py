@@ -111,7 +111,7 @@ def test_public_request_handles_checked_redirect_and_rejects_encoded_responses(m
 
 @pytest.mark.parametrize(
     ("status", "expected"),
-    [(401, "access_restricted"), (429, "rate_limited"), (500, "http_error")],
+    [(401, "access_restricted"), (429, "rate_limited"), (500, "http_server_error")],
 )
 def test_fetch_document_returns_explicit_safe_http_failures(
     monkeypatch: pytest.MonkeyPatch, status: int, expected: str
@@ -147,7 +147,9 @@ def test_searx_parser_discards_private_rows_and_redacts_titles(monkeypatch: pyte
 
     monkeypatch.setattr(j1_fetch.http.client, "HTTPConnection", SearchConnection)
     rows = j1_fetch._search_searxng("technical guide", "http://127.0.0.1:8890")
-    assert rows == [{"url": "https://example.org/guide", "title": "Technical guide", "source": "searxng"}]
+    assert rows == [
+        {"url": "https://example.org/guide", "title": "Technical guide", "snippet": "", "source": "searxng"}
+    ]
 
 
 def test_ocr_runtime_helpers_fail_closed_without_real_binaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

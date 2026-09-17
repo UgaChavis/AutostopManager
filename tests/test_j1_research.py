@@ -409,7 +409,7 @@ def test_robots_policy_obeys_rules_and_caches(
     ("status", "headers", "body", "expected"),
     [
         (401, {"content-type": "text/html"}, b"", "access_restricted"),
-        (503, {"content-type": "text/html"}, b"", "http_error"),
+        (503, {"content-type": "text/html"}, b"", "http_server_error"),
         (200, {"content-type": "image/png"}, b"image", "unsupported_media"),
         (200, {"content-type": "text/html"}, b"<p>short</p>", "browser_isolation_unverified"),
         (200, {"content-type": "text/plain"}, b"captcha " * 20, "requires_human"),
@@ -526,9 +526,17 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
             pass
 
     monkeypatch.setattr(j1_fetch.http.client, "HTTPConnection", FakeConnection)
-    assert j1_fetch.search_public("public topic", searxng_url="http://127.0.0.1:8080")[0] == [
-        {"url": "https://example.org/article", "title": "Public report", "source": "searxng"}
-    ]
+    rows = j1_fetch.search_public("public topic", searxng_url="http://127.0.0.1:8080")[0]
+    assert [row["url"] for row in rows] == ["https://example.org/article"]
+    assert rows[0]["title"] == "Public report"
+    assert rows[0]["snippet"] == ""
+    assert rows[0]["source"] == "searxng"
+    assert rows[0]["engines"] == ["brave", "google", "qwant", "yep"]
+    assert (rows[0]["source_class"], rows[0]["source_tier"], rows[0]["search_rank"]) == (
+        "unknown",
+        "unclassified",
+        1,
+    )
     with pytest.raises(ValueError, match="searxng_url_invalid"):
         j1_fetch._search_searxng("public topic", "http://example.org/search")
 
@@ -547,7 +555,19 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     )
     rows, source = j1_fetch.search_public("public topic", searxng_url="http://127.0.0.1:8080")
     assert source == "duckduckgo"
-    assert rows == [{"url": "https://example.org/second", "title": "Another public report", "source": "duckduckgo"}]
+    assert rows == [
+        {
+            "url": "https://example.org/second",
+            "title": "Another public report",
+            "snippet": "",
+            "source": "duckduckgo",
+            "engines": ["duckduckgo"],
+            "source_class": "unknown",
+            "source_tier": "unclassified",
+            "source_basis": "fallback:unclassified",
+            "search_rank": 1,
+        }
+    ]
 
 
 def test_search_skips_unrelated_engine_and_uses_relevant_public_result(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -566,6 +586,8 @@ def test_search_skips_unrelated_engine_and_uses_relevant_public_result(monkeypat
     assert calls == [
         "!brave brake pads operation technical guide",
         "!google brake pads operation technical guide",
+        "!qwant brake pads operation technical guide",
+        "!yep brake pads operation technical guide",
     ]
     assert j1_fetch._relevant_search_results(
         "тормозные колодки устройство",
