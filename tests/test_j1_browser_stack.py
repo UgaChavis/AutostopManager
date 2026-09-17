@@ -231,7 +231,9 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "Environment=DOCKER_CONFIG=/run/autostop-j1-browser-docker" in unit
     assert "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker" in unit
     assert "ProtectHome=yes" in unit
-    assert unit.index("ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker") < unit.index("ExecStart=/usr/bin/docker compose")
+    assert unit.index(
+        "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker"
+    ) < unit.index("ExecStart=/usr/bin/docker compose")
     assert "isolation-ready" in unit
     assert "docker compose" in unit
     assert "config --quiet" in installer
