@@ -404,6 +404,52 @@ def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
     return found[:20]
 
 
+_SEARCH_FILLER = {
+    "about",
+    "and",
+    "for",
+    "from",
+    "guide",
+    "how",
+    "information",
+    "official",
+    "technical",
+    "the",
+    "what",
+    "with",
+    "данные",
+    "документация",
+    "информация",
+    "какие",
+    "как",
+    "найти",
+    "официальный",
+    "почему",
+    "поиск",
+    "про",
+    "техническая",
+}
+_SEARXNG_ENGINES = ("brave", "google", "qwant", "yep")
+
+
+def _relevant_search_results(query: str, rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Keep lexical matches; a failing engine can return wholly unrelated pages."""
+
+    terms = {
+        token[:5] if len(token) > 5 else token
+        for token in re.findall(r"[^\W_]+", query.casefold(), re.UNICODE)
+        if len(token) >= 3 and token not in _SEARCH_FILLER
+    }
+    if not terms:
+        return rows
+    required = 2 if len(terms) >= 3 else 1
+    return [
+        row
+        for row in rows
+        if sum(term in (row.get("title", "") + " " + row.get("url", "")).casefold() for term in terms) >= required
+    ]
+
+
 class _DDGLinks(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -437,7 +483,7 @@ class _DDGLinks(HTMLParser):
 
 
 def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, str]], str]:
-    """Search local SearXNG first; then bounded public DDG HTML."""
+    """Search local SearXNG, filtering unrelated engine output, then public DDG."""
 
     direct_url = public_url(query)
     if direct_url:
@@ -445,12 +491,15 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
     if contains_sensitive(query):
         return [], "sensitive_query"
     if searxng_url:
-        try:
-            found = _search_searxng(query, searxng_url)
-            if found:
-                return found, "searxng"
-        except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
-            pass
+        # Explicit SearXNG engines avoid a broken default engine polluting the
+        # corpus; a suspended engine is followed by the next public engine.
+        for engine in _SEARXNG_ENGINES:
+            try:
+                found = _relevant_search_results(query, _search_searxng("!" + engine + " " + query, searxng_url))
+                if found:
+                    return found, "searxng"
+            except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
+                continue
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     allowed, delay = _robots_policy(url)
     if not allowed:

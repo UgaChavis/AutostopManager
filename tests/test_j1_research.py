@@ -404,3 +404,45 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     rows, source = j1_fetch.search_public("public topic", searxng_url="http://127.0.0.1:8080")
     assert source == "duckduckgo"
     assert rows == [{"url": "https://example.org/second", "title": "Another public report", "source": "duckduckgo"}]
+
+
+def test_search_skips_unrelated_engine_and_uses_relevant_public_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
+        calls.append(query)
+        if query.startswith("!brave "):
+            return [{"url": "https://example.org/roblox", "title": "Roblox download", "source": "searxng"}]
+        return [{"url": "https://example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}]
+
+    monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
+    rows, source = j1_fetch.search_public("brake pads operation technical guide", searxng_url="http://127.0.0.1:8080")
+    assert source == "searxng"
+    assert [row["url"] for row in rows] == ["https://example.org/brake-pads"]
+    assert calls == [
+        "!brave brake pads operation technical guide",
+        "!google brake pads operation technical guide",
+    ]
+    assert j1_fetch._relevant_search_results(
+        "тормозные колодки устройство",
+        [{"url": "https://example.org/article", "title": "Устройство тормозных колодок"}],
+    )
+
+
+def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
+        calls.append(query)
+        return [{"url": "https://example.org/roblox", "title": "Roblox download", "source": "searxng"}]
+
+    monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
+    monkeypatch.setattr(j1_fetch, "_robots_policy", lambda _url: (False, 1.0))
+    rows, source = j1_fetch.search_public("brake pads operation", searxng_url="http://127.0.0.1:8080")
+    assert rows == [] and source == "search_unavailable"
+    assert calls == [
+        "!brave brake pads operation",
+        "!google brake pads operation",
+        "!qwant brake pads operation",
+        "!yep brake pads operation",
+    ]
