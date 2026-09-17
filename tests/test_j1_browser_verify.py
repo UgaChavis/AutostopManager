@@ -9,6 +9,7 @@ from autostop_manager import j1_fetch
 
 
 def _container(service: str, identifier: str, networks: dict[str, str]) -> dict[str, object]:
+    is_renderer = service == verify.RENDERER_SERVICE
     return {
         "Id": identifier,
         "Config": {"Labels": {"com.docker.compose.service": service}, "User": "10001:10001"},
@@ -18,6 +19,9 @@ def _container(service: str, identifier: str, networks: dict[str, str]) -> dict[
             "Privileged": False,
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges:true"],
+            "Init": is_renderer,
+            "PidsLimit": 128 if is_renderer else 64,
+            "Ulimits": [{"Name": "nofile", "Soft": 1024 if is_renderer else 256, "Hard": 1024 if is_renderer else 256}],
         },
         "NetworkSettings": {
             "Ports": {"18890/tcp": None},
@@ -126,6 +130,18 @@ def test_verifier_rejects_topology_escape(mutation: str) -> None:
         expected = "browser_network_topology_invalid"
     with pytest.raises(verify.VerificationError, match=expected):
         verify.verify_topology(changed_containers, changed_networks)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("Init", False), ("PidsLimit", 64), ("Ulimits", [{"Name": "nofile", "Soft": 256, "Hard": 256}])),
+)
+def test_verifier_rejects_renderer_without_compensating_runtime_limits(field: str, value: object) -> None:
+    containers, networks = _topology()
+    changed = deepcopy(containers)
+    changed[verify.RENDERER_SERVICE]["HostConfig"][field] = value  # type: ignore[index]
+    with pytest.raises(verify.VerificationError, match="browser_renderer_runtime_invalid"):
+        verify.verify_topology(changed, networks)
 
 
 def test_attestation_content_rejects_non_sha_revision() -> None:
