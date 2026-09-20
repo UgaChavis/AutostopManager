@@ -437,6 +437,13 @@ def test_service_and_instructions_are_event_only():
         assert "120" not in text
     skill = (ROOT / ".agents/skills/manage-owner-telegram/SKILL.md").read_text()
     assert "--enable|--disable|--status" in skill
+    store_skill = (ROOT / ".agents/skills/manage-autostop-store/SKILL.md").read_text()
+    assert "проверяемая привязка согласия" in store_skill
+    assert "store_quote_conductor` через `order" in store_skill
+    assert "сделать `handoff`" in store_skill
+    assert "не придумывать хеш согласия" in store_skill
+    assert "фазы `waiting_payment`" in store_skill
+    assert "Не объявляй оплату полученной, не резервируй и не закупай" in store_skill
     runbook = (ROOT / "docs/agent/deployment_runbook.md").read_text()
     assert "scripts/install-codex-wake.sh" in runbook
 
