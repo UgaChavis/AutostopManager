@@ -170,6 +170,23 @@ def test_normalize_part_intent_recognizes_drive_shaft_with_position_clarificatio
     assert "axle" in result["clarification_fields"]
 
 
+def test_normalize_part_intent_extracts_unambiguous_strut_position_from_wording():
+    result = normalize_part_intent("передняя правая амортизационная стойка")
+
+    assert result["intent_id"] == "shock_absorber"
+    assert result["clarification_required"] is False
+    assert result["inferred_position_context"] == {"axle": "front", "side": "right"}
+
+
+def test_normalize_part_intent_keeps_both_axles_on_clarification_path():
+    result = normalize_part_intent("передние и задние амортизаторы")
+
+    assert result["intent_id"] == "shock_absorber"
+    assert result["clarification_required"] is True
+    assert result["clarification_fields"] == ["axle"]
+    assert result["inferred_position_context"] == {}
+
+
 def test_normalize_part_intent_unknown_keeps_search_text():
     result = normalize_part_intent("редкая штука", axle="front")
 

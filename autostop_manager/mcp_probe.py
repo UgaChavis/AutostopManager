@@ -223,20 +223,26 @@ async def async_probe_manager_mcp(
                     resolver_payload = resolver or {}
                     readiness = resolver_payload.get("readiness")
                     resolver_status = resolver_payload.get("status")
+                    resolver_calls = resolver_payload.get("calls")
+                    has_text_category_dry_run = isinstance(resolver_calls, list) and any(
+                        isinstance(call, Mapping)
+                        and call.get("operation") == "parts_by_vin"
+                        and call.get("dry_run") is True
+                        for call in resolver_calls
+                    )
                     resolver_ok = (
                         _tool_error_check(resolver_error, resolver)
-                        and resolver_status == "needs_partsapi_category_mapping"
+                        and resolver_status == "needs_identity_confirmation"
                         and isinstance(readiness, Mapping)
-                        and readiness.get("needs_partsapi_category_mapping") is True
+                        and readiness.get("needs_partsapi_category_mapping") is False
+                        and has_text_category_dry_run
                         and not bool(resolver_payload.get("oem_candidates"))
                         and int(resolver_payload.get("live_call_count") or 0) == 0
                     )
                     raw_identifier_returned = _payload_contains(resolver, SYNTHETIC_IDENTIFIER)
                     report["checks"]["synthetic_resolver"] = {
                         "ok": resolver_ok and not raw_identifier_returned,
-                        "diagnostic": "category_unresolved"
-                        if resolver_status == "needs_partsapi_category_mapping"
-                        else "resolver_failed",
+                        "diagnostic": "controlled_text_category" if has_text_category_dry_run else "resolver_failed",
                         "status": resolver_status,
                         "live_call_count": int(resolver_payload.get("live_call_count") or 0) if resolver else None,
                         "oem_candidate_count": len(resolver_payload.get("oem_candidates") or []) if resolver else 0,
@@ -245,8 +251,8 @@ async def async_probe_manager_mcp(
                         report["privacy"]["raw_identifier_returned"] = True
                     if not resolver_ok or raw_identifier_returned:
                         report["diagnostic"] = (
-                            "category_unresolved"
-                            if resolver_status == "needs_partsapi_category_mapping"
+                            "controlled_text_category_failed"
+                            if _tool_error_check(resolver_error, resolver)
                             else "tool_invocation_failure"
                         )
                         return report

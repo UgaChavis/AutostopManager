@@ -413,6 +413,9 @@ def _rank_oem_candidate(
         "category_id": category_resolution.get("category")
         if category_resolution.get("category_kind") == "numeric_id"
         else None,
+        "partsapi_category": category_resolution.get("category"),
+        "partsapi_category_kind": category_resolution.get("category_kind"),
+        "partsapi_category_mode": category_resolution.get("category_mode"),
         "fitment_scope": (
             "vin_specific"
             if requested_position_confirmed
@@ -733,19 +736,23 @@ def resolve_vin_oem_parts(
     high_identity_conflict = any(item.get("severity") == "high" for item in conflicts)
     has_identifier = bool(raw_identifier)
     part_actionable = bool(part_profile.get("recognized")) and not bool(part_profile.get("clarification_required"))
-    category_numeric = category_resolution.get("category_kind") == "numeric_id" and not category_resolution.get(
-        "category_unresolved"
+    category_queryable = bool(
+        category_resolution.get(
+            "category_queryable",
+            category_resolution.get("category_kind") == "numeric_id"
+            and not category_resolution.get("category_unresolved"),
+        )
     )
     raw_blocking_reasons = identity_readiness.get("blocking_reasons")
     blocking_reasons = list(raw_blocking_reasons) if isinstance(raw_blocking_reasons, list) else []
     ready_for_oem_candidate_lookup = (
-        bool(identity_readiness.get("ready_for_oem_candidate_lookup")) and part_actionable and category_numeric
+        bool(identity_readiness.get("ready_for_oem_candidate_lookup")) and part_actionable and category_queryable
     )
     readiness: dict[str, Any] = {
         "has_identifier": has_identifier,
         "ready_for_identity_crosscheck": has_identifier and not high_identity_conflict,
         "ready_for_category_lookup": part_actionable,
-        "needs_partsapi_category_mapping": part_actionable and not category_numeric,
+        "needs_partsapi_category_mapping": part_actionable and not category_queryable,
         "ready_for_oem_candidate_lookup": ready_for_oem_candidate_lookup,
         "ready_for_applicability_enrichment": False,
         "ready_for_crm_writeback": False,
@@ -766,11 +773,11 @@ def resolve_vin_oem_parts(
                 fields=list(part_profile.get("clarification_fields") or []),
             )
         )
-    if part_actionable and not category_numeric:
+    if part_actionable and not category_queryable:
         manual_actions.append(
             _manual_action(
                 "map_partsapi_category",
-                "Построить или обновить PartsAPI category index и выбрать numeric cat для getPartsbyVIN.",
+                "Построить или обновить PartsAPI category index и выбрать контролируемый cat для getPartsbyVIN.",
             )
         )
     if not identity_readiness.get("ready_for_oem_candidate_lookup"):
@@ -786,6 +793,7 @@ def resolve_vin_oem_parts(
     if (
         raw_identifier
         and category_resolution.get("category")
+        and category_queryable
         and (readiness["ready_for_oem_candidate_lookup"] or dry_run or not live_partsapi_oem)
     ):
         parts_call = partsapi_call(
@@ -800,7 +808,7 @@ def resolve_vin_oem_parts(
             {
                 "stage": "partsapi_category",
                 "operation": "parts_by_vin",
-                "error": "Numeric PartsAPI category is required before getPartsbyVIN.",
+                "error": "A controlled PartsAPI category is required before getPartsbyVIN.",
                 "category_resolution": category_resolution,
             }
         )

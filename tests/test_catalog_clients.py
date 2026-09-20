@@ -674,12 +674,23 @@ def test_resolve_partsapi_category_distinguishes_numeric_and_text_candidates():
     assert unknown["category_kind"] == "unresolved"
 
 
-def test_resolve_partsapi_category_does_not_map_brake_disc_to_brake_pad_numeric_category():
+def test_resolve_partsapi_category_uses_curated_text_when_no_numeric_mapping_exists():
     result = resolve_partsapi_category("тормозные диски")
 
     assert result["category"] != "1191"
-    assert result["category_unresolved"] is True
+    assert result["category"] == "brake disc"
+    assert result["category_unresolved"] is False
     assert result["category_kind"] == "text_candidate"
+    assert result["category_mode"] == "curated_text"
+    assert result["category_queryable"] is True
+
+
+def test_resolve_partsapi_category_rejects_untrusted_explicit_text():
+    result = resolve_partsapi_category("амортизатор", explicit_category="untrusted category")
+
+    assert result["category"] == "untrusted category"
+    assert result["category_queryable"] is False
+    assert result["category_unresolved"] is True
 
 
 def test_compound_part_request_does_not_automatically_select_one_index_category():

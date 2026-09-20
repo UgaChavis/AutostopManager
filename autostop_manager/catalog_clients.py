@@ -2592,11 +2592,17 @@ def resolve_partsapi_category(
         if str(row.get("cat_id") or "").strip().isdigit()
     ]
 
+    recognized_single_intent = bool(part_profile.get("recognized")) and part_profile.get("intent_id") not in {
+        "",
+        "multiple_parts",
+        "unknown",
+    }
+    curated_text_categories = {value.casefold(): value for value in text_candidates}
     explicit = str(explicit_category or "").strip()
     extra: dict[str, Any] = {}
     category: str | None
     if explicit:
-        category, source = explicit, "explicit"
+        category, source = curated_text_categories.get(explicit.casefold(), explicit), "explicit"
     elif part_profile.get("intent_id") == "multiple_parts":
         category, source = None, "none"
     elif index_numeric_candidates:
@@ -2610,11 +2616,29 @@ def resolve_partsapi_category(
         category, source = text_candidates[0], "parts_intent_text_candidate"
     else:
         category, source = None, "none"
-    kind = "unresolved" if category is None else "numeric_id" if category.isdigit() else "text_candidate"
+    category_is_numeric = bool(category and category.isdigit())
+    category_is_curated_text = bool(
+        category
+        and not category_is_numeric
+        and recognized_single_intent
+        and category.casefold() in curated_text_categories
+        and source in {"explicit", "parts_intent_text_candidate"}
+    )
+    category_queryable = bool(category and len(category) <= 25 and (category_is_numeric or category_is_curated_text))
+    kind = "unresolved" if category is None else "numeric_id" if category_is_numeric else "text_candidate"
+    category_mode = (
+        "numeric_id"
+        if category_queryable and category_is_numeric
+        else "curated_text"
+        if category_queryable
+        else "unresolved"
+    )
     return {
         "category": category,
         "category_kind": kind,
-        "category_unresolved": kind != "numeric_id",
+        "category_mode": category_mode,
+        "category_queryable": category_queryable,
+        "category_unresolved": not category_queryable,
         "source": source,
         "numeric_candidates": numeric_candidates,
         "index_numeric_candidates": index_numeric_candidates,

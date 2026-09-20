@@ -352,7 +352,13 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         intent_id="shock_absorber",
         canonical_name_ru="амортизатор",
         canonical_name_en="shock absorber / strut",
-        patterns=(r"\bамортизатор", r"\bстойк\w*\s+аморт", r"shock\s+absorber", r"\bstrut\b"),
+        patterns=(
+            r"\bамортизатор",
+            r"\bстойк\w*\s+аморт",
+            r"\bамортизацион\w*\s+стойк\w*",
+            r"shock\s+absorber",
+            r"\bstrut\b",
+        ),
         catalog_groups_ru=("подвеска", "амортизатор", "стойка амортизатора"),
         catalog_groups_en=("suspension", "shock absorber", "strut"),
         positions=("front_or_rear_required", "left_right_when_split"),
@@ -610,6 +616,47 @@ def _legacy_position_coordinates(position: str | None) -> tuple[str | None, str 
     return (position, None) if axle_hint else (None, position)
 
 
+def _single_text_position_hint(text: str, patterns: dict[str, str]) -> str | None:
+    """Return one unambiguous position coordinate found in the part wording."""
+
+    normalized = re.sub(r"[_/\\-]+", " ", text.casefold())
+    matches = {value for value, pattern in patterns.items() if re.search(pattern, normalized)}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _infer_position_context(text: str) -> dict[str, str]:
+    """Extract only unambiguous axle/side hints from a recognised part request.
+
+    Wording such as "front and rear" deliberately yields no axle value and
+    keeps the request on the clarification path.
+    """
+
+    coordinates = {
+        "axle": _single_text_position_hint(
+            text,
+            {
+                "front": r"\b(?:front(?:\s+axle)?|передн\w*)\b",
+                "rear": r"\b(?:rear(?:\s+axle)?|задн\w*)\b",
+            },
+        ),
+        "side": _single_text_position_hint(
+            text,
+            {
+                "left": r"\b(?:left|lh|лев\w*)\b",
+                "right": r"\b(?:right|rh|прав\w*)\b",
+            },
+        ),
+        "inner_outer": _single_text_position_hint(
+            text,
+            {
+                "inner": r"\b(?:inner|internal|inboard|внутрен\w*)\b",
+                "outer": r"\b(?:outer|external|outboard|наружн\w*)\b",
+            },
+        ),
+    }
+    return {key: value for key, value in coordinates.items() if value is not None}
+
+
 def normalize_part_intent(
     raw: str | None,
     *,
@@ -624,8 +671,10 @@ def normalize_part_intent(
     position = position.strip() if position else None
     inner_outer = inner_outer.strip() if inner_outer else None
     legacy_axle, legacy_inner_outer = _legacy_position_coordinates(position)
-    effective_axle = axle or legacy_axle
-    effective_inner_outer = inner_outer or legacy_inner_outer
+    inferred_context = _infer_position_context(text)
+    effective_axle = axle or legacy_axle or inferred_context.get("axle")
+    effective_side = side or inferred_context.get("side")
+    effective_inner_outer = inner_outer or legacy_inner_outer or inferred_context.get("inner_outer")
     explicit_positions = list(dict.fromkeys(value for value in [axle, side, position, inner_outer] if value))
     matches = _match_parts(text)
     matched = matches[0] if len(matches) == 1 else None
@@ -665,9 +714,18 @@ def normalize_part_intent(
     }
     supplied_context = {
         "axle": effective_axle,
-        "side": side,
+        "side": effective_side,
         "position": position,
         "inner_outer": effective_inner_outer,
+    }
+    explicit_context = {
+        "axle": axle or legacy_axle,
+        "side": side,
+        "position": position,
+        "inner_outer": inner_outer or legacy_inner_outer,
+    }
+    inferred_context = {
+        key: value for key, value in inferred_context.items() if value and not explicit_context.get(key)
     }
     derived_required_fields = list(
         dict.fromkeys(
@@ -693,7 +751,8 @@ def normalize_part_intent(
             "required_position_fields": derived_required_fields,
             "risk_fields": list(matched.critical_vehicle_fields),
             "explicit_positions": explicit_positions,
-            "explicit_position_context": {key: value for key, value in supplied_context.items() if value},
+            "explicit_position_context": {key: value for key, value in explicit_context.items() if value},
+            "inferred_position_context": inferred_context,
             "clarification_required": bool(missing_fields),
             "clarification_fields": missing_fields,
         }

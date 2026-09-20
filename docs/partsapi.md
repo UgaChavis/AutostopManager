@@ -41,6 +41,16 @@ HTTP 401/403 is `provider_auth_error`, never retried: verify
 The error suggests `vin_decode_oe` when a VIN/frame is available; it does not
 silently substitute another vehicle or spend quota on an automatic VIN lookup.
 
+For `getPartsbyVIN`, the provider documents `cat` as `String(25)`, not a
+numeric-only field. E1 therefore prefers a numeric category from its local
+index, but can send a short, curated text category from one recognised,
+single-part intent. Arbitrary text, an unknown part and a multi-part request
+remain blocked. `category_queryable` means that the input is safe to try; a
+successful response still requires position and applicability checks. The
+existing `type=oem` adapter default remains a local convention rather than a
+provider-documented enum. An auth/5xx failure is reported as a provider failure
+and falls back to manual EPC instead of being presented as no matching part.
+
 For `norms_models`, obtain `makeNameSEO` from `norms_makes`, not a TecDoc make ID.
 These codes are uppercase; surrounding whitespace and letter case are normalized
 for both friendly inputs and `provider_parameters`. Lowercase codes can trigger

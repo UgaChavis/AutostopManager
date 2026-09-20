@@ -323,11 +323,58 @@ def test_resolver_accepts_independent_cv_joint_coordinates():
     }
 
 
+def test_resolver_uses_curated_text_category_for_front_strut(monkeypatch):
+    identity = _medium_identity()
+    identity["confidence_label"] = "high"
+    identity["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] = True
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: identity)
+    calls = []
+
+    def fake_partsapi_catalog_lookup(**kwargs):
+        calls.append(kwargs)
+        return {
+            "ok": True,
+            "provider": "partsapi_ru",
+            "operation": kwargs["operation"],
+            "dry_run": kwargs.get("dry_run", False),
+            "outcome": "empty_result",
+            "attempt_count": 1 if not kwargs.get("dry_run", False) else 0,
+            "request_plan": {"configured": True, "params": {}, "redacted_url": "https://api.partsapi.ru?key=***"},
+            "vehicle_profiles": [],
+            "oem_candidates": [],
+        }
+
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.partsapi_catalog_lookup", fake_partsapi_catalog_lookup)
+    result = resolve_vin_oem_parts(
+        identifier="1HGCM82633A004352",
+        requested_part="передние амортизационные стойки",
+        live_vpic=False,
+        live_partsapi_oem=True,
+        max_live_calls=1,
+    )
+
+    parts_call = next(call for call in calls if call["operation"] == "parts_by_vin")
+    assert parts_call["category"] == "shock absorber"
+    assert result["part_intent"]["clarification_required"] is False
+    assert result["readiness"]["needs_partsapi_category_mapping"] is False
+    assert result["category_resolution"]["category_mode"] == "curated_text"
+
+
 def test_resolver_blocks_live_oem_when_category_is_unresolved(monkeypatch):
     identity = _medium_identity()
     identity["confidence_label"] = "high"
     identity["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] = True
     monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *args, **kwargs: identity)
+    monkeypatch.setattr(
+        "autostop_manager.vin_oem_resolver.resolve_partsapi_category",
+        lambda *_args, **_kwargs: {
+            "category": "untrusted category",
+            "category_kind": "text_candidate",
+            "category_mode": "unresolved",
+            "category_queryable": False,
+            "category_unresolved": True,
+        },
+    )
     calls = []
 
     def fake_partsapi_catalog_lookup(**kwargs):

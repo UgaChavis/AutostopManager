@@ -100,8 +100,8 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
     }
     assert report["checks"]["synthetic_resolver"] == {
         "ok": True,
-        "diagnostic": "category_unresolved",
-        "status": "needs_partsapi_category_mapping",
+        "diagnostic": "controlled_text_category",
+        "status": "needs_identity_confirmation",
         "live_call_count": 0,
         "oem_candidate_count": 0,
     }
