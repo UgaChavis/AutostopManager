@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 import http.client
 import ipaddress
 import json
+import math
 import os
 import pwd
 import re
@@ -23,13 +24,20 @@ import tempfile
 import threading
 import time
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, quote_plus, unquote, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
+
+from .j1_sources import classify_source, discovery_domain
 
 USER_AGENT = "AutoStop-J1/1.0 (+public research; respects robots.txt)"
 MAX_HTML_BYTES = 2_000_000
 MAX_PDF_BYTES = 8_000_000
 MAX_TEXT_CHARS = 50_000
+MAX_SEARCH_RESULTS = 20
+MAX_SEARCH_RESULTS_PER_DOMAIN = 3
+MAX_SEARCH_SNIPPET_CHARS = 600
+MAX_DOCUMENT_RETRIES = 1
+_RETRY_DELAY_SECONDS = 0.25
 _VIN = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
     re.I,
@@ -48,6 +56,21 @@ _ROBOTS: dict[str, tuple[float, RobotFileParser | None, bool, float]] = {}
 _ROBOTS_LOCK = threading.Lock()
 _HOST_NEXT: dict[str, float] = {}
 _RATE_LOCK = threading.Lock()
+_RETRYABLE_DOCUMENT_ERRORS = frozenset(
+    {
+        "fetch_failed",
+        "rate_limited",
+        "http_server_error",
+        "ocr_unavailable",
+        "ocr_timeout",
+        "ocr_render_failed",
+        "ocr_extract_failed",
+        "browser_unavailable",
+        "browser_timeout",
+        "browser_render_failed",
+        "browser_busy",
+    }
+)
 
 
 def contains_sensitive(value: str) -> bool:
@@ -446,7 +469,11 @@ def _browser_fallback(final_url: str, title: str, *, allow_browser: bool) -> dic
         from .j1_browser import isolation_verified, render_page
     except Exception:  # noqa: BLE001 - the optional client can be unavailable in a minimal release.
         return {"ok": False, "error": "browser_isolation_unverified"}
-    if not isolation_verified():
+    try:
+        verified = isolation_verified()
+    except Exception:  # noqa: BLE001 - a malformed optional attestation cannot stop static J1.
+        verified = False
+    if not verified:
         return {"ok": False, "error": "browser_isolation_unverified"}
     # The browser makes a second request, so reuse the cached policy and host
     # delay before giving it the static response's safe final URL.
@@ -476,8 +503,28 @@ def _browser_fallback(final_url: str, title: str, *, allow_browser: bool) -> dic
     }
 
 
-def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
-    """Return bounded public text; an isolated browser is only a gated fallback."""
+def _retry_after_seconds(headers: dict[str, str]) -> float:
+    """Use a tiny bounded delay for one respectful 429 retry.
+
+    Date-form Retry-After is deliberately ignored: parsing it would add clock
+    policy to a worker whose retry is intentionally short and optional.
+    """
+
+    return _bounded_retry_delay(headers.get("retry-after", ""))
+
+
+def _bounded_retry_delay(value: object) -> float:
+    try:
+        retry_after = float(str(value or ""))
+    except (TypeError, ValueError):
+        retry_after = _RETRY_DELAY_SECONDS
+    if not math.isfinite(retry_after):
+        retry_after = _RETRY_DELAY_SECONDS
+    return min(3.0, max(_RETRY_DELAY_SECONDS, retry_after))
+
+
+def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
+    """Run one fail-closed document retrieval attempt."""
 
     safe_url = public_url(url)
     if not safe_url:
@@ -491,10 +538,35 @@ def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
         status, headers, body, final_url = _request_public(
             safe_url, max_bytes=MAX_PDF_BYTES, check_redirect_robots=True
         )
-    except (OSError, ValueError, TimeoutError, ssl.SSLError, http.client.HTTPException):
+    except (OSError, TimeoutError, ssl.SSLError, http.client.HTTPException):
         return {"ok": False, "error": "fetch_failed"}
+    except ValueError as exc:
+        # Validation and robots/redirect guards are deterministic safety
+        # failures.  They must never become a retry loop against a blocked or
+        # private destination.
+        code = str(exc)
+        return {
+            "ok": False,
+            "error": code
+            if code
+            in {
+                "unsafe_url",
+                "unsafe_redirect",
+                "unsafe_dns_answer",
+                "redirect_robots_disallowed",
+                "robots_redirected",
+                "document_too_large",
+                "unsupported_content_encoding",
+                "too_many_redirects",
+            }
+            else "fetch_rejected",
+        }
     if status in {401, 403, 429}:
-        return {"ok": False, "error": "access_restricted" if status != 429 else "rate_limited"}
+        if status == 429:
+            return {"ok": False, "error": "rate_limited", "retry_after_seconds": _retry_after_seconds(headers)}
+        return {"ok": False, "error": "access_restricted"}
+    if 500 <= status <= 599:
+        return {"ok": False, "error": "http_server_error"}
     if status != 200:
         return {"ok": False, "error": "http_error"}
     extracted = _extract_static_content(headers.get("content-type", "").casefold(), body, final_url, headers)
@@ -537,6 +609,33 @@ def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
     }
 
 
+def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
+    """Return bounded public text with at most one transient-error retry.
+
+    Robots, privacy, authentication, CAPTCHA and validation failures never
+    retry.  The retry starts a new complete guarded request, so DNS and robots
+    controls are re-applied before any second connection.
+    """
+
+    first = _fetch_document_once(url, allow_browser=allow_browser)
+    if first.get("ok") is True or str(first.get("error") or "") not in _RETRYABLE_DOCUMENT_ERRORS:
+        return first
+    if first.get("error") == "rate_limited":
+        time.sleep(_bounded_retry_delay(first.get("retry_after_seconds")))
+    second = _fetch_document_once(url, allow_browser=allow_browser)
+    # Retry timing is internal: preserve the original public result contract
+    # and never surface a server-provided header through MCP.
+    second.pop("retry_after_seconds", None)
+    return second
+
+
+def _clean_search_text(value: object, *, limit: int) -> str:
+    """Retain a bounded, redacted text field from an untrusted result row."""
+
+    plain = re.sub(r"<[^>]*>", " ", html.unescape(str(value or "")))
+    return redact_sensitive(" ".join(plain.split()), limit=limit)
+
+
 def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
     parsed = urlsplit(base_url)
     if (
@@ -566,9 +665,17 @@ def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
         url = public_url(str(row.get("url") or ""))
         if url:
             found.append(
-                {"url": url, "title": redact_sensitive(str(row.get("title") or ""), limit=200), "source": "searxng"}
+                {
+                    "url": url,
+                    "title": _clean_search_text(row.get("title"), limit=200),
+                    "snippet": _clean_search_text(
+                        row.get("content") or row.get("snippet") or row.get("description"),
+                        limit=MAX_SEARCH_SNIPPET_CHARS,
+                    ),
+                    "source": "searxng",
+                }
             )
-    return found[:20]
+    return found[:MAX_SEARCH_RESULTS]
 
 
 _SEARCH_FILLER = {
@@ -597,24 +704,138 @@ _SEARCH_FILLER = {
     "техническая",
 }
 _SEARXNG_ENGINES = ("brave", "google", "qwant", "yep")
+_SEARCH_TIER_SCORE = {"A": 400, "B": 300, "C": 200, "D": 100, "unclassified": 0}
+_SEARCH_TRACKING_PARAMETERS = frozenset(
+    {"fbclid", "gclid", "dclid", "msclkid", "yclid", "ysclid", "mc_cid", "mc_eid", "_ga", "_gl"}
+)
 
 
-def _relevant_search_results(query: str, rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def _search_terms(query: str) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                token[:5] if len(token) > 5 else token
+                for token in re.findall(r"[^\W_]+", query.casefold(), re.UNICODE)
+                if len(token) >= 3 and token not in _SEARCH_FILLER
+            }
+        )
+    )
+
+
+def _search_haystack(row: dict[str, Any]) -> str:
+    return " ".join(str(row.get(key) or "") for key in ("title", "snippet", "url")).casefold()
+
+
+def _relevant_search_results(query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep lexical matches; a failing engine can return wholly unrelated pages."""
 
-    terms = {
-        token[:5] if len(token) > 5 else token
-        for token in re.findall(r"[^\W_]+", query.casefold(), re.UNICODE)
-        if len(token) >= 3 and token not in _SEARCH_FILLER
-    }
+    terms = _search_terms(query)
     if not terms:
         return rows
     required = 2 if len(terms) >= 3 else 1
-    return [
-        row
-        for row in rows
-        if sum(term in (row.get("title", "") + " " + row.get("url", "")).casefold() for term in terms) >= required
+    return [row for row in rows if sum(term in _search_haystack(row) for term in terms) >= required]
+
+
+def _discovery_url_key(url: str) -> str:
+    """Deduplicate same public result across engines without dropping meaning."""
+
+    try:
+        parsed = urlsplit(url)
+        parameters = parse_qsl(parsed.query, keep_blank_values=True)
+    except ValueError:
+        return url.casefold()
+    kept = [
+        (name, value)
+        for name, value in parameters
+        if not (name.casefold().startswith("utm_") or name.casefold() in _SEARCH_TRACKING_PARAMETERS)
     ]
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    if parsed.port and not (
+        (parsed.scheme == "http" and parsed.port == 80) or (parsed.scheme == "https" and parsed.port == 443)
+    ):
+        host += f":{parsed.port}"
+    return urlunsplit((parsed.scheme.casefold(), host, parsed.path or "/", urlencode(kept, doseq=True), ""))
+
+
+def _merge_snippets(left: str, right: str) -> str:
+    values: list[str] = []
+    for value in (left, right):
+        clean = _clean_search_text(value, limit=MAX_SEARCH_SNIPPET_CHARS)
+        if clean and clean.casefold() not in {item.casefold() for item in values}:
+            values.append(clean)
+    return " | ".join(values)[:MAX_SEARCH_SNIPPET_CHARS]
+
+
+def _prepare_discovery_row(row: dict[str, Any], *, engine: str) -> dict[str, Any] | None:
+    url = public_url(str(row.get("url") or ""))
+    if not url:
+        return None
+    title = _clean_search_text(row.get("title"), limit=200)
+    snippet = _clean_search_text(
+        row.get("snippet") or row.get("content") or row.get("description"), limit=MAX_SEARCH_SNIPPET_CHARS
+    )
+    kind = "pdf" if urlsplit(url).path.casefold().endswith(".pdf") else ""
+    classification = classify_source(url, title=title, kind=kind)
+    return {
+        "url": url,
+        "title": title,
+        "snippet": snippet,
+        "source": _clean_search_text(row.get("source") or "searxng", limit=40),
+        "engines": [engine],
+        "source_class": classification.source_class,
+        "source_tier": classification.source_tier,
+        "source_basis": classification.source_basis,
+    }
+
+
+def _discovery_score(query: str, row: dict[str, Any]) -> int:
+    """Rank by tier plus independent matches in title, snippet and URL."""
+
+    score = _SEARCH_TIER_SCORE.get(str(row.get("source_tier") or ""), 0)
+    title = str(row.get("title") or "").casefold()
+    snippet = str(row.get("snippet") or "").casefold()
+    url = str(row.get("url") or "").casefold()
+    for term in _search_terms(query):
+        score += 9 if term in title else 0
+        score += 5 if term in snippet else 0
+        score += 2 if term in url else 0
+    return score
+
+
+def _rank_discovered_results(query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge engine output, deduplicate URLs and cap any one source domain."""
+
+    merged: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        prepared = _prepare_discovery_row(row, engine=str(row.get("engine") or row.get("source") or "unknown"))
+        if prepared is None:
+            continue
+        key = _discovery_url_key(prepared["url"])
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = prepared
+            continue
+        existing["snippet"] = _merge_snippets(str(existing["snippet"]), str(prepared["snippet"]))
+        existing["engines"] = sorted({*existing["engines"], *prepared["engines"]})
+        # Prefer the longer title when engines disagree about the same page.
+        if len(str(prepared["title"])) > len(str(existing["title"])):
+            existing["title"] = prepared["title"]
+    ordered = sorted(
+        merged.values(),
+        key=lambda row: (-_discovery_score(query, row), str(row["url"])),
+    )
+    result: list[dict[str, Any]] = []
+    per_domain: dict[str, int] = {}
+    for row in ordered:
+        domain = discovery_domain(str(row["url"])) or "unknown"
+        if per_domain.get(domain, 0) >= MAX_SEARCH_RESULTS_PER_DOMAIN:
+            continue
+        per_domain[domain] = per_domain.get(domain, 0) + 1
+        row["search_rank"] = len(result) + 1
+        result.append(row)
+        if len(result) >= MAX_SEARCH_RESULTS:
+            break
+    return result
 
 
 class _DDGLinks(HTMLParser):
@@ -623,13 +844,17 @@ class _DDGLinks(HTMLParser):
         self.rows: list[dict[str, str]] = []
         self._href = ""
         self._title: list[str] = []
+        self._snippet_tag = ""
+        self._snippet: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "a":
-            attrs_map = dict(attrs)
-            if "result__a" in str(attrs_map.get("class") or ""):
-                self._href = str(attrs_map.get("href") or "")
-                self._title = []
+        attrs_map = dict(attrs)
+        if "result__snippet" in str(attrs_map.get("class") or ""):
+            self._snippet_tag = tag
+            self._snippet = []
+        if tag == "a" and "result__a" in str(attrs_map.get("class") or ""):
+            self._href = str(attrs_map.get("href") or "")
+            self._title = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "a" and self._href:
@@ -638,35 +863,53 @@ class _DDGLinks(HTMLParser):
             if parsed.hostname in {"duckduckgo.com", "www.duckduckgo.com"}:
                 href = unquote(parse_qs(parsed.query).get("uddg", [""])[0])
             url = public_url(href)
-            if url and len(self.rows) < 20:
+            if url and len(self.rows) < MAX_SEARCH_RESULTS:
                 self.rows.append(
-                    {"url": url, "title": redact_sensitive(" ".join(self._title), limit=200), "source": "duckduckgo"}
+                    {
+                        "url": url,
+                        "title": _clean_search_text(" ".join(self._title), limit=200),
+                        "snippet": "",
+                        "source": "duckduckgo",
+                    }
                 )
             self._href = ""
+        if self._snippet_tag and tag == self._snippet_tag:
+            if self.rows:
+                self.rows[-1]["snippet"] = _clean_search_text(" ".join(self._snippet), limit=MAX_SEARCH_SNIPPET_CHARS)
+            self._snippet_tag = ""
+            self._snippet = []
 
     def handle_data(self, data: str) -> None:
         if self._href:
             self._title.append(data)
+        if self._snippet_tag:
+            self._snippet.append(data)
 
 
-def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, str]], str]:
-    """Search local SearXNG, filtering unrelated engine output, then public DDG."""
+def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, Any]], str]:
+    """Search every available local engine, then rank safe public discoveries."""
 
     direct_url = public_url(query)
     if direct_url:
-        return [{"url": direct_url, "title": "", "source": "direct_url"}], "direct_url"
+        return _rank_discovered_results(
+            query,
+            [{"url": direct_url, "title": "", "snippet": "", "source": "direct_url", "engine": "direct_url"}],
+        ), "direct_url"
     if contains_sensitive(query):
         return [], "sensitive_query"
     if searxng_url:
-        # Explicit SearXNG engines avoid a broken default engine polluting the
-        # corpus; a suspended engine is followed by the next public engine.
+        # Collect all explicitly configured engines.  One engine can drift or
+        # omit a result; it must not decide the corpus alone.
+        discovered: list[dict[str, Any]] = []
         for engine in _SEARXNG_ENGINES:
             try:
                 found = _relevant_search_results(query, _search_searxng("!" + engine + " " + query, searxng_url))
-                if found:
-                    return found, "searxng"
+                discovered.extend({**row, "engine": engine} for row in found)
             except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
                 continue
+        ranked = _rank_discovered_results(query, discovered)
+        if ranked:
+            return ranked, "searxng"
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     allowed, delay = _robots_policy(url)
     if not allowed:
@@ -678,6 +921,7 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
             return [], "search_unavailable"
         parser = _DDGLinks()
         parser.feed(body.decode("utf-8", "replace"))
-        return parser.rows, "duckduckgo"
+        ranked = _rank_discovered_results(query, [{**row, "engine": "duckduckgo"} for row in parser.rows])
+        return (ranked, "duckduckgo") if ranked else ([], "search_unavailable")
     except (OSError, TimeoutError, ValueError, http.client.HTTPException):
         return [], "search_unavailable"

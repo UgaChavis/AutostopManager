@@ -7,6 +7,7 @@ services:
       dockerfile: deploy/j1-browser/Dockerfile
     command: ["-m", "autostop_manager.j1_browser_renderer", "serve", "--socket", "/run/autostop-j1-browser/renderer.sock"]
     user: "10001:10001"
+    init: true
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m
@@ -23,12 +24,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 64
+    pids_limit: 128
     mem_limit: 768m
     ulimits:
       nofile:
-        soft: 256
-        hard: 256
+        soft: 1024
+        hard: 1024
     networks:
       j1_browser_control:
         ipv4_address: 172.31.250.2

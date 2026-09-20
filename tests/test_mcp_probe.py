@@ -90,7 +90,7 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
         assert report["checks"]["store_owner_capabilities"] == {"ok": store_ready}
     assert report["checks"]["native_ping"]["ok"] is True
     assert report["checks"]["tools_list"]["ok"] is True
-    assert report["checks"]["tools_list"]["tool_count"] == 39
+    assert report["checks"]["tools_list"]["tool_count"] == 40
     assert report["checks"]["catalog_provider_status"]["ok"] is True
     assert report["checks"]["partsapi_category_index"] == {
         "ok": True,

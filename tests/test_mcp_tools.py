@@ -133,6 +133,7 @@ def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
         "j1_research_status",
         "j1_research_results",
         "j1_research_document",
+        "j1_research_report",
         "j1_research_add_queries",
         "j1_research_cancel",
     )
@@ -141,6 +142,7 @@ def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
         "research_status",
         "research_results",
         "research_document",
+        "research_report",
         "research_add_queries",
         "research_cancel",
     )
@@ -162,11 +164,19 @@ def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
     assert server.tools["j1_research_status"]("job-1")["ok"]
     assert server.tools["j1_research_results"]("job-1", "term", 2, 5)["ok"]
     assert server.tools["j1_research_document"]("job-1", "doc-1", 100, 500)["ok"]
+    assert server.tools["j1_research_report"]("job-1")["ok"]
     assert server.tools["j1_research_add_queries"]("job-1", ["another"])["ok"]
     assert server.tools["j1_research_cancel"]("job-1")["ok"]
     assert [name for name, _ in calls] == list(implementations)
-    assert calls[0][1] == {"objective": "public question", "queries": ["русский", "english"], "max_pages": 40}
+    assert calls[0][1] == {
+        "objective": "public question",
+        "queries": ["русский", "english"],
+        "max_pages": 40,
+        "automotive_context": None,
+        "profile": "general",
+    }
     assert calls[3][1] == {"job_id": "job-1", "document_id": "doc-1", "offset": 100, "max_chars": 500}
+    assert calls[4][1] == {"job_id": "job-1"}
 
 
 def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):

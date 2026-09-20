@@ -40,6 +40,8 @@ MAX_REQUEST_BYTES = 4096
 MAX_TIMEOUT_SECONDS = 25
 _MAX_RESPONSE_BYTES = 96_000
 _MAX_CONCURRENT_RENDERS = 2
+_CHROMIUM_NOFILE_LIMIT = 1_024
+_CHROMIUM_FILE_SIZE_LIMIT = 16 * 1024 * 1024
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
@@ -159,6 +161,10 @@ def _chromium_argv(*, binary: str, url: str, profile_dir: str, proxy_url: str, w
     return [
         binary,
         "--headless=new",
+        # Docker supplies the outer sandbox: the host cannot grant Chromium's
+        # nested sandbox while this unprivileged renderer keeps its fixed
+        # read-only, capability-free container boundary.
+        "--no-sandbox",
         "--incognito",
         "--disable-gpu",
         "--disable-dev-shm-usage",
@@ -208,13 +214,32 @@ def _write_ephemeral_preferences(profile_dir: str) -> None:
     os.chmod(path, 0o600)
 
 
+def _chromium_environment(profile_dir: str) -> dict[str, str]:
+    """Give Chromium private writable runtime paths inside its disposable profile."""
+
+    root = Path(profile_dir)
+    paths = {
+        "HOME": root / "home",
+        "TMPDIR": root / "tmp",
+        "XDG_CONFIG_HOME": root / "xdg-config",
+        "XDG_CACHE_HOME": root / "xdg-cache",
+        "XDG_RUNTIME_DIR": root / "xdg-runtime",
+    }
+    for path in paths.values():
+        path.mkdir(mode=0o700)
+        os.chmod(path, 0o700)
+    environment = os.environ.copy()
+    environment.update({name: str(path) for name, path in paths.items()})
+    return environment
+
+
 def _child_limits() -> None:
-    """Keep Chromium's dumped DOM bounded; cgroup limits the renderer itself."""
+    """Keep Chromium's output and file-descriptor use bounded."""
 
     import resource
 
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_DOM_BYTES + 65_536, MAX_DOM_BYTES + 65_536))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (_CHROMIUM_FILE_SIZE_LIMIT, _CHROMIUM_FILE_SIZE_LIMIT))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (_CHROMIUM_NOFILE_LIMIT, _CHROMIUM_NOFILE_LIMIT))
 
 
 def _run_chromium(url: str, *, timeout_seconds: int) -> tuple[bytes, str]:
@@ -228,6 +253,7 @@ def _run_chromium(url: str, *, timeout_seconds: int) -> tuple[bytes, str]:
     try:
         with tempfile.TemporaryDirectory(prefix="j1-browser-") as profile_dir, tempfile.TemporaryFile() as output:
             _write_ephemeral_preferences(profile_dir)
+            environment = _chromium_environment(profile_dir)
             process = subprocess.Popen(
                 _chromium_argv(
                     binary=binary,
@@ -242,6 +268,7 @@ def _run_chromium(url: str, *, timeout_seconds: int) -> tuple[bytes, str]:
                 close_fds=True,
                 start_new_session=True,
                 preexec_fn=_child_limits,
+                env=environment,
             )
             try:
                 process.wait(timeout=timeout_seconds)

@@ -102,9 +102,11 @@ def test_browser_normalization_fails_closed(payload: object, error: str) -> None
 
 def test_browser_marker_requires_root_owned_private_regular_file(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int] = []
+    revision = "a" * 40
     monkeypatch.setattr(j1_browser.os, "open", lambda *_args: 42)
-    monkeypatch.setattr(j1_browser.os, "read", lambda *_args: j1_browser._ISOLATION_MARKER_CONTENT)
+    monkeypatch.setattr(j1_browser.os, "read", lambda *_args: j1_browser.attestation_content(revision))
     monkeypatch.setattr(j1_browser.os, "close", lambda descriptor: closed.append(descriptor))
+    monkeypatch.setattr(j1_browser, "active_release_revision", lambda *_args: (revision, ""))
     monkeypatch.setattr(
         j1_browser.os,
         "fstat",

@@ -141,11 +141,20 @@ def test_renderer_uses_same_robots_agent_and_disables_cookie_persistence(tmp_pat
         wait_ms=500,
     )
     assert f"--user-agent={j1_fetch.USER_AGENT}" in argv
-    assert "--disable-quic" in argv and "--incognito" in argv
+    assert "--disable-quic" in argv and "--incognito" in argv and "--no-sandbox" in argv
     renderer._write_ephemeral_preferences(str(tmp_path))
     preferences = json.loads((tmp_path / "Default" / "Preferences").read_text(encoding="utf-8"))
     assert preferences["profile"]["default_content_setting_values"]["cookies"] == 2
     assert preferences["profile"]["default_content_setting_values"]["automatic_downloads"] == 2
+
+
+def test_renderer_gives_chromium_private_writable_runtime_paths(tmp_path: Path) -> None:
+    environment = renderer._chromium_environment(str(tmp_path))
+    for name in ("HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"):
+        path = Path(environment[name])
+        assert path.is_relative_to(tmp_path)
+        assert path.is_dir()
+        assert path.stat().st_mode & 0o777 == 0o700
 
 
 def test_proxy_rejects_mixed_dns_and_wildcard_without_renderer_peer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,6 +226,14 @@ def test_ocr_timeout_is_explicit_after_render(monkeypatch: pytest.MonkeyPatch) -
     assert result == {"ok": False, "error": "ocr_timeout", "retryable": True, "extraction_method": "pdf_ocr"}
 
 
+def test_browser_image_includes_renderer_source_dependencies() -> None:
+    dockerfile = (ROOT / "deploy/j1-browser/Dockerfile").read_text(encoding="utf-8")
+
+    assert "autostop_manager/j1_sources.py" in dockerfile
+    assert "autostop_manager/j1_fetch.py" in dockerfile
+    assert "autostop_manager/j1_browser.py" in dockerfile
+
+
 def test_browser_compose_has_bounded_control_network_and_no_public_port() -> None:
     compose = (ROOT / "deploy/j1-browser/docker-compose.yml").read_text(encoding="utf-8")
     unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
@@ -226,8 +243,36 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "172.31.250.3:18890" in compose
     assert "ports:" not in compose
     assert "j1_browser_egress" in compose
-    assert "RuntimeDirectory=autostop-j1-browser" in unit
+    assert "init: true" in compose
+    assert "pids_limit: 128" in compose
+    assert "soft: 1024" in compose and "hard: 1024" in compose
+    assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
+    assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation" not in unit
+    assert "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser" in unit
+    assert "ExecStartPre=+/usr/bin/rm -f -- /run/autostop-j1-browser/renderer.sock" in unit
+    assert "Environment=HOME=/run/autostop-j1-browser-docker" in unit
+    assert "Environment=DOCKER_CONFIG=/run/autostop-j1-browser-docker" in unit
+    assert "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker" in unit
+    assert "ProtectHome=yes" in unit
+    assert unit.index(
+        "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker"
+    ) < unit.index("ExecStart=/usr/bin/docker compose")
+    assert unit.index(
+        "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser"
+    ) < unit.index("ExecStart=/usr/bin/docker compose")
     assert "isolation-ready" in unit
     assert "docker compose" in unit
     assert "config --quiet" in installer
     assert "isolation_attestation_required" in installer
+
+
+def test_browser_attestation_uses_a_sealed_directory_and_release_verifier() -> None:
+    unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
+    installer = (ROOT / "scripts/install-j1-browser-stack.sh").read_text(encoding="utf-8")
+
+    assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
+    assert "install -d -m 0700 -o root -g root /run/autostop-j1-browser-attestation" in unit
+    assert "/run/autostop-j1-browser-attestation/isolation-ready" in unit
+    assert "--verify" in installer
+    assert '"${RUNTIME_PYTHON}" -m "${VERIFIER_MODULE}" attest' in installer
+    assert "j1_browser_isolation_attested=true" in installer
