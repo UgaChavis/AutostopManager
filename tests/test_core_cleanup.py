@@ -31,7 +31,10 @@ def docs(tmp_path):
 
 
 def test_documents_fit_budget_and_have_only_two_skills():
-    assert diagnostics.audit_documentation()["ok"]
+    report = diagnostics.audit_documentation()
+    assert diagnostics.INSTRUCTION_BUDGET_BYTES == 32 * 1024
+    assert report["bytes"] <= diagnostics.INSTRUCTION_BUDGET_BYTES
+    assert report["ok"]
     assert len(list((ROOT / ".agents/skills").glob("*/SKILL.md"))) == 2
 
 

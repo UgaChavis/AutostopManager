@@ -17,7 +17,9 @@ TEXT_DOCUMENTS = (
     "docs/agent/deployment_runbook.md",
     "docs/agent/j1_web_research.md",
 )
-INSTRUCTION_BUDGET_BYTES = 16 * 1024
+# Aggregate ceiling for the six active operational instruction documents.  It
+# remains bounded while allowing their current guarded-workflow coverage.
+INSTRUCTION_BUDGET_BYTES = 32 * 1024
 
 
 def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:

@@ -239,9 +239,14 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
         if name == "search_partsapi_category_index":
             return False, {"ok": failure != "category"}
         if name == "resolve_vin_oem_parts":
+            if failure == "resolver":
+                return False, {"status": "broken", "readiness": {"needs_partsapi_category_mapping": True}}
             return False, {
-                "status": "broken" if failure == "resolver" else "needs_partsapi_category_mapping",
-                "readiness": {"needs_partsapi_category_mapping": True},
+                "status": "needs_identity_confirmation",
+                "readiness": {"needs_partsapi_category_mapping": False},
+                "calls": [{"operation": "parts_by_vin", "dry_run": True}],
+                "oem_candidates": [],
+                "live_call_count": 0,
                 "extra": probe.SYNTHETIC_IDENTIFIER if failure == "resolver_private" else "",
             }
         return False, {
