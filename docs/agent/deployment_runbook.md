@@ -19,7 +19,7 @@ hooks and prints a backup path. Keep old hook files/database for rollback.
 `--restore BACKUP --apply` requires an unchanged replacement configuration.
 
 `/opt/autostopcrm/deploy.sh` also restarts CRM. First run the CLI
-`store-conductor-release-gate` against persistent Store state; reconcile blocked
+`.venv/bin/python -m autostop_manager.cli store-conductor-release-gate` against persistent Store state; reconcile blocked
 legacy runs. Its `knowledge-sync`/`knowledge-audit` calls now only check documents.
 
 Deploy owns activation/rollback; never repoint `current`. Manager's private `.env`
@@ -42,15 +42,17 @@ swap I/O for the immediately preceding 60 seconds. The deploy snapshots only
 the browser unit/attestation state, starts the isolated two-container stack and
 runs its immutable-release verifier. A failed verifier rolls back that browser
 state; static J1 remains available. Do not create an attestation marker by hand.
-`doctor --integrations --full` checks CRM, native Manager/Store and Gmail.
+`.venv/bin/python -m autostop_manager.cli doctor --integrations --full` checks CRM,
+native Manager/Store and Gmail.
 Retire the integration-audit timer explicitly; old watchdog units must be absent.
 
 ## Telegram and rollback
 
 Preserve the work task and private wake configuration. With work paused, use
-the published revision with `install-telegram-bridge.sh --account work --revision`,
-`provision-telegram-transcription-model.sh --account work --revision`, then
-`deploy_telegram_bridge.sh --account work --no-start REVISION`. Install wake via
+the published revision with
+`scripts/install-telegram-bridge.sh --account work --revision <commit>`,
+`scripts/provision-telegram-transcription-model.sh --account work --revision <commit>`,
+then `scripts/deploy_telegram_bridge.sh --account work --no-start <commit>`. Install wake via
 the active Telegram snapshot's `scripts/install-codex-wake.sh`. These installers
 own paired source/venv/model activation; do not switch links manually.
 
