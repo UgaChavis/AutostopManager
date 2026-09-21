@@ -10,6 +10,9 @@ Group=autostop-work-telegram
 WorkingDirectory=/opt/autostop-work-telegram-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
+# Optional root-owned runtime configuration. It contains only the fixed private
+# owner peer accepted by the narrow scheduled-notification operation.
+EnvironmentFile=-/etc/autostop-work-telegram/owner-notification.env
 # The file is absent by default: inbound monitoring stays off unless the owner
 # explicitly enables the persistent event-driven work mode.
 EnvironmentFile=-/etc/autostop-work-telegram/monitor.env

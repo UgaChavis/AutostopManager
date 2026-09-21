@@ -56,6 +56,7 @@ def test_work_telegram_service_has_no_personal_state_or_socket() -> None:
     assert "WorkingDirectory=/opt/autostop-work-telegram-releases/current" in service
     assert "--account work daemon" in service
     assert "/opt/autostop-work-telegram-venv/bin/python" in service
+    assert "EnvironmentFile=-/etc/autostop-work-telegram/owner-notification.env" in service
     assert "EnvironmentFile=-/etc/autostop-work-telegram/monitor.env" in service
     assert "/opt/autostop-telegram-venv/bin/python" not in service
     assert "/var/lib/autostop-work-telegram" in service
@@ -1031,6 +1032,33 @@ def test_named_work_account_owns_all_runtime_paths() -> None:
     assert paths.socket_path == telegram_bridge.WORK_SOCKET_PATH
 
 
+def test_work_owner_peer_is_loaded_only_from_the_runtime_environment(monkeypatch, tmp_path) -> None:
+    credentials = tmp_path / "credentials"
+    credentials.write_text(
+        "TELEGRAM_API_ID=12345678\nTELEGRAM_API_HASH=0123456789abcdef0123456789abcdef\n",
+        encoding="ascii",
+    )
+    credentials.chmod(0o600)
+    state_dir = tmp_path / "state"
+    paths = telegram_bridge.TelegramAccountPaths(
+        credentials_path=credentials,
+        session_path=state_dir / "account",
+        state_dir=state_dir,
+        socket_path=tmp_path / "run" / "bridge.sock",
+    )
+    monkeypatch.setattr(telegram_bridge, "_account_paths", lambda _account: paths)
+    monkeypatch.setenv(telegram_bridge.WORK_OWNER_PEER_ENVIRONMENT, "123456789")
+
+    work = telegram_bridge._config_for_account("work")
+    personal = telegram_bridge._config_for_account("personal")
+
+    assert work.owner_peer_id == 123456789
+    assert personal.owner_peer_id is None
+    monkeypatch.setenv(telegram_bridge.WORK_OWNER_PEER_ENVIRONMENT, "@owner")
+    with pytest.raises(BridgeError, match="owner_peer_id_invalid"):
+        telegram_bridge._config_for_account("work")
+
+
 def test_named_accounts_have_fixed_isolated_media_paths() -> None:
     personal_inbox = account_inbox_dir("personal")
     work_inbox = account_inbox_dir("work")
@@ -1201,8 +1229,30 @@ def test_apply_requires_idempotency_key() -> None:
         validate_download_request({"peer": "@target", "message_id": 10, "mode": "apply"})
 
 
+def test_owner_notification_contract_has_no_caller_supplied_target() -> None:
+    request = {
+        "operation": "send_owner_notification",
+        "text": "digest",
+        "mode": "dry_run",
+    }
+
+    assert telegram_bridge.validate_owner_notification_request(request, owner_peer_id=10) == (
+        "10",
+        "digest",
+        "dry_run",
+        "",
+        0,
+    )
+    with pytest.raises(BridgeError, match="owner_peer_not_configured"):
+        telegram_bridge.validate_owner_notification_request(request, owner_peer_id=None)
+    for override in ({"peer": "11"}, {"address": "@owner"}, {"reply_to_message_id": 5}):
+        with pytest.raises(BridgeError, match="owner_notification_request_invalid"):
+            telegram_bridge.validate_owner_notification_request(request | override, owner_peer_id=10)
+
+
 def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "apply"}) is True
+    assert _requires_mutation_lock({"operation": "send_owner_notification", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send_photo", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
@@ -2107,7 +2157,7 @@ def test_monitor_voice_stage_expiry_removes_an_abandoned_file(monkeypatch, tmp_p
     assert monitor.voice_stage(handle) is None
 
 
-def _runtime_config(tmp_path) -> TelegramConfig:
+def _runtime_config(tmp_path, *, owner_peer_id: int | None = None) -> TelegramConfig:
     runtime_dir = tmp_path / "run"
     state_dir = tmp_path / "state"
     return TelegramConfig(
@@ -2116,6 +2166,7 @@ def _runtime_config(tmp_path) -> TelegramConfig:
         session_path=state_dir / "account",
         state_dir=state_dir,
         socket_path=runtime_dir / "bridge.sock",
+        owner_peer_id=owner_peer_id,
     )
 
 
@@ -2202,6 +2253,14 @@ def test_read_only_bridge_operations_are_bounded_and_redacted(monkeypatch, tmp_p
 
     assert probe == {"ok": True, "authorized": True}
     assert status["authorized"] is True
+    assert status["transport_ready"] is True
+    assert status["inbound_enabled"] is False
+    assert status["owner_notification_configured"] is False
+    monitored_status = asyncio.run(
+        telegram_bridge._handle_operation(client, config, {"operation": "status"}, inbound_monitor=_inbound_monitor())
+    )
+    assert monitored_status["transport_ready"] is True
+    assert monitored_status["inbound_enabled"] is True
     assert dialogs["dialogs"][0]["unread_count"] == 3
     assert search_result["matches"][0]["id"] == 20
     assert read["messages"][1]["text"] == "[redacted_sensitive_uri]"
@@ -2646,6 +2705,86 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
                 client,
                 config,
                 apply_request | {"text": "changed", "contract_token": changed_dry["contract_token"]},
+            )
+        )
+
+
+def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path, owner_peer_id=10)
+    entity = object()
+    target = {"id": 10, "title": "Private owner", "username": "not-returned", "kind": "private"}
+
+    async def resolve(_client, peer):
+        assert peer == "10"
+        return entity, target
+
+    async def last_message(_client, _entity):
+        return 30 if _client.sent else 20
+
+    class Client:
+        def __init__(self):
+            self.sent: list[str] = []
+
+        async def send_message(self, _entity, text):
+            self.sent.append(text)
+            return SimpleNamespace(id=30)
+
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 30
+            return SimpleNamespace(id=30, message=self.sent[-1], out=True)
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
+    client = Client()
+    dry_request = {
+        "operation": "send_owner_notification",
+        "text": "CRM: одно изменение",
+        "mode": "dry_run",
+    }
+    dry = asyncio.run(telegram_bridge._handle_operation(client, config, dry_request))
+    apply_request = dry_request | {
+        "mode": "apply",
+        "contract_token": dry["contract_token"],
+        "idempotency_key": "crm-digest:window-1",
+    }
+
+    applied = asyncio.run(telegram_bridge._handle_operation(client, config, apply_request))
+    replayed = asyncio.run(telegram_bridge._handle_operation(client, config, apply_request))
+    readback = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "owner_notification_readback",
+                "message_id": applied["message_id"],
+                "expected_text_sha256": dry["text_sha256"],
+            },
+        )
+    )
+
+    assert dry["target"] == {"id": 10, "kind": "private"}
+    assert applied["target"] == {"id": 10, "kind": "private"}
+    assert applied["verified"] is True
+    assert replayed["replayed"] is True
+    assert readback == {
+        "ok": True,
+        "target": {"id": 10, "kind": "private"},
+        "message_id": 30,
+        "text_sha256": dry["text_sha256"],
+        "verified": True,
+    }
+    assert client.sent == ["CRM: одно изменение"]
+
+    with pytest.raises(BridgeError, match="owner_notification_readback_mismatch"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                config,
+                {
+                    "operation": "owner_notification_readback",
+                    "message_id": 30,
+                    "expected_text_sha256": "0" * 64,
+                },
             )
         )
 
@@ -3284,6 +3423,66 @@ def test_monitor_cli_commands_map_opaque_operations(monkeypatch, capsys) -> None
     ]
     assert all("send" not in request["operation"] for request in requests)
     assert capsys.readouterr().out.count('"ok": true') == 5
+
+
+def test_owner_notification_cli_never_accepts_or_emits_a_target(monkeypatch, capsys) -> None:
+    requests: list[dict[str, object]] = []
+
+    def local_request(_socket, request):
+        requests.append(request)
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_bridge, "send_local_request", local_request)
+
+    assert (
+        telegram_bridge.main(
+            [
+                "--account",
+                "work",
+                "send-owner-notification",
+                "--text",
+                "digest",
+                "--mode",
+                "apply",
+                "--contract-token",
+                "proof",
+                "--idempotency-key",
+                "window-1",
+            ]
+        )
+        == 0
+    )
+    assert (
+        telegram_bridge.main(
+            [
+                "--account",
+                "work",
+                "owner-notification-readback",
+                "--message-id",
+                "42",
+                "--expected-text-sha256",
+                "a" * 64,
+            ]
+        )
+        == 0
+    )
+
+    assert requests == [
+        {
+            "operation": "send_owner_notification",
+            "text": "digest",
+            "mode": "apply",
+            "contract_token": "proof",
+            "idempotency_key": "window-1",
+        },
+        {
+            "operation": "owner_notification_readback",
+            "message_id": 42,
+            "expected_text_sha256": "a" * 64,
+        },
+    ]
+    assert all("peer" not in request and "address" not in request for request in requests)
+    assert capsys.readouterr().out.count('"ok": true') == 2
 
 
 def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch) -> None:

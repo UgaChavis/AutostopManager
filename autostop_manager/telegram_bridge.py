@@ -54,6 +54,7 @@ DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
+WORK_OWNER_PEER_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_OWNER_PEER_ID"
 INBOUND_EVENT_OPEN = "open"
 INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
 INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
@@ -148,6 +149,7 @@ class TelegramConfig:
     session_path: Path = DEFAULT_SESSION_PATH
     state_dir: Path = DEFAULT_STATE_DIR
     socket_path: Path = DEFAULT_SOCKET_PATH
+    owner_peer_id: int | None = None
 
     @classmethod
     def load(
@@ -460,11 +462,29 @@ class InboundMonitor:
 
 def _config_for_account(account: str) -> TelegramConfig:
     paths = _account_paths(account)
-    return TelegramConfig.load(
+    config = TelegramConfig.load(
         paths.credentials_path,
         session_path=paths.session_path,
         state_dir=paths.state_dir,
         socket_path=paths.socket_path,
+    )
+    if account != "work":
+        return config
+    raw_owner_peer_id = os.environ.get(WORK_OWNER_PEER_ENVIRONMENT, "").strip()
+    if not raw_owner_peer_id:
+        return config
+    if not raw_owner_peer_id.isascii() or not raw_owner_peer_id.isdigit() or len(raw_owner_peer_id) > 19:
+        raise BridgeError("owner_peer_id_invalid")
+    owner_peer_id = int(raw_owner_peer_id)
+    if owner_peer_id <= 0:
+        raise BridgeError("owner_peer_id_invalid")
+    return TelegramConfig(
+        api_id=config.api_id,
+        api_hash=config.api_hash,
+        session_path=config.session_path,
+        state_dir=config.state_dir,
+        socket_path=config.socket_path,
+        owner_peer_id=owner_peer_id,
     )
 
 
@@ -676,6 +696,47 @@ def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str, 
     if reply_to_message_id < 0:
         raise BridgeError("reply_to_message_id_invalid")
     return peer, text, mode, idempotency_key, reply_to_message_id
+
+
+def validate_owner_notification_request(
+    request: dict[str, Any], *, owner_peer_id: int | None
+) -> tuple[str, str, str, str, int]:
+    if owner_peer_id is None:
+        raise BridgeError("owner_peer_not_configured")
+    allowed_fields = {"operation", "text", "mode", "contract_token", "idempotency_key"}
+    if set(request) - allowed_fields:
+        raise BridgeError("owner_notification_request_invalid")
+    return validate_send_request(
+        {
+            "peer": str(owner_peer_id),
+            "text": request.get("text"),
+            "mode": request.get("mode"),
+            "idempotency_key": request.get("idempotency_key"),
+        }
+    )
+
+
+def validate_owner_notification_readback_request(
+    request: dict[str, Any], *, owner_peer_id: int | None
+) -> tuple[str, int, str]:
+    if owner_peer_id is None:
+        raise BridgeError("owner_peer_not_configured")
+    allowed_fields = {"operation", "message_id", "expected_text_sha256"}
+    if set(request) - allowed_fields:
+        raise BridgeError("owner_notification_request_invalid")
+    raw_message_id = request.get("message_id")
+    if isinstance(raw_message_id, bool):
+        raise BridgeError("message_id_invalid")
+    try:
+        message_id = int(raw_message_id or 0)
+    except (TypeError, ValueError) as exc:
+        raise BridgeError("message_id_invalid") from exc
+    if message_id <= 0:
+        raise BridgeError("message_id_invalid")
+    expected_text_sha256 = str(request.get("expected_text_sha256") or "").strip().casefold()
+    if re.fullmatch(r"[0-9a-f]{64}", expected_text_sha256) is None:
+        raise BridgeError("expected_text_sha256_invalid")
+    return str(owner_peer_id), message_id, expected_text_sha256
 
 
 def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
@@ -1534,6 +1595,67 @@ async def _handle_send_text_to_entity(
     return response
 
 
+def _owner_target_summary(target: dict[str, Any]) -> dict[str, Any]:
+    return {"id": int(target["id"]), "kind": str(target["kind"])}
+
+
+async def _handle_owner_notification(
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+    *,
+    inbound_monitor: InboundMonitor | None = None,
+) -> dict[str, Any]:
+    peer, text, mode, idempotency_key, reply_to_message_id = validate_owner_notification_request(
+        request, owner_peer_id=config.owner_peer_id
+    )
+    entity, target = await _resolve_peer(client, peer)
+    if int(target.get("id") or 0) != config.owner_peer_id:
+        raise BridgeError("owner_peer_mismatch")
+    response = await _handle_send_text_to_entity(
+        client,
+        config,
+        request,
+        entity=entity,
+        target=target,
+        text=text,
+        mode=mode,
+        idempotency_key=idempotency_key,
+        reply_to_message_id=reply_to_message_id,
+        inbound_monitor=inbound_monitor,
+    )
+    response["target"] = _owner_target_summary(target)
+    return response
+
+
+async def _handle_owner_notification_readback(
+    client: Any, config: TelegramConfig, request: dict[str, Any]
+) -> dict[str, Any]:
+    peer, message_id, expected_text_sha256 = validate_owner_notification_readback_request(
+        request, owner_peer_id=config.owner_peer_id
+    )
+    entity, target = await _resolve_peer(client, peer)
+    if int(target.get("id") or 0) != config.owner_peer_id:
+        raise BridgeError("owner_peer_mismatch")
+    if target.get("kind") != "private":
+        raise BridgeError("private_peer_required")
+    message = await client.get_messages(entity, ids=message_id)
+    if message is None or int(getattr(message, "id", 0) or 0) != message_id:
+        raise BridgeError("owner_notification_not_found")
+    if not bool(getattr(message, "out", False)):
+        raise BridgeError("owner_notification_not_outgoing")
+    text_sha256 = hashlib.sha256(str(getattr(message, "message", None) or "").encode("utf-8")).hexdigest()
+    if text_sha256 != expected_text_sha256:
+        raise BridgeError("owner_notification_readback_mismatch")
+    return {
+        "ok": True,
+        "target": _owner_target_summary(target),
+        "message_id": message_id,
+        "text_sha256": text_sha256,
+        "verified": True,
+    }
+
+
 def _monitor_context_limit(value: Any) -> int:
     if isinstance(value, bool):
         raise BridgeError("inbound_context_limit_invalid")
@@ -1884,6 +2006,9 @@ async def _handle_operation(
         return {
             "ok": True,
             "authorized": bool(me),
+            "transport_ready": True,
+            "inbound_enabled": inbound_monitor is not None,
+            "owner_notification_configured": config.owner_peer_id is not None,
             "account": {
                 "id": int(getattr(me, "id", 0) or 0),
                 "name": " ".join(
@@ -1894,6 +2019,12 @@ async def _handle_operation(
             if me
             else None,
         }
+
+    if operation == "send_owner_notification":
+        return await _handle_owner_notification(client, config, request, inbound_monitor=inbound_monitor)
+
+    if operation == "owner_notification_readback":
+        return await _handle_owner_notification_readback(client, config, request)
 
     monitor_response = await _handle_monitor_operation(client, config, request, inbound_monitor)
     if monitor_response is not None:
@@ -1988,7 +2119,9 @@ async def _handle_operation(
 
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     operation = request.get("operation")
-    return (operation in {"send", "send_photo", "download"} and request.get("mode") == "apply") or operation in {
+    return (
+        operation in {"send", "send_owner_notification", "send_photo", "download"} and request.get("mode") == "apply"
+    ) or operation in {
         "discard_download",
         "monitor_mark",
     }
@@ -2250,6 +2383,14 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--contract-token", default="")
     send.add_argument("--idempotency-key", default="")
     send.add_argument("--reply-to-message-id", type=int, default=0)
+    send_owner_notification = subparsers.add_parser("send-owner-notification")
+    send_owner_notification.add_argument("--text", required=True)
+    send_owner_notification.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    send_owner_notification.add_argument("--contract-token", default="")
+    send_owner_notification.add_argument("--idempotency-key", default="")
+    owner_notification_readback = subparsers.add_parser("owner-notification-readback")
+    owner_notification_readback.add_argument("--message-id", required=True, type=int)
+    owner_notification_readback.add_argument("--expected-text-sha256", required=True)
     send_photo = subparsers.add_parser("send-photo")
     send_photo.add_argument("--peer", required=True)
     send_photo.add_argument("--file", required=True, type=Path)
@@ -2314,6 +2455,24 @@ def main(argv: list[str] | None = None) -> int:
                         "contract_token": args.contract_token,
                         "idempotency_key": args.idempotency_key,
                         "reply_to_message_id": args.reply_to_message_id,
+                    }
+                )
+            elif args.command == "send-owner-notification":
+                request.update(
+                    {
+                        "operation": "send_owner_notification",
+                        "text": args.text,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "owner-notification-readback":
+                request.update(
+                    {
+                        "operation": "owner_notification_readback",
+                        "message_id": args.message_id,
+                        "expected_text_sha256": args.expected_text_sha256,
                     }
                 )
             elif args.command == "send-photo":
