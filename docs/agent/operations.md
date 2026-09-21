@@ -13,7 +13,7 @@ deadlines and finance need their own authorization. Reread the changed card.
 ## Documents and Gmail
 
 Use CRM printing and AutoStop templates for CRM documents, not parallel PDF/HTML.
-Manual acts use `save_completion_act_form`; resetting needs separate permission
+Manual acts use `agent_document_workflow(operation="save_completion_act_form")`; resetting needs separate permission
 and a recovery snapshot. Confirm current requisites and applicable official form
 requirements; old documents are not proof of current details. Check calculations
 and rendered output before delivery, not just extracted text.

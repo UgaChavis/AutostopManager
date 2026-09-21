@@ -27,7 +27,6 @@ case "${account}" in
     venv_python="/opt/autostop-work-telegram-venv/bin/python"
     session_base="/var/lib/autostop-work-telegram/account.session"
     monitor_env="/etc/autostop-work-telegram/monitor.env"
-    owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"
     ;;
   *)
     echo "usage: $0 --account personal|work" >&2
@@ -54,12 +53,6 @@ if [[ "${account}" == "work" ]]; then
     && { [[ ! -f "${monitor_env}" || -L "${monitor_env}" ]] \
       || [[ "$(stat -c '%U:%G:%a' "${monitor_env}")" != "root:root:644" ]]; }; then
     echo "work_telegram_monitor_config_invalid=true" >&2
-    exit 1
-  fi
-  if [[ -e "${owner_notification_env}" || -L "${owner_notification_env}" ]] \
-    && { [[ ! -f "${owner_notification_env}" || -L "${owner_notification_env}" ]] \
-      || [[ "$(stat -c '%U:%G:%a' "${owner_notification_env}")" != "root:root:600" ]]; }; then
-    echo "work_telegram_owner_notification_config_invalid=true" >&2
     exit 1
   fi
 fi

@@ -9,4 +9,4 @@ J1 читает публичные материалы; не пишет в CRM и
 - Реестр ранжирует источники: A — OEM, регуляторы и TSB; B — производители компонентов; C — каталоги; D — форумы и контекст. D — опыт, не доказательство. Частота — только при измеримой совокупности A/B, иначе `not_measured`.
 - `canonical_url` убирает лишь tracking-параметры. Повторы не индексируются. Лимиты: 50 000 символов, 250 МБ, 7 дней.
 
-Статический поиск работает без browser path. Браузер не использует cookies, вход или CAPTCHA; verifier проверяет socket, сети, DNS, закрытые адреса и SHA-bound marker `root:root 0600`. `j1_research probe` сообщает `browser_ready`; при отказе browser path выключен.
+Статический поиск работает без browser path. Браузер не использует cookies, вход или CAPTCHA; verifier проверяет socket, сети, DNS, закрытые адреса и SHA-bound marker `root:root 0600`. `python -m autostop_manager.j1_research probe` сообщает `browser_ready`; при отказе browser path выключен.

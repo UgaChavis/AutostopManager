@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from string import Formatter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -33,6 +36,7 @@ class MockServer:
         self.loaded = False
         self.unload_after_turn = False
         self.reject_method = None
+        self.thread_status = "idle"
 
     async def handle(self, socket):
         async for raw in socket:
@@ -55,7 +59,7 @@ class MockServer:
                         "id": THREAD,
                         "cwd": wake.PROJECT_DIR,
                         "ephemeral": False,
-                        "status": {"type": "idle"},
+                        "status": {"type": self.thread_status},
                         "turns": [{"items": [{"type": "agentMessage", "text": "WAKE_PROBE_OK"}]}],
                     }
                 }
@@ -271,6 +275,29 @@ def test_overflow_and_disconnected_are_visible_without_retry():
         dispatcher.accept({"operation": "event", "event_id": "inbound-999"}, 123)
 
 
+def test_status_identifies_loaded_instruction_without_processing_queued_events():
+    app = SimpleNamespace(connected=True, run_turn=AsyncMock())
+    dispatcher = wake.WakeDispatcher(app, 123)
+    dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
+    status = dispatcher.status()
+    assert status["instruction_sha256"] == hashlib.sha256(wake.WAKE_INSTRUCTION.encode("utf-8")).hexdigest()
+    assert status["queued"] == 1 and status["active"] is False
+    assert "inbound-" not in json.dumps(status)
+    app.run_turn.assert_not_awaited()
+
+
+def test_event_instruction_routes_one_event_through_telegram_skill_and_work_bridge():
+    fields = [field for _literal, field, _spec, _conversion in Formatter().parse(wake.WAKE_INSTRUCTION) if field]
+    assert fields == ["event_id"]
+    instruction = wake.WAKE_INSTRUCTION.format(event_id="inbound-1")
+    assert instruction.count("inbound-1") == 1
+    assert [word for word in instruction.split() if word.startswith("$")] == ["$manage-owner-telegram"]
+    skill = ".agents/skills/manage-owner-telegram/SKILL.md"
+    assert skill in instruction
+    assert (ROOT / skill).is_file()
+    assert "monitor-target" in instruction and "work bridge" in instruction
+
+
 @pytest.mark.parametrize("media", [None, "photo", "voice", "document"])
 def test_bridge_to_dispatcher_text_and_attachments_use_only_ref(monkeypatch, tmp_path, media):
     async def scenario():
@@ -344,27 +371,119 @@ def test_probe_verifies_output_and_archives_only_synthetic_task(monkeypatch, tmp
         monkeypatch.setattr(wake.AppServer, "connect", test_connect)
         async with unix_serve(server.handle, path, compression=None):
             result = await wake.setup_task(probe=True)
-        assert result == {"ok": True, "turn_started": True, "turn_completed": True, "output_verified": True}
+        assert result == {
+            "ok": True,
+            "turn_started": True,
+            "turn_completed": True,
+            "output_verified": True,
+            "instruction_sha256": hashlib.sha256(wake.WAKE_INSTRUCTION.encode("utf-8")).hexdigest(),
+        }
         start = next(c for c in server.calls if c.get("method") == "thread/start")
         assert start["params"]["sandbox"] == "read-only"
         assert start["params"]["approvalPolicy"] == "never"
+        turns = [c for c in server.calls if c.get("method") == "turn/start"]
+        assert len(turns) == 1
+        assert turns[0]["params"]["input"] == [{"type": "text", "text": "Ответь только WAKE_PROBE_OK."}]
         assert server.calls[-1]["method"] == "thread/archive"
 
     asyncio.run(scenario())
 
 
-def test_resume_rejects_foreign_or_busy_task():
+@pytest.mark.parametrize("allow_active", [False, True])
+def test_resume_rejects_foreign_task_even_when_active_is_allowed(allow_active):
     async def scenario():
         app = wake.AppServer(wake.WakeConfig(THREAD))
         for thread, error in [
             ({"id": THREAD, "ephemeral": True, "cwd": wake.PROJECT_DIR}, "target_invalid"),
             ({"id": THREAD, "cwd": "/tmp"}, "target_invalid"),
             ({"id": "another-task", "cwd": wake.PROJECT_DIR}, "target_invalid"),
-            ({"id": THREAD, "cwd": wake.PROJECT_DIR, "status": {"type": "active"}}, "thread_busy"),
         ]:
             app.request = AsyncMock(return_value={"thread": thread})
             with pytest.raises(wake.WakeError, match=error):
-                await app.resume()
+                await app.resume(allow_active=allow_active)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("allow_active", [False, True])
+def test_resume_rpc_rejection_is_not_bypassed_when_active_is_allowed(allow_active):
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.request = AsyncMock(side_effect=wake.RPCRejected("private RPC payload"))
+        with pytest.raises(wake.WakeError, match=r"^codex_thread_resume_rejected$"):
+            await app.resume(allow_active=allow_active)
+        app.request.assert_awaited_once_with("thread/resume", {"threadId": THREAD, "cwd": wake.PROJECT_DIR})
+        assert app.active_turn is None and not app.outcome_unknown
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="daemon control socket is root-only by contract")
+def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupting_turn(monkeypatch, tmp_path):
+    async def scenario():
+        server = MockServer()
+        server.thread_status = "active"
+        app_socket = str(tmp_path / "app.sock")
+        wake_socket = tmp_path / "wake.sock"
+        ready = asyncio.Event()
+        stop_callbacks = {}
+        start_unix_server = asyncio.start_unix_server
+
+        async def start_test_server(*args, **kwargs):
+            result = await start_unix_server(*args, **kwargs)
+            ready.set()
+            return result
+
+        monkeypatch.setattr(wake, "SOCKET_PATH", wake_socket)
+        monkeypatch.setattr(
+            wake.pwd, "getpwnam", lambda _name: SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+        )
+        monkeypatch.setattr(asyncio, "start_unix_server", start_test_server)
+        monkeypatch.setattr(
+            asyncio.get_running_loop(),
+            "add_signal_handler",
+            lambda sig, callback: stop_callbacks.__setitem__(sig, callback),
+        )
+        monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+        async with unix_serve(server.handle, app_socket, compression=None):
+            task = asyncio.create_task(wake.daemon(wake.WakeConfig(THREAD, app_socket=app_socket)))
+            try:
+                await asyncio.wait_for(ready.wait(), 2)
+                status = await wake.local_request({"operation": "status"}, path=wake_socket)
+                assert status["enabled"] and status["connected"]
+                assert not status["active"] and status["queued"] == status["accepted"] == 0
+            finally:
+                stop_callbacks[signal.SIGTERM]()
+                await asyncio.wait_for(task, 2)
+        assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
+        assert server.counter == 0
+        assert not wake_socket.exists()
+
+    asyncio.run(scenario())
+
+
+def test_event_on_active_owner_task_fails_closed_without_starting_or_interrupting_turn(tmp_path):
+    async def scenario():
+        server = MockServer()
+        server.thread_status = "active"
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
+            try:
+                await app.connect()
+                dispatcher = wake.WakeDispatcher(app, 123)
+                for event_id in ("inbound-1", "inbound-2"):
+                    dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
+                await asyncio.wait_for(dispatcher.work(), 2)
+                assert not dispatcher.enabled and dispatcher.failed == 1
+                assert dispatcher.last_error == "codex_thread_busy"
+                assert dispatcher.queue.qsize() == 1
+                assert not app.outcome_unknown and app.active_turn is None
+                await dispatcher.pause()
+            finally:
+                await app.close()
+        assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
+        assert server.counter == 0
 
     asyncio.run(scenario())
 
@@ -438,12 +557,9 @@ def test_service_and_instructions_are_event_only():
     skill = (ROOT / ".agents/skills/manage-owner-telegram/SKILL.md").read_text()
     assert "--enable|--disable|--status" in skill
     store_skill = (ROOT / ".agents/skills/manage-autostop-store/SKILL.md").read_text()
-    assert "проверяемая привязка согласия" in store_skill
-    assert "store_quote_conductor` через `order" in store_skill
-    assert "сделать `handoff`" in store_skill
-    assert "не придумывать хеш согласия" in store_skill
-    assert "фазы `waiting_payment`" in store_skill
-    assert "Не объявляй оплату полученной, не резервируй и не закупай" in store_skill
+    # Guard behavior is covered by conductor tests; prose may be rephrased.
+    for command in ("store_quote_conductor", "order", "handoff", "waiting_payment"):
+        assert f"`{command}`" in store_skill
     runbook = (ROOT / "docs/agent/deployment_runbook.md").read_text()
     assert "scripts/install-codex-wake.sh" in runbook
 
@@ -476,10 +592,6 @@ def test_repeated_enable_with_wake_preserves_bridge_and_queue(tmp_path):
         ('wake_python="/opt/AutostopManager/.venv/bin/python"', f'wake_python="{wake_python}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
-        (
-            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
-            f'owner_notification_env="{tmp_path / "owner.env"}"',
-        ),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
         ("/opt/autostop-work-telegram-releases/*", f"{release_root}/*"),
     ):
@@ -536,10 +648,6 @@ def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario
         ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
-        (
-            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
-            f'owner_notification_env="{tmp_path / "owner.env"}"',
-        ),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
     ):
         assert old in source

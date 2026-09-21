@@ -56,7 +56,6 @@ case "${account}" in
     work_model_link="/opt/autostop-work-telegram-models/faster-whisper-small"
     media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"
     monitor_env="/etc/autostop-work-telegram/monitor.env"
-    owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"
     ;;
   *)
     echo "account_invalid=true" >&2
@@ -152,13 +151,6 @@ if [[ "${account}" == "work" ]]; then
       exit 1
     }
     work_inbound_expected=1
-  fi
-  if [[ -e "${owner_notification_env}" || -L "${owner_notification_env}" ]]; then
-    [[ -f "${owner_notification_env}" && ! -L "${owner_notification_env}" \
-      && "$(stat -c '%U:%G:%a' "${owner_notification_env}")" == "root:root:600" ]] || {
-      echo "ERROR: work Telegram owner notification config is invalid" >&2
-      exit 1
-    }
   fi
 fi
 

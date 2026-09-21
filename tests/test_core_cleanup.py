@@ -60,7 +60,7 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
     elif fault == "outside":
         path.write_text("[bad](../elsewhere.md)")
     elif fault == "large":
-        path.write_text("x" * 13000)
+        path.write_text("x" * (diagnostics.INSTRUCTION_BUDGET_BYTES + 1))
     elif fault == "extra":
         (docs / "docs/agent/extra.md").write_text("# extra")
     else:
