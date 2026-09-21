@@ -461,6 +461,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     source.mkdir()
     for relative_path, content in {
         "deploy/systemd/autostop-work-telegram.service": "[Service]\nExecStart=/bin/true\n",
+        "scripts/set-work-telegram-duty.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/run-work-telegram-media.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/run-work-telegram-monitor-voice.sh": f"#!/usr/bin/env bash\nexit {voice_exit}\n",
         "deploy/telegram/faster-whisper-small.sha256": "fixture-model-manifest\n",
@@ -614,6 +615,8 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         assert active_state_path.read_text(encoding="utf-8") == "active"
         assert unit_state_path.read_text(encoding="utf-8") == "enabled"
         assert monitor_env.exists() is inbound_intent
+        duty_controller = release_root / "current" / "scripts" / "set-work-telegram-duty.sh"
+        assert duty_controller.stat().st_mode & 0o777 == 0o755
         return
     else:
         assert completed.returncode == 1

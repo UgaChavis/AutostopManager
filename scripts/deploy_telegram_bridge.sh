@@ -295,8 +295,13 @@ chown -R root:root "${staging_dir}"
 find "${staging_dir}" -type d -exec chmod 0755 {} +
 find "${staging_dir}" -type f -exec chmod 0644 {} +
 if [[ "${account}" == "work" ]]; then
+  duty_controller_source="${staging_dir}/scripts/set-work-telegram-duty.sh"
   media_wrapper_source="${staging_dir}/scripts/run-work-telegram-media.sh"
   monitor_voice_wrapper_source="${staging_dir}/scripts/run-work-telegram-monitor-voice.sh"
+  if [[ ! -f "${duty_controller_source}" || -L "${duty_controller_source}" ]]; then
+    echo "ERROR: work Telegram duty controller missing from release" >&2
+    exit 1
+  fi
   if [[ ! -f "${media_wrapper_source}" || -L "${media_wrapper_source}" ]]; then
     echo "ERROR: work media sandbox wrapper missing from release" >&2
     exit 1
@@ -305,7 +310,7 @@ if [[ "${account}" == "work" ]]; then
     echo "ERROR: work monitored-voice wrapper missing from release" >&2
     exit 1
   fi
-  chmod 0755 "${media_wrapper_source}" "${monitor_voice_wrapper_source}"
+  chmod 0755 "${duty_controller_source}" "${media_wrapper_source}" "${monitor_voice_wrapper_source}"
 fi
 mv -- "${staging_dir}" "${release_dir}"
 
