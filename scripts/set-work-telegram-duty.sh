@@ -6,6 +6,7 @@ service_user="autostop-work-telegram"
 release_link="/opt/autostop-work-telegram-releases/current"
 venv_python="/opt/autostop-work-telegram-venv/bin/python"
 monitor_env="/etc/autostop-work-telegram/monitor.env"
+owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"
 control_lock="/run/autostop-work-telegram-control.lock"
 pending_monitor_env=""
 wake_unit="autostop-codex-wake.service"
@@ -18,6 +19,19 @@ if [[ "${EUID}" -ne 0 ]]; then echo "run_as_root_required=true" >&2; exit 1; fi
 if [[ $# -ne 1 ]]; then usage; exit 2; fi
 exec 9>"${control_lock}"
 flock -x 9
+
+if [[ -e "${monitor_env}" || -L "${monitor_env}" ]] \
+  && { [[ ! -f "${monitor_env}" || -L "${monitor_env}" ]] \
+    || [[ "$(stat -c '%U:%G:%a' "${monitor_env}")" != "root:root:644" ]]; }; then
+  echo "work_telegram_monitor_config_invalid=true" >&2
+  exit 1
+fi
+if [[ -e "${owner_notification_env}" || -L "${owner_notification_env}" ]] \
+  && { [[ ! -f "${owner_notification_env}" || -L "${owner_notification_env}" ]] \
+    || [[ "$(stat -c '%U:%G:%a' "${owner_notification_env}")" != "root:root:600" ]]; }; then
+  echo "work_telegram_owner_notification_config_invalid=true" >&2
+  exit 1
+fi
 
 active_media_workers() {
   systemctl list-units --type=service --all --no-legend --no-pager \

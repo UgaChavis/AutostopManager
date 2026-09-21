@@ -313,6 +313,8 @@ def test_work_telegram_duty_control_has_explicit_enable_and_disable_paths() -> N
     text = script.read_text(encoding="utf-8")
     assert "usage: $0 --enable|--disable" in text
     assert 'monitor_env="/etc/autostop-work-telegram/monitor.env"' in text
+    assert 'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"' in text
+    assert "work_telegram_owner_notification_config_invalid=true" in text
     assert 'release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"' in text
     assert '[[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/*' in text
     assert all(forbidden not in text for forbidden in (" dialogs", " send", " search", " read"))
@@ -365,6 +367,10 @@ def test_work_telegram_duty_disable_clears_intent_and_stops_inflight_media(tmp_p
     for old, new in (
         ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
+        (
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{tmp_path / "owner.env"}"',
+        ),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
     ):
@@ -412,6 +418,10 @@ def test_work_telegram_duty_disable_allows_a_missing_unit_before_first_release(t
     script_text = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
     for old, new in (
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
+        (
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{tmp_path / "owner.env"}"',
+        ),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
     ):
@@ -431,6 +441,48 @@ def test_work_telegram_duty_disable_allows_a_missing_unit_before_first_release(t
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.splitlines() == ["work_telegram_duty=disabled", "monitoring=off", "outbound=ready"]
     assert not monitor_env.exists()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="duty-control fixture requires its root-only path")
+def test_work_telegram_duty_rejects_unsafe_owner_config_without_touching_services(tmp_path) -> None:
+    owner_config = tmp_path / "owner.env"
+    owner_target = tmp_path / "owner-target.env"
+    owner_target.write_text("AUTOSTOP_WORK_TELEGRAM_OWNER_PEER_ID=123456\n", encoding="utf-8")
+    owner_config.symlink_to(owner_target)
+    control_lock = tmp_path / "run" / "control.lock"
+    control_lock.parent.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    systemctl_log = tmp_path / "systemctl.log"
+    (fake_bin / "systemctl").write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"\nexit 99\n', encoding="utf-8"
+    )
+    (fake_bin / "systemctl").chmod(0o755)
+    source = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
+    for old, new in (
+        ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{tmp_path / "monitor.env"}"'),
+        (
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{owner_config}"',
+        ),
+        ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
+    ):
+        source = source.replace(old, new, 1)
+    script = tmp_path / "set-work-telegram-duty.sh"
+    script.write_text(source, encoding="utf-8")
+    script.chmod(0o755)
+
+    completed = subprocess.run(
+        [str(script), "--disable"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "FAKE_SYSTEMCTL_LOG": str(systemctl_log)},
+    )
+
+    assert completed.returncode == 1
+    assert "work_telegram_owner_notification_config_invalid=true" in completed.stderr
+    assert not systemctl_log.exists()
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="duty-control fixture requires its root-only path")
@@ -485,6 +537,10 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
         ('release_link="/opt/autostop-work-telegram-releases/current"', f'release_link="{current_link}"'),
         ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
+        (
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{tmp_path / "owner.env"}"',
+        ),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
         ("/opt/autostop-work-telegram-releases/*", f"{release_root}/*"),

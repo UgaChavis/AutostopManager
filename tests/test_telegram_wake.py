@@ -476,6 +476,10 @@ def test_repeated_enable_with_wake_preserves_bridge_and_queue(tmp_path):
         ('wake_python="/opt/AutostopManager/.venv/bin/python"', f'wake_python="{wake_python}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
+        (
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{tmp_path / "owner.env"}"',
+        ),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
         ("/opt/autostop-work-telegram-releases/*", f"{release_root}/*"),
     ):
@@ -532,6 +536,10 @@ def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario
         ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
+        (
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{tmp_path / "owner.env"}"',
+        ),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
     ):
         assert old in source
