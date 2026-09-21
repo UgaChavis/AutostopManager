@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import asdict
@@ -34,6 +35,7 @@ class MockServer:
         self.loaded = False
         self.unload_after_turn = False
         self.reject_method = None
+        self.thread_status = "idle"
 
     async def handle(self, socket):
         async for raw in socket:
@@ -56,7 +58,7 @@ class MockServer:
                         "id": THREAD,
                         "cwd": wake.PROJECT_DIR,
                         "ephemeral": False,
-                        "status": {"type": "idle"},
+                        "status": {"type": self.thread_status},
                         "turns": [{"items": [{"type": "agentMessage", "text": "WAKE_PROBE_OK"}]}],
                     }
                 }
@@ -394,18 +396,101 @@ def test_probe_verifies_output_and_archives_only_synthetic_task(monkeypatch, tmp
     asyncio.run(scenario())
 
 
-def test_resume_rejects_foreign_or_busy_task():
+@pytest.mark.parametrize("allow_active", [False, True])
+def test_resume_rejects_foreign_task_even_when_active_is_allowed(allow_active):
     async def scenario():
         app = wake.AppServer(wake.WakeConfig(THREAD))
         for thread, error in [
             ({"id": THREAD, "ephemeral": True, "cwd": wake.PROJECT_DIR}, "target_invalid"),
             ({"id": THREAD, "cwd": "/tmp"}, "target_invalid"),
             ({"id": "another-task", "cwd": wake.PROJECT_DIR}, "target_invalid"),
-            ({"id": THREAD, "cwd": wake.PROJECT_DIR, "status": {"type": "active"}}, "thread_busy"),
         ]:
             app.request = AsyncMock(return_value={"thread": thread})
             with pytest.raises(wake.WakeError, match=error):
-                await app.resume()
+                await app.resume(allow_active=allow_active)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("allow_active", [False, True])
+def test_resume_rpc_rejection_is_not_bypassed_when_active_is_allowed(allow_active):
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.request = AsyncMock(side_effect=wake.RPCRejected("private RPC payload"))
+        with pytest.raises(wake.WakeError, match=r"^codex_thread_resume_rejected$"):
+            await app.resume(allow_active=allow_active)
+        app.request.assert_awaited_once_with("thread/resume", {"threadId": THREAD, "cwd": wake.PROJECT_DIR})
+        assert app.active_turn is None and not app.outcome_unknown
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="daemon control socket is root-only by contract")
+def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupting_turn(monkeypatch, tmp_path):
+    async def scenario():
+        server = MockServer()
+        server.thread_status = "active"
+        app_socket = str(tmp_path / "app.sock")
+        wake_socket = tmp_path / "wake.sock"
+        ready = asyncio.Event()
+        stop_callbacks = {}
+        start_unix_server = asyncio.start_unix_server
+
+        async def start_test_server(*args, **kwargs):
+            result = await start_unix_server(*args, **kwargs)
+            ready.set()
+            return result
+
+        monkeypatch.setattr(wake, "SOCKET_PATH", wake_socket)
+        monkeypatch.setattr(
+            wake.pwd, "getpwnam", lambda _name: SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+        )
+        monkeypatch.setattr(asyncio, "start_unix_server", start_test_server)
+        monkeypatch.setattr(
+            asyncio.get_running_loop(),
+            "add_signal_handler",
+            lambda sig, callback: stop_callbacks.__setitem__(sig, callback),
+        )
+        monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+        async with unix_serve(server.handle, app_socket, compression=None):
+            task = asyncio.create_task(wake.daemon(wake.WakeConfig(THREAD, app_socket=app_socket)))
+            try:
+                await asyncio.wait_for(ready.wait(), 2)
+                status = await wake.local_request({"operation": "status"}, path=wake_socket)
+                assert status["enabled"] and status["connected"]
+                assert not status["active"] and status["queued"] == status["accepted"] == 0
+            finally:
+                stop_callbacks[signal.SIGTERM]()
+                await asyncio.wait_for(task, 2)
+        assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
+        assert server.counter == 0
+        assert not wake_socket.exists()
+
+    asyncio.run(scenario())
+
+
+def test_event_on_active_owner_task_fails_closed_without_starting_or_interrupting_turn(tmp_path):
+    async def scenario():
+        server = MockServer()
+        server.thread_status = "active"
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
+            try:
+                await app.connect()
+                dispatcher = wake.WakeDispatcher(app, 123)
+                for event_id in ("inbound-1", "inbound-2"):
+                    dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
+                await asyncio.wait_for(dispatcher.work(), 2)
+                assert not dispatcher.enabled and dispatcher.failed == 1
+                assert dispatcher.last_error == "codex_thread_busy"
+                assert dispatcher.queue.qsize() == 1
+                assert not app.outcome_unknown and app.active_turn is None
+                await dispatcher.pause()
+            finally:
+                await app.close()
+        assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
+        assert server.counter == 0
 
     asyncio.run(scenario())
 

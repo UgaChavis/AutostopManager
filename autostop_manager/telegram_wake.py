@@ -173,7 +173,7 @@ class AppServer:
                     future.set_exception(WakeError("codex_disconnected"))
             self.events.put_nowait({"method": "connection_lost"})
 
-    async def resume(self) -> None:
+    async def resume(self, *, allow_active: bool = False) -> None:
         params = {"threadId": self.config.thread_id, "cwd": self.config.project_dir}
         try:
             result = await self.request("thread/resume", params)
@@ -186,7 +186,7 @@ class AppServer:
             or thread.get("cwd") != self.config.project_dir
         ):
             raise WakeError("codex_thread_target_invalid")
-        if thread.get("status", {}).get("type") == "active":
+        if not allow_active and thread.get("status", {}).get("type") == "active":
             raise WakeError("codex_thread_busy")
 
     async def run_turn(self, text: str) -> None:
@@ -388,7 +388,9 @@ async def daemon(config: WakeConfig) -> None:
         asyncio.get_running_loop().add_signal_handler(sig, stopping.set)
     try:
         await app.connect()
-        await app.resume()
+        # Startup only attaches; an owner's active turn must not prevent readiness.
+        # Each actual event still uses run_turn's strict idle-target check.
+        await app.resume(allow_active=True)
         SOCKET_PATH.unlink(missing_ok=True)
         server = await asyncio.start_unix_server(dispatcher.serve, path=str(SOCKET_PATH), limit=1024)
         os.chmod(SOCKET_PATH, 0o660)
