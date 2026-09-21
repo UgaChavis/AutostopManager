@@ -2894,6 +2894,10 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
         "verified": True,
     }
     assert client.sent == ["CRM: одно изменение"]
+    saved_idempotency = json.loads((config.state_dir / "idempotency.json").read_text(encoding="utf-8"))
+    assert saved_idempotency["crm-digest:window-1"]["operation"] == "send_owner_notification"
+    assert saved_idempotency["crm-digest:window-1"]["target_role"] == "owner"
+    assert "peer_id" not in saved_idempotency["crm-digest:window-1"]
 
     with pytest.raises(BridgeError, match="owner_notification_readback_mismatch"):
         asyncio.run(

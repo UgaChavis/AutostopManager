@@ -1503,6 +1503,8 @@ async def _handle_send_text_to_entity(
     idempotency_key: str,
     reply_to_message_id: int = 0,
     inbound_monitor: InboundMonitor | None = None,
+    idempotency_operation: str = "send_text",
+    idempotency_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
@@ -1544,10 +1546,14 @@ async def _handle_send_text_to_entity(
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
+    target_binding = idempotency_target or {"peer_id": target["id"]}
+    allowed_previous_operations = {idempotency_operation}
+    if idempotency_operation == "send_text":
+        allowed_previous_operations.add(None)
     if previous is not None:
         if (
-            previous.get("operation") not in {None, "send_text"}
-            or previous.get("peer_id") != target["id"]
+            previous.get("operation") not in allowed_previous_operations
+            or any(previous.get(key) != value for key, value in target_binding.items())
             or previous.get("text_sha256") != text_sha256
             or previous.get("reply_to_message_id", 0) != reply_to_message_id
             or previous.get("reply_message_sha256", "") != reply_message_sha256
@@ -1560,9 +1566,9 @@ async def _handle_send_text_to_entity(
             entity, text, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
         )
         idempotency[idempotency_key] = {
-            "operation": "send_text",
+            "operation": idempotency_operation,
             "message_id": int(sent.id),
-            "peer_id": target["id"],
+            **target_binding,
             "reply_message_sha256": reply_message_sha256,
             "reply_to_message_id": reply_to_message_id,
             "text_sha256": text_sha256,
@@ -1623,6 +1629,8 @@ async def _handle_owner_notification(
         idempotency_key=idempotency_key,
         reply_to_message_id=reply_to_message_id,
         inbound_monitor=inbound_monitor,
+        idempotency_operation="send_owner_notification",
+        idempotency_target={"target_role": "owner"},
     )
     response["target"] = _owner_target_summary(target)
     return response
