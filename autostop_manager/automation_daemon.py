@@ -59,6 +59,18 @@ def notification_readiness(notifier: OwnerNotifier) -> dict[str, str]:
     }
 
 
+def crm_change_feed_readiness(source: HttpCrmDigestSource | None) -> str:
+    """Probe authenticated CRM feed health without registering its consumer."""
+
+    if source is None:
+        return "not_configured"
+    try:
+        status = source.readiness()
+    except (AutomationJobError, OSError, TimeoutError):
+        return "unavailable"
+    return "pending" if status.get("pending_publish") is True else "ready"
+
+
 class AutomationDaemon:
     def __init__(
         self,
@@ -97,17 +109,25 @@ class AutomationDaemon:
         notifier = TelegramOwnerNotifier(telegram_socket)
         executors: dict[str, Executor] = {}
         crm_ready = bool(crm_config.configured and not crm_config.error_code)
+        crm_source: HttpCrmDigestSource | None = None
+        crm_readiness_source: HttpCrmDigestSource | None = None
         if crm_ready:
+            crm_source = HttpCrmDigestSource(crm_config)
+            crm_readiness_source = HttpCrmDigestSource(crm_config, timeout_seconds=2)
             executors["crm_digest_v1"] = CrmDigestExecutor(
                 store=state,
-                source=HttpCrmDigestSource(crm_config),
+                source=crm_source,
                 notifier=notifier,
             )
 
         def readiness() -> Mapping[str, Any]:
             checks = {
                 "crm_digest_executor": "ready" if "crm_digest_v1" in executors else "not_configured",
-                "crm_change_feed": "ready" if crm_ready else (crm_config.error_code or "not_configured"),
+                "crm_change_feed": (
+                    crm_change_feed_readiness(crm_readiness_source)
+                    if crm_ready
+                    else (crm_config.error_code or "not_configured")
+                ),
                 **notification_readiness(notifier),
             }
             return {"ready": all(value == "ready" for value in checks.values()), "checks": checks}

@@ -10,6 +10,7 @@ from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, Aut
 from autostop_manager.automation_daemon import (
     AutomationDaemon,
     TEST_NOTIFICATION_TEXT,
+    crm_change_feed_readiness,
     notification_readiness,
 )
 from autostop_manager.automation_jobs import AutomationJobError
@@ -171,6 +172,30 @@ def test_notification_readiness_fails_closed_when_bridge_status_is_unavailable()
         "notification_transport": "unavailable",
         "owner_notification_target": "not_configured",
     }
+
+
+def test_crm_change_feed_readiness_is_non_mutating_and_fail_closed():
+    class Source:
+        def __init__(self, result=None, error=None):
+            self.result = result
+            self.error = error
+            self.calls = 0
+
+        def readiness(self):
+            self.calls += 1
+            if self.error is not None:
+                raise self.error
+            return self.result
+
+    ready = Source({"pending_publish": False})
+    pending = Source({"pending_publish": True})
+    unavailable = Source(error=AutomationJobError("automation_crm_unavailable"))
+
+    assert crm_change_feed_readiness(None) == "not_configured"
+    assert crm_change_feed_readiness(ready) == "ready"
+    assert crm_change_feed_readiness(pending) == "pending"
+    assert crm_change_feed_readiness(unavailable) == "unavailable"
+    assert ready.calls == pending.calls == unavailable.calls == 1
 
 
 def test_daemon_delivers_test_notification_once_through_verified_owner_target(tmp_path: Path):

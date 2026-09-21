@@ -455,3 +455,68 @@ def test_crm_source_uses_reserved_protocol_header_and_existing_mcp_bearer(monkey
         "/api/change_feed/register",
         {"consumer_id": CRM_DIGEST_CONSUMER_ID, "start_at": "latest"},
     )
+
+
+def test_crm_source_readiness_uses_non_mutating_probe_and_strict_contract(monkeypatch):
+    observed = {}
+
+    class Response:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def iter_bytes(self):
+            yield json.dumps(
+                {
+                    "ok": True,
+                    "data": {
+                        "format": "crm_change_feed_readiness_v1",
+                        "consumer_id": CRM_DIGEST_CONSUMER_ID,
+                        "consumer_registered": False,
+                        "pending_delivery": False,
+                        "pending_publish": False,
+                        "generation": "generation-1",
+                        "high_water": 41,
+                    },
+                }
+            ).encode()
+
+    class Client:
+        def __init__(self, **kwargs):
+            observed["client"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, method, path, *, json):
+            observed["request"] = (method, path, dict(json))
+            return Response()
+
+    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.Client", Client)
+    source = HttpCrmDigestSource(
+        AutomationCrmConnectionConfig(
+            configured=True,
+            api_url="http://127.0.0.1:8000",
+            bearer_token="existing-mcp-token",
+        ),
+        timeout_seconds=2,
+    )
+
+    assert source.readiness() == {
+        "format": "crm_change_feed_readiness_v1",
+        "consumer_id": CRM_DIGEST_CONSUMER_ID,
+        "consumer_registered": False,
+        "pending_delivery": False,
+        "pending_publish": False,
+        "generation": "generation-1",
+        "high_water": 41,
+    }
+    assert observed["client"]["timeout"] == 2
+    assert observed["request"] == ("POST", "/api/change_feed/readiness", {})

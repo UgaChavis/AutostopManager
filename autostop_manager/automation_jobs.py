@@ -40,6 +40,8 @@ class AutomationJobError(RuntimeError):
 
 
 class CrmDigestSource(Protocol):
+    def readiness(self) -> dict[str, Any]: ...
+
     def register(self) -> dict[str, Any]: ...
 
     def read(self, *, cursor: str | None = None) -> dict[str, Any]: ...
@@ -62,9 +64,10 @@ class OwnerNotifier(Protocol):
 
 
 class HttpCrmDigestSource:
-    """Narrow direct HTTP client for five durable CRM change-feed routes."""
+    """Narrow direct HTTP client for six durable CRM change-feed routes."""
 
     _FORMATS: ClassVar[dict[str, str]] = {
+        "readiness": "crm_change_feed_readiness_v1",
         "register": "crm_change_feed_registration_v1",
         "read": "crm_change_feed_page_v1",
         "summarize": "crm_change_digest_v1",
@@ -79,6 +82,7 @@ class HttpCrmDigestSource:
 
     def _post(self, operation: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         path = {
+            "readiness": "/api/change_feed/readiness",
             "register": "/api/change_feed/register",
             "read": "/api/change_feed/read",
             "summarize": "/api/change_feed/summarize",
@@ -120,6 +124,19 @@ class HttpCrmDigestSource:
             raise AutomationJobError("automation_crm_request_failed")
         result = dict(data)
         if result.get("format") != self._FORMATS[operation]:
+            raise AutomationJobError("automation_crm_contract_invalid")
+        return result
+
+    def readiness(self) -> dict[str, Any]:
+        result = self._post("readiness", {})
+        if (
+            result.get("consumer_id") != CRM_DIGEST_CONSUMER_ID
+            or type(result.get("consumer_registered")) is not bool
+            or type(result.get("pending_delivery")) is not bool
+            or type(result.get("pending_publish")) is not bool
+            or type(result.get("high_water")) is not int
+            or not isinstance(result.get("generation"), str)
+        ):
             raise AutomationJobError("automation_crm_contract_invalid")
         return result
 
