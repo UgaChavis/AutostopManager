@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from autostop_manager import automation_registry
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
 from autostop_manager.automation_registry import (
     AutomationError,
@@ -716,3 +717,236 @@ def test_expired_lease_opens_one_incident_atomically(monkeypatch, tmp_path: Path
     assert runtime[0] == "automation_lease_expired"
     assert runtime[1].startswith("inc_")
     assert alerts == 1
+
+
+def test_registry_helpers_reject_invalid_typed_values_and_normalize_naive_time():
+    parsed = automation_registry.parse_time("2026-09-21T12:00:00")
+    assert parsed == datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+    assert automation_registry.parse_time("not-a-time") is None
+    assert automation_registry._decode_json("not-json", {"fallback": True}) == {"fallback": True}
+    assert is_in_active_window(datetime(2026, 9, 21, tzinfo=UTC), timezone="UTC", active_window="24/7") is True
+
+    for invalid in (None, 1, "Unknown/Nowhere"):
+        with pytest.raises(AutomationError, match="automation_timezone_invalid"):
+            automation_registry.normalize_timezone(invalid)
+    for invalid in (None, {}, {"start": "09:00", "end": "09:00"}):
+        with pytest.raises(AutomationError, match="automation_active_window_invalid"):
+            automation_registry.normalize_active_window(invalid)
+    with pytest.raises(AutomationError, match="automation_next_delay_invalid"):
+        next_scheduled_time(
+            datetime(2026, 9, 21, tzinfo=UTC),
+            delay_seconds=-1,
+            timezone="UTC",
+            active_window="24/7",
+        )
+
+
+def test_registry_storage_rejects_unsafe_paths_and_newer_schema(tmp_path: Path):
+    with pytest.raises(AutomationError, match="automation_db_path_invalid"):
+        with AutomationStore(Path("relative.sqlite3")).connect():
+            pass
+
+    open_parent = tmp_path / "open"
+    open_parent.mkdir(mode=0o755)
+    open_parent.chmod(0o755)
+    with pytest.raises(AutomationError, match="automation_db_directory_invalid"):
+        with AutomationStore(open_parent / "manager.sqlite3").connect():
+            pass
+
+    secure_parent = tmp_path / "secure"
+    secure_parent.mkdir(mode=0o700)
+    directory_at_file = secure_parent / "manager.sqlite3"
+    directory_at_file.mkdir()
+    with pytest.raises(AutomationError, match="automation_db_file_invalid"):
+        with AutomationStore(directory_at_file).connect():
+            pass
+
+    newer_path = tmp_path / "newer.sqlite3"
+    with sqlite3.connect(newer_path) as connection:
+        connection.execute(
+            "CREATE TABLE manager_automation_schema(component TEXT PRIMARY KEY, version INTEGER, upgraded_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO manager_automation_schema(component, version, upgraded_at) VALUES('automation_center', 999, '')"
+        )
+    newer_path.chmod(0o600)
+    with pytest.raises(AutomationError, match="automation_schema_newer_than_runtime"):
+        AutomationStore(newer_path).initialize()
+
+    valid = AutomationStore(tmp_path / "valid.sqlite3")
+    assert valid.schema_version() == automation_registry.AUTOMATION_SCHEMA_VERSION
+
+
+def test_command_replay_rejects_invalid_key_and_corrupt_stored_result(tmp_path: Path):
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    with pytest.raises(AutomationError, match="idempotency_key_invalid"):
+        store.execute_command(
+            source="codex",
+            idempotency_key="short",
+            operation="status",
+            request_hash="request",
+            actor_hash="actor",
+            mutation=lambda _connection, _command_id: {},
+        )
+
+    store.initialize()
+    with store.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO manager_automation_commands(
+                command_id, source, idempotency_key, operation, request_hash,
+                actor_hash, response_json, created_at
+            ) VALUES('cmd_corrupt', 'codex', 'corrupt-result-0001', 'status', 'request', 'actor', '[]', '')
+            """
+        )
+    with pytest.raises(AutomationError, match="idempotency_result_invalid"):
+        store.execute_command(
+            source="codex",
+            idempotency_key="corrupt-result-0001",
+            operation="status",
+            request_hash="request",
+            actor_hash="actor",
+            mutation=lambda _connection, _command_id: pytest.fail("corrupt replay must not mutate"),
+        )
+
+
+def test_global_hold_validations_and_owner_binding(tmp_path: Path):
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    store.initialize()
+    with store.connect() as connection:
+        invalid = [
+            (
+                {"enabled": "yes", "reason": None, "attempt_hash": None, "expected_revision": 0},
+                "automation_global_hold_invalid",
+            ),
+            (
+                {"enabled": True, "reason": "operator", "attempt_hash": None, "expected_revision": None},
+                "expected_revision_required",
+            ),
+            (
+                {"enabled": True, "reason": "unknown", "attempt_hash": None, "expected_revision": 0},
+                "automation_global_hold_reason_invalid",
+            ),
+            (
+                {"enabled": True, "reason": "release", "attempt_hash": "bad", "expected_revision": 0},
+                "automation_global_hold_attempt_invalid",
+            ),
+            (
+                {"enabled": True, "reason": "release", "attempt_hash": None, "expected_revision": 0},
+                "automation_global_hold_attempt_required",
+            ),
+            (
+                {"enabled": True, "reason": "operator", "attempt_hash": "a" * 64, "expected_revision": 0},
+                "automation_global_hold_attempt_invalid",
+            ),
+            (
+                {"enabled": False, "reason": "operator", "attempt_hash": None, "expected_revision": 0},
+                "automation_global_hold_reason_invalid",
+            ),
+        ]
+        for values, code in invalid:
+            with pytest.raises(AutomationError, match=code):
+                store.set_global_hold(connection, actor_hash="actor-a", **values)
+
+        held = store.set_global_hold(
+            connection,
+            enabled=True,
+            reason="release",
+            attempt_hash="a" * 64,
+            expected_revision=0,
+            actor_hash="actor-a",
+        )
+        assert held["global_hold"]["revision"] == 1
+        with pytest.raises(AutomationError, match="automation_global_hold_ownership_lost"):
+            store.set_global_hold(
+                connection,
+                enabled=False,
+                reason=None,
+                attempt_hash="a" * 64,
+                expected_revision=1,
+                actor_hash="actor-b",
+            )
+        with pytest.raises(AutomationError, match="automation_global_hold_ownership_lost"):
+            store.set_global_hold(
+                connection,
+                enabled=True,
+                reason="release",
+                attempt_hash="a" * 64,
+                expected_revision=1,
+                actor_hash="actor-b",
+            )
+        replay = store.set_global_hold(
+            connection,
+            enabled=True,
+            reason="release",
+            attempt_hash="a" * 64,
+            expected_revision=1,
+            actor_hash="actor-a",
+        )
+        assert replay["changed"] is False
+
+
+def test_system_timer_and_delivery_state_validations(tmp_path: Path):
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    store.initialize()
+    with pytest.raises(AutomationError, match="system_timer_control_mode_invalid"):
+        store.adopt_system_timer(timer_id="test", unit_name="test.timer", control_mode="unsafe", state={})
+
+    state = {"desired_state": "on", "actual_state": "active", "period_minutes": 15}
+    store.adopt_system_timer(
+        timer_id="managed_pc_health",
+        unit_name="autostop-managed-pc-health.timer",
+        control_mode="managed",
+        state=state,
+    )
+    with pytest.raises(AutomationError, match="system_timer_policy_changed"):
+        store.adopt_system_timer(
+            timer_id="managed_pc_health",
+            unit_name="different.timer",
+            control_mode="managed",
+            state=state,
+        )
+
+    with store.connect() as connection:
+        for method, values, code in [
+            (
+                store.update_system_timer,
+                {
+                    "timer_id": "missing",
+                    "unit_name": "missing.timer",
+                    "control_mode": "managed",
+                    "state": state,
+                    "expected_revision": 1,
+                },
+                "system_timer_not_adopted",
+            ),
+            (
+                store.update_system_timer,
+                {
+                    "timer_id": "managed_pc_health",
+                    "unit_name": "autostop-managed-pc-health.timer",
+                    "control_mode": "managed",
+                    "state": state,
+                    "expected_revision": None,
+                },
+                "expected_revision_required",
+            ),
+            (
+                store.require_system_timer_revision,
+                {"timer_id": "managed_pc_health", "expected_revision": 2},
+                "automation_revision_conflict",
+            ),
+        ]:
+            with pytest.raises(AutomationError, match=code):
+                method(connection, **values)
+
+    for operation in (
+        lambda: store.controller_heartbeat(owner="worker", state="invalid"),
+        lambda: store.cancel_outbox_claim(outbox_id="out", owner="worker", fencing_token=1, result_code="BAD"),
+        lambda: store.block_outbox_claim(outbox_id="out", owner="worker", fencing_token=1, result_code="BAD"),
+        lambda: store.finish_outbox(
+            outbox_id="out", owner="worker", fencing_token=1, sent=False, result_code="ok", retry_seconds=1
+        ),
+    ):
+        with pytest.raises(AutomationError):
+            operation()

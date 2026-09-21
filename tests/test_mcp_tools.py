@@ -647,3 +647,101 @@ def test_crm_mcp_catalog_counts_are_current():
     assert "agent_finance_workflow" in catalog["expected_tool_names"]
     assert "prepare_action_contract" in catalog["expected_tool_names"]
     assert "prepare_crm_card_action" not in catalog["expected_tool_names"]
+
+
+def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeAutomationClient:
+        def __init__(self, *, actor):
+            assert actor == {"kind": "codex", "id": "manager-mcp", "is_admin": True}
+
+        def request(
+            self,
+            operation,
+            payload=None,
+            *,
+            idempotency_key=None,
+            expected_revision=None,
+        ):
+            calls.append(
+                {
+                    "operation": operation,
+                    "payload": payload,
+                    "idempotency_key": idempotency_key,
+                    "expected_revision": expected_revision,
+                }
+            )
+            if operation == "readiness":
+                raise OSError("controller unavailable")
+            if operation == "archive":
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "automation_revision_conflict",
+                        "job_id": "job-1",
+                        "revision": 8,
+                        "expected_revision": 7,
+                        "current_revision": 8,
+                        "unsafe_detail": {"must_not": "escape"},
+                    },
+                }
+            if operation == "run_now":
+                return {"ok": False, "error": "malformed"}
+            return {"ok": True, "data": {"operation": operation, "payload": payload}}
+
+    monkeypatch.setattr(mcp_tools_module, "AutomationControlClient", FakeAutomationClient)
+    server = _FakeServer()
+    register_manager_tools(
+        server,
+        StoreState(tmp_path / "memory.sqlite3"),
+        include_tools={"manager_automations", "manager_automation_control"},
+    )
+
+    assert set(server.tools) == {"manager_automations", "manager_automation_control"}
+    read_annotations = server.options["manager_automations"]["annotations"]
+    assert read_annotations.readOnlyHint is True
+    assert read_annotations.destructiveHint is False
+    control_annotations = server.options["manager_automation_control"]["annotations"]
+    assert control_annotations.readOnlyHint is False
+    assert control_annotations.destructiveHint is True
+
+    status = server.tools["manager_automations"](operation="status", job_id="job-1", include_archived=True)
+    assert status == {
+        "ok": True,
+        "operation": "status",
+        "payload": {"job_id": "job-1", "include_archived": True},
+    }
+    templates = server.tools["manager_automations"](operation="templates")
+    assert templates["payload"] == {}
+    assert server.tools["manager_automations"](operation="readiness") == {
+        "ok": False,
+        "error": "automation_control_unavailable",
+    }
+
+    created = server.tools["manager_automation_control"](
+        operation="create_from_template",
+        payload={"template_id": "crm_digest_v1"},
+        idempotency_key="create-digest-0001",
+    )
+    assert created["ok"] is True
+    conflict = server.tools["manager_automation_control"](
+        operation="archive",
+        payload={"job_id": "job-1"},
+        idempotency_key="archive-job-0001",
+        expected_revision=7,
+    )
+    assert conflict == {
+        "ok": False,
+        "error": "automation_revision_conflict",
+        "job_id": "job-1",
+        "revision": 8,
+        "expected_revision": 7,
+        "current_revision": 8,
+    }
+    assert server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"}) == {
+        "ok": False,
+        "error": "automation_control_failed",
+    }
+    assert calls[-2]["expected_revision"] == 7
+    assert calls[-2]["idempotency_key"] == "archive-job-0001"
