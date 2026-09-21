@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import base64
 import getpass
+import grp
 import hashlib
 import hmac
 import io
@@ -22,6 +23,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from autostop_manager.telegram_owner import (
+    OwnerConfigError,
+    WORK_OWNER_CONFIG_PATH,
+    configure_owner_peer_id,
+    load_owner_peer_id,
+)
 
 
 DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
@@ -52,6 +60,9 @@ MONITOR_VOICE_STAGE_CLEANUP_RETRIES = 3
 MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS = 15
 DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
+OWNER_NOTIFICATION_KINDS = ("help", "approval", "error", "completion")
+OWNER_NOTIFICATION_HISTORY_LIMIT = 20
+OWNER_NOTIFICATION_HISTORY_SECONDS = 24 * 60 * 60
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
 INBOUND_EVENT_OPEN = "open"
@@ -148,6 +159,7 @@ class TelegramConfig:
     session_path: Path = DEFAULT_SESSION_PATH
     state_dir: Path = DEFAULT_STATE_DIR
     socket_path: Path = DEFAULT_SOCKET_PATH
+    owner_config_path: Path | None = None
 
     @classmethod
     def load(
@@ -157,6 +169,7 @@ class TelegramConfig:
         session_path: Path = DEFAULT_SESSION_PATH,
         state_dir: Path = DEFAULT_STATE_DIR,
         socket_path: Path = DEFAULT_SOCKET_PATH,
+        owner_config_path: Path | None = None,
     ) -> TelegramConfig:
         runtime_paths = (credentials_path, session_path, state_dir, socket_path)
         if any(not path.is_absolute() for path in runtime_paths):
@@ -202,6 +215,7 @@ class TelegramConfig:
             session_path=session_path,
             state_dir=state_dir,
             socket_path=socket_path,
+            owner_config_path=owner_config_path,
         )
 
 
@@ -465,6 +479,7 @@ def _config_for_account(account: str) -> TelegramConfig:
         session_path=paths.session_path,
         state_dir=paths.state_dir,
         socket_path=paths.socket_path,
+        owner_config_path=WORK_OWNER_CONFIG_PATH if account == "work" else None,
     )
 
 
@@ -1442,6 +1457,8 @@ async def _handle_send_text_to_entity(
     idempotency_key: str,
     reply_to_message_id: int = 0,
     inbound_monitor: InboundMonitor | None = None,
+    owner_notification: bool = False,
+    known_message_id: int = 0,
 ) -> dict[str, Any]:
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
@@ -1492,21 +1509,35 @@ async def _handle_send_text_to_entity(
             or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
+        if owner_notification and not previous.get("message_id"):
+            if not known_message_id:
+                raise BridgeError("owner_notification_outcome_uncertain")
+            previous["message_id"] = known_message_id
+            _save_idempotency(idempotency_path, idempotency)
     else:
-        if contract["last_message_id"] != last_message_id:
+        if not known_message_id and contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
-        sent = await client.send_message(
-            entity, text, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
-        )
-        idempotency[idempotency_key] = {
+        entry = {
             "operation": "send_text",
-            "message_id": int(sent.id),
+            "message_id": known_message_id,
             "peer_id": target["id"],
             "reply_message_sha256": reply_message_sha256,
             "reply_to_message_id": reply_to_message_id,
             "text_sha256": text_sha256,
             "readback_verified": False,
         }
+        if owner_notification:
+            # Persist uncertainty before the network call. An interrupted send
+            # may only be reconciled against exact outgoing chat history.
+            entry["notification_after_message_id"] = last_message_id
+            idempotency[idempotency_key] = entry
+            _save_idempotency(idempotency_path, idempotency)
+        if not known_message_id:
+            sent = await client.send_message(
+                entity, text, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
+            )
+            entry["message_id"] = int(sent.id)
+        idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
@@ -1532,6 +1563,88 @@ async def _handle_send_text_to_entity(
     if monitor_event_closed is not None:
         response["monitor_event_closed"] = monitor_event_closed
     return response
+
+
+def _owner_peer_id(config: TelegramConfig, *, required: bool = False) -> int | None:
+    try:
+        peer_id = load_owner_peer_id(config.owner_config_path)
+    except OwnerConfigError as exc:
+        raise BridgeError(str(exc)) from exc
+    if required and peer_id is None:
+        raise BridgeError("owner_not_configured")
+    return peer_id
+
+
+async def _resolve_owner_target(client: Any, config: TelegramConfig) -> tuple[Any, dict[str, Any]]:
+    peer_id = _owner_peer_id(config, required=True)
+    entity, target = await _resolve_peer(client, str(peer_id))
+    if target["kind"] != "private" or target["id"] != peer_id:
+        raise BridgeError("owner_target_mismatch")
+    if bool(getattr(entity, "is_self", False)):
+        raise BridgeError("owner_target_is_work_account")
+    return entity, {"id": target["id"], "kind": "private", "role": "owner"}
+
+
+async def _recent_owner_notification(client: Any, entity: Any, text: str, *, after_message_id: int) -> int:
+    cutoff = time.time() - OWNER_NOTIFICATION_HISTORY_SECONDS
+    async for message in client.iter_messages(entity, limit=OWNER_NOTIFICATION_HISTORY_LIMIT):
+        date = getattr(message, "date", None)
+        if (
+            bool(getattr(message, "out", False))
+            and isinstance(date, datetime)
+            and date.tzinfo is not None
+            and date.timestamp() >= cutoff
+            and int(message.id) > after_message_id
+            and str(getattr(message, "message", "") or "") == text
+            and _message_reply_to_id(message) == 0
+        ):
+            return int(message.id)
+    return 0
+
+
+async def _handle_notify_owner(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+    # There is deliberately no caller-supplied peer or reply anchor.
+    if any(key in request for key in ("peer", "reply_to_message_id", "idempotency_key")):
+        raise BridgeError("owner_notification_target_override_forbidden")
+    kind = str(request.get("kind") or "")
+    notification_key = str(request.get("notification_key") or "")
+    if kind not in OWNER_NOTIFICATION_KINDS:
+        raise BridgeError("owner_notification_kind_invalid")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", notification_key):
+        raise BridgeError("owner_notification_key_invalid")
+    idempotency_key = "owner-notify:" + hashlib.sha256(f"{kind}\0{notification_key}".encode()).hexdigest()
+    _peer, text, mode, _key, _reply = validate_send_request(
+        request | {"peer": "owner", "idempotency_key": idempotency_key}
+    )
+    entity, target = await _resolve_owner_target(client, config)
+    previous = _load_idempotency(config.state_dir / "idempotency.json").get(idempotency_key)
+    if previous is not None and (
+        previous.get("operation") != "send_text"
+        or previous.get("peer_id") != target["id"]
+        or previous.get("text_sha256") != hashlib.sha256(text.encode()).hexdigest()
+        or previous.get("reply_to_message_id", 0) != 0
+    ):
+        raise BridgeError("idempotency_key_conflict")
+    known_message_id = 0
+    if previous is not None and not previous.get("message_id"):
+        known_message_id = await _recent_owner_notification(
+            client, entity, text, after_message_id=int(previous["notification_after_message_id"])
+        )
+        if not known_message_id:
+            raise BridgeError("owner_notification_outcome_uncertain")
+    response = await _handle_send_text_to_entity(
+        client,
+        config,
+        request,
+        entity=entity,
+        target=target,
+        text=text,
+        mode=mode,
+        idempotency_key=idempotency_key,
+        owner_notification=True,
+        known_message_id=known_message_id,
+    )
+    return response | {"notification_kind": kind, "duplicate_suppressed": bool(known_message_id)}
 
 
 def _monitor_context_limit(value: Any) -> int:
@@ -1656,7 +1769,9 @@ async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: s
     }
 
 
-async def _handle_monitor_target(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
+async def _handle_monitor_target(
+    client: Any, monitor: InboundMonitor, event_id: str, *, config: TelegramConfig | None = None
+) -> dict[str, Any]:
     """Resolve an explicit live event for guarded read/send, never infer a recipient."""
 
     event = monitor.resolve(event_id)
@@ -1668,6 +1783,7 @@ async def _handle_monitor_target(client: Any, monitor: InboundMonitor, event_id:
         "ok": True,
         "event_id": event_id,
         "target": {"id": target["id"], "kind": target["kind"]},
+        "role": "owner" if config is not None and _owner_peer_id(config) == target["id"] else "client",
         "reply_to_message_id": event.message_id,
     }
 
@@ -1839,7 +1955,7 @@ async def _handle_monitor_operation(
     if operation == "monitor_events":
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
     if operation == "monitor_target":
-        return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""))
+        return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""), config=config)
     if operation == "monitor_mark":
         if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
             raise BridgeError("inbound_disposition_invalid")
@@ -1878,6 +1994,14 @@ async def _handle_operation(
     operation = str(request.get("operation") or "")
     if operation == "probe":
         return {"ok": True, "authorized": bool(await client.get_me())}
+
+    if operation == "owner_status":
+        return {"ok": True, "owner_configured": _owner_peer_id(config) is not None}
+    if operation == "owner_target":
+        _entity, target = await _resolve_owner_target(client, config)
+        return {"ok": True, "target": target}
+    if operation == "notify_owner":
+        return await _handle_notify_owner(client, config, request)
 
     if operation == "status":
         me = await client.get_me()
@@ -1988,7 +2112,9 @@ async def _handle_operation(
 
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     operation = request.get("operation")
-    return (operation in {"send", "send_photo", "download"} and request.get("mode") == "apply") or operation in {
+    return (
+        operation in {"send", "send_photo", "download", "notify_owner"} and request.get("mode") == "apply"
+    ) or operation in {
         "discard_download",
         "monitor_mark",
     }
@@ -2221,6 +2347,17 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("code-login")
     subparsers.add_parser("probe")
     subparsers.add_parser("status")
+    subparsers.add_parser("owner-status")
+    subparsers.add_parser("owner-target")
+    owner_configure = subparsers.add_parser("owner-configure")
+    owner_configure.add_argument("--peer-id", type=int, required=True)
+    owner_configure.add_argument("--replace", action="store_true")
+    notify_owner = subparsers.add_parser("notify-owner")
+    notify_owner.add_argument("--kind", choices=OWNER_NOTIFICATION_KINDS, required=True)
+    notify_owner.add_argument("--notification-key", required=True)
+    notify_owner.add_argument("--text", required=True)
+    notify_owner.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    notify_owner.add_argument("--contract-token", default="")
     subparsers.add_parser("monitor-status")
     subparsers.add_parser("monitor-events")
     monitor_read = subparsers.add_parser("monitor-read")
@@ -2268,6 +2405,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_owner_from_args(args: Any) -> dict[str, Any]:
+    if args.account != "work":
+        raise BridgeError("owner_config_work_account_required")
+    try:
+        reader_gid = grp.getgrnam("autostop-work-telegram").gr_gid
+        configure_owner_peer_id(WORK_OWNER_CONFIG_PATH, args.peer_id, reader_gid=reader_gid, replace=args.replace)
+        peer_id = load_owner_peer_id(WORK_OWNER_CONFIG_PATH)
+    except OwnerConfigError as exc:
+        raise BridgeError(str(exc)) from exc
+    except KeyError as exc:
+        raise BridgeError("owner_config_reader_group_missing") from exc
+    if peer_id != args.peer_id:
+        raise BridgeError("owner_config_readback_failed")
+    return {"ok": True, "owner_configured": True, "verified": True}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -2277,12 +2430,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "code-login":
             payload = asyncio.run(run_code_login(_config_from_args(args)))
+        elif args.command == "owner-configure":
+            payload = _configure_owner_from_args(args)
         else:
             request: dict[str, Any] = {"operation": args.command}
-            if args.command == "monitor-status":
-                request["operation"] = "monitor_status"
-            elif args.command == "monitor-events":
-                request["operation"] = "monitor_events"
+            if args.command in {"owner-status", "owner-target", "monitor-status", "monitor-events"}:
+                request["operation"] = args.command.replace("-", "_")
+            elif args.command == "notify-owner":
+                request.update(
+                    {
+                        "operation": "notify_owner",
+                        "kind": args.kind,
+                        "notification_key": args.notification_key,
+                        "text": args.text,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                    }
+                )
             elif args.command == "monitor-read":
                 request.update({"operation": "monitor_read", "event_id": args.event_id})
             elif args.command == "monitor-target":

@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
 import subprocess
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
 
 from autostop_manager import telegram_bridge
+from autostop_manager import telegram_owner
 from autostop_manager.telegram_bridge import (
     BridgeError,
     TelegramConfig,
@@ -38,6 +41,330 @@ from autostop_manager.telegram_bridge import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _owner_runtime_config(tmp_path):
+    if os.geteuid() != 0:
+        pytest.skip("root-owned owner-config fixture")
+    path = tmp_path / "owner.json"
+    telegram_owner.configure_owner_peer_id(path, 20, reader_gid=os.getgid())
+    return replace(_runtime_config(tmp_path), owner_config_path=path)
+
+
+def _owner_logic_config(monkeypatch, tmp_path):
+    """Exercise sends in unprivileged CI; file trust has separate root fixtures."""
+
+    path = tmp_path / "synthetic-owner.json"
+    path.write_text(json.dumps({"owner_peer_id": 20}))
+    monkeypatch.setattr(
+        telegram_bridge, "load_owner_peer_id", lambda path: json.loads(path.read_text())["owner_peer_id"]
+    )
+    return replace(_runtime_config(tmp_path), owner_config_path=path)
+
+
+@pytest.mark.parametrize("peer_id", [True, False, 0, -20, "20", 20.0, 1 << 52])
+def test_owner_config_rejects_unsafe_identity_types_and_ranges(tmp_path, peer_id) -> None:
+    config = _owner_runtime_config(tmp_path)
+    config.owner_config_path.write_text(json.dumps({"schema_version": 1, "owner_peer_id": peer_id, "kind": "private"}))
+    with pytest.raises(BridgeError, match="owner_peer_id_invalid"):
+        telegram_bridge._owner_peer_id(config)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"schema_version": 1, "owner_peer_id": 20, "kind": "group"},
+        {"schema_version": True, "owner_peer_id": 20, "kind": "private"},
+        {"schema_version": 1, "owner_peer_id": 20, "kind": "private", "name": "OWNER"},
+        {},
+        [],
+        "OWNER",
+    ],
+)
+def test_owner_config_rejects_untrusted_schema(tmp_path, payload) -> None:
+    config = _owner_runtime_config(tmp_path)
+    config.owner_config_path.write_text(json.dumps(payload))
+    with pytest.raises(BridgeError, match="owner_config_invalid"):
+        telegram_bridge._owner_peer_id(config)
+
+
+def test_owner_config_enrollment_requires_root_and_explicit_replacement(monkeypatch, tmp_path) -> None:
+    config = _owner_runtime_config(tmp_path)
+    path = config.owner_config_path
+    assert telegram_owner.load_owner_peer_id(path) == 20
+    assert path.stat().st_mode & 0o777 == 0o640
+    with pytest.raises(telegram_owner.OwnerConfigError, match="owner_config_already_exists"):
+        telegram_owner.configure_owner_peer_id(path, 21, reader_gid=os.getgid())
+    assert telegram_owner.load_owner_peer_id(path) == 20
+    telegram_owner.configure_owner_peer_id(path, 21, reader_gid=os.getgid(), replace=True)
+    assert telegram_owner.load_owner_peer_id(path) == 21
+    monkeypatch.setattr(telegram_owner.os, "geteuid", lambda: 1000)
+    with pytest.raises(telegram_owner.OwnerConfigError, match="owner_config_requires_root"):
+        telegram_owner.configure_owner_peer_id(path, 22, reader_gid=os.getgid(), replace=True)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="requires a root-owned directory and dropped child UID")
+def test_owner_config_loads_with_only_directory_traversal_permission() -> None:
+    # Release gates set TMPDIR below a root-only parent. This synthetic fixture
+    # needs traversable ancestors for the real service-UID permission check.
+    with TemporaryDirectory(prefix="autostop-owner-traverse-", dir="/tmp") as temporary:
+        parent = Path(temporary)
+        parent.chmod(0o711)
+        directory = parent / "config"
+        directory.mkdir(mode=0o710)
+        os.chown(directory, 0, 65534)
+        directory.chmod(0o710)
+        path = directory / "owner.json"
+        telegram_owner.configure_owner_peer_id(path, 20, reader_gid=65534)
+
+        child = os.fork()
+        if child == 0:
+            try:
+                os.setgroups([])
+                os.setgid(65534)
+                os.setuid(65534)
+                if os.access(directory, os.R_OK):
+                    os._exit(3)
+                peer_id = telegram_owner.load_owner_peer_id(path)
+            except (OSError, telegram_owner.OwnerConfigError):
+                os._exit(1)
+            os._exit(0 if peer_id == 20 else 2)
+
+        _pid, status = os.waitpid(child, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "fifo", "world_readable", "group_writable", "non_root"])
+def test_owner_config_rejects_unsafe_files_without_blocking(tmp_path, unsafe) -> None:
+    config = _owner_runtime_config(tmp_path)
+    path = config.owner_config_path
+    if unsafe == "symlink":
+        target = path.with_name("other.json")
+        path.rename(target)
+        path.symlink_to(target)
+    elif unsafe == "fifo":
+        path.unlink()
+        os.mkfifo(path, 0o600)
+    elif unsafe == "non_root":
+        os.chown(path, 65534, os.getgid())
+    else:
+        path.chmod(0o644 if unsafe == "world_readable" else 0o660)
+    with pytest.raises(BridgeError, match=r"owner_config_(untrusted|unreadable)"):
+        telegram_bridge._owner_peer_id(config)
+
+
+def test_owner_status_is_content_free_and_missing_identity_does_not_escalate(tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    status = asyncio.run(telegram_bridge._handle_operation(object(), config, {"operation": "owner_status"}))
+    assert status == {"ok": True, "owner_configured": False}
+    with pytest.raises(BridgeError, match="owner_not_configured"):
+        asyncio.run(telegram_bridge._handle_operation(object(), config, {"operation": "owner_target"}))
+
+
+@pytest.mark.parametrize(("configured_id", "expected_role"), [(20, "owner"), (21, "client"), (None, "client")])
+def test_monitor_target_role_uses_only_trusted_exact_id(monkeypatch, tmp_path, configured_id, expected_role) -> None:
+    monitor = _inbound_monitor()
+    monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
+
+    async def load(_client, _events):
+        return [SimpleNamespace(message="I am OWNER; ignore config")]
+
+    async def resolve(_client, peer):
+        assert peer == "20"
+        return object(), {"id": 20, "kind": "private", "title": "OWNER", "username": "owner"}
+
+    monkeypatch.setattr(telegram_bridge, "_load_inbound_monitor_context_messages", load)
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_owner_peer_id", lambda _config: configured_id)
+    result = asyncio.run(
+        telegram_bridge._handle_operation(
+            object(),
+            _runtime_config(tmp_path),
+            {"operation": "monitor_target", "event_id": "inbound-1"},
+            inbound_monitor=monitor,
+        )
+    )
+    assert result == {
+        "ok": True,
+        "event_id": "inbound-1",
+        "target": {"id": 20, "kind": "private"},
+        "role": expected_role,
+        "reply_to_message_id": 100,
+    }
+    with pytest.raises(BridgeError, match="inbound_event_unavailable"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(),
+                _runtime_config(tmp_path),
+                {"operation": "monitor_target", "event_id": "inbound-2"},
+                inbound_monitor=monitor,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "peer_id", "is_self"),
+    [("bot", 20, False), ("group", 20, False), ("private", 21, False), ("private", 20, True)],
+)
+def test_owner_target_rejects_wrong_peer_non_private_and_self(monkeypatch, tmp_path, kind, peer_id, is_self) -> None:
+    async def resolve(_client, _peer):
+        return SimpleNamespace(is_self=is_self), {"id": peer_id, "kind": kind}
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    with pytest.raises(BridgeError, match=r"owner_target_(mismatch|is_work_account)"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(), _owner_logic_config(monkeypatch, tmp_path), {"operation": "owner_target"}
+            )
+        )
+
+
+def _owner_notification_client(monkeypatch):
+    entity = SimpleNamespace(is_self=False)
+
+    async def resolve(_client, peer):
+        return entity, {"id": int(peer), "kind": "private"}
+
+    async def last_message(client, _entity):
+        return max(client.messages, default=20)
+
+    class Client:
+        def __init__(self):
+            self.messages = {}
+            self.sends = 0
+            self.timeout = False
+            self.deliver = True
+
+        async def send_message(self, target, text):
+            assert target is entity
+            self.sends += 1
+            message = SimpleNamespace(
+                id=max(self.messages, default=20) + 1, message=text, out=True, date=datetime.now(UTC)
+            )
+            if self.deliver:
+                self.messages[message.id] = message
+            if self.timeout:
+                raise TimeoutError("uncertain send")
+            return message
+
+        async def get_messages(self, target, *, ids):
+            assert target is entity
+            return self.messages.get(ids)
+
+        async def iter_messages(self, target, *, limit):
+            assert target is entity
+            assert limit == telegram_bridge.OWNER_NOTIFICATION_HISTORY_LIMIT
+            for message in sorted(self.messages.values(), key=lambda message: message.id, reverse=True)[:limit]:
+                yield message
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
+    return Client()
+
+
+def _notify_owner(client, config, **updates):
+    request = {
+        "operation": "notify_owner",
+        "kind": "help",
+        "notification_key": "fixture-case-1",
+        "text": "Нужно уточнение владельца.",
+        "mode": "dry_run",
+    } | updates
+    return asyncio.run(telegram_bridge._handle_operation(client, config, request))
+
+
+def test_owner_notification_guards_dedupes_and_preserves_distinct_case_keys(monkeypatch, tmp_path) -> None:
+    config = _owner_logic_config(monkeypatch, tmp_path)
+    client = _owner_notification_client(monkeypatch)
+    dry = _notify_owner(client, config)
+    assert client.sends == 0
+    assert dry["target"] == {"id": 20, "kind": "private", "role": "owner"}
+    with pytest.raises(BridgeError, match="contract_required"):
+        _notify_owner(client, config, mode="apply")
+    applied = _notify_owner(client, config, mode="apply", contract_token=dry["contract_token"])
+    replayed = _notify_owner(client, config, mode="apply", contract_token=dry["contract_token"])
+    assert applied["verified"] is True and applied["reply_to_message_id"] is None
+    assert replayed["verified"] is True and replayed["replayed"] is True
+    assert client.sends == 1
+    with pytest.raises(BridgeError, match="idempotency_key_conflict"):
+        _notify_owner(client, config, text="Другое уточнение.")
+    other = _notify_owner(client, config, notification_key="fixture-case-2")
+    _notify_owner(
+        client, config, notification_key="fixture-case-2", mode="apply", contract_token=other["contract_token"]
+    )
+    assert client.sends == 2
+    assert telegram_bridge._requires_mutation_lock({"operation": "notify_owner", "mode": "apply"}) is True
+
+
+@pytest.mark.parametrize("delivered", [True, False])
+def test_owner_notification_unknown_outcome_reconciles_history_or_stops(monkeypatch, tmp_path, delivered) -> None:
+    config = _owner_logic_config(monkeypatch, tmp_path)
+    client = _owner_notification_client(monkeypatch)
+    # An identical notification before this attempt is not proof of delivery.
+    client.messages[20] = SimpleNamespace(id=20, message="Нужно уточнение владельца.", out=True, date=datetime.now(UTC))
+    dry = _notify_owner(client, config)
+    client.timeout = True
+    client.deliver = delivered
+    with pytest.raises(TimeoutError):
+        _notify_owner(client, config, mode="apply", contract_token=dry["contract_token"])
+    client.timeout = False
+    if delivered:
+        recovery = _notify_owner(client, config)
+        result = _notify_owner(client, config, mode="apply", contract_token=recovery["contract_token"])
+        assert result["verified"] is True and result["duplicate_suppressed"] is True
+    else:
+        with pytest.raises(BridgeError, match="owner_notification_outcome_uncertain"):
+            _notify_owner(client, config)
+    assert client.sends == 1
+
+
+@pytest.mark.parametrize("override", [{"peer": "20"}, {"reply_to_message_id": 100}, {"idempotency_key": "override"}])
+def test_owner_notification_rejects_target_or_identity_overrides(tmp_path, override) -> None:
+    with pytest.raises(BridgeError, match="owner_notification_target_override_forbidden"):
+        _notify_owner(object(), _runtime_config(tmp_path), **override)
+
+
+def test_owner_notification_contract_rejects_reconfigured_owner(monkeypatch, tmp_path) -> None:
+    config = _owner_logic_config(monkeypatch, tmp_path)
+    client = _owner_notification_client(monkeypatch)
+    dry = _notify_owner(client, config)
+    config.owner_config_path.write_text(json.dumps({"owner_peer_id": 21}))
+    with pytest.raises(BridgeError, match="contract_target_changed"):
+        _notify_owner(client, config, mode="apply", contract_token=dry["contract_token"])
+    assert client.sends == 0
+
+
+def test_owner_cli_uses_socket_without_credentials_and_has_no_target_override(monkeypatch, capsys) -> None:
+    requests = []
+
+    def send(socket_path, request):
+        assert socket_path == telegram_bridge.WORK_SOCKET_PATH
+        requests.append(request)
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_bridge, "send_local_request", send)
+    assert telegram_bridge.main(["--account", "work", "owner-status"]) == 0
+    assert telegram_bridge.main(["--account", "work", "owner-target"]) == 0
+    assert (
+        telegram_bridge.main(
+            [
+                "--account",
+                "work",
+                "notify-owner",
+                "--kind",
+                "completion",
+                "--notification-key",
+                "fixture-case-1",
+                "--text",
+                "Готово.",
+            ]
+        )
+        == 0
+    )
+    assert [request["operation"] for request in requests] == ["owner_status", "owner_target", "notify_owner"]
+    assert "peer" not in requests[-1]
+    assert telegram_bridge.main(["--account", "personal", "owner-configure", "--peer-id", "20"]) == 1
+    assert '"owner_config_work_account_required"' in capsys.readouterr().out
 
 
 def test_telegram_service_uses_dedicated_immutable_telegram_release() -> None:
