@@ -351,6 +351,11 @@ class AutomationControlService:
 
         if operation in WRITE_OPERATIONS and not _can_manage(actor):
             raise AutomationError("automation_permission_denied")
+        if (
+            operation == "set_global_hold"
+            or (operation == "preview" and payload.get("target_operation") == "set_global_hold")
+        ) and actor["kind"] != "system":
+            raise AutomationError("automation_permission_denied")
         if operation == "status":
             job_id = payload.get("job_id")
             if job_id is not None and not isinstance(job_id, str):

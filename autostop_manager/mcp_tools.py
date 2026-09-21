@@ -171,7 +171,6 @@ def register_manager_tools(  # noqa: C901
             "run_now",
             "test_notification",
             "archive",
-            "set_global_hold",
         ],
         payload: dict[str, Any] | None = None,
         idempotency_key: str = "",

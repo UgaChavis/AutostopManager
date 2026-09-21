@@ -592,6 +592,7 @@ def test_global_hold_is_cas_guarded_and_blocks_scheduler_claims(tmp_path: Path):
         {"enabled": True, "reason": "release", "attempt_hash": "d" * 64},
         idempotency_key="global-hold-0001",
         expected_revision=0,
+        actor={"kind": "system", "id": "release-test", "is_admin": True},
     )
 
     assert held["global_hold"] == {
@@ -608,6 +609,7 @@ def test_global_hold_is_cas_guarded_and_blocks_scheduler_claims(tmp_path: Path):
             {"enabled": False, "reason": None, "attempt_hash": "d" * 64},
             idempotency_key="global-hold-0002",
             expected_revision=0,
+            actor={"kind": "system", "id": "release-test", "is_admin": True},
         )
     released = request(
         service,
@@ -615,9 +617,29 @@ def test_global_hold_is_cas_guarded_and_blocks_scheduler_claims(tmp_path: Path):
         {"enabled": False, "reason": None, "attempt_hash": "d" * 64},
         idempotency_key="global-hold-0003",
         expected_revision=1,
+        actor={"kind": "system", "id": "release-test", "is_admin": True},
     )
     assert released["global_hold"]["revision"] == 2
     assert store.claim_next_run(owner="worker-a") is not None
+
+
+@pytest.mark.parametrize("kind", ["codex", "telegram_owner", "crm_operator"])
+@pytest.mark.parametrize("operation", ["set_global_hold", "preview"])
+def test_global_hold_control_is_release_system_only(tmp_path: Path, kind: str, operation: str):
+    service = AutomationControlService(AutomationStore(tmp_path / "manager.sqlite3"))
+    payload = {"enabled": True, "reason": "release", "attempt_hash": "d" * 64}
+    if operation == "preview":
+        payload = {"target_operation": "set_global_hold", "target_payload": payload}
+
+    with pytest.raises(AutomationError, match="automation_permission_denied"):
+        request(
+            service,
+            operation,
+            payload,
+            idempotency_key="global-hold-denied-0001" if operation != "preview" else None,
+            expected_revision=0 if operation != "preview" else None,
+            actor={"kind": kind, "id": "untrusted-hold-actor", "is_admin": True},
+        )
 
 
 def test_error_incident_alert_is_suppressed_until_one_recovery(tmp_path: Path):
