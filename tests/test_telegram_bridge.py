@@ -53,6 +53,7 @@ def test_work_telegram_service_has_no_personal_state_or_socket() -> None:
     service = (ROOT / "deploy/systemd/autostop-work-telegram.service").read_text(encoding="utf-8")
 
     assert "User=autostop-work-telegram" in service
+    assert "SupplementaryGroups=10001" in service
     assert "WorkingDirectory=/opt/autostop-work-telegram-releases/current" in service
     assert "--account work daemon" in service
     assert "/opt/autostop-work-telegram-venv/bin/python" in service
