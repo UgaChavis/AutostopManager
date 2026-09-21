@@ -9,7 +9,10 @@ boot_unit=/etc/systemd/system/autostop-codex-start.service
 python=/opt/AutostopManager/.venv/bin/python
 [[ "$release" == /opt/autostop-work-telegram-releases/* && -d "$release" && ! -L "$release" ]]
 [[ "$(stat -c %U "$release")" == root ]]
-! systemctl is-active --quiet autostop-codex-wake.service
+if systemctl is-active --quiet autostop-codex-wake.service; then
+  echo "codex_wake_service_must_be_inactive=true" >&2
+  exit 1
+fi
 export PYTHONPATH="$release" PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1
 "$python" -c 'import websockets; assert websockets.__version__ == "15.0.1"'
 /usr/local/bin/codex app-server daemon version | "$python" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(not(s.get("status")=="running" and s.get("cliVersion")==s.get("appServerVersion")))'

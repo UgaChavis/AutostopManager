@@ -337,9 +337,8 @@ bridge_ready() {
 }
 
 start_work_bridge() {
-  local attempt
   systemctl enable --now "${service_unit}" || return 1
-  for attempt in $(seq 1 15); do
+  for _attempt in $(seq 1 15); do
     if bridge_ready; then
       return 0
     fi

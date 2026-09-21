@@ -53,8 +53,8 @@ bridge_status() {
 }
 
 wait_for_outbound_only() {
-  local attempt status
-  for attempt in {1..15}; do
+  local status
+  for _attempt in {1..15}; do
     if systemctl is-active --quiet "${service_unit}" \
       && status="$(bridge_status)" \
       && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
@@ -91,7 +91,7 @@ disable_duty() {
 }
 
 enable_duty() {
-  local monitor_env_dir monitor_status release_dir attempt intent_changed=0 wake_ready=0
+  local monitor_env_dir monitor_status release_dir intent_changed=0 wake_ready=0
   release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
   [[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/* && -d "${release_dir}" && ! -L "${release_dir}" && -x "${venv_python}" ]] || return 1
   monitor_env_dir="$(dirname -- "${monitor_env}")"
@@ -102,7 +102,7 @@ enable_duty() {
     printf '%s\n' 'AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET=/run/autostop-codex-wake/wake.sock' >> "${pending_monitor_env}" || return 1
     systemctl start autostop-codex-start.service || return 1
     systemctl enable --now "${wake_unit}" || return 1
-    for attempt in {1..15}; do
+    for _attempt in {1..15}; do
       if PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status \
         | "${venv_python}" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(not(s.get("enabled") and s.get("connected")))'; then
         wake_ready=1
@@ -128,7 +128,7 @@ enable_duty() {
     systemctl enable --now "${service_unit}" || return 1
   fi
   # Type=simple becomes active before the bridge connects and opens its socket.
-  for attempt in {1..15}; do
+  for _attempt in {1..15}; do
     if systemctl is-active --quiet "${service_unit}" \
       && monitor_status="$(sudo -u "${service_user}" env PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work monitor-status)" \
       && grep -Eq '"enabled": true' <<<"${monitor_status}" \
@@ -148,16 +148,14 @@ cleanup_incomplete_duty() {
 }
 
 duty_is_paused() {
-  local unit value
+  local value
   [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || return 1
-  for unit in "${wake_unit}"; do
-    value="$(systemctl show --property=LoadState --value "${unit}")" || return 1
-    [[ "${value}" == "loaded" ]] || return 1
-    value="$(systemctl show --property=ActiveState --value "${unit}")" || return 1
-    [[ "${value}" == "inactive" ]] || return 1
-    value="$(systemctl show --property=UnitFileState --value "${unit}")" || return 1
-    [[ "${value}" == "disabled" ]] || return 1
-  done
+  value="$(systemctl show --property=LoadState --value "${wake_unit}")" || return 1
+  [[ "${value}" == "loaded" ]] || return 1
+  value="$(systemctl show --property=ActiveState --value "${wake_unit}")" || return 1
+  [[ "${value}" == "inactive" ]] || return 1
+  value="$(systemctl show --property=UnitFileState --value "${wake_unit}")" || return 1
+  [[ "${value}" == "disabled" ]] || return 1
   systemctl is-active --quiet "${service_unit}" || return 1
   value="$(systemctl show --property=UnitFileState --value "${service_unit}")" || return 1
   [[ "${value}" == "enabled" ]] || return 1
