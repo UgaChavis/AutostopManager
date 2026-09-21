@@ -63,3 +63,42 @@ On failure keep work paused, roll back the release and reinstall its MCP endpoin
 Restore learning hooks only with the old Manager available. Preserve volumes/uploads;
 never overwrite new business operations with an old database. Verify restored
 components before enabling work. [Refresh/test Codex](../mcp_release_checks.md).
+
+## Automation Center release state
+
+Automation Center has a separate root-only registry at
+`/var/lib/autostop-manager-scheduler/registry.sqlite3`; it is never placed in
+the CRM-mounted Manager data directory. Generate a unique, non-reused release
+attempt key and first run `python -m autostop_manager.automation_release hold
+--release-attempt-key ATTEMPT`; require its machine-readable `quiescent=true`
+and held-state readback. A revision/SHA alone is not a release attempt key.
+Create an online backup before any installer or schema migration, to a new file
+in a pre-created root-owned `0700` backup directory with
+`scripts/backup-manager-automation-state.py --output ABSOLUTE_NEW_PATH`; the
+helper uses SQLite backup, verifies the component schema and writes atomically
+with mode `0600`.
+
+Before the first scheduler start, adopt the allowlisted system timers under the
+same owned hold with `python -m autostop_manager.automation_release adopt-current
+--release-attempt-key ATTEMPT`; require `timers_verified=true`. Adoption is
+create-if-absent and never overwrites persisted desired state.
+
+The coordinating deploy must also snapshot the exact scheduler unit, all three
+managed timer drop-ins (including absence), and the work-Telegram duty config;
+the SQLite helper does not cover those files. Install from the active immutable
+Manager release with `scripts/install-manager-automation.sh
+--activate-under-hold --release-attempt-key ATTEMPT --manager-revision SHA
+--crm-revision CRM_SHA [--crm-version CRM_VERSION]`;
+the revision must come from the sealed release manifest or deploy input because
+an immutable archive need not contain `.git`. The CRM revision is required for
+activation and is recorded only as bounded technical metadata in the readiness
+packet; do not copy CRM secrets into this config. Replacing a changed installed unit
+requires `--replace-unit`. The installer starts under hold, adopts timers only
+when absent, and verifies/seeds `crm_digest_v1` strictly OFF. After activation, verify
+`autostop-manager-scheduler.service`, the root:10001 `0750` runtime directory,
+the `0660` control socket, readiness, templates, jobs and all five adopted
+timer states. Release only after the coordinated CRM/Telegram smoke checks with
+`python -m autostop_manager.automation_release release-hold
+--release-attempt-key ATTEMPT`. A code
+rollback must preserve the registry; restore a backup only for an explicit
+state-recovery decision, never merely because code activation failed.

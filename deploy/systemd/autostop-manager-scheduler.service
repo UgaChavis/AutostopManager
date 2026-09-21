@@ -1,0 +1,51 @@
+[Unit]
+Description=AutoStop Manager Automation Center scheduler
+After=local-fs.target
+ConditionPathIsDirectory=/opt/autostop-manager-releases/current
+ConditionPathExists=/opt/AutostopManager/.venv/bin/python
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+Group=10001
+WorkingDirectory=/opt/autostop-manager-releases/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONSAFEPATH=1
+Environment=PYTHONPATH=/opt/autostop-manager-releases/current
+Environment=AUTOSTOP_MANAGER_ENV_FILE=/dev/null
+Environment=AUTOSTOP_AUTOMATION_DB=/var/lib/autostop-manager-scheduler/registry.sqlite3
+Environment=AUTOSTOP_AUTOMATION_CONTROL_SOCKET=/run/autostop-manager-automation/control.sock
+EnvironmentFile=/etc/autostop-manager/automation-control.env
+EnvironmentFile=-/opt/AutostopManager/.crm-mcp.env
+RuntimeDirectory=autostop-manager-automation
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+StateDirectory=autostop-manager-scheduler
+StateDirectoryMode=0700
+UMask=0077
+ExecStartPre=/usr/bin/test -x /opt/AutostopManager/.venv/bin/python
+ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.automation_daemon daemon
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/autostop-manager-scheduler /run/autostop-manager-automation /etc/systemd/system
+TasksMax=32
+LimitNOFILE=256
+
+[Install]
+WantedBy=multi-user.target

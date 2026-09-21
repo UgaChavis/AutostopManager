@@ -148,3 +148,51 @@ def test_store_api_url_rejects_external_hosts_credentials_and_url_smuggling(monk
     for value in rejected:
         monkeypatch.setenv("AUTOSTOP_STORE_API_URL", value)
         assert config.get_store_api_url() == ""
+
+
+def test_automation_registry_uses_a_separate_root_only_state_path(monkeypatch, tmp_path):
+    automation_path = tmp_path / "scheduler" / "registry.sqlite3"
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_DB", str(automation_path))
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "legacy-manager.sqlite3"))
+
+    assert config.get_automation_db_path() == automation_path.resolve()
+    assert config.get_automation_db_path() != config.get_db_path()
+
+
+def test_automation_crm_route_is_derived_only_from_literal_loopback_mcp(monkeypatch):
+    monkeypatch.delenv("AUTOSTOP_AUTOMATION_CRM_API_URL", raising=False)
+    monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", "http://127.0.0.1:8001/mcp")
+    monkeypatch.setenv("AUTOSTOP_CRM_MCP_BEARER_TOKEN", "technical-bearer")
+
+    runtime = config.get_automation_crm_connection_config()
+
+    assert runtime.configured is True
+    assert runtime.api_url == "http://127.0.0.1:8000"
+    assert runtime.bearer_token == "technical-bearer"
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_API_URL", "http://crm.example:8000")
+    assert config.get_automation_crm_connection_config().error_code == "automation_crm_configuration_invalid"
+
+
+def test_automation_control_peer_roles_are_uid_bound(monkeypatch):
+    monkeypatch.setenv(
+        "AUTOSTOP_AUTOMATION_CONTROL_PEERS",
+        "0:codex|system,10001:crm_operator,987:telegram_owner",
+    )
+
+    assert config.get_automation_control_peer_roles() == {
+        0: frozenset({"codex", "system"}),
+        10001: frozenset({"crm_operator"}),
+        987: frozenset({"telegram_owner"}),
+    }
+
+
+def test_automation_runtime_identity_is_bounded_and_never_exposes_arbitrary_env(monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_REVISION", "a" * 40)
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_VERSION", "crm-2026.09")
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_REVISION", "contains secret spaces")
+
+    assert config.get_automation_runtime_identity() == {
+        "manager_revision": "a" * 40,
+        "crm_version": "crm-2026.09",
+        "crm_revision": "unknown",
+    }

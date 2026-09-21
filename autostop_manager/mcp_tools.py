@@ -7,6 +7,8 @@ from typing import Any, Literal
 from mcp.types import ToolAnnotations
 
 from .action_contract import prepare_action_contract
+from .automation_control import AutomationControlClient
+from .automation_registry import AutomationError
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
     PARTSAPI_OPERATIONS,
@@ -90,6 +92,97 @@ def register_manager_tools(  # noqa: C901
         store=memory,
         gateway=StoreQuoteOwnerApi(store_owner_client),
     )
+
+    def automation_request(
+        operation: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        idempotency_key: str | None = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        try:
+            response = AutomationControlClient(actor={"kind": "codex", "id": "manager-mcp", "is_admin": True}).request(
+                operation,
+                payload,
+                idempotency_key=idempotency_key,
+                expected_revision=expected_revision,
+            )
+        except (AutomationError, OSError, TimeoutError):
+            return {"ok": False, "error": "automation_control_unavailable"}
+        if response.get("ok") is True and isinstance(response.get("data"), dict):
+            return {"ok": True, **response["data"]}
+        error = response.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        result: dict[str, Any] = {"ok": False, "error": str(code or "automation_control_failed")}
+        if isinstance(error, dict):
+            for key in ("job_id", "revision", "expected_revision", "current_revision"):
+                if isinstance(error.get(key), (str, int)):
+                    result[key] = error[key]
+        return result
+
+    @server.tool(
+        name="manager_automations",
+        description=(
+            "READ_ONLY: Inspect the Manager Automation Center status, allowlisted templates or readiness. "
+            "Returns only technical state; it does not read CRM records or Telegram messages."
+        ),
+        annotations=ToolAnnotations(
+            title="Manager Automations",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def manager_automations_tool(
+        operation: Literal["status", "templates", "readiness"] = "status",
+        job_id: str = "",
+        include_archived: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if job_id:
+            payload["job_id"] = job_id
+        if operation == "status" and include_archived:
+            payload["include_archived"] = True
+        return automation_request(operation, payload)
+
+    @server.tool(
+        name="manager_automation_control",
+        description=(
+            "CONTROL: Preview or change one allowlisted Manager automation through the local controller. "
+            "Mutations require an idempotency key; existing-job changes also require the exact revision. "
+            "Creating crm_digest_v1 is singleton and starts OFF. Allowlisted system timers use timer_id; "
+            "read-only timers reject changes. Test notification only queues an outbox intent."
+        ),
+        annotations=ToolAnnotations(
+            title="Manager Automation Control",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def manager_automation_control_tool(
+        operation: Literal[
+            "preview",
+            "create_from_template",
+            "set_enabled",
+            "set_schedule",
+            "run_now",
+            "test_notification",
+            "archive",
+            "set_global_hold",
+        ],
+        payload: dict[str, Any] | None = None,
+        idempotency_key: str = "",
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        return automation_request(
+            operation,
+            payload,
+            idempotency_key=idempotency_key or None,
+            expected_revision=expected_revision,
+        )
 
     @server.tool(
         name="get_store_analytics_report",

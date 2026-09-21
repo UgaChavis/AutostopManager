@@ -38,6 +38,16 @@ def test_documents_fit_budget_and_have_only_two_skills():
     assert len(list((ROOT / ".agents/skills").glob("*/SKILL.md"))) == 2
 
 
+def test_prepare_for_work_instruction_requires_fresh_private_readiness_context():
+    instructions = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    normalized = " ".join(instructions.split())
+
+    assert "«приготовься к работе»" in instructions
+    assert "`manager_automations` with operation `readiness`" in normalized
+    assert "wait for automation reconciliation" in normalized
+    assert "do not carry over old conversation context or business records" in normalized
+
+
 @pytest.mark.parametrize("fault", ["missing", "empty", "link", "outside", "large", "extra", "name", "description"])
 def test_document_checks_fail_on_broken_instructions(docs, fault):
     path = docs / "AGENTS.md"
@@ -137,7 +147,7 @@ def test_old_database_history_is_preserved_without_being_read(tmp_path):
 
 def test_retired_tools_and_providers_are_absent():
     tools = build_server()._tool_manager._tools
-    assert len(tools) == 40
+    assert len(tools) == 42
     assert (
         not {
             "remember",
