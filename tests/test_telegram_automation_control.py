@@ -7,6 +7,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
+
 from autostop_manager.automation_control import (
     AutomationControlClient,
     AutomationControlServer,
@@ -49,9 +51,38 @@ def _job(
     }
 
 
+def _timer(
+    timer_id: str = "managed_pc_health",
+    *,
+    name: str = "Проверка управляемых ПК",
+    desired_state: str = "off",
+    revision: int = 2,
+    every_minutes: int = 15,
+    control_mode: str = "managed",
+) -> dict[str, Any]:
+    return {
+        "timer_id": timer_id,
+        "name": name,
+        "control_mode": control_mode,
+        "locked": control_mode == "read_only",
+        "desired_state": desired_state,
+        "actual_state": "inactive" if desired_state == "off" else "active",
+        "period_minutes": every_minutes,
+        "actual_period_minutes": every_minutes,
+        "revision": revision,
+        "next_run_at": None if desired_state == "off" else "2026-09-21T12:15:00Z",
+        "reconcile_state": "in_sync",
+    }
+
+
 class FakeControl:
-    def __init__(self, jobs: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        jobs: list[dict[str, Any]] | None = None,
+        timers: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.jobs = copy.deepcopy(jobs if jobs is not None else [_job()])
+        self.timers = copy.deepcopy(timers or [])
         self.templates = [
             {
                 "template_id": "crm_digest_v1",
@@ -79,7 +110,13 @@ class FakeControl:
         if operation == "status":
             job_id = request["payload"].get("job_id")
             jobs = [job for job in self.jobs if not job_id or job["job_id"] == job_id]
-            return {"ok": True, "data": {"jobs": copy.deepcopy(jobs)}}
+            return {
+                "ok": True,
+                "data": {
+                    "jobs": copy.deepcopy(jobs),
+                    "system_timers": copy.deepcopy(self.timers),
+                },
+            }
         if operation == "templates":
             return {"ok": True, "data": {"templates": copy.deepcopy(self.templates)}}
         if operation == "preview":
@@ -87,21 +124,42 @@ class FakeControl:
         if idempotency_key in self.idempotency:
             return copy.deepcopy(self.idempotency[str(idempotency_key)])
         if operation == "set_enabled":
-            job = self._find_job(str(request["payload"]["job_id"]))
-            if job["revision"] != expected_revision:
+            target = (
+                self._find_timer(str(request["payload"]["timer_id"]))
+                if "timer_id" in request["payload"]
+                else self._find_job(str(request["payload"]["job_id"]))
+            )
+            if target["revision"] != expected_revision:
                 return {"ok": False, "error": {"code": "automation_revision_conflict"}}
-            job["desired_state"] = "on" if request["payload"]["enabled"] else "off"
-            job["actual_state"] = "idle" if request["payload"]["enabled"] else "disabled"
-            job["next_run_at"] = "2026-09-21T12:20:00Z" if request["payload"]["enabled"] else None
-            job["revision"] += 1
-            response = {"ok": True, "data": {"changed": True, "job": copy.deepcopy(job)}}
+            target["desired_state"] = "on" if request["payload"]["enabled"] else "off"
+            if "timer_id" in request["payload"]:
+                target["actual_state"] = "active" if request["payload"]["enabled"] else "inactive"
+                target["next_run_at"] = "2026-09-21T12:15:00Z" if request["payload"]["enabled"] else None
+                target["reconcile_state"] = "in_sync"
+                response_key = "system_timer"
+            else:
+                target["actual_state"] = "idle" if request["payload"]["enabled"] else "disabled"
+                target["next_run_at"] = "2026-09-21T12:20:00Z" if request["payload"]["enabled"] else None
+                response_key = "job"
+            target["revision"] += 1
+            response = {"ok": True, "data": {"changed": True, response_key: copy.deepcopy(target)}}
         elif operation == "set_schedule":
-            job = self._find_job(str(request["payload"]["job_id"]))
-            if job["revision"] != expected_revision:
+            if "timer_id" in request["payload"]:
+                target = self._find_timer(str(request["payload"]["timer_id"]))
+            else:
+                target = self._find_job(str(request["payload"]["job_id"]))
+            if target["revision"] != expected_revision:
                 return {"ok": False, "error": {"code": "automation_revision_conflict"}}
-            job["schedule"] = copy.deepcopy(request["payload"]["schedule"])
-            job["revision"] += 1
-            response = {"ok": True, "data": {"changed": True, "job": copy.deepcopy(job)}}
+            if "timer_id" in request["payload"]:
+                target["period_minutes"] = request["payload"]["schedule"]["every_minutes"]
+                target["actual_period_minutes"] = target["period_minutes"]
+                target["reconcile_state"] = "in_sync"
+                response_key = "system_timer"
+            else:
+                target["schedule"] = copy.deepcopy(request["payload"]["schedule"])
+                response_key = "job"
+            target["revision"] += 1
+            response = {"ok": True, "data": {"changed": True, response_key: copy.deepcopy(target)}}
         elif operation == "create_from_template":
             schedule = {
                 "kind": "interval",
@@ -121,6 +179,68 @@ class FakeControl:
 
     def _find_job(self, job_id: str) -> dict[str, Any]:
         return next(job for job in self.jobs if job["job_id"] == job_id)
+
+    def _find_timer(self, timer_id: str) -> dict[str, Any]:
+        return next(timer for timer in self.timers if timer["timer_id"] == timer_id)
+
+
+class FakeSystemTimerController:
+    def __init__(self) -> None:
+        self.state = {
+            "load_state": "loaded",
+            "unit_file_state": "disabled",
+            "desired_state": "off",
+            "actual_state": "inactive",
+            "period_minutes": 15,
+            "next_run_at": None,
+            "last_run_at": None,
+            "error_code": None,
+        }
+
+    def _live(self) -> dict[str, Any]:
+        return {
+            "timer_id": "managed_pc_health",
+            "unit_name": "autostop-managed-pc-health.timer",
+            "name": "Проверка управляемых ПК",
+            "control_mode": "managed",
+            "locked": False,
+            "inspection_ok": True,
+            "state": copy.deepcopy(self.state),
+        }
+
+    def list_status(self) -> list[dict[str, Any]]:
+        return [self._live()]
+
+    def inspect(self, timer_id: str) -> dict[str, Any]:
+        assert timer_id == "managed_pc_health"
+        return self._live()
+
+    def render_interval_dropin(self, timer_id: str, *, every_minutes: int) -> str:
+        assert timer_id == "managed_pc_health"
+        return f"OnUnitActiveSec={every_minutes}min"
+
+    def set_enabled(self, timer_id: str, *, enabled: bool) -> dict[str, Any]:
+        assert timer_id == "managed_pc_health"
+        self.state.update(
+            {
+                "unit_file_state": "enabled" if enabled else "disabled",
+                "desired_state": "on" if enabled else "off",
+                "actual_state": "active" if enabled else "inactive",
+            }
+        )
+        return self._live()
+
+    def set_schedule(
+        self,
+        timer_id: str,
+        *,
+        every_minutes: int,
+        expected_dropin_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        assert timer_id == "managed_pc_health"
+        assert expected_dropin_sha256 is None
+        self.state["period_minutes"] = every_minutes
+        return self._live() | {"dropin_sha256": "a" * 64}
 
 
 def _message(text: str, *, peer_id: int = OWNER_PEER_ID, message_id: int = 42, private: bool = True):
@@ -161,6 +281,123 @@ def test_exact_on_command_applies_immediately_and_verifies_readback():
     assert re.fullmatch(r"tg-auto:[0-9a-f]{40}", str(mutation["idempotency_key"]))
     assert str(OWNER_PEER_ID) not in str(mutation["idempotency_key"])
     assert control.jobs[0]["desired_state"] == "on"
+
+
+def test_status_includes_managed_and_read_only_system_timers():
+    control = FakeControl(
+        jobs=[],
+        timers=[
+            _timer(),
+            _timer(
+                "database_backup",
+                name="Резервная копия CRM",
+                control_mode="read_only",
+            ),
+        ],
+    )
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message("регламентные задания"))
+
+    assert result.ok is True
+    assert "[таймер managed_pc_health]" in result.reply_text
+    assert "управляемый" in result.reply_text
+    assert "[таймер database_backup]" in result.reply_text
+    assert "только чтение" in result.reply_text
+
+
+def test_exact_managed_timer_on_applies_immediately_and_verifies_readback():
+    control = FakeControl(jobs=[], timers=[_timer()])
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message("включи managed_pc_health"))
+
+    assert result.handled is True
+    assert result.ok is True
+    assert "ON" in result.reply_text
+    assert [call["operation"] for call in control.calls] == ["status", "set_enabled", "status"]
+    mutation = control.calls[1]
+    assert mutation["payload"] == {"timer_id": "managed_pc_health", "enabled": True}
+    assert mutation["expected_revision"] == 2
+    assert control.timers[0]["desired_state"] == "on"
+    assert control.timers[0]["actual_state"] == "active"
+
+
+def test_managed_timer_toggle_repairs_drift_instead_of_claiming_noop():
+    drifted = _timer(desired_state="on") | {
+        "actual_state": "inactive",
+        "reconcile_state": "drift",
+    }
+    control = FakeControl(jobs=[], timers=[drifted])
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message("включи managed_pc_health"))
+
+    assert result.ok is True
+    assert [call["operation"] for call in control.calls] == ["status", "set_enabled", "status"]
+    assert control.timers[0]["actual_state"] == "active"
+    assert control.timers[0]["reconcile_state"] == "in_sync"
+
+
+def test_read_only_system_timer_rejects_toggle_without_mutation():
+    control = FakeControl(
+        jobs=[],
+        timers=[
+            _timer(
+                "database_backup",
+                name="Резервная копия CRM",
+                control_mode="read_only",
+            )
+        ],
+    )
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message("выключи database_backup"))
+
+    assert result.handled is True
+    assert result.ok is False
+    assert "только для чтения" in result.reply_text
+    assert [call["operation"] for call in control.calls] == ["status"]
+
+
+def test_read_only_system_timer_rejects_period_change_without_preview():
+    control = FakeControl(
+        jobs=[],
+        timers=[
+            _timer(
+                "database_backup",
+                name="Резервная копия CRM",
+                control_mode="read_only",
+            )
+        ],
+    )
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message("период database_backup раз в 20 минут"))
+
+    assert result.handled is True
+    assert result.ok is False
+    assert "только для чтения" in result.reply_text
+    assert [call["operation"] for call in control.calls] == ["status"]
+
+
+def test_managed_timer_toggle_never_claims_success_when_live_readback_drifts():
+    class DriftedReadbackControl(FakeControl):
+        def request(self, operation, payload=None, idempotency_key=None, expected_revision=None):
+            response = super().request(operation, payload, idempotency_key, expected_revision)
+            if operation == "status" and self.timers and self.timers[0]["desired_state"] == "on":
+                response["data"]["system_timers"][0]["actual_state"] = "inactive"
+                response["data"]["system_timers"][0]["reconcile_state"] = "drift"
+            return response
+
+    control = DriftedReadbackControl(jobs=[], timers=[_timer()])
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message("включи managed_pc_health"))
+
+    assert result.ok is False
+    assert "не подтверждено" in result.reply_text
+    assert len([call for call in control.calls if call["operation"] == "set_enabled"]) == 1
 
 
 def test_duplicate_on_command_is_verified_as_a_noop_without_idempotency_conflict():
@@ -226,6 +463,52 @@ def test_schedule_requires_preview_and_matching_confirmation_then_readback():
     assert control.jobs[0]["schedule"]["every_minutes"] == 30
     assert control.jobs[0]["schedule"]["timezone"] == "Asia/Krasnoyarsk"
     assert control.jobs[0]["schedule"]["active_window"] == "24/7"
+
+
+def test_managed_timer_period_requires_preview_confirmation_and_exact_readback():
+    control = FakeControl(jobs=[], timers=[_timer()])
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    preview = adapter.handle(_message("период managed_pc_health раз в 20 минут"))
+    token = _confirmation_token(preview.reply_text)
+
+    assert preview.ok is True
+    assert [call["operation"] for call in control.calls] == ["status", "preview"]
+    assert control.calls[1]["payload"]["target_payload"] == {
+        "timer_id": "managed_pc_health",
+        "schedule": {"every_minutes": 20},
+    }
+    confirmed = adapter.handle(_message(f"Подтвердить {token}", message_id=49))
+
+    assert confirmed.ok is True
+    assert "20 мин" in confirmed.reply_text
+    assert [call["operation"] for call in control.calls] == [
+        "status",
+        "preview",
+        "set_schedule",
+        "status",
+    ]
+    assert control.calls[2]["expected_revision"] == 2
+    assert control.timers[0]["period_minutes"] == 20
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "часовой пояс managed_pc_health UTC",
+        "активные часы managed_pc_health 09:00-21:00",
+    ],
+)
+def test_job_only_schedule_fields_reject_system_timer_without_preview(command):
+    control = FakeControl(jobs=[], timers=[_timer()])
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    result = adapter.handle(_message(command))
+
+    assert result.handled is True
+    assert result.ok is False
+    assert "только к заданиям" in result.reply_text
+    assert [call["operation"] for call in control.calls] == ["status"]
 
 
 def test_timezone_change_preserves_period_and_window_until_preview_confirmation():
@@ -415,8 +698,10 @@ def test_incoming_coordinator_ignores_unauthorized_and_unknown_text():
 def test_adapter_uses_real_local_control_protocol_and_exact_readback(tmp_path):
     async def scenario():
         socket_path = tmp_path / "automation.sock"
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(mode=0o700)
         server = AutomationControlServer(
-            service=AutomationControlService(AutomationStore(tmp_path / "manager.sqlite3")),
+            service=AutomationControlService(AutomationStore(state_dir / "manager.sqlite3")),
             socket_path=socket_path,
             allowed_uids=frozenset({os.getuid()}),
         )
@@ -466,4 +751,55 @@ def test_adapter_uses_real_local_control_protocol_and_exact_readback(tmp_path):
         "timezone": "UTC",
         "active_window": {"start": "09:00", "end": "21:00"},
     }
-    assert str(OWNER_PEER_ID).encode() not in (tmp_path / "manager.sqlite3").read_bytes()
+    assert str(OWNER_PEER_ID).encode() not in (tmp_path / "state" / "manager.sqlite3").read_bytes()
+
+
+def test_managed_timer_uses_real_local_control_protocol_and_exact_readback(tmp_path):
+    async def scenario():
+        socket_path = tmp_path / "automation.sock"
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(mode=0o700)
+        store = AutomationStore(state_dir / "manager.sqlite3")
+        controller = FakeSystemTimerController()
+        store.adopt_system_timer(
+            timer_id="managed_pc_health",
+            unit_name="autostop-managed-pc-health.timer",
+            control_mode="managed",
+            state=controller.state,
+        )
+        server = AutomationControlServer(
+            service=AutomationControlService(store, timer_controller=controller),
+            socket_path=socket_path,
+            allowed_uids=frozenset({os.getuid()}),
+        )
+        await server.start()
+        try:
+            adapter = build_runtime_owner_adapter(owner_peer_id=OWNER_PEER_ID, socket_path=socket_path)
+            enabled = await asyncio.to_thread(adapter.handle, _message("включи managed_pc_health"))
+            preview = await asyncio.to_thread(
+                adapter.handle,
+                _message("период managed_pc_health раз в 20 минут", message_id=60),
+            )
+            scheduled = await asyncio.to_thread(
+                adapter.handle,
+                _message(f"Подтвердить {_confirmation_token(preview.reply_text)}", message_id=61),
+            )
+            readback = await asyncio.to_thread(
+                AutomationControlClient(socket_path=socket_path).request,
+                "status",
+            )
+            return enabled, scheduled, readback
+        finally:
+            await server.close()
+
+    enabled, scheduled, readback = asyncio.run(scenario())
+
+    assert enabled.ok is True
+    assert scheduled.ok is True
+    timer = readback["data"]["system_timers"][0]
+    assert timer["timer_id"] == "managed_pc_health"
+    assert timer["desired_state"] == "on"
+    assert timer["actual_state"] == "active"
+    assert timer["period_minutes"] == 20
+    assert timer["actual_period_minutes"] == 20
+    assert timer["reconcile_state"] == "in_sync"

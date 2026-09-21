@@ -97,6 +97,12 @@ class _PendingConfirmation:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class _ResolvedTarget:
+    kind: str
+    item: dict[str, Any]
+
+
 def _normalized(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
@@ -221,10 +227,19 @@ class TelegramAutomationAdapter:
         if data is None:
             return self._failure("status", response)
         jobs = data.get("jobs")
-        if not isinstance(jobs, list) or not jobs:
-            return TelegramAutomationResult(True, True, "status", "Регламентных заданий пока нет.")
+        timers = data.get("system_timers", [])
+        if not isinstance(jobs, list) or not isinstance(timers, list):
+            return TelegramAutomationResult(
+                True,
+                False,
+                "status",
+                "Состояние регламентных заданий сейчас недоступно.",
+            )
         lines = []
-        for job in jobs[:20]:
+        for job in jobs:
+            # Reserve room for the small reviewed system-timer allowlist.
+            if len(lines) >= 15:
+                break
             if not isinstance(job, dict):
                 continue
             state = "ON" if job.get("desired_state") == "on" else "OFF"
@@ -241,30 +256,74 @@ class TelegramAutomationAdapter:
                 f"{job.get('name') or job.get('job_id')}: {state} ({actual_state}), {period} мин., "
                 f"{timezone}, {active_window_label}."
             )
-        return TelegramAutomationResult(True, True, "status", "\n".join(lines) or "Нет доступных заданий.")
+        for timer in timers:
+            if len(lines) >= 20:
+                break
+            if not isinstance(timer, dict):
+                continue
+            state = "ON" if timer.get("desired_state") == "on" else "OFF"
+            actual_state = str(timer.get("actual_state") or "unknown")
+            period = timer.get("period_minutes")
+            access = "только чтение" if timer.get("locked") is True else "управляемый"
+            lines.append(
+                f"{timer.get('name') or timer.get('timer_id')} [таймер {timer.get('timer_id')}]: "
+                f"{state} ({actual_state}), {period} мин., {access}."
+            )
+        return TelegramAutomationResult(
+            True,
+            True,
+            "status",
+            "\n".join(lines) or "Регламентных заданий и системных таймеров пока нет.",
+        )
 
-    def _jobs(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    def _targets(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
         response = self._request("status")
         data = _response_data(response)
-        if data is None or not isinstance(data.get("jobs"), list):
-            return [], response
-        return [job for job in data["jobs"] if isinstance(job, dict)], None
+        if (
+            data is None
+            or not isinstance(data.get("jobs"), list)
+            or not isinstance(data.get("system_timers", []), list)
+        ):
+            return [], [], response
+        jobs = [job for job in data["jobs"] if isinstance(job, dict)]
+        timers = [timer for timer in data.get("system_timers", []) if isinstance(timer, dict)]
+        return jobs, timers, None
 
-    def _resolve_job(self, target: str) -> tuple[dict[str, Any] | None, str | None]:
-        jobs, failure = self._jobs()
+    def _resolve_target(self, target: str) -> tuple[_ResolvedTarget | None, str | None]:
+        jobs, timers, failure = self._targets()
         if failure is not None:
             return None, "Состояние заданий сейчас недоступно; ничего не изменено."
         wanted = _normalized(target)
-        matches = {
-            str(job.get("job_id")): job
-            for job in jobs
-            if wanted in {_normalized(str(job.get("job_id") or "")), _normalized(str(job.get("name") or ""))}
-        }
+        matches: dict[tuple[str, str], _ResolvedTarget] = {}
+        for kind, identifier, items in (
+            ("job", "job_id", jobs),
+            ("system_timer", "timer_id", timers),
+        ):
+            for item in items:
+                item_id = str(item.get(identifier) or "")
+                if wanted in {_normalized(item_id), _normalized(str(item.get("name") or ""))}:
+                    matches[(kind, item_id)] = _ResolvedTarget(kind=kind, item=item)
         if not matches:
-            return None, "Точное задание не найдено; ничего не изменено."
+            return None, "Точная автоматизация не найдена; ничего не изменено."
         if len(matches) != 1:
-            return None, "Название неоднозначно. Укажите точный ID задания."
+            return None, "Название неоднозначно. Укажите точный ID задания или таймера."
         return next(iter(matches.values())), None
+
+    def _readback_target(self, kind: str, target_id: str) -> dict[str, Any] | None:
+        payload = {"job_id": target_id} if kind == "job" else {}
+        response = self._request("status", payload)
+        data = _response_data(response)
+        if data is None:
+            return None
+        collection_name = "jobs" if kind == "job" else "system_timers"
+        identifier = "job_id" if kind == "job" else "timer_id"
+        collection = data.get(collection_name)
+        if not isinstance(collection, list):
+            return None
+        matches = [item for item in collection if isinstance(item, dict) and item.get(identifier) == target_id]
+        return matches[0] if len(matches) == 1 else None
 
     def _resolve_template(self, target: str) -> tuple[dict[str, Any] | None, str | None]:
         response = self._request("templates")
@@ -290,68 +349,108 @@ class TelegramAutomationAdapter:
         return next(iter(matches.values())), None
 
     def _toggle(self, target: str, *, enabled: bool, message: TelegramAutomationMessage) -> TelegramAutomationResult:
-        job, error = self._resolve_job(target)
-        if job is None:
+        resolved, error = self._resolve_target(target)
+        if resolved is None:
             return TelegramAutomationResult(True, False, "set_enabled", str(error))
-        job_id = str(job.get("job_id") or "")
-        revision = job.get("revision")
-        if type(revision) is not int:
+        item = resolved.item
+        identifier = "job_id" if resolved.kind == "job" else "timer_id"
+        target_id = str(item.get(identifier) or "")
+        if resolved.kind == "system_timer" and (item.get("locked") is True or item.get("control_mode") != "managed"):
             return TelegramAutomationResult(
-                True, False, "set_enabled", "Ревизия задания недоступна; ничего не изменено."
+                True,
+                False,
+                "set_enabled",
+                "Этот системный таймер доступен только для чтения; ничего не изменено.",
+            )
+        revision = item.get("revision")
+        if type(revision) is not int or (resolved.kind == "system_timer" and revision < 1):
+            return TelegramAutomationResult(
+                True, False, "set_enabled", "Ревизия автоматизации недоступна; ничего не изменено."
             )
         expected = "on" if enabled else "off"
-        if job.get("desired_state") == expected:
-            actual_state = str(job.get("actual_state") or "unknown")
-            next_run = job.get("next_run_at") or "не назначен"
+        expected_actual = "active" if enabled else "inactive"
+        already_verified = item.get("desired_state") == expected
+        if resolved.kind == "system_timer":
+            already_verified = (
+                already_verified
+                and item.get("actual_state") == expected_actual
+                and item.get("reconcile_state") == "in_sync"
+            )
+        if already_verified:
+            actual_state = str(item.get("actual_state") or "unknown")
+            next_run = item.get("next_run_at") or "не назначен"
             return TelegramAutomationResult(
                 True,
                 True,
                 "set_enabled",
-                f"{job.get('name') or job_id}: уже {expected.upper()}; фактически: {actual_state}; "
+                f"{item.get('name') or target_id}: уже {expected.upper()}; фактически: {actual_state}; "
                 f"следующий запуск: {next_run}.",
             )
+        payload = {identifier: target_id, "enabled": enabled}
         response = self._request(
             "set_enabled",
-            {"job_id": job_id, "enabled": enabled},
-            idempotency_key=self._idempotency_key(message, "set-enabled", job_id),
+            payload,
+            idempotency_key=self._idempotency_key(message, f"set-enabled-{resolved.kind}", target_id),
             expected_revision=revision,
         )
         if _response_data(response) is None:
             return self._failure("set_enabled", response)
-        readback = self._request("status", {"job_id": job_id})
-        data = _response_data(readback)
-        jobs = data.get("jobs") if data is not None else None
-        if (
-            not isinstance(jobs, list)
-            or len(jobs) != 1
-            or jobs[0].get("job_id") != job_id
-            or jobs[0].get("desired_state") != expected
-        ):
+        verified = self._readback_target(resolved.kind, target_id)
+        readback_matches = verified is not None and verified.get("desired_state") == expected
+        if resolved.kind == "system_timer":
+            readback_matches = bool(
+                readback_matches
+                and verified is not None
+                and verified.get("actual_state") == expected_actual
+                and verified.get("reconcile_state") == "in_sync"
+            )
+        if not readback_matches:
             return TelegramAutomationResult(
                 True,
                 False,
                 "set_enabled",
                 "Команда принята, но точное состояние не подтверждено. Повтор не выполнялся.",
             )
-        verified = jobs[0]
         actual_state = str(verified.get("actual_state") or "unknown")
         next_run = verified.get("next_run_at") or "не назначен"
         return TelegramAutomationResult(
             True,
             True,
             "set_enabled",
-            f"{verified.get('name') or job_id}: {expected.upper()}; фактически: {actual_state}; "
+            f"{verified.get('name') or target_id}: {expected.upper()}; фактически: {actual_state}; "
             f"следующий запуск: {next_run}.",
         )
 
     def _preview_schedule(
         self, target: str, *, every_minutes: int, message: TelegramAutomationMessage
     ) -> TelegramAutomationResult:
-        job, error = self._resolve_job(target)
-        if job is None:
+        resolved, error = self._resolve_target(target)
+        if resolved is None:
             return TelegramAutomationResult(True, False, "set_schedule", str(error))
+        if resolved.kind == "system_timer":
+            timer = resolved.item
+            if timer.get("locked") is True or timer.get("control_mode") != "managed":
+                return TelegramAutomationResult(
+                    True,
+                    False,
+                    "set_schedule",
+                    "Этот системный таймер доступен только для чтения; ничего не изменено.",
+                )
+            revision = timer.get("revision")
+            if type(revision) is not int or revision < 1:
+                return TelegramAutomationResult(
+                    True, False, "set_schedule", "Ревизия таймера недоступна; ничего не изменено."
+                )
+            timer_id = str(timer.get("timer_id") or "")
+            return self._preview(
+                operation="set_schedule",
+                payload={"timer_id": timer_id, "schedule": {"every_minutes": every_minutes}},
+                expected_revision=revision,
+                message=message,
+                summary=f"Период системного таймера {timer.get('name') or timer_id}: {every_minutes} мин.",
+            )
         return self._preview_schedule_job(
-            job,
+            resolved.item,
             changes={"every_minutes": every_minutes},
             message=message,
             summary=f"Период: {every_minutes} мин.",
@@ -365,10 +464,17 @@ class TelegramAutomationAdapter:
         message: TelegramAutomationMessage,
         summary: str,
     ) -> TelegramAutomationResult:
-        job, error = self._resolve_job(target)
-        if job is None:
+        resolved, error = self._resolve_target(target)
+        if resolved is None:
             return TelegramAutomationResult(True, False, "set_schedule", str(error))
-        return self._preview_schedule_job(job, changes=changes, message=message, summary=summary)
+        if resolved.kind != "job":
+            return TelegramAutomationResult(
+                True,
+                False,
+                "set_schedule",
+                "Часовой пояс и активные часы применимы только к заданиям; ничего не изменено.",
+            )
+        return self._preview_schedule_job(resolved.item, changes=changes, message=message, summary=summary)
 
     def _preview_schedule_job(
         self,
@@ -438,7 +544,9 @@ class TelegramAutomationAdapter:
             payload=payload,
             expected_revision=expected_revision,
             idempotency_key=self._idempotency_key(
-                message, operation, str(payload.get("job_id") or payload.get("template_id"))
+                message,
+                operation,
+                str(payload.get("job_id") or payload.get("timer_id") or payload.get("template_id")),
             ),
             expires_at=float(self._now()) + self.confirmation_ttl_seconds,
         )
@@ -467,6 +575,38 @@ class TelegramAutomationAdapter:
                     True, False, pending.operation, "Задание уже изменилось. Предпросмотр отменён; запросите новый."
                 )
             return self._failure(pending.operation, response)
+        pending_timer_id = pending.payload.get("timer_id")
+        if isinstance(pending_timer_id, str):
+            timer = data.get("system_timer") if isinstance(data.get("system_timer"), dict) else None
+            if timer is None or timer.get("timer_id") != pending_timer_id:
+                del self._pending[token]
+                return TelegramAutomationResult(
+                    True,
+                    False,
+                    pending.operation,
+                    "Изменение принято, но таймер для readback не получен. Повтор не выполнялся.",
+                )
+            verified_timer = self._readback_target("system_timer", pending_timer_id)
+            del self._pending[token]
+            expected_minutes = pending.payload.get("schedule", {}).get("every_minutes")
+            if (
+                verified_timer is None
+                or verified_timer.get("period_minutes") != expected_minutes
+                or verified_timer.get("actual_period_minutes") != expected_minutes
+                or verified_timer.get("reconcile_state") != "in_sync"
+            ):
+                return TelegramAutomationResult(
+                    True,
+                    False,
+                    pending.operation,
+                    "Изменение применено, но новый период таймера не подтверждён. Повтор не выполнялся.",
+                )
+            return TelegramAutomationResult(
+                True,
+                True,
+                pending.operation,
+                f"Период системного таймера подтверждён: {expected_minutes} мин.",
+            )
         job = data.get("job") if isinstance(data.get("job"), dict) else None
         if job is None or not job.get("job_id"):
             del self._pending[token]
