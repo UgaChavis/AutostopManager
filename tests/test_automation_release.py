@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from autostop_manager.automation_timers import SYSTEM_TIMER_ALLOWLIST
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = Path("/opt/AutostopManager/.venv/bin/python")
+PYTHON = Path(sys.executable)
 
 
 def test_release_preflight_holds_before_idempotent_off_seed(tmp_path: Path):

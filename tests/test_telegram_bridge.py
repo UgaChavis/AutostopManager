@@ -51,11 +51,11 @@ def _owner_runtime_config(tmp_path):
     return replace(_runtime_config(tmp_path), owner_config_path=path)
 
 
-def _owner_logic_config(monkeypatch, tmp_path):
+def _owner_logic_config(monkeypatch, tmp_path, *, owner_peer_id: int = 20):
     """Exercise sends in unprivileged CI; file trust has separate root fixtures."""
 
     path = tmp_path / "synthetic-owner.json"
-    path.write_text(json.dumps({"owner_peer_id": 20}))
+    path.write_text(json.dumps({"owner_peer_id": owner_peer_id}))
     monkeypatch.setattr(
         telegram_bridge, "load_owner_peer_id", lambda path: json.loads(path.read_text())["owner_peer_id"]
     )
@@ -1157,7 +1157,7 @@ exit 2
     stat = fake_bin / "stat"
     stat.write_text(
         "#!/bin/sh\n"
-        'case "$*" in *monitor.env|*owner.env) exec /usr/bin/stat "$@" ;; esac\n'
+        "case \"$*\" in *monitor.env) printf 'root:root:644\\n'; exit 0 ;; esac\n"
         "printf 'mock-service:mock-service:%s\\n' \"$FAKE_SESSION_MODE\"\n",
         encoding="utf-8",
     )
@@ -1417,7 +1417,7 @@ def test_named_work_account_owns_all_runtime_paths() -> None:
     assert paths.socket_path == telegram_bridge.WORK_SOCKET_PATH
 
 
-def test_work_owner_peer_is_loaded_only_from_root_owned_config(monkeypatch, tmp_path) -> None:
+def test_work_owner_peer_is_loaded_only_from_fixed_config_path(monkeypatch, tmp_path) -> None:
     credentials = tmp_path / "credentials"
     credentials.write_text(
         "TELEGRAM_API_ID=12345678\nTELEGRAM_API_HASH=0123456789abcdef0123456789abcdef\n",
@@ -1439,12 +1439,22 @@ def test_work_owner_peer_is_loaded_only_from_root_owned_config(monkeypatch, tmp_
     )
     owner_config.chmod(0o640)
     monkeypatch.setattr(telegram_bridge, "WORK_OWNER_CONFIG_PATH", owner_config)
+    loaded_paths: list[Path] = []
+
+    def load_owner(path: Path | None) -> int | None:
+        if path is None:
+            return None
+        loaded_paths.append(path)
+        return 123456789
+
+    monkeypatch.setattr(telegram_bridge, "load_owner_peer_id", load_owner)
 
     work = telegram_bridge._config_for_account("work")
     personal = telegram_bridge._config_for_account("personal")
 
     assert telegram_bridge._owner_peer_id(work) == 123456789
     assert telegram_bridge._owner_peer_id(personal) is None
+    assert loaded_paths == [owner_config]
 
 
 def test_named_accounts_have_fixed_isolated_media_paths() -> None:
@@ -2546,24 +2556,16 @@ def test_monitor_voice_stage_expiry_removes_an_abandoned_file(monkeypatch, tmp_p
     assert monitor.voice_stage(handle) is None
 
 
-def _runtime_config(tmp_path, *, owner_peer_id: int | None = None) -> TelegramConfig:
+def _runtime_config(tmp_path) -> TelegramConfig:
     runtime_dir = tmp_path / "run"
     state_dir = tmp_path / "state"
-    owner_config_path = None
-    if owner_peer_id is not None:
-        owner_config_path = tmp_path / "owner.json"
-        owner_config_path.write_text(
-            json.dumps({"schema_version": 1, "owner_peer_id": owner_peer_id, "kind": "private"}) + "\n",
-            encoding="ascii",
-        )
-        owner_config_path.chmod(0o640)
     return TelegramConfig(
         api_id=123456,
         api_hash="0" * 32,
         session_path=state_dir / "account",
         state_dir=state_dir,
         socket_path=runtime_dir / "bridge.sock",
-        owner_config_path=owner_config_path,
+        owner_config_path=None,
     )
 
 
@@ -3107,7 +3109,7 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
 
 
 def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path, owner_peer_id=10)
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
     entity = object()
     target = {"id": 10, "title": "Private owner", "username": "not-returned", "kind": "private"}
 
@@ -3195,11 +3197,11 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
         asyncio.run(
             telegram_bridge._handle_operation(
                 client,
-                _runtime_config(tmp_path, owner_peer_id=11),
+                _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=11),
                 apply_request | {"idempotency_key": "crm-digest:other-window"},
             )
         )
-    changed_owner_config = _runtime_config(tmp_path, owner_peer_id=11)
+    changed_owner_config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=11)
     changed_owner_dry = asyncio.run(telegram_bridge._handle_operation(client, changed_owner_config, dry_request))
     with pytest.raises(BridgeError, match="idempotency_key_conflict"):
         asyncio.run(
@@ -3237,8 +3239,8 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
         )
 
 
-def test_owner_notification_idempotency_readback_not_found_never_calls_telegram(tmp_path) -> None:
-    config = _runtime_config(tmp_path, owner_peer_id=10)
+def test_owner_notification_idempotency_readback_not_found_never_calls_telegram(monkeypatch, tmp_path) -> None:
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
 
     class NoTelegramClient:
         def __getattr__(self, name):
@@ -4000,7 +4002,7 @@ def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch
 
 
 def test_owner_automation_command_is_consumed_before_codex_wake(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path, owner_peer_id=10)
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
     monitor = telegram_bridge.InboundMonitor()
     routed: list[object] = []
     replies: list[tuple[str, int]] = []
@@ -4036,7 +4038,7 @@ def test_owner_automation_command_is_consumed_before_codex_wake(monkeypatch, tmp
 
 
 def test_foreign_peer_never_reaches_owner_automation_adapter(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path, owner_peer_id=10)
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
     monitor = telegram_bridge.InboundMonitor()
     captured: list[object] = []
 
@@ -4060,7 +4062,7 @@ def test_foreign_peer_never_reaches_owner_automation_adapter(monkeypatch, tmp_pa
 
 
 def test_unknown_owner_text_passes_through_to_existing_codex_wake(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path, owner_peer_id=10)
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
     monitor = telegram_bridge.InboundMonitor()
     captured: list[object] = []
 
@@ -4086,7 +4088,7 @@ def test_unknown_owner_text_passes_through_to_existing_codex_wake(monkeypatch, t
 
 
 def test_owner_automation_reply_uses_fixed_target_dry_run_apply_and_verified_readback(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path, owner_peer_id=10)
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
     requests: list[dict[str, object]] = []
 
     async def owner_notification(_client, _config, request):
