@@ -2897,6 +2897,7 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
     saved_idempotency = json.loads((config.state_dir / "idempotency.json").read_text(encoding="utf-8"))
     assert saved_idempotency["crm-digest:window-1"]["operation"] == "send_owner_notification"
     assert saved_idempotency["crm-digest:window-1"]["target_role"] == "owner"
+    assert len(saved_idempotency["crm-digest:window-1"]["target_fingerprint"]) == 16
     assert "peer_id" not in saved_idempotency["crm-digest:window-1"]
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     contract_payload = telegram_bridge._decode_contract(dry["contract_token"], contract_key)
@@ -2907,6 +2908,16 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
                 client,
                 _runtime_config(tmp_path, owner_peer_id=11),
                 apply_request | {"idempotency_key": "crm-digest:other-window"},
+            )
+        )
+    changed_owner_config = _runtime_config(tmp_path, owner_peer_id=11)
+    changed_owner_dry = asyncio.run(telegram_bridge._handle_operation(client, changed_owner_config, dry_request))
+    with pytest.raises(BridgeError, match="idempotency_key_conflict"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                changed_owner_config,
+                apply_request | {"contract_token": changed_owner_dry["contract_token"]},
             )
         )
 

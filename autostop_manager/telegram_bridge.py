@@ -1555,7 +1555,9 @@ async def _handle_send_text_to_entity(
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
-    target_binding = idempotency_target or {"peer_id": target["id"]}
+    target_binding = dict(idempotency_target or {"peer_id": target["id"]})
+    if contract_target_role is not None:
+        target_binding["target_fingerprint"] = f"{contract_peer_id:016x}"
     allowed_previous_operations = {idempotency_operation}
     if idempotency_operation == "send_text":
         allowed_previous_operations.add(None)
