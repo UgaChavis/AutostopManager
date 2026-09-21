@@ -126,7 +126,14 @@ class TelegramAutomationAdapter:
         self._pending: dict[str, _PendingConfirmation] = {}
 
     def handle(self, message: TelegramAutomationMessage) -> TelegramAutomationResult:
-        if not message.is_private or message.peer_id != self.owner_peer_id:
+        if (
+            message.is_private is not True
+            or type(message.peer_id) is not int
+            or message.peer_id != self.owner_peer_id
+            or type(message.message_id) is not int
+            or message.message_id <= 0
+            or not isinstance(message.text, str)
+        ):
             return TelegramAutomationResult(False, False, "ignored", "")
         text = message.text.strip()
         if (
@@ -177,9 +184,10 @@ class TelegramAutomationAdapter:
             if not isinstance(job, dict):
                 continue
             state = "ON" if job.get("desired_state") == "on" else "OFF"
+            actual_state = str(job.get("actual_state") or "unknown")
             schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
             period = schedule.get("every_minutes")
-            lines.append(f"{job.get('name') or job.get('job_id')}: {state}, {period} мин.")
+            lines.append(f"{job.get('name') or job.get('job_id')}: {state} ({actual_state}), {period} мин.")
         return TelegramAutomationResult(True, True, "status", "\n".join(lines) or "Нет доступных заданий.")
 
     def _jobs(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -263,12 +271,14 @@ class TelegramAutomationAdapter:
                 "Команда принята, но точное состояние не подтверждено. Повтор не выполнялся.",
             )
         verified = jobs[0]
+        actual_state = str(verified.get("actual_state") or "unknown")
         next_run = verified.get("next_run_at") or "не назначен"
         return TelegramAutomationResult(
             True,
             True,
             "set_enabled",
-            f"{verified.get('name') or job_id}: {expected.upper()}; следующий запуск: {next_run}.",
+            f"{verified.get('name') or job_id}: {expected.upper()}; фактически: {actual_state}; "
+            f"следующий запуск: {next_run}.",
         )
 
     def _preview_schedule(
@@ -474,6 +484,6 @@ class TelegramAutomationAdapter:
 def build_runtime_owner_adapter(*, owner_peer_id: int, socket_path: Path | None = None) -> TelegramAutomationAdapter:
     client = AutomationControlClient(
         socket_path=socket_path,
-        actor={"kind": "telegram_owner", "id": "owner-command-adapter-v1", "is_admin": True},
+        actor={"kind": "telegram_owner", "id": "owner-command-adapter-v1", "is_admin": False},
     )
     return TelegramAutomationAdapter(owner_peer_id=owner_peer_id, control=client)
