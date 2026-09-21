@@ -33,6 +33,25 @@ stop_active_media_workers() {
   systemctl stop "${units[@]}" || return 1
 }
 
+bridge_status() {
+  sudo -u "${service_user}" env PYTHONPATH="${release_link}" \
+    "${venv_python}" -m autostop_manager.telegram_bridge --account work status
+}
+
+wait_for_outbound_only() {
+  local attempt status
+  for attempt in {1..15}; do
+    if systemctl is-active --quiet "${service_unit}" \
+      && status="$(bridge_status)" \
+      && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
+      && grep -Eq '"inbound_enabled":[[:space:]]*false' <<<"${status}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 disable_duty() {
   local workers load_state
   if [[ -f "${wake_config}" ]]; then
@@ -44,10 +63,11 @@ disable_duty() {
   [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || unlink -- "${monitor_env}" || return 1
   load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${load_state}" == "loaded" ]]; then
-    systemctl disable "${service_unit}" || return 1
-    systemctl stop "${service_unit}" || return 1
-    [[ "$(systemctl show --property=ActiveState --value "${service_unit}")" == "inactive" ]] || return 1
-    [[ "$(systemctl show --property=UnitFileState --value "${service_unit}")" == "disabled" ]] || return 1
+    # Duty controls inbound event handling only. The bridge remains enabled so
+    # guarded scheduled notifications can still use its local outbound RPC.
+    systemctl enable "${service_unit}" || return 1
+    systemctl restart "${service_unit}" || return 1
+    wait_for_outbound_only || return 1
   elif [[ "${load_state}" != "not-found" ]]; then
     return 1
   fi
@@ -116,7 +136,7 @@ cleanup_incomplete_duty() {
 duty_is_paused() {
   local unit value
   [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || return 1
-  for unit in "${wake_unit}" "${service_unit}"; do
+  for unit in "${wake_unit}"; do
     value="$(systemctl show --property=LoadState --value "${unit}")" || return 1
     [[ "${value}" == "loaded" ]] || return 1
     value="$(systemctl show --property=ActiveState --value "${unit}")" || return 1
@@ -124,27 +144,36 @@ duty_is_paused() {
     value="$(systemctl show --property=UnitFileState --value "${unit}")" || return 1
     [[ "${value}" == "disabled" ]] || return 1
   done
+  systemctl is-active --quiet "${service_unit}" || return 1
+  value="$(systemctl show --property=UnitFileState --value "${service_unit}")" || return 1
+  [[ "${value}" == "enabled" ]] || return 1
+  wait_for_outbound_only
 }
 
 case "$1" in
   --status)
-    if [[ -f "${wake_config}" ]] && systemctl is-active --quiet "${wake_unit}"; then
-      PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status
-    elif [[ -f "${wake_config}" ]] && duty_is_paused; then
-      printf '%s\n' '{"ok":true,"enabled":false,"connected":false,"state":"paused","polling":false}'
-    elif [[ -f "${wake_config}" ]]; then
-      printf '%s\n' '{"ok":false,"enabled":false,"error":"wake_service_not_running","polling":false}'
-      exit 1
-    else
-      printf '%s\n' '{"ok":false,"error":"wake_not_installed"}'
-      exit 1
-    fi
+    bridge_state="$(bridge_status)" || { printf '%s\n' '{"ok":false,"transport_ready":false,"error":"bridge_unavailable"}'; exit 1; }
+    wake_active=false
+    if [[ -f "${wake_config}" ]] && systemctl is-active --quiet "${wake_unit}"; then wake_active=true; fi
+    BRIDGE_STATE="${bridge_state}" WAKE_ACTIVE="${wake_active}" "${venv_python}" -c '
+import json, os
+s=json.loads(os.environ["BRIDGE_STATE"])
+inbound=bool(s.get("inbound_enabled"))
+print(json.dumps({
+  "ok": bool(s.get("ok")),
+  "transport_ready": bool(s.get("transport_ready")),
+  "inbound_enabled": inbound,
+  "owner_notification_configured": bool(s.get("owner_notification_configured")),
+  "wake_active": os.environ["WAKE_ACTIVE"] == "true",
+  "state": "inbound_enabled" if inbound else "outbound_only",
+  "polling": False,
+}, separators=(",", ":"), sort_keys=True))'
     ;;
   --disable)
     trap cleanup_incomplete_duty EXIT
     disable_duty || { echo "work_telegram_duty_disable_failed=true" >&2; exit 1; }
     trap - EXIT
-    printf '%s\n' "work_telegram_duty=disabled" "monitoring=off"
+    printf '%s\n' "work_telegram_duty=disabled" "monitoring=off" "outbound=ready"
     ;;
   --enable)
     trap cleanup_incomplete_duty EXIT

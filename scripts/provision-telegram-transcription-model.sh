@@ -18,14 +18,21 @@ fi
 
 service_unit="autostop-work-telegram.service"
 control_lock="/run/autostop-work-telegram-control.lock"
+model_link_root="/opt/autostop-work-telegram-models"
+model_link="${model_link_root}/faster-whisper-small"
 exec 9>"${control_lock}"
 flock -x 9
 active_state="$(systemctl show --property=ActiveState --value "${service_unit}" 2>/dev/null || true)"
 unit_file_state="$(systemctl show --property=UnitFileState --value "${service_unit}" 2>/dev/null || true)"
 if [[ -n "${active_state}" || -n "${unit_file_state}" ]]; then
-  if [[ "${active_state}" != "inactive" ]] \
+  if [[ "${active_state}" == "active" && "${unit_file_state}" == "enabled" ]]; then
+    if [[ ! -L "${model_link}" ]]; then
+      echo "work_telegram_runtime_lifecycle_unsafe_for_model_update=true" >&2
+      exit 1
+    fi
+  elif [[ "${active_state}" != "inactive" ]] \
     || { [[ "${unit_file_state}" != "disabled" ]] && [[ "${unit_file_state}" != "disabled-runtime" ]]; }; then
-    echo "work_telegram_runtime_must_be_paused_before_model_update=true" >&2
+    echo "work_telegram_runtime_lifecycle_unsafe_for_model_update=true" >&2
     exit 1
   fi
 fi
@@ -38,8 +45,6 @@ work_runtime_dir=""
 work_runtime_ready_marker=""
 target_venv=""
 manifest_path=""
-model_link_root="/opt/autostop-work-telegram-models"
-model_link="${model_link_root}/faster-whisper-small"
 target_model=""
 model_ready_marker=""
 model_files=(

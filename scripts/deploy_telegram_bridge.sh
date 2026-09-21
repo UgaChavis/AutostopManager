@@ -55,6 +55,8 @@ case "${account}" in
     work_runtime_root="/opt/autostop-work-telegram-runtimes"
     work_model_link="/opt/autostop-work-telegram-models/faster-whisper-small"
     media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"
+    monitor_env="/etc/autostop-work-telegram/monitor.env"
+    owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"
     ;;
   *)
     echo "account_invalid=true" >&2
@@ -67,7 +69,7 @@ if [[ "${no_start}" -eq 1 && "${account}" != "work" ]]; then
   exit 2
 fi
 if [[ "${account}" == "work" && "${no_start}" -ne 1 ]]; then
-  echo "ERROR: work runtime releases require --no-start while duty is paused" >&2
+  echo "ERROR: work runtime releases require --no-start as an explicit lifecycle guard" >&2
   exit 2
 fi
 
@@ -118,12 +120,14 @@ previous_work_model=""
 work_runtime_switched=0
 current_link="${release_root}/current"
 previous_release="$(readlink -f "${current_link}" 2>/dev/null || true)"
+work_service_was_active=0
+work_inbound_expected=0
 
 if [[ "${account}" == "work" ]]; then
   work_load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${work_load_state}" == "not-found" ]]; then
     [[ -z "${previous_release}" && ! -e "${current_link}" && ! -L "${current_link}" ]] || {
-      echo "ERROR: missing work Telegram service requires a clean first paused release" >&2
+      echo "ERROR: missing work Telegram service requires a clean first release" >&2
       exit 1
     }
   else
@@ -133,11 +137,27 @@ if [[ "${account}" == "work" ]]; then
     }
     work_active_state="$(systemctl show --property=ActiveState --value "${service_unit}")"
     work_unit_file_state="$(systemctl show --property=UnitFileState --value "${service_unit}")"
-    if [[ "${work_active_state}" != "inactive" \
+    if [[ "${work_active_state}" == "active" && "${work_unit_file_state}" == "enabled" ]]; then
+      work_service_was_active=1
+    elif [[ "${work_active_state}" != "inactive" \
       || ( "${work_unit_file_state}" != "disabled" && "${work_unit_file_state}" != "disabled-runtime" ) ]]; then
-      echo "ERROR: --no-start requires an inactive disabled work Telegram service" >&2
+      echo "ERROR: work Telegram service lifecycle must be active-enabled or legacy inactive-disabled" >&2
       exit 1
     fi
+  fi
+  if [[ -e "${monitor_env}" || -L "${monitor_env}" ]]; then
+    [[ -f "${monitor_env}" && ! -L "${monitor_env}" ]] || {
+      echo "ERROR: work Telegram inbound intent is invalid" >&2
+      exit 1
+    }
+    work_inbound_expected=1
+  fi
+  if [[ -e "${owner_notification_env}" || -L "${owner_notification_env}" ]]; then
+    [[ -f "${owner_notification_env}" && ! -L "${owner_notification_env}" \
+      && "$(stat -c '%U:%G:%a' "${owner_notification_env}")" == "root:root:600" ]] || {
+      echo "ERROR: work Telegram owner notification config is invalid" >&2
+      exit 1
+    }
   fi
 fi
 
@@ -297,10 +317,34 @@ fi
 mv -- "${staging_dir}" "${release_dir}"
 
 bridge_ready() {
-  systemctl is-active --quiet "${service_unit}" \
-    && sudo -u "${service_user}" env PYTHONPATH="${current_link}" \
+  local status
+  systemctl is-active --quiet "${service_unit}" || return 1
+  if [[ "${account}" != "work" ]]; then
+    sudo -u "${service_user}" env PYTHONPATH="${current_link}" \
       "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account "${account}" probe \
-      | grep -Eq '"authorized": true'
+      | grep -Eq '"authorized":[[:space:]]*true'
+    return
+  fi
+  status="$(
+    sudo -u "${service_user}" env PYTHONPATH="${current_link}" \
+      "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work status
+  )" || return 1
+  grep -Eq '"authorized":[[:space:]]*true' <<<"${status}" \
+    && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
+    && grep -Eq "\"inbound_enabled\":[[:space:]]*$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)" \
+      <<<"${status}"
+}
+
+start_work_bridge() {
+  local attempt
+  systemctl enable --now "${service_unit}" || return 1
+  for attempt in $(seq 1 15); do
+    if bridge_ready; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 restore_media_wrapper() {
@@ -373,8 +417,11 @@ activate_new_release_assets() {
 }
 
 rollback() {
+  if [[ "${account}" == "work" ]]; then
+    systemctl stop "${service_unit}" || return 1
+  fi
   restore_previous_release_assets || return 1
-  if ! systemctl restart "${service_unit}"; then
+  if ! systemctl enable --now "${service_unit}"; then
     return 1
   fi
   for _rollback_attempt in $(seq 1 15); do
@@ -406,36 +453,66 @@ transcription_runtime_ready() {
     "${venv_root}/bin/python" -m autostop_manager.telegram_transcribe --account personal --self-check
 }
 
+if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
+  if ! systemctl stop "${service_unit}"; then
+    echo "ERROR: work Telegram transport did not enter the bounded release stop" >&2
+    exit 1
+  fi
+fi
+
 if ! activate_new_release_assets; then
+  restore_succeeded=0
   if restore_previous_release_assets; then
+    restore_succeeded=1
+  fi
+  if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
+    start_work_bridge || restore_succeeded=0
+  fi
+  if [[ "${restore_succeeded}" -eq 1 ]]; then
     echo "ERROR: Telegram release activation failed; previous release assets restored" >&2
   else
-    echo "ERROR: Telegram release activation failed; no previous Telegram release exists" >&2
+    echo "ERROR: Telegram release activation failed; previous runtime was not fully restored" >&2
   fi
   exit 1
 fi
 
 if ! install_current_media_wrapper; then
+  restore_succeeded=0
   if restore_previous_release_assets; then
+    restore_succeeded=1
+  fi
+  if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
+    start_work_bridge || restore_succeeded=0
+  fi
+  if [[ "${restore_succeeded}" -eq 1 ]]; then
     echo "ERROR: work media sandbox wrapper install failed; previous release assets restored" >&2
   else
-    echo "ERROR: work media sandbox wrapper install failed; no previous Telegram release exists" >&2
+    echo "ERROR: work media sandbox wrapper install failed; previous runtime was not fully restored" >&2
   fi
   exit 1
 fi
 
 if [[ "${account}" == "work" ]]; then
+  if ! start_work_bridge; then
+    if rollback; then
+      echo "ERROR: work Telegram bridge readiness failed; previous release restored" >&2
+    else
+      echo "ERROR: work Telegram bridge readiness failed; no previous Telegram release exists" >&2
+    fi
+    exit 1
+  fi
   if ! transcription_runtime_ready; then
-    if restore_previous_release_assets; then
+    if rollback; then
       echo "ERROR: local Telegram transcription runtime failed; previous release assets restored" >&2
     else
-      echo "ERROR: local Telegram transcription runtime failed; no previous Telegram release exists" >&2
+      echo "ERROR: local Telegram transcription runtime failed; previous runtime was not fully restored" >&2
     fi
     exit 1
   fi
   echo "telegram_bridge_deployed=true"
   echo "account=work"
-  echo "activation=paused"
+  echo "outbound=ready"
+  echo "inbound_restored=$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)"
   cleanup_initial_release_backups
   exit 0
 fi

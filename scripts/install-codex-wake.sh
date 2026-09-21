@@ -9,7 +9,6 @@ boot_unit=/etc/systemd/system/autostop-codex-start.service
 python=/opt/AutostopManager/.venv/bin/python
 [[ "$release" == /opt/autostop-work-telegram-releases/* && -d "$release" && ! -L "$release" ]]
 [[ "$(stat -c %U "$release")" == root ]]
-! systemctl is-active --quiet autostop-work-telegram.service
 ! systemctl is-active --quiet autostop-codex-wake.service
 export PYTHONPATH="$release" PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1
 "$python" -c 'import websockets; assert websockets.__version__ == "15.0.1"'

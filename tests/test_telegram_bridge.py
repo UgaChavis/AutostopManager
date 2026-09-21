@@ -80,8 +80,10 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert "autostop-telegram.service" in text
     assert "autostop-work-telegram.service" in text
     assert "--no-start" in text
-    assert "work runtime releases require --no-start while duty is paused" in text
-    assert "missing work Telegram service requires a clean first paused release" in text
+    assert "work runtime releases require --no-start as an explicit lifecycle guard" in text
+    assert "missing work Telegram service requires a clean first release" in text
+    assert "inbound_restored=" in text
+    assert "outbound=ready" in text
     assert '"${media_wrapper_path}" self-check' in text
     assert '"${current_link}/scripts/run-work-telegram-monitor-voice.sh" --self-check >/dev/null || return 1' in text
     assert text.index('"${media_wrapper_path}" self-check') < text.index(
@@ -100,19 +102,20 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="deploy-script fixture requires its root-only path")
 @pytest.mark.parametrize(
-    ("active_state", "unit_state", "voice_exit"),
+    ("active_state", "unit_state", "voice_exit", "inbound_intent"),
     [
-        ("inactive", "disabled", 1),
-        ("inactive", "disabled", 0),
-        ("active", "enabled", 0),
-        ("inactive", "enabled", 0),
-        ("failed", "disabled", 0),
-        ("activating", "disabled", 0),
-        ("inactive", "masked", 0),
+        ("inactive", "disabled", 1, False),
+        ("inactive", "disabled", 0, False),
+        ("active", "enabled", 0, False),
+        ("active", "enabled", 0, True),
+        ("inactive", "enabled", 0, False),
+        ("failed", "disabled", 0, False),
+        ("activating", "disabled", 0, False),
+        ("inactive", "masked", 0, False),
     ],
 )
-def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
-    tmp_path, active_state, unit_state, voice_exit
+def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
+    tmp_path, active_state, unit_state, voice_exit, inbound_intent
 ) -> None:
     source = tmp_path / "source"
     remote = tmp_path / "origin.git"
@@ -124,6 +127,9 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
     model_link = tmp_path / "models" / "faster-whisper-small"
     fake_bin = tmp_path / "bin"
     daemon_reload_count = tmp_path / "daemon-reload-count"
+    active_state_path = tmp_path / "active-state"
+    unit_state_path = tmp_path / "unit-state"
+    monitor_env = tmp_path / "monitor.env"
     source.mkdir()
     for relative_path, content in {
         "deploy/systemd/autostop-work-telegram.service": "[Service]\nExecStart=/bin/true\n",
@@ -160,7 +166,14 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
         (candidate_runtime, (".dependencies-ready", ".model-ready")),
     ):
         (runtime_dir / "venv" / "bin").mkdir(parents=True)
-        (runtime_dir / "venv" / "bin" / "python").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (runtime_dir / "venv" / "bin" / "python").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in *"telegram_bridge --account work status"*) '
+            'printf \'{"ok":true,"authorized":true,"transport_ready":true,'
+            '"inbound_enabled":%s}\\n\' "$FAKE_INBOUND_EXPECTED" ;; '
+            "*) : ;; esac\n",
+            encoding="utf-8",
+        )
         (runtime_dir / "venv" / "bin" / "python").chmod(0o755)
         (runtime_dir / "model").mkdir()
         for marker_name in marker_names:
@@ -189,6 +202,10 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
     unit_path.parent.mkdir()
     unit_path.write_text(previous_unit, encoding="utf-8")
     media_wrapper_path.parent.mkdir()
+    active_state_path.write_text(active_state, encoding="utf-8")
+    unit_state_path.write_text(unit_state, encoding="utf-8")
+    if inbound_intent:
+        monitor_env.write_text("AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n", encoding="utf-8")
 
     fake_bin.mkdir()
     (fake_bin / "systemctl").write_text(
@@ -196,9 +213,13 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
         "set -eu\n"
         'case "$1" in\n'
         "  show)\n"
-        '    case "$*" in *LoadState*) printf loaded ;; *ActiveState*) printf "%s" "$FAKE_ACTIVE_STATE" ;; *) printf "%s" "$FAKE_UNIT_STATE" ;; esac\n'
+        '    case "$*" in *LoadState*) printf loaded ;; *ActiveState*) cat "$FAKE_ACTIVE_STATE_PATH" ;; *) cat "$FAKE_UNIT_STATE_PATH" ;; esac\n'
         "    exit 0\n"
         "    ;;\n"
+        '  is-active) [[ "$(cat "$FAKE_ACTIVE_STATE_PATH")" == active ]]; exit $? ;;\n'
+        '  stop) printf inactive > "$FAKE_ACTIVE_STATE_PATH"; exit 0 ;;\n'
+        '  enable) printf enabled > "$FAKE_UNIT_STATE_PATH"; '
+        '    [[ "${2:-}" != --now ]] || printf active > "$FAKE_ACTIVE_STATE_PATH"; exit 0 ;;\n'
         "  daemon-reload)\n"
         "    count=0\n"
         '    [[ -f "$FAKE_SYSTEMCTL_COUNT_FILE" ]] && count=$(cat "$FAKE_SYSTEMCTL_COUNT_FILE")\n'
@@ -210,6 +231,10 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
         encoding="utf-8",
     )
     (fake_bin / "systemctl").chmod(0o755)
+    (fake_bin / "sudo").write_text('#!/bin/sh\nshift 2\nexec "$@"\n', encoding="utf-8")
+    (fake_bin / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (fake_bin / "sudo").chmod(0o755)
+    (fake_bin / "sleep").chmod(0o755)
 
     script_text = (ROOT / "scripts" / "deploy_telegram_bridge.sh").read_text(encoding="utf-8")
     replacements = {
@@ -220,6 +245,8 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
         'work_runtime_root="/opt/autostop-work-telegram-runtimes"': f'work_runtime_root="{runtime_root}"',
         'work_model_link="/opt/autostop-work-telegram-models/faster-whisper-small"': f'work_model_link="{model_link}"',
         'media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"': f'media_wrapper_path="{media_wrapper_path}"',
+        'monitor_env="/etc/autostop-work-telegram/monitor.env"': f'monitor_env="{monitor_env}"',
+        'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"': f'owner_notification_env="{tmp_path / "owner.env"}"',
         'control_lock="/run/autostop-work-telegram-control.lock"': f'control_lock="{tmp_path / "control.lock"}"',
     }
     for old, new in replacements.items():
@@ -238,22 +265,28 @@ def test_paused_work_deploy_preserves_lifecycle_and_rolls_back_failed_checks(
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "FAKE_SYSTEMCTL_COUNT_FILE": str(daemon_reload_count),
-            "FAKE_ACTIVE_STATE": active_state,
-            "FAKE_UNIT_STATE": unit_state,
+            "FAKE_ACTIVE_STATE_PATH": str(active_state_path),
+            "FAKE_UNIT_STATE_PATH": str(unit_state_path),
+            "FAKE_INBOUND_EXPECTED": "true" if inbound_intent else "false",
         },
     )
 
-    if active_state != "inactive" or unit_state != "disabled":
+    coherent_lifecycle = (active_state, unit_state) in {("active", "enabled"), ("inactive", "disabled")}
+    if not coherent_lifecycle:
         assert completed.returncode == 1
-        assert "requires an inactive disabled work Telegram service" in completed.stderr
+        assert "lifecycle must be active-enabled or legacy inactive-disabled" in completed.stderr
         assert not daemon_reload_count.exists()
     elif voice_exit == 0:
         assert completed.returncode == 0, completed.stderr
-        assert "activation=paused" in completed.stdout
+        assert "outbound=ready" in completed.stdout
+        assert f"inbound_restored={str(inbound_intent).lower()}" in completed.stdout
         assert (release_root / "current").resolve() != previous_release
         assert venv_link.resolve() == candidate_runtime / "venv"
         assert model_link.resolve() == candidate_runtime / "model"
         assert daemon_reload_count.read_text(encoding="utf-8") == "1"
+        assert active_state_path.read_text(encoding="utf-8") == "active"
+        assert unit_state_path.read_text(encoding="utf-8") == "enabled"
+        assert monitor_env.exists() is inbound_intent
         return
     else:
         assert completed.returncode == 1
@@ -306,18 +339,31 @@ def test_work_telegram_duty_disable_clears_intent_and_stops_inflight_media(tmp_p
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     control_lock.parent.mkdir()
+    venv_python = tmp_path / "venv-python"
+    venv_python.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"transport_ready":true,"inbound_enabled":false}\'\n',
+        encoding="utf-8",
+    )
+    venv_python.chmod(0o755)
     fake_bin.mkdir()
     (fake_bin / "systemctl").write_text(
         '#!/bin/sh\ncase "$1" in\n'
-        "disable) printf 'disabled\\n' > \"$FAKE_UNIT_FILE_STATE\";;\n"
-        'stop) shift; for unit; do case "$unit" in autostop-work-telegram.service) printf \'inactive\\n\' > "$FAKE_BRIDGE_STATE";; autostop-work-telegram-media-*) printf \'inactive\\n\' > "$FAKE_MEDIA_STATE";; esac; done;;\n'
+        "enable) printf 'enabled\\n' > \"$FAKE_UNIT_FILE_STATE\";;\n"
+        "restart) printf 'active\\n' > \"$FAKE_BRIDGE_STATE\";;\n"
+        'is-active) [ "$(cat "$FAKE_BRIDGE_STATE")" = active ];;\n'
+        'stop) shift; for unit; do case "$unit" in autostop-work-telegram-media-*) printf \'inactive\\n\' > "$FAKE_MEDIA_STATE";; esac; done;;\n'
         'show) case "$*" in *LoadState*) printf \'loaded\\n\';; *ActiveState*) cat "$FAKE_BRIDGE_STATE";; *) cat "$FAKE_UNIT_FILE_STATE";; esac;;\n'
         'list-units) [ "$(cat "$FAKE_MEDIA_STATE")" != inactive ] && printf \'autostop-work-telegram-media-123.service loaded deactivating stop\\n\' || true;; *) exit 2;; esac\n',
         encoding="utf-8",
     )
+    (fake_bin / "sudo").write_text('#!/bin/sh\nshift 2\nexec "$@"\n', encoding="utf-8")
+    (fake_bin / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (fake_bin / "systemctl").chmod(0o755)
+    (fake_bin / "sudo").chmod(0o755)
+    (fake_bin / "sleep").chmod(0o755)
     script_text = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
     for old, new in (
+        ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
@@ -340,11 +386,11 @@ def test_work_telegram_duty_disable_clears_intent_and_stops_inflight_media(tmp_p
         },
     )
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.splitlines() == ["work_telegram_duty=disabled", "monitoring=off"]
+    assert completed.stdout.splitlines() == ["work_telegram_duty=disabled", "monitoring=off", "outbound=ready"]
     assert not monitor_env.exists()
     assert [path.read_text(encoding="utf-8") for path in (bridge_state, unit_file_state, media_state)] == [
-        "inactive\n",
-        "disabled\n",
+        "active\n",
+        "enabled\n",
         "inactive\n",
     ]
 
@@ -383,7 +429,7 @@ def test_work_telegram_duty_disable_allows_a_missing_unit_before_first_release(t
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.splitlines() == ["work_telegram_duty=disabled", "monitoring=off"]
+    assert completed.stdout.splitlines() == ["work_telegram_duty=disabled", "monitoring=off", "outbound=ready"]
     assert not monitor_env.exists()
 
 
@@ -409,7 +455,9 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
     monitor_env.parent.mkdir()
     control_lock.parent.mkdir()
     venv_python.write_text(
-        '#!/bin/sh\ncount=0\n[ ! -f "$FAKE_PROBE_COUNT" ] || count=$(cat "$FAKE_PROBE_COUNT")\n'
+        '#!/bin/sh\nif [ ! -e "$FAKE_MONITOR_ENV" ]; then '
+        'printf \'%s\\n\' \'{"ok":true,"transport_ready":true,"inbound_enabled":false}\'; exit 0; fi\n'
+        'count=0\n[ ! -f "$FAKE_PROBE_COUNT" ] || count=$(cat "$FAKE_PROBE_COUNT")\n'
         'count=$((count + 1))\nprintf "%s" "$count" > "$FAKE_PROBE_COUNT"\n'
         '[ "$count" -gt "$FAKE_READY_AFTER" ] || exit 1\n'
         'printf \'%s\\n\' \'{"ok": true, "monitor": {"enabled": true, "retention": "memory_only"}}\'\n',
@@ -459,6 +507,7 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
             "FAKE_UNIT_STATE": str(unit_state),
             "FAKE_PROBE_COUNT": str(probe_count),
             "FAKE_READY_AFTER": str(ready_after),
+            "FAKE_MONITOR_ENV": str(monitor_env),
         },
     )
 
@@ -466,8 +515,8 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
         assert completed.returncode == 1
         assert "work_telegram_duty_enable_failed=true" in completed.stderr
         assert not monitor_env.exists()
-        assert bridge_state.read_text(encoding="utf-8") == "inactive"
-        assert unit_state.read_text(encoding="utf-8") == "disabled"
+        assert bridge_state.read_text(encoding="utf-8") == "active"
+        assert unit_state.read_text(encoding="utf-8") == "enabled"
         assert int(probe_count.read_text(encoding="utf-8")) == 15
         return
 
@@ -522,7 +571,7 @@ def test_work_model_provisioner_is_syntax_valid_and_scoped() -> None:
     assert "autostop-work-telegram" in text
     assert "telegram_release_source_invalid=true" in text
     assert "transcription_model_manifest_revision_mismatch=true" in text
-    assert "work_telegram_runtime_must_be_paused_before_model_update=true" in text
+    assert "work_telegram_runtime_lifecycle_unsafe_for_model_update=true" in text
     assert "autostop-work-telegram-control.lock" in text
     assert "PYTHONPATH" not in text
     assert "curl" not in text
@@ -637,8 +686,11 @@ def test_authorization_script_supports_both_accounts_without_message_operations(
     assert "umask 077" in text
     assert "umask 077; exec" in text
     assert "verify_private_session_files" in text
-    assert "clear_work_monitor_intent" in text
+    assert "clear_work_monitor_intent" not in text
     assert 'monitor_env="/etc/autostop-work-telegram/monitor.env"' in text
+    assert 'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"' in text
+    assert "work_telegram_monitor_config_invalid=true" in text
+    assert "work_telegram_owner_notification_config_invalid=true" in text
     assert "restore_original_service_state" in text
     assert 'systemctl disable "${service_unit}"' in text
     assert '"${service_user}:${service_user}:600"' in text
@@ -696,6 +748,11 @@ def _run_mocked_authorization(
         source = source.replace(
             'monitor_env="/etc/autostop-work-telegram/monitor.env"',
             f'monitor_env="{monitor_env}"',
+            1,
+        )
+        source = source.replace(
+            'owner_notification_env="/etc/autostop-work-telegram/owner-notification.env"',
+            f'owner_notification_env="{tmp_path / "owner.env"}"',
             1,
         )
         source = source.replace(
@@ -776,7 +833,12 @@ exit 2
     sudo.chmod(0o755)
 
     stat = fake_bin / "stat"
-    stat.write_text("#!/bin/sh\nprintf 'mock-service:mock-service:%s\\n' \"$FAKE_SESSION_MODE\"\n", encoding="utf-8")
+    stat.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in *monitor.env|*owner.env) exec /usr/bin/stat "$@" ;; esac\n'
+        "printf 'mock-service:mock-service:%s\\n' \"$FAKE_SESSION_MODE\"\n",
+        encoding="utf-8",
+    )
     stat.chmod(0o755)
 
     active = tmp_path / "active"
@@ -830,7 +892,7 @@ def test_work_authorization_recovers_an_existing_private_session(tmp_path) -> No
     assert state == "active=1,enabled=1"
 
 
-def test_work_authorization_reexecs_an_active_authorized_bridge_without_monitor_intent(tmp_path) -> None:
+def test_work_authorization_reexecs_an_active_authorized_bridge_and_preserves_monitor_intent(tmp_path) -> None:
     completed, state, monitor_env, systemctl_log = _run_mocked_authorization(
         tmp_path,
         scenario="active_authorized",
@@ -841,7 +903,7 @@ def test_work_authorization_reexecs_an_active_authorized_bridge_without_monitor_
     assert "work_telegram_already_authorized=true" in completed.stdout
     assert state == "active=1,enabled=1"
     assert monitor_env is not None
-    assert not monitor_env.exists()
+    assert monitor_env.read_text(encoding="utf-8") == "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n"
     commands = systemctl_log.read_text(encoding="utf-8")
     assert "stop autostop-work-telegram.service" in commands
     assert "enable --now autostop-work-telegram.service" in commands
@@ -850,7 +912,7 @@ def test_work_authorization_reexecs_an_active_authorized_bridge_without_monitor_
     )
 
 
-def test_work_authorization_keeps_a_failed_monitor_intent_from_reviving_the_bridge(tmp_path) -> None:
+def test_work_authorization_rejects_invalid_monitor_intent_without_stopping_transport(tmp_path) -> None:
     completed, state, monitor_env, systemctl_log = _run_mocked_authorization(
         tmp_path,
         scenario="active_authorized",
@@ -858,12 +920,13 @@ def test_work_authorization_keeps_a_failed_monitor_intent_from_reviving_the_brid
     )
 
     assert completed.returncode == 1
-    assert "work_telegram_existing_authorization_unverified=true" in completed.stderr
-    assert state == "active=0,enabled=0"
+    assert "work_telegram_monitor_config_invalid=true" in completed.stderr
+    assert state == "active=1,enabled=1"
     assert monitor_env is not None
     assert monitor_env.is_dir()
     commands = systemctl_log.read_text(encoding="utf-8")
-    assert "disable autostop-work-telegram.service" in commands
+    assert "stop autostop-work-telegram.service" not in commands
+    assert "disable autostop-work-telegram.service" not in commands
 
 
 def test_work_authorization_rejects_an_existing_open_session_before_login(tmp_path) -> None:
@@ -900,7 +963,7 @@ def test_telegram_install_script_supports_an_isolated_work_account() -> None:
     assert "requirements-py312-linux-x86_64.lock" in text
     assert "usage: $0 --account personal|work --revision <commit>" in text
     assert "telegram_release_source_invalid=true" in text
-    assert "work_telegram_runtime_must_be_paused_before_dependency_update=true" in text
+    assert "work_telegram_runtime_lifecycle_unsafe_for_dependency_update=true" in text
     assert "autostop-work-telegram-control.lock" in text
 
 

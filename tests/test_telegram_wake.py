@@ -499,50 +499,37 @@ def test_repeated_enable_with_wake_preserves_bridge_and_queue(tmp_path):
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="control script root gate")
-@pytest.mark.parametrize(
-    "scenario",
-    [
-        "paused",
-        "enabled",
-        "failed",
-        "bridge_active",
-        "missing_unit",
-        "show_error",
-        "monitor",
-        "monitor_link",
-        "no_config",
-    ],
-)
-def test_duty_status_distinguishes_pause_from_failure(tmp_path, scenario):
+@pytest.mark.parametrize("scenario", ["outbound_only", "inbound_enabled", "bridge_unavailable"])
+def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario):
     config = tmp_path / "wake.json"
-    if scenario != "no_config":
-        config.write_text("{}")
+    config.write_text("{}")
     monitor = tmp_path / "monitor.env"
-    if scenario == "monitor":
+    if scenario == "inbound_enabled":
         monitor.write_text("AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n")
-    elif scenario == "monitor_link":
-        monitor.symlink_to(tmp_path / "missing-monitor")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    venv_python = tmp_path / "venv-python"
+    venv_python.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = -c ]; then exec "$REAL_PYTHON" "$@"; fi\n'
+        'if [ "$FAKE_SCENARIO" = bridge_unavailable ]; then exit 1; fi\n'
+        'if [ "$FAKE_SCENARIO" = inbound_enabled ]; then inbound=true; else inbound=false; fi\n'
+        'printf \'{"ok":true,"transport_ready":true,"inbound_enabled":%s,'
+        '"owner_notification_configured":true}\\n\' "$inbound"\n'
+    )
+    (fake_bin / "sudo").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')
     systemctl = fake_bin / "systemctl"
     systemctl.write_text(
         "#!/bin/sh\n"
         'printf \'%s\\n\' "$*" >> "$FAKE_LOG"\n'
-        '[ "$1" != is-active ] || exit 3\n'
-        '[ "$1" = show ] || exit 90\n'
-        '[ "$FAKE_SCENARIO" != show_error ] || exit 1\n'
-        'case "$2" in\n'
-        '  --property=LoadState) value=loaded; [ "$FAKE_SCENARIO" != missing_unit ] || value=not-found ;;\n'
-        '  --property=UnitFileState) value=disabled; [ "$FAKE_SCENARIO" != enabled ] || value=enabled ;;\n'
-        "  --property=ActiveState) value=inactive\n"
-        '    [ "$FAKE_SCENARIO" != failed ] || value=failed\n'
-        '    if [ "$FAKE_SCENARIO" = bridge_active ] && [ "$4" = autostop-work-telegram.service ]; then value=active; fi ;;\n'
-        "  *) exit 91 ;;\n"
-        "esac\nprintf '%s\\n' \"$value\"\n"
+        '[ "$1" = is-active ] || exit 90\n'
+        '[ "$FAKE_SCENARIO" = inbound_enabled ]\n'
     )
-    systemctl.chmod(0o755)
+    for path in (venv_python, fake_bin / "sudo", systemctl):
+        path.chmod(0o755)
     source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
     for old, new in (
+        ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
@@ -556,15 +543,24 @@ def test_duty_status_distinguishes_pause_from_failure(tmp_path, scenario):
         ["bash", str(script), "--status"],
         capture_output=True,
         text=True,
-        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "FAKE_LOG": str(log), "FAKE_SCENARIO": scenario},
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_LOG": str(log),
+            "FAKE_SCENARIO": scenario,
+            "REAL_PYTHON": sys.executable,
+        },
         timeout=10,
     )
     payload = json.loads(result.stdout)
-    assert payload["ok"] is (scenario == "paused")
-    assert result.returncode == (0 if scenario == "paused" else 1)
-    if scenario == "paused":
-        assert payload == {"ok": True, "enabled": False, "connected": False, "state": "paused", "polling": False}
+    assert payload["ok"] is (scenario != "bridge_unavailable")
+    assert result.returncode == (1 if scenario == "bridge_unavailable" else 0)
+    if scenario == "bridge_unavailable":
+        assert payload == {"ok": False, "transport_ready": False, "error": "bridge_unavailable"}
     else:
-        assert payload["error"] == ("wake_not_installed" if scenario == "no_config" else "wake_service_not_running")
+        assert payload["transport_ready"] is True
+        assert payload["inbound_enabled"] is (scenario == "inbound_enabled")
+        assert payload["wake_active"] is (scenario == "inbound_enabled")
+        assert payload["state"] == scenario
     if log.exists():
-        assert all(line.startswith(("is-active ", "show ")) for line in log.read_text().splitlines())
+        assert all(line.startswith("is-active ") for line in log.read_text().splitlines())

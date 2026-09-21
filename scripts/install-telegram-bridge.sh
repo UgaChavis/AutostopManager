@@ -56,12 +56,18 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-require_work_runtime_paused() {
+require_work_runtime_safe() {
   local active_state unit_file_state
   active_state="$(systemctl show --property=ActiveState --value "${service_unit}" 2>/dev/null || true)"
   unit_file_state="$(systemctl show --property=UnitFileState --value "${service_unit}" 2>/dev/null || true)"
   if [[ -z "${active_state}" && -z "${unit_file_state}" ]]; then
     return 0
+  fi
+  if [[ "${active_state}" == "active" && "${unit_file_state}" == "enabled" ]]; then
+    # Candidate runtimes are immutable. An active bridge is safe only after the
+    # legacy venv has already been migrated to a release-owned symlink.
+    [[ -L "${venv_root}" ]]
+    return
   fi
   [[ "${active_state}" == "inactive" ]] \
     && [[ "${unit_file_state}" == "disabled" || "${unit_file_state}" == "disabled-runtime" ]]
@@ -71,8 +77,8 @@ if [[ "${account}" == "work" ]]; then
   control_lock="/run/autostop-work-telegram-control.lock"
   exec 9>"${control_lock}"
   flock -x 9
-  if ! require_work_runtime_paused; then
-    echo "work_telegram_runtime_must_be_paused_before_dependency_update=true" >&2
+  if ! require_work_runtime_safe; then
+    echo "work_telegram_runtime_lifecycle_unsafe_for_dependency_update=true" >&2
     exit 1
   fi
 fi
