@@ -146,7 +146,8 @@ if [[ "${account}" == "work" ]]; then
     fi
   fi
   if [[ -e "${monitor_env}" || -L "${monitor_env}" ]]; then
-    [[ -f "${monitor_env}" && ! -L "${monitor_env}" ]] || {
+    [[ -f "${monitor_env}" && ! -L "${monitor_env}" \
+      && "$(stat -c '%U:%G:%a' "${monitor_env}")" == "root:root:644" ]] || {
       echo "ERROR: work Telegram inbound intent is invalid" >&2
       exit 1
     }
