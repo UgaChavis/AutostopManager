@@ -8,7 +8,7 @@ ConditionPathExists=/opt/AutostopManager/.venv/bin/python
 Type=notify
 NotifyAccess=main
 User=root
-Group=10001
+Group=autostop-automation
 WorkingDirectory=/opt/autostop-manager-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1

@@ -110,6 +110,18 @@ if [[ "${revision}" != "${remote_revision}" ]]; then
   echo "ERROR: Telegram release revision must match origin/${BRANCH}" >&2
   exit 1
 fi
+if [[ "${account}" == "work" ]]; then
+  automation_group_helper="${SOURCE_DIR}/scripts/ensure-automation-group.sh"
+  if [[ ! -f "${automation_group_helper}" || -L "${automation_group_helper}" \
+    || ! -x "${automation_group_helper}" ]]; then
+    echo "ERROR: automation group helper is unavailable" >&2
+    exit 1
+  fi
+  if ! "${automation_group_helper}" >/dev/null; then
+    echo "ERROR: automation group is unavailable" >&2
+    exit 1
+  fi
+fi
 
 work_runtime_dir=""
 candidate_work_venv=""

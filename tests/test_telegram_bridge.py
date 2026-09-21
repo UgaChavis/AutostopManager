@@ -380,7 +380,7 @@ def test_work_telegram_service_has_no_personal_state_or_socket() -> None:
     service = (ROOT / "deploy/systemd/autostop-work-telegram.service").read_text(encoding="utf-8")
 
     assert "User=autostop-work-telegram" in service
-    assert "SupplementaryGroups=10001" in service
+    assert "SupplementaryGroups=autostop-automation" in service
     assert "WorkingDirectory=/opt/autostop-work-telegram-releases/current" in service
     assert "--account work daemon" in service
     assert "/opt/autostop-work-telegram-venv/bin/python" in service
@@ -458,9 +458,13 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     active_state_path = tmp_path / "active-state"
     unit_state_path = tmp_path / "unit-state"
     monitor_env = tmp_path / "monitor.env"
+    automation_group_helper_called = tmp_path / "automation-group-helper-called"
     source.mkdir()
     for relative_path, content in {
         "deploy/systemd/autostop-work-telegram.service": "[Service]\nExecStart=/bin/true\n",
+        "scripts/ensure-automation-group.sh": (
+            '#!/usr/bin/env bash\nset -eu\nprintf called > "$FAKE_AUTOMATION_GROUP_HELPER_CALLED"\n'
+        ),
         "scripts/set-work-telegram-duty.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/run-work-telegram-media.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/run-work-telegram-monitor-voice.sh": f"#!/usr/bin/env bash\nexit {voice_exit}\n",
@@ -469,6 +473,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         path = source / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+    (source / "scripts" / "ensure-automation-group.sh").chmod(0o755)
     for command in (
         ["git", "init", str(source)],
         ["git", "-C", str(source), "config", "user.email", "test@example.invalid"],
@@ -596,9 +601,11 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
             "FAKE_ACTIVE_STATE_PATH": str(active_state_path),
             "FAKE_UNIT_STATE_PATH": str(unit_state_path),
             "FAKE_INBOUND_EXPECTED": "true" if inbound_intent else "false",
+            "FAKE_AUTOMATION_GROUP_HELPER_CALLED": str(automation_group_helper_called),
         },
     )
 
+    assert automation_group_helper_called.read_text(encoding="utf-8") == "called"
     coherent_lifecycle = (active_state, unit_state) in {("active", "enabled"), ("inactive", "disabled")}
     if not coherent_lifecycle:
         assert completed.returncode == 1

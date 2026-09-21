@@ -7,7 +7,7 @@ After=network-online.target autostop-codex-wake.service
 Type=simple
 User=autostop-work-telegram
 Group=autostop-work-telegram
-SupplementaryGroups=10001
+SupplementaryGroups=autostop-automation
 WorkingDirectory=/opt/autostop-work-telegram-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current

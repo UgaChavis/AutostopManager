@@ -9,6 +9,7 @@ RUNTIME_DB="${RUNTIME_STATE_DIR}/registry.sqlite3"
 UNIT_NAME="autostop-manager-scheduler.service"
 UNIT_SOURCE="${PROJECT_ROOT}/deploy/systemd/${UNIT_NAME}"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
+GROUP_HELPER="${PROJECT_ROOT}/scripts/ensure-automation-group.sh"
 CONFIG_DIR="/etc/autostop-manager"
 CONFIG_PATH="${CONFIG_DIR}/automation-control.env"
 SOCKET_PATH="/run/autostop-manager-automation/control.sock"
@@ -91,10 +92,13 @@ if [[ ! -d "${RELEASE_ROOT}" ]] || [[ "$(readlink -f "${PROJECT_ROOT}")" != "$(r
   echo "current_release_source_required=true" >&2
   exit 1
 fi
-if [[ ! -f "${UNIT_SOURCE}" || -L "${UNIT_SOURCE}" || ! -x "${RUNTIME_PYTHON}" ]]; then
+if [[ ! -f "${UNIT_SOURCE}" || -L "${UNIT_SOURCE}" \
+  || ! -f "${GROUP_HELPER}" || -L "${GROUP_HELPER}" || ! -x "${GROUP_HELPER}" \
+  || ! -x "${RUNTIME_PYTHON}" ]]; then
   echo "automation_runtime_prerequisite_invalid=true" >&2
   exit 1
 fi
+"${GROUP_HELPER}" >/dev/null
 if [[ -L "${RUNTIME_STATE_DIR}" || ( -e "${RUNTIME_STATE_DIR}" && ! -d "${RUNTIME_STATE_DIR}" ) ]]; then
   echo "automation_state_directory_invalid=true" >&2
   exit 1
