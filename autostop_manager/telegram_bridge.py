@@ -1596,7 +1596,7 @@ async def _handle_send_text_to_entity(
 
 
 def _owner_target_summary(target: dict[str, Any]) -> dict[str, Any]:
-    return {"id": int(target["id"]), "kind": str(target["kind"])}
+    return {"kind": str(target["kind"]), "role": "owner"}
 
 
 async def _handle_owner_notification(

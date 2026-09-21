@@ -2881,13 +2881,13 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
         )
     )
 
-    assert dry["target"] == {"id": 10, "kind": "private"}
-    assert applied["target"] == {"id": 10, "kind": "private"}
+    assert dry["target"] == {"kind": "private", "role": "owner"}
+    assert applied["target"] == {"kind": "private", "role": "owner"}
     assert applied["verified"] is True
     assert replayed["replayed"] is True
     assert readback == {
         "ok": True,
-        "target": {"id": 10, "kind": "private"},
+        "target": {"kind": "private", "role": "owner"},
         "message_id": 30,
         "text_sha256": dry["text_sha256"],
         "verified": True,
