@@ -7,11 +7,16 @@ after the normal guarded Telegram send flow.
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import hashlib
+import hmac
 import re
 import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -38,6 +43,17 @@ _CREATE_PATTERN = re.compile(
     r"^добавь(?:\s+задание)?\s+(?P<template>[^\r\n]{1,96}?)"
     r"(?:\s+(?:каждые|раз\s+в)\s+(?P<amount>[1-9][0-9]{0,3})\s*"
     r"(?P<unit>мин(?:ут(?:у|ы)?)?|час(?:а|ов)?))?$",
+    re.IGNORECASE,
+)
+_TIMEZONE_PATTERN = re.compile(
+    r"^(?:часовой\s+пояс|timezone)(?:\s+задания)?\s+(?P<target>[^\r\n]{1,96}?)\s+"
+    r"(?P<timezone>UTC|[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+){1,3})$",
+    re.IGNORECASE,
+)
+_ACTIVE_WINDOW_PATTERN = re.compile(
+    r"^(?:активные\s+часы|активное\s+окно)(?:\s+задания)?\s+(?P<target>[^\r\n]{1,96}?)\s+"
+    r"(?:(?P<always>24/7)|(?P<start>(?:[01][0-9]|2[0-3]):[0-5][0-9])\s*[-–—]\s*"
+    r"(?P<end>(?:[01][0-9]|2[0-3]):[0-5][0-9]))$",
     re.IGNORECASE,
 )
 _CONFIRM_PATTERN = re.compile(r"^(?:подтвердить|подтверждаю)\s+(?P<token>[A-F0-9]{8})$", re.IGNORECASE)
@@ -114,6 +130,7 @@ class TelegramAutomationAdapter:
         control: AutomationControl,
         confirmation_ttl_seconds: int = CONFIRMATION_TTL_SECONDS,
         now: Callable[[], float] = time.monotonic,
+        idempotency_secret: bytes | None = None,
     ) -> None:
         if type(owner_peer_id) is not int or owner_peer_id <= 0:
             raise ValueError("owner_peer_id_invalid")
@@ -123,6 +140,9 @@ class TelegramAutomationAdapter:
         self.control = control
         self.confirmation_ttl_seconds = confirmation_ttl_seconds
         self._now = now
+        self._idempotency_secret = secrets.token_bytes(32) if idempotency_secret is None else idempotency_secret
+        if not isinstance(self._idempotency_secret, bytes) or len(self._idempotency_secret) != 32:
+            raise ValueError("idempotency_secret_invalid")
         self._pending: dict[str, _PendingConfirmation] = {}
 
     def handle(self, message: TelegramAutomationMessage) -> TelegramAutomationResult:
@@ -166,6 +186,30 @@ class TelegramAutomationAdapter:
                 every_minutes=_minutes(match.group("amount"), match.group("unit")),
                 message=message,
             )
+        if match := _TIMEZONE_PATTERN.fullmatch(text):
+            timezone = match.group("timezone")
+            if timezone.casefold() == "utc":
+                timezone = "UTC"
+            return self._preview_schedule_patch(
+                match.group("target"),
+                changes={"timezone": timezone},
+                message=message,
+                summary=f"Часовой пояс: {timezone}.",
+            )
+        if match := _ACTIVE_WINDOW_PATTERN.fullmatch(text):
+            active_window: str | dict[str, str]
+            if match.group("always"):
+                active_window = "24/7"
+                label = "24/7"
+            else:
+                active_window = {"start": match.group("start"), "end": match.group("end")}
+                label = f"{match.group('start')}–{match.group('end')}"
+            return self._preview_schedule_patch(
+                match.group("target"),
+                changes={"active_window": active_window},
+                message=message,
+                summary=f"Активные часы: {label}.",
+            )
         if match := _CREATE_PATTERN.fullmatch(text):
             every_minutes = _minutes(match.group("amount"), match.group("unit")) if match.group("amount") else None
             return self._preview_create(match.group("template"), every_minutes=every_minutes, message=message)
@@ -187,7 +231,16 @@ class TelegramAutomationAdapter:
             actual_state = str(job.get("actual_state") or "unknown")
             schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
             period = schedule.get("every_minutes")
-            lines.append(f"{job.get('name') or job.get('job_id')}: {state} ({actual_state}), {period} мин.")
+            timezone = schedule.get("timezone") or "не задан"
+            active_window = schedule.get("active_window")
+            if isinstance(active_window, dict):
+                active_window_label = f"{active_window.get('start')}–{active_window.get('end')}"
+            else:
+                active_window_label = str(active_window or "не задано")
+            lines.append(
+                f"{job.get('name') or job.get('job_id')}: {state} ({actual_state}), {period} мин., "
+                f"{timezone}, {active_window_label}."
+            )
         return TelegramAutomationResult(True, True, "status", "\n".join(lines) or "Нет доступных заданий.")
 
     def _jobs(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -246,6 +299,17 @@ class TelegramAutomationAdapter:
             return TelegramAutomationResult(
                 True, False, "set_enabled", "Ревизия задания недоступна; ничего не изменено."
             )
+        expected = "on" if enabled else "off"
+        if job.get("desired_state") == expected:
+            actual_state = str(job.get("actual_state") or "unknown")
+            next_run = job.get("next_run_at") or "не назначен"
+            return TelegramAutomationResult(
+                True,
+                True,
+                "set_enabled",
+                f"{job.get('name') or job_id}: уже {expected.upper()}; фактически: {actual_state}; "
+                f"следующий запуск: {next_run}.",
+            )
         response = self._request(
             "set_enabled",
             {"job_id": job_id, "enabled": enabled},
@@ -257,7 +321,6 @@ class TelegramAutomationAdapter:
         readback = self._request("status", {"job_id": job_id})
         data = _response_data(readback)
         jobs = data.get("jobs") if data is not None else None
-        expected = "on" if enabled else "off"
         if (
             not isinstance(jobs, list)
             or len(jobs) != 1
@@ -287,21 +350,49 @@ class TelegramAutomationAdapter:
         job, error = self._resolve_job(target)
         if job is None:
             return TelegramAutomationResult(True, False, "set_schedule", str(error))
+        return self._preview_schedule_job(
+            job,
+            changes={"every_minutes": every_minutes},
+            message=message,
+            summary=f"Период: {every_minutes} мин.",
+        )
+
+    def _preview_schedule_patch(
+        self,
+        target: str,
+        *,
+        changes: dict[str, Any],
+        message: TelegramAutomationMessage,
+        summary: str,
+    ) -> TelegramAutomationResult:
+        job, error = self._resolve_job(target)
+        if job is None:
+            return TelegramAutomationResult(True, False, "set_schedule", str(error))
+        return self._preview_schedule_job(job, changes=changes, message=message, summary=summary)
+
+    def _preview_schedule_job(
+        self,
+        job: dict[str, Any],
+        *,
+        changes: dict[str, Any],
+        message: TelegramAutomationMessage,
+        summary: str,
+    ) -> TelegramAutomationResult:
         revision = job.get("revision")
-        if type(revision) is not int:
+        schedule = job.get("schedule")
+        if type(revision) is not int or not isinstance(schedule, dict):
             return TelegramAutomationResult(
-                True, False, "set_schedule", "Ревизия задания недоступна; ничего не изменено."
+                True, False, "set_schedule", "Текущее расписание или ревизия недоступны; ничего не изменено."
             )
-        payload = {
-            "job_id": str(job["job_id"]),
-            "schedule": {"every_minutes": every_minutes, "timezone": "UTC"},
-        }
+        merged_schedule = copy.deepcopy(schedule)
+        merged_schedule.update(copy.deepcopy(changes))
+        payload = {"job_id": str(job["job_id"]), "schedule": merged_schedule}
         return self._preview(
             operation="set_schedule",
             payload=payload,
             expected_revision=revision,
             message=message,
-            summary=f"Период {job.get('name') or job['job_id']}: {every_minutes} мин.",
+            summary=f"Расписание {job.get('name') or job['job_id']}. {summary}",
         )
 
     def _preview_create(
@@ -312,7 +403,7 @@ class TelegramAutomationAdapter:
             return TelegramAutomationResult(True, False, "create_from_template", str(error))
         payload: dict[str, Any] = {"template_id": str(template["template_id"]), "enabled": False}
         if every_minutes is not None:
-            payload["schedule"] = {"every_minutes": every_minutes, "timezone": "UTC"}
+            payload["schedule"] = {"every_minutes": every_minutes}
         return self._preview(
             operation="create_from_template",
             payload=payload,
@@ -406,12 +497,12 @@ class TelegramAutomationAdapter:
         del self._pending[token]
         if pending.operation == "set_schedule":
             schedule = job.get("schedule") if isinstance(job, dict) and isinstance(job.get("schedule"), dict) else {}
-            expected_minutes = pending.payload["schedule"]["every_minutes"]
-            if schedule.get("every_minutes") != expected_minutes or schedule.get("timezone") != "UTC":
+            expected_schedule = pending.payload["schedule"]
+            if any(schedule.get(key) != value for key, value in expected_schedule.items()):
                 return TelegramAutomationResult(
-                    True, False, pending.operation, "Изменение применено, но новый период не подтверждён."
+                    True, False, pending.operation, "Изменение применено, но новое расписание не подтверждено."
                 )
-            reply = f"Период подтверждён: {expected_minutes} мин."
+            reply = "Расписание применено и подтверждено."
         elif pending.operation == "create_from_template":
             expected_schedule = pending.payload.get("schedule")
             schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
@@ -420,10 +511,7 @@ class TelegramAutomationAdapter:
                 or job.get("template_id") != pending.payload["template_id"]
                 or (
                     isinstance(expected_schedule, dict)
-                    and (
-                        schedule.get("every_minutes") != expected_schedule["every_minutes"]
-                        or schedule.get("timezone") != "UTC"
-                    )
+                    and any(schedule.get(key) != value for key, value in expected_schedule.items())
                 )
             ):
                 return TelegramAutomationResult(
@@ -473,17 +561,70 @@ class TelegramAutomationAdapter:
                 return token
         raise RuntimeError("confirmation_token_unavailable")
 
-    @staticmethod
-    def _idempotency_key(message: TelegramAutomationMessage, operation: str, target: str) -> str:
-        digest = hashlib.sha256(
-            f"telegram-owner-command-v1\0{message.peer_id}\0{message.message_id}\0{operation}\0{target}".encode()
+    def _idempotency_key(self, message: TelegramAutomationMessage, operation: str, target: str) -> str:
+        digest = hmac.new(
+            self._idempotency_secret,
+            f"telegram-owner-command-v1\0{message.peer_id}\0{message.message_id}\0{operation}\0{target}".encode(),
+            hashlib.sha256,
         ).hexdigest()
         return f"tg-auto:{digest[:40]}"
 
 
-def build_runtime_owner_adapter(*, owner_peer_id: int, socket_path: Path | None = None) -> TelegramAutomationAdapter:
+class TelegramAutomationIncomingCoordinator:
+    """Consume only bounded owner commands; leave all other text to Codex wake."""
+
+    def __init__(self, adapter: TelegramAutomationAdapter, *, replay_cache_size: int = 32) -> None:
+        if not 1 <= replay_cache_size <= 128:
+            raise ValueError("automation_replay_cache_size_invalid")
+        self.adapter = adapter
+        self.replay_cache_size = replay_cache_size
+        self._handled_replies: OrderedDict[int, str] = OrderedDict()
+        self._route_lock = asyncio.Lock()
+
+    async def route(
+        self,
+        message: TelegramAutomationMessage,
+        *,
+        reply: Callable[[str, int], Awaitable[bool]],
+    ) -> bool:
+        if (
+            message.is_private is not True
+            or type(message.peer_id) is not int
+            or message.peer_id != self.adapter.owner_peer_id
+            or type(message.message_id) is not int
+            or message.message_id <= 0
+        ):
+            return False
+        async with self._route_lock:
+            cached_reply = self._handled_replies.get(message.message_id)
+            if cached_reply is not None:
+                self._handled_replies.move_to_end(message.message_id)
+                with suppress(OSError, TimeoutError):
+                    await reply(cached_reply, message.message_id)
+                return True
+            result = await asyncio.to_thread(self.adapter.handle, message)
+            if not result.handled:
+                return False
+            self._handled_replies[message.message_id] = result.reply_text
+            while len(self._handled_replies) > self.replay_cache_size:
+                self._handled_replies.popitem(last=False)
+            with suppress(OSError, TimeoutError):
+                await reply(result.reply_text, message.message_id)
+            return True
+
+
+def build_runtime_owner_adapter(
+    *,
+    owner_peer_id: int,
+    socket_path: Path | None = None,
+    idempotency_secret: bytes | None = None,
+) -> TelegramAutomationAdapter:
     client = AutomationControlClient(
         socket_path=socket_path,
         actor={"kind": "telegram_owner", "id": "owner-command-adapter-v1", "is_admin": False},
     )
-    return TelegramAutomationAdapter(owner_peer_id=owner_peer_id, control=client)
+    return TelegramAutomationAdapter(
+        owner_peer_id=owner_peer_id,
+        control=client,
+        idempotency_secret=idempotency_secret,
+    )

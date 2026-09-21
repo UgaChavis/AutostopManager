@@ -739,6 +739,23 @@ def validate_owner_notification_readback_request(
     return str(owner_peer_id), message_id, expected_text_sha256
 
 
+def validate_owner_notification_idempotency_readback_request(
+    request: dict[str, Any], *, owner_peer_id: int | None
+) -> tuple[str, str]:
+    if owner_peer_id is None:
+        raise BridgeError("owner_peer_not_configured")
+    allowed_fields = {"operation", "idempotency_key", "expected_text_sha256"}
+    if set(request) - allowed_fields:
+        raise BridgeError("owner_notification_request_invalid")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    if not idempotency_key or len(idempotency_key) > 256:
+        raise BridgeError("idempotency_key_invalid")
+    expected_text_sha256 = str(request.get("expected_text_sha256") or "").strip().casefold()
+    if re.fullmatch(r"[0-9a-f]{64}", expected_text_sha256) is None:
+        raise BridgeError("expected_text_sha256_invalid")
+    return idempotency_key, expected_text_sha256
+
+
 def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
     peer = str(request.get("peer") or "").strip()
     photo = Path(str(request.get("photo") or ""))
@@ -1676,6 +1693,52 @@ async def _handle_owner_notification_readback(
     }
 
 
+async def _handle_owner_notification_idempotency_readback(
+    client: Any, config: TelegramConfig, request: dict[str, Any]
+) -> dict[str, Any]:
+    idempotency_key, expected_text_sha256 = validate_owner_notification_idempotency_readback_request(
+        request, owner_peer_id=config.owner_peer_id
+    )
+    idempotency = _load_idempotency(config.state_dir / "idempotency.json")
+    record = idempotency.get(idempotency_key)
+    if record is None:
+        return {
+            "ok": True,
+            "outcome": "not_found",
+            "found": False,
+            "verified": False,
+            "target": {"kind": "private", "role": "owner"},
+        }
+
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    owner_binding = hmac.new(
+        contract_key,
+        f"owner\0{config.owner_peer_id}".encode(),
+        hashlib.sha256,
+    ).digest()
+    expected_target_fingerprint = f"{(int.from_bytes(owner_binding[:8], 'big') or 1):016x}"
+    if (
+        record.get("operation") != "send_owner_notification"
+        or record.get("target_role") != "owner"
+        or record.get("target_fingerprint") != expected_target_fingerprint
+        or record.get("text_sha256") != expected_text_sha256
+    ):
+        raise BridgeError("idempotency_key_conflict")
+    message_id = record.get("message_id")
+    if type(message_id) is not int or message_id <= 0:
+        raise BridgeError("idempotency_state_invalid")
+    readback = await _handle_owner_notification_readback(
+        client,
+        config,
+        {
+            "operation": "owner_notification_readback",
+            "message_id": message_id,
+            "expected_text_sha256": expected_text_sha256,
+        },
+    )
+    return readback | {"outcome": "verified", "found": True}
+
+
 def _monitor_context_limit(value: Any) -> int:
     if isinstance(value, bool):
         raise BridgeError("inbound_context_limit_invalid")
@@ -2046,6 +2109,9 @@ async def _handle_operation(
     if operation == "owner_notification_readback":
         return await _handle_owner_notification_readback(client, config, request)
 
+    if operation == "owner_notification_idempotency_readback":
+        return await _handle_owner_notification_idempotency_readback(client, config, request)
+
     monitor_response = await _handle_monitor_operation(client, config, request, inbound_monitor)
     if monitor_response is not None:
         return monitor_response
@@ -2144,6 +2210,7 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     ) or operation in {
         "discard_download",
         "monitor_mark",
+        "owner_notification_idempotency_readback",
     }
 
 
@@ -2209,6 +2276,95 @@ async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
             print("work_telegram_wake_delivery_failed=true", file=sys.stderr, flush=True)
 
 
+def _automation_message_from_event(event: Any) -> Any | None:
+    if getattr(event, "is_private", None) is not True or bool(getattr(event, "out", False)):
+        return None
+    peer_id = getattr(event, "chat_id", None)
+    message_id = getattr(event, "id", None)
+    if type(peer_id) is not int or peer_id <= 0 or type(message_id) is not int or message_id <= 0:
+        return None
+    text = getattr(event, "raw_text", None)
+    if not isinstance(text, str):
+        raw_message = getattr(event, "message", None)
+        text = raw_message if isinstance(raw_message, str) else getattr(raw_message, "message", None)
+    if not isinstance(text, str):
+        return None
+    from autostop_manager.telegram_automation_control import TelegramAutomationMessage
+
+    return TelegramAutomationMessage(
+        peer_id=peer_id,
+        message_id=message_id,
+        text=text,
+        is_private=True,
+    )
+
+
+async def _send_owner_automation_reply(
+    client: Any,
+    config: TelegramConfig,
+    *,
+    text: str,
+    source_message_id: int,
+) -> bool:
+    if config.owner_peer_id is None or type(source_message_id) is not int or source_message_id <= 0:
+        return False
+    try:
+        contract_key = _ensure_private_key(config.state_dir / "contract.key")
+        reply_digest = hmac.new(
+            contract_key,
+            f"owner-automation-reply-v1\0{source_message_id}\0{hashlib.sha256(text.encode()).hexdigest()}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        dry_request = {"operation": "send_owner_notification", "text": text, "mode": "dry_run"}
+        async with _MUTATION_LOCK:
+            dry_run = await _handle_owner_notification(client, config, dry_request)
+            contract_token = dry_run.get("contract_token")
+            if not isinstance(contract_token, str) or not contract_token:
+                return False
+            applied = await _handle_owner_notification(
+                client,
+                config,
+                dry_request
+                | {
+                    "mode": "apply",
+                    "contract_token": contract_token,
+                    "idempotency_key": f"tg-auto-reply:{reply_digest[:40]}",
+                },
+            )
+    except Exception:  # noqa: BLE001 - a failed reply must never re-run a recognized command via Codex wake.
+        print("work_telegram_automation_reply_failed=true", file=sys.stderr, flush=True)
+        return False
+    return applied.get("verified") is True and type(applied.get("message_id")) is int
+
+
+async def _route_or_capture_incoming_event(
+    client: Any,
+    config: TelegramConfig,
+    monitor: InboundMonitor,
+    event: Any,
+    *,
+    automation_coordinator: Any | None,
+) -> None:
+    if automation_coordinator is not None:
+        message = _automation_message_from_event(event)
+        if message is not None and message.peer_id == config.owner_peer_id:
+
+            async def reply(text: str, source_message_id: int) -> bool:
+                return await _send_owner_automation_reply(
+                    client,
+                    config,
+                    text=text,
+                    source_message_id=source_message_id,
+                )
+
+            try:
+                if await automation_coordinator.route(message, reply=reply):
+                    return
+            except (OSError, RuntimeError, TimeoutError, ValueError):
+                pass
+    await _capture_incoming_event(monitor, event)
+
+
 async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) -> None:
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
@@ -2222,13 +2378,32 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
     config.socket_path.unlink(missing_ok=True)
     client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=False)
     inbound_monitor = InboundMonitor() if monitor_incoming else None
+    automation_coordinator: Any | None = None
     if inbound_monitor is not None:
         # Telethon otherwise persists entity names, phones and usernames while processing updates.
         client.session.save_entities = False
         events = _load_telegram_events()
+        if config.owner_peer_id is not None:
+            from autostop_manager.telegram_automation_control import (
+                TelegramAutomationIncomingCoordinator,
+                build_runtime_owner_adapter,
+            )
+
+            automation_coordinator = TelegramAutomationIncomingCoordinator(
+                build_runtime_owner_adapter(
+                    owner_peer_id=config.owner_peer_id,
+                    idempotency_secret=_ensure_private_key(config.state_dir / "contract.key"),
+                )
+            )
 
         async def capture(event: Any) -> None:
-            await _capture_incoming_event(inbound_monitor, event)
+            await _route_or_capture_incoming_event(
+                client,
+                config,
+                inbound_monitor,
+                event,
+                automation_coordinator=automation_coordinator,
+            )
 
         client.add_event_handler(capture, events.NewMessage(incoming=True))
     await client.connect()
@@ -2411,6 +2586,9 @@ def build_parser() -> argparse.ArgumentParser:
     owner_notification_readback = subparsers.add_parser("owner-notification-readback")
     owner_notification_readback.add_argument("--message-id", required=True, type=int)
     owner_notification_readback.add_argument("--expected-text-sha256", required=True)
+    owner_idempotency_readback = subparsers.add_parser("owner-notification-idempotency-readback")
+    owner_idempotency_readback.add_argument("--idempotency-key", required=True)
+    owner_idempotency_readback.add_argument("--expected-text-sha256", required=True)
     send_photo = subparsers.add_parser("send-photo")
     send_photo.add_argument("--peer", required=True)
     send_photo.add_argument("--file", required=True, type=Path)
@@ -2487,11 +2665,21 @@ def main(argv: list[str] | None = None) -> int:
                         "idempotency_key": args.idempotency_key,
                     }
                 )
-            elif args.command == "owner-notification-readback":
+            elif args.command in {
+                "owner-notification-readback",
+                "owner-notification-idempotency-readback",
+            }:
+                identifier_name, identifier_value = {
+                    "owner-notification-readback": ("message_id", getattr(args, "message_id", None)),
+                    "owner-notification-idempotency-readback": (
+                        "idempotency_key",
+                        getattr(args, "idempotency_key", None),
+                    ),
+                }[args.command]
                 request.update(
                     {
-                        "operation": "owner_notification_readback",
-                        "message_id": args.message_id,
+                        "operation": args.command.replace("-", "_"),
+                        identifier_name: identifier_value,
                         "expected_text_sha256": args.expected_text_sha256,
                     }
                 )

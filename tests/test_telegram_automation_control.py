@@ -15,6 +15,7 @@ from autostop_manager.automation_control import (
 from autostop_manager.automation_registry import AutomationError, AutomationStore
 from autostop_manager.telegram_automation_control import (
     TelegramAutomationAdapter,
+    TelegramAutomationIncomingCoordinator,
     TelegramAutomationMessage,
     build_runtime_owner_adapter,
 )
@@ -38,7 +39,12 @@ def _job(
         "desired_state": desired_state,
         "actual_state": "disabled" if desired_state == "off" else "idle",
         "revision": revision,
-        "schedule": {"kind": "interval", "every_minutes": every_minutes, "timezone": "UTC"},
+        "schedule": {
+            "kind": "interval",
+            "every_minutes": every_minutes,
+            "timezone": "Asia/Krasnoyarsk",
+            "active_window": "24/7",
+        },
         "next_run_at": None if desired_state == "off" else "2026-09-21T12:20:00Z",
     }
 
@@ -97,11 +103,13 @@ class FakeControl:
             job["revision"] += 1
             response = {"ok": True, "data": {"changed": True, "job": copy.deepcopy(job)}}
         elif operation == "create_from_template":
-            schedule = request["payload"].get("schedule") or {
+            schedule = {
                 "kind": "interval",
                 "every_minutes": 20,
-                "timezone": "UTC",
+                "timezone": "Asia/Krasnoyarsk",
+                "active_window": "24/7",
             }
+            schedule.update(request["payload"].get("schedule") or {})
             job = _job("auto_fedcba9876543210fedcba98", revision=1, every_minutes=schedule["every_minutes"])
             self.jobs.append(job)
             response = {"ok": True, "data": {"created": True, "job": copy.deepcopy(job)}}
@@ -155,7 +163,7 @@ def test_exact_on_command_applies_immediately_and_verifies_readback():
     assert control.jobs[0]["desired_state"] == "on"
 
 
-def test_duplicate_on_command_reuses_idempotency_key_and_readback():
+def test_duplicate_on_command_is_verified_as_a_noop_without_idempotency_conflict():
     control = FakeControl()
     adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
     message = _message("включи CRM: краткий дайджест изменений")
@@ -163,10 +171,10 @@ def test_duplicate_on_command_reuses_idempotency_key_and_readback():
     first = adapter.handle(message)
     second = adapter.handle(message)
 
-    mutations = [call for call in control.calls if call["operation"] == "set_enabled"]
     assert first.ok is True
     assert second.ok is True
-    assert mutations[0]["idempotency_key"] == mutations[1]["idempotency_key"]
+    assert "уже ON" in second.reply_text
+    assert len([call for call in control.calls if call["operation"] == "set_enabled"]) == 1
 
 
 def test_on_command_never_claims_success_when_exact_readback_mismatches():
@@ -212,10 +220,74 @@ def test_schedule_requires_preview_and_matching_confirmation_then_readback():
     confirmed = adapter.handle(_message(f"Подтвердить {token}", message_id=43))
 
     assert confirmed.ok is True
-    assert "30 мин" in confirmed.reply_text
+    assert "подтверждено" in confirmed.reply_text
     assert [call["operation"] for call in control.calls] == ["status", "preview", "set_schedule", "status"]
     assert control.calls[2]["expected_revision"] == 3
     assert control.jobs[0]["schedule"]["every_minutes"] == 30
+    assert control.jobs[0]["schedule"]["timezone"] == "Asia/Krasnoyarsk"
+    assert control.jobs[0]["schedule"]["active_window"] == "24/7"
+
+
+def test_timezone_change_preserves_period_and_window_until_preview_confirmation():
+    control = FakeControl()
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    preview = adapter.handle(_message("часовой пояс CRM: краткий дайджест изменений utc"))
+    token = _confirmation_token(preview.reply_text)
+
+    assert [call["operation"] for call in control.calls] == ["status", "preview"]
+    proposed = control.calls[1]["payload"]["target_payload"]["schedule"]
+    assert proposed == {
+        "kind": "interval",
+        "every_minutes": 20,
+        "timezone": "UTC",
+        "active_window": "24/7",
+    }
+    confirmed = adapter.handle(_message(f"Подтвердить {token}", message_id=47))
+
+    assert confirmed.ok is True
+    assert control.jobs[0]["schedule"] == proposed
+
+
+def test_active_hours_change_uses_typed_window_and_preserves_timezone():
+    control = FakeControl()
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    preview = adapter.handle(_message("активные часы CRM: краткий дайджест изменений 09:30-21:15"))
+    token = _confirmation_token(preview.reply_text)
+
+    proposed = control.calls[1]["payload"]["target_payload"]["schedule"]
+    assert proposed["every_minutes"] == 20
+    assert proposed["timezone"] == "Asia/Krasnoyarsk"
+    assert proposed["active_window"] == {"start": "09:30", "end": "21:15"}
+    confirmed = adapter.handle(_message(f"Подтвердить {token}", message_id=48))
+
+    assert confirmed.ok is True
+    assert control.jobs[0]["schedule"]["active_window"] == {"start": "09:30", "end": "21:15"}
+
+
+def test_active_hours_accepts_typed_always_window():
+    control = FakeControl(
+        jobs=[
+            _job()
+            | {
+                "schedule": {
+                    "kind": "interval",
+                    "every_minutes": 20,
+                    "timezone": "Asia/Krasnoyarsk",
+                    "active_window": {"start": "09:30", "end": "21:15"},
+                }
+            }
+        ]
+    )
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+
+    preview = adapter.handle(_message("активное окно CRM: краткий дайджест изменений 24/7"))
+
+    proposed = control.calls[1]["payload"]["target_payload"]["schedule"]
+    assert preview.ok is True
+    assert proposed["active_window"] == "24/7"
+    assert proposed["timezone"] == "Asia/Krasnoyarsk"
 
 
 def test_create_requires_preview_and_stays_off_after_confirmation():
@@ -271,6 +343,75 @@ def test_control_exception_is_returned_as_safe_failure():
     assert "private_backend_detail" not in result.reply_text
 
 
+def test_incoming_coordinator_routes_owner_command_and_replays_without_second_mutation():
+    control = FakeControl()
+    coordinator = TelegramAutomationIncomingCoordinator(
+        TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+    )
+    replies: list[tuple[str, int]] = []
+
+    async def reply(text: str, source_message_id: int) -> bool:
+        replies.append((text, source_message_id))
+        return True
+
+    message = _message("включи CRM: краткий дайджест изменений")
+    first = asyncio.run(coordinator.route(message, reply=reply))
+    replay = asyncio.run(coordinator.route(message, reply=reply))
+    foreign_replay = asyncio.run(
+        coordinator.route(
+            _message(message.text, peer_id=123, message_id=message.message_id),
+            reply=reply,
+        )
+    )
+
+    assert first is True
+    assert replay is True
+    assert foreign_replay is False
+    assert len(replies) == 2
+    assert replies[0] == replies[1]
+    assert len([call for call in control.calls if call["operation"] == "set_enabled"]) == 1
+
+
+def test_incoming_coordinator_consumes_recognized_command_when_reply_delivery_fails():
+    control = FakeControl()
+    coordinator = TelegramAutomationIncomingCoordinator(
+        TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+    )
+
+    async def failed_reply(_text: str, _source_message_id: int) -> bool:
+        return False
+
+    consumed = asyncio.run(
+        coordinator.route(
+            _message("включи CRM: краткий дайджест изменений"),
+            reply=failed_reply,
+        )
+    )
+
+    assert consumed is True
+    assert len([call for call in control.calls if call["operation"] == "set_enabled"]) == 1
+
+
+def test_incoming_coordinator_ignores_unauthorized_and_unknown_text():
+    control = FakeControl()
+    coordinator = TelegramAutomationIncomingCoordinator(
+        TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+    )
+    replies: list[str] = []
+
+    async def reply(text: str, _source_message_id: int) -> bool:
+        replies.append(text)
+        return True
+
+    unauthorized = asyncio.run(coordinator.route(_message("регламентные задания", peer_id=123), reply=reply))
+    unknown = asyncio.run(coordinator.route(_message("обычный вопрос", message_id=43), reply=reply))
+
+    assert unauthorized is False
+    assert unknown is False
+    assert replies == []
+    assert control.calls == []
+
+
 def test_adapter_uses_real_local_control_protocol_and_exact_readback(tmp_path):
     async def scenario():
         socket_path = tmp_path / "automation.sock"
@@ -292,13 +433,37 @@ def test_adapter_uses_real_local_control_protocol_and_exact_readback(tmp_path):
             job_id = created["data"]["job"]["job_id"]
             adapter = build_runtime_owner_adapter(owner_peer_id=OWNER_PEER_ID, socket_path=socket_path)
             result = await asyncio.to_thread(adapter.handle, _message(f"включи {job_id}"))
+            timezone_preview = await asyncio.to_thread(
+                adapter.handle,
+                _message(f"часовой пояс {job_id} UTC", message_id=50),
+            )
+            timezone_result = await asyncio.to_thread(
+                adapter.handle,
+                _message(f"Подтвердить {_confirmation_token(timezone_preview.reply_text)}", message_id=51),
+            )
+            window_preview = await asyncio.to_thread(
+                adapter.handle,
+                _message(f"активные часы {job_id} 09:00-21:00", message_id=52),
+            )
+            window_result = await asyncio.to_thread(
+                adapter.handle,
+                _message(f"Подтвердить {_confirmation_token(window_preview.reply_text)}", message_id=53),
+            )
             readback = await asyncio.to_thread(bootstrap.request, "status", {"job_id": job_id})
-            return result, readback
+            return result, timezone_result, window_result, readback
         finally:
             await server.close()
 
-    result, readback = asyncio.run(scenario())
+    result, timezone_result, window_result, readback = asyncio.run(scenario())
 
     assert result.ok is True
+    assert timezone_result.ok is True
+    assert window_result.ok is True
     assert readback["data"]["jobs"][0]["desired_state"] == "on"
+    assert readback["data"]["jobs"][0]["schedule"] == {
+        "kind": "interval",
+        "every_minutes": 20,
+        "timezone": "UTC",
+        "active_window": {"start": "09:00", "end": "21:00"},
+    }
     assert str(OWNER_PEER_ID).encode() not in (tmp_path / "manager.sqlite3").read_bytes()

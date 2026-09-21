@@ -1373,6 +1373,7 @@ def test_owner_notification_contract_has_no_caller_supplied_target() -> None:
 def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send_owner_notification", "mode": "apply"}) is True
+    assert _requires_mutation_lock({"operation": "owner_notification_idempotency_readback"}) is True
     assert _requires_mutation_lock({"operation": "send_photo", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
@@ -2881,6 +2882,17 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
             },
         )
     )
+    idempotency_readback = asyncio.run(
+        telegram_bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "owner_notification_idempotency_readback",
+                "idempotency_key": "crm-digest:window-1",
+                "expected_text_sha256": dry["text_sha256"],
+            },
+        )
+    )
 
     assert dry["target"] == {"kind": "private", "role": "owner"}
     assert applied["target"] == {"kind": "private", "role": "owner"}
@@ -2893,6 +2905,7 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
         "text_sha256": dry["text_sha256"],
         "verified": True,
     }
+    assert idempotency_readback == readback | {"outcome": "verified", "found": True}
     assert client.sent == ["CRM: одно изменение"]
     saved_idempotency = json.loads((config.state_dir / "idempotency.json").read_text(encoding="utf-8"))
     assert saved_idempotency["crm-digest:window-1"]["operation"] == "send_owner_notification"
@@ -2933,6 +2946,48 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
                 },
             )
         )
+
+    with pytest.raises(BridgeError, match="idempotency_key_conflict"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                config,
+                {
+                    "operation": "owner_notification_idempotency_readback",
+                    "idempotency_key": "crm-digest:window-1",
+                    "expected_text_sha256": "0" * 64,
+                },
+            )
+        )
+
+
+def test_owner_notification_idempotency_readback_not_found_never_calls_telegram(tmp_path) -> None:
+    config = _runtime_config(tmp_path, owner_peer_id=10)
+
+    class NoTelegramClient:
+        def __getattr__(self, name):
+            raise AssertionError(f"unexpected Telegram access: {name}")
+
+    result = asyncio.run(
+        telegram_bridge._handle_operation(
+            NoTelegramClient(),
+            config,
+            {
+                "operation": "owner_notification_idempotency_readback",
+                "idempotency_key": "crm-digest:missing-window",
+                "expected_text_sha256": "a" * 64,
+            },
+        )
+    )
+
+    assert result == {
+        "ok": True,
+        "outcome": "not_found",
+        "found": False,
+        "verified": False,
+        "target": {"kind": "private", "role": "owner"},
+    }
+    assert not (config.state_dir / "contract.key").exists()
 
 
 def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path) -> None:
@@ -3612,6 +3667,20 @@ def test_owner_notification_cli_never_accepts_or_emits_a_target(monkeypatch, cap
         )
         == 0
     )
+    assert (
+        telegram_bridge.main(
+            [
+                "--account",
+                "work",
+                "owner-notification-idempotency-readback",
+                "--idempotency-key",
+                "window-1",
+                "--expected-text-sha256",
+                "b" * 64,
+            ]
+        )
+        == 0
+    )
 
     assert requests == [
         {
@@ -3626,9 +3695,14 @@ def test_owner_notification_cli_never_accepts_or_emits_a_target(monkeypatch, cap
             "message_id": 42,
             "expected_text_sha256": "a" * 64,
         },
+        {
+            "operation": "owner_notification_idempotency_readback",
+            "idempotency_key": "window-1",
+            "expected_text_sha256": "b" * 64,
+        },
     ]
     assert all("peer" not in request and "address" not in request for request in requests)
-    assert capsys.readouterr().out.count('"ok": true') == 2
+    assert capsys.readouterr().out.count('"ok": true') == 3
 
 
 def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch) -> None:
@@ -3647,6 +3721,115 @@ def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch
     assert telegram_bridge.main(["--account", "work", "daemon"]) == 0
     assert telegram_bridge.main(["--account", "personal", "daemon", "--monitor-incoming"]) == 0
     assert selected == [False, False, True, True, False]
+
+
+def test_owner_automation_command_is_consumed_before_codex_wake(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path, owner_peer_id=10)
+    monitor = telegram_bridge.InboundMonitor()
+    routed: list[object] = []
+    replies: list[tuple[str, int]] = []
+    captured: list[object] = []
+
+    class Coordinator:
+        async def route(self, message, *, reply):
+            routed.append(message)
+            return await reply("Задание включено. Состояние: ON.", message.message_id)
+
+    async def send_reply(_client, _config, *, text, source_message_id):
+        replies.append((text, source_message_id))
+        return True
+
+    async def capture(_monitor, event):
+        captured.append(event)
+
+    monkeypatch.setattr(telegram_bridge, "_send_owner_automation_reply", send_reply)
+    monkeypatch.setattr(telegram_bridge, "_capture_incoming_event", capture)
+    event = SimpleNamespace(is_private=True, out=False, chat_id=10, id=77, raw_text="включи CRM")
+
+    asyncio.run(
+        telegram_bridge._route_or_capture_incoming_event(
+            object(), config, monitor, event, automation_coordinator=Coordinator()
+        )
+    )
+
+    assert len(routed) == 1
+    assert routed[0].peer_id == 10
+    assert routed[0].message_id == 77
+    assert replies == [("Задание включено. Состояние: ON.", 77)]
+    assert captured == []
+
+
+def test_foreign_peer_never_reaches_owner_automation_adapter(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path, owner_peer_id=10)
+    monitor = telegram_bridge.InboundMonitor()
+    captured: list[object] = []
+
+    class Coordinator:
+        async def route(self, _message, *, reply):
+            raise AssertionError(f"unexpected owner command route: {reply}")
+
+    async def capture(_monitor, event):
+        captured.append(event)
+
+    monkeypatch.setattr(telegram_bridge, "_capture_incoming_event", capture)
+    event = SimpleNamespace(is_private=True, out=False, chat_id=11, id=78, raw_text="включи CRM")
+
+    asyncio.run(
+        telegram_bridge._route_or_capture_incoming_event(
+            object(), config, monitor, event, automation_coordinator=Coordinator()
+        )
+    )
+
+    assert captured == [event]
+
+
+def test_unknown_owner_text_passes_through_to_existing_codex_wake(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path, owner_peer_id=10)
+    monitor = telegram_bridge.InboundMonitor()
+    captured: list[object] = []
+
+    class Coordinator:
+        async def route(self, message, *, reply):
+            assert message.text == "обычный вопрос"
+            assert callable(reply)
+            return False
+
+    async def capture(_monitor, event):
+        captured.append(event)
+
+    monkeypatch.setattr(telegram_bridge, "_capture_incoming_event", capture)
+    event = SimpleNamespace(is_private=True, out=False, chat_id=10, id=79, raw_text="обычный вопрос")
+
+    asyncio.run(
+        telegram_bridge._route_or_capture_incoming_event(
+            object(), config, monitor, event, automation_coordinator=Coordinator()
+        )
+    )
+
+    assert captured == [event]
+
+
+def test_owner_automation_reply_uses_fixed_target_dry_run_apply_and_verified_readback(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path, owner_peer_id=10)
+    requests: list[dict[str, object]] = []
+
+    async def owner_notification(_client, _config, request):
+        requests.append(dict(request))
+        if request["mode"] == "dry_run":
+            return {"ok": True, "contract_token": "proof"}
+        return {"ok": True, "verified": True, "message_id": 88}
+
+    monkeypatch.setattr(telegram_bridge, "_handle_owner_notification", owner_notification)
+
+    verified = asyncio.run(
+        telegram_bridge._send_owner_automation_reply(object(), config, text="Состояние: ON.", source_message_id=77)
+    )
+
+    assert verified is True
+    assert [request["mode"] for request in requests] == ["dry_run", "apply"]
+    assert requests[1]["contract_token"] == "proof"
+    assert str(requests[1]["idempotency_key"]).startswith("tg-auto-reply:")
+    assert all("peer" not in request and "address" not in request for request in requests)
 
 
 def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> None:
