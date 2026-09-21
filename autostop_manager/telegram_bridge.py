@@ -1505,6 +1505,7 @@ async def _handle_send_text_to_entity(
     inbound_monitor: InboundMonitor | None = None,
     idempotency_operation: str = "send_text",
     idempotency_target: dict[str, Any] | None = None,
+    contract_target_role: str | None = None,
 ) -> dict[str, Any]:
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
@@ -1512,6 +1513,14 @@ async def _handle_send_text_to_entity(
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    contract_peer_id = int(target["id"])
+    if contract_target_role is not None:
+        binding = hmac.new(
+            contract_key,
+            f"{contract_target_role}\0{contract_peer_id}".encode(),
+            hashlib.sha256,
+        ).digest()
+        contract_peer_id = int.from_bytes(binding[:8], "big") or 1
     text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if mode == "dry_run":
         return {
@@ -1524,7 +1533,7 @@ async def _handle_send_text_to_entity(
             "reply_source": reply_source,
             "contract_token": issue_send_contract(
                 contract_key,
-                peer_id=target["id"],
+                peer_id=contract_peer_id,
                 text=text,
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to_message_id,
@@ -1538,7 +1547,7 @@ async def _handle_send_text_to_entity(
     contract = verify_send_contract(
         contract_token,
         contract_key,
-        peer_id=target["id"],
+        peer_id=contract_peer_id,
         text=text,
         reply_to_message_id=reply_to_message_id,
         reply_message_sha256=reply_message_sha256,
@@ -1631,6 +1640,7 @@ async def _handle_owner_notification(
         inbound_monitor=inbound_monitor,
         idempotency_operation="send_owner_notification",
         idempotency_target={"target_role": "owner"},
+        contract_target_role="owner",
     )
     response["target"] = _owner_target_summary(target)
     return response

@@ -2835,8 +2835,8 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
     target = {"id": 10, "title": "Private owner", "username": "not-returned", "kind": "private"}
 
     async def resolve(_client, peer):
-        assert peer == "10"
-        return entity, target
+        assert peer in {"10", "11"}
+        return entity, target | {"id": int(peer)}
 
     async def last_message(_client, _entity):
         return 30 if _client.sent else 20
@@ -2898,6 +2898,17 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
     assert saved_idempotency["crm-digest:window-1"]["operation"] == "send_owner_notification"
     assert saved_idempotency["crm-digest:window-1"]["target_role"] == "owner"
     assert "peer_id" not in saved_idempotency["crm-digest:window-1"]
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    contract_payload = telegram_bridge._decode_contract(dry["contract_token"], contract_key)
+    assert contract_payload["peer_id"] != config.owner_peer_id
+    with pytest.raises(BridgeError, match="contract_target_changed"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                _runtime_config(tmp_path, owner_peer_id=11),
+                apply_request | {"idempotency_key": "crm-digest:other-window"},
+            )
+        )
 
     with pytest.raises(BridgeError, match="owner_notification_readback_mismatch"):
         asyncio.run(
