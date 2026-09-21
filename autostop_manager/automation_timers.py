@@ -385,7 +385,7 @@ class SystemTimerController:
             raise AutomationError("system_timer_inspection_failed")
         expected_desired = "on" if enabled else "off"
         expected_actual = "active" if enabled else "inactive"
-        original_error: AutomationError | None = None
+        original_error: AutomationError | OSError | None = None
         try:
             self._systemctl_action("enable" if enabled else "disable", "--now", policy.unit_name)
             status = self.inspect(timer_id)
@@ -430,7 +430,7 @@ class SystemTimerController:
         if not before["inspection_ok"]:
             raise AutomationError("system_timer_inspection_failed")
         snapshot = self._capture_dropin(policy)
-        original_error: AutomationError | None = None
+        original_error: AutomationError | OSError | None = None
         try:
             staged = self.stage_interval_dropin(
                 timer_id,

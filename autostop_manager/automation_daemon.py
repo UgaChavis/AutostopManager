@@ -12,7 +12,7 @@ import signal
 import socket
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from .automation_control import AutomationControlServer, AutomationControlService
@@ -145,9 +145,9 @@ class AutomationDaemon:
                 if inspect.iscoroutinefunction(executor):
                     outcome = await executor(invocation)
                 else:
-                    outcome = await asyncio.to_thread(executor, invocation)
-                    if inspect.isawaitable(outcome):
-                        outcome = await outcome
+                    sync_executor = cast(Callable[[Mapping[str, Any]], Any], executor)
+                    sync_outcome = await asyncio.to_thread(sync_executor, invocation)
+                    outcome = await sync_outcome if inspect.isawaitable(sync_outcome) else sync_outcome
                 succeeded = bool(outcome.get("ok"))
                 raw_result_code = outcome.get("result_code")
                 result_code = str(raw_result_code or ("ok" if succeeded else "automation_executor_failed"))

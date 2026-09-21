@@ -1572,7 +1572,7 @@ async def _handle_send_text_to_entity(
     target_binding = dict(idempotency_target or {"peer_id": target["id"]})
     if contract_target_role is not None:
         target_binding["target_fingerprint"] = f"{contract_peer_id:016x}"
-    allowed_previous_operations = {idempotency_operation}
+    allowed_previous_operations: set[str | None] = {idempotency_operation}
     if idempotency_operation == "send_text":
         allowed_previous_operations.add(None)
     if previous is not None:

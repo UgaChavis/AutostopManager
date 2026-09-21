@@ -240,7 +240,8 @@ def seed(*, release_attempt_key: str) -> dict[str, Any]:
             or hold_state.get("attempt_hash") != attempt_hash
         ):
             raise AutomationError("automation_release_hold_required")
-        jobs = status.get("jobs") if isinstance(status.get("jobs"), list) else []
+        raw_jobs = status.get("jobs")
+        jobs: list[Any] = raw_jobs if isinstance(raw_jobs, list) else []
         existing = [item for item in jobs if isinstance(item, dict) and item.get("template_id") == "crm_digest_v1"]
         if not existing:
             response = client.request(

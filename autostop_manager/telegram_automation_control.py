@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
@@ -235,7 +235,7 @@ class TelegramAutomationAdapter:
                 "status",
                 "Состояние регламентных заданий сейчас недоступно.",
             )
-        lines = []
+        lines: list[str] = []
         for job in jobs:
             # Reserve room for the small reviewed system-timer allowlist.
             if len(lines) >= 15:
@@ -244,7 +244,8 @@ class TelegramAutomationAdapter:
                 continue
             state = "ON" if job.get("desired_state") == "on" else "OFF"
             actual_state = str(job.get("actual_state") or "unknown")
-            schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
+            raw_schedule = job.get("schedule")
+            schedule: Mapping[str, Any] = raw_schedule if isinstance(raw_schedule, dict) else {}
             period = schedule.get("every_minutes")
             timezone = schedule.get("timezone") or "не задан"
             active_window = schedule.get("active_window")
@@ -411,13 +412,14 @@ class TelegramAutomationAdapter:
                 "set_enabled",
                 "Команда принята, но точное состояние не подтверждено. Повтор не выполнялся.",
             )
-        actual_state = str(verified.get("actual_state") or "unknown")
-        next_run = verified.get("next_run_at") or "не назначен"
+        verified_item = cast(dict[str, Any], verified)
+        actual_state = str(verified_item.get("actual_state") or "unknown")
+        next_run = verified_item.get("next_run_at") or "не назначен"
         return TelegramAutomationResult(
             True,
             True,
             "set_enabled",
-            f"{verified.get('name') or target_id}: {expected.upper()}; фактически: {actual_state}; "
+            f"{verified_item.get('name') or target_id}: {expected.upper()}; фактически: {actual_state}; "
             f"следующий запуск: {next_run}.",
         )
 
@@ -636,7 +638,8 @@ class TelegramAutomationAdapter:
         job = jobs[0]
         del self._pending[token]
         if pending.operation == "set_schedule":
-            schedule = job.get("schedule") if isinstance(job, dict) and isinstance(job.get("schedule"), dict) else {}
+            raw_schedule = job.get("schedule") if isinstance(job, dict) else None
+            schedule: Mapping[str, Any] = raw_schedule if isinstance(raw_schedule, dict) else {}
             expected_schedule = pending.payload["schedule"]
             if any(schedule.get(key) != value for key, value in expected_schedule.items()):
                 return TelegramAutomationResult(

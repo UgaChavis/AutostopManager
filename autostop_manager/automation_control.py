@@ -13,7 +13,7 @@ import struct
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from .automation_registry import (
@@ -128,7 +128,8 @@ class AutomationControlService:
         timers = []
         for live in self.timer_controller.list_status():
             saved = persisted.get(str(live["timer_id"]), {})
-            state = live.get("state") if isinstance(live.get("state"), Mapping) else {}
+            raw_state = live.get("state")
+            state: Mapping[str, Any] = raw_state if isinstance(raw_state, Mapping) else {}
             desired_state = saved.get("desired_state", state.get("desired_state", "off"))
             desired_period = saved.get("period_minutes", state.get("period_minutes"))
             actual_state = state.get("actual_state", "unknown")
@@ -403,7 +404,7 @@ class AutomationControlService:
             if operation == "set_global_hold":
                 return self.store.set_global_hold(
                     connection,
-                    enabled=payload.get("enabled"),
+                    enabled=cast(bool, payload.get("enabled")),
                     reason=payload.get("reason"),
                     actor_hash=actor_hash,
                     attempt_hash=payload.get("attempt_hash"),
@@ -429,7 +430,7 @@ class AutomationControlService:
                 if policy.control_mode != "managed":
                     raise AutomationError("system_timer_read_only")
                 if operation == "set_enabled":
-                    live = self.timer_controller.set_enabled(timer_id, enabled=payload.get("enabled"))
+                    live = self.timer_controller.set_enabled(timer_id, enabled=cast(bool, payload.get("enabled")))
                 else:
                     schedule = payload.get("schedule")
                     if not isinstance(schedule, Mapping) or type(schedule.get("every_minutes")) is not int:
@@ -461,7 +462,7 @@ class AutomationControlService:
                 return self.store.set_enabled(
                     connection,
                     job_id=job_id,
-                    enabled=payload.get("enabled"),
+                    enabled=cast(bool, payload.get("enabled")),
                     expected_revision=expected_revision,
                 )
             if operation == "set_schedule":

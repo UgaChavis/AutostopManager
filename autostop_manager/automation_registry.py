@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -153,10 +153,11 @@ def is_in_active_window(at: datetime, *, timezone: str, active_window: Any) -> b
     normalized_window = normalize_active_window(active_window)
     if normalized_window == "24/7":
         return True
+    window = cast(dict[str, str], normalized_window)
     local = at.astimezone(ZoneInfo(normalize_timezone(timezone)))
     current = local.hour * 3600 + local.minute * 60 + local.second
-    start = _clock_seconds(normalized_window["start"])
-    end = _clock_seconds(normalized_window["end"])
+    start = _clock_seconds(window["start"])
+    end = _clock_seconds(window["end"])
     if start < end:
         return start <= current < end
     return current >= start or current < end
@@ -182,13 +183,14 @@ def next_active_time(at: datetime, *, timezone: str, active_window: Any) -> date
     candidate = at.astimezone(UTC)
     if normalized_window == "24/7":
         return candidate
+    window = cast(dict[str, str], normalized_window)
     zone = ZoneInfo(normalize_timezone(timezone))
     local = candidate.astimezone(zone)
-    if is_in_active_window(candidate, timezone=timezone, active_window=normalized_window):
+    if is_in_active_window(candidate, timezone=timezone, active_window=window):
         return candidate
     current = local.hour * 3600 + local.minute * 60 + local.second
-    start = _clock_seconds(normalized_window["start"])
-    end = _clock_seconds(normalized_window["end"])
+    start = _clock_seconds(window["start"])
+    end = _clock_seconds(window["end"])
     add_days = 1 if start < end and current >= end else 0
     boundary = _local_boundary(local, start_seconds=start, add_days=add_days).astimezone(UTC)
     if boundary <= candidate:
@@ -767,9 +769,8 @@ class AutomationStore:
                 "SELECT lease_until FROM manager_automation_runtime WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
-            lease_active = bool(
-                runtime and parse_time(runtime["lease_until"]) and parse_time(runtime["lease_until"]) > now_dt
-            )
+            lease_until = parse_time(runtime["lease_until"]) if runtime else None
+            lease_active = bool(lease_until is not None and lease_until > now_dt)
             connection.execute(
                 """
                 UPDATE manager_automation_runtime
