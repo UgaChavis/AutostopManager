@@ -25,15 +25,19 @@ from autostop_manager.telegram_bridge import (
     account_model_dir,
     account_outbox_dir,
     build_parser,
+    issue_document_contract,
     issue_download_contract,
-    issue_send_contract,
     issue_photo_contract,
+    issue_send_contract,
     normalize_phone,
     redact_sensitive_message_text,
+    validate_document_file,
+    validate_document_request,
     validate_download_request,
     validate_photo_file,
     validate_photo_request,
     validate_send_request,
+    verify_document_contract,
     verify_download_contract,
     verify_photo_contract,
     verify_send_contract,
@@ -41,6 +45,51 @@ from autostop_manager.telegram_bridge import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _minimal_pdf(*, note: bytes = b"order") -> bytes:
+    pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [] /Count 0 >>",
+        b"<< /Producer (AutoStop) /Subject (" + note + b") >>",
+    )
+    offsets = [0]
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{number} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets)}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def _minimal_xref_stream_pdf() -> bytes:
+    pdf = bytearray(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for number, body in (
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>"),
+        (2, b"<< /Type /Pages /Kids [] /Count 0 >>"),
+    ):
+        offsets.append(len(pdf))
+        pdf.extend(f"{number} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    offsets.append(xref_offset)
+    entries = bytearray(b"\x00\x00\x00\x00\x00\xff\xff")
+    for offset in offsets[1:]:
+        entries.extend(b"\x01" + offset.to_bytes(4, "big") + b"\x00\x00")
+    pdf.extend(b"3 0 obj\n")
+    pdf.extend(f"<< /Type /XRef /Size 4 /Root 1 0 R /W [1 4 2] /Length {len(entries)} >>\nstream\n".encode())
+    pdf.extend(entries)
+    pdf.extend(f"\nendstream\nendobj\nstartxref\n{xref_offset}\n%%EOF\n".encode())
+    return bytes(pdf)
 
 
 def _owner_runtime_config(tmp_path):
@@ -1590,6 +1639,50 @@ def test_photo_contract_binds_target_caption_photo_and_expiry() -> None:
         )
 
 
+def test_document_contract_binds_target_caption_hash_size_name_and_expiry() -> None:
+    secret = b"x" * 32
+    digest = "a" * 64
+    token = issue_document_contract(
+        secret,
+        peer_id=10,
+        caption="ready",
+        document_sha256=digest,
+        document_bytes=123,
+        document_name="order-813.pdf",
+        last_message_id=7,
+        now=100,
+    )
+
+    payload = verify_document_contract(
+        token,
+        secret,
+        peer_id=10,
+        caption="ready",
+        document_sha256=digest,
+        document_bytes=123,
+        document_name="order-813.pdf",
+        now=101,
+    )
+
+    assert payload["last_message_id"] == 7
+    for override, error in (
+        ({"document_sha256": "b" * 64}, "contract_document_changed"),
+        ({"document_bytes": 124}, "contract_document_size_changed"),
+        ({"document_name": "other.pdf"}, "contract_document_name_changed"),
+    ):
+        values = {
+            "peer_id": 10,
+            "caption": "ready",
+            "document_sha256": digest,
+            "document_bytes": 123,
+            "document_name": "order-813.pdf",
+            "now": 101,
+            **override,
+        }
+        with pytest.raises(BridgeError, match=error):
+            verify_document_contract(token, secret, **values)
+
+
 def test_download_contract_binds_target_message_media_and_expiry() -> None:
     secret = b"x" * 32
     token = issue_download_contract(
@@ -1637,7 +1730,15 @@ def test_apply_requires_idempotency_key() -> None:
     with pytest.raises(BridgeError, match="idempotency_key_required"):
         validate_photo_request({"peer": "@target", "photo": "/run/example.jpg", "caption": "hello", "mode": "apply"})
     with pytest.raises(BridgeError, match="idempotency_key_required"):
+        validate_document_request({"peer": "10", "document": "/run/example.pdf", "caption": "hello", "mode": "apply"})
+    with pytest.raises(BridgeError, match="idempotency_key_required"):
         validate_download_request({"peer": "@target", "message_id": 10, "mode": "apply"})
+
+
+@pytest.mark.parametrize("peer", ["", "@target", "Client", "-10010", "0"])
+def test_document_send_requires_exact_positive_numeric_peer(peer) -> None:
+    with pytest.raises(BridgeError, match="exact_private_peer_required"):
+        validate_document_request({"peer": peer, "document": "/run/example.pdf", "caption": "hello", "mode": "dry_run"})
 
 
 def test_owner_notification_contract_has_no_caller_supplied_target() -> None:
@@ -1666,6 +1767,7 @@ def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send_owner_notification", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "owner_notification_idempotency_readback"}) is True
     assert _requires_mutation_lock({"operation": "send_photo", "mode": "apply"}) is True
+    assert _requires_mutation_lock({"operation": "send_document", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "discard_download"}) is True
@@ -1716,6 +1818,35 @@ def test_photo_send_rejects_non_private_peer(monkeypatch, tmp_path) -> None:
         )
 
 
+def test_document_send_rejects_non_private_peer(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    outbox = config.socket_path.parent / "outbox"
+    outbox.mkdir(parents=True, mode=0o700)
+    document = outbox / "order.pdf"
+    document.write_bytes(_minimal_pdf())
+    document.chmod(0o600)
+
+    async def resolve_peer(_client, _peer):
+        return object(), {"id": 10, "title": "Channel", "username": None, "kind": "channel"}
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
+
+    with pytest.raises(BridgeError, match="private_peer_required"):
+        asyncio.run(
+            telegram_bridge._handle_operation(
+                object(),
+                config,
+                {
+                    "operation": "send_document",
+                    "peer": "10",
+                    "document": str(document),
+                    "caption": "ready",
+                    "mode": "dry_run",
+                },
+            )
+        )
+
+
 def test_photo_file_must_be_private_jpeg_inside_outbox(tmp_path) -> None:
     outbox = tmp_path / "outbox"
     outbox.mkdir()
@@ -1761,6 +1892,82 @@ def test_photo_file_rejects_symlink_without_reading_target(tmp_path) -> None:
         validate_photo_file(photo, outbox_dir=outbox)
 
     assert target.read_bytes() == b"\xff\xd8example\xff\xd9"
+
+
+def test_document_file_must_be_private_pdf_inside_outbox(tmp_path) -> None:
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(mode=0o700)
+    content = _minimal_pdf()
+    document = outbox / "order.pdf"
+    document.write_bytes(content)
+    document.chmod(0o600)
+
+    resolved, digest, size = validate_document_file(document, outbox_dir=outbox)
+
+    assert resolved == document
+    assert digest == telegram_bridge.hashlib.sha256(content).hexdigest()
+    assert size == len(content)
+
+
+def test_document_file_rejects_xref_stream_pdf(tmp_path) -> None:
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(mode=0o700)
+    content = _minimal_xref_stream_pdf()
+    document = outbox / "xref-stream.pdf"
+    document.write_bytes(content)
+    document.chmod(0o600)
+
+    with pytest.raises(BridgeError, match="document_invalid"):
+        validate_document_file(document, outbox_dir=outbox)
+
+
+def test_document_file_rejects_open_permissions_wrong_directory_symlink_and_non_pdf(tmp_path) -> None:
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(mode=0o700)
+    valid_content = _minimal_pdf()
+    open_document = outbox / "open.pdf"
+    open_document.write_bytes(valid_content)
+    open_document.chmod(0o640)
+    outside_document = tmp_path / "outside.pdf"
+    outside_document.write_bytes(valid_content)
+    outside_document.chmod(0o600)
+    target = outbox / "target.pdf"
+    target.write_bytes(valid_content)
+    target.chmod(0o600)
+    linked_document = outbox / "linked.pdf"
+    linked_document.symlink_to(target.name)
+    invalid_document = outbox / "invalid.pdf"
+    invalid_document.write_bytes(b"not a PDF document")
+    invalid_document.chmod(0o600)
+    marker_only_document = outbox / "marker-only.pdf"
+    marker_only_document.write_bytes(b"%PDF-1.7\nnot structurally valid\n%%EOF\n")
+    marker_only_document.chmod(0o600)
+    dangling_root_document = outbox / "dangling-root.pdf"
+    dangling_root_document.write_bytes(
+        valid_content.replace(b"/Size 4", b"/Size 10").replace(b"/Root 1 0 R", b"/Root 9 0 R")
+    )
+    dangling_root_document.chmod(0o600)
+    string_catalog_document = outbox / "string-catalog.pdf"
+    catalog_dictionary = b"<< /Type /Catalog /Pages 2 0 R >>"
+    fake_catalog_string = b"(" + b"/Type /Catalog /Pages 2 0 R".ljust(len(catalog_dictionary) - 2) + b")"
+    string_catalog_document.write_bytes(valid_content.replace(catalog_dictionary, fake_catalog_string))
+    string_catalog_document.chmod(0o600)
+
+    with pytest.raises(BridgeError, match="document_permissions_invalid"):
+        validate_document_file(open_document, outbox_dir=outbox)
+    with pytest.raises(BridgeError, match="document_path_invalid"):
+        validate_document_file(outside_document, outbox_dir=outbox)
+    with pytest.raises(BridgeError, match="document_unavailable"):
+        validate_document_file(linked_document, outbox_dir=outbox)
+    with pytest.raises(BridgeError, match="document_invalid"):
+        validate_document_file(invalid_document, outbox_dir=outbox)
+    with pytest.raises(BridgeError, match="document_invalid"):
+        validate_document_file(marker_only_document, outbox_dir=outbox)
+    with pytest.raises(BridgeError, match="document_invalid"):
+        validate_document_file(dangling_root_document, outbox_dir=outbox)
+    with pytest.raises(BridgeError, match="document_invalid"):
+        validate_document_file(string_catalog_document, outbox_dir=outbox)
+    assert target.read_bytes() == valid_content
 
 
 def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path) -> None:
@@ -1847,6 +2054,156 @@ def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path)
     )
     assert replayed["replayed"] is True and replayed["verified"] is True
     assert client.send_count == 1
+
+
+def test_send_document_uploads_validated_bytes_and_independently_reads_back(monkeypatch, tmp_path) -> None:
+    runtime_dir = tmp_path / "run"
+    outbox = runtime_dir / "outbox"
+    outbox.mkdir(parents=True, mode=0o700)
+    document = outbox / "order-813.pdf"
+    original = _minimal_pdf(note=b"validated-order")
+    document.write_bytes(original)
+    document.chmod(0o600)
+    state_dir = tmp_path / "state"
+    config = TelegramConfig(
+        api_id=123456,
+        api_hash="0" * 32,
+        session_path=state_dir / "account",
+        state_dir=state_dir,
+        socket_path=runtime_dir / "bridge.sock",
+    )
+    entity = object()
+
+    async def resolve_peer(_client, peer):
+        assert peer == "10"
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    async def last_message_id(_client, _entity):
+        return 30 if _client.uploaded else 20
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message_id)
+
+    class Client:
+        uploaded = b""
+        send_count = 0
+
+        async def send_file(self, _entity, upload, **kwargs):
+            assert kwargs == {
+                "caption": "Car ready",
+                "force_document": True,
+                "mime_type": "application/pdf",
+            }
+            document.write_bytes(_minimal_pdf(note=b"swapped-order"))
+            self.uploaded = upload.read()
+            self.send_count += 1
+            return SimpleNamespace(id=30)
+
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 30
+            return SimpleNamespace(
+                id=30,
+                message="Car ready",
+                media=SimpleNamespace(),
+                file=SimpleNamespace(
+                    name="order-813.pdf",
+                    mime_type="application/pdf",
+                    size=len(original),
+                ),
+                document=SimpleNamespace(attributes=[]),
+            )
+
+        async def download_media(self, message, *, file):
+            assert message.id == 30
+            assert file is bytes
+            return self.uploaded
+
+    client = Client()
+    dry_run = asyncio.run(
+        telegram_bridge._handle_send_document(
+            client,
+            config,
+            {"peer": "10", "document": str(document), "caption": "Car ready", "mode": "dry_run"},
+        )
+    )
+    result = asyncio.run(
+        telegram_bridge._handle_send_document(
+            client,
+            config,
+            {
+                "peer": "10",
+                "document": str(document),
+                "caption": "Car ready",
+                "mode": "apply",
+                "contract_token": dry_run["contract_token"],
+                "idempotency_key": "document-test-key",
+            },
+        )
+    )
+
+    assert result["verified"] is True
+    assert result["document_sha256"] == telegram_bridge.hashlib.sha256(original).hexdigest()
+    assert client.uploaded == original
+
+    document.write_bytes(original)
+    replayed = asyncio.run(
+        telegram_bridge._handle_send_document(
+            client,
+            config,
+            {
+                "peer": "10",
+                "document": str(document),
+                "caption": "Car ready",
+                "mode": "apply",
+                "contract_token": dry_run["contract_token"],
+                "idempotency_key": "document-test-key",
+            },
+        )
+    )
+    assert replayed["replayed"] is True and replayed["verified"] is True
+    assert client.send_count == 1
+
+
+def test_send_document_rejects_conversation_change_after_dry_run(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    outbox = config.socket_path.parent / "outbox"
+    outbox.mkdir(parents=True, mode=0o700)
+    document = outbox / "order.pdf"
+    document.write_bytes(_minimal_pdf())
+    document.chmod(0o600)
+    entity = object()
+    last_message_ids = iter((20, 21))
+
+    async def resolve_peer(_client, peer):
+        assert peer == "10"
+        return entity, {"id": 10, "title": "Target", "username": None, "kind": "private"}
+
+    async def last_message_id(_client, _entity):
+        return next(last_message_ids)
+
+    class Client:
+        async def send_file(self, *_args, **_kwargs):
+            raise AssertionError("document must not be sent after the conversation changes")
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message_id)
+    client = Client()
+    request = {"peer": "10", "document": str(document), "caption": "ready", "mode": "dry_run"}
+    dry_run = asyncio.run(telegram_bridge._handle_send_document(client, config, request))
+
+    with pytest.raises(BridgeError, match="conversation_changed_since_dry_run"):
+        asyncio.run(
+            telegram_bridge._handle_send_document(
+                client,
+                config,
+                request
+                | {
+                    "mode": "apply",
+                    "contract_token": dry_run["contract_token"],
+                    "idempotency_key": "document-changed-conversation-key",
+                },
+            )
+        )
 
 
 def test_send_request_rejects_empty_or_oversized_text() -> None:
@@ -3632,6 +3989,25 @@ def test_local_request_transport_and_cli_mapping(monkeypatch, tmp_path, capsys) 
     )
     assert json.loads(capsys.readouterr().out)["request_operation"] == "send_photo"
     assert requests[-1]["caption"] == "caption"
+    assert (
+        telegram_bridge.main(
+            [
+                "--account",
+                "work",
+                "send-document",
+                "--peer",
+                "10",
+                "--file",
+                str(tmp_path / "order.pdf"),
+                "--caption",
+                "ready",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["request_operation"] == "send_document"
+    assert requests[-1]["document"] == str(tmp_path / "order.pdf")
+    assert requests[-1]["caption"] == "ready"
 
 
 def test_local_request_accepts_only_bounded_timeout_values(monkeypatch, tmp_path) -> None:

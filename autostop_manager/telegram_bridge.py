@@ -45,6 +45,7 @@ MAX_REQUEST_BYTES = 128 * 1024
 MAX_MESSAGE_CHARS = 4096
 MAX_CAPTION_CHARS = 1024
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 CONTRACT_TTL_SECONDS = 15 * 60
 TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
@@ -611,6 +612,61 @@ def verify_photo_contract(
     return payload
 
 
+def issue_document_contract(
+    secret: bytes,
+    *,
+    peer_id: int,
+    caption: str,
+    document_sha256: str,
+    document_bytes: int,
+    document_name: str,
+    last_message_id: int,
+    now: int | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else int(now)
+    payload = {
+        "caption_sha256": hashlib.sha256(caption.encode("utf-8")).hexdigest(),
+        "document_bytes": int(document_bytes),
+        "document_name": document_name,
+        "document_sha256": document_sha256,
+        "issued_at": issued_at,
+        "last_message_id": int(last_message_id),
+        "peer_id": int(peer_id),
+        "type": "document",
+    }
+    return _issue_contract(secret, payload)
+
+
+def verify_document_contract(
+    token: str,
+    secret: bytes,
+    *,
+    peer_id: int,
+    caption: str,
+    document_sha256: str,
+    document_bytes: int,
+    document_name: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    payload = _decode_contract(token, secret)
+    if payload.get("type") != "document":
+        raise BridgeError("contract_invalid")
+    if payload.get("peer_id") != int(peer_id):
+        raise BridgeError("contract_target_changed")
+    if payload.get("caption_sha256") != hashlib.sha256(caption.encode("utf-8")).hexdigest():
+        raise BridgeError("contract_text_changed")
+    if payload.get("document_sha256") != document_sha256:
+        raise BridgeError("contract_document_changed")
+    if payload.get("document_bytes") != int(document_bytes):
+        raise BridgeError("contract_document_size_changed")
+    if payload.get("document_name") != document_name:
+        raise BridgeError("contract_document_name_changed")
+    _verify_contract_age(payload, now)
+    if not isinstance(payload.get("last_message_id"), int):
+        raise BridgeError("contract_invalid")
+    return payload
+
+
 def issue_download_contract(
     secret: bytes,
     *,
@@ -763,6 +819,20 @@ def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str
         raise BridgeError("caption_length_invalid")
     _validate_mode(mode, idempotency_key)
     return peer, photo, caption, mode, idempotency_key
+
+
+def validate_document_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
+    peer = str(request.get("peer") or "").strip()
+    document = Path(str(request.get("document") or ""))
+    caption = str(request.get("caption") or "")
+    mode = str(request.get("mode") or "dry_run")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    if not peer.isdigit() or int(peer) <= 0:
+        raise BridgeError("exact_private_peer_required")
+    if not caption or len(caption) > MAX_CAPTION_CHARS:
+        raise BridgeError("caption_length_invalid")
+    _validate_mode(mode, idempotency_key)
+    return peer, document, caption, mode, idempotency_key
 
 
 def validate_download_request(request: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -1054,6 +1124,305 @@ def _load_validated_photo_file(
 def validate_photo_file(path: Path, *, outbox_dir: Path = DEFAULT_OUTBOX_DIR) -> tuple[Path, str, int]:
     """Validate one private JPEG without allowing a later pathname race."""
     validated_path, digest, size, _content = _load_validated_photo_file(path, outbox_dir=outbox_dir)
+    return validated_path, digest, size
+
+
+def _parse_classic_pdf_xref(xref_table: bytes) -> dict[int, tuple[int, int]] | None:
+    lines = xref_table.splitlines()
+    if not lines or lines[0].strip() != b"xref":
+        return None
+    entries: dict[int, tuple[int, int]] = {}
+    line_index = 1
+    while line_index < len(lines):
+        if not lines[line_index].strip():
+            line_index += 1
+            continue
+        subsection = re.fullmatch(rb"[ \t]*([0-9]+)[ \t]+([1-9][0-9]*)[ \t]*", lines[line_index])
+        if subsection is None:
+            return None
+        first_object = int(subsection.group(1))
+        entry_count = int(subsection.group(2))
+        line_index += 1
+        if line_index + entry_count > len(lines):
+            return None
+        for entry_offset in range(entry_count):
+            entry = re.fullmatch(
+                rb"[ \t]*([0-9]{10})[ \t]+([0-9]{5})[ \t]+([nf])[ \t]*",
+                lines[line_index + entry_offset],
+            )
+            if entry is None:
+                return None
+            if entry.group(3) == b"n":
+                entries[first_object + entry_offset] = (int(entry.group(1)), int(entry.group(2)))
+        line_index += entry_count
+    return entries
+
+
+def _read_classic_pdf_object(
+    content: bytes,
+    *,
+    xref_offset: int,
+    entries: dict[int, tuple[int, int]],
+    reference: tuple[int, int],
+) -> bytes | None:
+    object_number, generation = reference
+    entry = entries.get(object_number)
+    if entry is None or entry[1] != generation:
+        return None
+    object_offset = entry[0]
+    if not 0 < object_offset < xref_offset:
+        return None
+    header = re.match(
+        rb"[ \t]*" + str(object_number).encode() + rb"\s+" + str(generation).encode() + rb"\s+obj\b",
+        content[object_offset:xref_offset],
+    )
+    if header is None:
+        return None
+    body_start = object_offset + header.end()
+    body_end = content.find(b"endobj", body_start, xref_offset)
+    return None if body_end < 0 else content[body_start:body_end]
+
+
+def _pdf_without_strings_and_comments(content: bytes) -> bytes | None:
+    sanitized = bytearray()
+    index = 0
+    while index < len(content):
+        current = content[index]
+        if current == ord("%"):
+            while index < len(content) and content[index] not in (ord("\r"), ord("\n")):
+                index += 1
+            continue
+        if current == ord("("):
+            depth = 1
+            index += 1
+            while index < len(content) and depth:
+                current = content[index]
+                if current == ord("\\"):
+                    index += 2
+                    continue
+                if current == ord("("):
+                    depth += 1
+                elif current == ord(")"):
+                    depth -= 1
+                index += 1
+            if depth:
+                return None
+            sanitized.append(ord(" "))
+            continue
+        if current == ord("<") and index + 1 < len(content) and content[index + 1] == ord("<"):
+            sanitized.extend(b"<<")
+            index += 2
+            continue
+        if current == ord("<"):
+            closing = content.find(b">", index + 1)
+            if closing < 0:
+                return None
+            index = closing + 1
+            sanitized.append(ord(" "))
+            continue
+        sanitized.append(current)
+        index += 1
+    return bytes(sanitized)
+
+
+def _pdf_top_level_dictionary_tokens(content: bytes) -> list[bytes] | None:
+    sanitized = _pdf_without_strings_and_comments(content)
+    if sanitized is None:
+        return None
+    tokens = re.findall(
+        rb"<<|>>|\[|\]|/[^\x00\x09\x0a\x0c\x0d\x20()<>{}\[\]/%]+|[+-]?[0-9]+|R|"
+        rb"[^\x00\x09\x0a\x0c\x0d\x20()<>{}\[\]/%]+",
+        sanitized,
+    )
+    if not tokens or tokens[0] != b"<<" or tokens[-1] != b">>":
+        return None
+    top_level: list[bytes] = []
+    dictionary_depth = 0
+    array_depth = 0
+    for token in tokens:
+        if token == b"<<":
+            dictionary_depth += 1
+            if dictionary_depth == 1 and array_depth == 0:
+                top_level.append(token)
+            continue
+        if token == b">>":
+            if dictionary_depth == 1 and array_depth == 0:
+                top_level.append(token)
+            dictionary_depth -= 1
+            if dictionary_depth < 0:
+                return None
+            continue
+        if token == b"[":
+            if dictionary_depth == 1 and array_depth == 0:
+                top_level.append(token)
+            array_depth += 1
+            continue
+        if token == b"]":
+            array_depth -= 1
+            if array_depth < 0:
+                return None
+            continue
+        if dictionary_depth == 1 and array_depth == 0:
+            top_level.append(token)
+    if dictionary_depth or array_depth or top_level[:1] != [b"<<"] or top_level[-1:] != [b">>"]:
+        return None
+    return top_level[1:-1]
+
+
+def _pdf_unique_field(tokens: list[bytes], key: bytes, value_width: int) -> tuple[bytes, ...] | None:
+    positions = [index for index, token in enumerate(tokens) if token == key]
+    if len(positions) != 1:
+        return None
+    position = positions[0]
+    values = tokens[position + 1 : position + 1 + value_width]
+    return tuple(values) if len(values) == value_width else None
+
+
+def _pdf_structure_is_sane(content: bytes) -> bool:
+    """Validate the classic-xref object chain used by CRM-generated PDFs."""
+    if re.match(rb"%PDF-(?:1\.[0-9]|2\.0)(?:\r\n|\r|\n)", content) is None:
+        return False
+    tail_start = max(0, len(content) - 64 * 1024)
+    startxref_match = re.search(
+        rb"startxref[\x00\x09\x0a\x0c\x0d\x20]+([0-9]{1,10})"
+        rb"[\x00\x09\x0a\x0c\x0d\x20]+%%EOF[\x00\x09\x0a\x0c\x0d\x20]*\Z",
+        content[tail_start:],
+    )
+    if startxref_match is None:
+        return False
+    startxref_position = tail_start + startxref_match.start()
+    xref_offset = int(startxref_match.group(1))
+    if not 0 < xref_offset < startxref_position:
+        return False
+    xref_section = content[xref_offset:startxref_position]
+    if re.match(rb"xref(?:\r\n|\r|\n)", xref_section) is None:
+        return False
+
+    trailer_match = re.search(rb"(?:^|\r\n|\r|\n)trailer\b", xref_section)
+    if trailer_match is None:
+        return False
+    xref_table = xref_section[: trailer_match.start()]
+    trailer = xref_section[trailer_match.end() :]
+    trailer_tokens = _pdf_top_level_dictionary_tokens(trailer)
+    if trailer_tokens is None:
+        return False
+    size_value = _pdf_unique_field(trailer_tokens, b"/Size", 1)
+    root_value = _pdf_unique_field(trailer_tokens, b"/Root", 3)
+    if (
+        size_value is None
+        or root_value is None
+        or re.fullmatch(rb"[1-9][0-9]*", size_value[0]) is None
+        or re.fullmatch(rb"[1-9][0-9]*", root_value[0]) is None
+        or re.fullmatch(rb"[0-9]+", root_value[1]) is None
+        or root_value[2] != b"R"
+    ):
+        return False
+
+    entries = _parse_classic_pdf_xref(xref_table)
+    if entries is None:
+        return False
+
+    declared_size = int(size_value[0])
+    root_reference = (int(root_value[0]), int(root_value[1]))
+    if root_reference[0] >= declared_size:
+        return False
+
+    catalog = _read_classic_pdf_object(
+        content,
+        xref_offset=xref_offset,
+        entries=entries,
+        reference=root_reference,
+    )
+    catalog_tokens = _pdf_top_level_dictionary_tokens(catalog) if catalog is not None else None
+    if catalog_tokens is None or _pdf_unique_field(catalog_tokens, b"/Type", 1) != (b"/Catalog",):
+        return False
+    pages_value = _pdf_unique_field(catalog_tokens, b"/Pages", 3)
+    if (
+        pages_value is None
+        or re.fullmatch(rb"[1-9][0-9]*", pages_value[0]) is None
+        or re.fullmatch(rb"[0-9]+", pages_value[1]) is None
+        or pages_value[2] != b"R"
+    ):
+        return False
+    pages_reference = (int(pages_value[0]), int(pages_value[1]))
+    if pages_reference[0] >= declared_size:
+        return False
+    pages = _read_classic_pdf_object(
+        content,
+        xref_offset=xref_offset,
+        entries=entries,
+        reference=pages_reference,
+    )
+    pages_tokens = _pdf_top_level_dictionary_tokens(pages) if pages is not None else None
+    if pages_tokens is None or _pdf_unique_field(pages_tokens, b"/Type", 1) != (b"/Pages",):
+        return False
+    count_value = _pdf_unique_field(pages_tokens, b"/Count", 1)
+    return bool(
+        _pdf_unique_field(pages_tokens, b"/Kids", 1) == (b"[",)
+        and count_value is not None
+        and re.fullmatch(rb"[0-9]+", count_value[0]) is not None
+    )
+
+
+def _load_validated_document_file(
+    path: Path,
+    *,
+    outbox_dir: Path = DEFAULT_OUTBOX_DIR,
+) -> tuple[Path, str, int, bytes]:
+    if not path.is_absolute() or not outbox_dir.is_absolute() or path.parent != outbox_dir:
+        raise BridgeError("document_path_invalid")
+    if path.name in {"", ".", ".."} or path.suffix.casefold() != ".pdf":
+        raise BridgeError("document_path_invalid")
+    try:
+        outbox_fd = os.open(
+            outbox_dir,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        raise BridgeError("document_unavailable") from exc
+    try:
+        outbox_stat = os.fstat(outbox_fd)
+        if outbox_stat.st_uid != os.geteuid() or stat.S_IMODE(outbox_stat.st_mode) != 0o700:
+            raise BridgeError("document_outbox_permissions_invalid")
+        try:
+            file_fd = os.open(
+                path.name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=outbox_fd,
+            )
+        except OSError as exc:
+            raise BridgeError("document_unavailable") from exc
+        try:
+            file_stat = os.fstat(file_fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise BridgeError("document_invalid")
+            if file_stat.st_uid != os.geteuid() or stat.S_IMODE(file_stat.st_mode) != 0o600:
+                raise BridgeError("document_permissions_invalid")
+            if not 8 <= file_stat.st_size <= MAX_DOCUMENT_BYTES:
+                raise BridgeError("document_size_invalid")
+            content = bytearray()
+            while len(content) <= MAX_DOCUMENT_BYTES:
+                chunk = os.read(file_fd, min(1024 * 1024, MAX_DOCUMENT_BYTES + 1 - len(content)))
+                if not chunk:
+                    break
+                content.extend(chunk)
+            if len(content) != file_stat.st_size or len(content) > MAX_DOCUMENT_BYTES:
+                raise BridgeError("document_size_invalid")
+        except OSError as exc:
+            raise BridgeError("document_unreadable") from exc
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(outbox_fd)
+    immutable_content = bytes(content)
+    if not _pdf_structure_is_sane(immutable_content):
+        raise BridgeError("document_invalid")
+    return path, hashlib.sha256(immutable_content).hexdigest(), len(immutable_content), immutable_content
+
+
+def validate_document_file(path: Path, *, outbox_dir: Path = DEFAULT_OUTBOX_DIR) -> tuple[Path, str, int]:
+    """Validate one private PDF without allowing a later pathname race."""
+    validated_path, digest, size, _content = _load_validated_document_file(path, outbox_dir=outbox_dir)
     return validated_path, digest, size
 
 
@@ -1393,6 +1762,126 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
         "replayed": previous is not None,
         "target": target,
         "message_id": message_id,
+        "verified": True,
+    }
+
+
+async def _handle_send_document(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+    peer, document, caption, mode, idempotency_key = validate_document_request(request)
+    document_path, document_sha256, document_bytes, document_content = _load_validated_document_file(
+        document,
+        outbox_dir=config.socket_path.parent / "outbox",
+    )
+    entity, target = await _resolve_peer(client, peer)
+    if target["kind"] != "private":
+        raise BridgeError("private_peer_required")
+    last_message_id = await _last_message_id(client, entity)
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
+    if mode == "dry_run":
+        return {
+            "ok": True,
+            "mode": "dry_run",
+            "target": target,
+            "caption_chars": len(caption),
+            "caption_sha256": caption_sha256,
+            "document_bytes": document_bytes,
+            "document_name": document_path.name,
+            "document_sha256": document_sha256,
+            "last_message_id": last_message_id,
+            "contract_token": issue_document_contract(
+                contract_key,
+                peer_id=target["id"],
+                caption=caption,
+                document_sha256=document_sha256,
+                document_bytes=document_bytes,
+                document_name=document_path.name,
+                last_message_id=last_message_id,
+            ),
+        }
+
+    contract_token = str(request.get("contract_token") or "")
+    if not contract_token:
+        raise BridgeError("contract_required")
+    contract = verify_document_contract(
+        contract_token,
+        contract_key,
+        peer_id=target["id"],
+        caption=caption,
+        document_sha256=document_sha256,
+        document_bytes=document_bytes,
+        document_name=document_path.name,
+    )
+    idempotency_path = config.state_dir / "idempotency.json"
+    idempotency = _load_idempotency(idempotency_path)
+    previous = idempotency.get(idempotency_key)
+    if previous is not None:
+        if (
+            previous.get("operation") != "send_document"
+            or previous.get("peer_id") != target["id"]
+            or previous.get("caption_sha256") != caption_sha256
+            or previous.get("document_sha256") != document_sha256
+            or previous.get("document_bytes") != document_bytes
+            or previous.get("document_name") != document_path.name
+        ):
+            raise BridgeError("idempotency_key_conflict")
+        if not previous.get("message_id"):
+            raise BridgeError("send_document_outcome_uncertain")
+    else:
+        if contract["last_message_id"] != last_message_id:
+            raise BridgeError("conversation_changed_since_dry_run")
+        entry = {
+            "operation": "send_document",
+            "message_id": 0,
+            "peer_id": target["id"],
+            "caption_sha256": caption_sha256,
+            "document_sha256": document_sha256,
+            "document_bytes": document_bytes,
+            "document_name": document_path.name,
+            "readback_verified": False,
+        }
+        # Persist the exact intent before the network call. If the process dies
+        # after Telegram accepts the document, this key blocks a blind resend.
+        idempotency[idempotency_key] = entry
+        _save_idempotency(idempotency_path, idempotency)
+        upload = io.BytesIO(document_content)
+        upload.name = document_path.name
+        sent = await client.send_file(
+            entity,
+            upload,
+            caption=caption,
+            force_document=True,
+            mime_type="application/pdf",
+        )
+        entry["message_id"] = int(sent.id)
+        _save_idempotency(idempotency_path, idempotency)
+    message_id = int(idempotency[idempotency_key]["message_id"])
+    readback = await client.get_messages(entity, ids=message_id)
+    metadata = _message_media_metadata(readback) if readback is not None else {}
+    if (
+        readback is None
+        or str(getattr(readback, "message", None) or "") != caption
+        or getattr(readback, "media", None) is None
+        or metadata.get("mime_type") != "application/pdf"
+        or metadata.get("file_name") != document_path.name
+        or metadata.get("size_bytes") != document_bytes
+    ):
+        raise BridgeError("send_document_readback_failed")
+    readback_content = await client.download_media(readback, file=bytes)
+    if not isinstance(readback_content, bytes):
+        raise BridgeError("send_document_readback_failed")
+    if len(readback_content) != document_bytes or hashlib.sha256(readback_content).hexdigest() != document_sha256:
+        raise BridgeError("send_document_readback_failed")
+    idempotency[idempotency_key]["readback_verified"] = True
+    _save_idempotency(idempotency_path, idempotency)
+    return {
+        "ok": True,
+        "mode": "apply",
+        "replayed": previous is not None,
+        "target": target,
+        "message_id": message_id,
+        "document_bytes": document_bytes,
+        "document_sha256": document_sha256,
         "verified": True,
     }
 
@@ -2303,6 +2792,9 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
     if operation == "send_photo":
         return await _handle_send_photo(client, config, request)
 
+    if operation == "send_document":
+        return await _handle_send_document(client, config, request)
+
     if operation == "download":
         return await _handle_download(client, config, request)
 
@@ -2317,7 +2809,15 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     operation = request.get("operation")
     return (
-        operation in {"send", "send_owner_notification", "send_photo", "download", "notify_owner"}
+        operation
+        in {
+            "send",
+            "send_owner_notification",
+            "send_photo",
+            "send_document",
+            "download",
+            "notify_owner",
+        }
         and request.get("mode") == "apply"
     ) or operation in {
         "discard_download",
@@ -2720,6 +3220,13 @@ def build_parser() -> argparse.ArgumentParser:
     send_photo.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send_photo.add_argument("--contract-token", default="")
     send_photo.add_argument("--idempotency-key", default="")
+    send_document = subparsers.add_parser("send-document")
+    send_document.add_argument("--peer", required=True)
+    send_document.add_argument("--file", required=True, type=Path)
+    send_document.add_argument("--caption", required=True)
+    send_document.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    send_document.add_argument("--contract-token", default="")
+    send_document.add_argument("--idempotency-key", default="")
     download = subparsers.add_parser("download")
     download.add_argument("--peer", required=True)
     download.add_argument("--message-id", required=True, type=int)
@@ -2840,6 +3347,18 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "operation": "send_photo",
                         "peer": args.peer,
                         "photo": str(args.file),
+                        "caption": args.caption,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "send-document":
+                request.update(
+                    {
+                        "operation": "send_document",
+                        "peer": args.peer,
+                        "document": str(args.file),
                         "caption": args.caption,
                         "mode": args.mode,
                         "contract_token": args.contract_token,
