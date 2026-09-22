@@ -4,9 +4,11 @@ Answer concisely in Russian; use live tool schemas. Load task-specific instructi
 only when needed. Use a skill supplied in the current turn; otherwise read its
 current file. Do not use an old copy from conversation history as current policy.
 
-CRM, Store, Gmail and Telegram own live records. Keep correspondence, customer,
-vehicle and financial data, identifiers and secrets out of Git and documentation.
-Manager persists only technical Store continuity needed for guarded operations.
+CRM, Store, Gmail and Telegram own live records. Customer, vehicle, financial
+and correspondence data may be recorded when needed only in authorized
+operational records or authorized case documentation. Manager may persist the
+minimum continuity needed for guarded operations. Never put secrets or live
+case data in Git or general project documentation.
 Never invent facts, identifiers, prices, availability, deadlines or consent.
 
 A request authorizes only its stated result. Drafting is not sending. Before an
