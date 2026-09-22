@@ -9,7 +9,7 @@ import sqlite3
 
 import pytest
 
-from autostop_manager import j1_fetch, j1_research as j1
+from autostop_manager import j1_browser, j1_fetch, j1_research as j1
 
 
 @pytest.fixture(autouse=True)
@@ -699,6 +699,8 @@ def test_fetch_document_reports_specific_unavailable_reason(
     )
     if expected == "ocr_invalid_pdf":
         monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _body: "")
+    if expected == "browser_isolation_unverified":
+        monkeypatch.setattr(j1_browser, "isolation_verified", lambda: False)
     assert j1_fetch.fetch_document("https://example.org/report")["error"] == expected
 
 

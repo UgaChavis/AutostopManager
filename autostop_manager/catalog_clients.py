@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from contextlib import suppress
 from http.client import HTTPException
 from html import unescape
 from html.parser import HTMLParser
@@ -1205,7 +1206,8 @@ def _exist_read_text(url: str, *, office_id: int, timeout: float) -> str:
 def _exist_read_json(url: str, *, office_id: int, timeout: float) -> Any:
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="application/json"))
     with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", errors="replace"))
+        payload = response.read().decode("utf-8", errors="replace")
+    return json.loads(payload) if payload.strip() else []
 
 
 def _exist_search_suggestions(payload: Any, *, base_url: str | None = None) -> list[dict[str, Any]]:
@@ -1466,10 +1468,48 @@ def _partsapi_provider_declared_error(payload: Any) -> bool:
     return str(payload.get("status") or "").strip().casefold() in {"error", "failed", "failure", "fail"}
 
 
+_PARTSAPI_ERROR_BODY_LIMIT = 4096
+_PARTSAPI_IP_QUOTA_MESSAGE = "exceeded the number of requests from the current ip address."
+
+
+def _partsapi_http_error_payload(exc: HTTPError) -> dict[str, Any]:
+    """Read a small JSON error envelope without retaining or returning provider text."""
+
+    if exc.fp is None:
+        return {}
+    try:
+        raw = exc.read(_PARTSAPI_ERROR_BODY_LIMIT + 1)
+    except (AttributeError, OSError, HTTPException, ValueError):
+        return {}
+    finally:
+        with suppress(OSError):
+            exc.close()
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) > _PARTSAPI_ERROR_BODY_LIMIT:
+        return {}
+    try:
+        payload = json.loads(bytes(raw).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
     """Return a safe, machine-readable failure class and retry decision."""
     if isinstance(exc, HTTPError):
         code = int(exc.code)
+        payload = _partsapi_http_error_payload(exc)
+        provider_code = payload.get("error_code", payload.get("code"))
+        try:
+            provider_code = int(str(provider_code).strip())
+        except (TypeError, ValueError):
+            provider_code = None
+        provider_message = str(payload.get("message") or "").strip().casefold()
+        if provider_code == 5000 or provider_message == _PARTSAPI_IP_QUOTA_MESSAGE:
+            return (
+                "provider_ip_quota_exceeded",
+                False,
+                "PartsAPI rejected this source IP because its request allowance is exhausted.",
+            )
         if code == 429:
             return "rate_limited", True, "PartsAPI rate limit reached."
         if code in (401, 403):
@@ -2403,6 +2443,7 @@ def partsapi_catalog_lookup(
     last_failure_class = "network_error"
     last_error = "PartsAPI request failed."
     last_retryable = False
+    last_requires_provider_action = False
     for attempt in range(1, attempt_count + 1):
         if attempt > 1:
             time.sleep(0.25 * (attempt - 1))
@@ -2426,6 +2467,7 @@ def partsapi_catalog_lookup(
             last_failure_class = failure_class
             last_error = error
             last_retryable = retryable
+            last_requires_provider_action = failure_class == "provider_ip_quota_exceeded"
             if not retryable:
                 break
     if not request_succeeded:
@@ -2439,13 +2481,16 @@ def partsapi_catalog_lookup(
             "outcome": last_failure_class,
             "failure_class": last_failure_class,
             "retryable": last_retryable,
+            "requires_provider_action": last_requires_provider_action,
             "requires_fallback": True,
             # A transport/provider failure is not an empty catalog result.
             # Keep this explicit for callers deciding whether to retry or
             # route the request to a manual EPC check.
             "empty_payload": False,
             "status_message": (
-                "Доступ к методу отклонён: проверьте ключ и права метода."
+                "PartsAPI исчерпал лимит запросов для текущего IP; повторы отключены, требуется действие провайдера."
+                if last_failure_class == "provider_ip_quota_exceeded"
+                else "Доступ к методу отклонён: проверьте ключ и права метода."
                 if last_failure_class == "provider_auth_error"
                 else "Сервис временно недоступен; это не отсутствие данных в каталоге."
                 if last_retryable

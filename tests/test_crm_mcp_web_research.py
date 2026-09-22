@@ -239,7 +239,6 @@ def test_configured_transport_error_is_structured_and_never_uses_local_fallback(
     [
         ("search_web_multi", 30.0),
         ("fetch_page_excerpt", 20.0),
-        ("fetch_page_browser", 35.0),
     ],
 )
 def test_generic_e8_capabilities_are_allowed_with_page_appropriate_timeout(monkeypatch, capability, minimum_timeout):
@@ -256,6 +255,10 @@ def test_generic_e8_capabilities_are_allowed_with_page_appropriate_timeout(monke
     assert transport.invoke(capability, args)["ok"] is True
     assert captured == {"name": capability, "arguments": args, "timeout_seconds": minimum_timeout}
     assert transport.invoke("store_management_action", args) == {
+        "ok": False,
+        "error": {"code": "crm_mcp_capability_not_allowed", "retryable": False},
+    }
+    assert transport.invoke("fetch_page_browser", {"url": "https://example.com/part"}) == {
         "ok": False,
         "error": {"code": "crm_mcp_capability_not_allowed", "retryable": False},
     }

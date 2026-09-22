@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+import autostop_manager.web_research_gateway as web_gateway
 from autostop_manager.web_research_gateway import (
     CapabilityWebResearchGatewayAdapter,
     DuckDuckGoWebResearchGateway,
@@ -335,8 +338,9 @@ def test_generic_web_research_rejects_contact_data_before_any_external_call():
     assert calls == [("search_web_multi", {"query": "7700100008", "limit": 5})]
 
 
-def test_installed_page_gateway_returns_excerpt_and_browser_without_private_errors():
+def test_installed_page_gateway_keeps_excerpt_on_crm_and_routes_browser_to_attested_j1(monkeypatch):
     calls = []
+    browser_calls = []
 
     def invoke(name, arguments):
         calls.append((name, arguments))
@@ -350,6 +354,16 @@ def test_installed_page_gateway_returns_excerpt_and_browser_without_private_erro
             },
         }
 
+    def render(url, *, max_chars):
+        browser_calls.append((url, max_chars))
+        return {
+            "ok": True,
+            "url": url,
+            "title": "Public part",
+            "text": "Rendered public price 4200 RUB",
+        }
+
+    monkeypatch.setattr(web_gateway, "fetch_j1_browser_page", render)
     install_web_research_gateway(CapabilityWebResearchGatewayAdapter(invoke))
     try:
         excerpt = fetch_page_excerpt(url="https://example.com/part")
@@ -360,4 +374,74 @@ def test_installed_page_gateway_returns_excerpt_and_browser_without_private_erro
     assert excerpt["ok"] is True
     assert browser["ok"] is True
     assert excerpt["excerpt"] == "Public price 4200 RUB"
-    assert [name for name, _ in calls] == ["fetch_page_excerpt", "fetch_page_browser"]
+    assert browser["excerpt"] == "Rendered public price 4200 RUB"
+    assert [name for name, _ in calls] == ["fetch_page_excerpt"]
+    assert browser_calls == [("https://example.com/part", 2500)]
+
+
+@pytest.mark.parametrize(
+    ("renderer_result", "expected_code", "retryable"),
+    [
+        (
+            {"ok": False, "error": "browser_isolation_unverified", "retryable": True},
+            "browser_isolation_unverified",
+            True,
+        ),
+        (
+            {"ok": False, "error": "requires_human", "retryable": False},
+            "requires_human",
+            False,
+        ),
+        (
+            {"ok": False, "error": "private_renderer_detail", "retryable": False},
+            "browser_render_failed",
+            False,
+        ),
+    ],
+)
+def test_attested_browser_failures_are_fail_closed_and_sanitized(
+    monkeypatch, renderer_result, expected_code, retryable
+):
+    monkeypatch.setattr(web_gateway, "fetch_j1_browser_page", lambda *_args, **_kwargs: renderer_result)
+
+    result = fetch_page_browser(url="https://example.com/part", wait_ms=99999)
+
+    assert result == {
+        "ok": False,
+        "schema": "WebResearchGatewayV1",
+        "capability": "fetch_page_browser",
+        "read_only": True,
+        "error": {"code": expected_code, "retryable": retryable},
+    }
+    assert "private_renderer_detail" not in str(result)
+
+
+def test_attested_browser_redacts_output_and_never_exposes_renderer_exception(monkeypatch):
+    vin = "WBA00000000000000"
+    monkeypatch.setattr(
+        web_gateway,
+        "fetch_j1_browser_page",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "url": "https://example.com/rendered",
+            "title": f"Part {vin}",
+            "text": f"Price 4200 RUB for {vin}",
+        },
+    )
+    rendered = fetch_page_browser(url="https://example.com/part", max_chars=20, wait_ms=0)
+    assert rendered["ok"] is True
+    assert rendered["domain"] == "example.com"
+    assert rendered["mode"] == "browser"
+    assert rendered["status_code"] == 0
+    assert rendered["links"] == []
+    assert rendered["access_flags"] == []
+    assert rendered["vin_redacted"] is True
+    assert vin not in str(rendered)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("private renderer exception")
+
+    monkeypatch.setattr(web_gateway, "fetch_j1_browser_page", fail)
+    failed = fetch_page_browser(url="https://example.com/part")
+    assert failed["error"] == {"code": "browser_render_failed", "retryable": True}
+    assert "private renderer exception" not in str(failed)

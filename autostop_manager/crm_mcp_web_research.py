@@ -2,7 +2,7 @@
 
 The Manager process owns the optional endpoint and bearer in its own runtime
 environment.  This module never reads CRM configuration files, never follows
-redirects, and exposes only the four read-only E8 capabilities Manager needs.
+redirects, and exposes only the three read-only E8 capabilities Manager needs.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from mcp.client.streamable_http import streamable_http_client
 
 from .config import CrmMcpConnectionConfig, get_crm_mcp_connection_config
 from .web_research_gateway import (
-    FETCH_PAGE_BROWSER_CAPABILITY,
     FETCH_PAGE_EXCERPT_CAPABILITY,
     RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY,
     SEARCH_WEB_MULTI_CAPABILITY,
@@ -39,13 +38,11 @@ _SUPPORTED_CAPABILITIES = frozenset(
         RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY,
         SEARCH_WEB_MULTI_CAPABILITY,
         FETCH_PAGE_EXCERPT_CAPABILITY,
-        FETCH_PAGE_BROWSER_CAPABILITY,
     }
 )
 _GENERIC_WEB_TIMEOUT_SECONDS = {
     SEARCH_WEB_MULTI_CAPABILITY: 30.0,
     FETCH_PAGE_EXCERPT_CAPABILITY: 20.0,
-    FETCH_PAGE_BROWSER_CAPABILITY: 35.0,
 }
 
 

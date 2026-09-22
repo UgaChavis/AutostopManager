@@ -10,6 +10,7 @@ import pytest
 import uvicorn
 
 from autostop_manager import config
+import autostop_manager.web_research_gateway as web_gateway
 from autostop_manager.mcp_probe import (
     SYNTHETIC_IDENTIFIER,
     async_probe_manager_mcp,
@@ -29,9 +30,17 @@ def test_transport_classifier_keeps_route_auth_and_registration_failures_distinc
     assert classify_transport_exception(RuntimeError("unclassified transport error")) == "transport_failure"
 
 
-@pytest.mark.parametrize("store_check,store_ready", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize(
+    ("store_check", "store_ready", "browser_check"),
+    [
+        (False, False, False),
+        (True, False, False),
+        (True, True, False),
+        (False, False, True),
+    ],
+)
 def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
-    tmp_path, monkeypatch, caplog, store_check, store_ready
+    tmp_path, monkeypatch, caplog, store_check, store_ready, browser_check
 ):
     sentinel_secret = "probe-secret-must-not-appear"
     previous_env_loaded = config._ENV_LOADED
@@ -50,6 +59,16 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
     monkeypatch.setattr(
         "autostop_manager.store_owner_api.StoreOwnerApiClient.list_capabilities",
         lambda *a, **kw: {"ok": store_ready, "private_payload": sentinel_secret},
+    )
+    monkeypatch.setattr(
+        web_gateway,
+        "fetch_j1_browser_page",
+        lambda url, *, max_chars: {
+            "ok": True,
+            "url": url,
+            "title": "Example Domain",
+            "text": "Example Domain synthetic browser smoke"[:max_chars],
+        },
     )
 
     async def run_probe() -> dict[str, object]:
@@ -70,7 +89,11 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
             else:
                 raise AssertionError("native_manager_mcp_test_server_did_not_start")
             return await async_probe_manager_mcp(
-                f"http://127.0.0.1:{port}/mcp", timeout=5, provider_failure_check=True, store_check=store_check
+                f"http://127.0.0.1:{port}/mcp",
+                timeout=5,
+                provider_failure_check=True,
+                store_check=store_check,
+                browser_check=browser_check,
             )
         finally:
             uvicorn_server.should_exit = True
@@ -88,6 +111,13 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
     if store_check:
         assert report["checks"]["store_runtime_status"] == {"ok": store_ready}
         assert report["checks"]["store_owner_capabilities"] == {"ok": store_ready}
+    if browser_check:
+        assert report["checks"]["fetch_page_browser"] == {
+            "ok": True,
+            "mode": "browser",
+            "domain": "example.com",
+            "has_excerpt": True,
+        }
     assert report["checks"]["native_ping"]["ok"] is True
     assert report["checks"]["tools_list"]["ok"] is True
     assert report["checks"]["tools_list"]["tool_count"] == 42

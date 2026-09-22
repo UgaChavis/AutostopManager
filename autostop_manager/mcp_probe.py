@@ -17,6 +17,8 @@ from .mcp_contract import validate_manager_mcp_surface
 DEFAULT_MANAGER_MCP_URL = "http://127.0.0.1:41931/mcp"
 SYNTHETIC_IDENTIFIER = "SYNTHETICVIN00001"
 GLOW_PLUG_QUERY = "свечи накаливания"
+BROWSER_SMOKE_URL = "https://example.com/"
+BROWSER_CHECK_TIMEOUT_SECONDS = 90.0
 
 
 def _safe_url(value: str) -> str:
@@ -109,6 +111,7 @@ async def async_probe_manager_mcp(
     timeout: float = 10.0,
     provider_failure_check: bool = False,
     store_check: bool = False,
+    browser_check: bool = False,
 ) -> dict[str, Any]:
     """Probe a native Manager MCP endpoint using only synthetic, read-only data.
 
@@ -133,8 +136,9 @@ async def async_probe_manager_mcp(
     if not (0 < timeout <= 90):
         return {**report, "diagnostic": "invalid_timeout"}
 
+    transport_timeout = max(timeout, BROWSER_CHECK_TIMEOUT_SECONDS) if browser_check else timeout
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http_client:
+        async with httpx.AsyncClient(timeout=transport_timeout, follow_redirects=False) as http_client:
             async with streamable_http_client(url, http_client=http_client) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     initialized = await session.initialize()
@@ -307,6 +311,33 @@ async def async_probe_manager_mcp(
                         ):
                             report["diagnostic"] = "store_connection_unavailable"
                             return report
+                    if browser_check:
+                        browser_timeout = max(timeout, BROWSER_CHECK_TIMEOUT_SECONDS)
+                        browser_error, browser = await _call(
+                            session,
+                            "fetch_page_browser",
+                            {"url": BROWSER_SMOKE_URL, "max_chars": 500, "wait_ms": 0},
+                            timeout=browser_timeout,
+                        )
+                        browser_payload = browser or {}
+                        browser_ok = (
+                            _tool_error_check(browser_error, browser)
+                            and browser_payload.get("ok") is True
+                            and browser_payload.get("capability") == "fetch_page_browser"
+                            and browser_payload.get("read_only") is True
+                            and browser_payload.get("mode") == "browser"
+                            and browser_payload.get("domain") == "example.com"
+                            and bool(browser_payload.get("excerpt"))
+                        )
+                        report["checks"]["fetch_page_browser"] = {
+                            "ok": browser_ok,
+                            "mode": browser_payload.get("mode"),
+                            "domain": browser_payload.get("domain"),
+                            "has_excerpt": bool(browser_payload.get("excerpt")),
+                        }
+                        if not browser_ok:
+                            report["diagnostic"] = "browser_renderer_unavailable"
+                            return report
     except Exception as exc:  # noqa: BLE001 - error text can contain transport details; report only its safe class.
         report["diagnostic"] = classify_transport_exception(exc)
         report["checks"]["transport"] = {"ok": False, "exception_type": type(exc).__name__}
@@ -323,11 +354,16 @@ def probe_manager_mcp(
     timeout: float = 10.0,
     provider_failure_check: bool = False,
     store_check: bool = False,
+    browser_check: bool = False,
 ) -> dict[str, Any]:
     """Synchronous CLI entry point for the safe native endpoint probe."""
 
     return asyncio.run(
         async_probe_manager_mcp(
-            url, timeout=timeout, provider_failure_check=provider_failure_check, store_check=store_check
+            url,
+            timeout=timeout,
+            provider_failure_check=provider_failure_check,
+            store_check=store_check,
+            browser_check=browser_check,
         )
     )

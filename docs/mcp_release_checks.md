@@ -14,6 +14,13 @@ autostop_manager.cli mcp-probe
 standalone recovery with preserved rollback state. Never print key values when
 checking process/configuration parity.
 
+After the J1 browser probe reports both `browser_ready=true` and
+`browser_containers_ready=true`, rerun the native probe with
+`--timeout 90 --browser-check`. Require `checks.fetch_page_browser.ok=true`; this calls the
+public synthetic page `https://example.com/` through the Manager MCP tool and
+does not retain its page text in the report. A green browser-stack probe alone
+does not prove that the advertised Manager tool is wired to it.
+
 Reconnect the existing Codex client using the supported App Server JSON-RPC
 `config/mcpServer/reload` request (`params: null`). It queues a refresh for loaded
 tasks; the current model turn may retain its original tool declarations until

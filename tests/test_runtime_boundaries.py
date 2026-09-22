@@ -109,6 +109,7 @@ def test_voice_runner_path_and_staged_path_checks(monkeypatch, tmp_path):
 
 def test_cli_dispatches_store_operations_and_probe_without_live_effects(monkeypatch, capsys):
     seen = []
+    probe_calls = []
 
     class Store:
         def store_quote_conductor_release_readiness(self):
@@ -124,7 +125,12 @@ def test_cli_dispatches_store_operations_and_probe_without_live_effects(monkeypa
             return {"ok": True}
 
     monkeypatch.setattr(cli, "StoreState", Store)
-    monkeypatch.setattr(cli, "probe_manager_mcp", lambda *a, **kw: {"ok": True})
+
+    def probe_manager_mcp(*args, **kwargs):
+        probe_calls.append((args, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(cli, "probe_manager_mcp", probe_manager_mcp)
     for args in (
         ["store-conductor-release-gate"],
         ["store-checkpoint-status", "--stream", "store_digest"],
@@ -139,11 +145,15 @@ def test_cli_dispatches_store_operations_and_probe_without_live_effects(monkeypa
             "--confirm-rebaseline",
         ],
         ["mcp-probe"],
+        ["mcp-probe", "--browser-check", "--timeout", "90"],
     ):
         assert cli.main(args) == 0
         assert json.loads(capsys.readouterr().out)["ok"]
     assert seen[:2] == ["gate", "store_digest"]
     assert seen[2]["expected_state_version"] == 1
+    assert probe_calls[0][1]["browser_check"] is False
+    assert probe_calls[1][1]["browser_check"] is True
+    assert probe_calls[1][1]["timeout"] == 90
 
 
 @pytest.mark.parametrize(
@@ -264,3 +274,88 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
     assert result["ok"] is (failure == "none")
     assert probe.SYNTHETIC_IDENTIFIER not in json.dumps(result)
     assert "PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("browser_payload", "expected_ok", "diagnostic"),
+    [
+        (
+            {
+                "ok": True,
+                "capability": "fetch_page_browser",
+                "read_only": True,
+                "mode": "browser",
+                "domain": "example.com",
+                "excerpt": "Example Domain PRIVATE page body",
+            },
+            True,
+            "ok",
+        ),
+        (
+            {
+                "ok": False,
+                "error": {"code": "browser_isolation_unverified", "retryable": True},
+            },
+            False,
+            "browser_renderer_unavailable",
+        ),
+    ],
+)
+def test_probe_browser_check_uses_dedicated_timeout_and_retains_no_page_text(
+    monkeypatch, browser_payload, expected_ok, diagnostic
+):
+    @asynccontextmanager
+    async def transport(*_args, **_kwargs):
+        yield None, None, None
+
+    class Session:
+        def __init__(self, *_args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def initialize(self):
+            return SimpleNamespace(serverInfo=SimpleNamespace(name="synthetic"))
+
+        async def send_ping(self):
+            pass
+
+        async def list_tools(self, **_kwargs):
+            return SimpleNamespace(tools=[SimpleNamespace(name="synthetic", inputSchema={})], nextCursor=None)
+
+    calls = []
+
+    async def call(_session, name, arguments, *, timeout):
+        calls.append((name, arguments, timeout))
+        if name == "catalog_provider_status":
+            return False, {"ok": True, "providers": [], "stage": "oem_catalog"}
+        if name == "search_partsapi_category_index":
+            return False, {"ok": True, "matches": [], "count": 0, "schema": "PartsApiCategoryIndexV1"}
+        if name == "resolve_vin_oem_parts":
+            return False, {
+                "status": "needs_identity_confirmation",
+                "readiness": {"needs_partsapi_category_mapping": False},
+                "calls": [{"operation": "parts_by_vin", "dry_run": True}],
+                "oem_candidates": [],
+                "live_call_count": 0,
+            }
+        assert name == "fetch_page_browser"
+        return False, browser_payload
+
+    monkeypatch.setattr(probe, "streamable_http_client", transport)
+    monkeypatch.setattr(probe, "ClientSession", Session)
+    monkeypatch.setattr(probe, "validate_manager_mcp_surface", lambda _: {"ok": True})
+    monkeypatch.setattr(probe, "_call", call)
+
+    result = probe.probe_manager_mcp(browser_check=True)
+
+    assert result["ok"] is expected_ok
+    assert result["diagnostic"] == diagnostic
+    browser_call = next(item for item in calls if item[0] == "fetch_page_browser")
+    assert browser_call[1] == {"url": probe.BROWSER_SMOKE_URL, "max_chars": 500, "wait_ms": 0}
+    assert browser_call[2] >= probe.BROWSER_CHECK_TIMEOUT_SECONDS
+    assert "PRIVATE page body" not in json.dumps(result)

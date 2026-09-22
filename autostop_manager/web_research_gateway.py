@@ -14,6 +14,7 @@ import re
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .j1_fetch import fetch_browser_document as fetch_j1_browser_page
 from .work_pricing_research import PUBLIC_RESEARCH_TIMEOUT_SECONDS, _ddg_search
 
 
@@ -28,6 +29,63 @@ _MAX_LIMIT = 10
 _MAX_PART_EVIDENCE_LIMIT = 5
 _MAX_PART_EVIDENCE_PAGES = 2
 _MAX_TIMEOUT_SECONDS = 60
+_J1_BROWSER_ERROR_CODES = frozenset(
+    {
+        "browser_binary_unavailable",
+        "browser_busy",
+        "browser_client_rejected",
+        "browser_document_too_large",
+        "browser_empty_or_dynamic",
+        "browser_isolation_stale",
+        "browser_isolation_unverified",
+        "browser_protocol_invalid",
+        "browser_proxy_invalid",
+        "browser_render_failed",
+        "browser_request_invalid",
+        "browser_response_invalid",
+        "browser_response_too_large",
+        "browser_socket_invalid",
+        "browser_socket_unavailable",
+        "browser_timeout",
+        "browser_unavailable",
+        "browser_url_invalid",
+        "access_restricted",
+        "document_too_large",
+        "empty_or_dynamic",
+        "fetch_failed",
+        "fetch_rejected",
+        "http_error",
+        "http_server_error",
+        "rate_limited",
+        "redirect_robots_disallowed",
+        "robots_disallowed",
+        "robots_redirected",
+        "too_many_redirects",
+        "unsafe_dns_answer",
+        "unsafe_redirect",
+        "unsafe_url",
+        "unsupported_content_encoding",
+        "unsupported_media",
+        "requires_human",
+    }
+)
+_J1_BROWSER_RETRYABLE_ERRORS = frozenset(
+    {
+        "browser_busy",
+        "browser_isolation_stale",
+        "browser_isolation_unverified",
+        "browser_protocol_invalid",
+        "browser_render_failed",
+        "browser_response_invalid",
+        "browser_response_too_large",
+        "browser_socket_unavailable",
+        "browser_timeout",
+        "browser_unavailable",
+        "fetch_failed",
+        "http_server_error",
+        "rate_limited",
+    }
+)
 _VIN_LIKE_TOKEN = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:"
     r"[A-HJ-NPR-Z0-9]{17}"
@@ -854,13 +912,51 @@ def fetch_page_excerpt(*, url: str, max_chars: int = 2500) -> dict[str, Any]:
 
 
 def fetch_page_browser(*, url: str, max_chars: int = 2500, wait_ms: int = 750) -> dict[str, Any]:
-    """Render one public page through CRM E8 and return bounded evidence."""
+    """Render one public page through the release-attested J1 browser."""
 
-    return _fetch_public_page(
+    safe_url = _public_page_url(url)
+    if not safe_url:
+        return _page_failure(FETCH_PAGE_BROWSER_CAPABILITY, code="web_page_url_invalid")
+    bounded_chars = _bounded_int(max_chars, default=2500, minimum=1, maximum=8000)
+    # ``wait_ms`` remains a bounded compatibility hint in the public MCP
+    # schema.  The isolated renderer owns its fixed, bounded virtual-time
+    # policy; callers cannot extend its execution or inject Chromium flags.
+    _bounded_int(wait_ms, default=750, minimum=0, maximum=5000)
+    try:
+        rendered = fetch_j1_browser_page(safe_url, max_chars=bounded_chars)
+    except Exception:  # noqa: BLE001 - renderer details stay behind the public boundary.
+        return _page_failure(
+            FETCH_PAGE_BROWSER_CAPABILITY,
+            code="browser_render_failed",
+            retryable=True,
+        )
+    if not isinstance(rendered, Mapping) or rendered.get("ok") is not True:
+        raw_code = rendered.get("error") if isinstance(rendered, Mapping) else ""
+        code = (
+            raw_code if isinstance(raw_code, str) and raw_code in _J1_BROWSER_ERROR_CODES else "browser_render_failed"
+        )
+        if code == "unsafe_url":
+            code = "web_page_url_invalid"
+        retryable = (
+            bool(rendered.get("retryable"))
+            if isinstance(rendered, Mapping) and "retryable" in rendered
+            else code in _J1_BROWSER_RETRYABLE_ERRORS
+        )
+        return _page_failure(FETCH_PAGE_BROWSER_CAPABILITY, code=code, retryable=retryable)
+    return normalize_web_page_response(
+        {
+            "ok": True,
+            "final_url": rendered.get("url") or safe_url,
+            "title": rendered.get("title"),
+            "excerpt": rendered.get("text"),
+            "links": [],
+            "access_flags": [],
+            "requires_human": False,
+            "status_code": 0,
+        },
         capability=FETCH_PAGE_BROWSER_CAPABILITY,
-        url=url,
-        max_chars=max_chars,
-        wait_ms=wait_ms,
+        url=safe_url,
+        max_chars=bounded_chars,
     )
 
 

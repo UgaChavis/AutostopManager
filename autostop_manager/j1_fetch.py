@@ -242,7 +242,12 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
 
 
 def _request_public(
-    url: str, *, max_bytes: int, timeout: float = 10.0, check_redirect_robots: bool = False
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float = 10.0,
+    check_redirect_robots: bool = False,
+    read_body: bool = True,
 ) -> tuple[int, dict[str, str], bytes, str]:
     current = public_url(url)
     if not current:
@@ -287,11 +292,11 @@ def _request_public(
             size_header = headers.get("content-length", "")
             if size_header.isdigit() and int(size_header) > max_bytes:
                 raise ValueError("document_too_large")
-            body = response.read(max_bytes + 1)
-            if len(body) > max_bytes:
-                raise ValueError("document_too_large")
             if headers.get("content-encoding", "identity").casefold() != "identity":
                 raise ValueError("unsupported_content_encoding")
+            body = response.read(max_bytes + 1) if read_body else b""
+            if len(body) > max_bytes:
+                raise ValueError("document_too_large")
             return status, headers, body, current
         finally:
             connection.close()
@@ -462,7 +467,13 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
     return {"ok": False, "error": "unsupported_media"}
 
 
-def _browser_fallback(final_url: str, title: str, *, allow_browser: bool) -> dict[str, Any]:
+def _browser_fallback(
+    final_url: str,
+    title: str,
+    *,
+    allow_browser: bool,
+    max_chars: int = MAX_TEXT_CHARS,
+) -> dict[str, Any]:
     if allow_browser is not True:
         return {"ok": False, "error": "browser_limit_reached"}
     try:
@@ -482,17 +493,23 @@ def _browser_fallback(final_url: str, title: str, *, allow_browser: bool) -> dic
         return {"ok": False, "error": "robots_disallowed"}
     origin = urlsplit(final_url)
     _rate_limit(f"{origin.scheme}://{origin.netloc}", delay)
+    bounded_chars = max(80, min(int(max_chars), MAX_TEXT_CHARS)) if type(max_chars) is int else MAX_TEXT_CHARS
     try:
-        rendered = render_page(final_url, max_chars=MAX_TEXT_CHARS, timeout_seconds=20)
+        rendered = render_page(final_url, max_chars=bounded_chars, timeout_seconds=20)
     except Exception:  # noqa: BLE001 - isolated renderer is an optional partial source.
         rendered = {"ok": False, "error": "browser_unavailable"}
     if not isinstance(rendered, dict) or rendered.get("ok") is not True:
         error = rendered.get("error") if isinstance(rendered, dict) else ""
         return {"ok": False, "error": str(error or "browser_render_failed")[:80], "browser_attempted": True}
     rendered_url = public_url(str(rendered.get("url") or ""))
-    rendered_text = redact_sensitive(str(rendered.get("text") or ""))
+    rendered_text = redact_sensitive(str(rendered.get("text") or ""), limit=bounded_chars)
     if not rendered_url or len(rendered_text) < 80:
         return {"ok": False, "error": "browser_response_invalid", "browser_attempted": True}
+    if any(
+        marker in rendered_text[:3000].casefold()
+        for marker in ("captcha", "введите капчу", "sign in to continue", "please log in")
+    ):
+        return {"ok": False, "error": "requires_human", "browser_attempted": True}
     return {
         "ok": True,
         "url": rendered_url,
@@ -627,6 +644,78 @@ def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
     # and never surface a server-provided header through MCP.
     second.pop("retry_after_seconds", None)
     return second
+
+
+def fetch_browser_document(url: str, *, max_chars: int = MAX_TEXT_CHARS) -> dict[str, Any]:
+    """Force an isolated browser render after a no-parser guarded preflight.
+
+    The Manager process validates URL DLP, pinned DNS, robots, redirects,
+    response status and media type, but deliberately does not read or parse
+    the untrusted response body.  Only the isolated renderer handles page
+    content; its bounded result is redacted again before it leaves J1.
+    """
+
+    safe_url = public_url(url)
+    if not safe_url:
+        return {"ok": False, "error": "unsafe_url"}
+    try:
+        from .j1_browser import isolation_verified
+
+        verified = isolation_verified()
+    except Exception:  # noqa: BLE001 - optional browser readiness fails closed.
+        verified = False
+    if not verified:
+        return {"ok": False, "error": "browser_isolation_unverified"}
+    bounded_chars = max(80, min(int(max_chars), MAX_TEXT_CHARS)) if type(max_chars) is int else MAX_TEXT_CHARS
+    allowed, delay = _robots_policy(safe_url)
+    if not allowed:
+        return {"ok": False, "error": "robots_disallowed"}
+    parsed = urlsplit(safe_url)
+    _rate_limit(f"{parsed.scheme}://{parsed.netloc}", delay)
+    try:
+        status, headers, _body, final_url = _request_public(
+            safe_url,
+            max_bytes=MAX_HTML_BYTES,
+            check_redirect_robots=True,
+            read_body=False,
+        )
+    except (OSError, TimeoutError, ssl.SSLError, http.client.HTTPException):
+        return {"ok": False, "error": "fetch_failed"}
+    except ValueError as exc:
+        code = str(exc)
+        return {
+            "ok": False,
+            "error": code
+            if code
+            in {
+                "unsafe_url",
+                "unsafe_redirect",
+                "unsafe_dns_answer",
+                "redirect_robots_disallowed",
+                "robots_redirected",
+                "document_too_large",
+                "unsupported_content_encoding",
+                "too_many_redirects",
+            }
+            else "fetch_rejected",
+        }
+    if status in {401, 403}:
+        return {"ok": False, "error": "access_restricted"}
+    if status == 429:
+        return {"ok": False, "error": "rate_limited"}
+    if 500 <= status <= 599:
+        return {"ok": False, "error": "http_server_error"}
+    if status != 200:
+        return {"ok": False, "error": "http_error"}
+    content_type = headers.get("content-type", "").partition(";")[0].strip().casefold()
+    if content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+        return {"ok": False, "error": "unsupported_media"}
+    return _browser_fallback(
+        final_url,
+        "",
+        allow_browser=True,
+        max_chars=bounded_chars,
+    )
 
 
 def _clean_search_text(value: object, *, limit: int) -> str:

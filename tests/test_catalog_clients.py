@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http.client import IncompleteRead
+from io import BytesIO
 import json
 import pytest
 from urllib.error import HTTPError
@@ -645,6 +646,34 @@ def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
     assert result["selected_item"]["catalog_candidate"]["pid"] == "02201730"
 
 
+@pytest.mark.parametrize(("search_payload", "status"), [(b"", 204), (b" \n", 200)])
+def test_exist_lookup_continues_to_pcode_when_search_response_is_empty(monkeypatch, search_payload, status):
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=20.0):
+        url = request.full_url
+        calls.append(url)
+        if "/Api/Parts/Search" in url:
+            response = _FakeRawResponse(search_payload)
+            response.status = status
+            return response
+        if "pcode=9091901164" in url:
+            return _FakeRawResponse(EXIST_CATALOG_HTML)
+        if "pid=02201730" in url:
+            return _FakeRawResponse(_exist_price_html())
+        message = f"unexpected Exist URL: {url}"
+        raise AssertionError(message)
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = exist_price_lookup(part_number="9091901164", brand="Toyota", office_id=905)
+
+    assert result["ok"] is True
+    assert result["search_suggestions"] == []
+    assert result["selected_item"]["catalog_candidate"]["pid"] == "02201730"
+    assert any("pcode=9091901164" in url for url in calls)
+
+
 def test_exist_lookup_dry_run_does_not_call_network(monkeypatch):
     def fail_urlopen(request, timeout=20.0):
         message = "dry-run must not call Exist"
@@ -952,6 +981,79 @@ def test_partsapi_5xx_is_not_reported_as_empty_result(monkeypatch):
     assert result["failure_class"] == "provider_http_5xx"
     assert result["retryable"] is True
     assert result["empty_payload"] is False
+
+
+@pytest.mark.parametrize(
+    "provider_payload",
+    [
+        {"error_code": 5000, "message": "provider detail must not be returned", "status": 401},
+        {"message": "Exceeded the number of requests from the current IP address.", "status": 401},
+    ],
+)
+def test_partsapi_ip_quota_401_requires_provider_action_without_retry_or_raw_body(monkeypatch, provider_payload):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    calls = []
+
+    def fail_urlopen(request, timeout=20.0):
+        calls.append(request.full_url)
+        body = json.dumps(provider_payload).encode("utf-8")
+        raise HTTPError(request.full_url, 401, "unauthorized", hdrs=None, fp=BytesIO(body))
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+
+    result = partsapi_catalog_lookup(
+        operation="parts_by_vin",
+        identifier="XW7BF4FK60S145161",
+        category="1191",
+        max_attempts=3,
+    )
+
+    assert result["ok"] is False
+    assert result["outcome"] == "provider_ip_quota_exceeded"
+    assert result["failure_class"] == "provider_ip_quota_exceeded"
+    assert result["retryable"] is False
+    assert result["requires_provider_action"] is True
+    assert result["requires_fallback"] is True
+    assert result["attempt_count"] == 1
+    assert len(calls) == 1
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "provider detail must not be returned" not in serialized
+    assert "Exceeded the number of requests from the current IP address." not in serialized
+    assert "secret-key" not in serialized
+
+
+@pytest.mark.parametrize(
+    "provider_body",
+    [b"x" * 4097, b"{not-json private-provider-detail"],
+)
+def test_partsapi_untrusted_http_error_body_is_bounded_closed_and_not_returned(monkeypatch, provider_body):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    streams = []
+
+    def fail_urlopen(request, timeout=20.0):
+        stream = BytesIO(provider_body)
+        streams.append(stream)
+        raise HTTPError(request.full_url, 401, "unauthorized", hdrs=None, fp=stream)
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
+
+    result = partsapi_catalog_lookup(
+        operation="parts_by_vin",
+        identifier="XW7BF4FK60S145161",
+        category="1191",
+        max_attempts=3,
+    )
+
+    assert result["failure_class"] == "provider_auth_error"
+    assert result["attempt_count"] == 1
+    assert streams and streams[0].closed is True
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "private-provider-detail" not in serialized
+    assert "secret-key" not in serialized
 
 
 def test_partsapi_declared_error_is_not_reported_as_empty_success(monkeypatch):
