@@ -30,12 +30,12 @@ def docs(tmp_path):
     return tmp_path
 
 
-def test_documents_fit_budget_and_have_only_two_skills():
+def test_documents_fit_budget_and_have_only_three_skills():
     report = diagnostics.audit_documentation()
     assert diagnostics.INSTRUCTION_BUDGET_BYTES == 32 * 1024
     assert report["bytes"] <= diagnostics.INSTRUCTION_BUDGET_BYTES
     assert report["ok"]
-    assert len(list((ROOT / ".agents/skills").glob("*/SKILL.md"))) == 2
+    assert len(list((ROOT / ".agents/skills").glob("*/SKILL.md"))) == 3
 
 
 def test_prepare_for_work_instruction_requires_fresh_private_readiness_context():

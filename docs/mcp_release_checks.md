@@ -1,11 +1,17 @@
 # Native MCP activation and Codex refresh
 
-A successful CRM deploy switches the shared Manager snapshot, but does not by
-itself prove that the native MCP process has restarted. After deploy, run the
-active snapshot's `scripts/install-manager-mcp.sh --activate` and verify that
+A coordinated CRM deploy with `AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1`
+installs, restarts and probes native MCP inside the rollback window. Do not run a
+second component installer after a successful deploy. Require
+`autostop-manager-mcp.service` active, verify that
 `/proc/$(systemctl show -p MainPID --value autostop-manager-mcp.service)/cwd`
-resolves to the same directory as `/opt/autostop-manager-releases/current`.
-Environment changes also require this restart; never print key values when
+resolves to the same directory as `/opt/autostop-manager-releases/current`, then
+run the active revision through `/opt/AutostopManager/.venv/bin/python -m
+autostop_manager.cli mcp-probe
+--url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` with
+`PYTHONPATH=/opt/autostop-manager-releases/current`. Use
+`scripts/install-manager-mcp.sh --activate` only for an explicitly scoped
+standalone recovery with preserved rollback state. Never print key values when
 checking process/configuration parity.
 
 Reconnect the existing Codex client using the supported App Server JSON-RPC
@@ -21,4 +27,3 @@ session usability. Check `norms_models` with a lowercase make code in dry-run
 mode, then a bounded live engine/catalog lookup when authorized. Do not confuse
 provider authentication or quota errors with an MCP transport outage. Restore
 the previous Telegram work-mode state after release checks succeed.
-

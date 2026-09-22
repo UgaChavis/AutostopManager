@@ -11,7 +11,9 @@ from .config import PROJECT_ROOT
 from .work_pricing_research import collect_public_work_pricing_research
 
 ROUNDING_STEP_RUB = 100
-AUTOSTOP_MARKUP = 1.50
+KRASNOYARSK_MARKUP = 1.45
+SAINT_PETERSBURG_MARKUP = 1.15
+AUTOSTOP_LABOR_RATE_RUB_PER_HOUR = 4_000
 MIN_CONFIDENT_QUOTES = 3
 LABOR_EXPERIENCE_SCHEMA = "autostop_service_labor_experience_v1"
 LABOR_EXPERIENCE_PATH = PROJECT_ROOT / "data" / "private_knowledge" / "service_labor_experience.json"
@@ -61,6 +63,16 @@ def _clean_text(value: str | None) -> str:
 def _normalize_key(value: str | None) -> str:
     text = _clean_text(value)
     return re.sub(r"[^a-z0-9а-яё]+", "_", text).strip("_")
+
+
+def _pricing_region(value: str | None) -> str | None:
+    text = _clean_text(value)
+    if "краснояр" in text or "krasnoyarsk" in text:
+        return "krasnoyarsk"
+    compact = re.sub(r"[^a-zа-яё]+", "", text)
+    if "санктпетербург" in compact or compact == "спб" or "saintpetersburg" in compact or "stpetersburg" in compact:
+        return "saint_petersburg"
+    return None
 
 
 def _as_text_list(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
@@ -396,8 +408,8 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append("missing_operation_name")
     if hours is None or hours_range is None:
         reasons.append("missing_or_invalid_labor_time_hours")
-    if public_source is False:
-        reasons.append("not_public_source")
+    if public_source is not True:
+        reasons.append("public_source_not_confirmed")
 
     return {
         "source": source,
@@ -408,7 +420,7 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
         "range_hours": hours_range,
         "captured_at": captured_at,
         "confidence": confidence if confidence in {"high", "medium", "low"} else "low",
-        "public_source": public_source is not False,
+        "public_source": public_source is True,
         "official": official is True,
         "capture_method": str(row.get("capture_method") or "public_source").strip(),
         "evidence": str(row.get("evidence") or "").strip()[:180],
@@ -544,44 +556,102 @@ def _operation_estimate(
         row["matched_operation"] = operation_name
         matched.append(row)
 
-    after_outliers, outliers = _outlier_filter(matched)
-    prices = [int(quote["price_rub"]) for quote in after_outliers if quote.get("price_rub") is not None]
-    weak_average = round(sum(prices) / len(prices)) if prices else None
-    enough_quotes = len(prices) >= MIN_CONFIDENT_QUOTES
-    russia_average = weak_average if enough_quotes else None
-    autostop_price = _round_to_100(russia_average * AUTOSTOP_MARKUP) if russia_average is not None else None
+    regional_rows = {
+        region: [quote for quote in matched if _pricing_region(str(quote.get("city_region") or "")) == region]
+        for region in ("krasnoyarsk", "saint_petersburg")
+    }
+    regional_samples: dict[str, dict[str, Any]] = {}
+    all_outliers: list[dict[str, Any]] = []
+    for region, rows in regional_rows.items():
+        valid_rows, outliers = _outlier_filter(rows)
+        regional_samples[region] = {
+            "valid_quotes": valid_rows,
+            "valid_count": len(valid_rows),
+            "excluded_outliers": outliers,
+        }
+        all_outliers.extend(outliers)
+
+    target_region = _pricing_region(str(vehicle_context.get("city") or "")) or "krasnoyarsk"
+    alternate_region = "saint_petersburg" if target_region == "krasnoyarsk" else "krasnoyarsk"
+    region_preference = (target_region, alternate_region)
+    regional_methods = {
+        "krasnoyarsk": ("krasnoyarsk_market_mean", KRASNOYARSK_MARKUP),
+        "saint_petersburg": ("saint_petersburg_market_mean", SAINT_PETERSBURG_MARKUP),
+    }
+
+    selected_region: str | None = None
+    selected_method: str | None = None
+    selected_multiplier: float | None = None
+    for region in region_preference:
+        if regional_samples[region]["valid_count"] >= MIN_CONFIDENT_QUOTES:
+            selected_region = region
+            selected_method, selected_multiplier = regional_methods[region]
+            break
+
+    selected_quotes = regional_samples[selected_region]["valid_quotes"] if selected_region else []
+    selected_prices = [int(quote["price_rub"]) for quote in selected_quotes if quote.get("price_rub") is not None]
+    weak_region = target_region if regional_samples[target_region]["valid_count"] else alternate_region
+    weak_prices = [
+        int(quote["price_rub"])
+        for quote in regional_samples[weak_region]["valid_quotes"]
+        if quote.get("price_rub") is not None
+    ]
+    weak_average = round(sum(weak_prices) / len(weak_prices)) if weak_prices else None
+    market_average = round(sum(selected_prices) / len(selected_prices)) if selected_prices else None
+    autostop_price = (
+        _round_to_100(market_average * selected_multiplier)
+        if market_average is not None and selected_multiplier is not None
+        else None
+    )
 
     missing_context = _operation_context_requirements(operation, vehicle_context)
-    if len(prices) < MIN_CONFIDENT_QUOTES:
-        missing_context.append("at_least_3_comparable_labor_only_public_prices")
+    if selected_region is None:
+        missing_context.append("regional_market_basis_or_valid_public_labor_hours")
     if not matched:
-        missing_context.append("public_russia_labor_only_price_sample")
+        missing_context.append("public_krasnoyarsk_or_saint_petersburg_labor_only_price_sample")
 
-    source_count = len({quote.get("source") for quote in after_outliers if quote.get("source")})
-    low_quote_confidence = any(quote.get("confidence") == "low" for quote in after_outliers)
-    if not prices:
+    source_count = len({quote.get("source") for quote in selected_quotes if quote.get("source")})
+    low_quote_confidence = any(quote.get("confidence") == "low" for quote in selected_quotes)
+    if not matched:
         confidence = "blocked"
-    elif not enough_quotes or missing_context:
+    elif selected_region is None or missing_context:
         confidence = "low"
-    elif len(prices) >= 5 and source_count >= 3 and not low_quote_confidence:
+    elif len(selected_prices) >= 5 and source_count >= 3 and not low_quote_confidence:
         confidence = "high"
     else:
         confidence = "medium"
+
+    unselected_quotes = [quote for quote in matched if quote not in selected_quotes and quote not in all_outliers]
 
     return {
         "operation": operation_name,
         "category": operation.get("category"),
         "sample": {
-            "valid_quotes": after_outliers,
-            "valid_count": len(after_outliers),
+            "valid_quotes": selected_quotes,
+            "valid_count": len(selected_quotes),
             "raw_matched_count": len(matched),
-            "excluded_outliers": outliers,
+            "matched_valid_count": len(matched),
+            "excluded_outliers": all_outliers,
+            "unselected_quotes": unselected_quotes,
             "invalid_quotes": excluded,
             "source_count": source_count,
-            "cities": sorted({quote.get("city_region") for quote in after_outliers if quote.get("city_region")}),
+            "cities": sorted({quote.get("city_region") for quote in selected_quotes if quote.get("city_region")}),
+            "regional_counts": {region: sample["valid_count"] for region, sample in regional_samples.items()},
         },
         "weak_average_rub": weak_average,
-        "russia_average_rub": russia_average,
+        "weak_average_region": weak_region if weak_prices else None,
+        "market_average_rub": market_average,
+        "target_market_region": target_region,
+        "regional_preference": list(region_preference),
+        "market_region": selected_region,
+        "pricing_method": selected_method,
+        "price_qualifier": "estimate" if autostop_price is not None else None,
+        "pricing_formula": {
+            "basis": "arithmetic_mean(selected_city_labor_only_quotes_after_outlier_filter)",
+            "multiplier": selected_multiplier,
+            "methods_combined": False,
+        },
+        "russia_average_rub": market_average,
         "autostop_price_rub": autostop_price,
         "confidence": confidence,
         "missing_context": _dedupe(missing_context),
@@ -648,6 +718,55 @@ def _operation_labor_time_analysis(
     }
 
 
+def _apply_labor_hour_fallback(
+    estimate: dict[str, Any],
+    labor_analysis: dict[str, Any],
+) -> None:
+    if estimate.get("autostop_price_rub") is not None:
+        return
+
+    average_hours = labor_analysis.get("average_hours")
+    if not isinstance(average_hours, (int, float)) or average_hours <= 0:
+        estimate["missing_context"] = _dedupe(
+            [
+                *estimate.get("missing_context", []),
+                "valid_public_labor_hours_for_4000_rub_fallback",
+            ]
+        )
+        return
+
+    estimate["pricing_method"] = "public_labor_hours"
+    estimate["market_region"] = None
+    estimate["market_average_rub"] = None
+    estimate["russia_average_rub"] = None
+    estimate["autostop_price_rub"] = _round_to_100(float(average_hours) * AUTOSTOP_LABOR_RATE_RUB_PER_HOUR)
+    estimate["pricing_formula"] = {
+        "basis": "valid_public_labor_hours_x_hourly_rate",
+        "average_hours": float(average_hours),
+        "hourly_rate_rub": AUTOSTOP_LABOR_RATE_RUB_PER_HOUR,
+        "methods_combined": False,
+    }
+    estimate["missing_context"] = [
+        item
+        for item in estimate.get("missing_context", [])
+        if item
+        not in {
+            "regional_market_basis_or_valid_public_labor_hours",
+            "public_krasnoyarsk_or_saint_petersburg_labor_only_price_sample",
+        }
+    ]
+    strong_hours = (
+        labor_analysis.get("confidence") == "high"
+        and int(labor_analysis.get("valid_count") or 0) >= 2
+        and int(labor_analysis.get("source_count") or 0) >= 2
+    )
+    estimate["confidence"] = "medium" if strong_hours and not estimate["missing_context"] else "low"
+    estimate["price_qualifier"] = "estimate" if estimate["confidence"] == "medium" else "about"
+    labor_analysis["autostop_effective_rate_rub_per_hour"] = AUTOSTOP_LABOR_RATE_RUB_PER_HOUR
+    labor_analysis["cross_check"] = "selected_hourly_rate_basis"
+    labor_analysis["rule"] = "selected as the exclusive fallback because no regional quote basis qualified"
+
+
 def _attach_internal_experience(
     *,
     estimate: dict[str, Any],
@@ -671,12 +790,17 @@ def _attach_internal_experience(
     recommended_range: list[int | None] | None
     basis: str
     source_families: list[str] = []
-    if public_price is not None:
-        source_families.append("public_russia_sto_market")
-    if internal_price is not None:
+    hourly_fallback = estimate.get("pricing_method") == "public_labor_hours"
+    if public_price is not None and not hourly_fallback:
+        source_families.append("public_regional_sto_market")
+    if internal_price is not None and not hourly_fallback:
         source_families.append("internal_closed_repair_order_experience")
 
-    if public_price is not None and internal_price is not None:
+    if hourly_fallback:
+        recommended = public_price
+        recommended_range = [public_price, public_price] if public_price is not None else None
+        basis = "public_labor_hours_exclusive"
+    elif public_price is not None and internal_price is not None:
         assert exact is not None
         public_weight = max(1, min(5, int(estimate.get("sample", {}).get("valid_count") or 1)))
         internal_weight = max(1, min(10, internal_count))
@@ -709,6 +833,10 @@ def _attach_internal_experience(
     estimate["recommended_range_rub"] = recommended_range
     estimate["recommendation_basis"] = basis
     estimate["evidence_source_families"] = source_families
+    estimate["internal_experience"]["applied_to_price"] = basis in {
+        "weighted_public_market_and_internal_experience",
+        "internal_experience_provisional",
+    }
 
 
 def _finalize_evidence_confidence(
@@ -830,12 +958,16 @@ def _pricing_totals(
     ]
     all_operations_priced = bool(operation_estimates) and len(confident_prices) == len(operation_estimates)
     total_works_rub = int(sum(confident_prices)) if all_operations_priced else None
-    russia_average_values = [
-        estimate["russia_average_rub"]
+    market_average_values = [
+        estimate["market_average_rub"]
         for estimate in operation_estimates
-        if estimate.get("russia_average_rub") is not None
+        if estimate.get("market_average_rub") is not None
     ]
-    russia_average_rub = int(sum(russia_average_values)) if all_operations_priced else None
+    market_average_rub = (
+        int(sum(market_average_values))
+        if all_operations_priced and len(market_average_values) == len(operation_estimates)
+        else None
+    )
 
     operation_confidences = [str(estimate.get("confidence")) for estimate in operation_estimates]
     if not normalized_operations:
@@ -851,6 +983,7 @@ def _pricing_totals(
     if complaint_only:
         return {
             "all_operations_priced": all_operations_priced,
+            "market_average_rub": None,
             "russia_average_rub": None,
             "autostop_price_rub": None,
             "total_works_rub": None,
@@ -860,7 +993,8 @@ def _pricing_totals(
         confidence = "medium"
     return {
         "all_operations_priced": all_operations_priced,
-        "russia_average_rub": russia_average_rub,
+        "market_average_rub": market_average_rub,
+        "russia_average_rub": market_average_rub,
         "autostop_price_rub": total_works_rub,
         "total_works_rub": total_works_rub,
         "confidence": confidence,
@@ -930,7 +1064,18 @@ def _pricing_next_actions(
         next_actions.append("Оценить только диагностику; финальный ремонт считать после результата диагностики.")
         next_actions.extend(_diagnostic_checklist(complaint, vehicle_context))
     if any(estimate.get("autostop_price_rub") is None for estimate in operation_estimates):
-        next_actions.append("Собрать минимум 3 сопоставимые публичные labor-only цены СТО по России.")
+        target_region = _pricing_region(str(vehicle_context.get("city") or "")) or "krasnoyarsk"
+        alternate_region = "saint_petersburg" if target_region == "krasnoyarsk" else "krasnoyarsk"
+        region_labels = {"krasnoyarsk": "Красноярска", "saint_petersburg": "Санкт-Петербурга"}
+        next_actions.append(
+            f"Собрать минимум 3 сопоставимые labor-only цены {region_labels[target_region]}; "
+            f"при их отсутствии — {region_labels[alternate_region]}."
+        )
+    if any(
+        estimate.get("pricing_method") == "public_labor_hours" and estimate.get("confidence") == "low"
+        for estimate in operation_estimates
+    ):
+        next_actions.append("Подтвердить публичную трудоёмкость вторым независимым источником перед финальной ценой.")
     if labor_time_confidence == "blocked" and normalized_operations:
         next_actions.append(
             "Автоматически найти публичные нормо-часы/трудоемкость не удалось; использовать цену как рыночную оценку без второго слоя."
@@ -1015,12 +1160,6 @@ def estimate_repair_work_cost(
         _operation_estimate(operation=operation, quotes=quote_sample, vehicle_context=vehicle_context)
         for operation in normalized_operations
     ]
-    for operation, estimate in zip(normalized_operations, operation_estimates, strict=False):
-        _attach_internal_experience(
-            estimate=estimate,
-            operation=operation,
-            experience_snapshot=experience_snapshot,
-        )
     labor_time_analysis = [
         _operation_labor_time_analysis(
             operation=operation,
@@ -1030,8 +1169,19 @@ def estimate_repair_work_cost(
         )
         for operation, estimate in zip(normalized_operations, operation_estimates, strict=False)
     ]
-    for estimate, labor_analysis in zip(operation_estimates, labor_time_analysis, strict=False):
+    for operation, estimate, labor_analysis in zip(
+        normalized_operations,
+        operation_estimates,
+        labor_time_analysis,
+        strict=False,
+    ):
+        _apply_labor_hour_fallback(estimate, labor_analysis)
         estimate["labor_time_analysis"] = labor_analysis
+        _attach_internal_experience(
+            estimate=estimate,
+            operation=operation,
+            experience_snapshot=experience_snapshot,
+        )
         _finalize_evidence_confidence(estimate, labor_analysis)
 
     for operation in operation_estimates:
@@ -1071,6 +1221,11 @@ def estimate_repair_work_cost(
     manager_lines = [
         {
             "operation": estimate.get("operation"),
+            "pricing_method": estimate.get("pricing_method"),
+            "price_qualifier": estimate.get("price_qualifier"),
+            "target_market_region": estimate.get("target_market_region"),
+            "market_region": estimate.get("market_region"),
+            "market_average_rub": estimate.get("market_average_rub"),
             "russia_average_rub": estimate.get("russia_average_rub"),
             "autostop_price_rub": estimate.get("autostop_price_rub"),
             "recommended_price_rub": estimate.get("recommended_price_rub"),
@@ -1102,6 +1257,18 @@ def estimate_repair_work_cost(
     else:
         decision_confidence = "low"
 
+    target_market_region = (
+        str(operation_estimates[0].get("target_market_region"))
+        if operation_estimates
+        else (_pricing_region(city) or "krasnoyarsk")
+    )
+    alternate_market_region = "saint_petersburg" if target_market_region == "krasnoyarsk" else "krasnoyarsk"
+    regional_preference = (
+        list(operation_estimates[0].get("regional_preference") or [])
+        if operation_estimates
+        else [target_market_region, alternate_market_region]
+    )
+
     return {
         "ok": True,
         "mode": "diagnostic_first" if complaint_only else "work_estimate",
@@ -1117,7 +1284,7 @@ def estimate_repair_work_cost(
             "sample_rules": [
                 "public labor-time mentions only",
                 "do not present public rows as official OEM norm-hours",
-                "use as plausibility and overlap layer, not as the primary price basis",
+                "use as an exclusive 4000-rub/hour fallback only when no regional quote basis qualifies",
             ],
         },
         "labor_time_analysis": labor_time_analysis,
@@ -1128,12 +1295,19 @@ def estimate_repair_work_cost(
         "overlap_adjustments": overlap_adjustments,
         "sources_checked": research.get("sources_checked", []),
         "pricing_basis": {
-            "model": "adaptive_multi_source_evidence_bundle",
-            "primary": "public_russia_sto_labor_only_prices",
-            "secondary": "public_labor_time_plausibility_layer",
+            "model": "exclusive_target_region_market_or_labor_hour_v2",
+            "target_market_region": target_market_region,
+            "regional_preference": regional_preference,
+            "regional_methods": {
+                "krasnoyarsk": "labor_only_mean_x_1_45",
+                "saint_petersburg": "labor_only_mean_x_1_15",
+            },
+            "fallback": "valid_public_labor_hours_x_4000_rub",
+            "selection_rule": "target_city_region_then_alternate_supported_region_then_public_labor_hours",
+            "methods_combined": False,
             "internal": "aggregate_only_closed_repair_order_experience",
-            "market": "public_russia_sto_labor_only_prices",
-            "labor_time": "vehicle_or_operation_labor_time_plausibility",
+            "market": "city_specific_public_sto_labor_only_prices",
+            "labor_time": "valid_public_vehicle_or_operation_labor_hours",
             "vehicle_context": "live_crm_or_verified_vehicle_identity",
             "labor_time_policy": labor_time_policy,
             "auto_research": bool(auto_research),
@@ -1143,7 +1317,7 @@ def estimate_repair_work_cost(
                 experience_snapshot.get("schema_version") if experience_snapshot else None
             ),
             "manual_owner_labor_time_required": False,
-            "rule": "No single source creates a high-confidence final price; reconcile internal experience, current market, labor time and exact scope.",
+            "rule": "Select exactly one public pricing method per operation; incomplete evidence cannot create a confident final price.",
         },
         "market_sample": {
             "quotes": valid_quotes,
@@ -1154,11 +1328,13 @@ def estimate_repair_work_cost(
             "cities": sorted({quote.get("city_region") for quote in valid_quotes if quote.get("city_region")}),
             "sample_rules": [
                 "labor-only prices only",
-                "public Russia STO prices as primary basis",
+                "do not mix cities in one arithmetic mean",
+                "prefer 3+ target-city quotes, otherwise 3+ alternate supported-region quotes",
                 "comparable operation and vehicle class",
                 "exclude outliers before arithmetic mean",
             ],
         },
+        "market_average_rub": totals["market_average_rub"],
         "russia_average_rub": totals["russia_average_rub"],
         "autostop_price_rub": totals["autostop_price_rub"],
         "total_works_rub": totals["total_works_rub"],
@@ -1172,15 +1348,30 @@ def estimate_repair_work_cost(
             "card_text_rule": "В карточку писать только короткий итог: работа, AutoStop цена, уверенность, что проверить.",
         },
         "formula": {
-            "basis": "arithmetic_mean(valid_public_labor_only_russia_quotes_after_outlier_filter)",
-            "markup_multiplier": AUTOSTOP_MARKUP,
+            "selection": "target_city_region_then_alternate_supported_region_then_public_labor_hours",
+            "target_market_region": target_market_region,
+            "regional_preference": regional_preference,
+            "methods_combined": False,
+            "krasnoyarsk_market": {
+                "basis": "arithmetic_mean(3+_comparable_labor_only_quotes_after_outlier_filter)",
+                "markup_multiplier": KRASNOYARSK_MARKUP,
+            },
+            "saint_petersburg_market": {
+                "basis": "arithmetic_mean(3+_comparable_labor_only_quotes_after_outlier_filter)",
+                "markup_multiplier": SAINT_PETERSBURG_MARKUP,
+            },
+            "public_labor_hours": {
+                "basis": "valid_public_labor_hours",
+                "hourly_rate_rub": AUTOSTOP_LABOR_RATE_RUB_PER_HOUR,
+            },
             "rounding": "round_to_nearest_100_rub",
             "minimum_confident_quotes": MIN_CONFIDENT_QUOTES,
+            "compatibility_aliases": {"russia_average_rub": "market_average_rub"},
         },
         "warnings": [
             "Do not call replace_repair_order_works from this estimate.",
             "Parts, fluids, materials, and procurement markup are separate from labor pricing.",
-            "Public labor-time rows are plausibility checks, not the primary price basis or official OEM norm-hours.",
+            "Public labor-time rows are not official OEM norm-hours and are used only as the exclusive hourly fallback.",
             "Internal repair-order aggregates are historical anchors; verify current scope and market before a customer quote.",
         ],
         "privacy": {

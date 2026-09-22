@@ -54,6 +54,9 @@ def test_catalog_provider_status_reports_missing_secret_names(monkeypatch):
     )
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
     assert partsapi["configured"] is False
+    assert partsapi["authorization_status"] == "not_configured"
+    assert partsapi["readiness_basis"] == "configuration_only"
+    assert partsapi["live_callable_now"] is False
     assert "PARTSAPI_BASE_URL" in partsapi["missing_env_names"]
     assert "PARTSAPI_KEY" in partsapi["missing_env_names"]
     assert ["PARTSAPI_KEY"] in partsapi["missing_env_groups"]
@@ -81,8 +84,12 @@ def test_catalog_provider_status_detects_configured_partsapi(monkeypatch):
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
 
     assert partsapi["configured"] is True
-    assert partsapi["live_callable_now"] is True
+    assert partsapi["authorization_status"] == "unverified"
+    assert partsapi["readiness_basis"] == "configuration_only"
+    assert partsapi["live_callable_now"] is False
+    assert partsapi["live_operations"] == []
     assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_KEY"]
+    assert status["live_callable_count"] == 0
 
 
 def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypatch):
@@ -94,7 +101,10 @@ def test_catalog_provider_status_detects_configured_partsapi_method_key(monkeypa
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
 
     assert partsapi["configured"] is True
-    assert partsapi["live_callable_now"] is True
+    assert partsapi["authorization_status"] == "unverified"
+    assert partsapi["readiness_basis"] == "configuration_only"
+    assert partsapi["live_callable_now"] is False
+    assert partsapi["configured_operations"] == ["parts_by_vin"]
     assert partsapi["present_env_names"] == ["PARTSAPI_BASE_URL", "PARTSAPI_PARTS_BY_VIN_KEY"]
 
 
@@ -105,7 +115,10 @@ def test_partsapi_identity_key_does_not_claim_oem_candidate_lookup(monkeypatch):
 
     plan = build_oem_parts_provider_plan(identifier="MR41S123456", requested_part="передние колодки")
 
-    assert plan["live_capability"]["partsapi_oem_operations"]["vin_decode_oe"]["live_callable_now"] is True
+    assert plan["live_capability"]["partsapi_oem_operations"]["vin_decode_oe"]["configured"] is True
+    assert plan["live_capability"]["partsapi_oem_operations"]["vin_decode_oe"]["live_callable_now"] is False
+    assert plan["live_capability"]["partsapi_authorization_status"] == "unverified"
+    assert plan["live_capability"]["partsapi_readiness_basis"] == "configuration_only"
     assert plan["live_capability"]["live_oem_candidate_lookup_available"] is False
     assert plan["live_capability"]["live_oem_catalog_available"] is False
 
@@ -119,14 +132,22 @@ def test_partsapi_provider_status_keeps_operation_level_readiness(monkeypatch):
     status = catalog_provider_status(stage="catalog_cross")
     partsapi = next(provider for provider in status["providers"] if provider["source_id"] == "partsapi_ru")
 
-    assert partsapi["live_callable_now"] is True
-    assert partsapi["operation_status"]["parts_by_vin"]["live_callable_now"] is True
+    assert partsapi["live_callable_now"] is False
+    assert partsapi["operation_status"]["parts_by_vin"]["configured"] is True
+    assert partsapi["operation_status"]["parts_by_vin"]["authorization_status"] == "unverified"
+    assert partsapi["operation_status"]["parts_by_vin"]["live_callable_now"] is False
     assert partsapi["operation_status"]["vin_decode"]["live_callable_now"] is False
 
     plan = build_oem_parts_provider_plan(identifier="MR41S123456", requested_part="передние колодки")
-    assert plan["live_capability"]["live_oem_candidate_lookup_available"] is True
+    assert plan["live_capability"]["configured_oem_candidate_lookup_available"] is True
+    assert plan["live_capability"]["live_oem_candidate_lookup_available"] is False
     assert plan["live_capability"]["live_oem_applicability_available"] is False
-    assert plan["live_capability"]["partsapi_oem_operations"]["parts_by_vin"]["live_callable_now"] is True
+    assert plan["live_capability"]["partsapi_oem_operations"]["parts_by_vin"]["live_callable_now"] is False
+    candidate_step = next(step for step in plan["pipeline"] if step["step"] == "find_oem_candidates")
+    assert "partsapi_ru" in candidate_step["providers"]
+    oem_blocker = next(blocker for blocker in plan["blockers"] if blocker["stage"] == "oem_catalog")
+    assert oem_blocker["authorization_status"] == "unverified"
+    assert oem_blocker["readiness_basis"] == "configuration_only"
 
 
 def test_applicability_key_alone_does_not_claim_oem_candidate_readiness(monkeypatch):
@@ -150,7 +171,8 @@ def test_applicability_key_alone_does_not_claim_oem_candidate_readiness(monkeypa
     )
 
     capability = plan["live_capability"]
-    assert capability["live_oem_applicability_available"] is True
+    assert capability["configured_oem_applicability_available"] is True
+    assert capability["live_oem_applicability_available"] is False
     assert capability["live_oem_candidate_lookup_available"] is False
     assert capability["live_oem_catalog_available"] is False
     assert capability["can_complete_full_auto_lookup_now"] is False

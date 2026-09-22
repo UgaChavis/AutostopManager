@@ -4,6 +4,8 @@ import json
 import inspect
 from pathlib import Path
 
+import pytest
+
 from autostop_manager import config as manager_config
 import autostop_manager.mcp_tools as mcp_tools_module
 from autostop_manager.mcp_server import build_server
@@ -31,6 +33,21 @@ PARTSAPI_ENV_NAMES = [
     "PARTSAPI_ARTICLE_CRITERIA_KEY",
     "PARTSAPI_BASE_URL",
 ]
+STORE_RUNTIME_ENV_NAMES = [
+    "AUTOSTOP_STORE_API_URL",
+    "AUTOSTOP_STORE_READ_TOKEN",
+    "AUTOSTOP_STORE_MANAGE_TOKEN",
+    "AUTOSTOP_STORE_OWNER_TOKEN",
+    "AUTOSTOP_STORE_QUOTE_TOKEN",
+]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_store_runtime_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", str(tmp_path / "empty.env"))
+    monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    for name in STORE_RUNTIME_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
 
 
 def _clear_partsapi_env(monkeypatch):

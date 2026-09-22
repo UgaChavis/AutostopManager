@@ -33,3 +33,4 @@ do not carry over old conversation context or business records.
 - General public-web research: [docs/agent/j1_web_research.md](docs/agent/j1_web_research.md).
 - Release, only when requested: [deployment_runbook.md](docs/agent/deployment_runbook.md).
 - CRM documents and Gmail: [operations.md](docs/agent/operations.md).
+- FST.KZ VPN only: [.agents/skills/manage-fst-vpn/SKILL.md](.agents/skills/manage-fst-vpn/SKILL.md).

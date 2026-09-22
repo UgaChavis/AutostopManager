@@ -8,11 +8,27 @@ from autostop_manager import j1_browser, j1_browser_verify as verify
 from autostop_manager import j1_fetch
 
 
-def _container(service: str, identifier: str, networks: dict[str, str]) -> dict[str, object]:
+REVISION = "a" * 40
+
+
+def _container(
+    service: str,
+    identifier: str,
+    networks: dict[str, str],
+    *,
+    revision: str = REVISION,
+) -> dict[str, object]:
     is_renderer = service == verify.RENDERER_SERVICE
     return {
         "Id": identifier,
-        "Config": {"Labels": {"com.docker.compose.service": service}, "User": "10001:10001"},
+        "Config": {
+            "Image": f"{verify.IMAGE_REPOSITORIES[service]}:{revision}",
+            "Labels": {
+                "com.docker.compose.service": service,
+                verify.IMAGE_REVISION_LABEL: revision,
+            },
+            "User": "10001:10001",
+        },
         "HostConfig": {
             "PortBindings": {},
             "ReadonlyRootfs": True,
@@ -30,12 +46,20 @@ def _container(service: str, identifier: str, networks: dict[str, str]) -> dict[
     }
 
 
-def _topology() -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
-    renderer = _container(verify.RENDERER_SERVICE, "renderer-id", {verify.CONTROL_NETWORK: verify.RENDERER_CONTROL_IP})
+def _topology(
+    revision: str = REVISION,
+) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+    renderer = _container(
+        verify.RENDERER_SERVICE,
+        "renderer-id",
+        {verify.CONTROL_NETWORK: verify.RENDERER_CONTROL_IP},
+        revision=revision,
+    )
     proxy = _container(
         verify.PROXY_SERVICE,
         "proxy-id",
         {verify.CONTROL_NETWORK: verify.PROXY_CONTROL_IP, verify.EGRESS_NETWORK: "172.30.0.2"},
+        revision=revision,
     )
     return (
         {verify.RENDERER_SERVICE: renderer, verify.PROXY_SERVICE: proxy},
@@ -109,7 +133,7 @@ def test_malformed_optional_attestation_cannot_break_static_fetch(monkeypatch: p
 
 def test_verifier_accepts_exact_two_container_topology() -> None:
     containers, networks = _topology()
-    verify.verify_topology(containers, networks)
+    verify.verify_topology(containers, networks, expected_revision=REVISION)
 
 
 @pytest.mark.parametrize("mutation", ("port", "renderer_egress", "private_control"))
@@ -129,7 +153,7 @@ def test_verifier_rejects_topology_escape(mutation: str) -> None:
         changed_networks[verify.CONTROL_NETWORK]["Internal"] = False
         expected = "browser_network_topology_invalid"
     with pytest.raises(verify.VerificationError, match=expected):
-        verify.verify_topology(changed_containers, changed_networks)
+        verify.verify_topology(changed_containers, changed_networks, expected_revision=REVISION)
 
 
 @pytest.mark.parametrize(
@@ -141,7 +165,21 @@ def test_verifier_rejects_renderer_without_compensating_runtime_limits(field: st
     changed = deepcopy(containers)
     changed[verify.RENDERER_SERVICE]["HostConfig"][field] = value  # type: ignore[index]
     with pytest.raises(verify.VerificationError, match="browser_renderer_runtime_invalid"):
-        verify.verify_topology(changed, networks)
+        verify.verify_topology(changed, networks, expected_revision=REVISION)
+
+
+@pytest.mark.parametrize("mutation", ("renderer_tag", "renderer_label", "proxy_tag", "proxy_label"))
+def test_verifier_rejects_container_image_revision_mismatch(mutation: str) -> None:
+    containers, networks = _topology()
+    changed = deepcopy(containers)
+    service, field = mutation.split("_", maxsplit=1)
+    config = changed[service]["Config"]  # type: ignore[index]
+    if field == "tag":
+        config["Image"] = f"{verify.IMAGE_REPOSITORIES[service]}:{'b' * 40}"  # type: ignore[index]
+    else:
+        config["Labels"][verify.IMAGE_REVISION_LABEL] = "b" * 40  # type: ignore[index]
+    with pytest.raises(verify.VerificationError, match="browser_container_image_revision_invalid"):
+        verify.verify_topology(changed, networks, expected_revision=REVISION)
 
 
 def test_attestation_content_rejects_non_sha_revision() -> None:
@@ -193,3 +231,25 @@ def test_health_probe_reports_container_state_without_rendering(monkeypatch: pyt
 
     assert result["browser_containers_ready"] is True
     assert result["browser_containers"] == {"renderer": "running", "proxy": "running"}
+
+
+def test_health_probe_rejects_container_from_another_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    containers, networks = _topology()
+    containers[verify.PROXY_SERVICE]["Config"]["Labels"][verify.IMAGE_REVISION_LABEL] = "b" * 40  # type: ignore[index]
+    monkeypatch.setattr(
+        j1_browser,
+        "browser_status",
+        lambda: {
+            "browser_ready": True,
+            "browser_reason": "",
+            "browser_release_revision": REVISION,
+            "browser_attestation_revision": REVISION,
+            "browser_socket_ready": True,
+        },
+    )
+    monkeypatch.setattr(verify, "_load_running_topology", lambda *_args: (containers, networks))
+
+    result = verify.probe_browser_stack()
+
+    assert result["browser_containers_ready"] is False
+    assert result["browser_container_reason"] == "browser_container_image_revision_invalid"

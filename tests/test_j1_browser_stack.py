@@ -232,12 +232,14 @@ def test_browser_image_includes_renderer_source_dependencies() -> None:
     assert "autostop_manager/j1_sources.py" in dockerfile
     assert "autostop_manager/j1_fetch.py" in dockerfile
     assert "autostop_manager/j1_browser.py" in dockerfile
+    assert 'LABEL org.opencontainers.image.revision="${AUTOSTOP_J1_BROWSER_IMAGE_REVISION}"' in dockerfile
 
 
 def test_browser_compose_has_bounded_control_network_and_no_public_port() -> None:
     compose = (ROOT / "deploy/j1-browser/docker-compose.yml").read_text(encoding="utf-8")
     unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
     installer = (ROOT / "scripts/install-j1-browser-stack.sh").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts/run-j1-browser-stack.sh").read_text(encoding="utf-8")
     assert "internal: true" in compose
     assert "172.31.250.2/32" in compose
     assert "172.31.250.3:18890" in compose
@@ -246,6 +248,9 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "init: true" in compose
     assert "pids_limit: 128" in compose
     assert "soft: 1024" in compose and "hard: 1024" in compose
+    assert "autostop-j1-browser-renderer:${AUTOSTOP_J1_BROWSER_IMAGE_REVISION" in compose
+    assert "autostop-j1-browser-proxy:${AUTOSTOP_J1_BROWSER_IMAGE_REVISION" in compose
+    assert compose.count("        AUTOSTOP_J1_BROWSER_IMAGE_REVISION: ") == 2
     assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
     assert "RuntimeDirectory=autostop-j1-browser autostop-j1-browser-attestation" not in unit
     assert "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser" in unit
@@ -256,23 +261,52 @@ def test_browser_compose_has_bounded_control_network_and_no_public_port() -> Non
     assert "ProtectHome=yes" in unit
     assert unit.index(
         "ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker"
-    ) < unit.index("ExecStart=/usr/bin/docker compose")
+    ) < unit.index("ExecStart=/usr/bin/bash")
     assert unit.index(
         "ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser"
-    ) < unit.index("ExecStart=/usr/bin/docker compose")
+    ) < unit.index("ExecStart=/usr/bin/bash")
     assert "isolation-ready" in unit
-    assert "docker compose" in unit
+    assert (
+        "ExecStart=/usr/bin/bash /opt/autostop-manager-releases/current/scripts/run-j1-browser-stack.sh start" in unit
+    )
+    assert "docker compose" not in unit
+    assert "--build" not in unit
+    assert "TimeoutStartSec=240s" in unit
+    assert '[[ ! "${revision_lines[0]}" =~ ^[0-9a-f]{40,64}$ ]]' in runner
+    assert 'export AUTOSTOP_J1_BROWSER_IMAGE_REVISION="${revision}"' in runner
+    assert "up --detach --no-build --remove-orphans" in runner
+    assert "down --remove-orphans" in runner
     assert "config --quiet" in installer
+    assert "--project-name autostop-j1-browser build" in installer
+    assert 'docker image inspect "${renderer_image}" "${proxy_image}"' in installer
+    assert "j1_browser_image_revision_invalid=true" in installer
+    assert installer.index("--project-name autostop-j1-browser build") < installer.index(
+        'install -o root -g root -m 0644 "${UNIT_SOURCE}" "${UNIT_PATH}"'
+    )
+    assert installer.index('docker image inspect "${renderer_image}" "${proxy_image}"') < installer.index(
+        'install -o root -g root -m 0644 "${UNIT_SOURCE}" "${UNIT_PATH}"'
+    )
     assert "isolation_attestation_required" in installer
 
 
 def test_browser_attestation_uses_a_sealed_directory_and_release_verifier() -> None:
     unit = (ROOT / "deploy/systemd/autostop-j1-browser.service").read_text(encoding="utf-8")
     installer = (ROOT / "scripts/install-j1-browser-stack.sh").read_text(encoding="utf-8")
+    attester = (ROOT / "scripts/attest-j1-browser-stack.sh").read_text(encoding="utf-8")
 
     assert "RuntimeDirectory=autostop-j1-browser-attestation autostop-j1-browser-docker" in unit
     assert "install -d -m 0700 -o root -g root /run/autostop-j1-browser-attestation" in unit
     assert "/run/autostop-j1-browser-attestation/isolation-ready" in unit
     assert "--verify" in installer
-    assert '"${RUNTIME_PYTHON}" -m "${VERIFIER_MODULE}" attest' in installer
+    assert (
+        "ExecStartPost=/usr/bin/bash /opt/autostop-manager-releases/current/scripts/attest-j1-browser-stack.sh" in unit
+    )
+    assert (
+        "ExecStopPost=/usr/bin/bash /opt/autostop-manager-releases/current/scripts/run-j1-browser-stack.sh stop" in unit
+    )
+    assert "ExecStop=" not in unit
+    assert '[[ -S "${SOCKET_PATH}" ]]' in attester
+    assert '"${RUNTIME_PYTHON}" -m autostop_manager.j1_browser_verify attest' in attester
+    assert '"${RUNTIME_PYTHON}" -m "${VERIFIER_MODULE}" probe' in installer
+    assert 'fail_closed_readback "j1_browser_readback_failed"' in installer
     assert "j1_browser_isolation_attested=true" in installer

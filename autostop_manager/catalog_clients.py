@@ -1492,12 +1492,15 @@ def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
 
 
 def partsapi_operation_status(operation: str) -> dict[str, Any]:
-    """Describe readiness for one operation, not merely for the whole account."""
+    """Describe configured request readiness without claiming live authorization."""
     if operation not in PARTSAPI_OPERATIONS:
         return {
             "ok": False,
             "provider": "partsapi_ru",
             "operation": operation,
+            "configured": False,
+            "authorization_status": "not_applicable",
+            "readiness_basis": "input_validation",
             "outcome": "invalid_operation",
             "failure_class": "invalid_operation",
             "retryable": False,
@@ -1511,10 +1514,14 @@ def partsapi_operation_status(operation: str) -> dict[str, Any]:
     accepted_key_env_names = ["PARTSAPI_KEY", *([method_key_env_name] if method_key_env_name else [])]
     has_key = bool(os.getenv("PARTSAPI_KEY") or (method_key_env_name and os.getenv(method_key_env_name)))
     missing_key_env_names = [] if has_key else accepted_key_env_names
+    configured = bool(request_plan["configured"])
     return {
-        "ok": bool(request_plan["configured"]),
+        "ok": configured,
         "provider": "partsapi_ru",
         "operation": operation,
+        "configured": configured,
+        "authorization_status": "unverified" if configured else "not_configured",
+        "readiness_basis": "configuration_only",
         "partsapi_method": spec["method"],
         "role": spec["role"],
         "required_params": list(spec["required"]),
@@ -1525,9 +1532,9 @@ def partsapi_operation_status(operation: str) -> dict[str, Any]:
         "base_url_configured": bool(request_plan["base_url_configured"]),
         "missing_env_names": list(request_plan["missing_env_names"]),
         "method_key_env_name": method_key_env_name,
-        "live_callable_now": bool(request_plan["configured"]),
-        "outcome": "ready" if request_plan["configured"] else "credentials_missing",
-        "failure_class": None if request_plan["configured"] else "credentials_missing",
+        "live_callable_now": False,
+        "outcome": "configured_unverified" if configured else "credentials_missing",
+        "failure_class": None if configured else "credentials_missing",
         "retryable": False,
     }
 
@@ -2358,6 +2365,9 @@ def partsapi_catalog_lookup(
         return {
             **base,
             "ok": False,
+            "authorization_status": "not_configured",
+            "readiness_basis": "configuration_only",
+            "live_callable_now": False,
             "missing_env_names": request_plan["missing_env_names"],
             "error": "PARTSAPI_BASE_URL plus PARTSAPI_KEY or the method-specific PartsAPI key are required for live requests.",
             "outcome": "credentials_missing",
@@ -2373,10 +2383,13 @@ def partsapi_catalog_lookup(
             **base,
             "ok": True,
             "dry_run": True,
+            "authorization_status": "unverified",
+            "readiness_basis": "configuration_only",
+            "live_callable_now": False,
             "attempt_count": 0,
             "max_attempts": _bounded_attempt_count(max_attempts),
             "attempts": [],
-            "outcome": "ready",
+            "outcome": "configured_unverified",
             "failure_class": None,
             "retryable": False,
             "requires_fallback": False,

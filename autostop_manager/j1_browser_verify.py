@@ -31,6 +31,11 @@ EGRESS_NETWORK = f"{PROJECT_NAME}_j1_browser_egress"
 RENDERER_CONTROL_IP = "172.31.250.2"
 PROXY_CONTROL_IP = "172.31.250.3"
 PROBE_URL = "https://example.com/"
+IMAGE_REVISION_LABEL = "org.opencontainers.image.revision"
+IMAGE_REPOSITORIES = {
+    RENDERER_SERVICE: "autostop-j1-browser-renderer",
+    PROXY_SERVICE: "autostop-j1-browser-proxy",
+}
 _DOCKER_TIMEOUT_SECONDS = 25
 _RENDER_TIMEOUT_SECONDS = 20
 _RENDERER_PIDS_LIMIT = 128
@@ -74,8 +79,14 @@ def _json_object(raw: str, *, error: str) -> dict[str, Any]:
     return payload
 
 
+def _container_labels(container: dict[str, Any]) -> dict[str, Any]:
+    config = container.get("Config") or {}
+    labels = (config.get("Labels") or {}) if isinstance(config, dict) else {}
+    return labels if isinstance(labels, dict) else {}
+
+
 def _container_service(container: dict[str, Any]) -> str:
-    labels = (container.get("Config") or {}).get("Labels") or {}
+    labels = _container_labels(container)
     return str(labels.get("com.docker.compose.service") or "")
 
 
@@ -140,7 +151,24 @@ def _network_is_internal(network: dict[str, Any], *, expected: bool) -> bool:
     return network.get("Internal") is expected
 
 
-def verify_topology(containers: dict[str, dict[str, Any]], networks: dict[str, dict[str, Any]]) -> None:
+def _verify_container_images(containers: dict[str, dict[str, Any]], expected_revision: str) -> None:
+    if not j1_browser.attestation_content(expected_revision):
+        raise VerificationError("browser_container_image_revision_invalid")
+    for service, repository in IMAGE_REPOSITORIES.items():
+        container = containers.get(service) or {}
+        config = container.get("Config") or {}
+        image = str(config.get("Image") or "") if isinstance(config, dict) else ""
+        label = str(_container_labels(container).get(IMAGE_REVISION_LABEL) or "")
+        if image != f"{repository}:{expected_revision}" or label != expected_revision:
+            raise VerificationError("browser_container_image_revision_invalid")
+
+
+def verify_topology(
+    containers: dict[str, dict[str, Any]],
+    networks: dict[str, dict[str, Any]],
+    *,
+    expected_revision: str,
+) -> None:
     """Validate the exact two-service browser topology from Docker inspect JSON."""
 
     if set(containers) != {RENDERER_SERVICE, PROXY_SERVICE}:
@@ -159,6 +187,7 @@ def verify_topology(containers: dict[str, dict[str, Any]], networks: dict[str, d
         raise VerificationError("browser_renderer_runtime_invalid")
     if not _proxy_runtime_hardened(proxy):
         raise VerificationError("browser_proxy_runtime_invalid")
+    _verify_container_images(containers, expected_revision)
 
     renderer_networks = _container_networks(renderer)
     proxy_networks = _container_networks(proxy)
@@ -343,7 +372,7 @@ def verify_and_attest(
     if not _socket_is_ready(socket_candidate):
         raise VerificationError("browser_socket_unavailable")
     containers, networks = _load_running_topology(command)
-    verify_topology(containers, networks)
+    verify_topology(containers, networks, expected_revision=revision)
     _verify_proxy_private_dns(_container_id(containers[PROXY_SERVICE]), command)
     _render_probe(socket_candidate)
     _write_attestation(marker_candidate, revision)
@@ -359,17 +388,24 @@ def verify_and_attest(
 def probe_browser_stack(command: Command = _command_output) -> dict[str, Any]:
     """Read the current attestation and container topology without egress or mutation."""
 
+    browser_status = j1_browser.browser_status()
     result: dict[str, Any] = {
         "ok": True,
         "schema": "autostop.j1.browser.health.v1",
-        **j1_browser.browser_status(),
+        **browser_status,
         "browser_containers_ready": False,
         "browser_container_reason": "",
         "browser_containers": {},
     }
+    revision = str(browser_status.get("browser_release_revision") or "")
+    if not revision:
+        result["browser_container_reason"] = str(
+            browser_status.get("browser_reason") or "browser_release_revision_unavailable"
+        )
+        return result
     try:
         containers, networks = _load_running_topology(command)
-        verify_topology(containers, networks)
+        verify_topology(containers, networks, expected_revision=revision)
     except VerificationError as exc:
         result["browser_container_reason"] = str(exc)
         return result

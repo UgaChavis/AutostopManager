@@ -16,6 +16,9 @@ UMask=0077
 Environment=AUTOSTOP_J1_BROWSER_SOCKET_DIR=/run/autostop-j1-browser
 Environment=HOME=/run/autostop-j1-browser-docker
 Environment=DOCKER_CONFIG=/run/autostop-j1-browser-docker
+Environment=PYTHONPATH=/opt/autostop-manager-releases/current
+Environment=PYTHONSAFEPATH=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStartPre=+/usr/bin/install -d -m 0710 -o 10001 -g 10001 /run/autostop-j1-browser
 ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browser-docker
 ExecStartPre=+/usr/bin/rm -f -- /run/autostop-j1-browser/renderer.sock
@@ -23,9 +26,15 @@ ExecStartPre=/usr/bin/install -d -m 0700 -o root -g root /run/autostop-j1-browse
 # A browser socket alone is not an activation signal: a release-specific
 # isolation attestation is created only by a later controlled verification.
 ExecStartPre=/usr/bin/rm -f -- /run/autostop-j1-browser-attestation/isolation-ready
-ExecStart=/usr/bin/docker compose -f /opt/autostop-manager-releases/current/deploy/j1-browser/docker-compose.yml --project-name autostop-j1-browser up --detach --build --remove-orphans
-ExecStop=/usr/bin/docker compose -f /opt/autostop-manager-releases/current/deploy/j1-browser/docker-compose.yml --project-name autostop-j1-browser down --remove-orphans
-TimeoutStartSec=180s
+# Images are built by the guarded release installer before this unit is
+# activated.  Boot/restart must only start the already verified release image;
+# a cold Docker build can exceed systemd's bounded startup window.
+ExecStart=/usr/bin/bash /opt/autostop-manager-releases/current/scripts/run-j1-browser-stack.sh start
+ExecStartPost=/usr/bin/bash /opt/autostop-manager-releases/current/scripts/attest-j1-browser-stack.sh
+# ExecStopPost also runs after a failed start/attestation, so no unattested
+# renderer or proxy containers are left behind.
+ExecStopPost=/usr/bin/bash /opt/autostop-manager-releases/current/scripts/run-j1-browser-stack.sh stop
+TimeoutStartSec=240s
 TimeoutStopSec=45s
 NoNewPrivileges=true
 PrivateTmp=true

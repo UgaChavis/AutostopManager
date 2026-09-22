@@ -5,7 +5,7 @@ import json
 from autostop_manager.work_pricing import estimate_repair_work_cost
 
 
-def _quote(source: str, price: int, operation: str = "замена рулевой рейки", city: str = "Москва"):
+def _quote(source: str, price: int, operation: str = "замена рулевой рейки", city: str = "Красноярск"):
     return {
         "source": source,
         "city": city,
@@ -35,10 +35,10 @@ def test_exact_work_with_public_quotes_excludes_outlier_and_applies_markup():
         work_items=["поменять рулевую рейку"],
         quotes_json=[
             _quote("sto-a", 10000),
-            _quote("sto-b", 11000, city="Красноярск"),
-            _quote("sto-c", 12000, city="Новосибирск"),
-            _quote("sto-d", 13000, city="Екатеринбург"),
-            _quote("sto-e", 99000, city="Москва"),
+            _quote("sto-b", 11000),
+            _quote("sto-c", 12000),
+            _quote("sto-d", 13000),
+            _quote("sto-e", 99000),
         ],
     )
 
@@ -48,11 +48,20 @@ def test_exact_work_with_public_quotes_excludes_outlier_and_applies_markup():
     assert result["normalized_operations"][0]["normalized_name"] == "замена рулевой рейки"
     assert result["operation_estimates"][0]["sample"]["valid_count"] == 4
     assert result["operation_estimates"][0]["sample"]["excluded_outliers"][0]["price_rub"] == 99000
+    assert result["operation_estimates"][0]["pricing_method"] == "krasnoyarsk_market_mean"
+    assert result["market_average_rub"] == 11500
     assert result["russia_average_rub"] == 11500
-    assert result["autostop_price_rub"] == 17300
+    assert result["autostop_price_rub"] == 16700
     assert result["confidence"] == "medium"
     assert result["labor_time_confidence"] == "blocked"
-    assert result["pricing_basis"]["secondary"] == "public_labor_time_plausibility_layer"
+    assert result["pricing_basis"]["regional_methods"] == {
+        "krasnoyarsk": "labor_only_mean_x_1_45",
+        "saint_petersburg": "labor_only_mean_x_1_15",
+    }
+    assert result["pricing_basis"]["target_market_region"] == "krasnoyarsk"
+    assert result["pricing_basis"]["regional_preference"] == ["krasnoyarsk", "saint_petersburg"]
+    assert result["pricing_basis"]["methods_combined"] is False
+    assert result["formula"]["krasnoyarsk_market"]["markup_multiplier"] == 1.45
     assert result["playbook"] == ".agents/skills/manage-autostop-store/SKILL.md"
     assert result["source_catalog"] == "docs/agent/automotive_sources/automotive_repair_sources_catalog.json"
 
@@ -71,7 +80,7 @@ def test_less_than_three_prices_returns_low_confidence_without_confident_price()
     assert result["russia_average_rub"] is None
     assert result["autostop_price_rub"] is None
     assert result["operation_estimates"][0]["weak_average_rub"] == 3500
-    assert "at_least_3_comparable_labor_only_public_prices" in result["missing_context"]
+    assert "regional_market_basis_or_valid_public_labor_hours" in result["missing_context"]
 
 
 def test_internal_labor_snapshot_remains_a_provisional_anchor():
@@ -122,7 +131,7 @@ def test_quotes_with_parts_are_excluded_from_labor_only_sample():
     assert result["market_sample"]["valid_count"] == 3
     assert result["market_sample"]["invalid_count"] == 1
     assert result["russia_average_rub"] == 1600
-    assert result["autostop_price_rub"] == 2400
+    assert result["autostop_price_rub"] == 2300
 
 
 def test_quotes_without_explicit_labor_only_confirmation_are_excluded():
@@ -172,8 +181,8 @@ def test_public_labor_time_layer_adds_cross_check_without_changing_price_formula
         quotes_json={
             "quotes": [
                 _quote("sto-a", 10000),
-                _quote("sto-b", 11000, city="Красноярск"),
-                _quote("sto-c", 12000, city="Новосибирск"),
+                _quote("sto-b", 11000),
+                _quote("sto-c", 12000),
             ],
             "labor_time_sample": [
                 _labor_time("public-time-a", 3.5),
@@ -183,11 +192,91 @@ def test_public_labor_time_layer_adds_cross_check_without_changing_price_formula
     )
 
     assert result["russia_average_rub"] == 11000
-    assert result["autostop_price_rub"] == 16500
+    assert result["autostop_price_rub"] == 16000
+    assert result["operation_estimates"][0]["pricing_method"] == "krasnoyarsk_market_mean"
     assert result["labor_time_confidence"] == "medium"
     assert result["labor_time_average_hours"] == 3.75
     assert result["labor_time_cross_check"] == "ok"
     assert result["operation_estimates"][0]["labor_time_analysis"]["average_hours"] == 3.75
+
+
+def test_saint_petersburg_market_is_used_only_when_krasnoyarsk_has_fewer_than_three_quotes():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена свечей"],
+        quotes_json=[
+            _quote("krsk-a", 5000, operation="замена свечей"),
+            _quote("krsk-b", 6000, operation="замена свечей"),
+            _quote("spb-a", 10000, operation="замена свечей", city="Санкт-Петербург"),
+            _quote("spb-b", 12000, operation="замена свечей", city="СПб"),
+            _quote("spb-c", 14000, operation="замена свечей", city="Saint Petersburg"),
+        ],
+        auto_research=False,
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["pricing_method"] == "saint_petersburg_market_mean"
+    assert operation["market_region"] == "saint_petersburg"
+    assert operation["market_average_rub"] == 12000
+    assert operation["autostop_price_rub"] == 13800
+    assert operation["sample"]["regional_counts"] == {"krasnoyarsk": 2, "saint_petersburg": 3}
+
+
+def test_krasnoyarsk_market_has_priority_and_pricing_methods_are_not_combined():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена свечей"],
+        quotes_json={
+            "quotes": [
+                _quote("krsk-a", 9000, operation="замена свечей"),
+                _quote("krsk-b", 10000, operation="замена свечей"),
+                _quote("krsk-c", 11000, operation="замена свечей"),
+                _quote("spb-a", 18000, operation="замена свечей", city="Санкт-Петербург"),
+                _quote("spb-b", 20000, operation="замена свечей", city="Санкт-Петербург"),
+                _quote("spb-c", 22000, operation="замена свечей", city="Санкт-Петербург"),
+            ],
+            "labor_time_sample": [
+                _labor_time("public-time-a", 8, operation="замена свечей"),
+                _labor_time("public-time-b", 8, operation="замена свечей"),
+            ],
+        },
+        auto_research=False,
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["pricing_method"] == "krasnoyarsk_market_mean"
+    assert operation["market_average_rub"] == 10000
+    assert operation["autostop_price_rub"] == 14500
+    assert operation["pricing_formula"] == {
+        "basis": "arithmetic_mean(selected_city_labor_only_quotes_after_outlier_filter)",
+        "multiplier": 1.45,
+        "methods_combined": False,
+    }
+    assert result["formula"]["methods_combined"] is False
+
+
+def test_saint_petersburg_target_prefers_saint_petersburg_when_both_regions_qualify():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        city="Санкт-Петербург",
+        work_items=["замена свечей"],
+        quotes_json=[
+            _quote("krsk-a", 9000, operation="замена свечей"),
+            _quote("krsk-b", 10000, operation="замена свечей"),
+            _quote("krsk-c", 11000, operation="замена свечей"),
+            _quote("spb-a", 18000, operation="замена свечей", city="Санкт-Петербург"),
+            _quote("spb-b", 20000, operation="замена свечей", city="Санкт-Петербург"),
+            _quote("spb-c", 22000, operation="замена свечей", city="Санкт-Петербург"),
+        ],
+        auto_research=False,
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["pricing_method"] == "saint_petersburg_market_mean"
+    assert operation["market_average_rub"] == 20000
+    assert operation["autostop_price_rub"] == 23000
+    assert operation["regional_preference"] == ["saint_petersburg", "krasnoyarsk"]
+    assert result["pricing_basis"]["target_market_region"] == "saint_petersburg"
 
 
 def test_auto_research_false_keeps_offline_quote_mode_and_stable_research_keys():
@@ -203,7 +292,7 @@ def test_auto_research_false_keeps_offline_quote_mode_and_stable_research_keys()
     )
 
     assert result["russia_average_rub"] == 3500
-    assert result["autostop_price_rub"] == 5300
+    assert result["autostop_price_rub"] == 5100
     assert result["sources_checked"][0]["status"] == "disabled"
     assert result["research"]["enabled"] is False
 
@@ -277,7 +366,7 @@ def test_price_fallback_is_used_when_price_rub_is_empty():
     assert result["market_sample"]["valid_count"] == 3
     assert result["market_sample"]["invalid_count"] == 0
     assert result["russia_average_rub"] == 3500
-    assert result["autostop_price_rub"] == 5300
+    assert result["autostop_price_rub"] == 5100
 
 
 def test_labor_time_fallback_uses_range_or_norm_hours_when_hours_is_empty():
@@ -303,4 +392,113 @@ def test_labor_time_fallback_uses_range_or_norm_hours_when_hours_is_empty():
     assert result["labor_time_sample"]["invalid_count"] == 0
     assert result["labor_time_range_hours"] == [3.5, 5.0]
     assert result["labor_time_average_hours"] == 4.12
-    assert result["operation_estimates"][0]["labor_time_analysis"]["average_hours"] == 4.12
+    operation = result["operation_estimates"][0]
+    assert operation["labor_time_analysis"]["average_hours"] == 4.12
+    assert operation["pricing_method"] == "public_labor_hours"
+    assert operation["price_qualifier"] == "estimate"
+    assert operation["market_average_rub"] is None
+    assert operation["autostop_price_rub"] == 16500
+    assert operation["confidence"] == "medium"
+    assert operation["pricing_formula"] == {
+        "basis": "valid_public_labor_hours_x_hourly_rate",
+        "average_hours": 4.12,
+        "hourly_rate_rub": 4000,
+        "methods_combined": False,
+    }
+    assert result["market_average_rub"] is None
+    assert result["autostop_price_rub"] == 16500
+
+
+def test_labor_hour_fallback_does_not_blend_with_internal_experience():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена масла"],
+        quotes_json={
+            "quotes": [],
+            "labor_time_sample": [
+                _labor_time("public-time-a", 2, operation="замена масла"),
+                _labor_time("public-time-b", 2, operation="замена масла"),
+            ],
+        },
+        auto_research=False,
+        internal_experience_json={
+            "schema_version": "autostop_service_labor_experience_v1",
+            "labor_baselines": [
+                {
+                    "operation_key": "замена_масла",
+                    "operation_name": "замена масла",
+                    "category": "general",
+                    "sample_count": 10,
+                    "p25_rub": 18000,
+                    "p75_rub": 22000,
+                    "recommended_anchor_rub": 20000,
+                }
+            ],
+        },
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["pricing_method"] == "public_labor_hours"
+    assert operation["pricing_formula"]["methods_combined"] is False
+    assert operation["autostop_price_rub"] == 8000
+    assert operation["recommended_price_rub"] == 8000
+    assert operation["recommended_range_rub"] == [8000, 8000]
+    assert operation["recommendation_basis"] == "public_labor_hours_exclusive"
+    assert operation["internal_experience"]["available"] is True
+    assert operation["internal_experience"]["selected"]["recommended_anchor_rub"] == 20000
+    assert operation["internal_experience"]["applied_to_price"] is False
+    assert "internal_closed_repair_order_experience" not in operation["evidence_source_families"]
+    assert result["autostop_price_rub"] == 8000
+    assert result["recommended_total_works_rub"] == 8000
+    assert result["formula"]["methods_combined"] is False
+
+
+def test_single_public_labor_time_row_is_about_only_and_not_a_confident_total():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена масла"],
+        quotes_json={
+            "quotes": [],
+            "labor_time_sample": [_labor_time("public-time-a", 2, operation="замена масла")],
+        },
+        auto_research=False,
+        use_internal_experience=False,
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["pricing_method"] == "public_labor_hours"
+    assert operation["price_qualifier"] == "about"
+    assert operation["autostop_price_rub"] == 8000
+    assert operation["confidence"] == "low"
+    assert result["autostop_price_rub"] is None
+    assert result["total_works_rub"] is None
+    assert result["confidence"] == "low"
+    assert result["formula"]["public_labor_hours"]["hourly_rate_rub"] == 4000
+
+
+def test_unconfirmed_public_labor_time_does_not_activate_hourly_fallback():
+    result = estimate_repair_work_cost(
+        vehicle="Toyota Camry",
+        work_items=["замена масла"],
+        quotes_json={
+            "quotes": [],
+            "labor_time_sample": [
+                {
+                    "source": "unconfirmed-time-source",
+                    "operation_name": "замена масла",
+                    "hours": 2,
+                    "captured_at": "2026-05-21",
+                    "confidence": "medium",
+                }
+            ],
+        },
+        auto_research=False,
+        use_internal_experience=False,
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["pricing_method"] is None
+    assert operation["autostop_price_rub"] is None
+    assert result["labor_time_sample"]["valid_count"] == 0
+    assert result["labor_time_sample"]["invalid_count"] == 1
+    assert result["autostop_price_rub"] is None

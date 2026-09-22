@@ -257,10 +257,19 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
             operation_status = {
                 operation: partsapi_operation_status(operation) for operation in sorted(PARTSAPI_OPERATIONS)
             }
-            row["operation_status"] = operation_status
-            row["live_operations"] = [
-                operation for operation, status in operation_status.items() if status.get("live_callable_now")
+            configured_operations = [
+                operation for operation, status in operation_status.items() if status.get("configured")
             ]
+            row.update(
+                {
+                    "authorization_status": "unverified" if configured_operations else "not_configured",
+                    "readiness_basis": "configuration_only",
+                    "live_callable_now": False,
+                    "configured_operations": configured_operations,
+                }
+            )
+            row["operation_status"] = operation_status
+            row["live_operations"] = []
         providers.append(row)
     stage_matrix = _provider_stage_matrix(providers)
     return {
@@ -438,6 +447,16 @@ def build_oem_parts_provider_plan(
     partsapi_operation_statuses = dict(partsapi_provider.get("operation_status") or {}) if partsapi_provider else {}
     partsapi_oem_operations = ("vin_decode_oe", "parts_by_vin", "oe_applicability")
     partsapi_oem_candidate_operations = ("parts_by_vin",)
+    partsapi_configured_oem_operations = [
+        operation
+        for operation in partsapi_oem_operations
+        if bool((partsapi_operation_statuses.get(operation) or {}).get("configured"))
+    ]
+    partsapi_configured_oem_candidate_operations = [
+        operation
+        for operation in partsapi_oem_candidate_operations
+        if bool((partsapi_operation_statuses.get(operation) or {}).get("configured"))
+    ]
     partsapi_live_oem_operations = [
         operation
         for operation in partsapi_oem_operations
@@ -453,7 +472,7 @@ def build_oem_parts_provider_plan(
     if partsapi_provider and partsapi_live_oem:
         live_oem.append(partsapi_provider)
     oem_candidate_providers = list(oem_providers)
-    if partsapi_provider and partsapi_live_oem:
+    if partsapi_provider and partsapi_configured_oem_candidate_operations:
         oem_candidate_providers.append(partsapi_provider)
     live_aftermarket = [provider for provider in aftermarket_providers if provider["live_callable_now"]]
     live_price_references = [provider for provider in procurement_providers if provider["live_callable_now"]]
@@ -473,14 +492,20 @@ def build_oem_parts_provider_plan(
                 for name in provider["missing_env_names"]
             }
         )
-        blockers.append(
-            {
-                "stage": "oem_catalog",
-                "reason": "No live VIN/frame-specific OEM catalog API is configured.",
-                "missing_env": missing_env,
-                "missing_env_names": missing_env,
-            }
-        )
+        blocker = {
+            "stage": "oem_catalog",
+            "reason": "No live VIN/frame-specific OEM catalog availability is verified.",
+            "missing_env": missing_env,
+            "missing_env_names": missing_env,
+        }
+        if partsapi_configured_oem_operations:
+            blocker.update(
+                {
+                    "authorization_status": "unverified",
+                    "readiness_basis": "configuration_only",
+                }
+            )
+        blockers.append(blocker)
     if not live_procurement:
         missing_env = sorted(
             {name for provider in _providers_for_stage("procurement_price") for name in provider["missing_env_names"]}
@@ -530,9 +555,20 @@ def build_oem_parts_provider_plan(
             "live_oem_applicability_available": bool(
                 (partsapi_operation_statuses.get("oe_applicability") or {}).get("live_callable_now")
             ),
+            "configured_oem_candidate_lookup_available": bool(partsapi_configured_oem_candidate_operations),
+            "configured_oem_applicability_available": bool(
+                (partsapi_operation_statuses.get("oe_applicability") or {}).get("configured")
+            ),
+            "partsapi_authorization_status": (
+                partsapi_provider.get("authorization_status") if partsapi_provider else "not_configured"
+            ),
+            "partsapi_readiness_basis": (
+                partsapi_provider.get("readiness_basis") if partsapi_provider else "configuration_only"
+            ),
             "partsapi_oem_operations": {
                 operation: partsapi_operation_statuses.get(operation, {}) for operation in partsapi_oem_operations
             },
+            "partsapi_configured_oem_operations": partsapi_configured_oem_operations,
             "partsapi_live_oem_operations": partsapi_live_oem_operations,
             "live_aftermarket_catalog_available": bool(live_aftermarket),
             "live_price_reference_available": bool(live_price_references),

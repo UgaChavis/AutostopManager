@@ -3,7 +3,10 @@
 `partsapi_catalog_lookup` supports the 43 shop methods reviewed on 2026-09-16,
 plus the existing `parts_by_vin` and `oe_applicability` routes (45 total).
 `catalog_provider_status` lists operation names, required parameters, API parameter
-names (`provider_params`), defaults and per-method credential readiness.
+names (`provider_params`), defaults and per-method configuration presence. A configured
+key remains `authorization_status=unverified` with
+`readiness_basis=configuration_only`; status and dry-run output do not claim live
+availability or successful authorization.
 
 Existing friendly operation names remain supported. Additional methods use their
 API name, for example `getMakes` with `provider_parameters={"carType": "PC"}`.

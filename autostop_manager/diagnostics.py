@@ -13,11 +13,12 @@ TEXT_DOCUMENTS = (
     "AGENTS.md",
     ".agents/skills/manage-owner-telegram/SKILL.md",
     ".agents/skills/manage-autostop-store/SKILL.md",
+    ".agents/skills/manage-fst-vpn/SKILL.md",
     "docs/agent/operations.md",
     "docs/agent/deployment_runbook.md",
     "docs/agent/j1_web_research.md",
 )
-# Aggregate ceiling for the six active operational instruction documents.  It
+# Aggregate ceiling for the active operational instruction documents.  It
 # remains bounded while allowing their current guarded-workflow coverage.
 INSTRUCTION_BUDGET_BYTES = 32 * 1024
 

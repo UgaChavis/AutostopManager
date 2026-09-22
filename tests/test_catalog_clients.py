@@ -178,6 +178,9 @@ def test_partsapi_lookup_reports_missing_env(monkeypatch):
     result = partsapi_catalog_lookup(operation="vin_decode_oe", identifier="MR41S123456", dry_run=True)
 
     assert result["ok"] is False
+    assert result["authorization_status"] == "not_configured"
+    assert result["readiness_basis"] == "configuration_only"
+    assert result["live_callable_now"] is False
     assert result["missing_env_names"] == ["PARTSAPI_KEY", "PARTSAPI_BASE_URL"]
     assert result["redacted_identifier"] == "MR4***456"
     assert result["request_plan"]["secret_exposed"] is False
@@ -210,7 +213,14 @@ def test_partsapi_operation_status_is_specific_to_each_method_key(monkeypatch):
     by_vin = partsapi_operation_status("parts_by_vin")
     vin_decode = partsapi_operation_status("vin_decode")
 
-    assert by_vin["live_callable_now"] is True
+    assert by_vin["configured"] is True
+    assert by_vin["authorization_status"] == "unverified"
+    assert by_vin["readiness_basis"] == "configuration_only"
+    assert by_vin["outcome"] == "configured_unverified"
+    assert by_vin["live_callable_now"] is False
+    assert vin_decode["configured"] is False
+    assert vin_decode["authorization_status"] == "not_configured"
+    assert vin_decode["readiness_basis"] == "configuration_only"
     assert vin_decode["live_callable_now"] is False
     assert "PARTSAPI_VINDECODE_KEY" in vin_decode["missing_key_env_names"]
     assert "PARTSAPI_KEY" in vin_decode["accepted_key_env_names"]
@@ -256,6 +266,10 @@ def test_partsapi_lookup_dry_run_with_configured_env(monkeypatch):
 
     assert result["ok"] is True
     assert result["dry_run"] is True
+    assert result["authorization_status"] == "unverified"
+    assert result["readiness_basis"] == "configuration_only"
+    assert result["live_callable_now"] is False
+    assert result["outcome"] == "configured_unverified"
     assert result["partsapi_method"] == "getCrossesWithBrand"
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 

@@ -2,9 +2,12 @@ name: autostop-j1-browser
 
 services:
   renderer:
+    image: "autostop-j1-browser-renderer:${AUTOSTOP_J1_BROWSER_IMAGE_REVISION:?revision required}"
     build:
       context: ../..
       dockerfile: deploy/j1-browser/Dockerfile
+      args:
+        AUTOSTOP_J1_BROWSER_IMAGE_REVISION: "${AUTOSTOP_J1_BROWSER_IMAGE_REVISION:?revision required}"
     command: ["-m", "autostop_manager.j1_browser_renderer", "serve", "--socket", "/run/autostop-j1-browser/renderer.sock"]
     user: "10001:10001"
     init: true
@@ -39,9 +42,12 @@ services:
     restart: unless-stopped
 
   proxy:
+    image: "autostop-j1-browser-proxy:${AUTOSTOP_J1_BROWSER_IMAGE_REVISION:?revision required}"
     build:
       context: ../..
       dockerfile: deploy/j1-browser/Dockerfile
+      args:
+        AUTOSTOP_J1_BROWSER_IMAGE_REVISION: "${AUTOSTOP_J1_BROWSER_IMAGE_REVISION:?revision required}"
     command:
       ["-m", "autostop_manager.j1_browser_proxy", "serve", "--host", "0.0.0.0", "--port", "18890", "--allowed-peer", "172.31.250.2/32"]
     user: "10001:10001"
