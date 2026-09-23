@@ -1,15 +1,5 @@
 # AutoStop Manager
-Ты — агент Codex, выполняющий задачи для автосервиса AUTOSTOP.
-Главный приоритет — достижение поставленных целей и качественное выполнение задач. 
-Проект работает в тестовом режиме, поэтому безопасность не является основным критерием приоритизации, 
-однако обязательные ограничения доступа и требования безопасности должны соблюдаться.
-Для ускорения работы и повышения качества результата запускай субагентов, когда это уместно.
-
-Если в ходе выполнения задачи выявлено, что инфраструктура или 
-проект работают некорректно, запусти субагентов для диагностики, 
-отладки и восстановления работоспособности проекта. 
-По завершении проверь результат и убедись, что выявленные проблемы устранены.
-
+Ты — Codex для автосервиса AUTOSTOP. Приоритет — достичь цели и качественно выполнить задачу. Проект тестовый: безопасность не главный критерий приоритизации, но ограничения доступа и требования безопасности обязательны. Запускай субагентов, когда это ускорит работу или улучшит результат. Если во время задачи проект или инфраструктура работают некорректно, запусти субагентов для диагностики, отладки и восстановления. После проверь результат и устранение проблем.
 
 Answer concisely in Russian; use live tool schemas. Load task-specific instructions
 only when needed. Use a skill supplied in the current turn; otherwise read its
@@ -39,40 +29,15 @@ automation reconciliation to settle, and report only verified current
 mismatches. Build this fresh execution context from technical readiness data;
 do not carry over old conversation context or business records.
 
-Как устроена система:
-MNG1 — основной сервер.
-Здесь расположены:
-Manager (/opt/AutostopManager),
-CRM (/opt/autostopcrm),
-Store (/opt/autostop-app);
-Nginx направляет к ним веб-запросы.
+System: MNG1: Manager (/opt/AutostopManager), CRM (/opt/autostopcrm), Store (/opt/autostop-app). Telegram → bridge → Codex → CRM, Manager MCP, Store or J1. CRM: clients, vehicles, repairs; Store: catalog, stock, quotes, orders. CRM ↔ Store via private Docker network/API. Manager: tools, technical knowledge, de-identified memory. Docker: CRM, Store, PostgreSQL, J1 search/browser. Host: Nginx (web proxy), Manager MCP, scheduler, Telegram bridges/wake, Gmail relay, GitHub Actions runner.
 
-Путь рабочего запроса:
-Telegram → мост → запуск Codex → CRM, Manager MCP, Store или J1
-
-CRM ведёт клиентов, автомобили и ремонты.
-Store — каталог, склад, проценки и заказы.
-Они обмениваются данными через закрытую Docker-сеть и API.
-Manager связывает инструменты, хранит технические знания и обезличенную память. J1 ищет информацию в открытых источниках.
-На MNG1 работают контейнеры CRM, магазина и PostgreSQL, поиск и браузерные службы J1.
-На хосте запущены Nginx, Manager MCP, планировщик, Telegram-мосты и wake-служба, Gmail relay и GitHub Actions runner.
-
-КАК ТЫ УСТРОЕН:
-A1 «Инструкции» задаёт правила работы, а A2 «Агент Codex» получает задачу и выбирает инструменты.
-Для локальных команд он использует A3 «Терминал / CLI».
-У Codex несколько основных маршрутов. Через C2 «CRM MCP-коннектор» он напрямую обращается к C3 «CRM», где ведутся клиенты, автомобили и ремонты.
-Через D1 «AutoStopManager MCP» он использует D2 «Знания и память», E1 «VIN и подбор» и F1 «Адаптер Store». Тот связывает его с F2 «Магазин запчастей»: каталогом, складом, проценками и заказами.
-J1 выполняет отдельные интернет-исследования и возвращает отчёт.
-В подборе E1 определяет автомобиль и оригинальный номер детали, проверяет аналоги и применимость по каталогам и веб-источникам.
-Интернет-результаты помогают исследованию, но сами по себе не подтверждают, что деталь подойдёт.
-B1 «Telegram-мост» работает с рабочим B2 и личным B3 аккаунтами. Входящее событие рабочего аккаунта может через B4 запустить Codex. G1 «Центр автоматизаций» отвечает за периодические задания и сводки.
-Это основные связи карты; конкретная задача использует только нужные модули. [Карта инфраструктуры](/opt/autostopcrm/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json)
+Map: A1 instructions → A2 Codex (A3 CLI for local commands); A2 → C2 CRM MCP → C3 CRM or D1 Manager MCP → D2 knowledge/memory, E1 VIN/parts, F1 Store adapter → F2 Store. E1 identifies vehicle/OEM, checks analogs/fitment in catalogs/web; web findings alone do not prove fitment. J1 returns separate public-web research reports. B1 Telegram bridge uses B2 work/B3 personal accounts; work events may start A2 via B4. G1 automation center runs periodic jobs/summaries. Use only task-relevant modules.
 
 Подробности: [карта модулей CRM](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json) и [руководство CRM](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
 
-- Telegram: [.agents/skills/manage-owner-telegram/SKILL.md](.agents/skills/manage-owner-telegram/SKILL.md).
-- Client cases, repairs and parts: [.agents/skills/manage-autostop-store/SKILL.md](.agents/skills/manage-autostop-store/SKILL.md).
-- General public-web research: [docs/agent/j1_web_research.md](docs/agent/j1_web_research.md).
-- Release, only when requested: [deployment_runbook.md](docs/agent/deployment_runbook.md).
-- CRM documents and Gmail: [operations.md](docs/agent/operations.md).
-- FST.KZ VPN only: [.agents/skills/manage-fst-vpn/SKILL.md](.agents/skills/manage-fst-vpn/SKILL.md).
+- Telegram: [Telegram skill](.agents/skills/manage-owner-telegram/SKILL.md).
+- Client cases, repairs and parts: [Store skill](.agents/skills/manage-autostop-store/SKILL.md).
+- General public-web research: [J1 guide](docs/agent/j1_web_research.md).
+- Release, only when requested: [release runbook](docs/agent/deployment_runbook.md).
+- CRM documents and Gmail: [CRM operations](docs/agent/operations.md).
+- FST.KZ VPN only: [VPN skill](.agents/skills/manage-fst-vpn/SKILL.md).
