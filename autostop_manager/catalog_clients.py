@@ -1926,7 +1926,11 @@ _AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
 
 _FILL_VOLUME_FIELDS = ("fillVolume", "fillUnit", "fillType", "fillTitle", "fillInfo")
 _SEARCH_TREE_FIELDS = (
+    "STR_ID",
+    "STR_ID_PARENT",
     "STR_LEVEL",
+    "STR_NODE_NAME",
+    "STR_PATH",
     "ROOT_NODE_TEXT",
     "ROOT_NODE_STR_ID",
     "NODE_1_TEXT",
@@ -1998,10 +2002,30 @@ def extract_partsapi_search_tree_rows(*, payload: Any) -> list[dict[str, Any]]:
             "provider": "partsapi_ru",
             "source_operation": "search_tree",
             "raw_keys": sorted(str(key) for key in item),
-            **{field: item[field] for field in _SEARCH_TREE_FIELDS if item.get(field) not in (None, "")},
+            **{
+                field: item[field]
+                for field in _SEARCH_TREE_FIELDS
+                if field in item and (item[field] not in (None, "") or field == "STR_ID_PARENT")
+            },
         }
         for item in _partsapi_autonorms_records(payload, fields=_SEARCH_TREE_FIELDS)
         if any(item.get(field) not in (None, "") for field in _SEARCH_TREE_FIELDS)
+    ]
+
+
+def extract_partsapi_article_criteria_rows(*, payload: Any) -> list[dict[str, Any]]:
+    """Retain recognized article characteristics separately from part candidates."""
+
+    fields = ("CRITERIA_NAME", "CRITERIA_VALUE")
+    return [
+        {
+            "provider": "partsapi_ru",
+            "source_operation": "article_criteria",
+            "raw_keys": sorted(str(key) for key in item),
+            **{field: item[field] for field in fields},
+        }
+        for item in _partsapi_autonorms_records(payload, fields=fields)
+        if all(item.get(field) not in (None, "") for field in fields)
     ]
 
 
@@ -2562,6 +2586,9 @@ def partsapi_catalog_lookup(
     autonorms_rows = extract_partsapi_autonorms_rows(payload=payload, operation=operation)
     fill_volumes = extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else []
     search_tree_rows = extract_partsapi_search_tree_rows(payload=payload) if operation == "search_tree" else []
+    article_criteria_rows = (
+        extract_partsapi_article_criteria_rows(payload=payload) if operation == "article_criteria" else []
+    )
     empty_payload = payload in (None, [], {})
     record_counts = {
         "vehicle_profiles": len(vehicle_profiles),
@@ -2571,6 +2598,7 @@ def partsapi_catalog_lookup(
         "autonorms_rows": len(autonorms_rows),
         "fill_volumes": len(fill_volumes),
         "search_tree_rows": len(search_tree_rows),
+        "article_criteria_rows": len(article_criteria_rows),
     }
     expected_records = {
         "vin_decode": ("vehicle_profiles", "oem_candidates"),
@@ -2585,7 +2613,7 @@ def partsapi_catalog_lookup(
         "article_crosses": ("article_candidates",),
         "articles": ("article_candidates",),
         "article": ("article_candidates",),
-        "article_criteria": ("article_candidates",),
+        "article_criteria": ("article_criteria_rows", "article_candidates"),
         "part_name_by_brand_number": ("article_candidates",),
         "engine_info": ("vehicle_profiles",),
         "search_tree": ("search_tree_rows",),
@@ -2614,6 +2642,7 @@ def partsapi_catalog_lookup(
         "autonorms_rows": autonorms_rows,
         "fill_volumes": fill_volumes,
         "search_tree_rows": search_tree_rows,
+        "article_criteria_rows": article_criteria_rows,
         "record_counts": record_counts,
         "outcome": outcome,
         "failure_class": None,
