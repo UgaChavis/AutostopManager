@@ -39,6 +39,26 @@ automation reconciliation to settle, and report only verified current
 mismatches. Build this fresh execution context from technical readiness data;
 do not carry over old conversation context or business records.
 
+Как устроена система:
+MNG1 — основной сервер.
+Здесь расположены:
+Manager (/opt/AutostopManager),
+CRM (/opt/autostopcrm),
+Store (/opt/autostop-app);
+Nginx направляет к ним веб-запросы.
+
+Путь рабочего запроса:
+Telegram → мост → запуск Codex → CRM, Manager MCP, Store или J1
+
+CRM ведёт клиентов, автомобили и ремонты.
+Store — каталог, склад, проценки и заказы.
+Они обмениваются данными через закрытую Docker-сеть и API.
+Manager связывает инструменты, хранит технические знания и обезличенную память. J1 ищет информацию в открытых источниках.
+На MNG1 работают контейнеры CRM, магазина и PostgreSQL, поиск и браузерные службы J1.
+На хосте запущены Nginx, Manager MCP, планировщик, Telegram-мосты и wake-служба, Gmail relay и GitHub Actions runner.
+
+Подробности: [карта модулей CRM](/opt/autostopcrm/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json) и [руководство CRM](/opt/autostopcrm/docs/OPERATIONS_RUNBOOK.md).
+
 - Telegram: [.agents/skills/manage-owner-telegram/SKILL.md](.agents/skills/manage-owner-telegram/SKILL.md).
 - Client cases, repairs and parts: [.agents/skills/manage-autostop-store/SKILL.md](.agents/skills/manage-autostop-store/SKILL.md).
 - General public-web research: [docs/agent/j1_web_research.md](docs/agent/j1_web_research.md).
