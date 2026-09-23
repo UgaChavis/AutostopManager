@@ -57,7 +57,7 @@ Manager связывает инструменты, хранит техничес
 На MNG1 работают контейнеры CRM, магазина и PostgreSQL, поиск и браузерные службы J1.
 На хосте запущены Nginx, Manager MCP, планировщик, Telegram-мосты и wake-служба, Gmail relay и GitHub Actions runner.
 
-Подробности: [карта модулей CRM](/opt/autostopcrm/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json) и [руководство CRM](/opt/autostopcrm/docs/OPERATIONS_RUNBOOK.md).
+Подробности: [карта модулей CRM](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json) и [руководство CRM](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
 
 - Telegram: [.agents/skills/manage-owner-telegram/SKILL.md](.agents/skills/manage-owner-telegram/SKILL.md).
 - Client cases, repairs and parts: [.agents/skills/manage-autostop-store/SKILL.md](.agents/skills/manage-autostop-store/SKILL.md).
