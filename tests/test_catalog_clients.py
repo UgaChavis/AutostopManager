@@ -471,6 +471,94 @@ def test_partsapi_search_tree_and_article_operations_use_safe_params(monkeypatch
     assert "criteria-secret" not in criteria["request_plan"]["redacted_url"]
 
 
+@pytest.mark.parametrize("envelope", ["list", "row", "data_array"])
+def test_partsapi_article_criteria_rows_are_success_without_article_candidates(monkeypatch, envelope):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    row = {"CRITERIA_NAME": "Высота [мм]", "CRITERIA_VALUE": "100"}
+    payload = row if envelope == "row" else {"data": {"array": [row]}} if envelope == "data_array" else [row]
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse(payload),
+    )
+
+    result = partsapi_catalog_lookup(operation="article_criteria", article_id="12345")
+
+    assert result["ok"] is True
+    assert result["outcome"] == "success"
+    assert result["empty_payload"] is False
+    assert result["requires_fallback"] is False
+    assert result["article_candidates"] == []
+    assert result["oem_candidates"] == []
+    assert result["record_counts"]["article_criteria_rows"] == 1
+    assert result["article_criteria_rows"] == [
+        {
+            "provider": "partsapi_ru",
+            "source_operation": "article_criteria",
+            "CRITERIA_NAME": "Высота [мм]",
+            "CRITERIA_VALUE": "100",
+            "raw_keys": ["CRITERIA_NAME", "CRITERIA_VALUE"],
+        }
+    ]
+    assert result["payload"] == payload
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], {"data": []}, [{"response": "unrecognised"}], [{"CRITERIA_NAME": "Высота [мм]", "CRITERIA_VALUE": ""}]],
+)
+def test_partsapi_article_criteria_requires_recognized_nonempty_rows(monkeypatch, payload):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse(payload),
+    )
+
+    result = partsapi_catalog_lookup(operation="article_criteria", article_id="12345")
+
+    empty_payload = payload in (None, [], {"data": []})
+    assert result["ok"] is empty_payload
+    assert result["outcome"] == ("empty_result" if empty_payload else "unparsed_response")
+    assert result["requires_fallback"] is True
+    assert result["article_criteria_rows"] == []
+
+
+def test_partsapi_article_criteria_preserves_legacy_article_candidates(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse([{"ART_ID": 12345, "ART_ARTICLE_NR": "TEST-100"}]),
+    )
+
+    result = partsapi_catalog_lookup(operation="article_criteria", article_id="12345")
+
+    assert result["outcome"] == "success"
+    assert result["article_candidates"][0]["article_id"] == 12345
+    assert result["article_criteria_rows"] == []
+
+
+def test_partsapi_criteria_rows_do_not_satisfy_article_search(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse([{"CRITERIA_NAME": "Высота [мм]", "CRITERIA_VALUE": "100"}]),
+    )
+
+    result = partsapi_catalog_lookup(operation="search_articles", part_number="TEST-100")
+
+    assert result["ok"] is False
+    assert result["outcome"] == "unparsed_response"
+    assert result["requires_fallback"] is True
+    assert result["article_criteria_rows"] == []
+
+
 def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
     profiles = extract_partsapi_vehicle_profiles(
         operation="engine_info",
@@ -520,6 +608,38 @@ def test_extract_partsapi_search_tree_rows_keeps_only_documented_nodes():
 
     assert rows[0]["ROOT_NODE_STR_ID"] == 100
     assert rows[0]["NODE_1_STR_ID"] == 110
+
+
+def test_partsapi_current_search_tree_retains_ids_and_names_for_article_lookup(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    payload = [
+        {"STR_ID": 100, "STR_ID_PARENT": None, "STR_LEVEL": 1, "STR_NODE_NAME": "Двигатель", "STR_PATH": "Двигатель"},
+        {
+            "STR_ID": 110,
+            "STR_ID_PARENT": 100,
+            "STR_LEVEL": 2,
+            "STR_NODE_NAME": "Фильтры",
+            "STR_PATH": "Двигатель/Фильтры",
+        },
+    ]
+    monkeypatch.setattr(
+        "autostop_manager.catalog_clients.urlopen",
+        lambda request, timeout=20.0: _FakeResponse(payload),
+    )
+
+    result = partsapi_catalog_lookup(operation="search_tree", type_id="12345")
+
+    assert result["outcome"] == "success"
+    assert result["record_counts"]["search_tree_rows"] == 2
+    for original, normalized in zip(payload, result["search_tree_rows"], strict=True):
+        assert all(normalized[key] == value for key, value in original.items())
+    articles = partsapi_catalog_lookup(
+        operation="articles", type_id="12345", category=str(result["search_tree_rows"][1]["STR_ID"]), dry_run=True
+    )
+    assert articles["ok"] is True
+    assert articles["request_plan"]["params"]["strId"] == "110"
 
 
 @pytest.mark.parametrize("operation", ["engine_info", "search_tree", "articles"])
