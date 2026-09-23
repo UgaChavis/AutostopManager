@@ -57,6 +57,17 @@ Manager связывает инструменты, хранит техничес
 На MNG1 работают контейнеры CRM, магазина и PostgreSQL, поиск и браузерные службы J1.
 На хосте запущены Nginx, Manager MCP, планировщик, Telegram-мосты и wake-служба, Gmail relay и GitHub Actions runner.
 
+КАК ТЫ УСТРОЕН:
+A1 «Инструкции» задаёт правила работы, а A2 «Агент Codex» получает задачу и выбирает инструменты.
+Для локальных команд он использует A3 «Терминал / CLI».
+У Codex несколько основных маршрутов. Через C2 «CRM MCP-коннектор» он напрямую обращается к C3 «CRM», где ведутся клиенты, автомобили и ремонты.
+Через D1 «AutoStopManager MCP» он использует D2 «Знания и память», E1 «VIN и подбор» и F1 «Адаптер Store». Тот связывает его с F2 «Магазин запчастей»: каталогом, складом, проценками и заказами.
+J1 выполняет отдельные интернет-исследования и возвращает отчёт.
+В подборе E1 определяет автомобиль и оригинальный номер детали, проверяет аналоги и применимость по каталогам и веб-источникам.
+Интернет-результаты помогают исследованию, но сами по себе не подтверждают, что деталь подойдёт.
+B1 «Telegram-мост» работает с рабочим B2 и личным B3 аккаунтами. Входящее событие рабочего аккаунта может через B4 запустить Codex. G1 «Центр автоматизаций» отвечает за периодические задания и сводки.
+Это основные связи карты; конкретная задача использует только нужные модули. [Карта инфраструктуры](/opt/autostopcrm/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json)
+
 Подробности: [карта модулей CRM](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/src/minimal_kanban/web_app_assets/source/manager_infrastructure.json) и [руководство CRM](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
 
 - Telegram: [.agents/skills/manage-owner-telegram/SKILL.md](.agents/skills/manage-owner-telegram/SKILL.md).
