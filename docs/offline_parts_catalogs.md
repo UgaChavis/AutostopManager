@@ -12,6 +12,22 @@ MCP-инструмент `search_offline_parts_catalogs` принимает `que
 
 Архив 25 новых каталогов опубликован в [GitHub Release catalogs-2026-09-25](https://github.com/UgaChavis/AutostopManager/releases/tag/catalogs-2026-09-25). SHA-256 скачанного `autostop-parts-catalogs-20260925-public.zip`: `b2b1e40510e91579a5e8e4be90e0d4a2b461122b6a73af27ec4600d4a1ff7ffe`. В выпуске есть отдельный файл `.sha256`.
 
+При следующем согласованном обновлении сервера `/opt/autostopcrm/deploy.sh` до начала обслуживания вызывает скрипт из выбранного снимка Manager. Скрипт проверяет 25 исходных файлов по SHA-256, их записи в индексе, извлечённый текст и поисковый запрос через `search_offline_parts_catalogs`. Если всё готово, ZIP не скачивается. На пустом кэше скрипт скачивает закреплённый ZIP из GitHub Release, проверяет размер и SHA-256, создаёт закрытый индекс, импортирует PDF/XLSX и выполняет OCR пустых страниц. При наличии только незавершённого OCR он заканчивает OCR без повторной загрузки. Кэш расположен рядом с БД Manager, вне Git; старые каталоги и их записи сохраняются. Ошибка загрузки, контрольной суммы, импорта, OCR или поиска прерывает обновление до обслуживания. Повторный запуск безопасен. Если запись уже есть, но её оригинал или поисковый файл удалён либо повреждён, скрипт останавливается без перезаписи этой записи: существующий импортёр не восстанавливает индексированные файлы автоматически.
+
+Для чтения состояния без загрузки и записи:
+
+```bash
+PYTHONSAFEPATH=1 PYTHONPATH=/opt/AutostopManager python3 /opt/AutostopManager/scripts/sync_offline_parts_catalog_release.py --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
+```
+
+Для отдельной установки на сервере с уже существующим каталогом `data/`:
+
+```bash
+PYTHONSAFEPATH=1 PYTHONPATH=/opt/AutostopManager python3 /opt/AutostopManager/scripts/sync_offline_parts_catalog_release.py --cache-root /opt/AutostopManager/data/offline_parts_catalogs
+```
+
+Для поиска нужен исполняемый `/usr/bin/rg`, доступный системной службе MCP. При новом импорте нужны `pdfinfo` и `pdftotext`; только для страниц, требующих OCR, нужны `pdftoppm`, Tesseract и языки `eng` и `rus`. Скрипт не открывает БД или `.env`: поисковая проверка принудительно использует указанный `--cache-root`. Git checkout сам по себе не содержит PDF/XLSX и не выполняет импорт; файлы попадают в кэш при согласованном запуске обновления через `/opt/autostopcrm/deploy.sh`.
+
 Для проверки архива и плана без записи файлов:
 
 ```bash
