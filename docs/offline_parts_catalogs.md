@@ -10,16 +10,18 @@ MCP-инструмент `search_offline_parts_catalogs` принимает `que
 
 ## Импорт
 
+Архив 25 новых каталогов опубликован в [GitHub Release catalogs-2026-09-25](https://github.com/UgaChavis/AutostopManager/releases/tag/catalogs-2026-09-25). SHA-256 скачанного `autostop-parts-catalogs-20260925-public.zip`: `b2b1e40510e91579a5e8e4be90e0d4a2b461122b6a73af27ec4600d4a1ff7ffe`. В выпуске есть отдельный файл `.sha256`.
+
 Для проверки архива и плана без записи файлов:
 
 ```bash
-python scripts/import_offline_parts_catalogs.py --archive /path/to/catalogs-unified-for-agent-20260925.zip --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
+python scripts/import_offline_parts_catalogs.py --archive /path/to/autostop-parts-catalogs-20260925-public.zip --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
 ```
 
 Для индексации в существующий закрытый кэш:
 
 ```bash
-python scripts/import_offline_parts_catalogs.py --archive /path/to/catalogs-unified-for-agent-20260925.zip --cache-root /opt/AutostopManager/data/offline_parts_catalogs
+python scripts/import_offline_parts_catalogs.py --archive /path/to/autostop-parts-catalogs-20260925-public.zip --cache-root /opt/AutostopManager/data/offline_parts_catalogs
 ```
 
 Нужны Python 3.11+, `pdfinfo` и `pdftotext` из Poppler. Импортёр проверяет пути, CRC и SHA-256, сохраняет исходные PDF/XLSX и извлечённые данные в `data/` вне Git, оставляет существующие записи и повторно пропускает уже добавленные каталоги. Индекс заменяется после записи новых файлов. PDF разбиваются по страницам; страницы без извлечённого текста перечисляются в `empty_pages` и требуют отдельного OCR. XLSX читаются потоково без выполнения формул и обращения к внешним ссылкам; числовые значения с нестандартным форматом Excel могут отличаться от отображаемого артикула, поэтому сверяйте их с оригиналом.
