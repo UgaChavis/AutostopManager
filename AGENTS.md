@@ -39,6 +39,6 @@ Map: A1 instructions → A2 Codex (A3 CLI for local commands); A2 → C2 CRM MCP
 - Client cases, repairs and parts: [Store skill](.agents/skills/manage-autostop-store/SKILL.md).
 - General public-web research: [J1 guide](docs/agent/j1_web_research.md).
 - Release, only when requested: [release runbook](docs/agent/deployment_runbook.md).
-- Module operation cards and coverage: [operational catalog](docs/agent/module_operations/README.md).
+- [Module catalog](docs/agent/module_operations/README.md).
 - CRM documents and Gmail: [CRM operations](docs/agent/operations.md).
 - FST.KZ VPN only: [VPN skill](.agents/skills/manage-fst-vpn/SKILL.md).

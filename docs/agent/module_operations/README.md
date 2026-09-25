@@ -1,11 +1,11 @@
 # AUTOSTOP: операционный каталог модулей
 
-Срез исходников: Manager `4e26c6c`, CRM `5f2fb219`, Store `1c4734ac` на 2026-09-25. Перед любой операцией перечитайте текущие `AGENTS.md`, активные схемы, `REVISION` и runbook. Срез не доказывает состояние production после этой даты.
+Срез исходников: Manager `2064711`, CRM `ac10f534`, Store `1c4734ac` на 2026-09-25. Перед любой операцией перечитайте текущие `AGENTS.md`, активные схемы, `REVISION` и runbook. Срез не доказывает состояние production после этой даты.
 
 | Область | Карточка и источник контракта | Владелец данных |
 | --- | --- | --- |
 | Codex, Manager CLI, native MCP, Manager tools | [Manager и MCP](manager_codex_mcp.md), `autostop_manager/cli.py`, `mcp_tools.py`, `docs/agent/manager_mcp_catalog.json` | Manager хранит только техническое состояние и минимальную обезличенную память |
-| CRM Gateway v2 и CRM MCP | [CRM operations](https://github.com/UgaChavis/AutostopCRM-V1/blob/5f2fb21911914bfd7b4f2b979d192ed1a5e35d52/docs/OPERATIONS_RUNBOOK.md), `/opt/autostopcrm/src/minimal_kanban/`, Manager `docs/agent/crm_mcp_catalog.json` | CRM |
+| CRM Gateway v2 и CRM MCP | [CRM operations](https://github.com/UgaChavis/AutostopCRM-V1/blob/ac10f5340c21554be8f2bd8f3572b58bbe355ee4/docs/OPERATIONS_RUNBOOK.md), `/opt/autostopcrm/src/minimal_kanban/`, Manager `docs/agent/crm_mcp_catalog.json` | CRM |
 | Store Agent/owner API | [Store Agent API](https://github.com/AutoStopKrsk/AutoStop-App/blob/1c4734ac7b9939106b432397267f133ab36b9125/docs/store_agent_api.md), `/opt/autostopapp/backend/app/routers/agent.py`, Store OpenAPI | Store |
 | Manager ↔ Store adapter | [Store adapter](store_adapter.md), `autostop_manager/store_api.py`, `store_integration.py`, `store_owner_api.py` | Store; Manager хранит только курсоры и guarded receipts |
 | VIN/OEM, PartsAPI, каталоги, J1 | [Автомобильные источники и J1](vin_catalog_j1.md), `docs/partsapi.md`, `docs/offline_parts_catalogs.md` | Manager для технических кандидатов; CRM/Store для кейсов |
