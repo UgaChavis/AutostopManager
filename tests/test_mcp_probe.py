@@ -50,7 +50,7 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
     monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
     monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", str(tmp_path / "does-not-exist.env"))
     monkeypatch.setenv("PARTSAPI_BASE_URL", "http://127.0.0.1:9")
-    monkeypatch.setenv("PARTSAPI_KEY", sentinel_secret)
+    monkeypatch.setenv("PARTSAPI_VINDECODE_KEY", sentinel_secret)
     config._ENV_LOADED = False
     monkeypatch.setattr(
         "autostop_manager.store_api.StoreApiClient.runtime_status",
@@ -122,19 +122,11 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
     assert report["checks"]["tools_list"]["ok"] is True
     assert report["checks"]["tools_list"]["tool_count"] == 42
     assert report["checks"]["catalog_provider_status"]["ok"] is True
-    assert report["checks"]["partsapi_category_index"] == {
-        "ok": True,
-        "diagnostic": "category_unresolved",
-        "match_count": 0,
-        "schema": "PartsApiCategoryIndexV1",
-    }
-    assert report["checks"]["synthetic_resolver"] == {
-        "ok": True,
-        "diagnostic": "controlled_text_category",
-        "status": "needs_identity_confirmation",
-        "live_call_count": 0,
-        "oem_candidate_count": 0,
-    }
+    assert report["checks"]["catalog_provider_status"]["stage"] == "catalog_cross"
+    assert report["checks"]["synthetic_resolver"]["ok"] is True
+    assert report["checks"]["synthetic_resolver"]["diagnostic"] == "vin_decode_dry_run"
+    assert report["checks"]["synthetic_resolver"]["live_call_count"] == 0
+    assert report["checks"]["synthetic_resolver"]["oem_candidate_count"] == 0
     assert report["checks"]["provider_failure"]["ok"] is True
     assert report["checks"]["provider_failure"]["diagnostic"] == "provider_failure"
     assert report["checks"]["provider_failure"]["failure_class"] in {

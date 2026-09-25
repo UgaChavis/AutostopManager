@@ -69,34 +69,12 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "docs_url": "https://partsapi.ru/method/doc/VINdecode",
         "role": "VIN decode into TecDoc/TecRMI vehicle identity and characteristics.",
     },
-    "vin_decode_oe": {
-        "method": "VINdecodeOE",
-        "required": ("identifier",),
-        "params": {"vin": "identifier"},
-        "docs_url": "https://partsapi.ru/method/doc/VINdecodeOE",
-        "role": "VIN/frame decode by original catalogs.",
-    },
     "plate_to_vin": {
         "method": "gosnomer2vin",
         "required": ("registration_number",),
         "params": {"gosnomer": "registration_number"},
         "docs_url": "https://partsapi.ru/method/doc/gosnomer2vin",
         "role": "VIN lookup by Russian vehicle registration number; identity lead that must be verified before writes.",
-    },
-    "parts_by_vin": {
-        "method": "getPartsbyVIN",
-        "required": ("identifier", "part_type", "category"),
-        "params": {"vin": "identifier", "type": "part_type", "cat": "category"},
-        "defaults": {"part_type": "oem"},
-        "docs_url": "https://partsapi.ru/method/doc/getPartsbyVIN",
-        "role": "OEM/non-OEM parts list by VIN and part group.",
-    },
-    "oe_applicability": {
-        "method": "getOEApplicability",
-        "required": ("part_number",),
-        "params": {"query": "part_number"},
-        "docs_url": "https://partsapi.ru/method/doc/getOEApplicability",
-        "role": "Applicability by original catalog part number.",
     },
     "crosses": {
         "method": "getCrosses",
@@ -223,10 +201,8 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
 
 PARTSAPI_METHOD_KEY_ENV_NAMES = {
     "VINdecode": "PARTSAPI_VINDECODE_KEY",
-    "VINdecodeOE": "PARTSAPI_VINDECODE_OE_KEY",
     "gosnomer2vin": "PARTSAPI_GOSNOMER2VIN_KEY",
-    "getPartsbyVIN": "PARTSAPI_PARTS_BY_VIN_KEY",
-    "getOEApplicability": "PARTSAPI_OE_APPLICABILITY_KEY",
+    "getProductGroupsByBrandNumber": "PARTSAPI_GET_PRODUCT_GROUPS_BY_BRAND_NUMBER_KEY",
     "getCrosses": "PARTSAPI_CROSSES_KEY",
     "getCrossesWithBrand": "PARTSAPI_CROSSES_WITH_BRAND_KEY",
     "getCrossesTitle": "PARTSAPI_CROSSES_TITLE_KEY",
@@ -259,8 +235,6 @@ for _method, _parameters in PARTSAPI_SHOP_METHODS.items():
             "generic_response": True,
         }
 
-
-PARTSAPI_OMIT_PART_TYPE_VALUES = {"omit", "none", "non-oem", "non_oem", "nonoriginal", "non-original", "aftermarket"}
 
 _OEM_PART_NUMBER_KEYS = (
     "number",
@@ -1420,16 +1394,11 @@ def exist_price_lookup(
 
 def _partsapi_credentials() -> dict[str, Any]:
     load_runtime_env()
-    key = os.getenv("PARTSAPI_KEY") or ""
     base_url = os.getenv("PARTSAPI_BASE_URL") or ""
-    missing = [name for name, value in {"PARTSAPI_KEY": key, "PARTSAPI_BASE_URL": base_url}.items() if not value]
     return {
-        "configured": not missing,
-        "key": key,
         "base_url": base_url,
         "key_param": os.getenv("PARTSAPI_KEY_PARAM") or "key",
         "method_param": os.getenv("PARTSAPI_METHOD_PARAM") or "method",
-        "missing_env_names": missing,
     }
 
 
@@ -1455,6 +1424,21 @@ def _response_shape(payload: Any) -> str:
     if isinstance(payload, list):
         return "array"
     return type(payload).__name__
+
+
+def _partsapi_explicitly_empty_payload(payload: Any) -> bool:
+    if payload in (None, [], {}):
+        return True
+    if not isinstance(payload, dict):
+        return False
+    envelope_keys = {"data", "result", "array", "items", "articles", "crosses"}
+    metadata_keys = {"success", "ok", "status", "message", "count", "total"}
+    present = envelope_keys.intersection(payload)
+    return (
+        bool(present)
+        and set(payload).issubset(envelope_keys | metadata_keys)
+        and all(payload[key] in (None, [], {}) for key in present)
+    )
 
 
 def _partsapi_provider_declared_error(payload: Any) -> bool:
@@ -1551,8 +1535,8 @@ def partsapi_operation_status(operation: str) -> dict[str, Any]:
     spec = PARTSAPI_OPERATIONS[operation]
     request_plan = build_partsapi_request(method=spec["method"], params={})
     method_key_env_name = PARTSAPI_METHOD_KEY_ENV_NAMES.get(spec["method"])
-    accepted_key_env_names = ["PARTSAPI_KEY", *([method_key_env_name] if method_key_env_name else [])]
-    has_key = bool(os.getenv("PARTSAPI_KEY") or (method_key_env_name and os.getenv(method_key_env_name)))
+    accepted_key_env_names = [method_key_env_name] if method_key_env_name else []
+    has_key = bool(method_key_env_name and os.getenv(method_key_env_name))
     missing_key_env_names = [] if has_key else accepted_key_env_names
     configured = bool(request_plan["configured"])
     return {
@@ -1702,6 +1686,7 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "grade": ("grade", "komplektaciya"),
     "transmission": ("kp", "kpp"),
     "tecdoc_car_id": ("carId", "typeNumber", "TYPE_ID"),
+    "vehicle_type": ("carType", "CAR_TYPE"),
     "tecdoc_external_id": ("TecDocExternalId",),
     "tecrmi_external_id": ("TecRmiExternalId",),
     "model_year_from": ("yearOfConstrFrom", "modelyearfrom"),
@@ -1845,23 +1830,41 @@ def _partsapi_engine_records(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def _partsapi_vin_decode_records(payload: Any, *, depth: int = 0) -> list[dict[str, Any]]:
+    """Find VINdecode vehicle rows across provider envelopes without choosing a modification."""
+    if depth > 5:
+        return []
+    if isinstance(payload, list):
+        return [record for item in payload for record in _partsapi_vin_decode_records(item, depth=depth + 1)]
+    if not isinstance(payload, dict):
+        return []
+    has_tecdoc_id = _first_value(payload, ("carId", "typeNumber", "TecDocExternalId")) not in (None, "")
+    has_make_and_model = _first_value(payload, ("manuName", "brand", "MANUFACTURER")) not in (
+        None,
+        "",
+    ) and _first_value(payload, ("modelName", "model")) not in (None, "")
+    if has_tecdoc_id or has_make_and_model:
+        return [payload]
+    return [
+        record
+        for nested in payload.values()
+        if isinstance(nested, (dict, list))
+        for record in _partsapi_vin_decode_records(nested, depth=depth + 1)
+    ]
+
+
 def extract_partsapi_vehicle_profiles(
     *, payload: Any, operation: str | None = None, requested_identifier: str | None = None
 ) -> list[dict[str, Any]]:
     # getEngine currently returns a top-level list; retain legacy envelopes too.
     if operation == "engine_info" and isinstance(payload, list):
         payload = {"data": payload}
-    if not isinstance(payload, dict):
-        return []
-
     items: list[dict[str, Any]] = []
     if operation == "vin_decode":
-        result = payload.get("result")
-        if isinstance(result, dict):
-            items.extend(item for item in result.values() if isinstance(item, dict))
-        elif isinstance(result, list):
-            items.extend(item for item in result if isinstance(item, dict))
+        items.extend(_partsapi_vin_decode_records(payload))
     elif operation == "vin_decode_oe":
+        if not isinstance(payload, dict):
+            return []
         data = payload.get("data")
         array = data.get("array") if isinstance(data, dict) else None
         if isinstance(array, dict):
@@ -1873,6 +1876,8 @@ def extract_partsapi_vehicle_profiles(
             if top_level is not None:
                 items.append(top_level)
     elif operation == "engine_info":
+        if not isinstance(payload, dict):
+            return []
         items.extend(_partsapi_engine_records(payload))
     elif operation == "plate_to_vin":
         items.extend(_partsapi_plate_vin_records(payload))
@@ -2180,7 +2185,7 @@ def extract_partsapi_article_candidates(
             item, ("ART_ARTICLE_NR", "ARL_DISPLAY_NR", "articleNumber", "article_number", "number")
         )
         article_id = _first_value(item, ("ART_ID", "ARL_ART_ID", "articleId", "article_id"))
-        brand = _first_value(item, ("ART_SUP_BRAND", "ARL_BRA_BRAND", "brand", "supplierBrand"))
+        brand = _first_value(item, ("ART_SUP_BRAND", "SUP_BRAND", "ARL_BRA_BRAND", "brand", "supplierBrand"))
         if part_number in (None, "") and article_id in (None, ""):
             continue
         identity = (
@@ -2198,6 +2203,9 @@ def extract_partsapi_article_candidates(
                 "article_id": article_id,
                 "part_number": str(part_number).strip() if part_number not in (None, "") else None,
                 "brand": brand,
+                "supplier_id": _first_value(item, ("SUP_ID",)),
+                "product_group": _first_value(item, ("PRODUCT_GROUP",)),
+                "product_group_id": _first_value(item, ("PT_ID",)),
                 "product_name": _first_value(
                     item, ("ART_PRODUCT_NAME", "productName", "product_name", "partname", "partName", "name")
                 ),
@@ -2221,13 +2229,13 @@ def build_partsapi_request(
 ) -> dict[str, Any]:
     credentials = _partsapi_credentials()
     method_key, method_key_env_name = _partsapi_method_key(method)
-    actual_key = key if key is not None else method_key or credentials["key"]
+    actual_key = key if key is not None else method_key
     actual_base_url = (base_url if base_url is not None else credentials["base_url"]).rstrip("?&")
     actual_key_param = key_param or credentials["key_param"]
     actual_method_param = method_param or credentials["method_param"]
     missing = []
     if not actual_key:
-        missing.append("PARTSAPI_KEY")
+        missing.append(method_key_env_name or "PARTSAPI_METHOD_KEY")
     if not actual_base_url:
         missing.append("PARTSAPI_BASE_URL")
 
@@ -2248,10 +2256,7 @@ def build_partsapi_request(
         "params": {key: value for key, value in params.items() if value not in (None, "")},
         "base_url_configured": bool(actual_base_url),
         "method_key_env_name": method_key_env_name if method_key else None,
-        "credential_env_any_of": [
-            *([method_key_env_name] if method_key_env_name else []),
-            "PARTSAPI_KEY",
-        ],
+        "credential_env_any_of": [method_key_env_name] if method_key_env_name else [],
         "key_param": actual_key_param,
         "method_param": actual_method_param,
         "missing_env_names": missing,
@@ -2366,11 +2371,6 @@ def partsapi_catalog_lookup(
         source = spec["params"].get(api_name, api_name)
         if params.get(api_name) in (None, "") and source not in missing_params:
             missing_params.append(source)
-    if (
-        operation == "parts_by_vin"
-        and str(input_values.get("part_type") or "").strip().lower() in PARTSAPI_OMIT_PART_TYPE_VALUES
-    ):
-        params["type"] = None
     request_plan = build_partsapi_request(method=spec["method"], params=params)
     base = {
         "provider": "partsapi_ru",
@@ -2409,7 +2409,7 @@ def partsapi_catalog_lookup(
             "readiness_basis": "configuration_only",
             "live_callable_now": False,
             "missing_env_names": request_plan["missing_env_names"],
-            "error": "PARTSAPI_BASE_URL plus PARTSAPI_KEY or the method-specific PartsAPI key are required for live requests.",
+            "error": "PARTSAPI_BASE_URL and the method-specific PartsAPI key are required for live requests.",
             "outcome": "credentials_missing",
             "failure_class": "credentials_missing",
             "retryable": False,
@@ -2496,7 +2496,7 @@ def partsapi_catalog_lookup(
                 if last_retryable
                 else "Запрос к каталогу не выполнен."
             ),
-            "fallback_operation": "vin_decode_oe" if operation == "engine_info" else None,
+            "fallback_operation": "vin_decode" if operation == "engine_info" else None,
             "fallback_requires_identifier": operation == "engine_info",
         }
 
@@ -2540,6 +2540,8 @@ def partsapi_catalog_lookup(
         []
         if operation
         in {
+            "vin_decode",
+            "plate_to_vin",
             "crosses",
             "crosses_with_brand",
             "crosses_title",
@@ -2553,16 +2555,13 @@ def partsapi_catalog_lookup(
         or spec.get("generic_response")
         else extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation)
     )
-    if operation == "parts_by_vin":
-        oem_candidates.extend(extract_partsapi_parts_by_vin_candidates(payload=payload, operation=operation))
-
     vehicle_profiles = extract_partsapi_vehicle_profiles(
         payload=payload, operation=operation, requested_identifier=str(input_values.get("identifier") or "")
     )
     autonorms_rows = extract_partsapi_autonorms_rows(payload=payload, operation=operation)
     fill_volumes = extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else []
     search_tree_rows = extract_partsapi_search_tree_rows(payload=payload) if operation == "search_tree" else []
-    empty_payload = payload in (None, [], {})
+    empty_payload = _partsapi_explicitly_empty_payload(payload)
     record_counts = {
         "vehicle_profiles": len(vehicle_profiles),
         "oem_candidates": len(oem_candidates),
@@ -2573,11 +2572,8 @@ def partsapi_catalog_lookup(
         "search_tree_rows": len(search_tree_rows),
     }
     expected_records = {
-        "vin_decode": ("vehicle_profiles", "oem_candidates"),
-        "vin_decode_oe": ("vehicle_profiles", "oem_candidates"),
-        "plate_to_vin": ("vehicle_profiles", "oem_candidates"),
-        "parts_by_vin": ("oem_candidates",),
-        "oe_applicability": ("oem_candidates",),
+        "vin_decode": ("vehicle_profiles",),
+        "plate_to_vin": ("vehicle_profiles",),
         "crosses": ("cross_candidates",),
         "crosses_with_brand": ("cross_candidates",),
         "crosses_title": ("cross_candidates",),
@@ -2596,11 +2592,11 @@ def partsapi_catalog_lookup(
         "fill_volumes": ("fill_volumes",),
     }.get(operation, ())
     no_expected_records = bool(expected_records) and not any(record_counts[name] for name in expected_records)
-    outcome = "empty_result" if empty_payload or no_expected_records else "success"
+    outcome = "empty_result" if empty_payload else "unparsed_response" if no_expected_records else "success"
 
     return {
         **base,
-        "ok": True,
+        "ok": outcome != "unparsed_response",
         "attempt_count": len(attempts),
         "max_attempts": attempt_count,
         "attempts": attempts,
@@ -2616,9 +2612,9 @@ def partsapi_catalog_lookup(
         "search_tree_rows": search_tree_rows,
         "record_counts": record_counts,
         "outcome": outcome,
-        "failure_class": None,
+        "failure_class": "adapter_unparsed_response" if outcome == "unparsed_response" else None,
         "retryable": False,
-        "requires_fallback": outcome == "empty_result",
+        "requires_fallback": outcome in {"empty_result", "unparsed_response"},
     }
 
 
@@ -2650,11 +2646,6 @@ def resolve_partsapi_category(
         if str(row.get("cat_id") or "").strip().isdigit()
     ]
 
-    recognized_single_intent = bool(part_profile.get("recognized")) and part_profile.get("intent_id") not in {
-        "",
-        "multiple_parts",
-        "unknown",
-    }
     curated_text_categories = {value.casefold(): value for value in text_candidates}
     explicit = str(explicit_category or "").strip()
     extra: dict[str, Any] = {}
@@ -2674,29 +2665,17 @@ def resolve_partsapi_category(
         category, source = text_candidates[0], "parts_intent_text_candidate"
     else:
         category, source = None, "none"
-    category_is_numeric = bool(category and category.isdigit())
-    category_is_curated_text = bool(
-        category
-        and not category_is_numeric
-        and recognized_single_intent
-        and category.casefold() in curated_text_categories
-        and source in {"explicit", "parts_intent_text_candidate"}
-    )
-    category_queryable = bool(category and len(category) <= 25 and (category_is_numeric or category_is_curated_text))
-    kind = "unresolved" if category is None else "numeric_id" if category_is_numeric else "text_candidate"
-    category_mode = (
-        "numeric_id"
-        if category_queryable and category_is_numeric
-        else "curated_text"
-        if category_queryable
-        else "unresolved"
-    )
+    # These hints belonged to the removed getPartsbyVIN.cat method. The active
+    # getArticles.strId must come from the vehicle's getSearchTree response.
+    legacy_kind = "unresolved" if category is None else "numeric_id" if category.isdigit() else "text_candidate"
     return {
-        "category": category,
-        "category_kind": kind,
-        "category_mode": category_mode,
-        "category_queryable": category_queryable,
-        "category_unresolved": not category_queryable,
+        "category": None,
+        "category_kind": "unresolved",
+        "category_mode": "legacy_inactive",
+        "category_queryable": False,
+        "category_unresolved": True,
+        "legacy_category_hint": category,
+        "legacy_category_kind": legacy_kind,
         "source": source,
         "numeric_candidates": numeric_candidates,
         "index_numeric_candidates": index_numeric_candidates,

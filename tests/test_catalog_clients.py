@@ -8,7 +8,10 @@ from urllib.error import HTTPError
 
 from autostop_manager import catalog_clients as catalog_clients_module
 from autostop_manager import config as manager_config
+from autostop_manager.partsapi_methods import PARTSAPI_SHOP_METHODS
 from autostop_manager.catalog_clients import (
+    PARTSAPI_METHOD_KEY_ENV_NAMES,
+    PARTSAPI_OPERATIONS,
     build_denso_aftermarket_search_request,
     build_exist_price_lookup_request,
     build_mann_filter_catalog_request,
@@ -32,36 +35,20 @@ from autostop_manager.catalog_clients import (
 )
 
 
-PARTSAPI_METHOD_ENV_NAMES = [
-    "PARTSAPI_VINDECODE_KEY",
-    "PARTSAPI_VINDECODE_OE_KEY",
-    "PARTSAPI_GOSNOMER2VIN_KEY",
-    "PARTSAPI_PARTS_BY_VIN_KEY",
-    "PARTSAPI_OE_APPLICABILITY_KEY",
-    "PARTSAPI_CROSSES_KEY",
-    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
-    "PARTSAPI_CROSSES_TITLE_KEY",
-    "PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY",
-    "PARTSAPI_ARTICLE_CROSSES_KEY",
-    "PARTSAPI_SEARCH_ARTICLES_KEY",
-    "PARTSAPI_GET_ENGINE_KEY",
-    "PARTSAPI_SEARCH_TREE_KEY",
-    "PARTSAPI_ARTICLES_KEY",
-    "PARTSAPI_ARTICLE_KEY",
-    "PARTSAPI_ARTICLE_CRITERIA_KEY",
-    "PARTSAPI_GET_NORMS_MAKES_KEY",
-    "PARTSAPI_GET_NORMS_MODELS_KEY",
-    "PARTSAPI_GET_NORMS_MOTORS_KEY",
-    "PARTSAPI_GET_NORMS_TIMES_KEY",
-    "PARTSAPI_GET_FILL_VOLUMES_KEY",
-]
+PARTSAPI_METHOD_ENV_NAMES = sorted(set(PARTSAPI_METHOD_KEY_ENV_NAMES.values()))
 
 
 def _clear_partsapi_method_env(monkeypatch):
     monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
     monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
+    monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     for name in PARTSAPI_METHOD_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
+
+
+def _configure_partsapi_test_keys(monkeypatch):
+    for name in PARTSAPI_METHOD_ENV_NAMES:
+        monkeypatch.setenv(name, "secret-key")
 
 
 class _FakeResponse:
@@ -156,7 +143,7 @@ def _exist_price_html() -> str:
 
 def test_partsapi_request_redacts_key(monkeypatch):
     request = build_partsapi_request(
-        method="VINdecodeOE",
+        method="VINdecode",
         params={"vin": "MR41S123456"},
         key="secret-key",
         base_url="https://partsapi.example.test/api",
@@ -167,7 +154,7 @@ def test_partsapi_request_redacts_key(monkeypatch):
     assert "MR41S123456" not in request["redacted_url"]
     assert "vin=MR4***456" in request["redacted_url"]
     assert "key=***" in request["redacted_url"]
-    assert "method=VINdecodeOE" in request["redacted_url"]
+    assert "method=VINdecode" in request["redacted_url"]
     assert request["secret_exposed"] is False
 
 
@@ -176,15 +163,30 @@ def test_partsapi_lookup_reports_missing_env(monkeypatch):
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     monkeypatch.delenv("PARTSAPI_BASE_URL", raising=False)
 
-    result = partsapi_catalog_lookup(operation="vin_decode_oe", identifier="MR41S123456", dry_run=True)
+    result = partsapi_catalog_lookup(operation="vin_decode", identifier="MR41S123456", dry_run=True)
 
     assert result["ok"] is False
     assert result["authorization_status"] == "not_configured"
     assert result["readiness_basis"] == "configuration_only"
     assert result["live_callable_now"] is False
-    assert result["missing_env_names"] == ["PARTSAPI_KEY", "PARTSAPI_BASE_URL"]
+    assert result["missing_env_names"] == ["PARTSAPI_VINDECODE_KEY", "PARTSAPI_BASE_URL"]
     assert result["redacted_identifier"] == "MR4***456"
     assert result["request_plan"]["secret_exposed"] is False
+
+
+def test_partsapi_generic_key_does_not_authorize_a_shop_method(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_KEY", "legacy-generic-key")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    status = partsapi_operation_status("vin_decode")
+    result = partsapi_catalog_lookup(operation="vin_decode", identifier="SYNTHETICVIN00001", dry_run=True)
+
+    assert status["configured"] is False
+    assert status["accepted_key_env_names"] == ["PARTSAPI_VINDECODE_KEY"]
+    assert result["outcome"] == "credentials_missing"
+    assert result["missing_env_names"] == ["PARTSAPI_VINDECODE_KEY"]
+    assert "legacy-generic-key" not in str(result)
 
 
 def test_partsapi_lookup_can_use_method_specific_test_key(monkeypatch):
@@ -209,22 +211,22 @@ def test_partsapi_operation_status_is_specific_to_each_method_key(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
-    monkeypatch.setenv("PARTSAPI_PARTS_BY_VIN_KEY", "parts-secret")
+    monkeypatch.setenv("PARTSAPI_GET_PRODUCT_GROUPS_BY_BRAND_NUMBER_KEY", "groups-secret")
 
-    by_vin = partsapi_operation_status("parts_by_vin")
+    groups = partsapi_operation_status("getProductGroupsByBrandNumber")
     vin_decode = partsapi_operation_status("vin_decode")
 
-    assert by_vin["configured"] is True
-    assert by_vin["authorization_status"] == "unverified"
-    assert by_vin["readiness_basis"] == "configuration_only"
-    assert by_vin["outcome"] == "configured_unverified"
-    assert by_vin["live_callable_now"] is False
+    assert groups["configured"] is True
+    assert groups["authorization_status"] == "unverified"
+    assert groups["readiness_basis"] == "configuration_only"
+    assert groups["outcome"] == "configured_unverified"
+    assert groups["live_callable_now"] is False
     assert vin_decode["configured"] is False
     assert vin_decode["authorization_status"] == "not_configured"
     assert vin_decode["readiness_basis"] == "configuration_only"
     assert vin_decode["live_callable_now"] is False
     assert "PARTSAPI_VINDECODE_KEY" in vin_decode["missing_key_env_names"]
-    assert "PARTSAPI_KEY" in vin_decode["accepted_key_env_names"]
+    assert vin_decode["accepted_key_env_names"] == ["PARTSAPI_VINDECODE_KEY"]
 
 
 def test_partsapi_plate_and_part_name_operations_use_documented_params(monkeypatch):
@@ -255,7 +257,7 @@ def test_partsapi_plate_and_part_name_operations_use_documented_params(monkeypat
 
 def test_partsapi_lookup_dry_run_with_configured_env(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     result = partsapi_catalog_lookup(
@@ -277,7 +279,7 @@ def test_partsapi_lookup_dry_run_with_configured_env(monkeypatch):
 
 def test_partsapi_vin_decode_defaults_to_russian_lang(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     result = partsapi_catalog_lookup(
@@ -295,40 +297,32 @@ def test_partsapi_vin_decode_defaults_to_russian_lang(monkeypatch):
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
-def test_partsapi_parts_by_vin_defaults_to_oem_type(monkeypatch):
+def test_partsapi_current_shop_methods_are_the_only_available_operations():
+    assert len(PARTSAPI_SHOP_METHODS) == len(PARTSAPI_OPERATIONS) == 43
+    assert {spec["method"] for spec in PARTSAPI_OPERATIONS.values()} == set(PARTSAPI_SHOP_METHODS)
+    assert {"VINdecodeOE", "getPartsbyVIN", "getOEApplicability"}.isdisjoint(PARTSAPI_SHOP_METHODS)
+    assert {"vin_decode_oe", "parts_by_vin", "oe_applicability"}.isdisjoint(PARTSAPI_OPERATIONS)
+
+
+def test_partsapi_product_groups_requires_all_documented_parameters(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    monkeypatch.setenv("PARTSAPI_GET_PRODUCT_GROUPS_BY_BRAND_NUMBER_KEY", "groups-secret")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
+    missing = partsapi_catalog_lookup(operation="getProductGroupsByBrandNumber", dry_run=True)
     result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        category="1191",
+        operation="getProductGroupsByBrandNumber",
+        provider_parameters={"brand": "BOSCH", "sku": "0 092 A68 008", "lang": 16},
         dry_run=True,
     )
 
+    assert missing["outcome"] == "invalid_input"
+    assert missing["missing_params"] == ["brand", "sku", "lang"]
     assert result["ok"] is True
-    assert result["request_plan"]["params"]["type"] == "oem"
-    assert result["request_plan"]["params"]["cat"] == "1191"
-
-
-def test_partsapi_parts_by_vin_can_omit_type_for_non_oem(monkeypatch):
-    _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
-    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
-
-    result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        part_type="non-oem",
-        category="1191",
-        dry_run=True,
-    )
-
-    assert result["ok"] is True
-    assert "type" not in result["request_plan"]["params"]
-    assert "type=" not in result["request_plan"]["redacted_url"]
-    assert result["request_plan"]["params"]["cat"] == "1191"
+    assert result["partsapi_method"] == "getProductGroupsByBrandNumber"
+    assert result["request_plan"]["params"] == {"brand": "BOSCH", "sku": "0 092 A68 008", "lang": 16}
+    assert result["request_plan"]["method_key_env_name"] == "PARTSAPI_GET_PRODUCT_GROUPS_BY_BRAND_NUMBER_KEY"
+    assert "groups-secret" not in str(result)
 
 
 def test_partsapi_engine_info_uses_tecdoc_type_params_and_method_key(monkeypatch):
@@ -528,10 +522,10 @@ def test_extract_partsapi_search_tree_rows_keeps_only_documented_nodes():
     assert rows[0]["NODE_1_STR_ID"] == 110
 
 
-@pytest.mark.parametrize("operation", ["engine_info", "search_tree"])
-def test_partsapi_structured_operation_falls_back_on_unrecognized_payload(monkeypatch, operation):
+@pytest.mark.parametrize("operation", ["engine_info", "search_tree", "articles"])
+def test_partsapi_structured_operation_distinguishes_empty_from_unparsed_payload(monkeypatch, operation):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     payload = {"data": {}} if operation == "engine_info" else {"response": "unrecognised"}
     monkeypatch.setattr(
@@ -539,10 +533,12 @@ def test_partsapi_structured_operation_falls_back_on_unrecognized_payload(monkey
         lambda request, timeout=20.0: _FakeResponse(payload),
     )
 
-    result = partsapi_catalog_lookup(operation=operation, type_id="1404")
+    result = partsapi_catalog_lookup(operation=operation, type_id="1404", category="1191")
 
-    assert result["ok"] is True
-    assert result["outcome"] == "empty_result"
+    assert result["ok"] is (operation == "engine_info")
+    assert result["outcome"] == ("empty_result" if operation == "engine_info" else "unparsed_response")
+    assert result["empty_payload"] is (operation == "engine_info")
+    assert result["failure_class"] == (None if operation == "engine_info" else "adapter_unparsed_response")
     assert result["requires_fallback"] is True
 
 
@@ -703,35 +699,39 @@ def test_exist_lookup_network_error_returns_json_error(monkeypatch):
     assert "network timeout" in result["error"]
 
 
-def test_resolve_partsapi_category_distinguishes_numeric_and_text_candidates():
+def test_resolve_partsapi_category_keeps_only_inactive_legacy_hints():
     explicit = resolve_partsapi_category("стойка стабилизатора", explicit_category="1191")
     text = resolve_partsapi_category("стойка стабилизатора")
     unknown = resolve_partsapi_category("непонятная редкая деталь")
 
-    assert explicit["category_kind"] == "numeric_id"
-    assert explicit["category_unresolved"] is False
-    assert text["category_kind"] == "numeric_id"
-    assert text["category_unresolved"] is False
+    assert explicit["category"] is None
+    assert explicit["legacy_category_hint"] == "1191"
+    assert explicit["legacy_category_kind"] == "numeric_id"
+    assert explicit["category_mode"] == "legacy_inactive"
+    assert explicit["category_queryable"] is False
+    assert text["category"] is None
+    assert text["legacy_category_kind"] == "numeric_id"
+    assert text["category_unresolved"] is True
     assert text["source"] == "partsapi_category_index"
     assert "stabilizer link" in text["text_candidates"]
     assert unknown["category_kind"] == "unresolved"
 
 
-def test_resolve_partsapi_category_uses_curated_text_when_no_numeric_mapping_exists():
+def test_resolve_partsapi_category_curated_text_is_not_a_tecdoc_tree_node():
     result = resolve_partsapi_category("тормозные диски")
 
-    assert result["category"] != "1191"
-    assert result["category"] == "brake disc"
-    assert result["category_unresolved"] is False
-    assert result["category_kind"] == "text_candidate"
-    assert result["category_mode"] == "curated_text"
-    assert result["category_queryable"] is True
+    assert result["category"] is None
+    assert result["legacy_category_hint"] == "brake disc"
+    assert result["legacy_category_kind"] == "text_candidate"
+    assert result["category_mode"] == "legacy_inactive"
+    assert result["category_queryable"] is False
 
 
 def test_resolve_partsapi_category_rejects_untrusted_explicit_text():
     result = resolve_partsapi_category("амортизатор", explicit_category="untrusted category")
 
-    assert result["category"] == "untrusted category"
+    assert result["category"] is None
+    assert result["legacy_category_hint"] == "untrusted category"
     assert result["category_queryable"] is False
     assert result["category_unresolved"] is True
 
@@ -743,7 +743,7 @@ def test_compound_part_request_does_not_automatically_select_one_index_category(
     assert result["index_matches"]  # Retain useful hints without selecting one for the whole request.
     assert result["category"] is None
     assert result["category_unresolved"] is True
-    assert resolve_partsapi_category(phrase, explicit_category="1191")["category"] == "1191"
+    assert resolve_partsapi_category(phrase, explicit_category="1191")["legacy_category_hint"] == "1191"
 
 
 def test_extract_partsapi_vehicle_profiles_handles_vin_decode_payload():
@@ -770,6 +770,22 @@ def test_extract_partsapi_vehicle_profiles_handles_vin_decode_payload():
     assert profiles[0]["modification"] == "2.8 quattro"
     assert profiles[0]["tecdoc_car_id"] == 12345
     assert profiles[0]["redacted_identifier"] == "WAU***542"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"carId": 12345, "manuName": "TEST", "modelName": "MODEL"},
+        [{"carId": 12345, "manuName": "TEST", "modelName": "MODEL"}],
+        {"result": {"vehicle": {"carId": 12345, "manuName": "TEST", "modelName": "MODEL"}}},
+    ],
+)
+def test_extract_partsapi_vin_decode_keeps_tecdoc_id_across_documented_response_shapes(payload):
+    profiles = extract_partsapi_vehicle_profiles(operation="vin_decode", payload=payload)
+    assert len(profiles) == 1
+    assert profiles[0]["tecdoc_car_id"] == 12345
+    assert profiles[0]["make"] == "TEST"
+    assert profiles[0]["model"] == "MODEL"
 
 
 def test_extract_partsapi_vehicle_profiles_handles_vin_decode_oe_payload():
@@ -866,46 +882,59 @@ def test_partsapi_parts_by_vin_preserves_explicit_negative_fitment():
     assert candidates[0]["confidence"] == 0.72
 
 
-def test_partsapi_parts_by_vin_live_payload_is_normalized(monkeypatch):
+def test_partsapi_tecdoc_vin_tree_articles_live_payloads_are_normalized(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
-        assert "method=getPartsbyVIN" in request.full_url
         assert "key=secret-key" in request.full_url
-        return _FakeResponse(
-            [
-                {
-                    "group": "Body",
-                    "name": "Windshield",
-                    "shortname": "Windshield",
-                    "parts": "CITROEN|5610106660",
-                }
-            ]
-        )
+        if "method=VINdecode" in request.full_url:
+            return _FakeResponse(
+                {"result": {"carId": 12345, "carType": "PC", "manuName": "TEST", "modelName": "MODEL"}}
+            )
+        if "method=getSearchTree" in request.full_url:
+            return _FakeResponse([{"NODE_2_TEXT": "Brake pad", "NODE_2_STR_ID": 1191}])
+        if "method=getArticles" in request.full_url:
+            return _FakeResponse(
+                [
+                    {
+                        "ART_ID": 42,
+                        "ART_ARTICLE_NR": "TEST-123",
+                        "SUP_BRAND": "TEST",
+                        "SUP_ID": 7,
+                        "PRODUCT_GROUP": "Brake pad",
+                        "PT_ID": 88,
+                    }
+                ]
+            )
+        pytest.fail("unexpected method")
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
-    result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        part_type="oem",
-        category="1191",
-    )
+    decoded = partsapi_catalog_lookup(operation="vin_decode", identifier="SYNTHETICVIN00001")
+    tree = partsapi_catalog_lookup(operation="search_tree", type_id="12345")
+    articles = partsapi_catalog_lookup(operation="articles", type_id="12345", category="1191")
 
-    assert result["ok"] is True
-    assert result["oem_candidates"][0]["part_number"] == "5610106660"
-    assert result["oem_candidates"][0]["brand"] == "CITROEN"
-    assert result["oem_candidates"][0]["fitment_evidence"]["fitment_status"] == "unconfirmed"
-    assert "is_fit_for_this_vin" not in result["oem_candidates"][0]["fitment_evidence"]
-    assert "secret-key" not in result["request_plan"]["redacted_url"]
+    assert decoded["outcome"] == tree["outcome"] == articles["outcome"] == "success"
+    assert decoded["vehicle_profiles"][0]["tecdoc_car_id"] == 12345
+    assert decoded["vehicle_profiles"][0]["vehicle_type"] == "PC"
+    assert decoded["oem_candidates"] == []
+    assert tree["search_tree_rows"][0]["NODE_2_STR_ID"] == 1191
+    article = articles["article_candidates"][0]
+    assert article["part_number"] == "TEST-123"
+    assert article["brand"] == "TEST"
+    assert article["supplier_id"] == 7
+    assert article["product_group_id"] == 88
+    assert article["fitment_evidence"]["fitment_confirmed"] is False
+    assert articles["oem_candidates"] == []
+    assert all("secret-key" not in str(row["request_plan"]) for row in (decoded, tree, articles))
 
 
 @pytest.mark.parametrize("failure", [TimeoutError("network timeout"), IncompleteRead(b"secret-key", 1)])
-def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch, failure):
+def test_partsapi_vin_decode_retry_records_attempts_without_secret(monkeypatch, failure):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     calls = []
@@ -917,10 +946,8 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
     result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        part_type="oem",
-        category="1191",
+        operation="vin_decode",
+        identifier="SYNTHETICVIN00001",
         max_attempts=2,
     )
 
@@ -936,7 +963,7 @@ def test_partsapi_parts_by_vin_retry_records_attempts_without_secret(monkeypatch
 
 def test_partsapi_retry_is_bounded_to_three_attempts(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     calls = []
 
@@ -946,10 +973,8 @@ def test_partsapi_retry_is_bounded_to_three_attempts(monkeypatch):
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
     result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        part_type="oem",
-        category="1191",
+        operation="vin_decode",
+        identifier="SYNTHETICVIN00001",
         max_attempts=10,
     )
 
@@ -962,7 +987,7 @@ def test_partsapi_retry_is_bounded_to_three_attempts(monkeypatch):
 
 def test_partsapi_5xx_is_not_reported_as_empty_result(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fail_urlopen(request, timeout=20.0):
@@ -970,10 +995,8 @@ def test_partsapi_5xx_is_not_reported_as_empty_result(monkeypatch):
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
     result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        part_type="oem",
-        category="1191",
+        operation="vin_decode",
+        identifier="SYNTHETICVIN00001",
     )
 
     assert result["ok"] is False
@@ -992,7 +1015,7 @@ def test_partsapi_5xx_is_not_reported_as_empty_result(monkeypatch):
 )
 def test_partsapi_ip_quota_401_requires_provider_action_without_retry_or_raw_body(monkeypatch, provider_payload):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     calls = []
 
@@ -1004,9 +1027,8 @@ def test_partsapi_ip_quota_401_requires_provider_action_without_retry_or_raw_bod
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
 
     result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        category="1191",
+        operation="vin_decode",
+        identifier="SYNTHETICVIN00001",
         max_attempts=3,
     )
 
@@ -1030,7 +1052,7 @@ def test_partsapi_ip_quota_401_requires_provider_action_without_retry_or_raw_bod
 )
 def test_partsapi_untrusted_http_error_body_is_bounded_closed_and_not_returned(monkeypatch, provider_body):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     streams = []
 
@@ -1042,9 +1064,8 @@ def test_partsapi_untrusted_http_error_body_is_bounded_closed_and_not_returned(m
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fail_urlopen)
 
     result = partsapi_catalog_lookup(
-        operation="parts_by_vin",
-        identifier="XW7BF4FK60S145161",
-        category="1191",
+        operation="vin_decode",
+        identifier="SYNTHETICVIN00001",
         max_attempts=3,
     )
 
@@ -1058,14 +1079,14 @@ def test_partsapi_untrusted_http_error_body_is_bounded_closed_and_not_returned(m
 
 def test_partsapi_declared_error_is_not_reported_as_empty_success(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     monkeypatch.setattr(
         "autostop_manager.catalog_clients.urlopen",
         lambda request, timeout=20.0: _FakeResponse({"status": "error", "error": "unsupported identifier"}),
     )
 
-    result = partsapi_catalog_lookup(operation="vin_decode_oe", identifier="MR41S123456")
+    result = partsapi_catalog_lookup(operation="vin_decode", identifier="SYNTHETICVIN00001")
 
     assert result["ok"] is False
     assert result["outcome"] == "provider_rejected"
@@ -1074,41 +1095,43 @@ def test_partsapi_declared_error_is_not_reported_as_empty_success(monkeypatch):
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
-def test_partsapi_unknown_nonempty_vin_shape_is_an_empty_result_for_fallback(monkeypatch):
+def test_partsapi_unknown_nonempty_vin_shape_is_a_parser_gap(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     monkeypatch.setattr(
         "autostop_manager.catalog_clients.urlopen",
         lambda request, timeout=20.0: _FakeResponse({"response": "unrecognised"}),
     )
 
-    result = partsapi_catalog_lookup(operation="vin_decode_oe", identifier="MR41S123456")
+    result = partsapi_catalog_lookup(operation="vin_decode", identifier="SYNTHETICVIN00001")
 
-    assert result["ok"] is True
-    assert result["outcome"] == "empty_result"
+    assert result["ok"] is False
+    assert result["outcome"] == "unparsed_response"
+    assert result["failure_class"] == "adapter_unparsed_response"
+    assert result["empty_payload"] is False
     assert result["requires_fallback"] is True
     assert result["response_shape"] == "object"
 
 
-def test_partsapi_oe_applicability_allows_empty_payload(monkeypatch):
+def test_partsapi_search_tree_allows_empty_payload(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
-        assert "method=getOEApplicability" in request.full_url
-        assert "query=5610106660" in request.full_url
+        assert "method=getSearchTree" in request.full_url
+        assert "carId=12345" in request.full_url
         return _FakeResponse(None)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
-    result = partsapi_catalog_lookup(operation="oe_applicability", part_number="5610106660")
+    result = partsapi_catalog_lookup(operation="search_tree", type_id="12345")
 
     assert result["ok"] is True
     assert result["payload"] is None
     assert result["empty_payload"] is True
-    assert result["oem_candidates"] == []
+    assert result["search_tree_rows"] == []
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 
@@ -1136,7 +1159,7 @@ def test_extract_partsapi_cross_candidates_handles_with_brand_payload():
 
 def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
@@ -1192,7 +1215,7 @@ def test_partsapi_crosses_title_uses_method_key_and_lang(monkeypatch):
 
 def test_partsapi_crosses_title_normalizes_partname(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
@@ -1226,7 +1249,7 @@ def test_partsapi_crosses_title_normalizes_partname(monkeypatch):
 
 def test_partsapi_crosses_uses_cross_candidates_not_oem(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
@@ -1280,7 +1303,7 @@ def test_extract_partsapi_article_candidates_handles_search_articles_payload():
 
 def test_partsapi_search_articles_uses_article_candidates_not_oem(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
@@ -1335,7 +1358,7 @@ def test_partsapi_article_crosses_uses_article_id_and_method_key(monkeypatch):
 
 def test_partsapi_article_crosses_uses_article_candidates_not_oem(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
@@ -1368,7 +1391,7 @@ def test_partsapi_article_crosses_uses_article_candidates_not_oem(monkeypatch):
 
 def test_partsapi_article_crosses_normalizes_arl_payload(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
 
     def fake_urlopen(request, timeout=20.0):
@@ -1708,7 +1731,7 @@ def test_partsapi_oe_engine_market_and_year_survive_normalization(year_first):
 
 def test_partsapi_engine_list_is_a_successful_profile(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     monkeypatch.setattr(
         catalog_clients_module,
@@ -1760,7 +1783,7 @@ def test_partsapi_auth_failure_does_not_retry_and_names_oe_fallback(monkeypatch,
     assert result["failure_class"] == "provider_auth_error"
     assert result["retryable"] is False
     assert result["empty_payload"] is False
-    assert result["fallback_operation"] == "vin_decode_oe"
+    assert result["fallback_operation"] == "vin_decode"
     assert result["fallback_requires_identifier"] is True
     assert "private-method-key" not in json.dumps(result)
 
@@ -1768,7 +1791,7 @@ def test_partsapi_auth_failure_does_not_retry_and_names_oe_fallback(monkeypatch,
 @pytest.mark.parametrize("via_override", [False, True])
 def test_partsapi_norms_models_canonicalizes_make_code(monkeypatch, via_override):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     kwargs = {"provider_parameters": {"makeNameSEO": " audi "}} if via_override else {"make_name_seo": " audi "}
     result = partsapi_catalog_lookup(operation="norms_models", dry_run=True, **kwargs)
@@ -1778,7 +1801,7 @@ def test_partsapi_norms_models_canonicalizes_make_code(monkeypatch, via_override
 @pytest.mark.parametrize("recovers", [False, True])
 def test_partsapi_norms_retry_once_with_delay_and_honest_failure(monkeypatch, recovers):
     _clear_partsapi_method_env(monkeypatch)
-    monkeypatch.setenv("PARTSAPI_KEY", "secret-key")
+    _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
     calls, delays = [], []
 

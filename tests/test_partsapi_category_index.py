@@ -8,12 +8,14 @@ from autostop_manager.partsapi_category_index import (
 )
 
 
-def test_category_index_maps_front_brake_pads_to_numeric_cat():
+def test_legacy_category_index_does_not_select_cat_for_current_contract():
     result = explain_partsapi_category_for_intent("front_brake_pads", query="передние колодки")
 
-    assert result["category_unresolved"] is False
-    assert result["selected_category"]["cat_id"].isdigit()
-    assert result["selected_category"]["matched_by"]
+    assert result["active_for_current_contract"] is False
+    assert result["category_unresolved"] is True
+    assert result["selected_category"] is None
+    assert result["historical_match"]["cat_id"].isdigit()
+    assert result["historical_match"]["matched_by"]
 
 
 def test_category_index_rejects_generic_token_match_for_another_intent():
@@ -29,7 +31,9 @@ def test_category_index_search_and_validate_are_safe():
 
     assert search["ok"] is True
     assert search["matches"]
+    assert search["active_for_current_contract"] is False
     assert validation["ok"] is True
+    assert validation["active_for_current_contract"] is False
     assert validation["privacy"]["secret_exposed"] is False
 
 
@@ -38,6 +42,22 @@ def test_category_index_search_rejects_negative_limit():
 
     assert search["count"] == 0
     assert search["matches"] == []
+
+
+def test_custom_historical_index_cannot_reactivate_removed_method(tmp_path):
+    index_path = tmp_path / "historical_category_index.json"
+    index_path.write_text(
+        '{"schema":"PartsApiCategoryIndexV1","categories":['
+        '{"cat_id":"1191","names_ru":["колодки"],"intent_ids":["front_brake_pads"]}]}',
+        encoding="utf-8",
+    )
+
+    result = explain_partsapi_category_for_intent("front_brake_pads", query="колодки", path=index_path)
+
+    assert result["active_for_current_contract"] is False
+    assert result["historical_match"]["cat_id"] == "1191"
+    assert result["selected_category"] is None
+    assert result["category_unresolved"] is True
 
 
 def test_category_index_loader_handles_invalid_payload(tmp_path):
