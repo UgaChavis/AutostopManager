@@ -10,6 +10,8 @@ from .config import PROJECT_ROOT
 
 
 DEFAULT_CATEGORY_INDEX_PATH = PROJECT_ROOT / "docs" / "agent" / "partsapi_category_index.json"
+# The current 43-method shop contract has no getPartsbyVIN category endpoint.
+CURRENT_CONTRACT_CATEGORY_INDEX_ACTIVE = False
 
 
 def _compact(value: Any) -> str:
@@ -159,6 +161,7 @@ def search_partsapi_category_index(
             matched_by.append("query")
         rows.append(_category_digest(row, score=score, matched_by=matched_by or ["tokens"]))
     rows.sort(key=lambda item: (-float(item.get("score") or 0.0), item.get("cat_id") or ""))
+    active_for_current_contract = CURRENT_CONTRACT_CATEGORY_INDEX_ACTIVE
     return {
         "ok": True,
         "schema": index.get("schema", "PartsApiCategoryIndexV1"),
@@ -169,6 +172,7 @@ def search_partsapi_category_index(
         "count": len(rows[:limit]),
         "matches": rows[:limit],
         "missing": bool(index.get("missing")),
+        "active_for_current_contract": active_for_current_contract,
     }
 
 
@@ -180,12 +184,16 @@ def explain_partsapi_category_for_intent(
 ) -> dict[str, Any]:
     result = search_partsapi_category_index(query, intent_id=intent_id, path=path, limit=5)
     top = result["matches"][0] if result["matches"] else None
+    active = bool(result["active_for_current_contract"])
     return {
         **result,
-        "selected_category": top,
-        "category_unresolved": top is None,
+        "selected_category": top if active else None,
+        "historical_match": top if not active else None,
+        "category_unresolved": top is None or not active,
         "explanation": (
             "Numeric PartsAPI category selected from local category index; validate source before CRM writeback."
+            if top and active
+            else "Historical category match only; getPartsbyVIN is absent from the current PartsAPI shop contract."
             if top
             else "No numeric PartsAPI category matched this intent/query."
         ),
@@ -214,5 +222,6 @@ def validate_partsapi_category_index(path: str | Path | None = None) -> dict[str
         "path": index.get("path"),
         "category_count": len(index.get("categories", [])),
         "errors": errors,
+        "active_for_current_contract": CURRENT_CONTRACT_CATEGORY_INDEX_ACTIVE,
         "privacy": {"secret_exposed": False, "raw_identifier_is_sensitive": False},
     }

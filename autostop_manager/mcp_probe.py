@@ -15,7 +15,8 @@ from .mcp_contract import validate_manager_mcp_surface
 
 
 DEFAULT_MANAGER_MCP_URL = "http://127.0.0.1:41931/mcp"
-SYNTHETIC_IDENTIFIER = "SYNTHETICVIN00001"
+# Use VIN-compatible characters so the dry-run resolver reaches VINdecode.
+SYNTHETIC_IDENTIFIER = "SYNTHETCVVN000001"
 GLOW_PLUG_QUERY = "свечи накаливания"
 BROWSER_SMOKE_URL = "https://example.com/"
 BROWSER_CHECK_TIMEOUT_SECONDS = 90.0
@@ -179,7 +180,7 @@ async def async_probe_manager_mcp(
                         return report
 
                     status_error, status = await _call(
-                        session, "catalog_provider_status", {"stage": "oem_catalog"}, timeout=timeout
+                        session, "catalog_provider_status", {"stage": "catalog_cross"}, timeout=timeout
                     )
                     status_payload = status or {}
                     status_ok = _tool_error_check(status_error, status) and status_payload.get("ok") is True
@@ -189,25 +190,6 @@ async def async_probe_manager_mcp(
                         "stage": status_payload.get("stage"),
                     }
                     if not status_ok:
-                        report["diagnostic"] = "tool_invocation_failure"
-                        return report
-
-                    category_error, category = await _call(
-                        session,
-                        "search_partsapi_category_index",
-                        {"query": GLOW_PLUG_QUERY, "intent_id": "glow_plug", "limit": 3},
-                        timeout=timeout,
-                    )
-                    category_payload = category or {}
-                    category_ok = _tool_error_check(category_error, category) and category_payload.get("ok") is True
-                    category_unresolved = category_ok and not bool(category_payload.get("matches"))
-                    report["checks"]["partsapi_category_index"] = {
-                        "ok": category_ok,
-                        "diagnostic": "category_unresolved" if category_unresolved else "ok",
-                        "match_count": int(category_payload.get("count") or 0),
-                        "schema": category_payload.get("schema"),
-                    }
-                    if not category_ok:
                         report["diagnostic"] = "tool_invocation_failure"
                         return report
 
@@ -225,28 +207,25 @@ async def async_probe_manager_mcp(
                         timeout=timeout,
                     )
                     resolver_payload = resolver or {}
-                    readiness = resolver_payload.get("readiness")
                     resolver_status = resolver_payload.get("status")
                     resolver_calls = resolver_payload.get("calls")
-                    has_text_category_dry_run = isinstance(resolver_calls, list) and any(
+                    has_vin_decode_dry_run = isinstance(resolver_calls, list) and any(
                         isinstance(call, Mapping)
-                        and call.get("operation") == "parts_by_vin"
+                        and call.get("operation") == "vin_decode"
                         and call.get("dry_run") is True
                         for call in resolver_calls
                     )
                     resolver_ok = (
                         _tool_error_check(resolver_error, resolver)
-                        and resolver_status == "needs_identity_confirmation"
-                        and isinstance(readiness, Mapping)
-                        and readiness.get("needs_partsapi_category_mapping") is False
-                        and has_text_category_dry_run
+                        and bool(resolver_status)
+                        and has_vin_decode_dry_run
                         and not bool(resolver_payload.get("oem_candidates"))
                         and int(resolver_payload.get("live_call_count") or 0) == 0
                     )
                     raw_identifier_returned = _payload_contains(resolver, SYNTHETIC_IDENTIFIER)
                     report["checks"]["synthetic_resolver"] = {
                         "ok": resolver_ok and not raw_identifier_returned,
-                        "diagnostic": "controlled_text_category" if has_text_category_dry_run else "resolver_failed",
+                        "diagnostic": "vin_decode_dry_run" if has_vin_decode_dry_run else "resolver_failed",
                         "status": resolver_status,
                         "live_call_count": int(resolver_payload.get("live_call_count") or 0) if resolver else None,
                         "oem_candidate_count": len(resolver_payload.get("oem_candidates") or []) if resolver else 0,
@@ -255,7 +234,7 @@ async def async_probe_manager_mcp(
                         report["privacy"]["raw_identifier_returned"] = True
                     if not resolver_ok or raw_identifier_returned:
                         report["diagnostic"] = (
-                            "controlled_text_category_failed"
+                            "vin_decode_dry_run_failed"
                             if _tool_error_check(resolver_error, resolver)
                             else "tool_invocation_failure"
                         )
@@ -266,9 +245,8 @@ async def async_probe_manager_mcp(
                             session,
                             "partsapi_catalog_lookup",
                             {
-                                "operation": "parts_by_vin",
+                                "operation": "vin_decode",
                                 "identifier": SYNTHETIC_IDENTIFIER,
-                                "category": "0",
                                 "timeout": 0,
                                 "max_attempts": 1,
                                 "dry_run": False,

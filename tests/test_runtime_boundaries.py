@@ -207,7 +207,6 @@ def test_probe_classifies_http_failure_without_payload(status, expected):
         "registry",
         "duplicate",
         "status",
-        "category",
         "resolver",
         "resolver_private",
         "provider",
@@ -246,15 +245,12 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
     async def call(session, name, arguments, **kw):
         if name == "catalog_provider_status":
             return False, {"ok": failure != "status"}
-        if name == "search_partsapi_category_index":
-            return False, {"ok": failure != "category"}
         if name == "resolve_vin_oem_parts":
             if failure == "resolver":
-                return False, {"status": "broken", "readiness": {"needs_partsapi_category_mapping": True}}
+                return False, {"status": "broken", "calls": []}
             return False, {
-                "status": "needs_identity_confirmation",
-                "readiness": {"needs_partsapi_category_mapping": False},
-                "calls": [{"operation": "parts_by_vin", "dry_run": True}],
+                "status": "needs_vehicle_modification",
+                "calls": [{"operation": "vin_decode", "dry_run": True}],
                 "oem_candidates": [],
                 "live_call_count": 0,
                 "extra": probe.SYNTHETIC_IDENTIFIER if failure == "resolver_private" else "",
@@ -332,14 +328,11 @@ def test_probe_browser_check_uses_dedicated_timeout_and_retains_no_page_text(
     async def call(_session, name, arguments, *, timeout):
         calls.append((name, arguments, timeout))
         if name == "catalog_provider_status":
-            return False, {"ok": True, "providers": [], "stage": "oem_catalog"}
-        if name == "search_partsapi_category_index":
-            return False, {"ok": True, "matches": [], "count": 0, "schema": "PartsApiCategoryIndexV1"}
+            return False, {"ok": True, "providers": [], "stage": "catalog_cross"}
         if name == "resolve_vin_oem_parts":
             return False, {
-                "status": "needs_identity_confirmation",
-                "readiness": {"needs_partsapi_category_mapping": False},
-                "calls": [{"operation": "parts_by_vin", "dry_run": True}],
+                "status": "needs_vehicle_modification",
+                "calls": [{"operation": "vin_decode", "dry_run": True}],
                 "oem_candidates": [],
                 "live_call_count": 0,
             }

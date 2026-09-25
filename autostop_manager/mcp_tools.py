@@ -783,9 +783,10 @@ def register_manager_tools(  # noqa: C901
             "Read-only PartsAPI lookup; dry_run sends no request. Valid operation values: "
             + ", ".join(PARTSAPI_OPERATIONS)
             + ". Check catalog_provider_status.operation_status for each operation's credentials and required parameters; "
-            "configured access does not prove provider success. For parts_by_vin, part_type defaults to oem; "
-            "use omit/non-oem to skip the type parameter. Additional shop operations accept provider_parameters "
-            "with API names from operation_status.provider_params. Never pass keys or method in that object."
+            "configured access does not prove provider success. VINdecode identifies a TecDoc carId; "
+            "getSearchTree supplies strId for getArticles. The articles are unconfirmed fitment candidates. "
+            "Shop operations accept provider_parameters with API names from operation_status.provider_params. "
+            "Never pass keys or method in that object."
         ),
         annotations=ToolAnnotations(
             title="PartsAPI Catalog Lookup",
@@ -802,7 +803,6 @@ def register_manager_tools(  # noqa: C901
         supplier_id: str | int | None = None,
         provider_parameters: dict[str, str | int | float] | None = None,
         brand: str | None = None,
-        part_type: str | None = None,
         category: str | None = None,
         vehicle_type: str | None = None,
         type_id: str | None = None,
@@ -827,7 +827,6 @@ def register_manager_tools(  # noqa: C901
             supplier_id=supplier_id,
             provider_parameters=provider_parameters,
             brand=brand,
-            part_type=part_type,
             category=category,
             vehicle_type=vehicle_type,
             type_id=type_id,
@@ -846,17 +845,17 @@ def register_manager_tools(  # noqa: C901
 
     server.tool(
         name="search_partsapi_category_index",
-        description="Search the local PartsAPI numeric category index by query/intent without live calls or secrets.",
+        description="Search a historical PartsAPI getPartsbyVIN category fixture; current 43-method contract does not use it.",
     )(search_partsapi_category_index)
 
     server.tool(
         name="explain_partsapi_category_for_intent",
-        description="Explain why a PartsAPI numeric category was selected for a part intent.",
+        description="Explain a historical PartsAPI numeric category match without selecting it for the current contract.",
     )(explain_partsapi_category_for_intent)
 
     server.tool(
         name="validate_partsapi_category_index",
-        description="Validate the tracked local PartsAPI category index fixture without exposing secrets or identifiers.",
+        description="Validate the historical PartsAPI category fixture and report whether it is active for the current contract.",
     )(validate_partsapi_category_index)
 
     @server.tool(
@@ -915,8 +914,10 @@ def register_manager_tools(  # noqa: C901
     server.tool(
         name="resolve_vin_oem_parts",
         description=(
-            "Resolve one VIN/frame/body-number and requested part into a read-only VinOemResolution: "
-            "identity, part intent, PartsAPI category, OEM candidates, enrichment, readiness gates, manual actions, and CRM gate."
+            "Resolve one VIN/frame/body-number and requested part into a read-only resolution: "
+            "vehicle identity, PartsAPI VINdecode and TecDoc tree/article candidates, readiness gates, "
+            "manual fitment actions, and a guarded CRM gate. Supply confirmed vehicle_type PC/CV/Motorcycle "
+            "when VINdecode does not return carType. TecDoc articles do not prove OEM fitment."
         ),
         annotations=ToolAnnotations(
             title="OEM Catalog Candidates",
@@ -1102,7 +1103,8 @@ def register_manager_tools(  # noqa: C901
         name="benchmark_vin_parts_lookup",
         description=(
             "Read-only benchmark for a batch of CRM VIN/frame/body-number items: identity confidence, part-intent recognition, "
-            "safe public search templates, provider blockers, and PartsAPI dry-run readiness. Raw identifiers are redacted from output."
+            "safe public search templates, provider blockers, and current 43-method PartsAPI dry-run readiness. "
+            "Raw identifiers are redacted from output."
         ),
     )(benchmark_vin_parts_lookup)
 

@@ -5,7 +5,7 @@ import os
 from typing import Any
 from urllib.parse import quote_plus
 
-from .catalog_clients import PARTSAPI_OPERATIONS, partsapi_operation_status
+from .catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES, PARTSAPI_OPERATIONS, partsapi_operation_status
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .vin_sources import AMAYAMA_SOURCE_ID, PARTSOUQ_SOURCE_ID, PUBLIC_CATALOG_SOURCE_ALIASES
@@ -60,34 +60,11 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         stage="catalog_cross",
         access_mode="api_key",
         env_names=("PARTSAPI_BASE_URL",),
-        env_any_groups=(
-            ("PARTSAPI_KEY",),
-            ("PARTSAPI_VINDECODE_KEY",),
-            ("PARTSAPI_VINDECODE_OE_KEY",),
-            ("PARTSAPI_GOSNOMER2VIN_KEY",),
-            ("PARTSAPI_PARTS_BY_VIN_KEY",),
-            ("PARTSAPI_OE_APPLICABILITY_KEY",),
-            ("PARTSAPI_CROSSES_KEY",),
-            ("PARTSAPI_CROSSES_WITH_BRAND_KEY",),
-            ("PARTSAPI_CROSSES_TITLE_KEY",),
-            ("PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY",),
-            ("PARTSAPI_ARTICLE_CROSSES_KEY",),
-            ("PARTSAPI_SEARCH_ARTICLES_KEY",),
-            ("PARTSAPI_GET_ENGINE_KEY",),
-            ("PARTSAPI_SEARCH_TREE_KEY",),
-            ("PARTSAPI_ARTICLES_KEY",),
-            ("PARTSAPI_ARTICLE_KEY",),
-            ("PARTSAPI_ARTICLE_CRITERIA_KEY",),
-            ("PARTSAPI_GET_NORMS_MAKES_KEY",),
-            ("PARTSAPI_GET_NORMS_MODELS_KEY",),
-            ("PARTSAPI_GET_NORMS_MOTORS_KEY",),
-            ("PARTSAPI_GET_NORMS_TIMES_KEY",),
-            ("PARTSAPI_GET_FILL_VOLUMES_KEY",),
-        ),
+        env_any_groups=tuple((name,) for name in sorted(set(PARTSAPI_METHOD_KEY_ENV_NAMES.values()))),
         capabilities=tuple(PARTSAPI_OPERATIONS),
         priority="high",
-        role="Primary MVP candidate for VIN/plate/OE decode, part-name/applicability/cross checks, AUTONORMS labor-time, and fluid-volume lookup.",
-        limits="Needs account/API key; not a confirmed procurement stock source unless supplier prices are connected.",
+        role="VIN identity, TecDoc article, part-name/cross, AUTONORMS labor-time, and fluid-volume lookup.",
+        limits="TecDoc articles are candidates, not VIN-specific OEM EPC proof or confirmed procurement stock.",
         docs_url="https://partsapi.ru/docs",
     ),
     CatalogProvider(
@@ -445,35 +422,15 @@ def build_oem_parts_provider_plan(
         (provider for provider in all_cross_providers if provider["source_id"] == "partsapi_ru"), None
     )
     partsapi_operation_statuses = dict(partsapi_provider.get("operation_status") or {}) if partsapi_provider else {}
-    partsapi_oem_operations = ("vin_decode_oe", "parts_by_vin", "oe_applicability")
-    partsapi_oem_candidate_operations = ("parts_by_vin",)
-    partsapi_configured_oem_operations = [
+    partsapi_tecdoc_operations = ("vin_decode", "search_tree", "articles")
+    partsapi_configured_tecdoc_operations = [
         operation
-        for operation in partsapi_oem_operations
+        for operation in partsapi_tecdoc_operations
         if bool((partsapi_operation_statuses.get(operation) or {}).get("configured"))
     ]
-    partsapi_configured_oem_candidate_operations = [
-        operation
-        for operation in partsapi_oem_candidate_operations
-        if bool((partsapi_operation_statuses.get(operation) or {}).get("configured"))
-    ]
-    partsapi_live_oem_operations = [
-        operation
-        for operation in partsapi_oem_operations
-        if bool((partsapi_operation_statuses.get(operation) or {}).get("live_callable_now"))
-    ]
-    partsapi_live_oem_candidate_operations = [
-        operation
-        for operation in partsapi_oem_candidate_operations
-        if bool((partsapi_operation_statuses.get(operation) or {}).get("live_callable_now"))
-    ]
-    partsapi_live_oem = bool(partsapi_live_oem_candidate_operations)
+    partsapi_tecdoc_chain_configured = len(partsapi_configured_tecdoc_operations) == len(partsapi_tecdoc_operations)
     live_oem: list[dict[str, Any]] = []
-    if partsapi_provider and partsapi_live_oem:
-        live_oem.append(partsapi_provider)
     oem_candidate_providers = list(oem_providers)
-    if partsapi_provider and partsapi_configured_oem_candidate_operations:
-        oem_candidate_providers.append(partsapi_provider)
     live_aftermarket = [provider for provider in aftermarket_providers if provider["live_callable_now"]]
     live_price_references = [provider for provider in procurement_providers if provider["live_callable_now"]]
     live_procurement = [
@@ -498,13 +455,8 @@ def build_oem_parts_provider_plan(
             "missing_env": missing_env,
             "missing_env_names": missing_env,
         }
-        if partsapi_configured_oem_operations:
-            blocker.update(
-                {
-                    "authorization_status": "unverified",
-                    "readiness_basis": "configuration_only",
-                }
-            )
+        if partsapi_tecdoc_chain_configured:
+            blocker["partsapi_scope"] = "TecDoc article candidates; exact OEM applicability requires an OEM EPC."
         blockers.append(blocker)
     if not live_procurement:
         missing_env = sorted(
@@ -551,25 +503,25 @@ def build_oem_parts_provider_plan(
             "identity_ready_for_oem_candidate_lookup": identity_ready,
             "identity_ready_for_crm_writeback": writeback_ready,
             "live_oem_catalog_available": bool(live_oem),
-            "live_oem_candidate_lookup_available": bool(partsapi_live_oem_candidate_operations),
-            "live_oem_applicability_available": bool(
-                (partsapi_operation_statuses.get("oe_applicability") or {}).get("live_callable_now")
-            ),
-            "configured_oem_candidate_lookup_available": bool(partsapi_configured_oem_candidate_operations),
-            "configured_oem_applicability_available": bool(
-                (partsapi_operation_statuses.get("oe_applicability") or {}).get("configured")
-            ),
+            "live_oem_candidate_lookup_available": False,
+            "live_oem_applicability_available": False,
+            "configured_oem_candidate_lookup_available": False,
+            "configured_oem_applicability_available": False,
+            "configured_tecdoc_article_lookup_available": partsapi_tecdoc_chain_configured,
+            "live_tecdoc_article_lookup_available": False,
             "partsapi_authorization_status": (
                 partsapi_provider.get("authorization_status") if partsapi_provider else "not_configured"
             ),
             "partsapi_readiness_basis": (
                 partsapi_provider.get("readiness_basis") if partsapi_provider else "configuration_only"
             ),
-            "partsapi_oem_operations": {
-                operation: partsapi_operation_statuses.get(operation, {}) for operation in partsapi_oem_operations
+            "partsapi_tecdoc_operations": {
+                operation: partsapi_operation_statuses.get(operation, {}) for operation in partsapi_tecdoc_operations
             },
-            "partsapi_configured_oem_operations": partsapi_configured_oem_operations,
-            "partsapi_live_oem_operations": partsapi_live_oem_operations,
+            "partsapi_configured_tecdoc_operations": partsapi_configured_tecdoc_operations,
+            "partsapi_oem_operations": {},
+            "partsapi_configured_oem_operations": [],
+            "partsapi_live_oem_operations": [],
             "live_aftermarket_catalog_available": bool(live_aftermarket),
             "live_price_reference_available": bool(live_price_references),
             "live_public_retail_reference_available": any(
@@ -583,6 +535,11 @@ def build_oem_parts_provider_plan(
                 "step": "decode_vehicle_identity",
                 "providers": [provider["source_id"] for provider in identity_providers],
                 "acceptance": "identity is high confidence or uncertainty is carried into quote matrix",
+            },
+            {
+                "step": "lookup_tecdoc_articles",
+                "providers": ["partsapi_ru"] if partsapi_provider and partsapi_tecdoc_chain_configured else [],
+                "acceptance": "VINdecode carId, a selected getSearchTree strId, and getArticles return candidate articles; verify fitment separately",
             },
             {
                 "step": "find_oem_candidates",
