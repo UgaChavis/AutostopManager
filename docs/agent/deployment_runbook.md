@@ -6,9 +6,8 @@ CRM keeps its Python registrar and guarded ledger; native MCP omits them.
 ## Verify and publish
 
 Run `./scripts/release-gates.sh` with disposable data; coverage stays >=82%.
-Commit, fetch `origin/AutostopManager`, merge without force and rerun gates.
-Push `git push origin HEAD:AutostopManager`;
-compare HEAD with `git ls-remote origin refs/heads/AutostopManager`; require green CI.
+Merge `origin/AutostopManager` into the feature branch, rerun gates, push and
+merge its green PR. Confirm the published revision with `git ls-remote`.
 
 ## Authorized coordinated release
 
@@ -25,9 +24,10 @@ any `current` link manually. Manager's private `.env` needs the loopback
 `AUTOSTOP_STORE_API_URL` and Store READ/MANAGE/QUOTE/OWNER tokens; CRM's environment
 is separate.
 
-Whenever native Manager MCP or static J1 is part of the release, invoke the
-coordinated deploy with
-`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1 AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`.
+Before deploy, switch the clean server checkout to `AutostopManager`, fetch and
+fast-forward it to the published revision. `deploy.sh` runs the pinned
+[catalog sync](../offline_parts_catalogs.md) before maintenance and activates
+native Manager MCP by default. For static J1, set `AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`.
 Browser rendering remains opt-in through `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY=1`
 and only after the deploy's 2 GiB `MemAvailable`, 1 GiB `SwapFree` and 60-second
 zero-swap-I/O preflight. Never create the browser attestation marker by hand.
