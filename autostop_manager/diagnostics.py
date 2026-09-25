@@ -18,6 +18,16 @@ TEXT_DOCUMENTS = (
     "docs/agent/deployment_runbook.md",
     "docs/agent/j1_web_research.md",
 )
+REFERENCE_DOCUMENTS = (
+    "docs/agent/module_operations/README.md",
+    "docs/agent/module_operations/coverage_matrix.md",
+    "docs/agent/module_operations/release_manifest_2026-09-25.md",
+    "docs/agent/module_operations/runtime_release.md",
+    "docs/agent/module_operations/store_adapter.md",
+    "docs/agent/module_operations/manager_codex_mcp.md",
+    "docs/agent/module_operations/vin_catalog_j1.md",
+    "docs/agent/module_operations/telegram_automation.md",
+)
 # Aggregate ceiling for the active operational instruction documents.  It
 # remains bounded while allowing their current guarded-workflow coverage.
 INSTRUCTION_BUDGET_BYTES = 32 * 1024
@@ -30,16 +40,17 @@ def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     actual = {"AGENTS.md"}
     actual.update(str(p.relative_to(root)) for p in (root / "docs/agent").rglob("*.md"))
     actual.update(str(p.relative_to(root)) for p in (root / ".agents/skills").rglob("*.md"))
-    if actual != set(TEXT_DOCUMENTS):
+    if actual != set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS):
         warnings.append("instruction_inventory_mismatch")
     size = 0
-    for name in TEXT_DOCUMENTS:
+    for name in (*TEXT_DOCUMENTS, *REFERENCE_DOCUMENTS):
         path = root / name
         try:
             if not path.resolve().is_relative_to(root):
                 raise ValueError("outside_project")
             text = path.read_text(encoding="utf-8")
-            size += len(text.encode())
+            if name in TEXT_DOCUMENTS:
+                size += len(text.encode())
             if not text.strip():
                 warnings.append(f"empty_document:{name}")
             if name.endswith("SKILL.md"):
@@ -60,7 +71,13 @@ def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             warnings.append(f"document_unreadable:{name}")
     if size > INSTRUCTION_BUDGET_BYTES:
         warnings.append("instruction_budget_exceeded")
-    return {"ok": not warnings, "documents": len(TEXT_DOCUMENTS), "bytes": size, "warnings": warnings}
+    return {
+        "ok": not warnings,
+        "documents": len(TEXT_DOCUMENTS),
+        "reference_documents": len(REFERENCE_DOCUMENTS),
+        "bytes": size,
+        "warnings": warnings,
+    }
 
 
 def watchdog_status() -> dict[str, Any]:
