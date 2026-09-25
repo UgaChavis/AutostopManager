@@ -102,7 +102,7 @@ def _rg_matches(
     elif has_synthetic_page_markers:
         # Extracted PDF pages have synthetic [PAGE N] lines. Exclude them in
         # ripgrep itself, before --max-count can hide a real catalog match.
-        expression = r"^[^\x0C].*" + literal
+        expression = r"^(?:[^\x0C].*)?" + literal
     else:
         expression = query
     command = [
