@@ -6,9 +6,10 @@ CRM keeps its Python registrar and guarded ledger; native MCP omits them.
 ## Verify and publish
 
 Run `./scripts/release-gates.sh` with disposable data; coverage stays >=82%.
-Commit, fetch `origin/AutostopManager`, merge without force and rerun gates.
-Push `git push origin HEAD:AutostopManager`;
-compare HEAD with `git ls-remote origin refs/heads/AutostopManager`; require green CI.
+Commit on a feature branch, fetch `origin/AutostopManager`, merge it into the
+feature branch without rebase, and rerun gates. Push the feature branch, require
+green CI, then merge its PR. Compare the merged revision with
+`git ls-remote origin refs/heads/AutostopManager`.
 
 ## Authorized coordinated release
 
@@ -25,9 +26,26 @@ any `current` link manually. Manager's private `.env` needs the loopback
 `AUTOSTOP_STORE_API_URL` and Store READ/MANAGE/QUOTE/OWNER tokens; CRM's environment
 is separate.
 
-Whenever native Manager MCP or static J1 is part of the release, invoke the
-coordinated deploy with
-`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1 AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`.
+Before a coordinated deploy, verify the server source checkout is clean, then
+run `git switch AutostopManager`, `git fetch origin AutostopManager`, and
+`git merge --ff-only origin/AutostopManager`. Confirm local HEAD matches the
+published revision before invoking the deploy.
+
+Before CRM enters maintenance, the coordinated deploy invokes the selected
+immutable Manager snapshot's `scripts/sync_offline_parts_catalog_release.py` with
+`--cache-root "$(dirname "$MANAGER_DB")/offline_parts_catalogs"`.
+The helper verifies the 25 published catalog originals, derived text and one
+search result. A complete cache needs no network; an empty cache receives the
+pinned [catalog release](../offline_parts_catalogs.md), import and OCR. A failure
+stops the release before maintenance. `--verify-only` performs the same local
+readback without writes or a download. Git does not contain the PDF/XLSX files;
+the coordinated deploy fetches them from the public GitHub Release when needed.
+An indexed original or text file that is missing or changed causes an explicit
+stop; this helper does not overwrite existing catalog entries.
+
+The coordinated deploy activates native Manager MCP by default
+(`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1`). When static J1 is part of the
+release, invoke it with `AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`.
 Browser rendering remains opt-in through `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY=1`
 and only after the deploy's 2 GiB `MemAvailable`, 1 GiB `SwapFree` and 60-second
 zero-swap-I/O preflight. Never create the browser attestation marker by hand.
