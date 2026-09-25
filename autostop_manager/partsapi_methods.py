@@ -1,4 +1,4 @@
-"""PartsAPI shop method signatures, reviewed 2026-09-16. No credentials or examples."""
+"""PartsAPI shop method signatures from the owner export of 2026-09-25."""
 
 PARTSAPI_SHOP_METHODS: dict[str, tuple[str, ...]] = {
     "getMakes": ("carType",),
@@ -17,8 +17,8 @@ PARTSAPI_SHOP_METHODS: dict[str, tuple[str, ...]] = {
     "tecdocCrosses": ("number",),
     "getEngine": ("TYPE", "TYPE_ID", "LANG"),
     "getPassengerCarInfo": ("carId", "lang"),
+    "getProductGroupsByBrandNumber": ("brand", "sku", "lang"),
     "VINdecode": ("vin", "lang"),
-    "VINdecodeOE": ("vin",),
     "decodeVINus": ("vin",),
     "gosnomer2vin": ("gosnomer",),
     "GetNormsMakes": (),

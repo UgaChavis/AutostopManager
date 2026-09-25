@@ -497,7 +497,7 @@ def _source_requirements(identifier_kind: str, profile: dict[str, Any]) -> list[
     requirements.append(
         {
             "source_id": "partsapi_ru",
-            "reason": "Needed for VINdecodeOE/OE applicability and cross/analog confidence before parts writeback.",
+            "reason": "VINdecode can add vehicle identity and TecDoc article/cross candidates; exact OEM applicability still needs EPC evidence.",
         }
     )
     if make in {"mercedes-benz", "volkswagen", "skoda", "bmw", "audi"}:
@@ -1071,7 +1071,7 @@ def decode_vehicle_identity(
             "epc_confirmation_required": True,
             "cross_source_agreement": {
                 "status": "not_checked",
-                "sources": ["NHTSA vPIC", "PartsAPI VINdecodeOE"],
+                "sources": ["NHTSA vPIC", "PartsAPI VINdecode"],
                 "matched_fields": [],
                 "conflicting_fields": [],
             },

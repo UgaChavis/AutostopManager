@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from autostop_manager import config as manager_config
+from autostop_manager.catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES
 import autostop_manager.mcp_tools as mcp_tools_module
 from autostop_manager.mcp_server import build_server
 from autostop_manager.mcp_tools import register_manager_tools
@@ -15,24 +16,7 @@ from autostop_manager.mcp_contract import mcp_schema_fingerprint as _mcp_schema_
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PARTSAPI_ENV_NAMES = [
-    "PARTSAPI_KEY",
-    "PARTSAPI_VINDECODE_KEY",
-    "PARTSAPI_VINDECODE_OE_KEY",
-    "PARTSAPI_PARTS_BY_VIN_KEY",
-    "PARTSAPI_OE_APPLICABILITY_KEY",
-    "PARTSAPI_CROSSES_KEY",
-    "PARTSAPI_CROSSES_WITH_BRAND_KEY",
-    "PARTSAPI_CROSSES_TITLE_KEY",
-    "PARTSAPI_ARTICLE_CROSSES_KEY",
-    "PARTSAPI_SEARCH_ARTICLES_KEY",
-    "PARTSAPI_GET_ENGINE_KEY",
-    "PARTSAPI_SEARCH_TREE_KEY",
-    "PARTSAPI_ARTICLES_KEY",
-    "PARTSAPI_ARTICLE_KEY",
-    "PARTSAPI_ARTICLE_CRITERIA_KEY",
-    "PARTSAPI_BASE_URL",
-]
+PARTSAPI_ENV_NAMES = ["PARTSAPI_KEY", "PARTSAPI_BASE_URL", *sorted(set(PARTSAPI_METHOD_KEY_ENV_NAMES.values()))]
 STORE_RUNTIME_ENV_NAMES = [
     "AUTOSTOP_STORE_API_URL",
     "AUTOSTOP_STORE_READ_TOKEN",
@@ -215,7 +199,8 @@ def test_benchmark_vin_parts_lookup_tool_is_registered(tmp_path, monkeypatch):
 
     assert result["summary"]["count"] == 1
     assert result["summary"]["part_intent_recognized_count"] == 1
-    assert "PARTSAPI_KEY" in result["summary"]["missing_env_names"]
+    assert "PARTSAPI_VINDECODE_KEY" in result["summary"]["missing_env_names"]
+    assert "PARTSAPI_KEY" not in result["summary"]["missing_env_names"]
     assert "MR41S123456" not in rendered
     assert "MR41S-123456" not in rendered
 
