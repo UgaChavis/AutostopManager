@@ -147,7 +147,7 @@ def test_old_database_history_is_preserved_without_being_read(tmp_path):
 
 def test_retired_tools_and_providers_are_absent():
     tools = build_server()._tool_manager._tools
-    assert len(tools) == 42
+    assert len(tools) == 43
     assert (
         not {
             "remember",
