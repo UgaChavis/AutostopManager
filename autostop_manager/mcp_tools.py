@@ -39,6 +39,7 @@ from .partsapi_category_index import (
     validate_partsapi_category_index,
 )
 from .oem_candidate_web_evidence import verify_oem_candidates_web
+from .offline_catalogs import search_offline_parts_catalogs
 from .part_market_assessment import assess_part_market
 from .public_automotive_evidence import lookup_public_automotive_evidence
 from .source_catalog import recommend_automotive_sources
@@ -1113,6 +1114,22 @@ def register_manager_tools(  # noqa: C901
             "by brand and data type without copying licensed source content."
         ),
     )(recommend_automotive_sources)
+
+    server.tool(
+        name="search_offline_parts_catalogs",
+        description=(
+            "Read-only lookup in locally extracted supplied parts catalog files. "
+            "Search by article/OE reference or non-identifying vehicle profile, never by full VIN. "
+            "Returns bounded excerpts with PDF page or XLSX sheet and row; hits are candidates, not confirmed fitment."
+        ),
+        annotations=ToolAnnotations(
+            title="Offline Parts Catalog Search",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )(search_offline_parts_catalogs)
 
     server.tool(
         name="lookup_public_automotive_evidence",
