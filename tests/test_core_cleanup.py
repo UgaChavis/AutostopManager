@@ -23,7 +23,7 @@ SPEC.loader.exec_module(hooks)
 
 @pytest.fixture
 def docs(tmp_path):
-    for name in diagnostics.TEXT_DOCUMENTS:
+    for name in (*diagnostics.TEXT_DOCUMENTS, *diagnostics.REFERENCE_DOCUMENTS):
         dest = tmp_path / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, dest)
@@ -34,6 +34,7 @@ def test_documents_fit_budget_and_have_only_three_skills():
     report = diagnostics.audit_documentation()
     assert diagnostics.INSTRUCTION_BUDGET_BYTES == 32 * 1024
     assert report["bytes"] <= diagnostics.INSTRUCTION_BUDGET_BYTES
+    assert report["reference_documents"] == len(diagnostics.REFERENCE_DOCUMENTS)
     assert report["ok"]
     assert len(list((ROOT / ".agents/skills").glob("*/SKILL.md"))) == 3
 
@@ -48,7 +49,9 @@ def test_prepare_for_work_instruction_requires_fresh_private_readiness_context()
     assert "do not carry over old conversation context or business records" in normalized
 
 
-@pytest.mark.parametrize("fault", ["missing", "empty", "link", "outside", "large", "extra", "name", "description"])
+@pytest.mark.parametrize(
+    "fault", ["missing", "empty", "link", "outside", "large", "extra", "reference_missing", "name", "description"]
+)
 def test_document_checks_fail_on_broken_instructions(docs, fault):
     path = docs / "AGENTS.md"
     if fault == "missing":
@@ -63,6 +66,8 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
         path.write_text("x" * (diagnostics.INSTRUCTION_BUDGET_BYTES + 1))
     elif fault == "extra":
         (docs / "docs/agent/extra.md").write_text("# extra")
+    elif fault == "reference_missing":
+        (docs / diagnostics.REFERENCE_DOCUMENTS[0]).unlink()
     else:
         path = docs / diagnostics.TEXT_DOCUMENTS[1]
         path.write_text(path.read_text().replace(f"{fault}:", "wrong:", 1))
