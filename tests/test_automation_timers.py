@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -103,6 +104,48 @@ def test_restart_preserves_adopted_desired_and_status_exposes_external_drift(tmp
     assert status["actual_period_minutes"] == 30
     assert status["reconcile_state"] == "drift"
     assert status["error_code"] == "system_timer_drift"
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unavailable"])
+def test_timer_transport_failure_preserves_status_and_blocks_readiness(tmp_path: Path, failure: str):
+    policies = {
+        timer_id: SystemTimerPolicy(timer_id, f"autostop-{timer_id}.timer", timer_id, "managed")
+        for timer_id in ("failed", "healthy")
+    }
+    store = AutomationStore(tmp_path / "registry.sqlite3")
+    controller = SystemTimerController(policies=policies, runner=fake_systemctl, store=store)
+    controller.adopt_all_current()
+    calls = []
+
+    def failing_transport(command):
+        calls.append(command)
+        if command[2] == "autostop-failed.timer":
+            if failure == "timeout":
+                return subprocess.run(
+                    [sys.executable, "-c", "import time; time.sleep(10)"],
+                    capture_output=True,
+                    text=True,
+                    timeout=0.05,
+                    check=False,
+                )
+            return subprocess.run([str(tmp_path / "missing-systemctl")], check=False)
+        return fake_systemctl(command)
+
+    controller.runner = failing_transport
+    service = AutomationControlService(store, timer_controller=controller)
+    status = control_request(service, "status", {}, None, None)
+    failed, healthy = status["system_timers"]
+    assert failed["reconcile_state"] == "inspection_error"
+    assert failed["error_code"] == "system_timer_inspection_failed"
+    assert failed["desired_state"] == "on"
+    assert failed["actual_state"] == "unknown"
+    assert healthy["reconcile_state"] == "in_sync"
+    readiness = control_request(service, "readiness", {}, None, None)
+    assert readiness["ready"] is False
+    assert readiness["checks"]["system_timer_reconciliation"] == "degraded"
+    with pytest.raises(AutomationError, match="system_timer_inspection_failed"):
+        controller.set_enabled("failed", enabled=False)
+    assert all(command[:2] == ["systemctl", "show"] for command in calls)
 
 
 def test_managed_timer_dropin_is_staged_without_systemctl_side_effect(tmp_path: Path):

@@ -1,5 +1,30 @@
 # Runtime, backups и выпуск
 
+## Хосты и границы
+
+MNG1 — `vps26457.mnogoweb.in`, основной прикладной сервер: Manager, CRM, Store,
+G1, Telegram, J1, Nginx и PostgreSQL. Это не основной VPN-сервер. На 2026-09-26
+ОС Ubuntu 24.04 LTS; точное ядро после перезагрузки проверяется через `uname -r`,
+а сам факт перезагрузки — новым `/proc/sys/kernel/random/boot_id`.
+
+По уточнению владельца от 2026-09-26 основной VPN — MNG2 (ранее написано MNJ2),
+резервный — fst.kz. Для MNG2 адрес и доверенный SSH-доступ пока не установлены.
+Не приписывайте ему старые алиасы или checkout `/root/AutostopVPN/repo` на MNG1.
+FST проверяется только через `autostop-vpn-fst` по
+[VPN skill](../../../.agents/skills/manage-fst-vpn/SKILL.md): текущий hostname
+`VPN-Kz.fst.kz`, контейнер `amnezia-awg2` работает, failed units отсутствуют.
+Это проверка SSH/процесса, не нового клиентского VPN-сеанса. VPN-хосты исключены
+из обновления/перезагрузки прикладного MNG1.
+
+Перед обновлением ОС сохраните root-only пакетный перечень, конфигурацию служб,
+сети и proxy, свежий проверенный dump и boot ID. Применяйте поддерживаемые
+обновления без снятия vendor phasing и без автоматического удаления данных.
+Перезагрузка выполняется после выпуска и завершения backup/deploy процессов;
+проверка после неё повторяет SHA, systemd, контейнеры, публичный TLS/HTTP,
+Gateway/MCP, G1, Telegram duty, static/browser J1 и доступ Codex.
+
+## Компоненты
+
 Срез 2026-09-25: source Manager `/opt/AutostopManager` (Git), CRM `/opt/autostopcrm` (Git), Store `/opt/autostopapp` (Git); installed Manager `/opt/autostop-manager-releases/current` — sealed snapshot с `REVISION`/`MANIFEST.sha256`, Store `/opt/autostop-app` — установленное дерево без Git. Реальную ревизию CRM подтверждает OCI label работающего `autostopcrm`, Store — production deploy marker + image/current.env, Manager — snapshot `REVISION` и cwd активного сервиса. Git HEAD и workflow success отдельно этого не доказывают.
 
 | Unit / контейнер | Назначение и readiness | Зависимость, безопасная проверка |

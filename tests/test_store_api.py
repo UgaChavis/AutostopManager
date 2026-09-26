@@ -565,6 +565,59 @@ def test_exact_order_read_accepts_live_archive_projection(monkeypatch):
     assert result["items"][0]["archive_reason_sha256"] == "c" * 64
 
 
+@pytest.mark.parametrize("read_path", ["search", "summary", "full"])
+@pytest.mark.parametrize("payment_status,paid_at", [("PAYMENT_REQUIRED", None), ("PAID", "2026-09-26T03:30:00Z")])
+def test_order_payment_projection_matches_store_search_and_exact_read(monkeypatch, read_path, payment_status, paid_at):
+    # Store agent_read._order_out and the bulk search projection share these
+    # fields. The fixture contains no customer or payment transaction details.
+    order = {
+        "entity": "store_order",
+        "id": "synthetic-order-1",
+        "status": "READY",
+        "payment_status": payment_status,
+        "paid_at": paid_at,
+        "ready_at": None,
+        "items_count": 0,
+        "total": "0.00",
+        "has_external_items": False,
+    }
+    if read_path == "full":
+        order.update(items=[], items_has_more=False, nested_limit=100)
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[order])))
+    client = _client()
+    result = (
+        client.search(entity="store_order", limit=1)
+        if read_path == "search"
+        else client.entity_context(entity="store_order", entity_id=order["id"], detail=read_path)
+    )
+    assert result["ok"] is True
+    assert result["items"][0]["payment_status"] == payment_status
+    assert result["items"][0]["paid_at"] == paid_at
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"payment_status": None},
+        {"payment_status": {"private": "hidden"}},
+        {"payment_status": "unknown"},
+        {"paid_at": False},
+        {"paid_at": {"private": "hidden"}},
+        {"paid_at": "2026-09-26"},
+        {"paid_at": "2026-09-26T03:30:00"},
+        {"paid_at": "invalid"},
+        {"paid_at": "2026-99-99T03:30:00Z"},
+    ],
+)
+def test_order_payment_projection_rejects_invalid_types_and_dates(monkeypatch, invalid):
+    order = {"entity": "store_order", "id": "synthetic-order-1", "payment_status": "PAID", "paid_at": None, **invalid}
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[order])))
+    result = _client().search(entity="store_order", limit=1)
+    assert result["ok"] is False
+    assert result["summary"]["error_code"] == "store_response_schema_invalid"
+    assert result["items"] == []
+
+
 def test_exact_quote_full_read_uses_quote_token_and_keeps_authorized_pii(monkeypatch):
     captured = {}
     payload = _envelope(

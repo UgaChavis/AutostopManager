@@ -14,6 +14,7 @@ TEXT_DOCUMENTS = (
     ".agents/skills/manage-owner-telegram/SKILL.md",
     ".agents/skills/manage-autostop-store/SKILL.md",
     ".agents/skills/manage-fst-vpn/SKILL.md",
+    ".agents/skills/manage-owner-instagram/SKILL.md",
     "docs/agent/operations.md",
     "docs/agent/deployment_runbook.md",
     "docs/agent/j1_web_research.md",
@@ -27,6 +28,7 @@ REFERENCE_DOCUMENTS = (
     "docs/agent/module_operations/manager_codex_mcp.md",
     "docs/agent/module_operations/vin_catalog_j1.md",
     "docs/agent/module_operations/telegram_automation.md",
+    "docs/agent/module_operations/instagram.md",
 )
 # Aggregate ceiling for the active operational instruction documents.  It
 # remains bounded while allowing their current guarded-workflow coverage.

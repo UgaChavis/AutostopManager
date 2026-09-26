@@ -138,3 +138,14 @@ PY
 | `scripts/remove-learning-hooks.py` | RO dry-run по умолчанию; `--apply` LOCAL меняет Codex config с backup. Только если gate сообщил требуемую legacy migration. |
 
 Сервисные unit-файлы и класс запуска: `autostop-manager-mcp.service` (native endpoint, LOCAL service), `autostop-manager-scheduler.service` (job executor, EXT отложенно), `autostop-j1.service` (public network worker, EXT чтение), `autostop-j1-browser.service` (Docker/attestation, EXT), `autostop-work-telegram.service` (рабочий bridge, EXT), `autostop-telegram.service` (личный bridge, EXT), `autostop-codex-wake.service` (Codex turns от event, EXT), `autostop-codex-start.service` (Codex boot daemon, LOCAL). Источник — `deploy/systemd/`; `systemctl is-active` проверяет только процесс, конкретные контракты указаны в [J1](vin_catalog_j1.md), [Telegram и Automation](telegram_automation.md) и [release runbook](../deployment_runbook.md).
+
+
+## Gmail и доказательство доставки
+
+`doctor --integrations --full` требует квитанцию profile/labels/search и реального
+self-delivery/readback/cleanup моложе 30 дней. Успешное read-only чтение не
+обновляет доказательство отправки. Сохраняйте старую квитанцию до разрешённого
+теста; при отсутствии разрешения отмечайте live delivery BLOCKED, не снимайте
+обязательный gate и не меняйте generated_at задним числом. На 2026-09-26 чтение
+работает, квитанция 2026-08-26 просрочена. Контракт —
+`autostop_manager/integration_audit.py`; правила — [CRM/Gmail operations](../operations.md).
