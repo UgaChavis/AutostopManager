@@ -10,6 +10,7 @@
 | Manager ↔ Store adapter | [Store adapter](store_adapter.md), `autostop_manager/store_api.py`, `store_integration.py`, `store_owner_api.py` | Store; Manager хранит только курсоры и guarded receipts |
 | VIN/OEM, PartsAPI, каталоги, J1 | [Автомобильные источники и J1](vin_catalog_j1.md), `docs/partsapi.md`, `docs/offline_parts_catalogs.md` | Manager для технических кандидатов; CRM/Store для кейсов |
 | Telegram bridge/wake, Automation Center | [Telegram и автоматизация](telegram_automation.md), `automation_registry.py`, `telegram_wake.py` | Telegram владеет сообщениями; Manager техническим состоянием |
+| Рабочий Instagram через Windsor.ai | [Instagram skill](../../../.agents/skills/manage-owner-instagram/SKILL.md), инструменты плагина в интерактивном Codex | Instagram владеет публикациями и комментариями; Direct и входящие события не подключены, доступность в CLI/wake не проверена |
 | Службы, контейнеры, CI и release | [Runtime и release](runtime_release.md), [release runbook](../deployment_runbook.md) | Каждый сервис по своей системе |
 
 [Матрица покрытия](coverage_matrix.md) фиксирует проверенные цепочки и пробелы. [Манифест релиза](release_manifest_2026-09-25.md) отделяет опубликованный GitHub от установленного runtime. Имена и схемы Manager MCP сверяются генератором `docs/agent/manager_mcp_catalog.json` и `mcp-probe`; CRM и Store имеют собственные проверки схем. Для полного JSON Schema читайте активный `tools/list`: каталог содержит fingerprint, а не копию каждого поля, которая может устареть.
