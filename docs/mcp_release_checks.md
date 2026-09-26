@@ -14,6 +14,14 @@ autostop_manager.cli mcp-probe
 standalone recovery with preserved rollback state. Never print key values when
 checking process/configuration parity.
 
+`--store-check` checks health/capabilities and reads at most one order through
+`store_search(entity="store_order", limit=1)`. It never mutates Store or follows
+pagination. Require `checks.store_order_search.ok=true`; schema drift fails the
+probe even when health is green. The report retains only `ok` and a fixed
+diagnostic, never order IDs, fields, or raw provider errors. An empty Store is
+reported as `store_order_sample_empty`: access works, but no order was available
+to exercise its field contract. Run this check after the Store cutover settles.
+
 After the J1 browser probe reports both `browser_ready=true` and
 `browser_containers_ready=true`, rerun the native probe with
 `--timeout 90 --browser-check`. Require `checks.fetch_page_browser.ok=true`; this calls the

@@ -106,6 +106,28 @@ def _tool_error_check(is_error: bool, payload: dict[str, Any] | None) -> bool:
     return not is_error and isinstance(payload, dict)
 
 
+def _store_order_read_check(is_error: bool, payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Summarize the adapter result without retaining an order or provider error text."""
+
+    data = payload or {}
+    items = data.get("items")
+    ok = (
+        _tool_error_check(is_error, payload)
+        and data.get("ok") is True
+        and isinstance(items, list)
+        and len(items) <= 1
+        and all(isinstance(item, Mapping) for item in items)
+    )
+    if ok:
+        return {"ok": True, "diagnostic": "ok" if items else "store_order_sample_empty"}
+    summary = data.get("summary")
+    schema_invalid = isinstance(summary, Mapping) and summary.get("error_code") == "store_response_schema_invalid"
+    return {
+        "ok": False,
+        "diagnostic": "store_response_schema_invalid" if schema_invalid else "store_order_read_unavailable",
+    }
+
+
 async def async_probe_manager_mcp(
     url: str = DEFAULT_MANAGER_MCP_URL,
     *,
@@ -114,7 +136,7 @@ async def async_probe_manager_mcp(
     store_check: bool = False,
     browser_check: bool = False,
 ) -> dict[str, Any]:
-    """Probe a native Manager MCP endpoint using only synthetic, read-only data.
+    """Probe native MCP with synthetic requests and an optional bounded Store read.
 
     Results are deliberately summarized: endpoint shape, tool names, hashes,
     statuses and failure classes are retained; input identifiers, response
@@ -132,6 +154,7 @@ async def async_probe_manager_mcp(
             "raw_identifier_returned": False,
             "secret_exposed": False,
             "raw_provider_response_retained": False,
+            "store_order_read_attempted": False,
         },
     }
     if not (0 < timeout <= 90):
@@ -288,6 +311,15 @@ async def async_probe_manager_mcp(
                             for name in ("store_runtime_status", "store_owner_capabilities")
                         ):
                             report["diagnostic"] = "store_connection_unavailable"
+                            return report
+                        report["privacy"]["store_order_read_attempted"] = True
+                        order_error, order_payload = await _call(
+                            session, "store_search", {"entity": "store_order", "limit": 1}, timeout=timeout
+                        )
+                        order_check = _store_order_read_check(order_error, order_payload)
+                        report["checks"]["store_order_search"] = order_check
+                        if not order_check["ok"]:
+                            report["diagnostic"] = order_check["diagnostic"]
                             return report
                     if browser_check:
                         browser_timeout = max(timeout, BROWSER_CHECK_TIMEOUT_SECONDS)
