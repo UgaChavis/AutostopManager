@@ -30,13 +30,18 @@ def docs(tmp_path):
     return tmp_path
 
 
-def test_documents_fit_budget_and_have_only_three_skills():
+def test_documents_fit_budget_and_cover_operational_skills():
     report = diagnostics.audit_documentation()
     assert diagnostics.INSTRUCTION_BUDGET_BYTES == 32 * 1024
     assert report["bytes"] <= diagnostics.INSTRUCTION_BUDGET_BYTES
     assert report["reference_documents"] == len(diagnostics.REFERENCE_DOCUMENTS)
     assert report["ok"]
-    assert len(list((ROOT / ".agents/skills").glob("*/SKILL.md"))) == 3
+    assert {path.parent.name for path in (ROOT / ".agents/skills").glob("*/SKILL.md")} == {
+        "manage-autostop-store",
+        "manage-fst-vpn",
+        "manage-owner-instagram",
+        "manage-owner-telegram",
+    }
 
 
 def test_prepare_for_work_instruction_requires_fresh_private_readiness_context():

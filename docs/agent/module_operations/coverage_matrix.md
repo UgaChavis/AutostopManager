@@ -1,19 +1,30 @@
-# Матрица покрытия, 2026-09-25
+# Матрица технического аудита, 2026-09-26
 
-Статус относится только к указанному доказательству. `PASS` означает пройденную проверку строки, а не полную функциональность всех downstream провайдеров. Текущие SHA и фактический результат после выпуска нужно обновить в release manifest.
+Статусы ниже — исходный live-аудит до нового выпуска. PASS относится к конкретной
+проверке, не всем возможным бизнес-сценариям. Финальные GitHub/runtime SHA и
+независимый post-deploy/post-boot readback сохраняются в закрытом техническом
+отчёте `/root/autostop-audit-20260926/`. Данные клиентов в отчёт не входят.
 
-| Цепочка / назначение | Точка входа и контракт | Тест / безопасная проверка | Доказательство текущего среза | Статус и пробел |
-| --- | --- | --- | --- | --- |
-| A1 → Codex runtime/CLI; загрузка инструкций и инструментов | `AGENTS.md`, `.codex/`, `autostop_manager/cli.py`; активный Codex `mcpServerStatus/list` | CLI `--help`, клиентский перечень tools, синтетическая задача | Активный клиент содержит CRM и Manager namespaces; установленный Manager MCP отвечает отдельно | `PASS` для регистрации; новая декларация после reload требует отдельного клиентского вызова |
-| A2 → D1 native Manager MCP; транспорт, schemas | `http://127.0.0.1:41931/mcp`; `mcp_server.py`, `mcp_tools.py`, `mcp_contract.py` | `mcp-probe --url ... --provider-failure-check --store-check` | Активный сервер прошёл initialize/ping, `tools/list`, synthetic resolver и Store checks на установленном SHA `ec173eb` | `PASS` для активной версии; исходный `2064711` даст ожидаемый schema drift до deploy |
-| A2 → C2 → C3 CRM Gateway v2; CRM данные | CRM MCP `get_runtime_status`, `ping_connector`, `get_connector_identity`; CRM Gateway source/schema | Gateway unit/contract tests, read-only identity/status | CRM image label `5f2fb219`, контейнер healthy, публичный `/`=200, `/mcp` без auth=401 | `PASS` для transport/identity; все write-capabilities проверяются только синтетически |
-| D1 → F1 → F2; Store read и guarded write | Manager `store_api.py`, `store_integration.py`; Store `/internal/agent/v1`, owner `/api/v1` | `mcp-probe --store-check`, Store Agent tests/OpenAPI | Manager probe прошёл Store status/capabilities; Store marker и image соответствуют `1c4734a` | `PASS` для status/schema; коммерческие writes в production не проверялись |
-| E1 VIN/OEM и PartsAPI; кандидаты, применимость | `vin_oem_resolver.py`, `catalog_clients.py`, `partsapi_methods.py`, `docs/partsapi.md` | Synthetic resolver/provider-failure tests; отдельный provider status | Основная Manager ветка содержит опубликованный PartsAPI контракт и offline catalog commits | `PASS` synthetic; реальная применимость отдельного VIN/OEM не установлена |
-| E1 offline catalogs; импорт и индекс | `offline_catalogs.py`, `scripts/import_offline_parts_catalogs.py`, `scripts/ocr_offline_parts_catalogs.py`, `scripts/sync_offline_parts_catalog_release.py` | `tests/test_offline_catalogs*.py`, `scripts/release-gates.sh`, release sync `--verify-only` | GitHub asset SHA verified; production cache имеет 35 записей, release sync `--verify-only` подтвердил 25 pinned originals, OCR и synthetic search; установленный MCP `ec173eb` ещё без search tool | `PASS` index/preflight; новый pinned release sync и `search_offline_parts_catalogs` требуют post-deploy read-only smoke |
-| J1 static search | `j1_research.py`, `autostop-j1.service`, SearXNG/Crawl4AI | `python -m autostop_manager.j1_research probe` | Сервис active и J1 probe ready | `PASS` технически; качество внешних результатов зависит от провайдеров |
-| J1 browser path | `j1_browser.py`, `autostop-j1-browser.service`, renderer/proxy | prerequisites + attestation + synthetic `fetch_page_browser` | Browser stack active, probe ready на установленной версии | `PASS` технически; после новой Manager ревизии attestation нужно повторить штатным путём |
-| B1 → B4 Telegram bridge/wake | `telegram_bridge.py`, `telegram_wake.py`, systemd work bridge/wake | Только technical `monitor-status`/`status`, без сообщений | Work bridge и wake active; monitor/wake status ok | `PASS` для duty/transport; содержимое/отправка не проверялись |
-| G1 automation → scheduler → timers/jobs | `automation_registry.py`, `automation_daemon.py`, `autostop-manager-scheduler.service` | readiness, `systemctl` и timer readback | readiness `ready=true`, scheduler и 5 managed timer states in_sync, hold отсутствует | `PASS` для технического состояния; отдельные бизнес jobs не запускались |
-| Release и backup; воспроизводимое восстановление | CRM `deploy.sh`, Manager release gates, Store `Deploy VPS` | SHA/CI, backup marker/dump list, официальные post-release checks | Store на текущем GitHub ref; CRM установлен на `5f2fb21` при ref `ac10f53`, Manager установлен на `ec173eb` при ref `2064711`; backup timer success 2026-09-25 | `BLOCKED` до публикации новых карточек, gates и штатного coordinated deploy |
+| Цепочка | Контракт / проверка | Результат исходного аудита | Исправление / граница |
+| --- | --- | --- | --- |
+| Codex → Manager MCP | `mcp-probe`, active tools/list | PASS: 43 tools, схемы, synthetic resolver, provider failure | После выпуска повторить на установленном SHA |
+| Codex → CRM Gateway | local/public exhaustive check, OAuth identity | PASS: 24 tools, auth, schemas, все safe invocations | Реальные финансовые изменения не проверяются |
+| Manager → Store | runtime/capabilities/search/exact read | FAIL: поиск заказов отклоняет новые поля оплаты | strict контракт `payment_status`, `paid_at`, регрессии search/summary/full |
+| Store → поставщики | sourcing ROSSKO/BERG | PASS transport; FAIL достоверность confidence/price basis | Совпадение артикула не подтверждает применимость; без закупочной цены нет confirmed purchase |
+| VIN/OEM, PartsAPI | live norms_models, synthetic VIN identity, MANN catalog | PASS запросы/структура результатов | Кандидаты не доказывают VIN-specific fitment или заказ |
+| Локальные каталоги | `search_offline_parts_catalogs`, pinned release sync | PASS bounded search with references | Сам поиск не подтверждает полноту всех каталогов |
+| J1 static | queued synthetic public job → search → fetch → report | PASS worker/SearXNG/HTML; дубликаты отмечены отдельно | Качество внешних источников проверяется по задаче |
+| J1 browser | native `mcp-probe --browser-check` и verifier | FAIL: browser release/attestation от старого SHA | Штатная activation нового SHA с memory/swap gate, затем MCP render |
+| Telegram → bridge → wake | content-free status, duty, VAD/inference self-check | PASS: authorized, wake connected, queue empty, voice execution | Клиентские text/photo/voice сценарии — synthetic tests; live sends не разрешены аудитом |
+| G1 → scheduler/timers | readiness + пять таймеров | PASS: in_sync, digest OFF, no hold/outbox | Ошибка одного systemctl изолируется; backup подписан Store; справки G1 без запуска |
+| G1 / карта CRM | Playwright desktop/mobile/keyboard | Новые тесты справок и отсутствия пересечений подписей | До post-deploy readback это результат тестового контура |
+| Windsor → Instagram | get_connectors/fields/actions/data; exact wake discovery/read | PASS: чтение в интерактивном Codex, CLI и wake | Записи BLOCKED для live smoke: тестовые публикации запрещены; Direct/event trigger отсутствуют |
+| Gmail | profile/labels/search read; full doctor proof | PASS чтение; BLOCKED свежая проверка доставки | Квитанция self-delivery старше 30 дней; не освежать её без реального разрешённого теста |
+| Backup/recovery | новый pg_dump + full decompress + isolated restore | Результат в закрытом restore-drill.log | Только network-none временные ресурсы; проверить cleanup и production health |
+| MNG1 release | canonical CI → exact SHA → штатный deploy → boot/readback | Выполняется после source gates | Локальные tests/PR не подтверждают установленную систему |
+| VPN | hostname/SSH/container status | FST PASS процесс; MNG2 BLOCKED точная идентификация доступа | MNG2 основной, FST резервный по владельцу; обновления VPN исключены |
 
-В каждом компоненте подробная карточка даёт command, env names, side effects, способ остановки и rollback. Фактический список каждого MCP tool и schema проверяется `tools/list` и catalog fingerprint; список каждой CLI команды формируется из parser и `--help`. Любой `FAIL` после обновления требует воспроизведения на точном SHA, а не общего restart.
+Операционные карточки и восстановление: [каталог](README.md),
+[runbook](../deployment_runbook.md), [runtime/hosts](runtime_release.md),
+[Instagram](instagram.md). Для каждой неисправности различайте transport,
+контракт, разрешения и результат; отсутствие ошибки HTTP не заменяет readback.

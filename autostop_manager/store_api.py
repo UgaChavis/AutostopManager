@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import hashlib
 from http.client import HTTPException
 import json
@@ -109,6 +110,8 @@ _ENTITY_SUMMARY_FIELDS: dict[str, frozenset[str]] = {
         {
             "order_number",
             "status",
+            "payment_status",
+            "paid_at",
             "ready_at",
             "archived_at",
             "has_archive_reason",
@@ -1300,6 +1303,14 @@ def _validate_quote_vin_photo(photo: Any, *, path: str) -> None:
 def _validate_entity_scalar_types(item: dict[str, Any], *, path: str) -> None:
     if "has_estimate_draft" in item and not isinstance(item["has_estimate_draft"], bool):
         raise ValueError(f"{path}.has_estimate_draft must be boolean")
+    if "payment_status" in item and item["payment_status"] not in ("PAYMENT_REQUIRED", "PAID"):
+        raise ValueError(f"{path}.payment_status is invalid")
+    paid_at = item.get("paid_at")
+    if paid_at is not None:
+        if not isinstance(paid_at, str) or len(paid_at) > 64 or "T" not in paid_at:
+            raise ValueError(f"{path}.paid_at must be an ISO datetime or null")
+        if datetime.fromisoformat(paid_at).tzinfo is None:
+            raise ValueError(f"{path}.paid_at must include a timezone")
 
 
 def _validate_quote_full_collection_counts(item: dict[str, Any], *, path: str) -> None:

@@ -62,7 +62,7 @@ SYSTEM_TIMER_ALLOWLIST: Mapping[str, SystemTimerPolicy] = MappingProxyType(
         "database_backup": SystemTimerPolicy(
             timer_id="database_backup",
             unit_name="autostop24-db-backup.timer",
-            display_name="Резервная копия CRM",
+            display_name="Резервная копия Store",
             control_mode="read_only",
         ),
         "app_watchdog": SystemTimerPolicy(
@@ -104,23 +104,27 @@ class SystemTimerController:
 
     def inspect(self, timer_id: str) -> dict[str, Any]:
         policy = self._policy(timer_id)
-        result = self.runner(
-            [
-                "systemctl",
-                "show",
-                policy.unit_name,
-                "--property=LoadState",
-                "--property=ActiveState",
-                "--property=UnitFileState",
-                "--property=NextElapseUSecRealtime",
-                "--property=NextElapseUSecMonotonic",
-                "--property=LastTriggerUSec",
-                "--property=Result",
-                "--property=TimersCalendar",
-                "--property=TimersMonotonic",
-                "--no-pager",
-            ]
-        )
+        command = [
+            "systemctl",
+            "show",
+            policy.unit_name,
+            "--property=LoadState",
+            "--property=ActiveState",
+            "--property=UnitFileState",
+            "--property=NextElapseUSecRealtime",
+            "--property=NextElapseUSecMonotonic",
+            "--property=LastTriggerUSec",
+            "--property=Result",
+            "--property=TimersCalendar",
+            "--property=TimersMonotonic",
+            "--no-pager",
+        ]
+        try:
+            result = self.runner(command)
+        except (OSError, subprocess.TimeoutExpired):
+            # Keep the other timers and readiness diagnostics available when
+            # systemd is unreachable. Never turn an unknown state into success.
+            result = subprocess.CompletedProcess(command, 1, stdout="", stderr="")
         properties: dict[str, list[str]] = {}
         if result.returncode == 0:
             for line in result.stdout.splitlines():
