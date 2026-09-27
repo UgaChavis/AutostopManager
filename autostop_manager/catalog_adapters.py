@@ -172,6 +172,30 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         docs_url="https://s.exist.ru/xml/osd.xml",
         manual_allowed=True,
     ),
+    CatalogProvider(
+        source_id="avito_reefapi",
+        name="Avito listings via ReefAPI",
+        stage="market_listing",
+        access_mode="api_key",
+        env_names=("REEFAPI_API_KEY",),
+        capabilities=("listing_search", "listing_details", "parts_market_leads"),
+        priority="high",
+        role="On-demand Avito listing leads for parts sourcing after article and vehicle identity work.",
+        limits="Provider credits and availability apply. Listings do not confirm stock, price, seller terms, or fitment.",
+        docs_url="https://reefapi.com/docs/avito",
+    ),
+    CatalogProvider(
+        source_id="drom_webbee",
+        name="Baza.Drom parts listings via Webbee",
+        stage="market_listing",
+        access_mode="api_key",
+        env_names=("WEBBEE_API_TOKEN", "WEBBEE_DROM_ROBOT_ALIAS"),
+        capabilities=("async_parts_search", "listing_results", "parts_market_leads"),
+        priority="high",
+        role="On-demand Baza.Drom spare-parts listing leads through the authorized Webbee task API.",
+        limits="Async task and provider quota apply. Results do not confirm stock, price, seller terms, or fitment.",
+        docs_url="https://app.webbee-ai.ru/api-docs/swagger.yml",
+    ),
 )
 
 
@@ -247,6 +271,15 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
             )
             row["operation_status"] = operation_status
             row["live_operations"] = []
+        if provider.stage == "market_listing":
+            row.update(
+                {
+                    "authorization_status": "unverified" if configured else "not_configured",
+                    "readiness_basis": "configuration_only",
+                    "live_callable_now": configured,
+                    "live_operations": [],
+                }
+            )
         providers.append(row)
     stage_matrix = _provider_stage_matrix(providers)
     return {
@@ -268,6 +301,7 @@ def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, An
         "aftermarket_catalog",
         "procurement_price",
         "market_price",
+        "market_listing",
     ]
     stage_labels = {
         "identity": "identity",
@@ -276,6 +310,7 @@ def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, An
         "aftermarket_catalog": "aftermarket",
         "procurement_price": "procurement",
         "market_price": "market benchmark",
+        "market_listing": "marketplace listings",
     }
     matrix: list[dict[str, Any]] = []
     by_stage = {stage: [provider for provider in providers if provider["stage"] == stage] for stage in stage_order}
@@ -417,6 +452,7 @@ def build_oem_parts_provider_plan(
     aftermarket_providers = _pick_configured(_providers_for_stage("aftermarket_catalog"))
     procurement_providers = _pick_configured(_providers_for_stage("procurement_price"))
     market_providers = _pick_configured(_providers_for_stage("market_price"))
+    listing_providers = _pick_configured(_providers_for_stage("market_listing"))
 
     partsapi_provider = next(
         (provider for provider in all_cross_providers if provider["source_id"] == "partsapi_ru"), None
@@ -567,6 +603,11 @@ def build_oem_parts_provider_plan(
                 "step": "quote_market_price",
                 "providers": [provider["source_id"] for provider in market_providers],
                 "acceptance": "RF public retail range is separate from procurement and client sale price",
+            },
+            {
+                "step": "search_market_listings",
+                "providers": [provider["source_id"] for provider in listing_providers],
+                "acceptance": "Avito and Drom announcements are transient sourcing leads; confirm the card, seller and fitment before a quote",
             },
         ],
         "manual_public_search_queries": _manual_public_search_queries(

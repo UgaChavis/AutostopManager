@@ -11,6 +11,7 @@
 | Store Agent/owner API | [Store Agent API](https://github.com/AutoStopKrsk/AutoStop-App/blob/1c4734ac7b9939106b432397267f133ab36b9125/docs/store_agent_api.md), `/opt/autostopapp/backend/app/routers/agent.py`, Store OpenAPI | Store |
 | Manager ↔ Store adapter | [Store adapter](store_adapter.md), `autostop_manager/store_api.py`, `store_integration.py`, `store_owner_api.py` | Store; Manager хранит только курсоры и guarded receipts |
 | VIN/OEM, PartsAPI, каталоги, J1 | [Автомобильные источники и J1](vin_catalog_j1.md), `docs/partsapi.md`, `docs/offline_parts_catalogs.md` | Manager для технических кандидатов; CRM/Store для кейсов |
+| Avito и Baza.Drom, объявления о запчастях | [Поиск объявлений](market_listings.md), `autostop_manager/avito_listings.py`, `autostop_manager/drom_listings.py` | Временные поисковые зацепки в Manager; подтверждённый кейс принадлежит CRM/Store |
 | Telegram bridge/wake, Automation Center | [Telegram и автоматизация](telegram_automation.md), `automation_registry.py`, `telegram_wake.py` | Telegram владеет сообщениями; Manager техническим состоянием |
 | Рабочий Instagram через Windsor.ai | [Instagram operations](instagram.md), [Instagram skill](../../../.agents/skills/manage-owner-instagram/SKILL.md), текущие инструменты плагина | Instagram; чтение в интерактивном Codex, CLI и wake проверено, реальные записи требуют отдельного результата; Direct и события отсутствуют |
 | Службы, контейнеры, CI и release | [Runtime и release](runtime_release.md), [release runbook](../deployment_runbook.md) | Каждый сервис по своей системе |

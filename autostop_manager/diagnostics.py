@@ -26,6 +26,7 @@ REFERENCE_DOCUMENTS = (
     "docs/agent/module_operations/runtime_release.md",
     "docs/agent/module_operations/store_adapter.md",
     "docs/agent/module_operations/manager_codex_mcp.md",
+    "docs/agent/module_operations/market_listings.md",
     "docs/agent/module_operations/vin_catalog_j1.md",
     "docs/agent/module_operations/telegram_automation.md",
     "docs/agent/module_operations/instagram.md",

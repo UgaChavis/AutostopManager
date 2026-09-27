@@ -9,6 +9,7 @@ from mcp.types import ToolAnnotations
 from .action_contract import prepare_action_contract
 from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
+from .avito_listings import avito_read_listing, avito_search_listings
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import (
     PARTSAPI_OPERATIONS,
@@ -24,6 +25,7 @@ from .config import (
     get_store_read_token,
 )
 from .crm_parts_store import parts_store_cards
+from .drom_listings import drom_get_parts_search, drom_start_parts_search
 from .j1_research import (
     research_add_queries,
     research_cancel,
@@ -767,6 +769,81 @@ def register_manager_tools(  # noqa: C901
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )(catalog_provider_status)
+
+    @server.tool(
+        name="avito_search_listings",
+        description=(
+            "Search Avito listings through ReefAPI by de-identified part or OEM query and location. "
+            "Default category is spare parts. Use Krasnoyarsk first, then another region if needed. "
+            "Returns bounded listing leads, never confirmed stock, price, or fitment. Provider credits may be consumed."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+    )
+    def avito_search_listings_tool(
+        query: str,
+        location: str = "krasnoyarsk",
+        category: str = "zapchasti_i_aksessuary",
+        page: int = 1,
+        limit: int = 50,
+        price_min: int | None = None,
+        price_max: int | None = None,
+        delivery_only: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return avito_search_listings(
+            query=query,
+            location=location,
+            category=category,
+            page=page,
+            limit=limit,
+            price_min=price_min,
+            price_max=price_max,
+            delivery_only=delivery_only,
+            dry_run=dry_run,
+        )
+
+    @server.tool(
+        name="avito_read_listing",
+        description=(
+            "Read one public Avito listing through ReefAPI using its ID or Avito URL. "
+            "Returns a sourcing lead with a bounded description; verify seller, stock and fitment separately. "
+            "Provider credits may be consumed."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+    )
+    def avito_read_listing_tool(ad_id: str, dry_run: bool = False) -> dict[str, Any]:
+        return avito_read_listing(ad_id=ad_id, dry_run=dry_run)
+
+    @server.tool(
+        name="drom_start_parts_search",
+        description=(
+            "Start one Webbee task for Baza.Drom spare-parts listings by a de-identified query and region. "
+            "Returns a task ID and run UID for drom_get_parts_search. Creates a vendor task and may consume quota; "
+            "does not write to Drom, CRM, or Store."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
+    def drom_start_parts_search_tool(
+        query: str,
+        region: str = "krasnoyarsk",
+        limit: int = 50,
+        page_limit: int = 3,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return drom_start_parts_search(query=query, region=region, limit=limit, page_limit=page_limit, dry_run=dry_run)
+
+    @server.tool(
+        name="drom_get_parts_search",
+        description=(
+            "Poll one Webbee Baza.Drom task by its ID and run UID; when complete, return bounded listing leads. "
+            "Queued is not complete. Verify the source listing, seller, price and fitment before using a result."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+    )
+    def drom_get_parts_search_tool(task_id: int, uid: str) -> dict[str, Any]:
+        return drom_get_parts_search(task_id=task_id, uid=uid)
 
     server.tool(
         name="plan_oem_parts_providers",

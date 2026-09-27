@@ -1,6 +1,6 @@
 # Manager CLI, native MCP и Codex
 
-Проверено по исходникам `4e26c6c336d9ff60770803e940860881cdd69615` 2026-09-25. Источники контрактов: [`cli.py`](../../../autostop_manager/cli.py), [`mcp_server.py`](../../../autostop_manager/mcp_server.py), [`mcp_tools.py`](../../../autostop_manager/mcp_tools.py), [`mcp_contract.py`](../../../autostop_manager/mcp_contract.py), [`manager_mcp_catalog.json`](../manager_mcp_catalog.json), [`mcp_release_checks.md`](../../mcp_release_checks.md). Данные CRM, Store и переписка принадлежат соответствующим системам; Manager хранит лишь ограниченное техническое состояние. Состояние production перечитывайте перед решением: снимок ниже сделан до выпуска этой ревизии.
+Обновлено по текущему source 2026-09-27. Источники контрактов: [`cli.py`](../../../autostop_manager/cli.py), [`mcp_server.py`](../../../autostop_manager/mcp_server.py), [`mcp_tools.py`](../../../autostop_manager/mcp_tools.py), [`mcp_contract.py`](../../../autostop_manager/mcp_contract.py), [`manager_mcp_catalog.json`](../manager_mcp_catalog.json), [`mcp_release_checks.md`](../../mcp_release_checks.md). Данные CRM, Store и переписка принадлежат соответствующим системам; Manager хранит лишь ограниченное техническое состояние. Снимок production ниже относится к прежней ревизии; перечитайте его перед выпуском.
 
 ## Маршрут и границы
 
@@ -50,7 +50,7 @@ asyncio.run(main())
 PY
 ```
 
-После deploy смените в первой строке **только** `status` на `reload`, дождитесь обновления и повторите `status`: нужно `connected=true`, `tool_count=43`, `tools_error=false`, `offline_search_schema_ok=true` для опубликованной ревизии `4e26c6c`. Перед deploy 2026-09-25 эта команда read-only показала `connected=true`, 42 tools и отсутствие нового tool. App Server schema получена локально командой `codex app-server generate-json-schema --out <temporary-dir> --experimental`; `mcpServerStatus/list` требует `threadId`, принимает `detail=toolsAndAuthOnly` и возвращает paginated `data`/`nextCursor`. Совпадение task status не подтверждает declarations уже начатого хода: проверяйте новый ход отдельно.
+После deploy смените в первой строке **только** `status` на `reload`, дождитесь обновления и повторите `status`: для этой source revision нужно `connected=true`, `tool_count=47`, `tools_error=false`, `offline_search_schema_ok=true`. Перед прежним deploy 2026-09-25 эта команда read-only показала `connected=true`, 42 tools и отсутствие нового tool. App Server schema получена локально командой `codex app-server generate-json-schema --out <temporary-dir> --experimental`; `mcpServerStatus/list` требует `threadId`, принимает `detail=toolsAndAuthOnly` и возвращает paginated `data`/`nextCursor`. Совпадение task status не подтверждает declarations уже начатого хода: проверяйте новый ход отдельно.
 
 Источник точной **текущей input schema каждого инструмента** — ответ `tools/list` живого endpoint. Сверка source идет через `docs/agent/manager_mcp_catalog.json` (имена, количество, SHA-256 отсортированных `{name,inputSchema}`), проверки `tests/test_mcp_tools.py`, `tests/test_mcp_contract.py` и `cli mcp-probe`. При изменении сигнатуры обновляйте manifest вместе с кодом. Просмотр конкретной схемы в подключенном Codex: найдите имя в `tools/list` и прочитайте `inputSchema`; не считайте старую карточку точнее активной схемы.
 
@@ -71,7 +71,7 @@ PY
 
 ## MCP-инструменты: маршрут проверки
 
-Все 43 имени source revision содержатся в manifest; у production-снимка 2026-09-25 было 42 имени. Ниже каждая строка задаёт владельца, эффект и короткий smoke. `read-only` не означает отсутствие сетевого чтения или записи в временный J1-кеш. **Ни один инструмент с потенциальной записью не вызывайте как smoke**: проверяйте его схему и synthetic/dry-run либо тест в disposable среде.
+Все 47 имён текущей source revision содержатся в manifest; у production-снимка 2026-09-25 было 42 имени. Ниже каждая строка задаёт владельца, эффект и короткий smoke. `read-only` не означает отсутствие сетевого чтения или записи в временный J1-кеш. **Ни один инструмент с потенциальной записью не вызывайте как smoke**: проверяйте его схему и synthetic/dry-run либо тест в disposable среде.
 
 | Инструмент | Назначение, владелец данных, эффект и безопасный smoke |
 | --- | --- |
@@ -91,7 +91,9 @@ PY
 | `lookup_original_parts` | Кандидаты OEM из каталога, read-only provider call; synthetic dry-run/status. Применимость не подтверждается одним источником. |
 | `estimate_repair_work_cost` | Оценка работ, read-only; без VIN/клиентских данных в smoke. Не подтверждает цену для клиента. |
 | `decode_vehicle_identity`, `decode_vehicle_identities` | VIN/frame identification; read-only/возможен внешний provider call. Smoke: dry-run с синтетическим номером; реальные идентификаторы только в авторизованном кейсе. |
-| `catalog_provider_status`, `plan_oem_parts_providers` | Доступность/план OEM провайдеров; read-only, без секретов. Smoke: `catalog_provider_status`; `configured` не равно успешный провайдер. |
+| `catalog_provider_status`, `plan_oem_parts_providers` | Доступность каталожных и рыночных источников, план OEM; read-only, без секретов. Smoke: `catalog_provider_status`; `configured` не равно успешный провайдер. |
+| `avito_search_listings`, `avito_read_listing` | ReefAPI: поиск и чтение одного объявления Авито; поставщик расходует кредиты. Smoke: dry-run, затем отдельный тестовый запрос без данных клиента. Объявление остаётся зацепкой. |
+| `drom_start_parts_search`, `drom_get_parts_search` | Webbee: поставить задачу Baza.Drom, проверить состояние и получить JSON. Start создаёт задачу у поставщика; smoke: dry-run, затем один ограниченный запуск и readback по его ID/UID. [Контракт](market_listings.md). |
 | `partsapi_catalog_lookup` | PartsAPI; `dry_run` без provider запроса, live режим читает внешний каталог. Smoke: dry-run и operation status; результат — кандидат, не fitment. |
 | `search_partsapi_category_index`, `explain_partsapi_category_for_intent`, `validate_partsapi_category_index` | Исторический индекс категорий старого контракта; read-only fixture. Smoke: synthetic текст и `validate`; не использовать как текущий PartsAPI маршрут. |
 | `public_aftermarket_catalog_lookup`, `exist_price_lookup` | Публичные/провайдерские аналоги и цены; read-only внешние запросы, availability и fitment перепроверять. Smoke: schema/dry-run по активным параметрам. |
@@ -101,10 +103,10 @@ PY
 | `j1_research_status`, `j1_research_results`, `j1_research_document`, `j1_research_report` | Чтение job ID и доказательного отчёта J1; read-only. Тесты с disposable кешем; production — только по текущему job ID. |
 | `j1_research_add_queries`, `j1_research_cancel` | Меняет временную J1 job; требует точный job ID, readback статуса. Не выполнять на чужой job как smoke. |
 | `assess_part_market`, `benchmark_vin_parts_lookup`, `recommend_automotive_sources`, `lookup_public_automotive_evidence` | Рыночная оценка/benchmark/реестр источников; read-only или публичные provider reads. Smoke: schema или synthetic fixture; не публикует Store quote. |
-| `search_offline_parts_catalogs` | Read-only поиск локально извлечённых каталогов; новый 43-й tool в source `4e26c6c`, отсутствовал в production-снимке. Smoke: synthetic артикул, оценить bounded excerpts; находка — кандидат. |
+| `search_offline_parts_catalogs` | Read-only поиск локально извлечённых каталогов; был 43-м tool в source `4e26c6c`, отсутствовал в production-снимке. Smoke: synthetic артикул, оценить bounded excerpts; находка — кандидат. |
 | `parts_store_cards` | Карточки CRM колонки «Магазин автозапчастей»: `list/get` читают, `create/append_note` пишут по exact card/revision/idempotency с Gateway readback. Smoke: schema; без live target не создавать карточку. |
 
-Проверенный production smoke до выпуска: из `/tmp` с `PYTHONPATH=/opt/autostop-manager-releases/current` команда `python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` дала `ok=true`, 42/42 схемы, synthetic resolver, предсказуемый отказ провайдера и Store capabilities. С `--timeout 90 --browser-check` вызов `fetch_page_browser` по `example.com` также дал `ok=true`. Из source checkout той же машины получен ожидаемый `schema_mismatch` из-за разных ревизий; это не сбой установленного endpoint. После deploy повторить из активной ревизии и требовать 43/43 либо новое опубликованное число.
+Проверенный production smoke до выпуска: из `/tmp` с `PYTHONPATH=/opt/autostop-manager-releases/current` команда `python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` дала `ok=true`, 42/42 схемы, synthetic resolver, предсказуемый отказ провайдера и Store capabilities. С `--timeout 90 --browser-check` вызов `fetch_page_browser` по `example.com` также дал `ok=true`. Из source checkout той же машины получен ожидаемый `schema_mismatch` из-за разных ревизий; это не сбой установленного endpoint. После deploy повторить из активной ревизии и требовать 47/47 для этого source либо число нового manifest.
 
 Диагностика: `transport_route_unavailable` → сокет/порт и unit; `transport_auth_failure` → разрешённый transport; `tool_not_registered` → версия client/endpoint или manifest; `schema_mismatch` → сверить **какой** `PYTHONPATH` импортирован и опубликованный SHA; provider failure → отдельный downstream, не перезапуск MCP. Для Store проверяйте private API отдельно. При неуспехе выпуска используйте только официальный rollback из `deployment_runbook.md`; не переключайте release symlink вручную.
 
