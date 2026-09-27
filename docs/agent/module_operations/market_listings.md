@@ -15,9 +15,9 @@ Set credentials in the private Manager runtime environment. Never place token
 values, vendor payloads, or customer search text in Git or general docs.
 `catalog_provider_status(stage="market_listing")` lists missing setting names
 without exposing values. `live_callable_now` means the required settings are
-present; `authorization_status=unverified` remains until a separate live check.
-Configuration alone is not a successful provider call; verify both sources
-with a non-customer part query after activation.
+present; `authorization_status=unverified` is a configuration-only marker and
+does not persist successful calls. Judge live access by each tool result.
+Verify both sources with a non-customer part query after activation.
 
 For parts sourcing, use an exact OEM/article and part name when available.
 Search Krasnoyarsk first, then broader regions if delivery is realistic. Search
