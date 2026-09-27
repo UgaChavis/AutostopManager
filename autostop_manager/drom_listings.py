@@ -469,8 +469,15 @@ def _normalise_listing(row: Mapping[str, Any], *, observed_at: str) -> dict[str,
 
     raw_id = _compact_text(_field(row, "ID", "listing_id", "listingId", "objectId", "ad_id"), limit=80)
     if not raw_id:
-        path_match = re.search(r"(?:^|/)(\d+)(?:\.html)?/?$", urlsplit(url).path)
-        raw_id = path_match.group(1) if path_match else None
+        path = urlsplit(url).path
+        provider_id_match = re.search(r"-g(\d+)\.html/?$", path)
+        path_match = re.search(r"(?:^|/)(\d+)(?:\.html)?/?$", path)
+        if provider_id_match:
+            raw_id = f"-{provider_id_match.group(1)}"
+        elif path_match:
+            raw_id = path_match.group(1)
+    # Webbee's public Baza.Drom sample exports some listing IDs as negative
+    # numbers; their source URLs encode the same number as a "-gN.html" suffix.
     if raw_id and not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", raw_id):
         raw_id = None
     price_rub, price_text, price_qualifier = _parse_price(_field(row, "Цена", "price", "price_rub"))

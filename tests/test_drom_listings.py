@@ -368,6 +368,39 @@ def test_get_falls_back_to_numeric_url_id_and_deduplicates_by_id_and_url(
     assert result["duplicate_listing_count"] == 2
 
 
+def test_get_recovers_negative_webbee_id_from_baza_g_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure(monkeypatch)
+    responses = iter(
+        [
+            (200, {"startedAt": "2026-09-27", "completedAt": "2026-09-27"}),
+            (
+                200,
+                [
+                    {
+                        "ID": -16400011444,
+                        "Название": "Фильтр масляный",
+                        "Ссылка на объект": "https://baza.drom.ru/lobnya/sell_spare_parts/filtr-masljanyj-g16400011444.html",
+                        "Цена": "305",
+                    },
+                    {
+                        "Название": "Повтор из другого региона",
+                        "Ссылка на объект": "https://baza.drom.ru/moskva/sell_spare_parts/filtr-masljanyj-g16400011444.html",
+                    },
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(drom_listings, "_api_request", lambda *_args, **_kwargs: next(responses))
+
+    result = drom_listings.drom_get_parts_search(12, "run-12")
+
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["listings"][0]["listing_id"] == "-16400011444"
+    assert result["listings"][0]["price_rub"] == 305
+    assert result["duplicate_listing_count"] == 1
+
+
 def test_failed_provider_task_does_not_fetch_results(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch)
     calls: list[str] = []
