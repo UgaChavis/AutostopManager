@@ -29,6 +29,7 @@ WEBBEE_API_BASE_URL = "https://analytics.webbee-ai.ru"
 BASE_PARTS_SEARCH_URL = "https://baza.drom.ru/{region}/sell_spare_parts/?{query}"
 WEBBEE_API_TOKEN_ENV = "WEBBEE_API_TOKEN"
 WEBBEE_DROM_ROBOT_ALIAS_ENV = "WEBBEE_DROM_ROBOT_ALIAS"
+DROM_LISTINGS_ENABLED_ENV = "AUTOSTOP_DROM_LISTINGS_ENABLED"
 REQUEST_TIMEOUT_SECONDS = 20.0
 MAX_RESPONSE_BYTES = 8_000_000
 MAX_QUERY_CHARS = 128
@@ -71,6 +72,13 @@ def _failure(
         "uid": uid,
         "outcome_uncertain": outcome_uncertain,
     }
+
+
+def drom_listings_enabled() -> bool:
+    """Require an explicit operator opt-in before any Webbee task or result call."""
+
+    load_runtime_env()
+    return os.environ.get(DROM_LISTINGS_ENABLED_ENV, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _load_api_config() -> tuple[str, str] | None:
@@ -285,6 +293,8 @@ def drom_start_parts_search(
         return _failure("limit_out_of_range")
     if clean_page_limit is None or clean_page_limit > MAX_PAGE_LIMIT:
         return _failure("page_limit_out_of_range")
+    if not drom_listings_enabled():
+        return _failure("webbee_disabled", status="disabled")
 
     search_url = _build_search_url(clean_query, clean_region)
     if dry_run:
@@ -542,6 +552,8 @@ def drom_get_parts_search(task_id: int, uid: str) -> dict[str, Any]:
         return _failure("task_id_invalid")
     if not isinstance(uid, str) or not _UID_RE.fullmatch(uid) or j1_fetch.contains_sensitive(uid):
         return _failure("run_uid_invalid", task_id=task_id)
+    if not drom_listings_enabled():
+        return _failure("webbee_disabled", status="disabled", task_id=task_id, uid=uid)
     config = _load_api_config()
     if config is None:
         return _failure("webbee_not_configured", task_id=task_id, uid=uid)

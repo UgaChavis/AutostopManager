@@ -10,14 +10,19 @@ from autostop_manager import drom_listings
 @pytest.fixture(autouse=True)
 def _disable_runtime_env_file_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(drom_listings, "load_runtime_env", list)
+    monkeypatch.delenv(drom_listings.DROM_LISTINGS_ENABLED_ENV, raising=False)
 
 
 def _configure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(drom_listings.DROM_LISTINGS_ENABLED_ENV, "1")
     monkeypatch.setenv("WEBBEE_API_TOKEN", "webbee-test-token")
     monkeypatch.setenv("WEBBEE_DROM_ROBOT_ALIAS", "baza.drom")
 
 
-def test_dry_run_builds_baza_parts_search_url_without_credentials_or_network() -> None:
+def test_enabled_dry_run_builds_baza_parts_search_url_without_credentials_or_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(drom_listings.DROM_LISTINGS_ENABLED_ENV, "1")
     result = drom_listings.drom_start_parts_search("фильтр масляный", dry_run=True)
 
     assert result == {
@@ -31,6 +36,25 @@ def test_dry_run_builds_baza_parts_search_url_without_credentials_or_network() -
         "uid": None,
         "outcome_uncertain": False,
     }
+
+
+def test_disabled_drom_never_contacts_webbee_even_with_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEBBEE_API_TOKEN", "webbee-test-token")
+    monkeypatch.setenv("WEBBEE_DROM_ROBOT_ALIAS", "baza.drom")
+    monkeypatch.setattr(
+        drom_listings,
+        "_api_request",
+        lambda *_args, **_kwargs: pytest.fail("disabled Drom must not call Webbee"),
+    )
+
+    for result in (
+        drom_listings.drom_start_parts_search("фильтр масляный"),
+        drom_listings.drom_start_parts_search("фильтр масляный", dry_run=True),
+        drom_listings.drom_get_parts_search(12, "run-12"),
+    ):
+        assert result["ok"] is False
+        assert result["status"] == "disabled"
+        assert result["error"] == "webbee_disabled"
 
 
 @pytest.mark.parametrize(

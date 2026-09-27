@@ -45,8 +45,9 @@ the previous Telegram work-mode state after release checks succeed.
 
 For the later marketplace activation, verify `catalog_provider_status` with
 `stage="market_listing"` and all four Avito/Drom names in `tools/list`.
-Run both providers' dry-run tools before a bounded real query using no customer
-data. ReefAPI search then listing read and Webbee start then status/result prove
-different links in the chain. A queued Webbee task is not yet a listing result;
+Run Avito dry-run before a bounded real query using no customer data. ReefAPI
+search then listing read prove the Avito chain. Drom is disabled until Webbee
+issues API access and `AUTOSTOP_DROM_LISTINGS_ENABLED=1` is explicitly set;
+only then run its dry-run, bounded start, and status/result. A queued Webbee task is not yet a listing result;
 provider authentication or quota failure is distinct from Manager transport
 failure. See [marketplace operations](agent/module_operations/market_listings.md).
