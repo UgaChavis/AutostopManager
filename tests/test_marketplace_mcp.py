@@ -8,7 +8,7 @@ from mcp.client.streamable_http import streamable_http_client
 import uvicorn
 
 from autostop_manager import config, mcp_tools
-from autostop_manager.catalog_adapters import catalog_provider_status
+from autostop_manager.catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from autostop_manager.mcp_probe import _payload_from_tool_result
 from autostop_manager.mcp_server import build_server
 from autostop_manager.storage import StoreState
@@ -31,7 +31,7 @@ class _ToolServer:
 def test_marketplace_status_requires_both_webbee_settings_and_never_exposes_keys(monkeypatch):
     monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
     monkeypatch.setattr(config, "_ENV_LOADED", False)
-    for name in ("REEFAPI_API_KEY", "WEBBEE_API_TOKEN", "WEBBEE_DROM_ROBOT_ALIAS"):
+    for name in ("REEFAPI_API_KEY", "WEBBEE_API_TOKEN", "WEBBEE_DROM_ROBOT_ALIAS", "AUTOSTOP_DROM_LISTINGS_ENABLED"):
         monkeypatch.delenv(name, raising=False)
 
     missing = catalog_provider_status(stage="market_listing")
@@ -39,6 +39,10 @@ def test_marketplace_status_requires_both_webbee_settings_and_never_exposes_keys
     assert all(row["configured"] is False for row in missing["providers"])
     assert all(row["live_callable_now"] is False for row in missing["providers"])
     assert all(row["authorization_status"] == "not_configured" for row in missing["providers"])
+    drom = next(row for row in missing["providers"] if row["source_id"] == "drom_webbee")
+    assert drom["activation_status"] == "disabled"
+    assert drom["indicator"] == "red"
+    assert missing["disabled_provider_ids"] == ["drom_webbee"]
 
     monkeypatch.setenv("REEFAPI_API_KEY", "reef-private-fixture")
     monkeypatch.setenv("WEBBEE_API_TOKEN", "webbee-private-fixture")
@@ -51,8 +55,24 @@ def test_marketplace_status_requires_both_webbee_settings_and_never_exposes_keys
     monkeypatch.setenv("WEBBEE_DROM_ROBOT_ALIAS", "test-robot")
     complete = catalog_provider_status(stage="market_listing")
     assert all(row["configured"] is True for row in complete["providers"])
-    assert all(row["live_callable_now"] is True for row in complete["providers"])
+    assert (
+        next(row for row in complete["providers"] if row["source_id"] == "avito_reefapi")["live_callable_now"] is True
+    )
+    assert next(row for row in complete["providers"] if row["source_id"] == "drom_webbee")["live_callable_now"] is False
     assert all(row["authorization_status"] == "unverified" for row in complete["providers"])
+    plan = build_oem_parts_provider_plan(identifier="NZE141-0000001", requested_part="воздушный фильтр")
+    listings_step = next(step for step in plan["pipeline"] if step["step"] == "search_market_listings")
+    assert listings_step["providers"] == ["avito_reefapi"]
+
+    monkeypatch.setenv("AUTOSTOP_DROM_LISTINGS_ENABLED", "1")
+    enabled = catalog_provider_status(stage="market_listing")
+    drom = next(row for row in enabled["providers"] if row["source_id"] == "drom_webbee")
+    assert drom["activation_status"] == "unverified"
+    assert drom["live_callable_now"] is True
+    assert enabled["disabled_provider_ids"] == []
+    plan = build_oem_parts_provider_plan(identifier="NZE141-0000001", requested_part="воздушный фильтр")
+    listings_step = next(step for step in plan["pipeline"] if step["step"] == "search_market_listings")
+    assert listings_step["providers"] == ["avito_reefapi", "drom_webbee"]
 
 
 def test_marketplace_mcp_tools_are_independent_and_forward_arguments(monkeypatch, tmp_path):
@@ -95,7 +115,7 @@ def test_marketplace_tools_are_callable_through_local_manager_mcp(monkeypatch, t
     monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
     monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
     monkeypatch.setattr(config, "_ENV_LOADED", False)
-    for name in ("REEFAPI_API_KEY", "WEBBEE_API_TOKEN", "WEBBEE_DROM_ROBOT_ALIAS"):
+    for name in ("REEFAPI_API_KEY", "WEBBEE_API_TOKEN", "WEBBEE_DROM_ROBOT_ALIAS", "AUTOSTOP_DROM_LISTINGS_ENABLED"):
         monkeypatch.delenv(name, raising=False)
 
     async def call_tools():
@@ -135,7 +155,8 @@ def test_marketplace_tools_are_callable_through_local_manager_mcp(monkeypatch, t
             listener.close()
 
     responses = asyncio.run(call_tools())
-    for name in ("avito_search_listings", "avito_read_listing", "drom_start_parts_search"):
+    for name in ("avito_search_listings", "avito_read_listing"):
         assert responses[name]["ok"] is True
-    assert responses["drom_start_parts_search"]["status"] == "dry_run"
-    assert responses["drom_get_parts_search"]["error"] == "webbee_not_configured"
+    assert responses["drom_start_parts_search"]["status"] == "disabled"
+    assert responses["drom_start_parts_search"]["error"] == "webbee_disabled"
+    assert responses["drom_get_parts_search"]["error"] == "webbee_disabled"

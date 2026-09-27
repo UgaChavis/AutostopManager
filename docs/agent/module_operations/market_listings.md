@@ -14,10 +14,21 @@ writes CRM, Store, or marketplace records.
 Set credentials in the private Manager runtime environment. Never place token
 values, vendor payloads, or customer search text in Git or general docs.
 `catalog_provider_status(stage="market_listing")` lists missing setting names
-without exposing values. `live_callable_now` means the required settings are
-present; `authorization_status=unverified` is a configuration-only marker and
+without exposing values. `live_callable_now` requires settings and any explicit
+activation switch; `authorization_status=unverified` is a configuration-only marker and
 does not persist successful calls. Judge live access by each tool result.
 Verify both sources with a non-customer part query after activation.
+
+Baza.Drom/Webbee is implemented but **disabled**. The current Webbee Free
+account does not expose an API token: its security page says API access is
+unavailable on Free, and the authenticated token request returned 401. Provider
+status reports `activation_status=disabled`, `indicator=red` and
+`live_callable_now=false`; both Drom tools return `webbee_disabled` without a
+vendor request, even if credentials are added later. After Webbee grants API
+access, set `WEBBEE_API_TOKEN` privately, verify a bounded non-customer task
+with the switch enabled in an isolated environment, then set
+`AUTOSTOP_DROM_LISTINGS_ENABLED=1` during a later authorized server release.
+The switch defaults to off. Avito is independent of this switch.
 
 For parts sourcing, use an exact OEM/article and part name when available.
 Search Krasnoyarsk first, then broader regions if delivery is realistic. Search

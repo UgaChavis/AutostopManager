@@ -7,6 +7,7 @@ from urllib.parse import quote_plus
 
 from .catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES, PARTSAPI_OPERATIONS, partsapi_operation_status
 from .config import load_runtime_env
+from .drom_listings import drom_listings_enabled
 from .parts_intent import normalize_part_intent
 from .vin_sources import AMAYAMA_SOURCE_ID, PARTSOUQ_SOURCE_ID, PUBLIC_CATALOG_SOURCE_ALIASES
 from .vin_lookup import classify_identifier
@@ -280,6 +281,19 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
                     "live_operations": [],
                 }
             )
+            if provider.source_id == "drom_webbee":
+                enabled = drom_listings_enabled()
+                row.update(
+                    {
+                        "enabled": enabled,
+                        "activation_status": (
+                            "disabled" if not enabled else "unverified" if configured else "not_configured"
+                        ),
+                        "disabled_reason": None if enabled else "webbee_api_access_pending",
+                        "indicator": "red" if not enabled else "unknown",
+                        "live_callable_now": configured and enabled,
+                    }
+                )
         providers.append(row)
     stage_matrix = _provider_stage_matrix(providers)
     return {
@@ -290,6 +304,9 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
         "configured_count": sum(1 for provider in providers if provider["configured"]),
         "live_callable_count": sum(1 for provider in providers if provider["live_callable_now"]),
         "missing_provider_ids": [provider["source_id"] for provider in providers if not provider["configured"]],
+        "disabled_provider_ids": [
+            provider["source_id"] for provider in providers if provider.get("activation_status") == "disabled"
+        ],
     }
 
 
@@ -452,7 +469,9 @@ def build_oem_parts_provider_plan(
     aftermarket_providers = _pick_configured(_providers_for_stage("aftermarket_catalog"))
     procurement_providers = _pick_configured(_providers_for_stage("procurement_price"))
     market_providers = _pick_configured(_providers_for_stage("market_price"))
-    listing_providers = _pick_configured(_providers_for_stage("market_listing"))
+    listing_providers = [
+        provider for provider in _providers_for_stage("market_listing") if provider["live_callable_now"]
+    ]
 
     partsapi_provider = next(
         (provider for provider in all_cross_providers if provider["source_id"] == "partsapi_ru"), None
@@ -607,7 +626,7 @@ def build_oem_parts_provider_plan(
             {
                 "step": "search_market_listings",
                 "providers": [provider["source_id"] for provider in listing_providers],
-                "acceptance": "Avito and Drom announcements are transient sourcing leads; confirm the card, seller and fitment before a quote",
+                "acceptance": "Enabled marketplace announcements are transient sourcing leads; confirm the card, seller and fitment before a quote",
             },
         ],
         "manual_public_search_queries": _manual_public_search_queries(

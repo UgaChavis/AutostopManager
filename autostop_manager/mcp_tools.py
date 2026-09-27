@@ -817,7 +817,8 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="drom_start_parts_search",
         description=(
-            "Start one Webbee task for Baza.Drom spare-parts listings by a de-identified query and region. "
+            "Currently disabled pending Webbee API access. Once explicitly enabled, start one Webbee task "
+            "for Baza.Drom spare-parts listings by a de-identified query and region. "
             "Returns a task ID and run UID for drom_get_parts_search. Creates a vendor task and may consume quota; "
             "does not write to Drom, CRM, or Store."
         ),
@@ -837,7 +838,8 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="drom_get_parts_search",
         description=(
-            "Poll one Webbee Baza.Drom task by its ID and run UID; when complete, return bounded listing leads. "
+            "Currently disabled pending Webbee API access. Once explicitly enabled, poll one Webbee "
+            "Baza.Drom task by its ID and run UID; when complete, return bounded listing leads. "
             "Queued is not complete. Verify the source listing, seller, price and fitment before using a result."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
