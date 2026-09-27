@@ -33,6 +33,8 @@ def test_build_server_uses_runtime_transport_config_and_registers_tools(monkeypa
     assert server.kwargs["stateless_http"] is True
     assert "agent_brief" not in server.kwargs["instructions"]
     assert "customer cases" in server.kwargs["instructions"]
+    assert "avito_search_listings" in server.kwargs["instructions"]
+    assert "drom_start_parts_search" in server.kwargs["instructions"]
 
 
 def test_main_runs_streamable_http_server(monkeypatch):
