@@ -8,7 +8,7 @@ writes CRM, Store, or marketplace records.
 
 | Source | Private runtime settings | MCP tools | Source contract |
 | --- | --- | --- | --- |
-| Avito | `REEFAPI_API_KEY` | `avito_search_listings`, `avito_read_listing` | [ReefAPI Avito API](https://reefapi.com/docs/avito) |
+| Avito | `REEFAPI_API_KEY` | `avito_search_listings`, `avito_read_listing`, `assess_avito_price_sample` | [ReefAPI Avito API](https://reefapi.com/docs/avito) |
 | Baza.Drom | `WEBBEE_API_TOKEN`, `WEBBEE_DROM_ROBOT_ALIAS` | `drom_start_parts_search`, `drom_get_parts_search` | [Webbee task API](https://app.webbee-ai.ru/api-docs/swagger.yml) |
 
 Set credentials in the private Manager runtime environment. Never place token
@@ -37,6 +37,16 @@ carry source URL, observed time and a `lead` status. A listed price, stock or
 compatibility claim requires live confirmation with the seller and vehicle
 before it becomes a procurement offer. Only the authorized CRM/Store case may
 retain selected business findings.
+
+`assess_avito_price_sample` accepts up to 60 normalized Avito search/detail
+listing objects and an exact part number. It makes no provider call. It keeps
+only ads whose title or description actually contains the article, with a
+fixed positive price, known condition, city, source URL and observation time.
+Duplicate listing IDs/URLs count once. Prices stay separate by condition and
+city; a median appears only for three or more distinct ads in one segment.
+This is a descriptive summary of the supplied Avito sample, not the E9 market
+median from independent domains. Search ranking and page coverage limit the
+sample. Seller price, availability and fitment remain unconfirmed.
 
 Both sources return the same listing keys: `source`, `listing_id`, `url`,
 `title`, `description`, `price_rub`, `price_text`, `price_qualifier`, `city`,

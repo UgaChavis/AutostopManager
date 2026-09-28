@@ -71,7 +71,7 @@ PY
 
 ## MCP-инструменты: маршрут проверки
 
-Все 47 имён текущей source revision содержатся в manifest; у production-снимка 2026-09-25 было 42 имени. Ниже каждая строка задаёт владельца, эффект и короткий smoke. `read-only` не означает отсутствие сетевого чтения или записи в временный J1-кеш. **Ни один инструмент с потенциальной записью не вызывайте как smoke**: проверяйте его схему и synthetic/dry-run либо тест в disposable среде.
+Все 48 имён текущей source revision содержатся в manifest; у production-снимка 2026-09-25 было 42 имени. Ниже каждая строка задаёт владельца, эффект и короткий smoke. `read-only` не означает отсутствие сетевого чтения или записи в временный J1-кеш. **Ни один инструмент с потенциальной записью не вызывайте как smoke**: проверяйте его схему и synthetic/dry-run либо тест в disposable среде.
 
 | Инструмент | Назначение, владелец данных, эффект и безопасный smoke |
 | --- | --- |
@@ -93,6 +93,7 @@ PY
 | `decode_vehicle_identity`, `decode_vehicle_identities` | VIN/frame identification; read-only/возможен внешний provider call. Smoke: dry-run с синтетическим номером; реальные идентификаторы только в авторизованном кейсе. |
 | `catalog_provider_status`, `plan_oem_parts_providers` | Доступность каталожных и рыночных источников, план OEM; read-only, без секретов. Smoke: `catalog_provider_status`; `configured` не равно успешный провайдер. |
 | `avito_search_listings`, `avito_read_listing` | ReefAPI: поиск и чтение одного объявления Авито; поставщик расходует кредиты. Smoke: dry-run, затем отдельный тестовый запрос без данных клиента. Объявление остаётся зацепкой. |
+| `assess_avito_price_sample` | Read-only сводка переданных объявлений по точному артикулу, состоянию и городу; медиана относится только к выборке Авито, без подтверждения применимости и наличия. Smoke: три синтетические карточки. |
 | `drom_start_parts_search`, `drom_get_parts_search` | Webbee: код внедрён, но сейчас выключен (`webbee_disabled`, красный статус). До API-токена и явного включения не запускает задачи. После разрешения: dry-run, один ограниченный запуск и readback по ID/UID. [Контракт](market_listings.md). |
 | `partsapi_catalog_lookup` | PartsAPI; `dry_run` без provider запроса, live режим читает внешний каталог. Smoke: dry-run и operation status; результат — кандидат, не fitment. |
 | `search_partsapi_category_index`, `explain_partsapi_category_for_intent`, `validate_partsapi_category_index` | Исторический индекс категорий старого контракта; read-only fixture. Smoke: synthetic текст и `validate`; не использовать как текущий PartsAPI маршрут. |
@@ -106,7 +107,7 @@ PY
 | `search_offline_parts_catalogs` | Read-only поиск локально извлечённых каталогов; был 43-м tool в source `4e26c6c`, отсутствовал в production-снимке. Smoke: synthetic артикул, оценить bounded excerpts; находка — кандидат. |
 | `parts_store_cards` | Карточки CRM колонки «Магазин автозапчастей»: `list/get` читают, `create/append_note` пишут по exact card/revision/idempotency с Gateway readback. Smoke: schema; без live target не создавать карточку. |
 
-Проверенный production smoke до выпуска: из `/tmp` с `PYTHONPATH=/opt/autostop-manager-releases/current` команда `python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` дала `ok=true`, 42/42 схемы, synthetic resolver, предсказуемый отказ провайдера и Store capabilities. С `--timeout 90 --browser-check` вызов `fetch_page_browser` по `example.com` также дал `ok=true`. Из source checkout той же машины получен ожидаемый `schema_mismatch` из-за разных ревизий; это не сбой установленного endpoint. После deploy повторить из активной ревизии и требовать 47/47 для этого source либо число нового manifest.
+Проверенный production smoke до выпуска: из `/tmp` с `PYTHONPATH=/opt/autostop-manager-releases/current` команда `python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` дала `ok=true`, 42/42 схемы, synthetic resolver, предсказуемый отказ провайдера и Store capabilities. С `--timeout 90 --browser-check` вызов `fetch_page_browser` по `example.com` также дал `ok=true`. Из source checkout той же машины получен ожидаемый `schema_mismatch` из-за разных ревизий; это не сбой установленного endpoint. После deploy повторить из активной ревизии и требовать число нового manifest (48/48).
 
 Диагностика: `transport_route_unavailable` → сокет/порт и unit; `transport_auth_failure` → разрешённый transport; `tool_not_registered` → версия client/endpoint или manifest; `schema_mismatch` → сверить **какой** `PYTHONPATH` импортирован и опубликованный SHA; provider failure → отдельный downstream, не перезапуск MCP. Для Store проверяйте private API отдельно. При неуспехе выпуска используйте только официальный rollback из `deployment_runbook.md`; не переключайте release symlink вручную.
 
