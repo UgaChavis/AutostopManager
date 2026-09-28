@@ -800,7 +800,7 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     assert rows[0]["title"] == "Public report"
     assert rows[0]["snippet"] == ""
     assert rows[0]["source"] == "searxng"
-    assert rows[0]["engines"] == ["bing"]
+    assert rows[0]["engines"] == ["bing", "yahoo"]
     assert (rows[0]["source_class"], rows[0]["source_tier"], rows[0]["search_rank"]) == (
         "unknown",
         "unclassified",
@@ -839,12 +839,20 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     ]
 
 
-def test_search_uses_enabled_bing_without_querying_disabled_engines(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_aggregates_bing_and_yahoo_without_legacy_engines(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
         calls.append(query)
-        return [{"url": "https://example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}]
+        if query.startswith("!bing "):
+            return [
+                {"url": "https://bing.example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}
+            ]
+        if query.startswith("!yahoo "):
+            return [
+                {"url": "https://yahoo.example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}
+            ]
+        pytest.fail("legacy SearXNG engine was queried")
 
     monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
     monkeypatch.setattr(
@@ -854,13 +862,44 @@ def test_search_uses_enabled_bing_without_querying_disabled_engines(monkeypatch:
     )
     rows, source = j1_fetch.search_public("brake pads operation technical guide", searxng_url="http://127.0.0.1:8080")
     assert source == "searxng"
-    assert [row["url"] for row in rows] == ["https://example.org/brake-pads"]
-    assert rows[0]["engines"] == ["bing"]
-    assert calls == ["!bing brake pads operation technical guide"]
+    assert {row["url"]: row["engines"] for row in rows} == {
+        "https://bing.example.org/brake-pads": ["bing"],
+        "https://yahoo.example.org/brake-pads": ["yahoo"],
+    }
+    assert calls == [
+        "!bing brake pads operation technical guide",
+        "!yahoo brake pads operation technical guide",
+    ]
     assert j1_fetch._relevant_search_results(
         "тормозные колодки устройство",
         [{"url": "https://example.org/article", "title": "Устройство тормозных колодок"}],
     )
+
+
+def test_search_uses_yahoo_when_bing_has_no_relevant_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
+        calls.append(query)
+        if query.startswith("!bing "):
+            return [{"url": "https://example.org/unrelated", "title": "Unrelated page", "source": "searxng"}]
+        if query.startswith("!yahoo "):
+            return [
+                {"url": "https://example.org/rfc-2606", "title": "RFC 2606 reserved DNS names", "source": "searxng"}
+            ]
+        pytest.fail("legacy SearXNG engine was queried")
+
+    monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: pytest.fail("public fallback should not run after Yahoo succeeds"),
+    )
+    rows, source = j1_fetch.search_public("RFC 2606 reserved DNS names", searxng_url="http://127.0.0.1:8080")
+    assert source == "searxng"
+    assert [row["url"] for row in rows] == ["https://example.org/rfc-2606"]
+    assert rows[0]["engines"] == ["yahoo"]
+    assert calls == ["!bing RFC 2606 reserved DNS names", "!yahoo RFC 2606 reserved DNS names"]
 
 
 def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -874,7 +913,7 @@ def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.M
     monkeypatch.setattr(j1_fetch, "_robots_policy", lambda _url: (False, 1.0))
     rows, source = j1_fetch.search_public("brake pads operation", searxng_url="http://127.0.0.1:8080")
     assert rows == [] and source == "search_unavailable"
-    assert calls == ["!bing brake pads operation"]
+    assert calls == ["!bing brake pads operation", "!yahoo brake pads operation"]
 
 
 def test_stage1_url_aware_input_accepts_bulletin_but_rejects_vin_url() -> None:

@@ -792,8 +792,9 @@ _SEARCH_FILLER = {
     "про",
     "техническая",
 }
-# The deployed J1 SearXNG configuration enables Bing; the former engines are disabled.
-_SEARXNG_ENGINES = ("bing",)
+# Explicit SearXNG bangs may use engines excluded from default searches.
+# Bing and Yahoo provide separate candidates; failures are isolated below.
+_SEARXNG_ENGINES = ("bing", "yahoo")
 _SEARCH_TIER_SCORE = {"A": 400, "B": 300, "C": 200, "D": 100, "unclassified": 0}
 _SEARCH_TRACKING_PARAMETERS = frozenset(
     {"fbclid", "gclid", "dclid", "msclkid", "yclid", "ysclid", "mc_cid", "mc_eid", "_ga", "_gl"}
