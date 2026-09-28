@@ -18,7 +18,7 @@ from .j1_fetch import contains_sensitive, redact_sensitive
 
 _API_BASE_URL = "https://api.reefapi.com"
 _API_KEY_ENV = "REEFAPI_API_KEY"
-_REQUEST_TIMEOUT_SECONDS = 10.0
+_REQUEST_TIMEOUT_SECONDS = 30.0
 _MAX_RESPONSE_BYTES = 5_000_000
 _MAX_QUERY_CHARS = 256
 _MAX_TEXT_CHARS = 8_000
