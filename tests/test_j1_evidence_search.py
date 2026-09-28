@@ -100,6 +100,9 @@ def test_search_merges_all_engines_preserves_snippets_ranks_tiers_and_caps_domai
             ]
         return []
 
+    # The deployed configuration currently selects only Bing; preserve coverage
+    # for multi-engine result merging if the configured set expands later.
+    monkeypatch.setattr(j1_fetch, "_SEARXNG_ENGINES", ("brave", "google", "qwant", "yep"))
     monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
     rows, provider = j1_fetch.search_public("8AR FTS injector technical guide", searxng_url="http://127.0.0.1:8890")
 

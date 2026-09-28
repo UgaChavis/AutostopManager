@@ -792,7 +792,8 @@ _SEARCH_FILLER = {
     "про",
     "техническая",
 }
-_SEARXNG_ENGINES = ("brave", "google", "qwant", "yep")
+# The deployed J1 SearXNG configuration enables Bing; the former engines are disabled.
+_SEARXNG_ENGINES = ("bing",)
 _SEARCH_TIER_SCORE = {"A": 400, "B": 300, "C": 200, "D": 100, "unclassified": 0}
 _SEARCH_TRACKING_PARAMETERS = frozenset(
     {"fbclid", "gclid", "dclid", "msclkid", "yclid", "ysclid", "mc_cid", "mc_eid", "_ga", "_gl"}
@@ -976,7 +977,7 @@ class _DDGLinks(HTMLParser):
 
 
 def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, Any]], str]:
-    """Search every available local engine, then rank safe public discoveries."""
+    """Search configured local engines, then rank safe public discoveries."""
 
     direct_url = public_url(query)
     if direct_url:
@@ -987,8 +988,7 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
     if contains_sensitive(query):
         return [], "sensitive_query"
     if searxng_url:
-        # Collect all explicitly configured engines.  One engine can drift or
-        # omit a result; it must not decide the corpus alone.
+        # Collect results from the configured local engines before falling back.
         discovered: list[dict[str, Any]] = []
         for engine in _SEARXNG_ENGINES:
             try:

@@ -800,7 +800,7 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     assert rows[0]["title"] == "Public report"
     assert rows[0]["snippet"] == ""
     assert rows[0]["source"] == "searxng"
-    assert rows[0]["engines"] == ["brave", "google", "qwant", "yep"]
+    assert rows[0]["engines"] == ["bing"]
     assert (rows[0]["source_class"], rows[0]["source_tier"], rows[0]["search_rank"]) == (
         "unknown",
         "unclassified",
@@ -839,25 +839,24 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     ]
 
 
-def test_search_skips_unrelated_engine_and_uses_relevant_public_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_uses_enabled_bing_without_querying_disabled_engines(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
         calls.append(query)
-        if query.startswith("!brave "):
-            return [{"url": "https://example.org/roblox", "title": "Roblox download", "source": "searxng"}]
         return [{"url": "https://example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}]
 
     monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: pytest.fail("public fallback should not run after Bing succeeds"),
+    )
     rows, source = j1_fetch.search_public("brake pads operation technical guide", searxng_url="http://127.0.0.1:8080")
     assert source == "searxng"
     assert [row["url"] for row in rows] == ["https://example.org/brake-pads"]
-    assert calls == [
-        "!brave brake pads operation technical guide",
-        "!google brake pads operation technical guide",
-        "!qwant brake pads operation technical guide",
-        "!yep brake pads operation technical guide",
-    ]
+    assert rows[0]["engines"] == ["bing"]
+    assert calls == ["!bing brake pads operation technical guide"]
     assert j1_fetch._relevant_search_results(
         "тормозные колодки устройство",
         [{"url": "https://example.org/article", "title": "Устройство тормозных колодок"}],
@@ -875,12 +874,7 @@ def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.M
     monkeypatch.setattr(j1_fetch, "_robots_policy", lambda _url: (False, 1.0))
     rows, source = j1_fetch.search_public("brake pads operation", searxng_url="http://127.0.0.1:8080")
     assert rows == [] and source == "search_unavailable"
-    assert calls == [
-        "!brave brake pads operation",
-        "!google brake pads operation",
-        "!qwant brake pads operation",
-        "!yep brake pads operation",
-    ]
+    assert calls == ["!bing brake pads operation"]
 
 
 def test_stage1_url_aware_input_accepts_bulletin_but_rejects_vin_url() -> None:
