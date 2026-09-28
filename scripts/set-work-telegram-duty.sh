@@ -13,11 +13,27 @@ wake_config="/etc/autostop-work-telegram/wake.json"
 wake_python="/opt/AutostopManager/.venv/bin/python"
 export PYTHONSAFEPATH=1
 
-usage() { echo "usage: $0 --enable|--disable|--status" >&2; }
+usage() { echo "usage: $0 --enable|--disable|--status [--expected-release-dir DIR]" >&2; }
 if [[ "${EUID}" -ne 0 ]]; then echo "run_as_root_required=true" >&2; exit 1; fi
-if [[ $# -ne 1 ]]; then usage; exit 2; fi
+if [[ $# -ne 1 && $# -ne 3 ]]; then usage; exit 2; fi
+operation="$1"
+expected_release_dir=""
+if [[ $# -eq 3 ]]; then
+  [[ "$2" == "--expected-release-dir" ]] || { usage; exit 2; }
+  expected_release_dir="$3"
+  [[ -n "${expected_release_dir}" ]] || { usage; exit 2; }
+fi
 exec 9>"${control_lock}"
 flock -x 9
+if [[ -n "${expected_release_dir}" ]]; then
+  current_release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
+  if [[ ! -L "${release_link}" || "${expected_release_dir}" != "$(dirname -- "${release_link}")/"* \
+    || ! -d "${expected_release_dir}" || -L "${expected_release_dir}" \
+    || "${current_release_dir}" != "${expected_release_dir}" ]]; then
+    echo "work_telegram_release_target_changed=true" >&2
+    exit 1
+  fi
+fi
 
 if [[ -e "${monitor_env}" || -L "${monitor_env}" ]] \
   && { [[ ! -f "${monitor_env}" || -L "${monitor_env}" ]] \
@@ -154,7 +170,7 @@ duty_is_paused() {
   wait_for_outbound_only
 }
 
-case "$1" in
+case "${operation}" in
   --status)
     bridge_state="$(bridge_status)" || { printf '%s\n' '{"ok":false,"transport_ready":false,"error":"bridge_unavailable"}'; exit 1; }
     wake_active=false
