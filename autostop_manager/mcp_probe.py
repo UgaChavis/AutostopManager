@@ -20,6 +20,41 @@ SYNTHETIC_IDENTIFIER = "SYNTHETCVVN000001"
 GLOW_PLUG_QUERY = "свечи накаливания"
 BROWSER_SMOKE_URL = "https://example.com/"
 BROWSER_CHECK_TIMEOUT_SECONDS = 90.0
+# These tools can change Manager or Store state even when a particular call
+# only reads or previews. Check the serialized live annotations as well as the
+# input schemas so an older deployment cannot silently advertise them as reads.
+EFFECTFUL_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
+    "j1_research_start": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+    "j1_research_add_queries": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+    "store_digest": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "store_management_action": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "store_quote_conductor": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+}
 
 
 def _safe_url(value: str) -> str:
@@ -93,6 +128,19 @@ async def _list_all_tools(session: ClientSession) -> list[Any]:
         cursor = page.nextCursor
         if not cursor:
             return tools
+
+
+def _effectful_annotation_mismatches(tools: list[Any]) -> list[str]:
+    mismatches = []
+    for tool in tools:
+        name = str(getattr(tool, "name", ""))
+        expected = EFFECTFUL_TOOL_ANNOTATIONS.get(name)
+        if expected is None:
+            continue
+        annotations = getattr(tool, "annotations", None)
+        if any(getattr(annotations, field, None) is not value for field, value in expected.items()):
+            mismatches.append(name)
+    return sorted(set(mismatches))
 
 
 async def _call(
@@ -188,6 +236,19 @@ async def async_probe_manager_mcp(
                             "diagnostic": "tool_not_registered",
                             "warnings": ["manager_mcp_transport_duplicate_tool_name"],
                         }
+                    annotation_tools_checked = (
+                        sum(str(getattr(tool, "name", "")) in EFFECTFUL_TOOL_ANNOTATIONS for tool in listed_tools)
+                        if contract.get("ok")
+                        else 0
+                    )
+                    annotation_mismatches = _effectful_annotation_mismatches(listed_tools) if contract.get("ok") else []
+                    if annotation_mismatches:
+                        contract = {
+                            **contract,
+                            "ok": False,
+                            "diagnostic": "annotation_mismatch",
+                            "warnings": ["manager_mcp_effect_annotations_mismatch"],
+                        }
                     report["checks"]["tools_list"] = {
                         "ok": bool(contract.get("ok")),
                         "diagnostic": contract.get("diagnostic"),
@@ -196,6 +257,8 @@ async def async_probe_manager_mcp(
                         "schema_fingerprint": contract.get("registered_schema_fingerprint"),
                         "missing_registered_tools": contract.get("missing_registered_tools", []),
                         "unexpected_registered_tools": contract.get("unexpected_registered_tools", []),
+                        "effectful_annotations_checked": annotation_tools_checked,
+                        "annotation_mismatch_tools": annotation_mismatches,
                         "warnings": contract.get("warnings", []),
                     }
                     if not contract.get("ok"):

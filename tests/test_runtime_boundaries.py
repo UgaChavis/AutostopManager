@@ -206,6 +206,7 @@ def test_probe_classifies_http_failure_without_payload(status, expected):
     [
         "registry",
         "duplicate",
+        "annotation",
         "status",
         "resolver",
         "resolver_private",
@@ -239,7 +240,11 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
             pass
 
         async def list_tools(self, **kw):
-            tool = SimpleNamespace(name="synthetic", inputSchema={})
+            tool = SimpleNamespace(
+                name="store_digest" if failure == "annotation" else "synthetic",
+                inputSchema={},
+                annotations=(SimpleNamespace(readOnlyHint=True) if failure == "annotation" else None),
+            )
             return SimpleNamespace(tools=[tool, tool] if failure == "duplicate" else [tool], nextCursor=None)
 
     async def call(session, name, arguments, **kw):
@@ -268,6 +273,9 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
     monkeypatch.setattr(probe, "_call", call)
     result = probe.probe_manager_mcp(provider_failure_check=True)
     assert result["ok"] is (failure == "none")
+    if failure == "annotation":
+        assert result["diagnostic"] == "annotation_mismatch"
+        assert result["checks"]["tools_list"]["annotation_mismatch_tools"] == ["store_digest"]
     assert probe.SYNTHETIC_IDENTIFIER not in json.dumps(result)
     assert "PRIVATE" not in json.dumps(result)
 

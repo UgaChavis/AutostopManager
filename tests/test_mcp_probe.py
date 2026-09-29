@@ -10,8 +10,12 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 import uvicorn
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from mcp.server.fastmcp import FastMCP
 
 from autostop_manager import config
+from autostop_manager.catalog_adapters import catalog_provider_status
 import autostop_manager.web_research_gateway as web_gateway
 import autostop_manager.store_api as store_api
 from autostop_manager.mcp_probe import (
@@ -20,6 +24,67 @@ from autostop_manager.mcp_probe import (
     classify_transport_exception,
 )
 from autostop_manager.mcp_server import build_server
+
+
+def test_catalog_provider_status_native_transport_preserves_both_json_channels_compactly(tmp_path, monkeypatch):
+    previous_env_loaded = config._ENV_LOADED
+    for name in tuple(os.environ):
+        if name.startswith("PARTSAPI_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", str(tmp_path / "empty.env"))
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
+    config._ENV_LOADED = False
+
+    async def run_call():
+        manager_server = build_server()
+        previous_server = FastMCP("previous")
+        previous_server.tool(name="catalog_provider_status")(catalog_provider_status)
+        manager_tool = next(
+            tool for tool in await manager_server.list_tools() if tool.name == "catalog_provider_status"
+        )
+        previous_tool = next(
+            tool for tool in await previous_server.list_tools() if tool.name == "catalog_provider_status"
+        )
+        assert manager_tool.inputSchema == previous_tool.inputSchema
+        assert manager_tool.outputSchema == previous_tool.outputSchema
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = int(listener.getsockname()[1])
+        uvicorn_server = uvicorn.Server(
+            uvicorn.Config(manager_server.streamable_http_app(), log_level="warning", access_log=False)
+        )
+        task = asyncio.create_task(uvicorn_server.serve(sockets=[listener]))
+        try:
+            for _ in range(200):
+                if uvicorn_server.started:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("native_manager_mcp_test_server_did_not_start")
+            async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (reader, writer, _):
+                async with ClientSession(reader, writer) as session:
+                    await session.initialize()
+                    return await session.call_tool("catalog_provider_status", {"stage": "catalog_cross"})
+        finally:
+            uvicorn_server.should_exit = True
+            await asyncio.wait_for(task, timeout=5)
+            listener.close()
+
+    try:
+        result = asyncio.run(run_call())
+        original = catalog_provider_status(stage="catalog_cross")
+    finally:
+        config._ENV_LOADED = previous_env_loaded
+
+    assert result.isError is False
+    assert len(result.content) == 1
+    text = result.content[0].text
+    parsed = json.loads(text)
+    assert parsed == result.structuredContent == json.loads(json.dumps(original, ensure_ascii=False))
+    assert text == json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+    assert len(text.encode()) < len(json.dumps(parsed, ensure_ascii=False, indent=2).encode())
 
 
 def test_transport_classifier_keeps_route_auth_and_registration_failures_distinct():
@@ -185,6 +250,8 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
     assert report["checks"]["native_ping"]["ok"] is True
     assert report["checks"]["tools_list"]["ok"] is True
     assert report["checks"]["tools_list"]["tool_count"] == 47
+    assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 5
+    assert report["checks"]["tools_list"]["annotation_mismatch_tools"] == []
     assert report["checks"]["catalog_provider_status"]["ok"] is True
     assert report["checks"]["catalog_provider_status"]["stage"] == "catalog_cross"
     assert report["checks"]["synthetic_resolver"]["ok"] is True

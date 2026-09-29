@@ -32,10 +32,10 @@ Browser rendering remains opt-in through `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY
 and only after the deploy's 2 GiB `MemAvailable`, 1 GiB `SwapFree` and 60-second
 zero-swap-I/O preflight. Never create the browser attestation marker by hand.
 
-After deploy, compare installed Manager/CRM revisions with the published inputs;
-run `.venv/bin/python -m autostop_manager.cli doctor --integrations --full`, verify
-the work-Telegram duty state was restored, and require old integration-audit and
-watchdog units to be absent. Before live research, require `autostop-j1.service`
+After deploy, verify installed Manager/CRM revisions, bounded MCP/CRM/Store
+probes, `doctor --integrations` (no `--full`), work-Telegram duty restoration,
+and absence of old integration-audit/watchdog units. Full doctor creates a test
+workflow; run it only with disposable CRM/Store. Before live research, require `autostop-j1.service`
 active and run
 `env PYTHONPATH=/opt/autostop-manager-releases/current
 AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1
@@ -45,31 +45,17 @@ becomes Manager customer memory. Then [refresh and test Codex MCP](../mcp_releas
 
 ## Recovery or standalone component work
 
-Use these paths only outside the normal coordinated deploy, with one exact
-published revision and a preserved rollback state. For work Telegram, pause duty,
-run `scripts/install-telegram-bridge.sh --account work --revision <commit>`,
-`scripts/provision-telegram-transcription-model.sh --account work --revision <commit>`,
-then `scripts/deploy_telegram_bridge.sh --account work --no-start <commit>` and
-the active snapshot's `scripts/install-codex-wake.sh`; do not switch links manually.
-Probe CRM/MCP, voice, systemd and versions without client sends before enabling
+Outside coordinated deploy, use one published revision and preserved rollback.
+For work Telegram, pause duty, follow the ordered [bridge/wake procedure](module_operations/telegram_automation.md)
+including `scripts/install-codex-wake.sh`,
+probe CRM/MCP, voice, systemd and versions without client sends, then enable
 through the [Telegram skill](../../.agents/skills/manage-owner-telegram/SKILL.md).
 Personal Telegram is a separate release; preserve its session.
 
-Automation Center state lives in the root-only
-`/var/lib/autostop-manager-scheduler/registry.sqlite3`. A standalone repair must
-use one unique release-attempt key with `python -m autostop_manager.automation_release
-hold --release-attempt-key ATTEMPT` and require `quiescent=true`. Make an online
-registry backup with `scripts/backup-manager-automation-state.py --output NEW_PATH`
-in a root-owned `0700` directory; separately snapshot the scheduler unit, managed
-timer drop-ins and Telegram duty config. Install only from the active immutable
-release under that hold with `scripts/install-manager-automation.sh
---activate-under-hold --release-attempt-key ATTEMPT --manager-revision SHA
---crm-revision CRM_SHA [--crm-version CRM_VERSION]`. Release the hold only after
-scheduler, socket, readiness, all five timer states and coordinated CRM/Telegram
-smoke checks pass, using `python -m autostop_manager.automation_release release-hold
---release-attempt-key ATTEMPT`.
-
-On failure keep work paused and verify the restored components before enabling it.
-Preserve volumes, uploads and the Automation registry; never overwrite newer
-business operations with an old database. Restore the registry backup only for an
-explicit state-recovery decision, never merely because code activation failed.
+For standalone Automation repair, use the [hold/backup/install procedure](module_operations/telegram_automation.md)
+with one release-attempt key. Require a quiescent hold, online registry backup in
+a root-owned `0700` directory, and snapshots of unit, timer drop-ins and duty.
+Release the hold only after scheduler, socket, readiness, five timers and
+CRM/Telegram smoke pass. On failure keep work paused and verify restored components.
+Preserve volumes, uploads and registry; restore an old registry only after an
+explicit state-recovery decision, never over newer business operations.
