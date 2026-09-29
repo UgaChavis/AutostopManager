@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SOURCE_DIR="/opt/AutostopManager"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRANCH="AutostopManager"
 
 if [[ $# -ne 4 || "$1" != "--account" || "$2" != "work" || "$3" != "--revision" ]]; then
