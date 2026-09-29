@@ -119,7 +119,7 @@ def test_search_sends_bounded_request_and_returns_normalized_non_pii_listing(mon
     assert request.full_url == "http://127.0.0.1:8765/avito/v1/search"
     assert request.get_method() == "POST"
     assert request.get_header("X-api-key") == "reef-secret-test-key"
-    assert timeout == avito_listings._REQUEST_TIMEOUT_SECONDS
+    assert timeout == 30.0
     payload = json.loads(request.data)
     assert payload == {
         "query": "Toyota 52159-0E901",
@@ -356,6 +356,23 @@ def test_search_maps_http_errors_without_echoing_response_or_key(monkeypatch, st
     result = avito_listings.avito_search_listings("part")
 
     assert result == {"ok": False, "source": "avito", "error": error}
+    assert "reef-secret-test-key" not in repr(result)
+
+
+def test_search_timeout_is_bounded_and_does_not_retry_a_chargeable_request(monkeypatch):
+    monkeypatch.setenv("REEFAPI_API_KEY", "reef-secret-test-key")
+    calls = []
+
+    def time_out(_request, timeout):
+        calls.append(timeout)
+        raise TimeoutError("key=reef-secret-test-key")
+
+    monkeypatch.setattr(avito_listings, "_open_request", time_out)
+
+    result = avito_listings.avito_search_listings("part")
+
+    assert result == {"ok": False, "source": "avito", "error": "provider_unavailable"}
+    assert calls == [30.0]
     assert "reef-secret-test-key" not in repr(result)
 
 

@@ -11,6 +11,7 @@ from .action_contract import prepare_action_contract
 from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
 from .avito_listings import avito_read_listing, avito_search_listings
+from .avito_market_assessment import assess_avito_price_sample
 from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status as _catalog_provider_status
 from .catalog_clients import (
     PARTSAPI_OPERATIONS,
@@ -843,6 +844,17 @@ def register_manager_tools(  # noqa: C901
     )
     def avito_read_listing_tool(ad_id: str, dry_run: bool = False) -> dict[str, Any]:
         return avito_read_listing(ad_id=ad_id, dry_run=dry_run)
+
+    server.tool(
+        name="assess_avito_price_sample",
+        description=(
+            "Summarize supplied normalized Avito part listings by exact part number, condition and city. "
+            "Returns per-segment sample counts, observed prices, range and a sample median only with at least "
+            "three distinct ads. Does not fetch listings, confirm fitment or availability, or produce an "
+            "independent-source market median. Pass search result listings and optionally read listing details."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )(assess_avito_price_sample)
 
     @server.tool(
         name="drom_start_parts_search",

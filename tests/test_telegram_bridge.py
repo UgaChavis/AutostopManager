@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -442,6 +443,28 @@ def test_work_telegram_service_has_no_personal_state_or_socket() -> None:
     assert "/run/autostop-telegram" not in service
 
 
+@pytest.mark.parametrize(
+    "script_name",
+    ("deploy_telegram_bridge.sh", "provision-telegram-transcription-model.sh"),
+)
+def test_telegram_release_source_follows_relocated_script(tmp_path, script_name) -> None:
+    source = ROOT / "scripts" / script_name
+    relocated_root = tmp_path / "release-source"
+    relocated_scripts = relocated_root / "scripts"
+    relocated_scripts.mkdir(parents=True)
+    assignment = next(
+        line for line in source.read_text(encoding="utf-8").splitlines() if line.startswith("SOURCE_DIR=")
+    )
+    probe = relocated_scripts / script_name
+    probe.write_text(
+        "#!/usr/bin/env bash\nset -eu\n" + assignment + '\nprintf "%s\\n" "$SOURCE_DIR"\n',
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(["bash", str(probe)], cwd=tmp_path, check=True, capture_output=True, text=True)
+    assert completed.stdout.strip() == str(relocated_root)
+
+
 def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     script = ROOT / "scripts/deploy_telegram_bridge.sh"
     completed = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
@@ -622,7 +645,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
 
     script_text = (ROOT / "scripts" / "deploy_telegram_bridge.sh").read_text(encoding="utf-8")
     replacements = {
-        'SOURCE_DIR="/opt/AutostopManager"': f'SOURCE_DIR="{source}"',
+        'SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"': f'SOURCE_DIR="{source}"',
         'release_root="/opt/autostop-work-telegram-releases"': f'release_root="{release_root}"',
         'unit_path="/etc/systemd/system/autostop-work-telegram.service"': f'unit_path="{unit_path}"',
         'venv_root="/opt/autostop-work-telegram-venv"': f'venv_root="{venv_link}"',
@@ -706,6 +729,56 @@ def test_work_telegram_duty_control_has_explicit_enable_and_disable_paths() -> N
     assert 'release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"' in text
     assert '[[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/*' in text
     assert all(forbidden not in text for forbidden in (" dialogs", " send", " search", " read"))
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="duty-control fixture requires its root-only path")
+def test_work_telegram_duty_checks_expected_release_after_lock(tmp_path) -> None:
+    release_root = tmp_path / "releases"
+    original = release_root / "original"
+    replacement = release_root / "replacement"
+    original.mkdir(parents=True)
+    replacement.mkdir()
+    current = release_root / "current"
+    current.symlink_to(original)
+    control_lock = tmp_path / "control.lock"
+    monitor_env = tmp_path / "monitor.env"
+    monitor_env.write_text("keep duty enabled\n", encoding="utf-8")
+    source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text(encoding="utf-8")
+    source = (
+        source.replace(
+            'release_link="/opt/autostop-work-telegram-releases/current"',
+            f'release_link="{current}"',
+            1,
+        )
+        .replace(
+            'control_lock="/run/autostop-work-telegram-control.lock"',
+            f'control_lock="{control_lock}"',
+            1,
+        )
+        .replace(
+            'monitor_env="/etc/autostop-work-telegram/monitor.env"',
+            f'monitor_env="{monitor_env}"',
+            1,
+        )
+    )
+    script = tmp_path / "duty.sh"
+    script.write_text(source, encoding="utf-8")
+    script.chmod(0o700)
+    with control_lock.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [str(script), "--disable", "--expected-release-dir", str(original)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        current.unlink()
+        current.symlink_to(replacement)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    _, stderr = process.communicate(timeout=10)
+    assert process.returncode == 1
+    assert "work_telegram_release_target_changed=true" in stderr
+    assert monitor_env.read_text(encoding="utf-8") == "keep duty enabled\n"
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="duty-control fixture requires its root-only path")
