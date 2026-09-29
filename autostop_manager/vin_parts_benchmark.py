@@ -1,32 +1,19 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 from urllib.parse import quote_plus
 
-from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
+from .catalog_adapters import _redact_identifier, build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import partsapi_catalog_lookup
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import decode_vehicle_identities, identity_values_agree
+from .vehicle_identity import _as_mapping, decode_vehicle_identities, identity_values_agree
 from .vin_oem_resolver import _redact_sensitive_output, resolve_vin_oem_parts
 from .vin_lookup import classify_identifier, normalize_vin
 
 
 def _compact(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip().startswith("{"):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def _merged_item_context(item: dict[str, Any]) -> dict[str, Any]:
@@ -61,19 +48,6 @@ def _item_identifier(item: dict[str, Any]) -> str:
         or context.get("body_number")
         or context.get("chassis_number")
     )
-
-
-def _redact_identifier(identifier: str) -> dict[str, Any]:
-    compact = "".join(str(identifier or "").split()).upper()
-    if len(compact) <= 6:
-        display = compact[:2] + "***" if compact else ""
-    else:
-        display = f"{compact[:3]}***{compact[-3:]}"
-    return {
-        "display": display,
-        "length": len(compact),
-        "prefix": compact[:3] if len(compact) >= 3 else compact,
-    }
 
 
 def _identifier_variants(identifier: str) -> set[str]:

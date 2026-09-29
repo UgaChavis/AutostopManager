@@ -2,11 +2,6 @@
 
 J1 читает публичные материалы; не пишет в CRM и не подтверждает диагноз или применимость.
 
-- В `j1_research_start` не передавайте VIN, контакты и секреты. Для автомобиля передайте `automotive_context`: `make`, `model`, `year`, `engine`, `system`, `symptom`, `dtc`, `part_number`.
-- Профиль сам строит до 12 запросов и читает до 60 страниц: OEM/TSB, технические материалы, каталоги, опыт владельцев. Общий режим: 30/300.
-- Статус: `j1_research_status`; материалы порциями: `j1_research_results` и `j1_research_document`; уточнения: `j1_research_add_queries`.
-- После сбора вызовите `j1_research_report` (`autostop.j1.report.v1`). Ведомость содержит источники, дубли, доступ, `exact`/`analog`/`general`, уверенность и пробелы.
-- Реестр ранжирует источники: A — OEM, регуляторы и TSB; B — производители компонентов; C — каталоги; D — форумы и контекст. D — опыт, не доказательство. Частота — только при измеримой совокупности A/B, иначе `not_measured`.
-- `canonical_url` убирает лишь tracking-параметры. Повторы не индексируются. Лимиты: 50 000 символов, 250 МБ, 7 дней.
+Для короткого запроса используйте `search_web_multi` и `fetch_page_excerpt`; для широкого исследования — `j1_research_start` → `j1_research_status` → `j1_research_results`/`j1_research_document` → `j1_research_report`. Передавайте только неперсональный контекст: VIN, контакты и секреты запрещены.
 
-Статический поиск работает без browser path. Браузер не использует cookies, вход или CAPTCHA; verifier проверяет socket, сети, DNS, закрытые адреса и SHA-bound marker `root:root 0600`. `python -m autostop_manager.j1_research probe` сообщает `browser_ready`; при отказе browser path выключен.
+Лимиты, оценка источников, browser gate и точные команды проверки находятся в [операционной карточке J1](module_operations/vin_catalog_j1.md). Аргументы инструментов сверяйте с активным `tools/list`.

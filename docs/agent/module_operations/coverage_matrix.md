@@ -7,7 +7,7 @@
 
 | Цепочка | Контракт / проверка | Результат исходного аудита | Исправление / граница |
 | --- | --- | --- | --- |
-| Codex → Manager MCP | `mcp-probe`, active tools/list | PASS: 43 tools, схемы, synthetic resolver, provider failure | После выпуска повторить на установленном SHA |
+| Codex → Manager MCP | `mcp-probe`, active tools/list | PASS на 2026-09-26: 43 tools, схемы, synthetic resolver, provider failure | После выпуска повторить на установленном SHA |
 | Codex → CRM Gateway | local/public exhaustive check, OAuth identity | PASS: 24 tools, auth, schemas, все safe invocations | Реальные финансовые изменения не проверяются |
 | Manager → Store | runtime/capabilities/search/exact read | FAIL: поиск заказов отклоняет новые поля оплаты | strict контракт `payment_status`, `paid_at`, регрессии search/summary/full |
 | Store → поставщики | sourcing ROSSKO/BERG | PASS transport; FAIL достоверность confidence/price basis | Совпадение артикула не подтверждает применимость; без закупочной цены нет confirmed purchase |
