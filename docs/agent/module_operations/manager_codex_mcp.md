@@ -50,9 +50,11 @@ asyncio.run(main())
 PY
 ```
 
-После deploy смените в первой строке **только** `status` на `reload`, дождитесь обновления и повторите `status`: для этой source revision нужно `connected=true`, `tool_count=47`, `tools_error=false`, `offline_search_schema_ok=true`. Перед прежним deploy 2026-09-25 эта команда read-only показала `connected=true`, 42 tools и отсутствие нового tool. App Server schema получена локально командой `codex app-server generate-json-schema --out <temporary-dir> --experimental`; `mcpServerStatus/list` требует `threadId`, принимает `detail=toolsAndAuthOnly` и возвращает paginated `data`/`nextCursor`. Совпадение task status не подтверждает declarations уже начатого хода: проверяйте новый ход отдельно.
+После deploy смените в первой строке **только** `status` на `reload`, дождитесь обновления и повторите `status`: для этой source revision нужно `connected=true`, `tool_count=48`, `tools_error=false`, `offline_search_schema_ok=true`. Перед прежним deploy 2026-09-25 эта команда read-only показала `connected=true`, 42 tools и отсутствие нового tool. App Server schema получена локально командой `codex app-server generate-json-schema --out <temporary-dir> --experimental`; `mcpServerStatus/list` требует `threadId`, принимает `detail=toolsAndAuthOnly` и возвращает paginated `data`/`nextCursor`. Совпадение task status не подтверждает declarations уже начатого хода: проверяйте новый ход отдельно.
 
 Источник точной **текущей input schema каждого инструмента** — ответ `tools/list` живого endpoint. Сверка source идет через `docs/agent/manager_mcp_catalog.json` (имена, количество, SHA-256 отсортированных `{name,inputSchema}`), проверки `tests/test_mcp_tools.py`, `tests/test_mcp_contract.py` и `cli mcp-probe`. При изменении сигнатуры обновляйте manifest вместе с кодом. Просмотр конкретной схемы в подключенном Codex: найдите имя в `tools/list` и прочитайте `inputSchema`; не считайте старую карточку точнее активной схемы.
+
+`tools/list` также передаёт `annotations`. Текущий `mcp-probe` отдельно сверяет live `readOnlyHint`, `destructiveHint`, `idempotentHint` и `openWorldHint` для пяти операций с состоянием: `j1_research_start`, `j1_research_add_queries`, `store_digest`, `store_management_action`, `store_quote_conductor`. `annotation_mismatch` означает расхождение активного endpoint с этими эффектами, даже когда 48 схем совпадают. Fingerprint manifest учитывает только `inputSchema`.
 
 ## CLI: все подкоманды
 
@@ -61,17 +63,17 @@ PY
 | Подкоманда `python -m autostop_manager.cli` | Вход, эффект и безопасная проверка |
 | --- | --- |
 | `knowledge-sync`, `knowledge-audit` | Без аргументов; read-only проверка локальной документации через `diagnostics.audit_documentation`; `ok=true` без `warnings`. Название `sync` не означает запись. |
-| `doctor` | `--integrations` включает live-зависимости; `--full` расширяет проверки. Без флагов — локальная диагностика. Для production из активной ревизии используйте `doctor --integrations --full`; проверяйте отдельные поля, не только `ok`. |
+| `doctor` | `--integrations` включает live-зависимости; `--full` расширяет проверки и создаёт тестовый workflow. Без флагов — локальная диагностика. `doctor --integrations --full` запускайте только в одноразовом контуре с синтетическими CRM/Store; в production ограничьтесь безопасными проверками без `--full`. Проверяйте отдельные поля, не только `ok`. |
 | `store-conductor-release-gate` | Read-only gate сохранённого Store quote conductor; запуск из source с disposable `AUTOSTOP_MANAGER_DB` не заменяет официальный gate на постоянном состоянии. |
 | `store-checkpoint-status` | `--stream store_digest|store_bootstrap`; read-only состояние checkpoint в `AUTOSTOP_MANAGER_DB`. |
 | `store-checkpoint-reset` | Запись; требует `--stream`, `--expected-state-version`, `--reason cursor_generation_mismatch|cursor_ahead_after_store_restore|operator_verified_rebaseline`, `--confirm-rebaseline`. Только после точной сверки Store и checkpoint; затем независимый `status`. |
-| `mcp-probe` | `--url` (по умолчанию loopback `/mcp`), `--timeout` (0..90], `--provider-failure-check`, `--store-check`, `--browser-check`. Synthetic read-only проверка handshake, paginated `tools/list`, manifest и ограниченных вызовов. Browser probe читает публичную `https://example.com/`; не сохраняет её текст в отчёте. |
+| `mcp-probe` | `--url` (по умолчанию loopback `/mcp`), `--timeout` (0..90], `--provider-failure-check`, `--store-check`, `--browser-check`. Synthetic read-only проверка handshake, paginated `tools/list`, manifest, annotations пяти операций с состоянием и ограниченных вызовов. Browser probe читает публичную `https://example.com/`; не сохраняет её текст в отчёте. |
 
 Точная встроенная справка: `python -m autostop_manager.cli --help` и `... <подкоманда> --help`. Код: `cli.build_parser/main`; тесты: `tests/test_core_cleanup.py`, `tests/test_mcp_probe.py`, `tests/test_runtime_boundaries.py`. `--help` и тесты не доказывают доступность production downstream.
 
 ## MCP-инструменты: маршрут проверки
 
-Все 48 имён текущей source revision содержатся в manifest; у production-снимка 2026-09-25 было 42 имени. Ниже каждая строка задаёт владельца, эффект и короткий smoke. `read-only` не означает отсутствие сетевого чтения или записи в временный J1-кеш. **Ни один инструмент с потенциальной записью не вызывайте как smoke**: проверяйте его схему и synthetic/dry-run либо тест в disposable среде.
+Все 48 имён текущей source revision содержатся в manifest; у production-снимка 2026-09-25 было 42 имени. Ниже каждая строка задаёт владельца, эффект и короткий smoke. Сетевое чтение, запись во временный J1-кеш и изменение бизнес-записи имеют разные эффекты. **Ни один инструмент с потенциальной записью не вызывайте как smoke**: проверяйте его схему и synthetic/dry-run либо тест в disposable среде.
 
 | Инструмент | Назначение, владелец данных, эффект и безопасный smoke |
 | --- | --- |
@@ -81,7 +83,7 @@ PY
 | `store_owner_capabilities` | Store API права/контракт, read-only; smoke без аргументов. |
 | `store_owner_api` | Store operations; read и write зависят от операции. Smoke: только capabilities/dry-run по Store карточке, никогда apply без точного target. |
 | `store_runtime_status` | Store technical readiness, read-only; smoke без аргументов. |
-| `store_digest` | Store события/сводка, read-only для Store; проверять bounded cursor и состояние, не копировать live записи в docs. |
+| `store_digest` | Читает Store события/сводку и записывает Manager checkpoint/ack; `readOnlyHint=false`. Проверять bounded cursor и состояние, не копировать live записи в docs. |
 | `store_search` | Поиск Store, read-only; synthetic невозможен как проверка качества реального каталога; schema и ограниченный разрешённый запрос. |
 | `store_entity_context` | Точная сущность Store, read-only; только по текущему идентификатору кейса. |
 | `download_store_quote_vin_photo` | Скачивание фото Store в ограниченный локальный временный файл; доступ по текущему quote target, после проверки удалить. Не synthetic smoke на production. |
@@ -91,7 +93,7 @@ PY
 | `lookup_original_parts` | Кандидаты OEM из каталога, read-only provider call; synthetic dry-run/status. Применимость не подтверждается одним источником. |
 | `estimate_repair_work_cost` | Оценка работ, read-only; без VIN/клиентских данных в smoke. Не подтверждает цену для клиента. |
 | `decode_vehicle_identity`, `decode_vehicle_identities` | VIN/frame identification; read-only/возможен внешний provider call. Smoke: dry-run с синтетическим номером; реальные идентификаторы только в авторизованном кейсе. |
-| `catalog_provider_status`, `plan_oem_parts_providers` | Доступность каталожных и рыночных источников, план OEM; read-only, без секретов. Smoke: `catalog_provider_status`; `configured` не равно успешный провайдер. |
+| `catalog_provider_status`, `plan_oem_parts_providers` | Доступность каталожных и рыночных источников, план OEM; read-only, без секретов. Smoke: `catalog_provider_status`; `configured` не равно успешный провайдер. Для `catalog_cross` 43 статуса PartsAPI остаются в `structuredContent` и в текстовом JSON; текстовая копия компактна, но по содержанию идентична. |
 | `avito_search_listings`, `avito_read_listing` | ReefAPI: поиск и чтение одного объявления Авито; поставщик расходует кредиты. Smoke: dry-run, затем отдельный тестовый запрос без данных клиента. Объявление остаётся зацепкой. |
 | `assess_avito_price_sample` | Read-only сводка переданных объявлений по точному артикулу, состоянию и городу; медиана относится только к выборке Авито, без подтверждения применимости и наличия. Smoke: три синтетические карточки. |
 | `drom_start_parts_search`, `drom_get_parts_search` | Webbee: код внедрён, но сейчас выключен (`webbee_disabled`, красный статус). До API-токена и явного включения не запускает задачи. После разрешения: dry-run, один ограниченный запуск и readback по ID/UID. [Контракт](market_listings.md). |
@@ -107,9 +109,11 @@ PY
 | `search_offline_parts_catalogs` | Read-only поиск локально извлечённых каталогов; был 43-м tool в source `4e26c6c`, отсутствовал в production-снимке. Smoke: synthetic артикул, оценить bounded excerpts; находка — кандидат. |
 | `parts_store_cards` | Карточки CRM колонки «Магазин автозапчастей»: `list/get` читают, `create/append_note` пишут по exact card/revision/idempotency с Gateway readback. Smoke: schema; без live target не создавать карточку. |
 
-Проверенный production smoke до выпуска: из `/tmp` с `PYTHONPATH=/opt/autostop-manager-releases/current` команда `python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` дала `ok=true`, 42/42 схемы, synthetic resolver, предсказуемый отказ провайдера и Store capabilities. С `--timeout 90 --browser-check` вызов `fetch_page_browser` по `example.com` также дал `ok=true`. Из source checkout той же машины получен ожидаемый `schema_mismatch` из-за разных ревизий; это не сбой установленного endpoint. После deploy повторить из активной ревизии и требовать число нового manifest (48/48).
+Исторический production smoke **2026-09-25**: из `/tmp` с `PYTHONPATH=/opt/autostop-manager-releases/current` команда `python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check` дала `ok=true`, 42/42 схемы, synthetic resolver, предсказуемый отказ провайдера и Store capabilities. С `--timeout 90 --browser-check` вызов `fetch_page_browser` по `example.com` также дал `ok=true`. Из source checkout другой ревизии возможен `schema_mismatch`; после deploy повторите probe из активной ревизии и требуйте 48/48 схем.
 
-Диагностика: `transport_route_unavailable` → сокет/порт и unit; `transport_auth_failure` → разрешённый transport; `tool_not_registered` → версия client/endpoint или manifest; `schema_mismatch` → сверить **какой** `PYTHONPATH` импортирован и опубликованный SHA; provider failure → отдельный downstream, не перезапуск MCP. Для Store проверяйте private API отдельно. При неуспехе выпуска используйте только официальный rollback из `deployment_runbook.md`; не переключайте release symlink вручную.
+Проверка **2026-09-27** новым source `mcp-probe` против установленного `127.0.0.1:41931`: 47/47 схем и fingerprint совпали, но результат `ok=false`, `annotation_mismatch` ровно для `j1_research_start`, `j1_research_add_queries`, `store_digest`, `store_management_action`, `store_quote_conductor`. Это ожидаемое расхождение source и установленного процесса до отдельного выпуска; аннотации ещё не исправлены в production. После выпуска повторить probe из активной ревизии и требовать 48/48 схем, отсутствие annotation mismatch и успешные ограниченные вызовы.
+
+Диагностика: `transport_route_unavailable` → сокет/порт и unit; `transport_auth_failure` → разрешённый transport; `tool_not_registered` → версия client/endpoint или manifest; `schema_mismatch` → сверить **какой** `PYTHONPATH` импортирован и опубликованный SHA; `annotation_mismatch` → сверить `tools/list` и ревизию endpoint; provider failure → отдельный downstream, не перезапуск MCP. Для Store проверяйте private API отдельно. При неуспехе выпуска используйте только официальный rollback из `deployment_runbook.md`; не переключайте release symlink вручную.
 
 ## Полный реестр скриптов этого репозитория
 
@@ -149,6 +153,8 @@ PY
 self-delivery/readback/cleanup моложе 30 дней. Успешное read-only чтение не
 обновляет доказательство отправки. Сохраняйте старую квитанцию до разрешённого
 теста; при отсутствии разрешения отмечайте live delivery BLOCKED, не снимайте
-обязательный gate и не меняйте generated_at задним числом. На 2026-09-26 чтение
-работает, квитанция 2026-08-26 просрочена. Контракт —
+обязательный gate и не меняйте generated_at задним числом. Исторический срез
+2026-09-26 показывал просроченную квитанцию 2026-08-26; отдельная техническая
+проверка 2026-09-27 показала возраст текущего proof около 2,9 часа, без новой
+отправки. Перед следующим gate проверяйте актуальный возраст заново. Контракт —
 `autostop_manager/integration_audit.py`; правила — [CRM/Gmail operations](../operations.md).

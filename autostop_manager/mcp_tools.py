@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Collection
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from mcp.types import ToolAnnotations
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from .action_contract import prepare_action_contract
 from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
 from .avito_listings import avito_read_listing, avito_search_listings
 from .avito_market_assessment import assess_avito_price_sample
-from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
+from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status as _catalog_provider_status
 from .catalog_clients import (
     PARTSAPI_OPERATIONS,
     exist_price_lookup,
@@ -482,6 +483,12 @@ def register_manager_tools(  # noqa: C901
             "INTERNAL_ONLY: Read one bounded Store digest page. Acknowledge its cursor before advancing; "
             "the first read creates a baseline and Manager persists no raw payload."
         ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
     )
     def store_digest_tool(
         baseline: bool = False,
@@ -555,6 +562,12 @@ def register_manager_tools(  # noqa: C901
             "INTERNAL_ONLY: Run one allowlisted Store management operation with ActionContractV2, exact "
             "preread, dry-run/apply, idempotency, optimistic concurrency and reread."
         ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
     )
     def store_management_action_tool(
         domain: str,
@@ -585,6 +598,12 @@ def register_manager_tools(  # noqa: C901
             "INTERNAL_ONLY: Advance one Store quote through Admin V2; use the work Telegram workflow for dialogue. "
             "Supports start, status, evidence, draft, publish, reopen, order, handoff and decline; writes use the exact "
             "current quote and a confirmed reread."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=False,
         ),
     )
     def store_quote_conductor_tool(
@@ -762,14 +781,25 @@ def register_manager_tools(  # noqa: C901
         ),
     )(decode_vehicle_identities)
 
-    server.tool(
+    @server.tool(
         name="catalog_provider_status",
         description=(
             "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
             "Use before claiming live catalog or supplier API access."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
-    )(catalog_provider_status)
+    )
+    def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
+        payload = _catalog_provider_status(stage=stage)
+        # FastMCP otherwise duplicates this detailed status as indented text.
+        # Keep both MCP result channels and their parsed values unchanged.
+        return cast(
+            dict[str, Any],
+            CallToolResult(
+                content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")))],
+                structuredContent=payload,
+            ),
+        )
 
     @server.tool(
         name="avito_search_listings",
@@ -1093,7 +1123,9 @@ def register_manager_tools(  # noqa: C901
             "Reject full VIN, personal contacts and secrets before storage or network use. The job only collects "
             "untrusted public evidence; it does not diagnose, confirm fitment or write CRM records."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
     )
     def j1_research_start_tool(
         objective: str,
@@ -1160,7 +1192,9 @@ def register_manager_tools(  # noqa: C901
             "Expand an existing public-web research job with de-identified queries, within its original budget. "
             "The worker searches only public sources and never writes CRM records."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
     )
     def j1_research_add_queries_tool(job_id: str, queries: list[str]) -> dict[str, Any]:
         return research_add_queries(job_id=job_id, queries=queries)

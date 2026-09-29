@@ -348,6 +348,25 @@ def test_manager_mcp_catalog_fingerprint_matches_live_input_schemas():
     assert catalog["schema_fingerprint"] == _mcp_schema_fingerprint(schemas)
 
 
+def test_effectful_manager_tools_advertise_their_actual_effects(tmp_path):
+    server = _FakeServer()
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
+
+    expected = {
+        "j1_research_start": (False, False, True),
+        "j1_research_add_queries": (False, False, True),
+        "store_digest": (False, False, False),
+        "store_management_action": (True, True, False),
+        "store_quote_conductor": (True, False, False),
+    }
+    for name, (destructive, idempotent, open_world) in expected.items():
+        annotations = server.options[name]["annotations"]
+        assert annotations.readOnlyHint is False, name
+        assert annotations.destructiveHint is destructive, name
+        assert annotations.idempotentHint is idempotent, name
+        assert annotations.openWorldHint is open_world, name
+
+
 def test_partsapi_description_advertises_only_accepted_operations():
     from autostop_manager.catalog_clients import PARTSAPI_OPERATIONS
 
