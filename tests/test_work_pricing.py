@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager.work_pricing import estimate_repair_work_cost
 
 
@@ -26,6 +28,73 @@ def _labor_time(source: str, hours: float, operation: str = "замена рул
         "captured_at": "2026-05-21",
         "confidence": "medium",
     }
+
+
+def test_shared_brake_adjective_does_not_match_a_different_operation():
+    result = estimate_repair_work_cost(
+        vehicle="Synthetic sedan",
+        vin="SYN00000000000000",
+        work_items=["замена тормозных колодок"],
+        quotes_json={
+            "quotes": [
+                _quote("sto-a", 4000, operation="замена тормозных дисков"),
+                _quote("sto-b", 5000, operation="замена тормозных дисков"),
+                _quote("sto-c", 6000, operation="замена тормозных дисков"),
+            ],
+            "labor_time_sample": [
+                _labor_time("time-a", 2, operation="замена тормозных дисков"),
+                _labor_time("time-b", 3, operation="замена тормозных дисков"),
+            ],
+        },
+        auto_research=False,
+        use_internal_experience=False,
+    )
+
+    operation = result["operation_estimates"][0]
+    assert operation["sample"]["raw_matched_count"] == 0
+    assert operation["labor_time_analysis"]["valid_count"] == 0
+    assert result["total_works_rub"] is None
+    assert result["recommended_total_works_rub"] is None
+
+
+def test_same_operation_with_additional_qualifier_still_matches():
+    result = estimate_repair_work_cost(
+        vehicle="Synthetic sedan",
+        vin="SYN00000000000000",
+        work_items=["замена тормозных колодок"],
+        quotes_json=[
+            _quote("sto-a", 3000, operation="замена передних тормозных колодок"),
+            _quote("sto-b", 4000, operation="замена передних тормозных колодок"),
+            _quote("sto-c", 5000, operation="замена передних тормозных колодок"),
+        ],
+        auto_research=False,
+        use_internal_experience=False,
+    )
+
+    assert result["operation_estimates"][0]["sample"]["valid_count"] == 3
+    assert result["market_average_rub"] == 4000
+    assert result["total_works_rub"] == 5800
+
+
+@pytest.mark.parametrize("hours", ["100 ч", "120 ч", "100–120 ч"])
+def test_over_limit_text_hours_cannot_activate_labor_pricing(hours):
+    result = estimate_repair_work_cost(
+        vehicle="Synthetic sedan",
+        work_items=["замена масла"],
+        quotes_json={
+            "quotes": [],
+            "labor_time_sample": [
+                _labor_time("time-a", hours, operation="замена масла"),
+                _labor_time("time-b", hours, operation="замена масла"),
+            ],
+        },
+        auto_research=False,
+        use_internal_experience=False,
+    )
+
+    assert result["labor_time_sample"]["valid_count"] == 0
+    assert result["operation_estimates"][0]["pricing_method"] is None
+    assert result["recommended_total_works_rub"] is None
 
 
 def test_exact_work_with_public_quotes_excludes_outlier_and_applies_markup():

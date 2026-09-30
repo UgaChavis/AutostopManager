@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager.vehicle_identity import (
     decode_vehicle_identities,
     decode_vehicle_identity,
@@ -214,6 +216,23 @@ def test_decode_vehicle_identities_normalizes_common_crm_make_typos():
     )
 
     assert result["results"][0]["vehicle_profile"]["make"] == "Volkswagen"
+
+
+@pytest.mark.parametrize("use_vpic_batch", [False, True])
+def test_decode_vehicle_identities_offline_blocks_all_vpic_requests(monkeypatch, use_vpic_batch):
+    def unexpected_network(*_args, **_kwargs):
+        raise AssertionError("Offline batch must not request VIN, WMI or batch decoding")
+
+    for function in ("decode_vin_vpic", "decode_wmi_vpic", "decode_vins_vpic_batch"):
+        monkeypatch.setattr(f"autostop_manager.vehicle_identity.{function}", unexpected_network)
+    monkeypatch.setattr("autostop_manager.vin_lookup.decode_vin_vpic", unexpected_network)
+    monkeypatch.setattr("autostop_manager.vehicle_identity.catalog_provider_status", lambda: {"providers": []})
+    result = decode_vehicle_identities(
+        [{"identifier": "1HGCM82633A000000"}], live_vpic=False, use_vpic_batch=use_vpic_batch
+    )
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["vpic_batch"]["attempted"] is False
 
 
 def test_decode_vehicle_identity_tolerates_invalid_crm_source_confidence():

@@ -1218,7 +1218,7 @@ def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | No
             return candidate
     for candidate in candidates:
         candidate_key = _exist_brand_key(candidate.get("brand"))
-        if requested and (requested in candidate_key or candidate_key in requested):
+        if requested and candidate_key and (requested in candidate_key or candidate_key in requested):
             return candidate
     return None
 

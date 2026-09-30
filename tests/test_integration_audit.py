@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import pytest
 
+from autostop_manager import integration_audit
 from autostop_manager.integration_audit import (
     DEFAULT_STORE_ROOT,
     EXPECTED_GATEWAY_TOOLS,
@@ -127,6 +128,31 @@ def test_docs_runtime_contract_requires_exact_surface_manifests(tmp_path):
     assert all(result["checks"].values())
 
 
+@pytest.mark.parametrize("payload", [None, [], True, 1, "not an object"])
+def test_docs_runtime_contract_reports_non_object_manifest(tmp_path, payload):
+    _write_catalog(tmp_path)
+    (tmp_path / "docs" / "agent" / "manager_mcp_catalog.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit_docs_runtime_contract(tmp_path)
+
+    assert result["ok"] is False
+    assert result["error"] == "mcp_surface_manifest_invalid_structure"
+
+
+@pytest.mark.parametrize("names", [None, "agent_brief", 1, [True]])
+def test_docs_runtime_contract_rejects_invalid_tool_names_shape(tmp_path, names):
+    _write_catalog(tmp_path)
+    path = tmp_path / "docs" / "agent" / "manager_mcp_catalog.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["expected_tool_names"] = names
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit_docs_runtime_contract(tmp_path)
+
+    assert result["ok"] is False
+    assert result["error"] == "mcp_surface_manifest_invalid_structure"
+
+
 def test_gmail_connector_full_mode_requires_fresh_ref_only_proof(tmp_path):
     plugin_root = tmp_path / "gmail"
     proof_path = tmp_path / "gmail-proof.json"
@@ -141,6 +167,103 @@ def test_gmail_connector_full_mode_requires_fresh_ref_only_proof(tmp_path):
 
     assert result["ok"] is True
     assert result["proof"]["required_checks_passed"] is True
+
+
+@pytest.mark.parametrize("payload", [None, [], True, 1, "not an object"])
+def test_gmail_connector_reports_non_object_live_proof(tmp_path, payload):
+    plugin_root = tmp_path / "gmail"
+    proof_path = tmp_path / "gmail-proof.json"
+    _write_gmail_runtime(plugin_root, proof_path)
+    proof_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit_gmail_connector(
+        plugin_root=plugin_root,
+        proof_path=proof_path,
+        require_live_proof=True,
+        max_age=timedelta(days=30),
+    )
+
+    assert result["ok"] is False
+    assert result["proof"]["error"] == "gmail_live_proof_invalid"
+
+
+@pytest.mark.parametrize("check_value", ["false", "true", 1, False])
+def test_gmail_connector_requires_boolean_true_in_proof_checks(tmp_path, check_value):
+    plugin_root = tmp_path / "gmail"
+    proof_path = tmp_path / "gmail-proof.json"
+    _write_gmail_runtime(plugin_root, proof_path)
+    payload = json.loads(proof_path.read_text(encoding="utf-8"))
+    payload["checks"]["profile_read"] = check_value
+    proof_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = audit_gmail_connector(
+        plugin_root=plugin_root,
+        proof_path=proof_path,
+        require_live_proof=True,
+        max_age=timedelta(days=30),
+    )
+
+    assert result["ok"] is False
+    assert result["proof"]["required_checks_passed"] is False
+
+
+@pytest.mark.parametrize("kind", ["parity", "gateway"])
+@pytest.mark.parametrize("payload", [None, [], True, 1, "not an object"])
+def test_checker_reports_non_object_json_without_crashing(tmp_path, monkeypatch, kind, payload):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    if kind == "parity":
+        _write_parity_checker(tmp_path, "parity.py")
+        result = integration_audit._run_capability_parity_check(
+            repo_path=tmp_path, script_name="parity.py", command_runner=runner
+        )
+        expected_error = "capability_parity_checker_invalid_output"
+        assert len(calls) == 1
+    else:
+        _write_parity_checker(tmp_path, "check_agent_gateway_v2.py")
+        python = tmp_path / ".venv" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+        monkeypatch.setattr(integration_audit.os, "environ", {})
+        result = integration_audit._run_gateway_check(
+            crm_path=tmp_path,
+            mcp_url="http://synthetic.invalid/mcp",
+            token="synthetic-token",
+            exhaustive=False,
+            command_runner=runner,
+        )
+        expected_error = "crm_gateway_checker_invalid_output"
+        assert len(calls) == 2
+
+    assert result["ok"] is False
+    assert result["error"] == expected_error
+    assert "synthetic-token" not in json.dumps(result)
+
+
+def test_gateway_reports_invalid_failure_list_without_crashing(tmp_path, monkeypatch):
+    _write_parity_checker(tmp_path, "check_agent_gateway_v2.py")
+    python = tmp_path / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(integration_audit.os, "environ", {})
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"ok": True, "failed_invocations": 1}))
+
+    result = integration_audit._run_gateway_check(
+        crm_path=tmp_path,
+        mcp_url="http://synthetic.invalid/mcp",
+        token="synthetic-token",
+        exhaustive=False,
+        command_runner=runner,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "crm_gateway_checker_invalid_output"
 
 
 def test_gmail_connector_accepts_current_app_only_plugin_contract(tmp_path):

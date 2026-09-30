@@ -14,6 +14,21 @@ from autostop_manager.web_research_gateway import (
 )
 
 
+@pytest.mark.parametrize("payload", [None, [], "invalid", {}, {"ok": True, "data": []}, {"results": "invalid"}])
+def test_gateway_rejects_malformed_search_payload(payload):
+    result = CapabilityWebResearchGatewayAdapter(lambda *_args: payload).search_web_multi(query="FORD 1712024")
+    assert result["ok"] is False
+    assert result["results"] == []
+    assert result["error"] == {"code": "web_research_gateway_invalid_response", "retryable": False}
+
+
+def test_gateway_preserves_nested_provider_failure():
+    payload = {"ok": True, "data": {"ok": False, "error": {"code": "provider_busy", "retryable": True}}}
+    result = CapabilityWebResearchGatewayAdapter(lambda *_args: payload).search_web_multi(query="FORD 1712024")
+    assert result["ok"] is False
+    assert result["error"] == {"code": "provider_busy", "retryable": True}
+
+
 def test_capability_adapter_normalizes_e8_style_payload_and_enforces_domains():
     captured = {}
 

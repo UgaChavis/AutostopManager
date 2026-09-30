@@ -135,6 +135,8 @@ def _candidate_position_assessment(candidate: dict[str, Any], part_profile: dict
     fitment = candidate.get("fitment_evidence") or {}
     candidate_values = [
         candidate.get("name"),
+        candidate.get("product_name"),
+        candidate.get("product_group"),
         candidate.get("description"),
         candidate.get("part_name"),
         candidate.get("position"),

@@ -141,12 +141,9 @@ def test_readiness_returns_fresh_privacy_safe_execution_packet(monkeypatch, tmp_
     assert packet["format"] == "manager_automation_execution_packet_v1"
     assert packet["manager_revision"] == "b" * 40
     assert packet["crm"] == {"version": "crm-1.2.3", "revision": "c" * 40}
-    assert {item["path_label"] for item in packet["instruction_hashes"]} == {
-        "AGENTS.md",
-        ".agents/skills/manage-owner-telegram/SKILL.md",
-        ".agents/skills/manage-autostop-store/SKILL.md",
-        "docs/agent/deployment_runbook.md",
-    }
+    assert {item["path_label"] for item in packet["instruction_hashes"]} == set(
+        automation_control.instruction_paths(automation_control.PROJECT_ROOT)
+    )
     assert packet["jobs"][0]["revision"] == 1
     assert packet["jobs"][0]["applied_revision"] == 1
     assert packet["cursors"] == [
@@ -221,6 +218,7 @@ def test_templates_and_instruction_hashes_cover_unavailable_and_oversized_files(
     large = tmp_path / "large.txt"
     large.write_bytes(b"x" * (1024 * 1024 + 1))
     monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(automation_control, "instruction_paths", lambda _root: ())
     monkeypatch.setattr(
         automation_control,
         "INSTRUCTION_FILES",
@@ -236,6 +234,18 @@ def test_templates_and_instruction_hashes_cover_unavailable_and_oversized_files(
         {"label": "large", "path_label": "large.txt", "sha256": "too_large"},
     ]
     assert templates["templates"][0]["template_id"] == "crm_digest_v1"
+
+
+def test_instruction_hashes_report_symlink_loop_as_unavailable(monkeypatch, tmp_path):
+    loop = tmp_path / "loop.md"
+    loop.symlink_to(loop.name)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(automation_control, "instruction_paths", lambda _root: ("loop.md",))
+    monkeypatch.setattr(automation_control, "INSTRUCTION_FILES", (("cycle", "loop.md"),))
+
+    assert AutomationControlService._instruction_hashes() == [
+        {"label": "cycle", "path_label": "loop.md", "sha256": "unavailable"}
+    ]
 
 
 def test_readiness_reports_reconciliation_and_blocked_delivery(monkeypatch, tmp_path):

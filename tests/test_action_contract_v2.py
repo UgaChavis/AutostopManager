@@ -1248,12 +1248,78 @@ def test_store_quote_conductor_contract_keeps_estimate_payload_as_hashes_only():
 
     assert result["ok"] is True
     assert result["execution"]["tool"] == "store_quote_conductor"
-    assert result["execution"]["operation"] == "store_quote_conductor"
-    assert result["execution"]["gateway_arguments"]["operation"] == "replace_estimate_draft"
-    payload = result["execution"]["gateway_arguments"]["payload"]
-    assert payload["quote_request_id"] == "quote-1"
-    assert payload["planned_change_hashes"]["entries_sha256"] == "a" * 64
+    assert result["execution"]["ready"] is False
+    assert result["execution"]["operation"] == "draft"
+    assert result["execution"]["gateway_arguments"] is None
+    assert result["execution"]["required_context"] == ["run_id", "expected_state_version", "entries", "coverage"]
+    assert result["target"]["id"] == "quote-1"
+    assert result["planned_changes"]["entries_sha256"] == "a" * 64
     assert "typed_store_quote_operation_checked" in result["preflight"]["checks"]
+    assert result["ledger"]["store_payload"] is False
+
+
+@pytest.mark.parametrize(
+    ("action", "changes", "operation", "required_context"),
+    [
+        (
+            "replace_estimate_draft",
+            {
+                "entries_count": 1,
+                "entries_sha256": "a" * 64,
+                "coverage_count": 1,
+                "coverage_sha256": "b" * 64,
+                "evidence_sha256": "c" * 64,
+                "provenance": "AUTOSTOP_MANAGER",
+            },
+            "draft",
+            ["run_id", "expected_state_version", "entries", "coverage"],
+        ),
+        (
+            "submit_estimate",
+            {
+                "customer_response_sha256": "a" * 64,
+                "entries_count": 1,
+                "entries_sha256": "b" * 64,
+                "provenance": "AUTOSTOP_MANAGER",
+            },
+            "publish",
+            ["run_id", "expected_state_version", "customer_response"],
+        ),
+        (
+            "reopen_estimate",
+            {"published_snapshot_sha256": "a" * 64},
+            "reopen",
+            ["run_id", "expected_state_version"],
+        ),
+        (
+            "confirm_estimate_order_from_telegram",
+            {"published_snapshot_sha256": "a" * 64, "consent_context_sha256": "b" * 64},
+            "order",
+            ["run_id", "expected_state_version", "published_snapshot_hash", "consent_context_hash"],
+        ),
+    ],
+)
+def test_store_quote_conductor_preview_requires_current_context(action, changes, operation, required_context):
+    result = prepare_action_contract(
+        domain="store_quote_conductor",
+        action=action,
+        target_id="quote-1",
+        planned_changes=changes,
+        owner_intent="Continue the current quote",
+        expected_revision="revision-1",
+        idempotency_key="quote-preview-001",
+        correlation_id="quote-preview-001",
+        run_id=1,
+        dry_run=False,
+    )
+
+    assert result["ok"] is True
+    assert result["execution"]["ready"] is False
+    assert result["execution"]["operation"] == operation
+    assert result["execution"]["gateway_arguments"] is None
+    assert result["execution"]["required_context"] == required_context
+    assert result["planned_changes"] == changes
+    assert "store_quote_conductor_requires_current_workflow_context" in result["warnings"]
     assert result["ledger"]["store_payload"] is False
 
 

@@ -150,7 +150,7 @@ def avito_read_listing(ad_id: str, dry_run: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return _failure("malformed_response")
     listing = _normalize_listing(raw, fallback_id=normalized_id, fallback_url=fallback_url)
-    if listing is None:
+    if listing is None or listing["listing_id"] != normalized_id:
         return _failure("malformed_response")
     return {
         "ok": True,
@@ -356,17 +356,20 @@ def _http_error_code(status: int) -> str:
 def _normalize_listing(
     raw: dict[str, Any], *, fallback_id: str | None = None, fallback_url: str | None = None
 ) -> dict[str, Any] | None:
-    listing_id = _normalize_listing_id(raw.get("ad_id", raw.get("id", fallback_id)))
-    if listing_id is None:
-        listing_id = _normalize_listing_id(fallback_id)
+    raw_id = raw.get("ad_id", raw.get("id"))
+    listing_id = _normalize_listing_id(fallback_id if raw_id is None else raw_id)
     if listing_id is None:
         return None
 
     title = _clean_text(raw.get("title"), limit=300)
     if not title:
         return None
-    url = _clean_avito_url(raw.get("url")) or fallback_url
+    raw_url = raw.get("url")
+    url = fallback_url if raw_url is None else _clean_avito_url(raw_url)
     if url is None:
+        return None
+    source_identity = _parse_listing_identifier(url)
+    if not source_identity["ok"] or source_identity["listing_id"] != listing_id:
         return None
     price_rub, price_text, price_qualifier = _normalize_price(raw)
     location = raw.get("location")

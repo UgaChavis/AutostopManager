@@ -412,8 +412,18 @@ def normalize_web_research_response(
                 "retryable": bool(error.get("retryable", True)),
             },
         )
-    data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else envelope
-    if not isinstance(data, Mapping):
+    data = envelope.get("data", payload)
+    if isinstance(data, Mapping) and data.get("ok") is False:
+        return normalize_web_research_response(
+            data,
+            query=safe_query,
+            limit=normalized_limit,
+            allowed_domains=normalized_domains,
+            adapter=adapter,
+            capability=capability,
+            vin_redacted=redacted,
+        )
+    if not isinstance(data, Mapping) or not isinstance(data.get("results"), list):
         return _gateway_response(
             ok=False,
             query=safe_query,

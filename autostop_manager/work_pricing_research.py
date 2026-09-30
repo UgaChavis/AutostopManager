@@ -163,14 +163,19 @@ def _labor_only_flags(text: str) -> tuple[bool | None, bool]:
 
 def _hours_from_text(text: str) -> list[tuple[float, float]]:
     values: list[tuple[float, float]] = []
-    decimal = r"\d{1,2}(?:[,.]\d{1,2})?"
+    decimal = r"(?<![\d,.])\d+(?:[,.]\d+)?(?![\d,.])"
     patterns = [
         rf"({decimal})\s*[-–]\s*({decimal})\s*(?:н/?ч|нормо[- ]?час|час|ч\.)",
         rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d]{{0,24}}({decimal})",
         rf"({decimal})\s*(?:н/?ч|нормо[- ]?час|час(?:а|ов)?|ч\.)",
     ]
-    for pattern in patterns:
+    range_spans: list[tuple[int, int]] = []
+    for pattern_index, pattern in enumerate(patterns):
         for match in re.finditer(pattern, text, flags=re.I):
+            if pattern_index == 0:
+                range_spans.append(match.span())
+            elif any(match.start() < end and match.end() > start for start, end in range_spans):
+                continue
             try:
                 if len(match.groups()) >= 2 and match.group(2):
                     start = float(match.group(1).replace(",", "."))

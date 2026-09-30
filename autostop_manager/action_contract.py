@@ -176,6 +176,23 @@ STORE_QUOTE_CONDUCTOR_ACTIONS = {
     ("store_quote_conductor", "reopen_estimate"),
     ("store_quote_conductor", "confirm_estimate_order_from_telegram"),
 }
+STORE_QUOTE_CONDUCTOR_OPERATIONS = {
+    "replace_estimate_draft": "draft",
+    "submit_estimate": "publish",
+    "reopen_estimate": "reopen",
+    "confirm_estimate_order_from_telegram": "order",
+}
+STORE_QUOTE_CONDUCTOR_REQUIRED_CONTEXT = {
+    "replace_estimate_draft": ["run_id", "expected_state_version", "entries", "coverage"],
+    "submit_estimate": ["run_id", "expected_state_version", "customer_response"],
+    "reopen_estimate": ["run_id", "expected_state_version"],
+    "confirm_estimate_order_from_telegram": [
+        "run_id",
+        "expected_state_version",
+        "published_snapshot_hash",
+        "consent_context_hash",
+    ],
+}
 RAW_CRM_ACTIONS = frozenset({"create_client", "create_card", "link_card_to_client"})
 RAW_CRM_COLLECTION_CREATES = frozenset({"create_client", "create_card"})
 STORE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
@@ -278,6 +295,13 @@ def prepare_action_contract(
     executor_tool = _executor_tool(normalized_domain, normalized_action, changes, target_id=normalized_target)
     if not executor_tool:
         warnings.append("executor_tool_requires_capability_discovery")
+    conductor_context = (
+        STORE_QUOTE_CONDUCTOR_REQUIRED_CONTEXT[normalized_action]
+        if (normalized_domain, normalized_action) in STORE_QUOTE_CONDUCTOR_ACTIONS
+        else []
+    )
+    if conductor_context:
+        warnings.append("store_quote_conductor_requires_current_workflow_context")
 
     contract_id = _contract_id(
         normalized_domain,
@@ -375,10 +399,11 @@ def prepare_action_contract(
         "idempotency": {"key": key or None, "required": True},
         "preflight": {"checks": preflight_checks, "blocking_reasons": blockers},
         "execution": {
-            "ready": not blockers and bool(executor_tool),
+            "ready": not blockers and bool(executor_tool) and not conductor_context,
             "tool": executor_tool,
             "operation": workflow_operation,
             "gateway_arguments": gateway_arguments,
+            **({"required_context": list(conductor_context)} if conductor_context else {}),
             "external_connector": "gmail" if normalized_domain == "gmail" else None,
             "response_mode": "compact",
         },
@@ -493,17 +518,10 @@ def _gateway_execution(
             "mode": mode,
         }
     if (domain, action) in STORE_QUOTE_CONDUCTOR_ACTIONS:
-        return "store_quote_conductor", {
-            "operation": action,
-            "payload": {
-                "quote_request_id": target_id,
-                "expected_revision": revision,
-                "planned_change_hashes": changes,
-                "correlation_id": correlation_id,
-            },
-            "idempotency_key": idempotency_key or None,
-            "mode": mode,
-        }
+        # This preview contains hashes, not the current workflow state or raw
+        # estimate inputs required by the conductor.  Its own guarded caller
+        # uses contract.ok, then dispatches a separately bound typed request.
+        return STORE_QUOTE_CONDUCTOR_OPERATIONS[action], None
     if domain == "document" and action in COMPLETION_ACT_ACTIONS:
         try:
             expected_version = int(str(revision or ""))

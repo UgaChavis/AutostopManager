@@ -4,6 +4,8 @@ from io import BytesIO
 import json
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
+
 import autostop_manager.public_automotive_evidence as evidence
 
 
@@ -122,3 +124,28 @@ def test_safe_fetch_rejects_unapproved_hosts():
         assert "allowlist" in str(exc)
     else:  # pragma: no cover - documents the safety expectation
         raise AssertionError("unapproved host was accepted")
+
+
+@pytest.mark.parametrize(
+    ("topic", "canonical_topic", "expected_source"),
+    [
+        ("бюллетени", "tsb", "nhtsa_tsbs_recent_zips"),
+        ("масло", "fluids", "official_fluid_reference_routes"),
+        ("отзывы", "recalls", "nhtsa_datasets_apis"),
+    ],
+)
+def test_russian_topics_select_the_requested_evidence_only(monkeypatch, topic, canonical_topic, expected_source):
+    monkeypatch.setattr(evidence, "_nhtsa_tsb_dataset_url", lambda: "https://static.nhtsa.gov/test.zip")
+    monkeypatch.setattr(
+        evidence,
+        "_safe_get_bytes",
+        lambda url, **_kwargs: _tsb_zip() if url.endswith(".zip") else _recall_payload(),
+    )
+
+    result = evidence.lookup_public_automotive_evidence(
+        make="Mercedes-Benz", model="C-Class", model_year=2020, topics=topic
+    )
+
+    assert result["ok"] is True
+    assert result["input_context"]["topics"] == [canonical_topic]
+    assert [item["source_id"] for item in result["evidence"]] == [expected_source]

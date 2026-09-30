@@ -642,6 +642,28 @@ def test_exist_lookup_selects_requested_brand_and_returns_price(monkeypatch):
     assert result["selected_item"]["catalog_candidate"]["pid"] == "02201730"
 
 
+@pytest.mark.parametrize("brand_markup", ["", "<b>---</b>"])
+def test_exist_lookup_does_not_select_unknown_brand_as_requested_brand(monkeypatch, brand_markup):
+    calls: list[str] = []
+    catalog = f'<a href="/Price/?pid=SYNTHETIC">{brand_markup} SYNTHETIC123 <dd>Деталь</dd></a>'
+
+    def fake_urlopen(request, timeout=20.0):
+        url = request.full_url
+        calls.append(url)
+        if "/Api/Parts/Search" in url:
+            return _FakeRawResponse("[]")
+        if "pcode=SYNTHETIC123" in url:
+            return _FakeRawResponse(catalog)
+        raise AssertionError("An unknown brand must not be selected for a price request")
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+    result = exist_price_lookup(part_number="SYNTHETIC123", brand="BOSCH")
+    assert result["ok"] is True
+    assert result["needs_disambiguation"] is True
+    assert result["selected_item"] is None
+    assert not any("pid=SYNTHETIC" in url for url in calls)
+
+
 @pytest.mark.parametrize(("search_payload", "status"), [(b"", 204), (b" \n", 200)])
 def test_exist_lookup_continues_to_pcode_when_search_response_is_empty(monkeypatch, search_payload, status):
     calls: list[str] = []

@@ -26,7 +26,7 @@ restore() {
   local code=$?
   if [[ -f "$backup/unit" ]]; then cp -a "$backup/unit" "$unit"; else unlink "$unit" 2>/dev/null || true; fi
   if [[ -f "$backup/boot-unit" ]]; then cp -a "$backup/boot-unit" "$boot_unit"; else unlink "$boot_unit" 2>/dev/null || true; fi
-  if [[ -f "$backup/config" ]]; then cp -a "$backup/config" /etc/autostop-work-telegram/wake.json; fi
+  if [[ -f "$backup/config" ]]; then cp -a "$backup/config" /etc/autostop-work-telegram/wake.json; else unlink /etc/autostop-work-telegram/wake.json 2>/dev/null || true; fi
   systemctl daemon-reload
   return "$code"
 }

@@ -197,8 +197,11 @@ def _operations_match(operation_name: str, quote_operation_name: str) -> bool:
         return True
     if _operation_category(op) != _operation_category(quote_op):
         return False
-    overlap = _significant_tokens(op) & _significant_tokens(quote_op)
-    return len(overlap) >= 1
+    operation_tokens = _significant_tokens(op)
+    quote_tokens = _significant_tokens(quote_op)
+    return bool(operation_tokens and quote_tokens) and (
+        operation_tokens <= quote_tokens or quote_tokens <= operation_tokens
+    )
 
 
 def _load_labor_experience(path: Path = LABOR_EXPERIENCE_PATH) -> dict[str, Any] | None:
@@ -367,14 +370,16 @@ def _coerce_hours(value: Any) -> tuple[float | None, list[float] | None]:
         return None, None
 
     text = str(value).replace(",", ".")
-    range_match = re.search(r"(\d{1,2}(?:\.\d{1,2})?)\s*[-–]\s*(\d{1,2}(?:\.\d{1,2})?)", text)
+    number = r"(?<![\d.])\d+(?:\.\d+)?(?![\d.])"
+    range_match = re.search(rf"({number})\s*[-–]\s*({number})", text)
     if range_match:
         start = round(float(range_match.group(1)), 2)
         end = round(float(range_match.group(2)), 2)
         if 0 < start <= end <= 80:
             return round((start + end) / 2, 2), [start, end]
+        return None, None
 
-    match = re.search(r"\d{1,2}(?:\.\d{1,2})?", text)
+    match = re.search(number, text)
     if not match:
         return None, None
     hours = round(float(match.group(0)), 2)

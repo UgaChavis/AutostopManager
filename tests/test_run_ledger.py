@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
+import pytest
+
 from autostop_manager.storage import (
     STORE_QUOTE_CONDUCTOR_LEDGER_INTENT,
     STORE_QUOTE_CONDUCTOR_LEDGER_OPERATION,
@@ -91,6 +93,69 @@ def test_v2_workflow_is_idempotent_resumable_and_keeps_external_steps_refs_only(
     status = store.get_manager_run(started["id"], include_events=True, include_external_steps=True)
     assert status["item"]["status"] == "completed"
     assert status["item"]["external_steps"][0]["result_refs"]["message_id"] == "message-9"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [("connector", "telegram"), ("action", "forward"), ("request_refs", {"thread_id": "thread-2"})],
+)
+def test_external_step_rejects_changed_request_without_changing_state(tmp_path, field, replacement):
+    store = StoreState(tmp_path / "memory.sqlite3")
+    started = store.start_workflow_run(
+        workflow_id="synthetic_workflow", intent="synthetic_workflow", idempotency_key="external-step-conflict"
+    )
+    executing = store.transition_workflow_run(started["id"], status="executing", expected_state_version=1)
+    request = {"step_id": "step-1", "connector": "gmail", "action": "send", "request_refs": {"thread_id": "thread-1"}}
+    waiting = store.register_external_step(started["id"], expected_state_version=executing["state_version"], **request)
+    before = store.get_manager_run(started["id"])["item"]
+
+    result = store.register_external_step(
+        started["id"], expected_state_version=waiting["state_version"], **(request | {field: replacement})
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "external_step_request_conflict"
+    assert result["conflict_fields"] == [field]
+    assert store.get_manager_run(started["id"])["item"] == before
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_external_step_exact_retry_compares_sanitized_refs_and_preserves_state(tmp_path, completed):
+    store = StoreState(tmp_path / "memory.sqlite3")
+    started = store.start_workflow_run(
+        workflow_id="synthetic_workflow", intent="synthetic_workflow", idempotency_key="external-step-exact-retry"
+    )
+    executing = store.transition_workflow_run(started["id"], status="executing", expected_state_version=1)
+    waiting = store.register_external_step(
+        started["id"],
+        step_id="step-1",
+        connector="gmail",
+        action="send",
+        request_refs={"thread_id": "thread-1"},
+        expected_state_version=executing["state_version"],
+    )
+    if completed:
+        store.complete_external_step(
+            started["id"],
+            step_id="step-1",
+            result_refs={"message_id": "message-1"},
+            expected_state_version=waiting["state_version"],
+        )
+    before = store.get_manager_run(started["id"])["item"]
+
+    result = store.register_external_step(
+        started["id"],
+        step_id=" step-1 ",
+        connector=" GMAIL ",
+        action=" send ",
+        request_refs={"THREAD_ID": "thread-1", "ignored_field": "ignored"},
+        expected_state_version=before["state_version"],
+    )
+
+    assert result["ok"] is True
+    assert result["deduplicated"] is True
+    assert result["status"] == ("completed" if completed else "pending")
+    assert store.get_manager_run(started["id"])["item"] == before
 
 
 def test_store_quote_conductor_uses_one_active_target_and_guarded_ledger(tmp_path):

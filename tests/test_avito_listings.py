@@ -470,6 +470,48 @@ def test_read_listing_accepts_numeric_id_and_returns_normalized_card(monkeypatch
     assert result["listing"]["seller"]["name"] == "Иван Иванов"
 
 
+def test_read_listing_rejects_a_different_returned_listing(monkeypatch):
+    _install_response(
+        monkeypatch,
+        {
+            "ok": True,
+            "data": _listing(
+                ad_id="8386499450",
+                url="https://www.avito.ru/krasnoyarsk/part_8386499450",
+            ),
+        },
+    )
+
+    result = avito_listings.avito_read_listing("8386499447")
+
+    assert result == {"ok": False, "source": "avito", "error": "malformed_response"}
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+def test_listing_url_must_reference_the_same_returned_id(monkeypatch, operation):
+    row = _listing(url="https://www.avito.ru/krasnoyarsk/part_8386499450")
+    data = row if operation == "read" else {"listings": [row]}
+    _install_response(monkeypatch, {"ok": True, "data": data})
+
+    result = (
+        avito_listings.avito_read_listing("8386499447")
+        if operation == "read"
+        else avito_listings.avito_search_listings("synthetic part")
+    )
+
+    assert result == {"ok": False, "source": "avito", "error": "malformed_response"}
+
+
+def test_read_listing_preserves_known_target_fallback_for_missing_fields(monkeypatch):
+    _install_response(monkeypatch, {"ok": True, "data": _listing(ad_id=None, url=None)})
+
+    result = avito_listings.avito_read_listing("https://www.avito.ru/item/8386499447")
+
+    assert result["ok"] is True
+    assert result["listing"]["listing_id"] == "8386499447"
+    assert result["listing"]["url"] == "https://www.avito.ru/item/8386499447"
+
+
 def test_read_listing_accepts_avito_url_but_sends_only_id(monkeypatch):
     calls = _install_response(monkeypatch, {"ok": True, "data": _listing()})
 

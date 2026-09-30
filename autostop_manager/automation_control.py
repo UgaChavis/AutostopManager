@@ -34,6 +34,7 @@ from .config import (
     get_automation_control_socket_path,
     get_automation_runtime_identity,
 )
+from .diagnostics import instruction_paths
 
 
 AUTOMATION_CONTROL_PROTOCOL = "autostop.manager.automation-control.v1"
@@ -57,7 +58,7 @@ INSTRUCTION_FILES = (
     ("project_instructions", "AGENTS.md"),
     ("owner_telegram_instructions", ".agents/skills/manage-owner-telegram/SKILL.md"),
     ("store_instructions", ".agents/skills/manage-autostop-store/SKILL.md"),
-    ("deployment_runbook", "docs/agent/deployment_runbook.md"),
+    ("deployment_runbook", "docs/agent/references/deployment.md"),
 )
 
 
@@ -112,11 +113,16 @@ class AutomationControlService:
     @staticmethod
     def _instruction_hashes() -> list[dict[str, str]]:
         results = []
-        for label, relative_path in INSTRUCTION_FILES:
+        labels = {path: label for label, path in INSTRUCTION_FILES}
+        paths = (*labels, *sorted(set(instruction_paths(PROJECT_ROOT)).difference(labels)))
+        for relative_path in paths:
+            label = labels.get(relative_path, relative_path.removesuffix(".md").replace("/", ":"))
             path = PROJECT_ROOT / relative_path
             try:
+                if not path.resolve().is_relative_to(PROJECT_ROOT.resolve()):
+                    raise OSError("instruction_outside_project")
                 content = path.read_bytes()
-            except OSError:
+            except (OSError, RuntimeError):
                 digest = "unavailable"
             else:
                 digest = hashlib.sha256(content).hexdigest() if len(content) <= 1024 * 1024 else "too_large"

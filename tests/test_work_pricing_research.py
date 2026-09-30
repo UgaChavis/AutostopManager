@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from urllib.error import URLError
 
+import pytest
+
 from autostop_manager import work_pricing_research as research
 
 
@@ -237,3 +239,13 @@ def test_research_warns_after_conflicting_duplicate_quotes_are_merged(monkeypatc
     assert result["quotes"][0]["includes_parts"] is True
     assert result["quotes"][0]["labor_only"] is False
     assert "Public labor-only price quotes were not found automatically." in result["warnings"]
+
+
+@pytest.mark.parametrize("excerpt", ["100 час", "120 ч.", "100–120 нормо-часов", "норма времени 120 часов"])
+def test_public_hours_do_not_match_fragments_of_out_of_range_numbers(excerpt):
+    assert research._hours_from_text(excerpt) == []
+
+
+def test_public_hours_preserve_decimal_and_range_observations():
+    assert (2.5, 2.5) in research._hours_from_text("2,5 часа")
+    assert (2.5, 3.0) in research._hours_from_text("2,5–3,0 нормо-часа")

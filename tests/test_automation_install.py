@@ -1,9 +1,48 @@
 import os
 from pathlib import Path
+import shlex
 import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("prior_config", [None, '{"synthetic_original":true}\n'])
+def test_wake_installer_rollback_restores_prior_config_or_removes_new_file(tmp_path: Path, prior_config):
+    source = (ROOT / "scripts/install-codex-wake.sh").read_text(encoding="utf-8")
+    restore = source.split("restore() {\n", 1)[1].split("\n}\n", 1)[0]
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    config = tmp_path / "wake.json"
+    if prior_config is not None:
+        (backup / "config").write_text(prior_config, encoding="utf-8")
+    config.write_text('{"synthetic_new":true}\n', encoding="utf-8")
+    unit = tmp_path / "unit"
+    boot_unit = tmp_path / "boot-unit"
+    unit.write_text("synthetic unit", encoding="utf-8")
+    boot_unit.write_text("synthetic boot unit", encoding="utf-8")
+    restore = restore.replace("/etc/autostop-work-telegram/wake.json", shlex.quote(str(config)))
+    script = (
+        "set -Eeuo pipefail\n"
+        f"unit={shlex.quote(str(unit))}\n"
+        f"boot_unit={shlex.quote(str(boot_unit))}\n"
+        f"backup={shlex.quote(str(backup))}\n"
+        "systemctl() { :; }\n"
+        f"restore() {{\n{restore}\n}}\n"
+        "trap restore ERR\nfalse\n"
+    )
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10, cwd=tmp_path)
+
+    assert result.returncode == 1, result.stderr
+    assert not unit.exists()
+    assert not boot_unit.exists()
+    if prior_config is None:
+        assert not config.exists()
+    else:
+        assert config.read_text(encoding="utf-8") == prior_config
 
 
 def test_automation_unit_is_local_only_and_hardened():
