@@ -14,10 +14,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     # External CRM deployment still invokes these names; neither writes a database.
     for command in ("knowledge-sync", "knowledge-audit"):
-        sub.add_parser(command, help="Validate local documentation (no database writes)")
+        knowledge = sub.add_parser(command, help="Validate local documentation (no database writes)")
+        knowledge.add_argument(
+            "--project-only", action="store_true", help="Validate project links; skip host Codex file availability"
+        )
     doctor = sub.add_parser("doctor", help="Local checks; live integrations require an explicit flag")
     doctor.add_argument("--integrations", action="store_true")
     doctor.add_argument("--full", action="store_true")
+    doctor.add_argument(
+        "--project-only", action="store_true", help="Validate project links; skip host Codex file availability"
+    )
     sub.add_parser("store-conductor-release-gate", help="Read-only legacy Store-state release gate")
     status = sub.add_parser("store-checkpoint-status")
     status.add_argument("--stream", required=True, choices=["store_digest", "store_bootstrap"])
@@ -51,9 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     result: dict[str, Any]
     if args.command in {"knowledge-sync", "knowledge-audit"}:
-        result = audit_documentation()
+        result = audit_documentation(check_external_links=False) if args.project_only else audit_documentation()
     elif args.command == "doctor":
-        result = diagnose(integrations=args.integrations, full=args.full)
+        options = {"check_external_links": False} if args.project_only else {}
+        result = diagnose(integrations=args.integrations, full=args.full, **options)
     elif args.command == "mcp-probe":
         result = probe_manager_mcp(
             args.url,

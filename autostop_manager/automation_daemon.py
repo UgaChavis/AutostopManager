@@ -334,6 +334,11 @@ class AutomationDaemon:
                 self.store.controller_heartbeat(owner=self.owner)
                 reconciled = self.store.reconcile_next_job()
                 if reconciled is not None:
+                    if not reconciled.get("applied"):
+                        # An active lease can keep this revision pending. Yield
+                        # so control requests and shutdown can run while waiting.
+                        with suppress(TimeoutError):
+                            await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
                     continue
                 outbox = self.store.claim_outbox(owner=self.owner, lease_seconds=self.lease_seconds)
                 if outbox is not None:

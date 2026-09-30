@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from autostop_manager.catalog_clients import extract_partsapi_article_candidates
 from autostop_manager.vin_oem_resolver import (
     _assess_partsapi_identity_agreement,
     resolve_vin_oem_parts,
@@ -129,6 +130,36 @@ def test_resolver_uses_current_three_method_chain_and_keeps_fitment_manual(monke
     assert result["readiness"]["ready_for_crm_writeback"] is False
     assert result["crm_writeback_gate"]["can_prepare_manual_writeback"] is False
     assert SYNTHETIC_VIN not in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    ("field", "title", "expected_match"),
+    [
+        ("ART_PRODUCT_NAME", "Rear brake pads", "conflict"),
+        ("ART_PRODUCT_NAME", "Front brake pads", "matched"),
+        ("PRODUCT_GROUP", "Rear brake pads", "conflict"),
+        ("PRODUCT_GROUP", "Front brake pads", "matched"),
+    ],
+)
+def test_resolver_compares_position_from_normalized_article_fields(monkeypatch, field, title, expected_match):
+    articles = extract_partsapi_article_candidates(
+        payload=[{"ART_ID": "42", "ART_ARTICLE_NR": "SYNTHETIC123", "ART_SUP_BRAND": "Example", field: title}],
+        operation="articles",
+    )
+    _install_fakes(monkeypatch, articles=articles)
+    result = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN,
+        requested_part="передние колодки",
+        live_vpic=False,
+        live_partsapi_oem=True,
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["requested_position_coordinates"] == {"axle": "front"}
+    assert candidate["position_match"] == expected_match
+    assert ("candidate_position_conflict" in candidate["blocking_reasons"]) is (expected_match == "conflict")
+    assert candidate["vin_fitment_confirmed"] is False
+    assert candidate["manual_review_required"] is True
+    assert result["readiness"]["ready_for_crm_writeback"] is False
 
 
 @pytest.mark.parametrize(

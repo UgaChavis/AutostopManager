@@ -23,19 +23,28 @@ SPEC.loader.exec_module(hooks)
 
 @pytest.fixture
 def docs(tmp_path):
-    for name in (*diagnostics.TEXT_DOCUMENTS, *diagnostics.REFERENCE_DOCUMENTS):
+    names = set(diagnostics.instruction_paths(ROOT))
+    for name in sorted(names):
+        document = ROOT / name
+        for link in diagnostics._document_links(document.read_text()):
+            target = diagnostics._local_link_path(link, document, ROOT, check_external_links=False)
+            if target is not None and target.is_relative_to(ROOT):
+                names.add(str(target.relative_to(ROOT)))
+    for name in sorted(names):
         dest = tmp_path / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, dest)
+    assert diagnostics.audit_documentation(tmp_path, check_external_links=False)["ok"]
     return tmp_path
 
 
 def test_documents_fit_budget_and_cover_operational_skills():
-    report = diagnostics.audit_documentation()
+    report = diagnostics.audit_documentation(check_external_links=False)
     assert diagnostics.INSTRUCTION_BUDGET_BYTES == 32 * 1024
     assert report["bytes"] <= diagnostics.INSTRUCTION_BUDGET_BYTES
-    assert report["reference_documents"] == len(diagnostics.REFERENCE_DOCUMENTS)
+    assert report["reference_documents"] == len(diagnostics.instruction_paths(ROOT)) - len(diagnostics.TEXT_DOCUMENTS)
     assert report["ok"]
+    assert report["external_links_checked"] is False
     assert {path.parent.name for path in (ROOT / ".agents/skills").glob("*/SKILL.md")} == {
         "manage-autostop-store",
         "manage-fst-vpn",
@@ -49,9 +58,9 @@ def test_prepare_for_work_instruction_requires_fresh_private_readiness_context()
     normalized = " ".join(instructions.split())
 
     assert "«приготовься к работе»" in instructions
-    assert "`manager_automations` with operation `readiness`" in normalized
-    assert "wait for automation reconciliation" in normalized
-    assert "do not carry over old conversation context or business records" in normalized
+    assert "`manager_automations` с операцией `readiness`" in normalized
+    assert "дождись завершения reconciliation" in normalized
+    assert "без переноса старых рабочих кейсов и переписки" in normalized
 
 
 @pytest.mark.parametrize(
@@ -74,16 +83,39 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
     elif fault == "reference_missing":
         (docs / diagnostics.REFERENCE_DOCUMENTS[0]).unlink()
     else:
-        path = docs / diagnostics.TEXT_DOCUMENTS[1]
+        path = docs / diagnostics.SKILL_DOCUMENTS[0]
         path.write_text(path.read_text().replace(f"{fault}:", "wrong:", 1))
-    assert not diagnostics.audit_documentation(docs)["ok"]
+    assert not diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
+@pytest.mark.parametrize("kind", ["document", "link", "module"])
+def test_document_checks_report_symlink_loops_without_crashing(docs, kind):
+    if kind == "link":
+        path = docs / "loop.py"
+        path.symlink_to(path.name)
+        instructions = docs / "AGENTS.md"
+        instructions.write_text(instructions.read_text() + "\n[loop](loop.py)\n")
+        expected = "document_link_invalid:AGENTS.md"
+    else:
+        name = "AGENTS.md" if kind == "document" else diagnostics.MODULE_DOCUMENTS["C4"]
+        path = docs / name
+        path.unlink()
+        path.symlink_to(path.name)
+        expected = f"document_unreadable:{name}"
+
+    report = diagnostics.audit_documentation(docs, check_external_links=False)
+
+    assert report["ok"] is False
+    assert expected in report["warnings"]
+    if kind == "module":
+        assert "module_link_missing:docs/agent/modules/C3.md:docs/agent/modules/C4.md" in report["warnings"]
 
 
 def test_compatibility_cli_checks_never_create_database(tmp_path, monkeypatch, capsys):
     db = tmp_path / "not-created.sqlite3"
     monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(db))
     for command in ("knowledge-sync", "knowledge-audit", "doctor"):
-        assert cli.main([command]) == 0
+        assert cli.main([command, "--project-only"]) == 0
         assert json.loads(capsys.readouterr().out)["ok"]
     assert not db.exists()
 
@@ -106,11 +138,11 @@ def test_integrations_only_run_when_requested(monkeypatch):
         "autostop_manager.integration_audit.build_integration_audit", lambda **kw: calls.append(kw) or {"ok": True}
     )
     monkeypatch.setattr(diagnostics, "watchdog_status", lambda: {"ok": True})
-    assert diagnostics.diagnose()["ok"]
+    assert diagnostics.diagnose(check_external_links=False)["ok"]
     assert calls == []
-    assert not diagnostics.diagnose(full=True)["ok"]
+    assert not diagnostics.diagnose(full=True, check_external_links=False)["ok"]
     assert calls == []
-    assert diagnostics.diagnose(integrations=True, full=True)["ok"]
+    assert diagnostics.diagnose(integrations=True, full=True, check_external_links=False)["ok"]
     assert calls == [{"full": True}]
 
 

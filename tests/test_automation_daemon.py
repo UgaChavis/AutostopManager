@@ -729,6 +729,49 @@ def test_scheduler_loop_prioritizes_each_work_class_and_recovers_errors(monkeypa
         assert any(name == "heartbeat" and values.get("state") == "error" for name, values in events)
 
 
+@pytest.mark.parametrize("stop_from_callback", [False, True])
+def test_pending_reconciliation_yields_for_control_and_waits_before_retry(stop_from_callback):
+    observed = []
+
+    class Store:
+        calls = 0
+        outbox_calls = 0
+
+        def controller_heartbeat(self, **_values):
+            pass
+
+        def reconcile_next_job(self):
+            self.calls += 1
+            if self.calls == 1:
+                asyncio.get_running_loop().call_soon(control_callback)
+            # Keep a regression bounded even if the scheduler never yields.
+            if self.calls == (3 if stop_from_callback else 2):
+                daemon.stopping.set()
+            return {"applied": False}
+
+        def claim_outbox(self, **_values):
+            self.outbox_calls += 1
+
+    def control_callback():
+        observed.append(store.calls)
+        if stop_from_callback:
+            daemon.stopping.set()
+
+    store = Store()
+    daemon = _unit_daemon(store)
+    daemon.tick_seconds = 0.001
+
+    async def scenario():
+        await daemon.scheduler_loop()
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+    assert observed == [1]
+    assert store.calls == (1 if stop_from_callback else 2)
+    assert store.outbox_calls == 0
+
+
 def test_daemon_run_initializes_adopts_serves_and_stops_cleanly(monkeypatch):
     events = []
 

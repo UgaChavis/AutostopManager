@@ -610,7 +610,11 @@ class TelegramAutomationAdapter:
                 f"Период системного таймера подтверждён: {expected_minutes} мин.",
             )
         job = data.get("job") if isinstance(data.get("job"), dict) else None
-        if job is None or not job.get("job_id"):
+        if (
+            job is None
+            or not job.get("job_id")
+            or (pending.operation == "set_schedule" and job["job_id"] != pending.payload["job_id"])
+        ):
             del self._pending[token]
             return TelegramAutomationResult(
                 True,

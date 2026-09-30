@@ -2985,6 +2985,21 @@ class StoreState:
                 (run_id, step_id),
             ).fetchone()
             if existing:
+                conflict_fields = []
+                if existing["connector"] != connector:
+                    conflict_fields.append("connector")
+                if existing["action"] != action:
+                    conflict_fields.append("action")
+                if _decode_json(existing["request_refs_json"], {}) != sanitized:
+                    conflict_fields.append("request_refs")
+                if conflict_fields:
+                    return {
+                        "ok": False,
+                        "error": "external_step_request_conflict",
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "conflict_fields": conflict_fields,
+                    }
                 return {
                     "ok": True,
                     "run_id": run_id,

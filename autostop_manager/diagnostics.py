@@ -2,51 +2,143 @@
 
 from __future__ import annotations
 
+from os.path import normpath
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from .config import PROJECT_ROOT
 
-TEXT_DOCUMENTS = (
-    "AGENTS.md",
+MODULE_PARENTS: dict[str, str | None] = {
+    "A1": None,
+    "A2": None,
+    "A3": None,
+    "A4": "A1",
+    "A5": "A1",
+    "B1": None,
+    "B2": None,
+    "B3": None,
+    "B4": None,
+    "C2": None,
+    "C3": None,
+    "C4": "C3",
+    "C5": "C3",
+    "C6": "C3",
+    "C7": "C3",
+    "D1": None,
+    "D2": None,
+    "D3": None,
+    "D4": "D2",
+    "D5": "D3",
+    "E1": None,
+    "E2": None,
+    "E3": None,
+    "E4": "E1",
+    "E5": "E1",
+    "E6": "E1",
+    "E7": "E1",
+    "E8": None,
+    "E9": "E1",
+    "E10": None,
+    "E11": None,
+    "F1": None,
+    "F2": None,
+    "F3": "F2",
+    "F4": "F2",
+    "F5": "F2",
+    "G1": None,
+    "H1": None,
+    "H2": None,
+    "I1": None,
+    "I2": None,
+    "J1": None,
+}
+MODULE_DOCUMENTS = {
+    module_id: "AGENTS.md" if module_id == "A2" else f"docs/agent/modules/{module_id}.md"
+    for module_id in MODULE_PARENTS
+}
+SKILL_DOCUMENTS = (
     ".agents/skills/manage-owner-telegram/SKILL.md",
     ".agents/skills/manage-autostop-store/SKILL.md",
     ".agents/skills/manage-fst-vpn/SKILL.md",
     ".agents/skills/manage-owner-instagram/SKILL.md",
-    "docs/agent/operations.md",
-    "docs/agent/deployment_runbook.md",
-    "docs/agent/j1_web_research.md",
 )
-REFERENCE_DOCUMENTS = (
-    "docs/agent/module_operations/README.md",
-    "docs/agent/module_operations/coverage_matrix.md",
-    "docs/agent/module_operations/release_manifest_2026-09-25.md",
-    "docs/agent/module_operations/runtime_release.md",
-    "docs/agent/module_operations/store_adapter.md",
-    "docs/agent/module_operations/manager_codex_mcp.md",
-    "docs/agent/module_operations/market_listings.md",
-    "docs/agent/module_operations/vin_catalog_j1.md",
-    "docs/agent/module_operations/telegram_automation.md",
-    "docs/agent/module_operations/instagram.md",
-)
-# Aggregate ceiling for the active operational instruction documents.  It
-# remains bounded while allowing their current guarded-workflow coverage.
+TEXT_DOCUMENTS = ("AGENTS.md", MODULE_DOCUMENTS["A1"], *SKILL_DOCUMENTS)
+REFERENCE_DOCUMENTS = tuple(path for module_id, path in MODULE_DOCUMENTS.items() if module_id not in {"A1", "A2"})
+# Only the entry instructions and operational skills count toward this budget.
+# Detailed module guides and complete plugin catalogs are loaded when needed.
 INSTRUCTION_BUDGET_BYTES = 32 * 1024
+EXTERNAL_CODEX_ROOTS = (
+    Path("/root/.codex/skills"),
+    Path("/root/.codex/plugins/cache"),
+)
+FST_ACCESS_DOCUMENT = Path("/root/.codex/CODEX_VPN_FST_ACCESS.md")
 
 
-def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
+def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
+    """Include every current Markdown document and missing required instructions."""
+    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
+    for directory in (root / "docs", root / ".agents/skills"):
+        names.update(str(path.relative_to(root)) for path in directory.rglob("*.md"))
+    return (*TEXT_DOCUMENTS, *sorted(names.difference(TEXT_DOCUMENTS)))
+
+
+def _document_links(text: str) -> list[str]:
+    inline = re.findall(r"\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]+)?\s*\)", text)
+    references = re.findall(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))", text)
+    return [angled or plain for angled, plain in (*inline, *references)]
+
+
+def _local_link_path(link: str, document: Path, root: Path, *, check_external_links: bool = True) -> Path | None:
+    parsed = urlsplit(link)
+    if parsed.scheme or not parsed.path:
+        return None
+    target = unquote(parsed.path)
+    # App-rendered file links may include a one-based line number.
+    target = re.sub(r":\d+$", "", target)
+    candidate = Path(normpath(document.parent / target))
+    document_name = document.relative_to(root).as_posix()
+    if not check_external_links and not candidate.is_relative_to(root):
+        allowed_external = document_name in {MODULE_DOCUMENTS["A4"], MODULE_DOCUMENTS["A5"]} and any(
+            candidate.is_relative_to(base) for base in EXTERNAL_CODEX_ROOTS
+        )
+        allowed_external = allowed_external or (
+            document_name == ".agents/skills/manage-fst-vpn/SKILL.md" and candidate == FST_ACCESS_DOCUMENT
+        )
+        if not allowed_external:
+            raise ValueError("document_link_invalid")
+        return candidate
+    resolved = candidate.resolve()
+    allowed = resolved.is_relative_to(root)
+    if document_name in {MODULE_DOCUMENTS["A4"], MODULE_DOCUMENTS["A5"]}:
+        allowed = allowed or any(resolved.is_relative_to(base.resolve()) for base in EXTERNAL_CODEX_ROOTS)
+    if document_name == ".agents/skills/manage-fst-vpn/SKILL.md":
+        allowed = allowed or resolved == FST_ACCESS_DOCUMENT.resolve()
+    if not allowed or not resolved.is_file():
+        raise ValueError("document_link_invalid")
+    return resolved
+
+
+def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool = True) -> dict[str, Any]:
     """Validate source documents without opening or creating a Manager database."""
     root = root.resolve()
     warnings: list[str] = []
     actual = {"AGENTS.md"}
-    actual.update(str(p.relative_to(root)) for p in (root / "docs/agent").rglob("*.md"))
+    actual.update(str(p.relative_to(root)) for p in (root / "docs").rglob("*.md"))
     actual.update(str(p.relative_to(root)) for p in (root / ".agents/skills").rglob("*.md"))
-    if actual != set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS):
+    references = {str(p.relative_to(root)) for p in (root / "docs/agent/references").rglob("*.md")}
+    for skill in SKILL_DOCUMENTS:
+        directory = (root / skill).parent
+        references.update(str(p.relative_to(root)) for p in directory.rglob("*.md") if p.name != "SKILL.md")
+    if actual != set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS) | references:
         warnings.append("instruction_inventory_mismatch")
     size = 0
-    for name in (*TEXT_DOCUMENTS, *REFERENCE_DOCUMENTS):
+    detail_size = 0
+    linked_paths: dict[str, set[Path]] = {}
+    paths = instruction_paths(root)
+    for name in paths:
         path = root / name
         try:
             if not path.resolve().is_relative_to(root):
@@ -54,8 +146,16 @@ def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             text = path.read_text(encoding="utf-8")
             if name in TEXT_DOCUMENTS:
                 size += len(text.encode())
+            else:
+                detail_size += len(text.encode())
             if not text.strip():
                 warnings.append(f"empty_document:{name}")
+            if (
+                name in MODULE_DOCUMENTS.values()
+                and name != "AGENTS.md"
+                and not re.search(r"(?m)^#\s+" + re.escape(path.stem) + r"\b", text)
+            ):
+                warnings.append(f"module_heading_invalid:{name}")
             if name.endswith("SKILL.md"):
                 header = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
                 fields = header.group(1) if header else ""
@@ -63,23 +163,47 @@ def audit_documentation(root: Path = PROJECT_ROOT) -> dict[str, Any]:
                     warnings.append(f"skill_name_invalid:{name}")
                 if not re.search(r"(?m)^description: .+", fields):
                     warnings.append(f"skill_description_missing:{name}")
-            for link in re.findall(r"\]\(([^)]+)\)", text):
-                target = link.split("#", 1)[0]
-                if not target or re.match(r"^[a-zA-Z]+://", target):
-                    continue
-                resolved = (path.parent / target).resolve()
-                if not resolved.is_relative_to(root) or not resolved.is_file():
+            linked_paths[name] = set()
+            for link in _document_links(text):
+                try:
+                    resolved = _local_link_path(link, path, root, check_external_links=check_external_links)
+                except (OSError, RuntimeError, ValueError):
                     warnings.append(f"document_link_invalid:{name}")
-        except (OSError, UnicodeError, ValueError):
+                else:
+                    if resolved is not None:
+                        linked_paths[name].add(resolved)
+        except (OSError, RuntimeError, UnicodeError, ValueError):
             warnings.append(f"document_unreadable:{name}")
+    required_links = [("AGENTS.md", MODULE_DOCUMENTS["A1"])]
+    required_links.extend(
+        (MODULE_DOCUMENTS["A1"], MODULE_DOCUMENTS[module_id])
+        for module_id, parent in MODULE_PARENTS.items()
+        if parent is None and module_id != "A1"
+    )
+    required_links.extend(
+        (MODULE_DOCUMENTS[parent], MODULE_DOCUMENTS[child])
+        for child, parent in MODULE_PARENTS.items()
+        if parent is not None
+    )
+    for source, target in required_links:
+        try:
+            linked = (root / target).resolve() in linked_paths.get(source, set())
+        except (OSError, RuntimeError):
+            linked = False
+        if not linked:
+            warnings.append(f"module_link_missing:{source}:{target}")
     if size > INSTRUCTION_BUDGET_BYTES:
         warnings.append("instruction_budget_exceeded")
     return {
         "ok": not warnings,
         "documents": len(TEXT_DOCUMENTS),
-        "reference_documents": len(REFERENCE_DOCUMENTS),
+        "reference_documents": len(paths) - len(TEXT_DOCUMENTS),
         "bytes": size,
-        "warnings": warnings,
+        "detail_bytes": detail_size,
+        "modules": len(MODULE_DOCUMENTS),
+        "skills": len(SKILL_DOCUMENTS),
+        "external_links_checked": check_external_links,
+        "warnings": sorted(set(warnings)),
     }
 
 
@@ -108,7 +232,7 @@ def watchdog_status() -> dict[str, Any]:
     return {"ok": all(checks.values()), "desired_state": "absent", "checks": checks}
 
 
-def diagnose(*, integrations: bool = False, full: bool = False) -> dict[str, Any]:
+def diagnose(*, integrations: bool = False, full: bool = False, check_external_links: bool = True) -> dict[str, Any]:
     from mcp.server.fastmcp import FastMCP
 
     from .mcp_contract import validate_manager_mcp_surface
@@ -117,7 +241,8 @@ def diagnose(*, integrations: bool = False, full: bool = False) -> dict[str, Any
     server = FastMCP("AutoStop-local-check")
     register_manager_tools(server)
     schemas = {name: tool.parameters for name, tool in server._tool_manager._tools.items()}
-    checks = {"documentation": audit_documentation(), "mcp": validate_manager_mcp_surface(schemas)}
+    documentation = audit_documentation() if check_external_links else audit_documentation(check_external_links=False)
+    checks = {"documentation": documentation, "mcp": validate_manager_mcp_surface(schemas)}
     if integrations:
         from .integration_audit import build_integration_audit
 
@@ -128,5 +253,6 @@ def diagnose(*, integrations: bool = False, full: bool = False) -> dict[str, Any
     return {
         "ok": all(c["ok"] for c in checks.values()),
         "checks": checks,
+        "external_links_checked": check_external_links,
         "warnings": [name for name, check in checks.items() if not check["ok"]],
     }

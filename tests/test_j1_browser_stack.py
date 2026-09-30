@@ -228,6 +228,12 @@ def test_ocr_timeout_is_explicit_after_render(monkeypatch: pytest.MonkeyPatch) -
 
 def test_browser_image_includes_renderer_source_dependencies() -> None:
     dockerfile = (ROOT / "deploy/j1-browser/Dockerfile").read_text(encoding="utf-8")
+    allowed_files = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+    for line in dockerfile.splitlines():
+        if line.startswith("COPY "):
+            for source in line.split()[1:-1]:
+                assert (ROOT / source).is_file(), source
+                assert f"!{source}" in allowed_files, source
 
     assert "autostop_manager/j1_sources.py" in dockerfile
     assert "autostop_manager/j1_fetch.py" in dockerfile

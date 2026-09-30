@@ -2129,6 +2129,78 @@ def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path)
     assert client.send_count == 1
 
 
+@pytest.mark.parametrize("operation", ["send", "send_photo"])
+def test_interrupted_send_persists_intent_and_blocks_fresh_contract_retry(monkeypatch, tmp_path, operation) -> None:
+    config = _runtime_config(tmp_path)
+    request = {"operation": operation, "peer": "10", "mode": "dry_run"}
+    if operation == "send_photo":
+        outbox = config.socket_path.parent / "outbox"
+        outbox.mkdir(parents=True, mode=0o700)
+        photo = outbox / "synthetic.jpg"
+        photo.write_bytes(b"\xff\xd8synthetic\xff\xd9")
+        photo.chmod(0o600)
+        request.update(photo=str(photo), caption="synthetic caption")
+    else:
+        request["text"] = "synthetic text"
+
+    async def resolve_peer(_client, _peer):
+        return object(), {"id": 10, "kind": "private"}
+
+    async def last_message_id(client, _entity):
+        return 30 if client.send_count else 20
+
+    monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve_peer)
+    monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message_id)
+
+    class Client:
+        send_count = 0
+
+        async def send_message(self, *_args, **_kwargs):
+            await self.send_file()
+
+        async def send_file(self, *_args, **_kwargs):
+            self.send_count += 1
+            ledger = json.loads((config.state_dir / "idempotency.json").read_text())
+            assert ledger["interrupted-send"]["message_id"] == 0
+            raise TimeoutError("synthetic lost response after acceptance")
+
+    client = Client()
+    dry_run = asyncio.run(telegram_bridge._handle_operation(client, config, request))
+    applied = request | {
+        "mode": "apply",
+        "contract_token": dry_run["contract_token"],
+        "idempotency_key": "interrupted-send",
+    }
+    with pytest.raises(TimeoutError):
+        asyncio.run(telegram_bridge._handle_operation(client, config, applied))
+    fresh = asyncio.run(telegram_bridge._handle_operation(client, config, request))
+    error = "send_photo_outcome_uncertain" if operation == "send_photo" else "send_outcome_uncertain"
+    with pytest.raises(BridgeError, match=error):
+        asyncio.run(
+            telegram_bridge._handle_operation(client, config, applied | {"contract_token": fresh["contract_token"]})
+        )
+    assert client.send_count == 1
+
+
+@pytest.mark.parametrize("media_kind", ["document", "photo"])
+def test_media_fingerprint_binds_telegram_file_identity(media_kind) -> None:
+    message = SimpleNamespace(
+        media=object(),
+        file=SimpleNamespace(mime_type="image/jpeg", name="same.jpg", size=100),
+        document=None,
+        photo=None,
+    )
+    media = SimpleNamespace(id=1001, dc_id=2, attributes=[])
+    setattr(message, media_kind, media)
+    original = telegram_bridge._message_media_metadata(message)
+    media.id = 1002
+    replacement = telegram_bridge._message_media_metadata(message)
+    assert original["fingerprint"] != replacement["fingerprint"]
+    assert {key: value for key, value in original.items() if key != "fingerprint"} == {
+        key: value for key, value in replacement.items() if key != "fingerprint"
+    }
+
+
 def test_send_document_uploads_validated_bytes_and_independently_reads_back(monkeypatch, tmp_path) -> None:
     runtime_dir = tmp_path / "run"
     outbox = runtime_dir / "outbox"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from contextlib import suppress
 from http.client import HTTPException
@@ -254,10 +253,6 @@ _OEM_BRAND_KEYS = ("brand", "Brand", "manufacturer", "Manufacturer", "maker", "M
 _OEM_GROUP_KEYS = ("group", "groupName", "category", "Category", "cata_name_en", "catalog_group")
 _OEM_APPLICABILITY_KEYS = ("applicability", "Applicability", "fitment", "Fitment", "usage", "model")
 _OEM_QUANTITY_KEYS = ("quantity", "qty", "Qty", "amount")
-
-
-def _md5(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _redact_identifier(identifier: str) -> str:
@@ -1218,7 +1213,7 @@ def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | No
             return candidate
     for candidate in candidates:
         candidate_key = _exist_brand_key(candidate.get("brand"))
-        if requested and (requested in candidate_key or candidate_key in requested):
+        if requested and candidate_key and (requested in candidate_key or candidate_key in requested):
             return candidate
     return None
 

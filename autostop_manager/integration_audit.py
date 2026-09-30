@@ -164,13 +164,17 @@ def _run_capability_parity_check(
     else:
         try:
             payload = json.loads(completed.stdout)
-        except (TypeError, json.JSONDecodeError):
+            if not isinstance(payload, dict):
+                raise ValueError("capability parity output must be an object")
+        except (TypeError, ValueError):
             result = {
                 **_failed_check("capability_parity_checker_invalid_output"),
                 "exit_code": completed.returncode,
             }
         else:
-            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            summary = payload.get("summary")
+            if not isinstance(summary, dict):
+                summary = {}
             safe_summary = {
                 str(name): value
                 for name, value in summary.items()
@@ -207,6 +211,13 @@ def audit_docs_runtime_contract(manager_root: Path) -> dict[str, Any]:
         catalogs = {name: json.loads(path.read_text(encoding="utf-8-sig")) for name, path in catalog_paths.items()}
     except (OSError, UnicodeError, json.JSONDecodeError):
         return _failed_check("mcp_surface_manifest_unreadable")
+    if any(
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("expected_tool_names"), list)
+        or not all(isinstance(item, str) for item in payload["expected_tool_names"])
+        for payload in catalogs.values()
+    ):
+        return _failed_check("mcp_surface_manifest_invalid_structure")
     tools = {
         name: sorted({str(item) for item in payload.get("expected_tool_names") or []})
         for name, payload in catalogs.items()
@@ -288,12 +299,16 @@ def _gmail_app_connector_present(plugin_root: Path) -> bool:
 def _read_gmail_proof(path: Path, *, max_age: timedelta) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise ValueError("Gmail proof must be an object")
         generated_at = datetime.fromisoformat(str(payload.get("generated_at") or ""))
         if generated_at.tzinfo is None:
             generated_at = generated_at.replace(tzinfo=UTC)
         age = datetime.now(UTC) - generated_at.astimezone(UTC)
-        proof_checks = payload.get("checks") if isinstance(payload.get("checks"), dict) else {}
-        required_ok = all(bool(proof_checks.get(name)) for name in _GMAIL_REQUIRED_PROOF_CHECKS)
+        proof_checks = payload.get("checks")
+        if not isinstance(proof_checks, dict):
+            proof_checks = {}
+        required_ok = all(proof_checks.get(name) is True for name in _GMAIL_REQUIRED_PROOF_CHECKS)
         valid = (
             payload.get("format") == GMAIL_PROOF_FORMAT
             and payload.get("ok") is True
@@ -351,14 +366,23 @@ def _run_gateway_check(
         else:
             try:
                 payload = json.loads(completed.stdout)
-            except (TypeError, json.JSONDecodeError):
+                if not isinstance(payload, dict):
+                    raise ValueError("gateway output must be an object")
+                failures = payload.get("failed_invocations")
+                if failures is not None and not isinstance(failures, list):
+                    raise ValueError("failed invocations must be a list")
+            except (TypeError, ValueError):
                 last_result = {
                     **_failed_check("crm_gateway_checker_invalid_output"),
                     "exit_code": completed.returncode,
                 }
             else:
-                safe_checks = payload.get("checks") if isinstance(payload.get("checks"), dict) else {}
-                safe_metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+                safe_checks = payload.get("checks")
+                if not isinstance(safe_checks, dict):
+                    safe_checks = {}
+                safe_metrics = payload.get("metrics")
+                if not isinstance(safe_metrics, dict):
+                    safe_metrics = {}
                 failed_invocations = [str(item) for item in payload.get("failed_invocations") or []]
                 ok = completed.returncode == 0 and payload.get("ok") is True
                 last_result = {

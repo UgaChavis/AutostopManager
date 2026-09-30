@@ -37,7 +37,7 @@ def _compact(value: Any, *, limit: int = _MAX_SUMMARY_CHARS) -> str:
 
 
 def _normalise(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+    return re.sub(r"[^a-z0-9а-яё]+", "", str(value or "").casefold())
 
 
 def _redact_identifier(value: str | None) -> str | None:

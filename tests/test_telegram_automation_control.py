@@ -445,6 +445,27 @@ def test_ambiguous_job_name_never_mutates():
     assert [call["operation"] for call in control.calls] == ["status"]
 
 
+def test_schedule_rejects_readback_for_a_different_job():
+    class WrongTargetControl(FakeControl):
+        def request(self, operation, payload=None, idempotency_key=None, expected_revision=None):
+            response = super().request(operation, payload, idempotency_key, expected_revision)
+            if operation == "set_schedule":
+                response["data"]["job"] = copy.deepcopy(self.jobs[1])
+            return response
+
+    control = WrongTargetControl(
+        jobs=[_job(), _job("auto_fedcba9876543210fedcba98", name="Other job", every_minutes=30)]
+    )
+    adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)
+    preview = adapter.handle(_message("период CRM: краткий дайджест изменений каждые 30 минут"))
+    assert preview.ok is True
+    token = _confirmation_token(preview.reply_text)
+    confirmed = adapter.handle(_message(f"Подтвердить {token}", message_id=43))
+    assert confirmed.handled is True
+    assert confirmed.ok is False
+    assert "Повтор не выполнялся" in confirmed.reply_text
+
+
 def test_schedule_requires_preview_and_matching_confirmation_then_readback():
     control = FakeControl()
     adapter = TelegramAutomationAdapter(owner_peer_id=OWNER_PEER_ID, control=control)

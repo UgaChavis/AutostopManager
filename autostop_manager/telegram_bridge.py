@@ -908,10 +908,15 @@ def _message_media_metadata(message: Any) -> dict[str, Any]:
         "width": width or None,
         "height": height or None,
     }
+    media_file = document or getattr(message, "photo", None)
+    file_identity = {
+        "media_id": getattr(media_file, "id", None),
+        "dc_id": getattr(media_file, "dc_id", None),
+    }
     return {
         **fingerprint_payload,
         "downloadable": downloadable,
-        "fingerprint": hashlib.sha256(_canonical_json(fingerprint_payload)).hexdigest(),
+        "fingerprint": hashlib.sha256(_canonical_json(fingerprint_payload | file_identity)).hexdigest(),
     }
 
 
@@ -1738,19 +1743,24 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
             or previous.get("photo_sha256") != photo_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
+        if not previous.get("message_id"):
+            raise BridgeError("send_photo_outcome_uncertain")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
-        upload = io.BytesIO(photo_content)
-        upload.name = photo_path.name
-        sent = await client.send_file(entity, upload, caption=caption, force_document=False)
-        idempotency[idempotency_key] = {
+        entry = {
             "operation": "send_photo",
-            "message_id": int(sent.id),
+            "message_id": 0,
             "peer_id": target["id"],
             "caption_sha256": caption_sha256,
             "photo_sha256": photo_sha256,
         }
+        idempotency[idempotency_key] = entry
+        _save_idempotency(idempotency_path, idempotency)
+        upload = io.BytesIO(photo_content)
+        upload.name = photo_path.name
+        sent = await client.send_file(entity, upload, caption=caption, force_document=False)
+        entry["message_id"] = int(sent.id)
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
@@ -2073,9 +2083,10 @@ async def _handle_send_text_to_entity(
             or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
-        if owner_notification and not previous.get("message_id"):
-            if not known_message_id:
-                raise BridgeError("owner_notification_outcome_uncertain")
+        if not previous.get("message_id"):
+            if not owner_notification or not known_message_id:
+                error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
+                raise BridgeError(error)
             previous["message_id"] = known_message_id
             _save_idempotency(idempotency_path, idempotency)
     else:
@@ -2091,11 +2102,10 @@ async def _handle_send_text_to_entity(
             "readback_verified": False,
         }
         if owner_notification:
-            # Persist uncertainty before the network call. An interrupted send
-            # may only be reconciled against exact outgoing chat history.
             entry["notification_after_message_id"] = last_message_id
-            idempotency[idempotency_key] = entry
-            _save_idempotency(idempotency_path, idempotency)
+        # A lost response must leave a durable intent that blocks blind retries.
+        idempotency[idempotency_key] = entry
+        _save_idempotency(idempotency_path, idempotency)
         if not known_message_id:
             sent = await client.send_message(
                 entity, text, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})

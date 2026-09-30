@@ -32,7 +32,7 @@ jobs:
 
       - name: Audit knowledge and documentation contracts
         run: |
-          python -m autostop_manager.cli doctor
+          python -m autostop_manager.cli doctor --project-only
 
       - name: Lint, format, and type check
         run: |

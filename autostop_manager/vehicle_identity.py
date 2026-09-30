@@ -1135,6 +1135,7 @@ def decode_vehicle_identities(
                 make_hint=item.get("make") or item.get("make_display") or context.get("make"),
                 live_vpic=live_vpic and batch_vpic is None,
                 vpic_result=batch_vpic,
+                live_wmi=live_vpic,
             )
         )
     high = sum(1 for item in results if item["confidence_label"] == "high")

@@ -228,6 +228,7 @@ def parts_store_cards(  # noqa: C901 - one bounded CRUD action router
         actual = _card(readback) if readback.get("ok") is True else None
         if (
             actual is None
+            or actual.get("id") != created_id
             or actual.get("column") != PARTS_STORE_COLUMN
             or actual.get("title") != arguments["title"]
             or actual.get("description") != arguments["description"]
@@ -256,7 +257,8 @@ def parts_store_cards(  # noqa: C901 - one bounded CRUD action router
         return _failure("card_revision_changed")
     if not str(idempotency_key or "").strip():
         return _failure("idempotency_key_required")
-    if history.rstrip().endswith(clean_note):
+    latest_history = history.rstrip()
+    if latest_history == clean_note or latest_history.endswith(f"\n\n{clean_note}"):
         return {
             "ok": True,
             "status": "already_present",
@@ -273,6 +275,11 @@ def parts_store_cards(  # noqa: C901 - one bounded CRUD action router
         return _write_failure("crm_append_failed", response)
     readback = gateway.invoke("get_card", {"card_id": exact_id})
     actual = _card(readback) if readback.get("ok") is True else None
-    if actual is None or actual.get("column") != PARTS_STORE_COLUMN or actual.get("description") != appended:
+    if (
+        actual is None
+        or actual.get("id") != exact_id
+        or actual.get("column") != PARTS_STORE_COLUMN
+        or actual.get("description") != appended
+    ):
         return _failure("crm_append_unverified", uncertain=True)
     return {"ok": True, "status": "completed", "column": PARTS_STORE_COLUMN, "card": _card_view(actual, full=True)}

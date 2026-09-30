@@ -207,3 +207,101 @@ def test_parts_store_create_exposes_only_safe_gateway_failure_code():
     assert result["ok"] is False
     assert result["gateway_warning"] == "agent_gateway_writes_disabled"
     assert result["outcome_uncertain"] is False
+
+
+def test_parts_store_note_suffix_is_not_a_complete_history_block():
+    gateway = FakeCrmGateway()
+    parts_store_cards(
+        "create",
+        transport=gateway,
+        title="Synthetic",
+        description="Предложение не отправлено",
+        idempotency_key="create-synthetic-suffix",
+    )
+
+    result = parts_store_cards(
+        "append_note",
+        transport=gateway,
+        card_id="store-1",
+        note="отправлено",
+        idempotency_key="append-synthetic-suffix",
+    )
+
+    assert result["status"] == "completed"
+    assert result["card"]["description"] == "Предложение не отправлено\n\nотправлено"
+    assert len([name for name, _, _ in gateway.calls if name == "update_card"]) == 1
+
+
+def test_parts_store_note_repeated_as_whole_block_is_already_present():
+    for history in ("Final note", "Earlier facts\n\nFinal note"):
+        gateway = FakeCrmGateway()
+        parts_store_cards(
+            "create",
+            transport=gateway,
+            title="Synthetic",
+            description=history,
+            idempotency_key="create-synthetic-whole-block",
+        )
+
+        result = parts_store_cards(
+            "append_note",
+            transport=gateway,
+            card_id="store-1",
+            note="Final note",
+            idempotency_key="append-synthetic-whole-block",
+        )
+
+        assert result["status"] == "already_present"
+        assert result["card"]["description"] == history
+        assert not any(name == "update_card" for name, _, _ in gateway.calls)
+
+
+def test_parts_store_create_requires_readback_of_the_created_id():
+    class WrongReadbackGateway(FakeCrmGateway):
+        def invoke(self, name, arguments, *, idempotency_key=""):
+            result = super().invoke(name, arguments, idempotency_key=idempotency_key)
+            if name == "get_card" and result.get("ok") is True:
+                result["data"]["data"]["card"]["id"] = "store-another"
+            return result
+
+    result = parts_store_cards(
+        "create",
+        transport=WrongReadbackGateway(),
+        title="Synthetic",
+        description="Synthetic facts",
+        idempotency_key="create-synthetic-wrong-target",
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "crm_create_unverified"
+    assert result["outcome_uncertain"] is True
+
+
+def test_parts_store_append_requires_readback_of_the_requested_id():
+    class WrongReadbackGateway(FakeCrmGateway):
+        def invoke(self, name, arguments, *, idempotency_key=""):
+            result = super().invoke(name, arguments, idempotency_key=idempotency_key)
+            write_occurred = any(call_name == "update_card" for call_name, _, _ in self.calls)
+            if name == "get_card" and write_occurred and result.get("ok") is True:
+                result["data"]["data"]["card"]["id"] = "store-another"
+            return result
+
+    gateway = WrongReadbackGateway()
+    parts_store_cards(
+        "create",
+        transport=gateway,
+        title="Synthetic",
+        description="Synthetic facts",
+        idempotency_key="create-synthetic-append-target",
+    )
+    result = parts_store_cards(
+        "append_note",
+        transport=gateway,
+        card_id="store-1",
+        note="Synthetic next step",
+        idempotency_key="append-synthetic-wrong-target",
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "crm_append_unverified"
+    assert result["outcome_uncertain"] is True
