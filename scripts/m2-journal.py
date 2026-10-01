@@ -16,6 +16,8 @@ ROOT = Path("/var/lib/autostop-manager/roles/M2")
 TEXT_FIELDS = ("task", "before", "actions", "checks", "result", "state")
 FIELDS = {"id", "git_sha", "release_required", *TEXT_FIELDS}
 RECORD = re.compile(r"(?m)^```m2-record\n(.*?)\n```$", re.S)
+SUMMARY_LIMIT = 10
+SUMMARY_RESULT_CHARS = 300
 
 
 def atomic_write(path, text):
@@ -85,11 +87,18 @@ def publish_pointers(root, week):
     entries = records(path)
     commits = {entry["git_sha"] for entry in entries if entry["git_sha"]}
     pending_release = sum(entry["release_required"] for entry in entries)
-    results = "\n".join(f"- {entry['at']}: {entry['result']}" for entry in entries) or "Записей пока нет."
+    results = (
+        "\n".join(
+            f"- {entry['at']}: {' '.join(entry['result'].split())[:SUMMARY_RESULT_CHARS]}"
+            for entry in entries[-SUMMARY_LIMIT:]
+        )
+        or "Записей пока нет."
+    )
     atomic_write(
         root / "summaries" / (week + ".md"),
         f"# M2 — сводка {week}\n\nПо записям недели: {len(entries)} результатов, {len(commits)} коммитов, "
-        f"{pending_release} записей требуют выпуска.\n\n{results}\n",
+        f"{pending_release} записей требуют выпуска.\n\nПоследние {SUMMARY_LIMIT} результатов; полные записи — "
+        f"[в журнале](../journal/{week}.md).\n\n{results}\n",
     )
     history = "\n".join(f"- [{p.stem}]({p.name})" for p in sorted((root / "journal").glob("????-W??.md")))
     completed = [p.stem for p in sorted((root / "journal").glob("????-W??.md")) if records(p)]
