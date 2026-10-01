@@ -1,10 +1,22 @@
 """Preserve partial supplier-read evidence while accepting the prior producer."""
 
+import re
+from pathlib import Path
+
 import pytest
 
 import autostop_manager.store_api as store_api_module
 
 from test_store_api import _Response, _client, _envelope
+
+
+def test_store_reference_action_list_matches_manager_consumer():
+    reference = Path(__file__).resolve().parents[1] / "docs/agent/references/store-api.md"
+    line = next(
+        line for line in reference.read_text().splitlines() if line.startswith("Allowlisted management actions:")
+    )
+    names = set(re.findall(r"`([a-z_]+)`", line.split(".", 1)[0]))
+    assert names == store_api_module.STORE_MANAGEMENT_OPERATIONS
 
 
 @pytest.mark.parametrize(
