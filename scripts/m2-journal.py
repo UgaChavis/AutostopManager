@@ -67,12 +67,16 @@ def ensure_week(root, week):
             raise ValueError("journal_symlink")
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = root / "journal" / (week + ".md")
+    if path.is_symlink():
+        raise ValueError("journal_symlink")
     if not path.exists():
         atomic_write(path, f"# M2 — журнал {week}\n\nДаты UTC. Только технические сведения.\n")
     return path
 
 
 def records(path):
+    if path.is_symlink():
+        raise ValueError("journal_symlink")
     return [json.loads(block) for block in RECORD.findall(path.read_text())]
 
 
@@ -101,6 +105,8 @@ def publish_pointers(root, week):
 
 def recover(root):
     pending = root / ".pending-record.json"
+    if pending.is_symlink():
+        raise ValueError("journal_symlink")
     if not pending.exists():
         return
     payload = json.loads(pending.read_text())

@@ -69,7 +69,8 @@ Source-команды запускай из checkout/worktree с `/opt/AutostopM
 | `scripts/ocr_offline_parts_catalogs.py` | `--verify-only` read-only; иначе OCR `--cache-root PATH`. |
 | `scripts/sync_offline_parts_catalog_release.py` | `--verify-only` read-only; иначе pinned download/import/OCR до maintenance. |
 | `scripts/remove-learning-hooks.py` | Dry-run по умолчанию; `--apply` меняет Codex config с backup только при необходимой legacy migration. |
-| `scripts/update-instruction-catalogs.py` | `python scripts/update-instruction-catalogs.py`, без флагов: читает инструкции проекта и установленных Codex-плагинов, записывает A4/A5 и `/tmp/autostop-instruction-catalog-inventory.json`. Несколько версий пакета требуют уточнения актуальной; plugin originals не меняет. Не имеет dry-run. |
+| `scripts/update-instruction-catalogs.py` | Без флагов записывает A4/A5 по действующим проектным инструкциям и выбранным внешним навыкам; `--check` сравнивает без записи. Отключённые навыки пропускаются по имени или пути. Несколько версий пакета требуют выбора актуальной. |
+| `scripts/m2-journal.py` | `start` создаёт текущую ISO-неделю UTC и восстанавливает прерванную запись; `append --record PRIVATE_JSON` дополняет журнал и обновляет состояние/сводку/индекс. Запись по UUID повторяется без дублирования; постоянные файлы находятся вне релизов и Git. Формат и порядок — [M2](../modules/M2.md). |
 
 Units в `deploy/systemd/`: Manager MCP, scheduler, J1 static/browser, work/personal Telegram, Codex wake/start. `systemctl is-active` показывает процесс, не правильность его контракта. Службы и backup: [host-operations.md](host-operations.md); Telegram/G1: [telegram-runtime.md](telegram-runtime.md).
 

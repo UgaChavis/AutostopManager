@@ -103,6 +103,66 @@ def test_catalogs_respect_disabled_skill_paths_and_refuse_ambiguous_versions(tmp
         catalogs.selected_skills(project, codex)
 
 
+def test_catalogs_respect_name_only_and_mixed_skill_selectors(tmp_path):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    skill(codex / "skills/.system/core/SKILL.md", "core")
+    skill(codex / "plugins/cache/openai-curated-remote/github/1/skills/review/SKILL.md", "review")
+    skill(codex / "plugins/cache/openai-curated-remote/windsor-ai/1/skills/common/SKILL.md", "common")
+    retained = skill(codex / "plugins/cache/openai-curated-remote/build-web-apps/1/skills/build/SKILL.md", "build")
+    write(
+        codex / "config.toml",
+        '[[skills.config]]\nname="core"\nenabled=false\n'
+        '[[skills.config]]\nname="github:review"\nenabled=false\n'
+        '[[skills.config]]\nname="common"\nenabled=false\n'
+        '[[skills.config]]\nname="build-web-apps:build"\nenabled=true\n',
+    )
+    assert [s["path"] for s in catalogs.selected_skills(project, codex)] == [retained]
+
+
+def test_catalog_check_preserves_recorded_date_after_day_or_year_rollover(tmp_path, monkeypatch):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    write(project / "AGENTS.md", "# AutoStop")
+    for name in ("A4.md", "A5.md"):
+        write(project / "docs/agent/modules" / name, "# Initial")
+    a4, a5, _ = catalogs.build_catalogs(project, codex, "2026-12-31")
+    write(project / "docs/agent/modules/A4.md", a4)
+    write(project / "docs/agent/modules/A5.md", a5)
+    monkeypatch.setattr(catalogs, "PROJECT", project)
+    monkeypatch.setattr(catalogs, "CODEX", codex)
+    monkeypatch.setattr("sys.argv", ["update-instruction-catalogs.py", "--check"])
+    assert catalogs.main() == 0
+    assert (project / "docs/agent/modules/A4.md").read_text() == a4
+    assert (project / "docs/agent/modules/A5.md").read_text() == a5
+
+
+@pytest.mark.parametrize("external_checked", [False, True])
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "openai-curated-remote/sales/1/skills/index/SKILL.md",
+        "openai-curated-remote/pages/1/skills/index/SKILL.md",
+        "openai-curated-remote/github/1/skills/index/references/old.md",
+    ],
+)
+def test_catalog_links_reject_retired_packages_and_nonentrypoints(tmp_path, monkeypatch, suffix, external_checked):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    monkeypatch.setattr(diagnostics, "EXTERNAL_CODEX_ROOTS", (codex / "skills", codex / "plugins/cache"))
+    document = project / diagnostics.MODULE_DOCUMENTS["A4"]
+    target = write(codex / "plugins/cache" / suffix, "# old")
+    with pytest.raises(ValueError, match="document_link_invalid"):
+        diagnostics._local_link_path(str(target), document, project, check_external_links=external_checked)
+
+
+def test_catalog_link_scope_matches_generator_selected_packages(tmp_path, monkeypatch):
+    assert diagnostics.EXTERNAL_SKILL_PACKAGES == frozenset(catalogs.PACKAGES)
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    monkeypatch.setattr(diagnostics, "EXTERNAL_CODEX_ROOTS", (codex / "skills", codex / "plugins/cache"))
+    document = project / diagnostics.MODULE_DOCUMENTS["A5"]
+    for package in catalogs.PACKAGES:
+        target = skill(codex / f"plugins/cache/openai-curated-remote/{package}/1/skills/index/SKILL.md", "index")
+        assert diagnostics._local_link_path(str(target), document, project) == target
+
+
 def test_roles_are_modules_and_only_link_to_exact_private_journal_entries(tmp_path):
     assert diagnostics.MODULE_PARENTS["M1"] is None
     assert diagnostics.MODULE_PARENTS["M2"] == "M1"
@@ -170,6 +230,59 @@ def test_journal_recovers_pending_transaction_after_interruption(tmp_path, writt
     assert report["entries"] == 1
     assert record["state"] in (tmp_path / "current-state.md").read_text()
     assert not (tmp_path / ".pending-record.json").exists()
+
+
+@pytest.mark.parametrize("stage", ["journal", "state", "summary", "index"])
+def test_journal_recovers_each_write_boundary_across_iso_year(tmp_path, monkeypatch, stage):
+    original = journal.atomic_write
+    record = example_record()
+    at = datetime(2026, 12, 31, tzinfo=UTC)
+
+    def interrupted(path, text):
+        target = (
+            (stage == "journal" and path.parent.name == "journal" and "```m2-record" in text)
+            or (stage == "state" and path.name == "current-state.md")
+            or (stage == "summary" and path.parent.name == "summaries")
+            or (stage == "index" and path.name == "INDEX.md")
+        )
+        if target:
+            raise OSError("synthetic interruption")
+        original(path, text)
+
+    monkeypatch.setattr(journal, "atomic_write", interrupted)
+    with pytest.raises(OSError, match="synthetic"):
+        journal.run(tmp_path, record, at)
+    assert (tmp_path / ".pending-record.json").exists()
+    monkeypatch.setattr(journal, "atomic_write", original)
+    report = journal.run(tmp_path, at=datetime(2027, 1, 4, tzinfo=UTC))
+    assert report["week"] == "2027-W01" and report["entries"] == 0
+    assert len(journal.records(tmp_path / "journal/2026-W53.md")) == 1
+    assert record["state"] in (tmp_path / "current-state.md").read_text()
+    assert "summaries/2026-W53.md" in (tmp_path / "journal/INDEX.md").read_text()
+    assert not (tmp_path / ".pending-record.json").exists()
+
+
+def test_journal_old_idempotent_replay_preserves_newer_current_state(tmp_path):
+    old = example_record()
+    current = {**old, "id": "019fda71-bd3a-74f2-bade-315ac6827d1b", "state": "Newer confirmed state."}
+    journal.run(tmp_path, old, datetime(2026, 12, 31, tzinfo=UTC))
+    at = datetime(2027, 1, 4, tzinfo=UTC)
+    journal.run(tmp_path, current, at)
+    journal.run(tmp_path, old, at)
+    assert "Newer confirmed state." in (tmp_path / "current-state.md").read_text()
+    assert len(journal.records(tmp_path / "journal/2026-W53.md")) == 1
+    assert len(journal.records(tmp_path / "journal/2027-W01.md")) == 1
+
+
+@pytest.mark.parametrize("name", ["journal/2026-W40.md", "journal/2026-W39.md", ".pending-record.json"])
+def test_journal_rejects_linked_week_or_pending_files(tmp_path, name):
+    outside = tmp_path / "external.txt"
+    outside.write_text("[]")
+    link = tmp_path / name
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside)
+    with pytest.raises(ValueError, match="journal_symlink"):
+        journal.run(tmp_path, at=datetime(2026, 10, 1, tzinfo=UTC))
 
 
 @pytest.mark.parametrize("fault", ["sha", "release", "empty", "fields", "naive", "symlink"])

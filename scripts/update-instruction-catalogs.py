@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, UTC
+from datetime import date, datetime, UTC
 import json
 from pathlib import Path
 import re
@@ -92,9 +92,9 @@ def project_documents(project):
 def selected_skills(project, codex):
     config_file = codex / "config.toml"
     config = tomllib.loads(config_file.read_text()) if config_file.is_file() else {}
-    disabled = {
-        Path(s["path"]).resolve() for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)
-    }
+    disabled_selectors = [s for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)]
+    disabled = {Path(s["path"]).resolve() for s in disabled_selectors if s.get("path")}
+    disabled_names = {s["name"] for s in disabled_selectors if s.get("name")}
     roots = [("AutoStop Manager", project / ".agents/skills"), ("Codex", codex / "skills/.system")]
     for package in PACKAGES:
         marketplace = "openai-bundled" if package == "visualize" else "openai-curated"
@@ -115,6 +115,8 @@ def selected_skills(project, codex):
                 continue
             info = metadata(path)
             name = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
+            if disabled_names.intersection({name, info["name"]}):
+                continue
             result.append({"group": group, "path": path, "name": name, "description": info["description"]})
     return result
 
@@ -159,8 +161,13 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         "| Файл | Материал |",
         "| --- | --- |",
     ]
+    generated_titles = {
+        project / "docs/agent/modules/A4.md": a4[0].removeprefix("# "),
+        project / "docs/agent/modules/A5.md": a5[0].removeprefix("# "),
+    }
     for path in project_paths:
-        a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(title(path)) + " |")
+        document_title = generated_titles[path] if path in generated_titles else title(path)
+        a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(document_title) + " |")
     a5.extend(["", "## Внешние и системные навыки Codex", "", "| Пакет | Вход |", "| --- | --- |"])
     for s in external:
         a5.append("| " + s["group"] + " | " + link(s["name"], s["path"], project) + " |")
@@ -175,11 +182,31 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
     return "\n".join(a4).rstrip() + "\n", "\n".join(a5).rstrip() + "\n", summary
 
 
+def checked_catalog_day(project):
+    days = []
+    for name in ("A4.md", "A5.md"):
+        path = project / "docs/agent/modules" / name
+        if not path.is_file():
+            return None
+        match = re.search(r"(?m)^Срез: (\d{4}-\d{2}-\d{2})\.", path.read_text(encoding="utf-8"))
+        if not match:
+            return None
+        try:
+            date.fromisoformat(match.group(1))
+        except ValueError:
+            return None
+        days.append(match.group(1))
+    return days[0] if days[0] == days[1] else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
     args = parser.parse_args()
-    a4, a5, summary = build_catalogs()
+    # A read-only check compares content at the recorded cutoff; tomorrow's
+    # date alone does not make an unchanged inventory stale.
+    day = checked_catalog_day(PROJECT) if args.check else None
+    a4, a5, summary = build_catalogs(PROJECT, CODEX, day)
     mismatches = []
     for name, text in [("A4.md", a4), ("A5.md", a5)]:
         path = PROJECT / "docs/agent/modules" / name

@@ -78,6 +78,18 @@ EXTERNAL_CODEX_ROOTS = (
     Path("/root/.codex/skills"),
     Path("/root/.codex/plugins/cache"),
 )
+EXTERNAL_SKILL_PACKAGES = frozenset(
+    {
+        "gmail",
+        "windsor-ai",
+        "github",
+        "build-web-apps",
+        "codex-security",
+        "openai-developers",
+        "plugin-management",
+        "visualize",
+    }
+)
 FST_ACCESS_DOCUMENT = Path("/root/.codex/CODEX_VPN_FST_ACCESS.md")
 ROLE_JOURNAL_ROOT = Path("/var/lib/autostop-manager/roles/M2")
 ROLE_JOURNAL_ENTRIES = {ROLE_JOURNAL_ROOT / "current-state.md", ROLE_JOURNAL_ROOT / "journal/INDEX.md"}
@@ -107,9 +119,10 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
     candidate = Path(normpath(document.parent / target))
     document_name = document.relative_to(root).as_posix()
     if not check_external_links and not candidate.is_relative_to(root):
-        allowed_external = document_name in {MODULE_DOCUMENTS["A4"], MODULE_DOCUMENTS["A5"]} and any(
-            candidate.is_relative_to(base) for base in EXTERNAL_CODEX_ROOTS
-        )
+        allowed_external = document_name in {
+            MODULE_DOCUMENTS["A4"],
+            MODULE_DOCUMENTS["A5"],
+        } and _codex_skill_entrypoint(candidate)
         allowed_external = allowed_external or (
             document_name == ".agents/skills/manage-fst-vpn/SKILL.md" and candidate == FST_ACCESS_DOCUMENT
         )
@@ -122,7 +135,9 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
     resolved = candidate.resolve()
     allowed = resolved.is_relative_to(root)
     if document_name in {MODULE_DOCUMENTS["A4"], MODULE_DOCUMENTS["A5"]}:
-        allowed = allowed or any(resolved.is_relative_to(base.resolve()) for base in EXTERNAL_CODEX_ROOTS)
+        allowed = allowed or (
+            _codex_skill_entrypoint(candidate) and _codex_skill_entrypoint(resolved, resolve_roots=True)
+        )
     if document_name == ".agents/skills/manage-fst-vpn/SKILL.md":
         allowed = allowed or resolved == FST_ACCESS_DOCUMENT.resolve()
     if document_name in {MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"]}:
@@ -132,6 +147,23 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
     if not allowed or not resolved.is_file():
         raise ValueError("document_link_invalid")
     return resolved
+
+
+def _codex_skill_entrypoint(path: Path, *, resolve_roots: bool = False) -> bool:
+    skills, cache = (base.resolve() if resolve_roots else base for base in EXTERNAL_CODEX_ROOTS)
+    if path.is_relative_to(skills):
+        parts = path.relative_to(skills).parts
+        return len(parts) == 3 and parts[0] == ".system" and parts[1] != "review-agent" and parts[-1] == "SKILL.md"
+    if path.is_relative_to(cache):
+        parts = path.relative_to(cache).parts
+        return (
+            len(parts) == 6
+            and parts[0] in {"openai-bundled", "openai-curated-remote", "openai-curated"}
+            and parts[1] in EXTERNAL_SKILL_PACKAGES
+            and parts[3] == "skills"
+            and parts[-1] == "SKILL.md"
+        )
+    return False
 
 
 def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool = True) -> dict[str, Any]:
