@@ -13,8 +13,11 @@
 3. Нормальный orchestrator — `/opt/autostopcrm/deploy.sh`. Он до maintenance выполняет [pinned catalog sync](offline-catalogs.md), затем backup релиза/config/DB, Automation hold, work-Telegram pause, immutable Manager activation, проверки и rollback. Не захватывай отдельный hold и не запускай installers поверх coordinated deploy; не переключай `current` вручную.
 4. Native Manager MCP активируется по умолчанию (`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1`). Для static J1 используй `AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`. Browser включается отдельно через `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY=1`: нужны `MemAvailable >=2 GiB`, `SwapFree >=1 GiB`, нулевой swap I/O за 60 секунд и повторная проверка ёмкости внутри deploy. Отказ gate сохраняет static J1; marker вручную не создаётся.
 5. Проверь installed Manager/CRM revisions, bounded MCP/CRM/Store probes, `doctor --integrations` без `--full`, восстановление duty и отсутствие retired integration-audit/watchdog units. Full doctor допустим лишь с одноразовыми CRM/Store. Для J1 нужны active `autostop-j1.service` и probe из [web-research.md](web-research.md).
+6. Сверь установленный `AGENTS.md`, A1, M1/M2 и A4/A5 с опубликованной ревизией; запусти `scripts/update-instruction-catalogs.py --check` из установленного snapshot. Числа A4/A5 относятся к выбранным файлам, а не ко всем включённым навыкам реестра. Обнови числа и ссылки конструктора по этому срезу, независимо перечитай карту и сохрани положение модулей и связи.
 
 Store выпускается отдельно через его GitHub `Deploy VPS` и текущий `/opt/autostopapp/docs/deploy_rollback.md`. Push/merge в Store `main`, включая docs-only, запускает полный cutover: сначала CI, backup/headroom/network/proxy gates, потом независимый readback. Не объединяй его с CRM cutover без согласованного объёма.
+
+При изменении sourcing warning-контракта сначала установи и проверь совместимый Manager consumer, затем публикуй Store producer в `main`: отправка Store запускает выпуск автоматически. Порядок и текущие warning-коды — [store-api.md](store-api.md).
 
 ## Native MCP и подключённый Codex
 
@@ -31,6 +34,14 @@ env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /opt/Auto
 В существующем клиенте после активации отправь App Server `config/mcpServer/reload` (`params: null`), затем в новом ходе проверь `mcpServerStatus/list` и endpoint `tools/list`. Старый ход может сохранять прежние declarations. `partsapi_catalog_lookup` должен содержать `provider_parameters`, `supplier_id`; `norms_models` проверяется с lowercase make code сначала dry-run, затем разрешённым bounded catalog lookup. Подтверждение reload не заменяет вызов. Протокол: [OpenAI App Server](https://developers.openai.com/codex/app-server).
 
 Для marketplace проверь `catalog_provider_status(stage="market_listing")` и четыре инструмента Avito/Drom. Avito: dry-run → bounded search → точное listing read. Drom запускается только после API access и `AUTOSTOP_DROM_LISTINGS_ENABLED=1`; queued task не равна результату. Подробности: [market-listings.md](market-listings.md). Auth/quota/provider ошибки отличай от transport. После проверок восстанови прежний work-mode.
+
+## Новый вход в роль M2
+
+После стабильной приёмки выпуска и обновления технического состояния создай новый ephemeral Codex thread с обычным cwd `/opt/AutostopManager` и поручением работать инженером M2. Сохрани штатные базовые инструкции. Ограничь проверку чтением: `AGENTS.md`, A1, M1, M2, состояние M2, индекс и последняя сводка по индексу. Переписка, клиентские кейсы, секреты, изменяющие инструменты и запуск исполнителей в этот smoke не входят.
+
+Приёмка требует фактических завершённых чтений и совпадения SHA-256 всех семи файлов с независимым срезом до и после хода, а также живого `tools/list` с текущим schema fingerprint и annotations. Ответ агента без этих receipts не подтверждает загрузку. Сохраняй только технические hashes, статусы и ограничения; polling делай порциями до 60 секунд, после хода отпишись от ephemeral thread.
+
+Ошибка первого чтения остаётся в отчёте; она восстановлена только после успешного чтения нужного файла с совпавшим hash. Журналы и история читаются через актуальный индекс M2, без копирования прежних рабочих кейсов. Внешние ограничения доступа оценивай отдельно от успешного входа в роль.
 
 ## Standalone восстановление
 
