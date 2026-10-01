@@ -1083,7 +1083,7 @@ def test_work_media_sandbox_wrapper_is_scoped_and_has_no_bridge_access() -> None
 
 
 def test_telegram_skill_requires_verified_private_audio_cleanup() -> None:
-    text = (ROOT / ".agents/skills/manage-owner-telegram/SKILL.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs/agent/modules/B2.md").read_text(encoding="utf-8")
 
     assert "--delete-after" in text
     assert "после ошибки" in text

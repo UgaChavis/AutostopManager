@@ -1,78 +1,36 @@
-"""Rebuild the Manager catalogs from current local instruction sources."""
+"""Index canonical project documents and selected skill entrypoints only."""
 
-from datetime import datetime, UTC
-from pathlib import Path
+from __future__ import annotations
+
+import argparse
+from datetime import date, datetime, UTC
 import json
+from pathlib import Path
 import re
+import tomllib
+from urllib.parse import unquote, urlsplit
 
 PROJECT = Path(__file__).resolve().parents[1]
-OUT = PROJECT / "docs/agent/modules"
-DAY = datetime.now(UTC).strftime("%Y-%m-%d")
-ROOTS = [("AutoStop Manager", PROJECT / ".agents/skills"), ("Codex", Path("/root/.codex/skills/.system"))]
-# Current installed package trees. Remote and CLI use separate distributions.
-for cache in [
-    Path("/root/.codex/plugins/cache/openai-bundled"),
-    Path("/root/.codex/plugins/cache/openai-curated-remote"),
-]:
-    for package in sorted(cache.iterdir()):
-        if not package.is_dir():
-            continue
-        versions = [v for v in package.iterdir() if v.is_dir()]
-        if len(versions) != 1:
-            raise RuntimeError("Specify the current package version before rebuilding: " + str(package))
-        ROOTS.append((package.name, versions[0]))
-# These enabled CLI packages carry skills absent from their remote connector-only bundles.
-for package in ["gmail", "google-calendar", "github"]:
-    root = Path("/root/.codex/plugins/cache/openai-curated") / package
-    versions = [v for v in root.iterdir() if v.is_dir()] if root.is_dir() else []
-    if len(versions) == 1:
-        ROOTS.append((package + " (CLI)", versions[0]))
-    elif len(versions) > 1:
-        raise RuntimeError("Specify the current CLI package version before rebuilding: " + str(root))
-
-INTERNAL = {
-    "Codex": {"review-agent"},
-    "data-analytics": {
-        "convert-to-doc",
-        "convert-to-slides",
-        "report-to-pdf",
-        "schedule-refresh-jobs",
-        "share-artifact-summary",
-    },
-    "product-design": {"design-qa", "get-context", "research", "share", "user-context"},
-}
-TEXT_EXT = {".md", ".mdx", ".rst", ".txt", ".prompt", ".jinja", ".jinja2"}
-BLOCKED_PARTS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    "archive",
-    "archives",
-    "archived",
-    "draft",
-    "drafts",
-    "license",
-    "licenses",
-    "licences",
-}
-BLOCKED_NAMES = {
-    "license",
-    "license.md",
-    "license.txt",
-    "notice",
-    "notice.txt",
-    "changelog",
-    "changelog.md",
-    "third_party_notices.txt",
-}
+CODEX = Path("/root/.codex")
+PACKAGES = (
+    "gmail",
+    "windsor-ai",
+    "github",
+    "build-web-apps",
+    "codex-security",
+    "openai-developers",
+    "plugin-management",
+    "visualize",
+)
+BLOCKED_PARTS = {"archive", "archives", "archived", "draft", "drafts"}
 
 
 def cell(value):
     return re.sub(r"\s+", " ", str(value)).strip().replace("|", "\\|")
 
 
-def link(label, path):
-    target = "../../../" + str(path.relative_to(PROJECT)) if path.is_relative_to(PROJECT) else str(path)
+def link(label, path, project):
+    target = "../../../" + str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
     if " " in target:
         target = "<" + target + ">"
     return "[" + cell(label).replace("[", "(").replace("]", ")") + "](" + target + ")"
@@ -88,202 +46,181 @@ def metadata(path):
         if value[:1] in {'"', "'"} and value[-1:] == value[:1]:
             value = value[1:-1]
         values[key] = value.lstrip("> |").strip()
+    if not all(values.values()):
+        raise ValueError("Incomplete skill metadata: " + str(path))
     return values
 
 
 def title(path):
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8")
     match = re.search(r"^#\s+(.+)$", text, re.M)
     return match.group(1).strip() if match else path.stem
 
 
-def eligible(path):
-    parts = {part.lower() for part in path.parts}
-    if parts & BLOCKED_PARTS or path.name.lower() in BLOCKED_NAMES:
-        return False
-    if path.name.lower().endswith("-draft.md"):
-        return False
-    if path.name.lower().startswith("requirements") and path.suffix.lower() == ".txt":
-        return False
-    if path.suffix.lower() in TEXT_EXT or (path.is_relative_to(PROJECT / "docs") and path.suffix == ".json"):
-        return True
-    return (
-        path.parent.name == "agents"
-        and path.suffix.lower() in {".yaml", ".yml"}
-        and re.search(r"^\s*default_prompt:", path.read_text(), re.M) is not None
-    )
+def project_documents(project):
+    """Follow explicit project links, never generated catalogs or external caches."""
+    seeds = {project / "AGENTS.md"}
+    seeds.update(p for p in (project / "docs/agent/modules").glob("*.md") if re.fullmatch(r"[A-Z]\d+", p.stem))
+    seeds.update((project / ".agents/skills").glob("*/SKILL.md"))
+    pending = sorted(seeds)
+    found = set()
+    while pending:
+        path = pending.pop().resolve()
+        if path in found:
+            continue
+        if not path.is_relative_to(project) or not path.is_file():
+            raise ValueError("Missing or outside-project instruction: " + str(path))
+        if set(path.relative_to(project).parts) & BLOCKED_PARTS or path.name.endswith("-draft.md"):
+            raise ValueError("Retired instruction is still linked: " + str(path))
+        found.add(path)
+        if path.suffix != ".md" or path.name in {"A4.md", "A5.md"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        inline = re.findall(r"\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]+)?\s*\)", text)
+        references = re.findall(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))", text)
+        for angled, plain in (*inline, *references):
+            parsed = urlsplit(angled or plain)
+            if parsed.scheme or not parsed.path:
+                continue
+            target = path.parent / re.sub(r":\d+$", "", unquote(parsed.path))
+            target = target.resolve()
+            if target.is_relative_to(project) and target.suffix in {".md", ".json"}:
+                pending.append(target)
+    return sorted(found)
 
 
-def kind(path):
-    if path.name == "SKILL.md":
-        return "Навык"
-    if path.name == "AGENTS.md":
-        return "Общие правила"
-    if path.suffix in {".yaml", ".yml"}:
-        return "Начальный запрос навыка"
-    if path.suffix == ".json":
-        return "Реестр / контракт"
-    if "template" in str(path).lower() or "example" in str(path).lower():
-        return "Шаблон / пример"
-    return "Инструкция / справочник"
+def selected_skills(project, codex):
+    config_file = codex / "config.toml"
+    config = tomllib.loads(config_file.read_text()) if config_file.is_file() else {}
+    disabled_selectors = [s for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)]
+    disabled = {Path(s["path"]).resolve() for s in disabled_selectors if s.get("path")}
+    disabled_names = {s["name"] for s in disabled_selectors if s.get("name")}
+    roots = [("AutoStop Manager", project / ".agents/skills"), ("Codex", codex / "skills/.system")]
+    for package in PACKAGES:
+        marketplace = "openai-bundled" if package == "visualize" else "openai-curated"
+        if not config.get("plugins", {}).get(package + "@" + marketplace, {}).get("enabled", True):
+            continue
+        for distribution in ("openai-bundled", "openai-curated-remote", "openai-curated"):
+            cache = codex / "plugins/cache" / distribution / package
+            candidates = sorted(v / "skills" for v in cache.glob("*") if list((v / "skills").glob("*/SKILL.md")))
+            if len(candidates) > 1:
+                raise ValueError("Specify current package version: " + str(cache))
+            if candidates:
+                roots.append((package, candidates[0]))
+                break
+    result = []
+    for group, root in roots:
+        for path in sorted(root.glob("*/SKILL.md")):
+            if path.resolve() in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
+                continue
+            info = metadata(path)
+            name = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
+            if disabled_names.intersection({name, info["name"]}):
+                continue
+            result.append({"group": group, "path": path, "name": name, "description": info["description"]})
+    return result
 
 
-skills = []
-documents = []
-for group, root in ROOTS:
-    if not root.is_dir():
-        raise RuntimeError("Missing current package: " + str(root))
-    for path in sorted(root.rglob("SKILL.md")):
-        info = metadata(path)
-        if not info["name"] or not info["description"]:
-            raise RuntimeError("Incomplete skill metadata: " + str(path))
-        internal = path.parent.name in INTERNAL.get(group, set()) or (group == "sales" and path.parent.name != "index")
-        logical = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
-        skills.append(
-            {
-                "group": group,
-                "path": path,
-                "name": logical,
-                "description": info["description"],
-                "entry": "Вложенный"
-                if internal
-                else "Установленный"
-                if group.endswith("(CLI)") or group == "openai-templates"
-                else "Основной",
-            }
-        )
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and eligible(path):
-            documents.append(
-                {
-                    "group": group,
-                    "path": path,
-                    "relative": str(path.relative_to(root)),
-                    "title": title(path),
-                    "kind": kind(path),
-                }
-            )
-
-
-for name in ["A4.md", "A5.md"]:
-    placeholder = OUT / name
-    if not placeholder.exists():
-        placeholder.parent.mkdir(parents=True, exist_ok=True)
-        placeholder.write_text("# " + name[:-3] + "\n")
-project_docs = [PROJECT / "AGENTS.md", *sorted((PROJECT / "docs").rglob("*"))]
-for path in project_docs:
-    if path.is_file() and eligible(path):
-        documents.append(
-            {
-                "group": "AutoStop Manager",
-                "path": path,
-                "relative": str(path.relative_to(PROJECT)),
-                "title": title(path),
-                "kind": kind(path),
-            }
-        )
-documents.sort(key=lambda d: (next(i for i, (group, _) in enumerate(ROOTS) if group == d["group"]), str(d["path"])))
-if len({str(d["path"]) for d in documents}) != len(documents):
-    raise RuntimeError("Duplicate instruction source")
-
-main_count = sum(s["entry"] == "Основной" for s in skills)
-project_count = sum(d["group"] == "AutoStop Manager" for d in documents)
-plugin_count = len(documents) - project_count
-a4 = [
-    "# A4 — Каталог навыков",
-    "",
-    "A4 помогает выбрать подходящий навык. Найди его по названию или назначению, открой актуальный SKILL.md и используй по текущей задаче. Параметры доступных инструментов проверяй в живой схеме.",
-    "",
-    "Здесь перечислены навыки AutoStop Manager, встроенные навыки Codex и навыки текущих пакетов установленных плагинов. Дополнительные инструкции и справочники ищи в [A5 — Полный указатель](A5.md).",
-    "",
-    "Срез: " + DAY + ". Всего " + str(len(skills)) + " навыков в проекте и текущих установленных пакетах.",
-    "",
-    "«Основной» — навык основного пакета; «Вложенный» — профильная инструкция пакета; «Установленный» — дополнительный шаблон или навык отдельного CLI-пакета. Наличие файла не гарантирует доступность инструмента в текущем сеансе.",
-    "",
-    "Черновики инструкций, архивы и другие версии пакетов в перечень не включены. При изменении состава плагинов или версии пакета обнови ссылки и список по текущему окружению.",
-    "",
-]
-for group, root in ROOTS:
-    entries = [s for s in skills if s["group"] == group]
-    if not entries:
-        continue
-    a4 += ["## " + group, ""]
-    if group not in {"AutoStop Manager", "Codex"}:
-        a4 += ["Версия пакета: " + root.name + ".", ""]
-    a4 += ["| Навык | Назначение из SKILL.md | Вход |", "| --- | --- | --- |"]
-    for s in entries:
-        a4.append("| " + link(s["name"], s["path"]) + " | " + cell(s["description"]) + " | " + s["entry"] + " |")
-    a4.append("")
-
-a5 = [
-    "# A5 — Полный указатель действующих инструкций",
-    "",
-    "A5 нужен, когда неизвестно, где описана нужная возможность. Найди модуль, имя навыка, инструмент или тему, затем открой соответствующий исходный файл. Выбирай нужные инструкции по задаче; короткий список навыков находится в [A4](A4.md).",
-    "",
-    "Срез: "
-    + DAY
-    + ". Всего "
-    + str(len(documents))
-    + " файлов: "
-    + str(project_count)
-    + " в AutoStop Manager и "
-    + str(plugin_count)
-    + " во встроенных навыках и текущих пакетах Codex.",
-    "",
-    "Включены действующие общие правила, все SKILL.md выбранных текущих пакетов, дополнительные текстовые инструкции, справочники, шаблоны и стартовые запросы навыков. Область проекта — AGENTS.md, .agents/skills/ и docs/. Область Codex — встроенные навыки и текущие установленные пакеты; доступность их инструментов зависит от сеанса.",
-    "",
-    "Черновики, исторические отчёты аудита и релизов, архивы, лицензии и старые версии пакетов исключены. Инструкции CRM, Store и других самостоятельных проектов ищи по ссылкам соответствующих руководств Manager; их репозитории не входят в этот указатель.",
-    "",
-    "Для обновления A4/A5 запусти `python scripts/update-instruction-catalogs.py` из корня проекта. Скрипт меняет только каталоги Manager. Если в кэше несколько версий одного пакета, сначала установи текущую версию по окружению Codex. Доступность действий проверяй по текущим инструментам.",
-    "",
-    "## Источники",
-    "",
-    "| Набор | Версия / область | Файлов |",
-    "| --- | --- | --- |",
-]
-for group, root in ROOTS:
-    count = sum(d["group"] == group for d in documents)
-    if not count:
-        continue
-    scope = (
-        "AGENTS.md, docs/, .agents/skills/"
-        if group == "AutoStop Manager"
-        else "Встроенные навыки"
-        if group == "Codex"
-        else root.name
-    )
-    a5.append("| " + group + " | " + scope + " | " + str(count) + " |")
-a5.append("")
-for group, _root in ROOTS:
-    if not any(d["group"] == group for d in documents):
-        continue
-    a5 += ["## " + group, "", "| Файл | Инструкция / материал | Тип |", "| --- | --- | --- |"]
-    for d in (d for d in documents if d["group"] == group):
-        relative = str(d["path"].relative_to(PROJECT)) if group == "AutoStop Manager" else d["relative"]
-        a5.append("| " + link(relative, d["path"]) + " | " + cell(d["title"]) + " | " + d["kind"] + " |")
+def build_catalogs(project=PROJECT, codex=CODEX, day=None):
+    project = project.resolve()
+    day = day or datetime.now(UTC).strftime("%Y-%m-%d")
+    skills = selected_skills(project, codex)
+    project_paths = project_documents(project)
+    external = [s for s in skills if not s["path"].is_relative_to(project)]
+    documents = len(project_paths) + len(external)
+    a4 = [
+        "# A4 — Каталог действующих навыков",
+        "",
+        "Выбери навык по задаче и прочитай его актуальный SKILL.md. Проектные навыки ведут к основным инструкциям модулей; параметры инструментов проверяй в текущей схеме.",
+        "",
+        f"Срез: {day}. Всего {len(skills)} навыков: проектные входы, системные средства Codex и выбранные внешние пакеты.",
+        "",
+        "Внешние пакеты: Gmail, Windsor.ai, GitHub, Build Web Apps, Codex Security, OpenAI Developers, Plugin Management и Visualize. Кеш остальных пакетов, вложенные справочники и шаблоны не индексируются. Наличие инструкции не подтверждает доступность коннектора.",
+        "",
+        "Основные правила и технические справочники проекта — в [A5](A5.md); порядок работы ролей — в [M1](M1.md) и [M2](M2.md).",
+        "",
+    ]
+    for group in dict.fromkeys(s["group"] for s in skills):
+        a4.extend(["## " + group, "", "| Навык | Назначение |", "| --- | --- |"])
+        for s in (s for s in skills if s["group"] == group):
+            a4.append("| " + link(s["name"], s["path"], project) + " | " + cell(s["description"]) + " |")
+        a4.append("")
+    a5 = [
+        "# A5 — Указатель действующих инструкций",
+        "",
+        "Открой основной модуль или связанный технический справочник по задаче. Полный текст каждой проектной инструкции хранится в одном исходном файле. Навыки выбираются через [A4](A4.md).",
+        "",
+        f"Срез: {day}. Всего {documents} файлов: {len(project_paths)} в AutoStop Manager и {len(external)} входов во внешние и системные навыки Codex.",
+        "",
+        "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
+        "",
+        "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи: `python scripts/update-instruction-catalogs.py --check`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
+        "",
+        "## AutoStop Manager",
+        "",
+        "| Файл | Материал |",
+        "| --- | --- |",
+    ]
+    generated_titles = {
+        project / "docs/agent/modules/A4.md": a4[0].removeprefix("# "),
+        project / "docs/agent/modules/A5.md": a5[0].removeprefix("# "),
+    }
+    for path in project_paths:
+        document_title = generated_titles[path] if path in generated_titles else title(path)
+        a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(document_title) + " |")
+    a5.extend(["", "## Внешние и системные навыки Codex", "", "| Пакет | Вход |", "| --- | --- |"])
+    for s in external:
+        a5.append("| " + s["group"] + " | " + link(s["name"], s["path"], project) + " |")
     a5.append("")
+    summary = {
+        "skills": len(skills),
+        "documents": documents,
+        "project_documents": len(project_paths),
+        "codex_documents": len(external),
+        "project_paths": [str(p.relative_to(project)) for p in project_paths],
+    }
+    return "\n".join(a4).rstrip() + "\n", "\n".join(a5).rstrip() + "\n", summary
 
-OUT.mkdir(exist_ok=True)
-(OUT / "A4.md").write_text("\n".join(a4).rstrip() + "\n", encoding="utf-8")
-(OUT / "A5.md").write_text("\n".join(a5).rstrip() + "\n", encoding="utf-8")
-snapshot = {
-    "skills": [{**s, "path": str(s["path"])} for s in skills],
-    "documents": [{**d, "path": str(d["path"])} for d in documents],
-}
-Path("/tmp/autostop-instruction-catalog-inventory.json").write_text(
-    json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8"
-)
-print(
-    json.dumps(
-        {
-            "skills": len(skills),
-            "main_skills": main_count,
-            "nested_skills": sum(s["entry"] == "Вложенный" for s in skills),
-            "installed_skills": sum(s["entry"] == "Установленный" for s in skills),
-            "documents": len(documents),
-            "project_documents": project_count,
-            "codex_documents": plugin_count,
-        },
-        ensure_ascii=False,
-    )
-)
+
+def checked_catalog_day(project):
+    days = []
+    for name in ("A4.md", "A5.md"):
+        path = project / "docs/agent/modules" / name
+        if not path.is_file():
+            return None
+        match = re.search(r"(?m)^Срез: (\d{4}-\d{2}-\d{2})\.", path.read_text(encoding="utf-8"))
+        if not match:
+            return None
+        try:
+            date.fromisoformat(match.group(1))
+        except ValueError:
+            return None
+        days.append(match.group(1))
+    return days[0] if days[0] == days[1] else None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    args = parser.parse_args()
+    # A read-only check compares content at the recorded cutoff; tomorrow's
+    # date alone does not make an unchanged inventory stale.
+    day = checked_catalog_day(PROJECT) if args.check else None
+    a4, a5, summary = build_catalogs(PROJECT, CODEX, day)
+    mismatches = []
+    for name, text in [("A4.md", a4), ("A5.md", a5)]:
+        path = PROJECT / "docs/agent/modules" / name
+        if args.check:
+            if not path.is_file() or path.read_text(encoding="utf-8") != text:
+                mismatches.append(name)
+        else:
+            path.write_text(text, encoding="utf-8")
+    if args.check:
+        summary["ok"] = not mismatches
+        summary["mismatches"] = mismatches
+    print(json.dumps(summary, ensure_ascii=False))
+    return int(bool(mismatches))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

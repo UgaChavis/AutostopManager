@@ -556,18 +556,19 @@ def test_service_and_instructions_are_event_only():
         text = (ROOT / relative).read_text()
         assert "120" not in text
     skill = (ROOT / ".agents/skills/manage-owner-telegram/SKILL.md").read_text()
-    assert "(../../../docs/agent/references/telegram-runtime.md)" in skill
+    assert "(../../../docs/agent/modules/B2.md)" in skill
+    telegram_module = (ROOT / "docs/agent/modules/B2.md").read_text()
+    assert "(../references/telegram-runtime.md)" in telegram_module
     telegram_runtime = (ROOT / "docs/agent/references/telegram-runtime.md").read_text()
     assert "scripts/set-work-telegram-duty.sh" in telegram_runtime
     for flag in ("--enable", "--disable", "--status"):
         assert flag in telegram_runtime
     store_skill_path = ROOT / ".agents/skills/manage-autostop-store/SKILL.md"
     store_skill = store_skill_path.read_text()
-    store_modules = {}
+    assert "(../../../docs/agent/modules/F2.md)" in store_skill
+    store_modules = {code: (ROOT / f"docs/agent/modules/{code}.md").read_text() for code in ("F1", "F2", "F4", "F5")}
     for code in ("F1", "F4", "F5"):
-        relative = f"../../../docs/agent/modules/{code}.md"
-        assert f"({relative})" in store_skill
-        store_modules[code] = (store_skill_path.parent / relative).resolve().read_text()
+        assert f"({code}.md)" in store_modules["F2"]
     assert "(F5.md)" in store_modules["F4"]
     assert "(F1.md)" in store_modules["F5"]
     assert "(../references/store-api.md)" in store_modules["F1"]
@@ -578,13 +579,13 @@ def test_service_and_instructions_are_event_only():
         for span in re.findall(r"`([^`\n]+)`", text)
         for name in re.findall(r"[A-Za-z0-9_]+", span)
     }
-    # The skill owns consent/payment behavior; linked cards own the tool contract.
+    # Module F2 owns client behavior; linked cards own the tool contract.
     for command in ("store_quote_conductor", "order", "handoff", "waiting_payment"):
         assert command in documented
     assert "`store_quote_conductor`" in store_modules["F1"]
     assert "`order`" in store_modules["F5"]
     for state in ("handoff", "waiting_payment"):
-        assert f"`{state}`" in store_skill
+        assert f"`{state}`" in store_modules["F2"]
     runbook = (ROOT / "docs/agent/references/deployment.md").read_text()
     assert "scripts/install-codex-wake.sh" in runbook
 

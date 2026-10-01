@@ -1,1 +1,33 @@
-{"format":"mcp_surface_manifest_v1","source":"direct autostopcrm-v1 Gateway v2 live registration; fingerprint=sha256(canonical sorted [{name,inputSchema}])","expected_tool_count":24,"expected_tool_names":["agent_board_digest","agent_board_workflow","agent_bootstrap","agent_document_workflow","agent_entity_context","agent_finance_workflow","agent_inventory_workflow","agent_search","call_raw_capability","complete_external_step","discover_raw_capabilities","get_connector_identity","get_raw_capability_schema","get_runtime_status","list_agent_workflows","ping_connector","prepare_action_contract","start_workflow","workflow_cancel","workflow_checkpoint","workflow_resume","workflow_status","workflow_transition","workflow_wait_for_external"],"schema_fingerprint":"dd3c03f9fdde60828dc716b72656bdc32b565755e2d2278c4445fc263c4fe73f","verified_at":"2026-09-22"}
+{
+  "format": "mcp_surface_manifest_v1",
+  "source": "CRM Gateway v2 registration; fingerprint=sha256(canonical sorted [{name,inputSchema}])",
+  "expected_tool_count": 24,
+  "expected_tool_names": [
+    "agent_board_digest",
+    "agent_board_workflow",
+    "agent_bootstrap",
+    "agent_document_workflow",
+    "agent_entity_context",
+    "agent_finance_workflow",
+    "agent_inventory_workflow",
+    "agent_search",
+    "call_raw_capability",
+    "complete_external_step",
+    "discover_raw_capabilities",
+    "get_connector_identity",
+    "get_raw_capability_schema",
+    "get_runtime_status",
+    "list_agent_workflows",
+    "ping_connector",
+    "prepare_action_contract",
+    "start_workflow",
+    "workflow_cancel",
+    "workflow_checkpoint",
+    "workflow_resume",
+    "workflow_status",
+    "workflow_transition",
+    "workflow_wait_for_external"
+  ],
+  "schema_fingerprint": "b10378098f31e0416c5a0a2159957befcd1a6c8ecc56002d32cf388421e44913",
+  "verified_at": "2026-10-01"
+}

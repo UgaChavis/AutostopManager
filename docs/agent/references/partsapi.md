@@ -29,7 +29,7 @@ Configured/status/dry_run подтверждают только конфигур
 
 VINdecode → сверка возвращённого VIN/вариантов → подтверждённый carId и vehicle_type → getSearchTree → strId именно этого дерева → getArticles. CarType не гарантирован VINdecode: нужен `PC`, `CV` или `Motorcycle`; неизвестный type останавливает resolver до tree lookup. Перед подтверждением сверяй двигатель, выпуск, рынок, options, side/axle/position, OEM и replacement chain. TecDoc article — кандидат.
 
-`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. [partsapi_category_index.json](../partsapi_category_index.json) хранит непроверенные числовые cat hints старого getPartsbyVIN только как legacy fixture, не активный query path.
+`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. `docs/agent/partsapi_category_index.json` хранит непроверенные числовые cat hints старого getPartsbyVIN только как legacy fixture, не активный query path.
 
 GetNormsModels.makeNameSEO берётся из GetNormsMakes, не TecDoc make ID; последующие model/motor IDs — из того же Autonorms catalog. getArticle требует ART_NUM/SUP_ID, media/crosses/criteria — ART_ID. Для getEngine, getPassengerCarInfo и части maintenance методов response tables неполны: parsing provisional до разрешённого live ответа. Generic payload сам не доказывает OEM/fitment.
 
