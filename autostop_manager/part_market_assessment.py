@@ -129,7 +129,7 @@ def _price(value: Any) -> int | None:
         return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not number.is_integer() or not 1 <= number <= _MAX_PRICE_RUB:
         return None
@@ -168,7 +168,11 @@ def _public_source_url(value: Any) -> tuple[str, str] | None:
 
 
 def _date_value(value: Any) -> date | None:
-    raw = _compact(value, limit=10)
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", raw):
+        return None
     try:
         value_date = date.fromisoformat(raw)
     except ValueError:
@@ -189,10 +193,9 @@ def _observed_freshness(value: Any) -> tuple[str, int, str] | None:
 
 
 def _publication_freshness(value: Any) -> tuple[str | None, int | None, str] | None:
-    raw = _compact(value, limit=10)
-    if not raw:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None, None, "publication_date_missing"
-    published = _date_value(raw)
+    published = _date_value(value)
     if published is None:
         return None
     age_days = (datetime.now(UTC).date() - published).days

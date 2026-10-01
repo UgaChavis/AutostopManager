@@ -135,7 +135,7 @@ def _api_request(
         return status_code, None
     try:
         return status_code, json.loads(raw.decode("utf-8-sig"))
-    except (UnicodeError, json.JSONDecodeError):
+    except (UnicodeError, ValueError, RecursionError):
         return status_code, None
 
 

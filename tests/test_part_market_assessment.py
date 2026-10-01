@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from autostop_manager.part_market_assessment import assess_part_market
 
 
@@ -230,6 +232,39 @@ def test_assessment_excludes_stale_page_from_current_median():
     assert segment["excluded_from_current_median_count"] == 1
     assert segment["median_exclusion_reasons"] == {"stale_published_page": 1}
     assert segment["median_confidence"] == "medium"
+
+
+def test_assessment_rejects_overflowing_price_without_internal_error():
+    observation = _observation(source="Synthetic", host="synthetic.example", price_rub=5_000)
+    observation["price_rub"] = 10**400
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=[observation])
+
+    assert result["ok"] is False
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [{"observation_index": 0, "code": "observation_fields_invalid"}]
+
+
+@pytest.mark.parametrize("field", ["observed_at", "published_at"])
+@pytest.mark.parametrize("variant", ["trailing_text", "timestamp", "compact", "week_date", "numeric"])
+def test_assessment_requires_calendar_date_without_silent_truncation(field, variant):
+    today = datetime.now(UTC).date()
+    week = today.isocalendar()
+    invalid = {
+        "trailing_text": today.isoformat() + "INVALID",
+        "timestamp": today.isoformat() + "T00:00:00Z",
+        "compact": today.strftime("%Y%m%d"),
+        "week_date": f"{week.year}-W{week.week:02d}-{week.weekday}",
+        "numeric": int(today.strftime("%Y%m%d")),
+    }[variant]
+    observation = _observation(source="Synthetic", host="synthetic.example", price_rub=5_000)
+    observation[field] = invalid
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=[observation])
+
+    assert result["ok"] is False
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [{"observation_index": 0, "code": "observation_fields_invalid"}]
 
 
 def test_assessment_lowers_current_median_confidence_for_missing_page_date_or_old_observation():
