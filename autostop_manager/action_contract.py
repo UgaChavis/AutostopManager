@@ -45,6 +45,7 @@ MUTATING_ACTIONS = {
     "update_quote_request_comment",
     "set_batch_storage_location",
     "mark_order_ready",
+    "set_order_payment_status",
     "add_quote_request_note",
     "execute_owner_api",
     "replace_estimate_draft",
@@ -134,6 +135,7 @@ EXECUTOR_TOOLS = {
     ("store_quote_request", "add_quote_request_note"): "agent_inventory_workflow",
     ("store_batch", "set_batch_storage_location"): "agent_inventory_workflow",
     ("store_order", "mark_order_ready"): "agent_inventory_workflow",
+    ("store_order", "set_order_payment_status"): "agent_inventory_workflow",
     ("store_owner_api", "execute_owner_api"): "store_owner_api",
     ("store_quote_conductor", "replace_estimate_draft"): "store_quote_conductor",
     ("store_quote_conductor", "submit_estimate"): "store_quote_conductor",
@@ -168,6 +170,7 @@ STORE_ACTIONS = {
     ("store_quote_request", "add_quote_request_note"),
     ("store_batch", "set_batch_storage_location"),
     ("store_order", "mark_order_ready"),
+    ("store_order", "set_order_payment_status"),
 }
 STORE_OWNER_ACTIONS = {("store_owner_api", "execute_owner_api")}
 STORE_QUOTE_CONDUCTOR_ACTIONS = {
@@ -265,6 +268,7 @@ def prepare_action_contract(
     if not changes and normalized_action not in TARGET_ONLY_ACTIONS:
         blockers.append("missing_planned_changes")
     blockers.extend(_store_correlation_blockers(normalized_domain, requested_correlation_id))
+    blockers.extend(_store_owner_finance_intent_blockers(normalized_domain, normalized_action, intent))
 
     _validate_domain_changes(normalized_domain, normalized_action, changes, blockers, warnings)
     blockers.extend(
@@ -729,6 +733,16 @@ def _valid_completion_act_form(value: Any) -> bool:
     return True
 
 
+def _store_owner_finance_intent_blockers(domain: str, action: str, intent: str) -> list[str]:
+    if (domain, action) != ("store_order", "set_order_payment_status"):
+        return []
+    if not intent.startswith("owner_finance:") or not intent.removeprefix("owner_finance:").strip():
+        return ["store_order_payment_status_requires_owner_finance_intent"]
+    if len(intent) > 500:
+        return ["store_order_payment_status_owner_intent_too_long"]
+    return []
+
+
 def _validate_store_changes(
     domain: str,
     action: str,
@@ -752,6 +766,7 @@ def _validate_store_changes(
         ("store_quote_request", "add_quote_request_note"): {"text"},
         ("store_batch", "set_batch_storage_location"): {"storage_location"},
         ("store_order", "mark_order_ready"): {"status"},
+        ("store_order", "set_order_payment_status"): {"paid"},
     }
     allowed = allowed_fields[(domain, action)]
     unexpected = sorted(set(changes).difference(allowed))
@@ -779,6 +794,10 @@ def _validate_store_changes(
         if str(changes.get("status") or "").strip().upper() != "READY":
             blockers.append("store_order_ready_status_required")
         warnings.append("store_order_ready_may_notify_customer")
+    elif action == "set_order_payment_status":
+        if not isinstance(changes.get("paid"), bool):
+            blockers.append("store_order_payment_paid_bool_required")
+        warnings.append("store_order_payment_status_requires_explicit_owner_finance_intent")
 
 
 def _validate_store_quote_conductor_changes(

@@ -968,6 +968,23 @@ def test_real_app_digest_status_distribution_list_passes_snake_case_contract(mon
             [{"field": "storage_location", "before": "A-1", "after": "B-2"}],
         ),
         (
+            "set_order_payment_status",
+            {"paid": True},
+            {
+                "entity_type": "store_order",
+                "entity_id": "order-1",
+                "status": "READY",
+                "payment_status": "PAID",
+                "paid_at": "generated_on_apply",
+                "ready_at": None,
+                "updated_at": "2026-10-01T00:00:00Z",
+            },
+            [
+                {"field": "payment_status", "before": "PAYMENT_REQUIRED", "after": "PAID"},
+                {"field": "paid_at", "before": None, "after": "generated_on_apply"},
+            ],
+        ),
+        (
             "mark_order_ready",
             {"status": "READY"},
             {"entity_type": "store_order", "entity_id": "order-1", "status": "READY"},
@@ -1094,3 +1111,21 @@ def test_post_pre_dispatch_failure_is_explicit_and_not_uncertain():
     assert result["summary"]["error_code"] == "store_manage_token_missing"
     assert result["meta"]["request_dispatched"] is False
     assert result["meta"]["outcome_uncertain"] is False
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"effects": [{"effect": "customer_notification", "applies": True}]},
+        {"effects": [], "external_effect_state": "DELIVERED"},
+    ],
+)
+def test_store_payment_status_response_rejects_customer_notification_effect(meta):
+    payload = {
+        "summary": {"operation": "set_order_payment_status"},
+        "changes": [],
+        "items": [],
+        "meta": meta,
+    }
+    with pytest.raises(ValueError, match="cannot return external effects"):
+        store_api_module._validate_action_payload(payload, "set_order_payment_status")
