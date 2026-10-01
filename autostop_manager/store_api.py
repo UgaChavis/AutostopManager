@@ -528,7 +528,14 @@ _ACTION_EFFECT_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
 }
-_WARNING_VALUES = frozenset(
+_SOURCING_WARNING_VALUES = frozenset(
+    {
+        "sourcing_provider_deadline_exceeded",
+        "sourcing_provider_capacity_exhausted",
+        "sourcing_provider_unavailable",
+    }
+)
+_WARNING_VALUES = _SOURCING_WARNING_VALUES | frozenset(
     {
         "since_replayed_from_change_feed_origin_for_no_skip",
         "external_notifier_is_best_effort",
@@ -1588,6 +1595,10 @@ def _validate_contract_payload(
         return
     if any(warning not in _WARNING_VALUES for warning in payload.get("warnings") or []):
         raise ValueError("Store response contains a non-allowlisted warning")
+    if _SOURCING_WARNING_VALUES.intersection(payload.get("warnings") or []) and (
+        response_contract != "search" or expected_entity != "store_sourcing_offer"
+    ):
+        raise ValueError("Store sourcing warnings are valid only for sourcing searches")
     if response_contract == "action" and expected_operation in STORE_MANAGEMENT_OPERATIONS:
         _validate_action_payload(payload, expected_operation)
         return
