@@ -32,3 +32,32 @@ def test_weekly_summary_is_bounded_but_statistics_cover_all_records(tmp_path):
     assert summary.count("\n- ") == 10
     assert len(summary) < 4000
     assert len(journal.records(tmp_path / "journal/2026-W40.md")) == 14
+
+
+def test_summary_keeps_release_flags_as_history_after_completed_release(tmp_path):
+    record = {
+        "id": str(UUID(int=1)),
+        "task": "synthetic source change",
+        "before": "synthetic baseline",
+        "actions": "synthetic commit",
+        "checks": "synthetic checks passed",
+        "result": "source ready",
+        "git_sha": "a" * 40,
+        "release_required": True,
+        "state": "synthetic release pending",
+    }
+    at = datetime(2026, 10, 1, tzinfo=UTC)
+    journal.run(tmp_path, record, at)
+    completed = {
+        **record,
+        "id": str(UUID(int=2)),
+        "release_required": False,
+        "result": "installed revision independently verified",
+        "state": "synthetic release completed; no pending release",
+    }
+    report = journal.run(tmp_path, completed, at)
+    summary = (tmp_path / "summaries/2026-W40.md").read_text()
+    assert report["release_records"] == 1
+    assert "1 записей с отметкой о необходимости выпуска" in summary
+    assert "требуют выпуска" not in summary
+    assert completed["state"] in (tmp_path / "current-state.md").read_text()
