@@ -86,7 +86,7 @@ def publish_pointers(root, week):
     path = ensure_week(root, week)
     entries = records(path)
     commits = {entry["git_sha"] for entry in entries if entry["git_sha"]}
-    pending_release = sum(entry["release_required"] for entry in entries)
+    release_records = sum(entry["release_required"] for entry in entries)
     results = (
         "\n".join(
             f"- {entry['at']}: {' '.join(entry['result'].split())[:SUMMARY_RESULT_CHARS]}"
@@ -97,7 +97,7 @@ def publish_pointers(root, week):
     atomic_write(
         root / "summaries" / (week + ".md"),
         f"# M2 — сводка {week}\n\nПо записям недели: {len(entries)} результатов, {len(commits)} коммитов, "
-        f"{pending_release} записей требуют выпуска.\n\nПоследние {SUMMARY_LIMIT} результатов; полные записи — "
+        f"{release_records} записей с отметкой о необходимости выпуска.\n\nПоследние {SUMMARY_LIMIT} результатов; полные записи — "
         f"[в журнале](../journal/{week}.md).\n\n{results}\n",
     )
     history = "\n".join(f"- [{p.stem}]({p.name})" for p in sorted((root / "journal").glob("????-W??.md")))
@@ -109,7 +109,7 @@ def publish_pointers(root, week):
         f"Текущая ISO-неделя UTC: [{week}]({week}.md). "
         f"[Сводка недели](../summaries/{week}.md); [последняя сводка с результатами](../summaries/{latest}.md).\n\n## История\n\n{history}\n",
     )
-    return {"week": week, "entries": len(entries), "commits": len(commits), "release_records": pending_release}
+    return {"week": week, "entries": len(entries), "commits": len(commits), "release_records": release_records}
 
 
 def recover(root):
