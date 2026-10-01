@@ -89,6 +89,61 @@ def project_documents(project):
     return sorted(found)
 
 
+def installed_skill_root(package, codex, config):
+    """Resolve installation metadata before inspecting skill files in its cache."""
+    caches = codex / "plugins/cache"
+    remote = caches / "openai-curated-remote" / package
+    marker = remote / ".codex-remote-plugin-install.json"
+    plugins = config.get("plugins", {})
+    if not isinstance(plugins, dict):
+        raise ValueError("Invalid plugin installation selectors")
+    if marker.is_file():
+        installation = json.loads(marker.read_text(encoding="utf-8"))
+        if (
+            not isinstance(installation, dict)
+            or type(installation.get("schema_version")) is not int
+            or installation.get("schema_version") != 1
+            or not isinstance(installation.get("remote_plugin_id"), str)
+            or not installation["remote_plugin_id"].strip()
+        ):
+            raise ValueError("Invalid installed package marker: " + str(marker))
+        marketplace = "openai-curated-remote"
+        selector = plugins.get(package + "@" + marketplace, plugins.get(package + "@openai-curated", {}))
+    else:
+        installed = [m for m in ("openai-bundled", "openai-curated") if package + "@" + m in plugins]
+        if not installed:
+            return None
+        if len(installed) != 1:
+            raise ValueError("Specify installed package marketplace: " + package)
+        marketplace = installed[0]
+        selector = plugins[package + "@" + marketplace]
+    if not isinstance(selector, dict) or type(selector.get("enabled", True)) is not bool:
+        raise ValueError("Invalid installed package selector: " + package + "@" + marketplace)
+    if not selector.get("enabled", True):
+        return None
+
+    cache = caches / marketplace / package
+    manifests = sorted(cache.glob("*/.codex-plugin/plugin.json"))
+    if len(manifests) != 1:
+        raise ValueError("Specify current package version: " + str(cache))
+    manifest = manifests[0]
+    if not manifest.resolve().is_relative_to(cache.resolve()):
+        raise ValueError("Outside-package manifest: " + str(manifest))
+    info = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(info, dict) or info.get("name") != package:
+        raise ValueError("Invalid installed package manifest: " + str(manifest))
+    skill_path = info.get("skills")
+    if skill_path is None:
+        return None
+    if not isinstance(skill_path, str) or not skill_path.strip():
+        raise ValueError("Invalid installed package skills: " + str(manifest))
+    version = manifest.parent.parent.resolve()
+    root = (version / skill_path).resolve()
+    if not root.is_relative_to(version) or not root.is_dir():
+        raise ValueError("Missing or outside-package skills: " + str(manifest))
+    return root
+
+
 def selected_skills(project, codex):
     config_file = codex / "config.toml"
     config = tomllib.loads(config_file.read_text()) if config_file.is_file() else {}
@@ -97,17 +152,9 @@ def selected_skills(project, codex):
     disabled_names = {s["name"] for s in disabled_selectors if s.get("name")}
     roots = [("AutoStop Manager", project / ".agents/skills"), ("Codex", codex / "skills/.system")]
     for package in PACKAGES:
-        marketplace = "openai-bundled" if package == "visualize" else "openai-curated"
-        if not config.get("plugins", {}).get(package + "@" + marketplace, {}).get("enabled", True):
-            continue
-        for distribution in ("openai-bundled", "openai-curated-remote", "openai-curated"):
-            cache = codex / "plugins/cache" / distribution / package
-            candidates = sorted(v / "skills" for v in cache.glob("*") if list((v / "skills").glob("*/SKILL.md")))
-            if len(candidates) > 1:
-                raise ValueError("Specify current package version: " + str(cache))
-            if candidates:
-                roots.append((package, candidates[0]))
-                break
+        root = installed_skill_root(package, codex, config)
+        if root is not None:
+            roots.append((package, root))
     result = []
     for group, root in roots:
         for path in sorted(root.glob("*/SKILL.md")):
@@ -133,9 +180,9 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         "",
         "Выбери навык по задаче и прочитай его актуальный SKILL.md. Проектные навыки ведут к основным инструкциям модулей; параметры инструментов проверяй в текущей схеме.",
         "",
-        f"Срез: {day}. Всего {len(skills)} навыков: проектные входы, системные средства Codex и выбранные внешние пакеты.",
+        f"Срез: {day}. Всего {len(skills)} входов SKILL.md: проектные навыки, системные средства Codex и выбранные внешние пакеты. Это выбранные материалы; число включённых навыков реестра сеанса может отличаться.",
         "",
-        "Внешние пакеты: Gmail, Windsor.ai, GitHub, Build Web Apps, Codex Security, OpenAI Developers, Plugin Management и Visualize. Кеш остальных пакетов, вложенные справочники и шаблоны не индексируются. Наличие инструкции не подтверждает доступность коннектора.",
+        "Внешние пакеты: Gmail, Windsor.ai, GitHub, Build Web Apps, Codex Security, OpenAI Developers, Plugin Management и Visualize. Входы берутся из manifest установленного пакета; пакет без навыков остаётся доступен через свои инструменты. Старые версии кеша, вложенные справочники и шаблоны не индексируются. Наличие инструкции не подтверждает доступность коннектора.",
         "",
         "Основные правила и технические справочники проекта — в [A5](A5.md); порядок работы ролей — в [M1](M1.md) и [M2](M2.md).",
         "",
@@ -152,7 +199,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         "",
         f"Срез: {day}. Всего {documents} файлов: {len(project_paths)} в AutoStop Manager и {len(external)} входов во внешние и системные навыки Codex.",
         "",
-        "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
+        "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние входы выбираются по manifest установленного пакета. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
         "",
         "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи: `python scripts/update-instruction-catalogs.py --check`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
         "",
