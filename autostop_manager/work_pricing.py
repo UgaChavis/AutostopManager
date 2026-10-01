@@ -7,7 +7,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from .config import PROJECT_ROOT
+from .config import get_db_path
 from .work_pricing_research import collect_public_work_pricing_research
 
 ROUNDING_STEP_RUB = 100
@@ -21,7 +21,6 @@ MAX_WORK_ITEM_CHARS = 240
 MAX_QUOTE_ROWS = 100
 MAX_LABOR_TIME_ROWS = 100
 LABOR_EXPERIENCE_SCHEMA = "autostop_service_labor_experience_v1"
-LABOR_EXPERIENCE_PATH = PROJECT_ROOT / "data" / "private_knowledge" / "service_labor_experience.json"
 
 COMMON_OPERATION_WORDS = {
     "замена",
@@ -209,12 +208,23 @@ def _operations_match(operation_name: str, quote_operation_name: str) -> bool:
     )
 
 
-def _load_labor_experience(path: Path = LABOR_EXPERIENCE_PATH) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
+def _load_labor_experience(path: Path | None = None) -> dict[str, Any] | None:
+    """Read optional aggregates beside the persistent Manager database."""
+
     try:
+        if path is None:
+            data_root = get_db_path().parent
+            private_root = data_root / "private_knowledge"
+            resolved_private_root = private_root.resolve()
+            path = private_root / "service_labor_experience.json"
+            if not resolved_private_root.is_relative_to(data_root) or not path.resolve().is_relative_to(
+                resolved_private_root
+            ):
+                return None
+        if not path.is_file():
+            return None
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, RuntimeError):
         return None
     if not isinstance(payload, dict) or payload.get("schema_version") != LABOR_EXPERIENCE_SCHEMA:
         return None

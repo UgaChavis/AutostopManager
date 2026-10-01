@@ -4,7 +4,118 @@ import json
 
 import pytest
 
+from autostop_manager import config, work_pricing
 from autostop_manager.work_pricing import estimate_repair_work_cost
+
+
+def test_internal_experience_uses_persistent_data_root_across_releases(tmp_path, monkeypatch):
+    persistent_data = tmp_path / "persistent-data"
+    private_knowledge = persistent_data / "private_knowledge"
+    private_knowledge.mkdir(parents=True)
+    payload = {"schema_version": work_pricing.LABOR_EXPERIENCE_SCHEMA, "labor_baselines": []}
+    (private_knowledge / "service_labor_experience.json").write_text(json.dumps(payload), encoding="utf-8")
+    db_path = persistent_data / "manager.sqlite3"
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(db_path))
+
+    for release in ("release-one", "release-two"):
+        release_root = tmp_path / release
+        release_root.mkdir()
+        monkeypatch.setattr(config, "PROJECT_ROOT", release_root)
+        assert work_pricing._load_labor_experience() == payload
+        assert not (release_root / "data").exists()
+
+    assert not db_path.exists()
+
+
+def test_internal_experience_explicit_fixture_path_overrides_runtime_data(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "other-data" / "manager.sqlite3"))
+    fixture = tmp_path / "experience.json"
+    payload = {"schema_version": work_pricing.LABOR_EXPERIENCE_SCHEMA, "labor_baselines": []}
+    fixture.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert work_pricing._load_labor_experience(fixture) == payload
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["{", "[]", '{"schema_version":"wrong"}', '{"price":' + "9" * 5_000 + "}", "[" * 20_000 + "0" + "]" * 20_000],
+    ids=["invalid-json", "wrong-shape", "wrong-schema", "integer-limit", "nesting-limit"],
+)
+def test_internal_experience_invalid_optional_aggregate_is_unavailable(tmp_path, monkeypatch, body):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
+    private = tmp_path / "private_knowledge"
+    private.mkdir()
+    (private / "service_labor_experience.json").write_text(body, encoding="utf-8")
+
+    assert work_pricing._load_labor_experience() is None
+
+
+def test_internal_experience_missing_optional_aggregate_does_not_create_data(tmp_path, monkeypatch):
+    data_root = tmp_path / "missing-data"
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(data_root / "manager.sqlite3"))
+
+    assert work_pricing._load_labor_experience() is None
+    assert not data_root.exists()
+
+
+@pytest.mark.parametrize("escape", ["directory", "file", "loop"])
+def test_internal_experience_default_path_cannot_escape_private_data(tmp_path, monkeypatch, escape):
+    data_root = tmp_path / "persistent-data"
+    data_root.mkdir()
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(data_root / "manager.sqlite3"))
+    outside = tmp_path / "unrelated-data"
+    outside.mkdir()
+    payload = {"schema_version": work_pricing.LABOR_EXPERIENCE_SCHEMA, "labor_baselines": []}
+    other = outside / "service_labor_experience.json"
+    other.write_text(json.dumps(payload), encoding="utf-8")
+    private = data_root / "private_knowledge"
+    if escape == "directory":
+        private.symlink_to(outside, target_is_directory=True)
+    else:
+        private.mkdir()
+        link = private / "service_labor_experience.json"
+        link.symlink_to(link if escape == "loop" else other)
+
+    assert work_pricing._load_labor_experience() is None
+
+
+def test_internal_experience_accepts_symlink_within_private_data(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
+    private = tmp_path / "private_knowledge"
+    private.mkdir()
+    payload = {"schema_version": work_pricing.LABOR_EXPERIENCE_SCHEMA, "labor_baselines": []}
+    fixture = private / "current-aggregate.json"
+    fixture.write_text(json.dumps(payload), encoding="utf-8")
+    (private / "service_labor_experience.json").symlink_to(fixture)
+
+    assert work_pricing._load_labor_experience() == payload
+
+
+@pytest.mark.parametrize("invalid", [False, True], ids=["missing", "invalid"])
+def test_optional_experience_does_not_break_public_quote_fallback(tmp_path, monkeypatch, invalid):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
+    if invalid:
+        private = tmp_path / "private_knowledge"
+        private.mkdir()
+        (private / "service_labor_experience.json").write_text("invalid", encoding="utf-8")
+    inputs = {
+        "vehicle": "Synthetic sedan",
+        "work_items": ["замена рулевой рейки"],
+        "quotes_json": {"quotes": [_quote("source-a", 4000), _quote("source-b", 4500), _quote("source-c", 5000)]},
+        "auto_research": False,
+    }
+
+    with_optional = estimate_repair_work_cost(**inputs, use_internal_experience=True)
+    without_optional = estimate_repair_work_cost(**inputs, use_internal_experience=False)
+
+    assert with_optional["ok"] is True
+    assert with_optional["pricing_basis"]["internal_experience_available"] is False
+    assert with_optional["autostop_price_rub"] == without_optional["autostop_price_rub"]
+    selected = with_optional["operation_estimates"][0]
+    assert selected["autostop_price_rub"] == without_optional["operation_estimates"][0]["autostop_price_rub"]
+    assert selected["autostop_price_rub"] is not None
+    assert selected["sample"]["valid_count"] == 3
+    assert not (tmp_path / "manager.sqlite3").exists()
 
 
 def _quote(source: str, price: int, operation: str = "замена рулевой рейки", city: str = "Красноярск"):
