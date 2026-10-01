@@ -5,6 +5,7 @@ import io
 import json
 import os
 import socket
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -15,6 +16,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.fastmcp import FastMCP
 
 from autostop_manager import config
+from autostop_manager import catalog_clients
 from autostop_manager.catalog_adapters import catalog_provider_status
 import autostop_manager.web_research_gateway as web_gateway
 import autostop_manager.store_api as store_api
@@ -122,12 +124,25 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
     monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", str(tmp_path / "does-not-exist.env"))
-    monkeypatch.setenv("PARTSAPI_BASE_URL", "http://127.0.0.1:9")
+    # Keep the synthetic origin HTTPS like the real provider contract. The
+    # transport boundary below injects failure without any provider traffic.
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://127.0.0.1:9")
     monkeypatch.setenv("PARTSAPI_VINDECODE_KEY", sentinel_secret)
     monkeypatch.setenv("AUTOSTOP_STORE_API_URL", "http://127.0.0.1:9/internal/agent/v1")
     monkeypatch.setenv("AUTOSTOP_STORE_READ_TOKEN", sentinel_secret)
     config._ENV_LOADED = False
     order_requests = []
+    provider_requests = []
+
+    def unavailable_provider(request, *, timeout):
+        endpoint = urlsplit(request.full_url)
+        assert endpoint.scheme == "https"
+        assert endpoint.hostname == "127.0.0.1" and endpoint.port == 9
+        assert timeout >= 1
+        provider_requests.append(request)
+        raise URLError("synthetic unavailable provider")
+
+    monkeypatch.setattr(catalog_clients, "urlopen", unavailable_provider)
 
     def store_response(request, *, timeout):
         # The actual Store adapter validates this provider response; search is
@@ -265,6 +280,7 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
         "timeout",
         "adapter_malformed_payload",
     }
+    assert len(provider_requests) == 1
     assert report["privacy"]["raw_identifier_returned"] is False
     assert report["privacy"]["secret_exposed"] is False
     assert SYNTHETIC_IDENTIFIER not in rendered
