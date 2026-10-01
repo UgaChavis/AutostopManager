@@ -54,6 +54,8 @@ MODULE_PARENTS: dict[str, str | None] = {
     "I1": None,
     "I2": None,
     "J1": None,
+    "M1": None,
+    "M2": "M1",
 }
 MODULE_DOCUMENTS = {
     module_id: "AGENTS.md" if module_id == "A2" else f"docs/agent/modules/{module_id}.md"
@@ -65,8 +67,10 @@ SKILL_DOCUMENTS = (
     ".agents/skills/manage-fst-vpn/SKILL.md",
     ".agents/skills/manage-owner-instagram/SKILL.md",
 )
-TEXT_DOCUMENTS = ("AGENTS.md", MODULE_DOCUMENTS["A1"], *SKILL_DOCUMENTS)
-REFERENCE_DOCUMENTS = tuple(path for module_id, path in MODULE_DOCUMENTS.items() if module_id not in {"A1", "A2"})
+TEXT_DOCUMENTS = ("AGENTS.md", MODULE_DOCUMENTS["A1"], MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"], *SKILL_DOCUMENTS)
+REFERENCE_DOCUMENTS = tuple(
+    path for module_id, path in MODULE_DOCUMENTS.items() if module_id not in {"A1", "A2", "M1", "M2"}
+)
 # Only the entry instructions and operational skills count toward this budget.
 # Detailed module guides and complete plugin catalogs are loaded when needed.
 INSTRUCTION_BUDGET_BYTES = 32 * 1024
@@ -75,6 +79,8 @@ EXTERNAL_CODEX_ROOTS = (
     Path("/root/.codex/plugins/cache"),
 )
 FST_ACCESS_DOCUMENT = Path("/root/.codex/CODEX_VPN_FST_ACCESS.md")
+ROLE_JOURNAL_ROOT = Path("/var/lib/autostop-manager/roles/M2")
+ROLE_JOURNAL_ENTRIES = {ROLE_JOURNAL_ROOT / "current-state.md", ROLE_JOURNAL_ROOT / "journal/INDEX.md"}
 
 
 def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
@@ -107,6 +113,9 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
         allowed_external = allowed_external or (
             document_name == ".agents/skills/manage-fst-vpn/SKILL.md" and candidate == FST_ACCESS_DOCUMENT
         )
+        allowed_external = allowed_external or (
+            document_name in {MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"]} and candidate in ROLE_JOURNAL_ENTRIES
+        )
         if not allowed_external:
             raise ValueError("document_link_invalid")
         return candidate
@@ -116,6 +125,10 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
         allowed = allowed or any(resolved.is_relative_to(base.resolve()) for base in EXTERNAL_CODEX_ROOTS)
     if document_name == ".agents/skills/manage-fst-vpn/SKILL.md":
         allowed = allowed or resolved == FST_ACCESS_DOCUMENT.resolve()
+    if document_name in {MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"]}:
+        allowed = allowed or (
+            candidate in ROLE_JOURNAL_ENTRIES and resolved.is_relative_to(ROLE_JOURNAL_ROOT.resolve())
+        )
     if not allowed or not resolved.is_file():
         raise ValueError("document_link_invalid")
     return resolved

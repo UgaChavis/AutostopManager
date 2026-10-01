@@ -56,8 +56,10 @@ OPERATIONS = READ_OPERATIONS | WRITE_OPERATIONS
 ACTOR_KINDS = frozenset({"crm_operator", "telegram_owner", "codex", "system"})
 INSTRUCTION_FILES = (
     ("project_instructions", "AGENTS.md"),
-    ("owner_telegram_instructions", ".agents/skills/manage-owner-telegram/SKILL.md"),
-    ("store_instructions", ".agents/skills/manage-autostop-store/SKILL.md"),
+    ("owner_telegram_instructions", "docs/agent/modules/B2.md"),
+    ("store_instructions", "docs/agent/modules/F2.md"),
+    ("director_instructions", "docs/agent/modules/M1.md"),
+    ("engineer_instructions", "docs/agent/modules/M2.md"),
     ("deployment_runbook", "docs/agent/references/deployment.md"),
 )
 
