@@ -701,7 +701,7 @@ def _operation_labor_time_analysis(
     elif len(matched) >= 2 and source_count >= 2 and not any(row.get("confidence") == "low" for row in matched):
         confidence = "high"
     elif len(matched) >= 1:
-        confidence = "medium" if not all(row.get("confidence") == "low" for row in matched) else "low"
+        confidence = "low"
     else:
         confidence = "blocked"
 

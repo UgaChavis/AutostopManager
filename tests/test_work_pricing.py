@@ -57,6 +57,22 @@ def test_shared_brake_adjective_does_not_match_a_different_operation():
     assert result["recommended_total_works_rub"] is None
 
 
+def test_one_labor_time_source_is_low_confidence():
+    result = estimate_repair_work_cost(
+        vehicle="Synthetic sedan",
+        work_items=["замена рулевой рейки"],
+        quotes_json={
+            "quotes": [_quote("source-a", 4000), _quote("source-b", 4500), _quote("source-c", 5000)],
+            "labor_time_sample": [_labor_time("only-time-source", 1.0)],
+        },
+        auto_research=False,
+        use_internal_experience=False,
+    )
+    analysis = result["operation_estimates"][0]["labor_time_analysis"]
+    assert analysis["source_count"] == 1
+    assert analysis["confidence"] == "low"
+
+
 def test_same_operation_with_additional_qualifier_still_matches():
     result = estimate_repair_work_cost(
         vehicle="Synthetic sedan",
