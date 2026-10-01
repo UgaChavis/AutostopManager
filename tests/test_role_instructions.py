@@ -34,6 +34,22 @@ def skill(path, name):
     return write(path, f"---\nname: {name}\ndescription: Task {name}\n---\n\n# {name}\n")
 
 
+def installed_package(codex, package, *, version="1", marketplace="openai-curated-remote", skills="./skills/"):
+    root = codex / "plugins/cache" / marketplace / package / version
+    info = {"name": package, "version": version}
+    if skills is not None:
+        info["skills"] = skills
+    write(root / ".codex-plugin/plugin.json", json.dumps(info))
+    if marketplace == "openai-curated-remote":
+        write(
+            root.parent / ".codex-remote-plugin-install.json",
+            json.dumps({"schema_version": 1, "remote_plugin_id": "synthetic-" + package}),
+        )
+    if isinstance(skills, str):
+        (root / skills).mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def test_catalogs_do_not_import_or_recursively_index_retired_packages(tmp_path):
     project, codex = tmp_path / "project", tmp_path / "codex"
     write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)")
@@ -49,13 +65,18 @@ def test_catalogs_do_not_import_or_recursively_index_retired_packages(tmp_path):
     skill(codex / "skills/.system/review-agent/SKILL.md", "review-agent")
     cache = codex / "plugins/cache/openai-curated-remote"
     for package in catalogs.PACKAGES:
-        folder = cache / package / "1/skills/index"
+        marketplace = "openai-bundled" if package == "visualize" else "openai-curated-remote"
+        root = installed_package(codex, package, marketplace=marketplace)
+        folder = root / "skills/index"
         skill(folder / "SKILL.md", "index")
         write(folder / "references/old.md", "# should not be indexed")
         skill(folder / "nested/SKILL.md", "nested")
     for package in ("sales", "pages", "work-pets", "openai-templates", "figma"):
         skill(cache / package / "1/skills/index/SKILL.md", "index")
-    write(codex / "config.toml", '[plugins."github@openai-curated"]\nenabled=false\n')
+    write(
+        codex / "config.toml",
+        '[plugins."github@openai-curated"]\nenabled=false\n[plugins."visualize@openai-bundled"]\nenabled=true\n',
+    )
     before = (project / "docs/agent/modules/A5.md").read_text()
 
     a4, a5, counts = catalogs.build_catalogs(project, codex, "2026-10-01")
@@ -97,8 +118,13 @@ def test_catalogs_respect_disabled_skill_paths_and_refuse_ambiguous_versions(tmp
     path = skill(codex / "skills/.system/core/SKILL.md", "core")
     write(codex / "config.toml", f'[[skills.config]]\npath="{path.parent}"\nenabled=false\n')
     assert catalogs.selected_skills(project, codex) == []
+    write(
+        codex / "config.toml",
+        f'[[skills.config]]\npath="{path.parent}"\nenabled=false\n[plugins."github@openai-curated"]\nenabled=true\n',
+    )
     for version in ("1", "2"):
-        skill(codex / f"plugins/cache/openai-curated/github/{version}/skills/index/SKILL.md", "index")
+        root = installed_package(codex, "github", version=version, marketplace="openai-curated")
+        skill(root / "skills/index/SKILL.md", "index")
     with pytest.raises(ValueError, match="Specify current"):
         catalogs.selected_skills(project, codex)
 
@@ -106,9 +132,9 @@ def test_catalogs_respect_disabled_skill_paths_and_refuse_ambiguous_versions(tmp
 def test_catalogs_respect_name_only_and_mixed_skill_selectors(tmp_path):
     project, codex = tmp_path / "project", tmp_path / "codex"
     skill(codex / "skills/.system/core/SKILL.md", "core")
-    skill(codex / "plugins/cache/openai-curated-remote/github/1/skills/review/SKILL.md", "review")
-    skill(codex / "plugins/cache/openai-curated-remote/windsor-ai/1/skills/common/SKILL.md", "common")
-    retained = skill(codex / "plugins/cache/openai-curated-remote/build-web-apps/1/skills/build/SKILL.md", "build")
+    skill(installed_package(codex, "github") / "skills/review/SKILL.md", "review")
+    skill(installed_package(codex, "windsor-ai") / "skills/common/SKILL.md", "common")
+    retained = skill(installed_package(codex, "build-web-apps") / "skills/build/SKILL.md", "build")
     write(
         codex / "config.toml",
         '[[skills.config]]\nname="core"\nenabled=false\n'
@@ -117,6 +143,103 @@ def test_catalogs_respect_name_only_and_mixed_skill_selectors(tmp_path):
         '[[skills.config]]\nname="build-web-apps:build"\nenabled=true\n',
     )
     assert [s["path"] for s in catalogs.selected_skills(project, codex)] == [retained]
+
+
+@pytest.mark.parametrize("package", ["gmail", "github"])
+def test_catalogs_do_not_fallback_from_installed_skill_less_manifest(tmp_path, package):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    current = installed_package(codex, package, version="2", skills=None)
+    # A leftover directory inside the current version is not declared either.
+    skill(current / "skills/undeclared/SKILL.md", "undeclared")
+    stale = installed_package(codex, package, marketplace="openai-curated")
+    skill(stale / "skills/old/SKILL.md", "old")
+    write(codex / "config.toml", f'[plugins."{package}@openai-curated"]\nenabled=true\n')
+    before = {p: p.read_bytes() for p in codex.rglob("*") if p.is_file()}
+
+    assert catalogs.selected_skills(project, codex) == []
+    assert {p: p.read_bytes() for p in codex.rglob("*") if p.is_file()} == before
+
+
+def test_catalogs_preserve_installed_manifest_skills_and_ignore_raw_caches(tmp_path):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    retained = skill(installed_package(codex, "github") / "skills/current/SKILL.md", "current")
+    skill(codex / "plugins/cache/openai-curated/github/stale/skills/old/SKILL.md", "old")
+    # Neither the directory nor its manifest is installation metadata by itself.
+    uninstalled = installed_package(codex, "gmail", marketplace="openai-curated")
+    skill(uninstalled / "skills/cached/SKILL.md", "cached")
+
+    assert [s["path"] for s in catalogs.selected_skills(project, codex)] == [retained]
+
+
+def test_catalogs_manifest_skills_path_and_default_enabled_metadata(tmp_path):
+    root = installed_package(tmp_path, "github", skills="./current-skills")
+    retained = skill(root / "current-skills/current/SKILL.md", "current")
+    skill(root / "skills/undeclared/SKILL.md", "undeclared")
+
+    assert [s["path"] for s in catalogs.selected_skills(tmp_path / "project", tmp_path)] == [retained]
+    assert (
+        catalogs.installed_skill_root("github", tmp_path, {"plugins": {"github@openai-curated-remote": {}}})
+        == retained.parent.parent
+    )
+
+
+@pytest.mark.parametrize("selector", [None, True, "enabled", {"enabled": "false"}, {"enabled": 0}])
+def test_catalogs_reject_invalid_installed_package_selector_types(tmp_path, selector):
+    installed_package(tmp_path, "github")
+    with pytest.raises(ValueError, match="Invalid installed package selector"):
+        catalogs.installed_skill_root("github", tmp_path, {"plugins": {"github@openai-curated-remote": selector}})
+
+
+def test_catalogs_remote_selector_without_installation_marker_does_not_activate_cache(tmp_path):
+    root = installed_package(tmp_path, "github")
+    skill(root / "skills/old/SKILL.md", "old")
+    (root.parent / ".codex-remote-plugin-install.json").unlink()
+    assert catalogs.installed_skill_root("github", tmp_path, {"plugins": {"github@openai-curated-remote": {}}}) is None
+
+
+@pytest.mark.parametrize("skills", ["", True, [], 1])
+def test_catalogs_reject_invalid_installed_manifest_skill_types(tmp_path, skills):
+    installed_package(tmp_path, "github", skills=skills)
+    with pytest.raises(ValueError, match="Invalid installed package skills"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("current", "legacy", "included"), [(False, True, False), (True, False, True), (None, False, False)]
+)
+def test_catalogs_respect_actual_installation_selector(tmp_path, current, legacy, included):
+    codex = tmp_path / "codex"
+    retained = skill(installed_package(codex, "github") / "skills/current/SKILL.md", "current")
+    config = {"plugins": {"github@openai-curated": {"enabled": legacy}}}
+    if current is not None:
+        config["plugins"]["github@openai-curated-remote"] = {"enabled": current}
+    root = catalogs.installed_skill_root("github", codex, config)
+
+    assert root == (retained.parent.parent if included else None)
+
+
+def test_catalogs_reject_ambiguous_installed_versions_even_if_one_has_no_skills(tmp_path):
+    installed_package(tmp_path, "github", version="1", skills=None)
+    root = installed_package(tmp_path, "github", version="2")
+    skill(root / "skills/current/SKILL.md", "current")
+    with pytest.raises(ValueError, match="Specify current"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "marker", [{}, {"schema_version": 1, "remote_plugin_id": ""}, {"schema_version": 2}, {"schema_version": True}]
+)
+def test_catalogs_reject_invalid_installation_marker_without_stale_fallback(tmp_path, marker):
+    root = installed_package(tmp_path, "github")
+    write(root.parent / ".codex-remote-plugin-install.json", json.dumps(marker))
+    with pytest.raises(ValueError, match="Invalid installed package marker"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+def test_catalogs_reject_manifest_skill_path_outside_installed_version(tmp_path):
+    installed_package(tmp_path, "github", skills="../../outside")
+    with pytest.raises(ValueError, match="outside-package"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
 
 
 def test_catalog_check_preserves_recorded_date_after_day_or_year_rollover(tmp_path, monkeypatch):
