@@ -147,6 +147,33 @@ def test_search_limits_normalized_rows_without_hidden_page_loop(monkeypatch):
     assert len(calls) == 1
 
 
+def test_search_ignores_overflowing_seller_rating_without_internal_error(monkeypatch):
+    listing = _listing()
+    listing["seller"]["rating"] = 10**400
+    calls = _install_response(monkeypatch, {"ok": True, "data": {"listings": [listing]}})
+
+    result = avito_listings.avito_search_listings("synthetic part")
+
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["listings"][0]["seller"]["rating"] is None
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b'{"ok":true,"data":{"price":' + b"9" * 5_000 + b"}}", b"[" * 20_000 + b"0" + b"]" * 20_000],
+    ids=["integer-limit", "nesting-limit"],
+)
+def test_search_returns_malformed_response_for_excessive_json_numbers_or_nesting(monkeypatch, body):
+    calls = _install_response(monkeypatch, body)
+
+    result = avito_listings.avito_search_listings("synthetic part")
+
+    assert result == {"ok": False, "source": "avito", "error": "malformed_response"}
+    assert len(calls) == 1
+
+
 def test_search_deduplicates_by_listing_id_or_source_url(monkeypatch):
     first = _listing()
     duplicate_id = _listing(

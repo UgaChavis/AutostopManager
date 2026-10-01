@@ -19,6 +19,36 @@ def _configure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEBBEE_DROM_ROBOT_ALIAS", "baza.drom")
 
 
+@pytest.mark.parametrize(
+    "body",
+    [b'{"price":' + b"9" * 5_000 + b"}", b"[" * 20_000 + b"0" + b"]" * 20_000],
+    ids=["integer-limit", "nesting-limit"],
+)
+def test_api_request_returns_invalid_json_without_internal_error(monkeypatch, body):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            return body[:limit]
+
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(drom_listings, "build_opener", lambda *_args: Opener())
+
+    status, payload = drom_listings._api_request("GET", "/webbee-api/v1.0/tasks", token="synthetic-token")
+
+    assert status == 200
+    assert payload is None
+
+
 def test_enabled_dry_run_builds_baza_parts_search_url_without_credentials_or_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -292,7 +292,7 @@ def _request_json(action: str, payload: dict[str, Any], *, base_url: str | None 
         return {"ok": False, "error": _http_error_code(exc.code)}
     except (TimeoutError, URLError, OSError, http.client.HTTPException):
         return {"ok": False, "error": "provider_unavailable"}
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return {"ok": False, "error": "malformed_response"}
 
     if not isinstance(parsed_body, dict):
@@ -511,7 +511,11 @@ def _public_seller_fields(value: Any) -> dict[str, Any] | None:
     name = _clean_text(value.get("name"), limit=120) or None
     seller_type = _clean_text(value.get("type"), limit=60) or None
     rating = value.get("rating")
-    if isinstance(rating, bool) or not isinstance(rating, (int, float)) or not math.isfinite(rating):
+    try:
+        valid_rating = not isinstance(rating, bool) and isinstance(rating, (int, float)) and math.isfinite(rating)
+    except OverflowError:
+        valid_rating = False
+    if not valid_rating:
         rating = None
     reviews = _clean_text(value.get("reviews"), limit=80) or None
     reviews_count = _nonnegative_integer(value.get("reviews_count"))
