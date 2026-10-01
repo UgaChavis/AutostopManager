@@ -21,7 +21,16 @@ Codex → native Manager MCP (`:41931/mcp`) → adapter → loopback `AUTOSTOP_S
 | `store_quote_conductor` → owner Admin V2 | `start/status/evidence/draft/publish/reopen/order/handoff/decline`; quote/run/revision | Status читает; остальные шаги могут писать/публиковать. |
 | `store_owner_api` → `/api/v1` | Текущий operation_id, typed path/query/body, mode, target/revision/contract/proof | GET читает; prepare проверяет input, dry_run — metadata, apply — запись. High-risk нужен dry-run proof/readback. |
 
-Allowlisted management actions: `assign_quote_request`, `set_quote_request_status`, `update_quote_request_comment`, `set_batch_storage_location`, `mark_order_ready`, `add_quote_request_note`. При uncertain apply сначала читай exact target/receipt, не повторяй запрос вслепую. HTTP 200/readiness не доказывают запись. Store search и public web не подтверждают применимость детали.
+Allowlisted management actions: `assign_quote_request`, `set_quote_request_status`, `update_quote_request_comment`, `set_batch_storage_location`, `mark_order_ready`, `set_order_payment_status`, `add_quote_request_note`, `replace_quote_offer_drafts`. Изменение оплаты требует отдельного текущего поручения владельца, scope `store:write:order_payment` и `owner_intent="owner_finance: <описание поручения>"`; автоматическое предоставление scope не выполняется. При uncertain apply сначала читай exact target/receipt, не повторяй запрос вслепую. HTTP 200/readiness не доказывают запись. Store search и public web не подтверждают применимость детали.
+
+Sourcing — lookup-only: `store_sourcing_offer` не поддерживает entity context.
+Ответ с `sourcing_provider_deadline_exceeded`, `sourcing_provider_capacity_exhausted`
+или `sourcing_provider_unavailable` сохраняет готовые предложения, но неполон;
+пустой ответ не подтверждает отсутствие предложений. Manager принимает эти
+фиксированные warning-коды только для sourcing search, а прежний Store без
+таких warnings остаётся совместим. Перед будущим выпуском Store с новым
+ограничением 6 секунд сначала выпусти совместимый Manager consumer. Исходники
+в feature-ветке сами по себе не меняют работающий сервер.
 
 ## Проверки и восстановление
 
