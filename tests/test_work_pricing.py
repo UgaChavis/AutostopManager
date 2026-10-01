@@ -571,3 +571,36 @@ def test_unconfirmed_public_labor_time_does_not_activate_hourly_fallback():
     assert result["labor_time_sample"]["valid_count"] == 0
     assert result["labor_time_sample"]["invalid_count"] == 1
     assert result["autostop_price_rub"] is None
+
+
+@pytest.mark.parametrize(
+    ("work_items", "quotes_json", "limit_key"),
+    [
+        ([f"operation {i}" for i in range(21)], None, "work_items"),
+        (["x" * 241], None, "work_item_chars"),
+        (["замена масла"], [_quote("fixture", 1000)] * 101, "quotes"),
+        (["замена масла"], {"labor_time_sample": [_labor_time("fixture", 1)] * 101}, "labor_time_rows"),
+    ],
+)
+def test_restored_labor_estimate_budget_fails_before_research(monkeypatch, work_items, quotes_json, limit_key):
+    def unexpected_research(**kwargs):
+        raise AssertionError("over-budget request must not start research")
+
+    monkeypatch.setattr("autostop_manager.work_pricing.collect_public_work_pricing_research", unexpected_research)
+    result = estimate_repair_work_cost(vehicle="Synthetic sedan", work_items=work_items, quotes_json=quotes_json)
+    assert result["ok"] is False
+    assert result["error"] == "invalid_input"
+    assert result["limits"][limit_key] > 0
+
+
+def test_restored_labor_quote_independence_prevents_single_source_price():
+    result = estimate_repair_work_cost(
+        vehicle="Synthetic sedan",
+        work_items=["замена свечей"],
+        quotes_json=[_quote("same-source", price, operation="замена свечей") for price in (3000, 3500, 4000)],
+        auto_research=False,
+        use_internal_experience=False,
+    )
+    assert result["russia_average_rub"] is None
+    assert result["autostop_price_rub"] is None
+    assert result["confidence"] == "low"

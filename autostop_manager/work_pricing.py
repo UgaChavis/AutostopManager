@@ -15,6 +15,11 @@ KRASNOYARSK_MARKUP = 1.45
 SAINT_PETERSBURG_MARKUP = 1.15
 AUTOSTOP_LABOR_RATE_RUB_PER_HOUR = 4_000
 MIN_CONFIDENT_QUOTES = 3
+MIN_INDEPENDENT_QUOTE_SOURCES = 2
+MAX_WORK_ITEMS = 20
+MAX_WORK_ITEM_CHARS = 240
+MAX_QUOTE_ROWS = 100
+MAX_LABOR_TIME_ROWS = 100
 LABOR_EXPERIENCE_SCHEMA = "autostop_service_labor_experience_v1"
 LABOR_EXPERIENCE_PATH = PROJECT_ROOT / "data" / "private_knowledge" / "service_labor_experience.json"
 
@@ -588,7 +593,11 @@ def _operation_estimate(
     selected_method: str | None = None
     selected_multiplier: float | None = None
     for region in region_preference:
-        if regional_samples[region]["valid_count"] >= MIN_CONFIDENT_QUOTES:
+        source_count = len({quote.get("source") for quote in regional_samples[region]["valid_quotes"]})
+        if (
+            regional_samples[region]["valid_count"] >= MIN_CONFIDENT_QUOTES
+            and source_count >= MIN_INDEPENDENT_QUOTE_SOURCES
+        ):
             selected_region = region
             selected_method, selected_multiplier = regional_methods[region]
             break
@@ -1119,6 +1128,33 @@ def estimate_repair_work_cost(
 ) -> dict[str, Any]:
     """Build a read-only multi-source labor-price estimate."""
 
+    raw_work_items = _as_text_list(work_items)
+    input_errors: list[str] = []
+    if len(raw_work_items) > MAX_WORK_ITEMS:
+        input_errors.append(f"work_items exceeds maximum of {MAX_WORK_ITEMS}")
+    if any(len(item) > MAX_WORK_ITEM_CHARS for item in raw_work_items):
+        input_errors.append(f"each work item must be at most {MAX_WORK_ITEM_CHARS} characters")
+    manual_quote_rows = _quote_rows(quotes_json)
+    embedded_labor_time_rows = _labor_time_rows(quotes_json)
+    if len(manual_quote_rows) > MAX_QUOTE_ROWS:
+        input_errors.append(f"quotes exceeds maximum of {MAX_QUOTE_ROWS}")
+    if len(embedded_labor_time_rows) > MAX_LABOR_TIME_ROWS:
+        input_errors.append(f"labor_time_sample exceeds maximum of {MAX_LABOR_TIME_ROWS}")
+    if input_errors:
+        return {
+            "ok": False,
+            "error": "invalid_input",
+            "errors": input_errors,
+            "limits": {
+                "work_items": MAX_WORK_ITEMS,
+                "work_item_chars": MAX_WORK_ITEM_CHARS,
+                "quotes": MAX_QUOTE_ROWS,
+                "labor_time_rows": MAX_LABOR_TIME_ROWS,
+            },
+            "read_only": True,
+            "crm_write_allowed": False,
+        }
+
     vehicle_context = {
         "vehicle": vehicle,
         "vin": vin,
@@ -1133,9 +1169,7 @@ def estimate_repair_work_cost(
     }
     vehicle_context["vehicle_class"] = _vehicle_class(vehicle_context)
 
-    normalized_operations, complaint_only = _normalize_operations(_as_text_list(work_items), complaint)
-    manual_quote_rows = _quote_rows(quotes_json)
-    embedded_labor_time_rows = _labor_time_rows(quotes_json)
+    normalized_operations, complaint_only = _normalize_operations(raw_work_items, complaint)
     experience_snapshot: dict[str, Any] | None
     if isinstance(internal_experience_json, dict):
         experience_snapshot = internal_experience_json
