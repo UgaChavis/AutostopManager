@@ -21,6 +21,7 @@ STORE_DOMAIN_ACTIONS = {
     ("store_quote_request", "add_quote_request_note"),
     ("store_batch", "set_batch_storage_location"),
     ("store_order", "mark_order_ready"),
+    ("store_order", "set_order_payment_status"),
 }
 STORE_DIGEST_STREAMS = frozenset({"store_digest", "store_bootstrap"})
 
@@ -583,7 +584,7 @@ class StoreIntegration:
         pre_state = self.entity_context(
             entity=normalized_domain,
             entity_id=canonical_target_id,
-            detail="summary",
+            detail="full" if normalized_action == "set_order_payment_status" else "summary",
         )
         if not pre_state.get("ok"):
             return _error_envelope(
@@ -631,7 +632,9 @@ class StoreIntegration:
                 reconcile_state = self.entity_context(
                     entity=normalized_domain,
                     entity_id=canonical_target_id,
-                    detail="full" if normalized_action == "add_quote_request_note" else "summary",
+                    detail="full"
+                    if normalized_action in {"add_quote_request_note", "set_order_payment_status"}
+                    else "summary",
                 )
                 post_state_read = reconcile_state.get("ok") is True
                 target_matches = post_state_read and _entity_matches(
@@ -640,7 +643,9 @@ class StoreIntegration:
                     entity_id=canonical_target_id,
                 )
                 failed_fields = (
-                    _failed_readback_fields(reconcile_state, canonical_changes, operation=normalized_action)
+                    _failed_readback_fields(
+                        reconcile_state, canonical_changes, operation=normalized_action, pre_state=pre_state
+                    )
                     if target_matches
                     else sorted(canonical_changes)
                 )
@@ -684,7 +689,9 @@ class StoreIntegration:
             post_state = self.entity_context(
                 entity=normalized_domain,
                 entity_id=canonical_target_id,
-                detail="full" if normalized_action == "add_quote_request_note" else "summary",
+                detail="full"
+                if normalized_action in {"add_quote_request_note", "set_order_payment_status"}
+                else "summary",
             )
             if not post_state.get("ok"):
                 return _error_envelope(
@@ -722,7 +729,9 @@ class StoreIntegration:
                         "readback_verified": False,
                     },
                 )
-            failed_fields = _failed_readback_fields(post_state, canonical_changes, operation=normalized_action)
+            failed_fields = _failed_readback_fields(
+                post_state, canonical_changes, operation=normalized_action, pre_state=pre_state
+            )
             if failed_fields:
                 return _error_envelope(
                     "store_apply_readback_mismatch",
@@ -1041,8 +1050,27 @@ def _failed_readback_fields(
     planned_changes: dict[str, Any],
     *,
     operation: str,
+    pre_state: dict[str, Any] | None = None,
 ) -> list[str]:
     entity = _entity_payload(payload)
+    if operation == "set_order_payment_status":
+        paid = planned_changes.get("paid")
+        desired = "PAID" if paid is True else "PAYMENT_REQUIRED"
+        payment_failed = [] if entity.get("payment_status") == desired else ["payment_status"]
+        if (
+            "paid_at" not in entity
+            or (paid is True and not entity["paid_at"])
+            or (paid is False and entity["paid_at"] is not None)
+        ):
+            payment_failed.append("paid_at")
+        if pre_state is not None:
+            before = _entity_payload(pre_state)
+            payment_failed.extend(
+                field
+                for field in ("status", "ready_at", "archived_at", "items")
+                if field in before and entity.get(field) != before[field]
+            )
+        return sorted(set(payment_failed))
     if operation == "add_quote_request_note":
         expected_text = str(planned_changes.get("text") or "").strip()
         notes_value = entity.get("notes")

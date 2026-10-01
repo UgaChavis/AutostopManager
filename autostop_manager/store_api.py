@@ -35,6 +35,7 @@ STORE_MANAGEMENT_OPERATIONS = frozenset(
         "update_quote_request_comment",
         "set_batch_storage_location",
         "mark_order_ready",
+        "set_order_payment_status",
         "add_quote_request_note",
     }
 )
@@ -58,6 +59,7 @@ _ACTION_CHANGE_LIMITS = {
     "update_quote_request_comment": 2,
     "set_batch_storage_location": 1,
     "mark_order_ready": 2,
+    "set_order_payment_status": 2,
     "add_quote_request_note": 1,
 }
 _ENVELOPE_FIELDS = frozenset(
@@ -422,6 +424,7 @@ _ACTION_ALLOWED_CHANGE_NAMES = {
     "add_quote_request_note": frozenset({"notes_count"}),
     "set_batch_storage_location": frozenset({"storage_location"}),
     "mark_order_ready": frozenset({"status", "ready_at"}),
+    "set_order_payment_status": frozenset({"payment_status", "paid_at"}),
 }
 _ACTION_META_FIELDS = frozenset(
     {
@@ -501,6 +504,9 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
     ),
     "set_batch_storage_location": frozenset({"entity_type", "entity_id", "part_id", "storage_location", "updated_at"}),
     "mark_order_ready": frozenset({"entity_type", "entity_id", "order_number", "status", "ready_at", "updated_at"}),
+    "set_order_payment_status": frozenset(
+        {"entity_type", "entity_id", "order_number", "status", "payment_status", "paid_at", "ready_at", "updated_at"}
+    ),
 }
 _ACTION_EFFECT_FIELDS: dict[str, frozenset[str]] = {
     "append_internal_note": frozenset({"effect", "text_sha256"}),
@@ -1557,6 +1563,10 @@ def _validate_action_payload(payload: dict[str, Any], operation: str) -> None:
     effects = payload["meta"].get("effects", [])
     if not isinstance(effects, list) or any(not isinstance(effect, dict) for effect in effects):
         raise ValueError("meta.effects must be an object list")
+    if operation == "set_order_payment_status" and (
+        effects or payload["meta"].get("external_effect_state", "NOT_APPLICABLE") != "NOT_APPLICABLE"
+    ):
+        raise ValueError("Store payment status action cannot return external effects")
     for index, effect in enumerate(effects):
         effect_name = str(effect.get("effect") or "")
         allowed = _ACTION_EFFECT_FIELDS.get(effect_name)

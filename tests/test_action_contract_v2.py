@@ -582,6 +582,8 @@ def test_existing_entity_update_requires_target_revision_and_idempotency():
         ("store_quote_request", "add_quote_request_note", {"text": "Нужно уточнить сторону"}),
         ("store_batch", "set_batch_storage_location", {"storage_location": "A-17"}),
         ("store_order", "mark_order_ready", {"status": "READY"}),
+        ("store_order", "set_order_payment_status", {"paid": True}),
+        ("store_order", "set_order_payment_status", {"paid": False}),
     ],
 )
 def test_store_action_contract_allowlist_uses_inventory_workflow_and_safe_transport(domain, action, changes):
@@ -590,7 +592,11 @@ def test_store_action_contract_allowlist_uses_inventory_workflow_and_safe_transp
         action=action,
         target_id="exact-store-id",
         planned_changes=changes,
-        owner_intent="Выполни точное разрешенное изменение объекта exact-store-id",
+        owner_intent=(
+            "owner_finance: Измени точный статус оплаты exact-store-id по отдельному поручению"
+            if action == "set_order_payment_status"
+            else "Выполни точное разрешенное изменение объекта exact-store-id"
+        ),
         expected_revision="2026-07-16T10:00:00+07:00",
         idempotency_key=f"{action}-exact-store-id-v1",
     )
@@ -1537,3 +1543,66 @@ def test_unreviewed_collection_post_cannot_bypass_revision_with_write_risk(
     assert result["ok"] is False
     assert result["concurrency"] == {"expected_revision": None, "required": True}
     assert "missing_expected_revision" in result["preflight"]["blocking_reasons"]
+
+
+@pytest.mark.parametrize("paid", [None, 0, 1, "true", "false"])
+def test_store_payment_status_requires_strict_paid_bool(paid):
+    result = prepare_action_contract(
+        domain="store_order",
+        action="set_order_payment_status",
+        target_id="fixture-order",
+        planned_changes={"paid": paid},
+        owner_intent="owner_finance: Измени точный статус оплаты fixture-order по отдельному поручению",
+        expected_revision="2026-10-01T00:00:00Z",
+        idempotency_key="fixture-payment-bool-1",
+    )
+    assert result["ok"] is False
+    assert "store_order_payment_paid_bool_required" in result["preflight"]["blocking_reasons"]
+
+
+def test_store_payment_status_requires_owner_finance_intent_and_preserves_change_boundary():
+    args = {
+        "domain": "store_order",
+        "action": "set_order_payment_status",
+        "target_id": "fixture-order",
+        "expected_revision": "2026-10-01T00:00:00Z",
+        "idempotency_key": "fixture-payment-boundary-1",
+    }
+    missing = prepare_action_contract(**args, planned_changes={"paid": True})
+    expanded = prepare_action_contract(
+        **args,
+        planned_changes={"paid": True, "status": "READY"},
+        owner_intent="owner_finance: Измени оплату fixture-order по отдельному поручению",
+    )
+    assert "missing_task_specific_owner_intent" in missing["preflight"]["blocking_reasons"]
+    assert "unsupported_store_change_fields" in expanded["preflight"]["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
+    "intent", ["", "owner_finance", "owner_finance:", "owner_finance:  ", "owner_technical: check", "Измени оплату"]
+)
+def test_store_payment_status_rejects_missing_explicit_finance_marker_and_description(intent):
+    result = prepare_action_contract(
+        domain="store_order",
+        action="set_order_payment_status",
+        target_id="fixture-order",
+        planned_changes={"paid": True},
+        owner_intent=intent,
+        expected_revision="2026-10-01T00:00:00Z",
+        idempotency_key="fixture-payment-intent-1",
+    )
+    assert result["ok"] is False
+    assert "store_order_payment_status_requires_owner_finance_intent" in result["preflight"]["blocking_reasons"]
+
+
+def test_store_payment_status_owner_intent_matches_native_string_limit():
+    result = prepare_action_contract(
+        domain="store_order",
+        action="set_order_payment_status",
+        target_id="fixture-order",
+        planned_changes={"paid": True},
+        owner_intent="owner_finance: " + "x" * 500,
+        expected_revision="2026-10-01T00:00:00Z",
+        idempotency_key="fixture-payment-long-intent-1",
+    )
+    assert "store_order_payment_status_owner_intent_too_long" in result["preflight"]["blocking_reasons"]

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 
+import pytest
+
 from autostop_manager.storage import StoreState
 from autostop_manager.store_integration import StoreIntegration, _merge_compact_refs
 
@@ -1164,3 +1166,106 @@ def test_scoped_store_checkpoint_reset_requires_cas_and_rebaselines_only_selecte
     assert digest["traversal_cursor"] is None
     assert digest["last_attempt_status"] == "reset"
     assert bootstrap["cursor"] == "bootstrap-stable"
+
+
+@pytest.mark.parametrize("paid", [True, False])
+def test_store_payment_status_uses_full_exact_readback_and_preserves_order_state(tmp_path, paid):
+    before = {
+        "entity": "store_order",
+        "id": "fixture-order",
+        "status": "READY",
+        "payment_status": "PAYMENT_REQUIRED" if paid else "PAID",
+        "paid_at": None if paid else "2026-10-01T00:00:00Z",
+        "ready_at": "2026-09-30T00:00:00Z",
+        "items": [],
+        "updated_at": "2026-10-01T01:00:00Z",
+    }
+    after = {
+        **before,
+        "payment_status": "PAID" if paid else "PAYMENT_REQUIRED",
+        "paid_at": "2026-10-01T01:01:00Z" if paid else None,
+        "updated_at": "2026-10-01T01:01:00Z",
+    }
+    client = _ActionClient(before=before, after=after)
+    details = []
+    original_context = client.entity_context
+
+    def context(**kwargs):
+        details.append(kwargs["detail"])
+        return original_context(**kwargs)
+
+    client.entity_context = context
+    result = StoreIntegration(client=client, store=StoreState(tmp_path / "fixture.sqlite3")).management_action(
+        domain="store_order",
+        action="set_order_payment_status",
+        target_id="fixture-order",
+        planned_changes={"paid": paid},
+        owner_intent="owner_finance: Измени точный статус оплаты fixture-order по отдельному поручению",
+        expected_updated_at=before["updated_at"],
+        idempotency_key="fixture-payment-apply-1",
+        correlation_id="fixture-payment-correlation-1",
+        mode="apply",
+    )
+    assert result["ok"] is True
+    assert result["meta"]["readback_verified"] is True
+    assert details == ["full", "full"]
+    assert client.action_calls[0]["planned_changes"] == {"paid": paid}
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"payment_status": "PAYMENT_REQUIRED"},
+        {"paid_at": None},
+        {"status": "COMPLETED"},
+        {"items": [{"id": "other"}]},
+    ],
+)
+def test_store_payment_status_blocks_unverified_or_unrelated_changed_fields(tmp_path, broken):
+    before = {
+        "entity": "store_order",
+        "id": "fixture-order",
+        "status": "READY",
+        "items": [],
+        "payment_status": "PAYMENT_REQUIRED",
+        "paid_at": None,
+        "updated_at": "2026-10-01T00:00:00Z",
+    }
+    after = {**before, "payment_status": "PAID", "paid_at": "2026-10-01T00:01:00Z", **broken}
+    result = StoreIntegration(
+        client=_ActionClient(before=before, after=after), store=StoreState(tmp_path / "fixture.sqlite3")
+    ).management_action(
+        domain="store_order",
+        action="set_order_payment_status",
+        target_id="fixture-order",
+        planned_changes={"paid": True},
+        owner_intent="owner_finance: Измени точный статус оплаты fixture-order по отдельному поручению",
+        expected_updated_at=before["updated_at"],
+        idempotency_key="fixture-payment-broken-1",
+        correlation_id="fixture-payment-correlation-1",
+        mode="apply",
+    )
+    assert result["ok"] is False
+    assert result["meta"]["readback_verified"] is False
+    assert result["status"] == "compensating"
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "apply"])
+@pytest.mark.parametrize("intent", ["owner_finance", "owner_finance:  ", "Измени оплату", "owner_technical: check"])
+def test_store_payment_status_blocks_finance_without_current_separate_owner_intent(tmp_path, mode, intent):
+    client = _ActionClient(before={"entity": "store_order", "id": "fixture-order"})
+    integration = StoreIntegration(client=client, store=StoreState(tmp_path / "memory.sqlite3"))
+    result = integration.management_action(
+        domain="store_order",
+        action="set_order_payment_status",
+        target_id="fixture-order",
+        planned_changes={"paid": True},
+        owner_intent=intent,
+        expected_updated_at="2026-10-01T00:00:00Z",
+        idempotency_key="fixture-payment-unapproved-1",
+        correlation_id="fixture-payment-unapproved-1",
+        mode=mode,
+    )
+    assert result["ok"] is False
+    assert client.action_calls == []
+    assert client.context_calls == 0

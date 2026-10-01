@@ -13,7 +13,7 @@ import time
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .partsapi_methods import PARTSAPI_SHOP_METHODS
@@ -28,6 +28,66 @@ EXIST_BASE_URL = "https://www.exist.ru"
 EXIST_OPEN_SEARCH_DOCS_URL = "https://s.exist.ru/xml/osd.xml"
 EXIST_DEFAULT_OFFICE_ID = 905
 EXIST_DEFAULT_OFFICE_NAME = "Красноярск, ул. Гайдашовка, д.3"
+
+
+MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
+MIN_PROVIDER_TIMEOUT_SECONDS = 1.0
+MAX_PROVIDER_TIMEOUT_SECONDS = 30.0
+MAX_PARTSAPI_TOTAL_TIMEOUT_SECONDS = 60.0
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
+
+
+def _clamp_timeout(timeout: Any, *, default: float = 20.0) -> float:
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value):
+        value = default
+    return max(MIN_PROVIDER_TIMEOUT_SECONDS, min(value, MAX_PROVIDER_TIMEOUT_SECONDS))
+
+
+def urlopen(request: Request, timeout: float = 20.0) -> Any:
+    """Keep credentials on their origin and bound each provider request."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=_clamp_timeout(timeout))
+
+
+def _read_response_bytes(response: Any, *, maximum: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
+    try:
+        raw = response.read(maximum + 1)
+    except TypeError:
+        # Small test doubles and legacy file-like adapters may not accept a size.
+        raw = response.read()
+    if not isinstance(raw, bytes):
+        raise ValueError("Provider response was not bytes.")
+    if len(raw) > maximum:
+        raise ValueError(f"Provider response exceeds the {maximum}-byte safety limit.")
+    return raw
+
+
+def _read_response_text(response: Any, *, errors: str = "strict") -> str:
+    return _read_response_bytes(response).decode("utf-8", errors=errors)
+
+
+def _https_endpoint(value: Any) -> str | None:
+    endpoint = str(value or "").strip().rstrip("/")
+    parsed = urlsplit(endpoint)
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        return None
+    return endpoint
 
 
 MANN_FILTER_PART_SEARCH_QUERY = """
@@ -360,7 +420,7 @@ def _dict_list(value: Any) -> list[dict[str, Any]]:
 def _read_json_url(url: str, *, headers: dict[str, str] | None = None, timeout: float = 20.0) -> dict[str, Any]:
     request = Request(url, headers={"User-Agent": "AutostopManager/0.1", **(headers or {})})
     with urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+        payload = json.loads(_read_response_text(response))
     if not isinstance(payload, dict):
         raise ValueError("provider returned a non-object JSON payload")
     return payload
@@ -1169,13 +1229,13 @@ def _exist_headers(*, office_id: int, accept: str) -> dict[str, str]:
 def _exist_read_text(url: str, *, office_id: int, timeout: float) -> str:
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="text/html,application/xhtml+xml"))
     with urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+        return _read_response_text(response, errors="replace")
 
 
 def _exist_read_json(url: str, *, office_id: int, timeout: float) -> Any:
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="application/json"))
     with urlopen(request, timeout=timeout) as response:
-        payload = response.read().decode("utf-8", errors="replace")
+        payload = _read_response_text(response, errors="replace")
     return json.loads(payload) if payload.strip() else []
 
 
@@ -1252,7 +1312,7 @@ def _exist_more_offers(
         method="POST",
     )
     with urlopen(request, timeout=timeout) as response:
-        wrapper = json.loads(response.read().decode("utf-8", errors="replace"))
+        wrapper = json.loads(_read_response_text(response, errors="replace"))
     raw_offers = json.loads(wrapper.get("d") or "[]") if isinstance(wrapper, dict) else []
     offers = [_exist_offer(offer, offer_type="direct") for offer in _exist_raw_offer_list(raw_offers)][
         : _clamp_page_size(max_offers, default=10, maximum=50)
@@ -1926,7 +1986,11 @@ _AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
 
 _FILL_VOLUME_FIELDS = ("fillVolume", "fillUnit", "fillType", "fillTitle", "fillInfo")
 _SEARCH_TREE_FIELDS = (
+    "STR_ID",
+    "STR_ID_PARENT",
     "STR_LEVEL",
+    "STR_NODE_NAME",
+    "STR_PATH",
     "ROOT_NODE_TEXT",
     "ROOT_NODE_STR_ID",
     "NODE_1_TEXT",
@@ -1998,10 +2062,30 @@ def extract_partsapi_search_tree_rows(*, payload: Any) -> list[dict[str, Any]]:
             "provider": "partsapi_ru",
             "source_operation": "search_tree",
             "raw_keys": sorted(str(key) for key in item),
-            **{field: item[field] for field in _SEARCH_TREE_FIELDS if item.get(field) not in (None, "")},
+            **{
+                field: item[field]
+                for field in _SEARCH_TREE_FIELDS
+                if field in item and (item[field] not in (None, "") or field == "STR_ID_PARENT")
+            },
         }
         for item in _partsapi_autonorms_records(payload, fields=_SEARCH_TREE_FIELDS)
         if any(item.get(field) not in (None, "") for field in _SEARCH_TREE_FIELDS)
+    ]
+
+
+def extract_partsapi_article_criteria_rows(*, payload: Any) -> list[dict[str, Any]]:
+    """Retain recognized article characteristics separately from part candidates."""
+
+    fields = ("CRITERIA_NAME", "CRITERIA_VALUE")
+    return [
+        {
+            "provider": "partsapi_ru",
+            "source_operation": "article_criteria",
+            "raw_keys": sorted(str(key) for key in item),
+            **{field: item[field] for field in fields},
+        }
+        for item in _partsapi_autonorms_records(payload, fields=fields)
+        if all(item.get(field) not in (None, "") for field in fields)
     ]
 
 
@@ -2225,7 +2309,7 @@ def build_partsapi_request(
     credentials = _partsapi_credentials()
     method_key, method_key_env_name = _partsapi_method_key(method)
     actual_key = key if key is not None else method_key
-    actual_base_url = (base_url if base_url is not None else credentials["base_url"]).rstrip("?&")
+    actual_base_url = _https_endpoint(base_url if base_url is not None else credentials["base_url"]) or ""
     actual_key_param = key_param or credentials["key_param"]
     actual_method_param = method_param or credentials["method_param"]
     missing = []
@@ -2434,6 +2518,7 @@ def partsapi_catalog_lookup(
     attempts: list[dict[str, Any]] = []
     payload: Any = None
     attempt_count = _bounded_attempt_count(max_attempts)
+    request_timeout = min(_clamp_timeout(timeout), MAX_PARTSAPI_TOTAL_TIMEOUT_SECONDS / attempt_count)
     request_succeeded = False
     last_failure_class = "network_error"
     last_error = "PartsAPI request failed."
@@ -2443,8 +2528,8 @@ def partsapi_catalog_lookup(
         if attempt > 1:
             time.sleep(0.25 * (attempt - 1))
         try:
-            with urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            with urlopen(request, timeout=request_timeout) as response:
+                payload = json.loads(_read_response_text(response))
             attempts.append({"attempt": attempt, "ok": True})
             request_succeeded = True
             break
@@ -2556,6 +2641,9 @@ def partsapi_catalog_lookup(
     autonorms_rows = extract_partsapi_autonorms_rows(payload=payload, operation=operation)
     fill_volumes = extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else []
     search_tree_rows = extract_partsapi_search_tree_rows(payload=payload) if operation == "search_tree" else []
+    article_criteria_rows = (
+        extract_partsapi_article_criteria_rows(payload=payload) if operation == "article_criteria" else []
+    )
     empty_payload = _partsapi_explicitly_empty_payload(payload)
     record_counts = {
         "vehicle_profiles": len(vehicle_profiles),
@@ -2565,6 +2653,7 @@ def partsapi_catalog_lookup(
         "autonorms_rows": len(autonorms_rows),
         "fill_volumes": len(fill_volumes),
         "search_tree_rows": len(search_tree_rows),
+        "article_criteria_rows": len(article_criteria_rows),
     }
     expected_records = {
         "vin_decode": ("vehicle_profiles",),
@@ -2576,7 +2665,7 @@ def partsapi_catalog_lookup(
         "article_crosses": ("article_candidates",),
         "articles": ("article_candidates",),
         "article": ("article_candidates",),
-        "article_criteria": ("article_candidates",),
+        "article_criteria": ("article_criteria_rows", "article_candidates"),
         "part_name_by_brand_number": ("article_candidates",),
         "engine_info": ("vehicle_profiles",),
         "search_tree": ("search_tree_rows",),
@@ -2605,6 +2694,7 @@ def partsapi_catalog_lookup(
         "autonorms_rows": autonorms_rows,
         "fill_volumes": fill_volumes,
         "search_tree_rows": search_tree_rows,
+        "article_criteria_rows": article_criteria_rows,
         "record_counts": record_counts,
         "outcome": outcome,
         "failure_class": "adapter_unparsed_response" if outcome == "unparsed_response" else None,

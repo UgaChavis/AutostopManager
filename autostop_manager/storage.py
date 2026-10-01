@@ -118,6 +118,7 @@ STORE_WORKFLOW_OPERATIONS = frozenset(
         "update_quote_request_comment",
         "set_batch_storage_location",
         "mark_order_ready",
+        "set_order_payment_status",
         "add_quote_request_note",
         "store_quote_conductor",
     }
