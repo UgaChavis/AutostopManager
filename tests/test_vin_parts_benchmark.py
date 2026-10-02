@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager.vin_parts_benchmark import (
     _assess_partsapi_identity_agreement,
     benchmark_vin_parts_lookup,
@@ -46,16 +48,40 @@ def _install_batch(monkeypatch, identity: dict | None = None):
     )
 
 
-def _fake_lookup(calls: list[dict], *, profiles: list[dict] | None = None):
+def _fake_lookup(calls: list[dict], *, profiles: list[dict] | None = None, vin_outcome: str | None = None):
+    profiles = [
+        {
+            **profile,
+            "identifier_matches_request": profile.get("identifier_matches_request"),
+            "requires_exact_identifier_confirmation": profile.get(
+                "requires_exact_identifier_confirmation", profile.get("identifier_matches_request") is not True
+            ),
+        }
+        for profile in profiles or []
+    ]
+    vin_outcome = vin_outcome or (
+        "identifier_mismatch"
+        if any(profile["identifier_matches_request"] is False for profile in profiles)
+        else "identifier_unverified"
+        if any(profile["identifier_matches_request"] is None for profile in profiles)
+        else "success"
+    )
+
     def lookup(**kwargs):
         calls.append(kwargs)
         operation = kwargs["operation"]
+        dry_run = kwargs.get("dry_run", False)
+        mismatch = operation == "vin_decode" and not dry_run and vin_outcome == "identifier_mismatch"
         return {
-            "ok": True,
+            "ok": not mismatch,
             "provider": "partsapi_ru",
             "operation": operation,
             "partsapi_method": {"vin_decode": "VINdecode", "search_tree": "getSearchTree"}[operation],
-            "dry_run": kwargs.get("dry_run", False),
+            "dry_run": dry_run,
+            "outcome": "configured_unverified" if dry_run else vin_outcome if operation == "vin_decode" else "success",
+            "failure_class": "provider_identifier_mismatch" if mismatch else None,
+            "retryable": False,
+            "requires_fallback": mismatch,
             "attempt_count": 0 if kwargs.get("dry_run") else 1,
             "request_plan": {
                 "configured": True,
@@ -139,6 +165,128 @@ def test_benchmark_blocks_vin_decode_identifier_mismatch(monkeypatch):
     identity = result["items"][0]["identity"]
     assert identity["ready_for_tecdoc_candidate_lookup"] is False
     assert identity["cross_source_agreement"]["status"] == "identifier_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("matches", "outcome", "confirmation", "allowed"),
+    [
+        (True, "success", False, True),
+        (None, "identifier_unverified", True, True),
+        (None, "success", True, False),
+        (None, "identifier_unverified", False, False),
+        (False, "identifier_mismatch", True, False),
+        (True, "identifier_mismatch", True, False),
+    ],
+)
+def test_benchmark_preserves_vin_evidence_and_candidate_gate(monkeypatch, matches, outcome, confirmation, allowed):
+    _install_batch(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup",
+        _fake_lookup(
+            calls,
+            profiles=[
+                {
+                    "make": "HONDA",
+                    "model": "Accord",
+                    "tecdoc_car_id": "9877",
+                    "vehicle_type": "PC",
+                    "identifier_matches_request": matches,
+                    "requires_exact_identifier_confirmation": confirmation,
+                }
+            ],
+            vin_outcome=outcome,
+        ),
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        live_partsapi_identity=True,
+    )
+    assert [call["operation"] for call in calls] == (["vin_decode", "search_tree"] if allowed else ["vin_decode"])
+    item = result["items"][0]
+    agreement = item["identity"]["cross_source_agreement"]
+    digest = item["prepared_calls"]["partsapi"][0]
+    expected_matches = False if outcome == "identifier_mismatch" else matches
+    expected_confirmation = confirmation or outcome in {"identifier_mismatch", "identifier_unverified"}
+    for evidence in (agreement, digest):
+        assert evidence["identifier_matches_request"] is expected_matches
+        assert evidence["requires_exact_identifier_confirmation"] is expected_confirmation
+        assert evidence["provider_outcome"] == outcome
+    assert digest["outcome"] == outcome
+    assert digest["failure_class"] == ("provider_identifier_mismatch" if outcome == "identifier_mismatch" else None)
+    assert digest["retryable"] is False
+    assert digest["requires_fallback"] is (outcome == "identifier_mismatch")
+    assert item["identity"]["ready_for_tecdoc_candidate_lookup"] is allowed
+    assert item["identity"]["ready_for_crm_writeback"] is False
+    assert result["summary"]["oem_candidate_count"] == 0
+    assert SYNTHETIC_VIN not in json.dumps(result)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_benchmark_prioritizes_foreign_row_over_modification_ambiguity(reverse):
+    profiles = [{"identifier_matches_request": True}, {"identifier_matches_request": False}]
+    agreement = _assess_partsapi_identity_agreement(
+        _medium_identity(),
+        {"ok": True, "outcome": "success", "vehicle_profiles": profiles[::-1] if reverse else profiles},
+    )
+    assert agreement["status"] == "identifier_mismatch"
+    assert agreement["identifier_matches_request"] is False
+    assert agreement["requires_exact_identifier_confirmation"] is True
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "model_conflict",
+        "make_only",
+        "low_confidence",
+        "high_conflict",
+        "medium_conflict",
+        "invalid_car_id",
+        "unknown_car_type",
+        "car_type_conflict",
+    ],
+)
+def test_benchmark_does_not_prepare_tree_without_candidate_readiness(monkeypatch, guard):
+    identity = _medium_identity()
+    profile = {"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877", "vehicle_type": "PC"}
+    vehicle_type = None
+    if guard == "model_conflict":
+        profile["model"] = "Civic"
+    elif guard == "make_only":
+        profile.pop("model")
+    elif guard == "low_confidence":
+        identity["confidence_label"] = "low"
+    elif guard in {"high_conflict", "medium_conflict"}:
+        identity["conflicts"] = [
+            {"field": "model_year", "severity": "medium" if guard == "medium_conflict" else "high"}
+        ]
+    elif guard == "invalid_car_id":
+        profile["tecdoc_car_id"] = "0"
+    elif guard == "unknown_car_type":
+        profile.pop("vehicle_type")
+    else:
+        profile["vehicle_type"] = "CV"
+        vehicle_type = "PC"
+    _install_batch(monkeypatch, identity)
+    calls = []
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup", _fake_lookup(calls, profiles=[profile])
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN, "vehicle_type": vehicle_type}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        live_partsapi_identity=True,
+    )
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    item = result["items"][0]
+    assert item["identity"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert item["prepared_calls"]["partsapi"][0]["outcome"] == "identifier_unverified"
 
 
 def test_benchmark_does_not_send_frame_to_vin_decode(monkeypatch):

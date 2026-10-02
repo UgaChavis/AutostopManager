@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from http.client import IncompleteRead
 from io import BytesIO
 import json
 import pytest
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
 
 from autostop_manager import catalog_clients as catalog_clients_module
 from autostop_manager import config as manager_config
+from autostop_manager import vin_oem_resolver
 from autostop_manager.partsapi_methods import PARTSAPI_SHOP_METHODS
 from autostop_manager.catalog_clients import (
     PARTSAPI_METHOD_KEY_ENV_NAMES,
@@ -79,6 +82,152 @@ class _FakeRawResponse:
 
     def read(self, limit: int = -1):
         return self.payload if limit < 0 else self.payload[:limit]
+
+
+@pytest.fixture
+def partsapi_vin_env(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    _configure_partsapi_test_keys(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: pytest.fail("Unexpected network call"))
+
+
+def _vin_row(**fields):
+    return {"carId": 12345, "carType": "PC", "manuName": "TEST", "modelName": "MODEL", **fields}
+
+
+@pytest.mark.parametrize("operation", ["vin_decode", "decodeVINus"])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_partsapi_rejects_conflicting_vin_before_http(partsapi_vin_env, operation, dry_run):
+    result = partsapi_catalog_lookup(
+        operation=operation, identifier="A" * 17, provider_parameters={"vin": "B" * 17}, dry_run=dry_run
+    )
+    assert result["ok"] is False
+    assert result["outcome"] == "invalid_input"
+    assert result["attempt_count"] == 0
+    assert result["retryable"] is False
+
+
+@pytest.mark.parametrize("identifier", [None, " aaaaa aaaaa aaaaaaa "])
+def test_partsapi_uses_one_normalized_vin(partsapi_vin_env, monkeypatch, identifier):
+    def respond(request, **_kwargs):
+        assert parse_qs(urlsplit(request.full_url).query)["vin"] == ["A" * 17]
+        return _FakeResponse({"result": [_vin_row(vin="a" * 17)]})
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
+    result = partsapi_catalog_lookup(
+        operation="vin_decode", identifier=identifier, provider_parameters={"vin": "A" * 17}
+    )
+    assert result["outcome"] == "success"
+    assert result["identifier_matches_request"] is True
+    assert result["redacted_identifier"] == "AAA***AAA"
+    assert result["privacy"]["raw_identifier_is_sensitive"] is True
+    assert "A" * 17 not in str(result["request_plan"])
+    assert "secret-key" not in str(result["request_plan"])
+
+
+@pytest.mark.parametrize(
+    ("payload", "matches"),
+    [
+        (_vin_row(vin="A" * 17), True),
+        ({"Vin": "A" * 17, "result": [_vin_row()]}, True),
+        ({"data": {"VIN": "A" * 17, "array": [_vin_row()]}}, True),
+        ({"vin": "B" * 17, "result": [_vin_row()]}, False),
+        ({"data": {"Vin": "B" * 17, "result": [_vin_row()]}}, False),
+        ({"vin": "B" * 17, "result": [_vin_row(vin="A" * 17)]}, False),
+        ({"vin": "A" * 17, "result": [_vin_row(vin="B" * 17)]}, False),
+        (_vin_row(vin="A" * 17, result=[_vin_row(vin="B" * 17)]), False),
+        (_vin_row(vin="B" * 17, result=[_vin_row(vin="A" * 17)]), False),
+        (_vin_row(vin="A" * 17, result={"Vin": "B" * 17}), False),
+        (_vin_row(vin="A" * 17, data={"Vin": "B" * 17}), False),
+        (_vin_row(vin="A" * 17, metadata={"Vin": "B" * 17}), True),
+        (_vin_row(vin="A" * 17, VIN="B" * 17), False),
+        (_vin_row(Vin="B" * 17), False),
+        ({"vin": "B" * 17, "result": [_vin_row(vin="")]}, False),
+        (_vin_row(vin="AAA***********AAA"), None),
+        (_vin_row(vin="A" * 8), None),
+        (_vin_row(), None),
+        ({"request": _vin_row(vin="A" * 17), "result": [_vin_row()]}, None),
+        ({"metadata": {"vin": "B" * 17}, "result": [_vin_row(vin="A" * 17)]}, True),
+        ({"result": [_vin_row(vin="A" * 17), _vin_row(vin="B" * 17)]}, False),
+        ({"result": [_vin_row(vin="B" * 17), _vin_row(vin="A" * 17)]}, False),
+        ({"result": [_vin_row(vin="A" * 17), _vin_row(vin="A" * 17, carId=67890)]}, True),
+    ],
+)
+def test_partsapi_vin_correlation_across_response_branches(partsapi_vin_env, monkeypatch, payload, matches):
+    before = json.dumps(payload, sort_keys=True)
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(payload))
+    result = partsapi_catalog_lookup(operation="vin_decode", identifier="A" * 17, max_attempts=3)
+    assert result["identifier_matches_request"] is matches
+    assert result["requires_exact_identifier_confirmation"] is (matches is not True)
+    assert result["outcome"] == (
+        "identifier_mismatch" if matches is False else "identifier_unverified" if matches is None else "success"
+    )
+    assert result["ok"] is (matches is not False)
+    assert result["failure_class"] == ("provider_identifier_mismatch" if matches is False else None)
+    assert result["requires_fallback"] is (matches is False)
+    assert result["attempt_count"] == 1
+    assert result["retryable"] is False
+    assert result["empty_payload"] is False
+    assert "B" * 17 not in str(result["vehicle_profiles"])
+    assert json.dumps(payload, sort_keys=True) == before
+
+    monkeypatch.setattr(
+        vin_oem_resolver,
+        "decode_vehicle_identity",
+        lambda *_a, **_k: {
+            "confidence_label": "medium",
+            "vehicle_profile": {"make": "TEST", "model": "MODEL"},
+            "conflicts": [],
+        },
+    )
+    methods = []
+
+    def respond(request, **_kwargs):
+        method = parse_qs(urlsplit(request.full_url).query)["method"][0]
+        methods.append(method)
+        return _FakeResponse(
+            {
+                "VINdecode": payload,
+                "getSearchTree": [{"NODE_3_TEXT": "Колодки тормозные", "NODE_3_STR_ID": 100470}],
+                "getArticles": [{"ART_ID": 1, "ART_NUM": "TEST-1", "SUP_BRAND": "TEST"}],
+            }[method]
+        )
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
+    resolved = vin_oem_resolver.resolve_vin_oem_parts(
+        identifier="A" * 17, requested_part="передние колодки", live_partsapi_oem=True, live_vpic=False
+    )
+    allowed = matches is not False and len(result["vehicle_profiles"]) == 1
+    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode"])
+    assert resolved["tecdoc_vehicle"]["identifier_matches_request"] is matches
+    assert resolved["readiness"]["ready_for_crm_writeback"] is False
+    for candidate in resolved["article_candidates"]:
+        assert candidate["vin_fitment_confirmed"] is False
+        assert candidate["manual_review_required"] is True
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_partsapi_vin_requests_remain_isolated(partsapi_vin_env, monkeypatch, parallel):
+    def respond(request, **_kwargs):
+        vin = parse_qs(urlsplit(request.full_url).query)["vin"][0]
+        return _FakeResponse({"result": [_vin_row(vin=vin, carId=ord(vin[0]))]})
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
+    vins = ["A" * 17, "B" * 17, "A" * 17] * (12 if parallel else 1)
+
+    def lookup(vin):
+        return partsapi_catalog_lookup(operation="vin_decode", identifier=vin)
+
+    if parallel:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lookup, vins))
+    else:
+        results = list(map(lookup, vins))
+    for vin, result in zip(vins, results, strict=True):
+        assert result["identifier_matches_request"] is True
+        assert result["vehicle_profiles"][0]["tecdoc_car_id"] == ord(vin[0])
+        assert result["outcome"] == "success"
 
 
 EXIST_CATALOG_HTML = """
@@ -1058,7 +1207,8 @@ def test_partsapi_tecdoc_vin_tree_articles_live_payloads_are_normalized(monkeypa
     tree = partsapi_catalog_lookup(operation="search_tree", type_id="12345")
     articles = partsapi_catalog_lookup(operation="articles", type_id="12345", category="1191")
 
-    assert decoded["outcome"] == tree["outcome"] == articles["outcome"] == "success"
+    assert decoded["outcome"] == "identifier_unverified"
+    assert tree["outcome"] == articles["outcome"] == "success"
     assert decoded["vehicle_profiles"][0]["tecdoc_car_id"] == 12345
     assert decoded["vehicle_profiles"][0]["vehicle_type"] == "PC"
     assert decoded["oem_candidates"] == []
@@ -1834,12 +1984,12 @@ def test_partsapi_article_requires_number_and_supplier_not_old_id(monkeypatch):
 def test_partsapi_returned_different_vin_is_not_exact_confirmation():
     profile = extract_partsapi_vehicle_profiles(
         operation="vin_decode",
-        requested_identifier="SYNTHETIC-REQUEST",
-        payload={"result": [{"brand": "TEST", "vin": "SYNTHETIC-OTHER", "model": "TEST MODEL"}]},
+        requested_identifier="A" * 17,
+        payload={"result": [{"brand": "TEST", "vin": "B" * 17, "model": "TEST MODEL"}]},
     )[0]
     assert profile["identifier_matches_request"] is False
     assert profile["requires_exact_identifier_confirmation"] is True
-    assert "SYNTHETIC-OTHER" not in str(profile)
+    assert "B" * 17 not in str(profile)
 
 
 @pytest.mark.parametrize("year_first", [False, True])

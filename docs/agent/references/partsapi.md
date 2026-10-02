@@ -27,7 +27,19 @@ Configured/status/dry_run подтверждают только конфигур
 
 ## VIN → кандидат
 
-VINdecode → сверка возвращённого VIN/вариантов → подтверждённый carId и vehicle_type → getSearchTree → strId именно этого дерева → getArticles. CarType не гарантирован VINdecode: нужен `PC`, `CV` или `Motorcycle`; неизвестный type останавливает resolver до tree lookup. Перед подтверждением сверяй двигатель, выпуск, рынок, options, side/axle/position, OEM и replacement chain. TecDoc article — кандидат.
+VINdecode → сверка VIN/вариантов и независимое согласование автомобиля → однозначный carId и vehicle_type → getSearchTree → strId именно этого дерева → getArticles. CarType не гарантирован VINdecode: нужен `PC`, `CV` или `Motorcycle`; неизвестный type останавливает resolver до tree lookup. Перед подтверждением сверяй двигатель, выпуск, рынок, options, side/axle/position, OEM и replacement chain. TecDoc article — кандидат.
+
+`identifier` и `provider_parameters.vin` нормализуются одинаково по регистру и пробелам. Разные значения отклоняются как `invalid_input` до HTTP, включая dry-run; при передаче только `provider_parameters.vin` он становится исходным VIN. Идентификатор в отправке, проверке ответа и метаданных один.
+
+| Результат `vin_decode` | `ok` | `identifier_matches_request` | Действие |
+| --- | --- | --- | --- |
+| `success` | true | true | Продолжить проверки подбора |
+| `identifier_unverified` | true | null | Только кандидаты после независимого согласования автомобиля |
+| `identifier_mismatch` | false | false | Остановить подбор; `failure_class=provider_identifier_mismatch`, без автоматического повтора |
+
+VIN каждой карточки проверяется вместе с VIN её родительских оболочек; все варианты регистра поля учитываются. Эхо запроса и соседние ветви не подтверждают карточку. Чужой полный VIN в любой найденной карточке блокирует весь ответ. Пустой, частичный или маскированный VIN сам совпадение не подтверждает; несколько модификаций нельзя автоматически свести к первой.
+
+Без подтверждённого VIN выставляется `requires_exact_identifier_confirmation=true`. Поиск кандидатов требует одного профиля, совпадения марки/модели с независимым контекстом, confidence medium/high, отсутствия выявленных противоречий, положительного carId и согласованного carType. `vin_fitment_confirmed=false`, ручная проверка обязательна, автоматическая запись в CRM запрещена. Transport, auth, quota, empty и unparsed сохраняют отдельные исходы.
 
 `VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. `docs/agent/partsapi_category_index.json` хранит непроверенные числовые cat hints старого getPartsbyVIN только как legacy fixture, не активный query path.
 
