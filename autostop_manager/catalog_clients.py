@@ -1771,16 +1771,21 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _partsapi_profile_values(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: value
+        for field, aliases in _PARTSAPI_PROFILE_FIELDS.items()
+        if (value := _first_value(item, aliases)) not in (None, "")
+    }
+
+
 def _partsapi_vehicle_profile_from_item(item: dict[str, Any], *, operation: str | None = None) -> dict[str, Any]:
     profile = {
         "provider": "partsapi_ru",
         "source_operation": operation,
         "raw_keys": sorted(str(key) for key in item),
     }
-    for normalized_key, source_keys in _PARTSAPI_PROFILE_FIELDS.items():
-        value = _first_value(item, source_keys)
-        if value not in (None, ""):
-            profile[normalized_key] = value
+    profile.update(_partsapi_profile_values(item))
 
     identifier = _first_value(item, ("vin", "VIN", "frame", "FRAME"))
     if identifier not in (None, ""):
@@ -1932,22 +1937,53 @@ def _partsapi_vin_decode_records(
         record
         for key, nested in payload.items()
         if str(key).casefold()
-        not in {"request", "params", "parameters", "query", "input", "echo", "request_params", "request_parameters"}
+        not in {
+            "request",
+            "params",
+            "parameters",
+            "query",
+            "input",
+            "echo",
+            "request_params",
+            "request_parameters",
+            "metadata",
+            "meta",
+        }
         and isinstance(nested, (dict, list))
         for record in _partsapi_vin_decode_records(nested, depth=depth + 1, identifiers=identifiers)
     ]
-    if records:
+    values = _partsapi_profile_values(payload)
+    has_tecdoc_id = "tecdoc_car_id" in values or "tecdoc_external_id" in values
+    if not has_tecdoc_id and not {"make", "model"}.issubset(values):
         return records
-    has_tecdoc_id = _first_value(payload, ("carId", "typeNumber", "TecDocExternalId")) not in (None, "")
-    has_make_and_model = _first_value(payload, ("manuName", "brand", "MANUFACTURER")) not in (
-        None,
-        "",
-    ) and _first_value(payload, ("modelName", "model")) not in (None, "")
-    return (
-        [(payload, identifiers + _partsapi_wrapped_identifiers(payload, depth=depth))]
-        if has_tecdoc_id or has_make_and_model
-        else []
-    )
+    if not records:
+        return [(payload, identifiers + _partsapi_wrapped_identifiers(payload, depth=depth))]
+    if len(records) == 1:
+        child, child_identifiers = records[0]
+        child_values = _partsapi_profile_values(child)
+        parent_id = str(values.get("tecdoc_car_id", "")).strip()
+        child_id = str(child_values.get("tecdoc_car_id", "")).strip()
+        same_vehicle = (
+            child_id.isascii()
+            and child_id.isdigit()
+            and int(child_id) > 0
+            and (
+                (not parent_id and "tecdoc_external_id" not in values)
+                or (parent_id.isascii() and parent_id.isdigit() and int(parent_id) == int(child_id))
+            )
+        )
+        compatible = all(
+            field == "tecdoc_car_id" or str(value).strip().casefold() == str(child_values[field]).strip().casefold()
+            for field, value in values.items()
+            if field in child_values
+        )
+        if same_vehicle and compatible:
+            # Keep missing ancestor characteristics; empty child fields cannot erase them.
+            merged = {**payload, **{key: value for key, value in child.items() if value not in (None, "")}}
+            return [(merged, child_identifiers)]
+    # Separate modifications and contradictions remain visible.  Parent evidence
+    # excludes child/sibling VINs; descendants already inherited this parent's VIN.
+    return [(payload, identifiers), *records]
 
 
 def extract_partsapi_vehicle_profiles(

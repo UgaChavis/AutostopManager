@@ -21,22 +21,6 @@ def _normalize_compare_value(value: Any) -> str:
     return re.sub(r"[^0-9a-zа-яё]+", "", str(value or "").casefold())
 
 
-def _vin_fitment_state(value: Any) -> bool | None:
-    """Accept only an explicit affirmative/negative VIN-fitment assertion."""
-
-    if value is True or value == 1:
-        return True
-    if value is False or value == 0:
-        return False
-    if isinstance(value, str):
-        normalized = value.strip().casefold()
-        if normalized in {"1", "true", "yes"}:
-            return True
-        if normalized in {"0", "false", "no"}:
-            return False
-    return None
-
-
 def _axle_hints(value: Any) -> set[str]:
     text = re.sub(r"[_/\\-]+", " ", str(value or "").casefold())
     hints: set[str] = set()
