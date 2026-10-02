@@ -35,6 +35,7 @@ CONNECT_TIMEOUT = 20
 RECOVERY_POLL_INTERVAL = 15
 HEARTBEAT_INTERVAL = 20
 HEARTBEAT_TIMEOUT = 20
+MAX_TURN_NOTIFICATIONS = 32
 WAKE_INSTRUCTION = (
     "$manage-owner-telegram Новое событие рабочего Telegram: {event_id}; режим включён владельцем. "
     "Прочитай AGENTS.md: актуальные правила этого запуска заменяют устаревшие правила истории. "
@@ -93,7 +94,7 @@ class AppServer:
         self.websocket: Any = None
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
-        self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(MAX_TURN_NOTIFICATIONS)
         self.sequence = 0
         self.connected = False
         self.active_turn: str | None = None
@@ -140,6 +141,7 @@ class AppServer:
         await self._write({"method": "initialized", "params": {}})
 
     async def _drop_connection(self) -> None:
+        generation = self.generation
         self.generation += 1
         self.connected = False
         self.ready_event.clear()
@@ -156,12 +158,15 @@ class AppServer:
         if websocket is not None:
             with suppress(OSError):
                 await websocket.close()
-        while not self.events.empty():
-            self.events.get_nowait()
+        self._clear_events()
         # Wake a worker already awaiting notifications even if the supervisor
         # replaces the socket before that worker can consume the reader's signal.
         if self.active_turn:
-            self.events.put_nowait({"method": "connection_lost"})
+            self.events.put_nowait({"method": "connection_lost", "generation": generation})
+
+    def _clear_events(self) -> None:
+        while not self.events.empty():
+            self.events.get_nowait()
 
     async def _write(self, data: dict[str, Any]) -> None:
         from websockets.exceptions import WebSocketException
@@ -216,10 +221,28 @@ class AppServer:
                     await self._write({"id": message["id"], "error": error})
                 elif message.get("method") in {"turn/started", "turn/completed"}:
                     params = message.get("params", {})
-                    if isinstance(params, dict) and params.get("threadId") == self.config.thread_id:
-                        self.events.put_nowait(message)
+                    if (
+                        self.blocked
+                        or not (self.active_turn or self.outcome_unknown)
+                        or not isinstance(params, dict)
+                        or params.get("threadId") != self.config.thread_id
+                    ):
+                        continue
+                    turn = rpc_entity(params, "turn")
+                    if self.active_turn and turn["id"] != self.active_turn:
+                        continue
+                    # Keep early notifications while turn/start is pending,
+                    # without retaining turn items or unrelated manual turns.
+                    self.events.put_nowait(
+                        {
+                            "method": message["method"],
+                            "params": {"turn": {"id": turn["id"], "status": turn.get("status")}},
+                        }
+                    )
         except (OSError, WebSocketException, TransportLost):
             pass
+        except asyncio.QueueFull:
+            self.block("codex_turn_notifications_full")
         except Exception:  # noqa: BLE001 - malformed/private RPC payloads fail closed with a fixed code.
             if generation == self.generation:
                 self.block("codex_rpc_frame_invalid")
@@ -240,7 +263,10 @@ class AppServer:
                 for future in self.pending.values():
                     if not future.done():
                         future.set_exception(TransportLost("codex_disconnected"))
-                self.events.put_nowait({"method": "connection_lost"})
+                # Metadata reconciles a disconnected turn; obsolete payloads
+                # must not fill the bounded queue or hide the loss signal.
+                self._clear_events()
+                self.events.put_nowait({"method": "connection_lost", "generation": generation})
 
     async def resume(self, *, allow_active: bool = False) -> None:
         params = {"threadId": self.config.thread_id, "cwd": self.config.project_dir, "excludeTurns": True}
@@ -354,6 +380,7 @@ class AppServer:
             raise WakeError("codex_turn_metadata_invalid")
         self.active_turn = None
         self.outcome_unknown = False
+        self._clear_events()
         if status != "completed":
             raise WakeError("codex_turn_failed")
         if not recovered and not self.last_turn_started:
@@ -441,6 +468,8 @@ class AppServer:
             except TimeoutError:
                 continue
             if message["method"] == "connection_lost":
+                if message["generation"] < turn_generation:
+                    continue
                 if not self.managed or self.pausing:
                     raise WakeError("codex_turn_outcome_unknown")
                 recovered = True
@@ -547,7 +576,9 @@ class WakeDispatcher:
             except Exception as exc:  # noqa: BLE001 - fail closed without exposing private RPC payloads.
                 if self.enabled or self.app.outcome_unknown:
                     self.failed += 1
-                    if isinstance(exc, WakeError):
+                    if self.app.blocked:
+                        self.last_error = self.app.recovery_error or "codex_recovery_blocked"
+                    elif isinstance(exc, WakeError):
                         self.last_error = str(exc)
                     elif isinstance(exc, (OSError, TimeoutError)):
                         self.last_error = "codex_transport_failed_or_unknown"
@@ -555,7 +586,7 @@ class WakeDispatcher:
                         self.last_error = "wake_worker_failed"
                 # Unknown side effects are not replayed and no new turn overlaps them.
                 self.enabled = False
-                if not self.app.pausing:
+                if not (self.app.pausing or self.app.blocked):
                     self.app.block(self.last_error or "wake_worker_failed")
             finally:
                 self.active = False
