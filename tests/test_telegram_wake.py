@@ -15,170 +15,34 @@ from unittest.mock import AsyncMock
 
 import pytest
 from telegram_duty_fakes import duty_fixture
+from telegram_wake_fakes import THREAD, MockServer, connected_app, ready_app
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager import telegram_wake as wake
 
-THREAD = "00000000-0000-4000-8000-000000000001"
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def ready_app():
-    app = wake.AppServer(wake.WakeConfig(THREAD))
-    app.connected = True
-    app.recovery_state = "ready"
-    return app
-
-
-class MockServer:
-    def __init__(self, *, complete=True, status="completed", disconnect=False):
-        self.calls = []
-        self.complete = complete
-        self.status = status
-        self.disconnect = disconnect
-        self.started = asyncio.Event()
-        self.release_start = asyncio.Event()
-        self.release_start.set()
-        self.counter = 0
-        self.loaded = False
-        self.unload_after_turn = False
-        self.reject_method = None
-        self.thread_status = "idle"
-        self.sockets = []
-        self.loaded_by_socket = {}
-        self.turn_statuses = {}
-        self.disconnect_after_start_response = False
-        self.metadata_pages = None
-        self.metadata_response = None
-        self.metadata_calls = 0
-        self.disconnect_metadata_once = False
-        self.release_initialize = asyncio.Event()
-        self.release_initialize.set()
-        self.release_resume = asyncio.Event()
-        self.release_resume.set()
-        self.initializing = asyncio.Event()
-        self.resuming = asyncio.Event()
-        self.emit_started = True
-        self.resume_calls = 0
-        self.disconnect_resume_on_call = None
-        self.metadata_requested = asyncio.Event()
-        self.release_metadata = asyncio.Event()
-        self.release_metadata.set()
-
-    async def handle(self, socket):
-        self.sockets.append(socket)
-        self.loaded_by_socket[socket] = False
-        async for raw in socket:
-            msg = json.loads(raw)
-            self.calls.append(msg)
-            method = msg.get("method")
-            if "id" not in msg:
-                continue
-            if method == self.reject_method or (method == "turn/start" and not self.loaded_by_socket[socket]):
-                await socket.send(
-                    json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "private error details"}})
-                )
-                continue
-            result = {}
-            if method == "initialize":
-                self.initializing.set()
-                await self.release_initialize.wait()
-            if method == "thread/resume":
-                self.resume_calls += 1
-                self.resuming.set()
-                await self.release_resume.wait()
-                if self.resume_calls == self.disconnect_resume_on_call:
-                    await socket.close()
-                    return
-            if method in {"thread/start", "thread/resume"}:
-                self.loaded = True
-                self.loaded_by_socket[socket] = True
-            if method in {"thread/start", "thread/resume", "thread/read"}:
-                result = {
-                    "thread": {
-                        "id": THREAD,
-                        "cwd": wake.PROJECT_DIR,
-                        "ephemeral": False,
-                        "status": {"type": self.thread_status},
-                        "turns": [{"items": [{"type": "agentMessage", "text": "WAKE_PROBE_OK"}]}],
-                    }
-                }
-            if method == "turn/start":
-                self.counter += 1
-                turn = {"id": str(self.counter), "status": "inProgress"}
-                self.turn_statuses[str(self.counter)] = "inProgress"
-                self.started.set()
-                await self.release_start.wait()
-                if self.emit_started:
-                    await socket.send(
-                        json.dumps({"method": "turn/started", "params": {"threadId": THREAD, "turn": turn}})
-                    )
-                result = {"turn": turn}
-            if method == "reject":
-                await socket.send(json.dumps({"id": msg["id"], "error": {"message": "private payload"}}))
-                continue
-            if method == "turn/start" and self.disconnect:
-                await socket.close()
-                return
-            if method == "thread/turns/list":
-                self.metadata_calls += 1
-                self.metadata_requested.set()
-                await self.release_metadata.wait()
-                if self.disconnect_metadata_once:
-                    self.disconnect_metadata_once = False
-                    await socket.close()
-                    return
-                if self.metadata_response is not None:
-                    result = self.metadata_response
-                elif self.metadata_pages is not None:
-                    page = int(msg["params"].get("cursor") or "0")
-                    result = self.metadata_pages[page]
-                else:
-                    result = {
-                        "data": [{"id": ident, "status": status} for ident, status in self.turn_statuses.items()],
-                        "nextCursor": None,
-                    }
-            await socket.send(json.dumps({"id": msg["id"], "result": result}))
-            if method == "turn/start" and self.disconnect_after_start_response:
-                self.disconnect_after_start_response = False
-                await socket.close()
-                return
-            if (method == "turn/start" and self.complete) or method == "turn/interrupt":
-                status = "interrupted" if method == "turn/interrupt" else self.status
-                params = {"threadId": THREAD, "turn": {"id": str(self.counter), "status": status}}
-                if self.unload_after_turn:
-                    self.loaded = False
-                    self.loaded_by_socket[socket] = False
-                self.turn_statuses[str(self.counter)] = status
-                await socket.send(json.dumps({"method": "turn/completed", "params": params}))
 
 
 def test_app_server_lifecycle_and_idle_has_no_model_or_telegram_calls(tmp_path):
     async def scenario():
         server = MockServer()
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            try:
-                await app.connect()
-                await app.resume()
-                await app.run_turn("synthetic event")
-                assert app.last_turn_started and app.active_turn is None
-                count = len(server.calls)
-                await asyncio.sleep(0.03)
-                assert len(server.calls) == count
-                assert [c["method"] for c in server.calls] == [
-                    "initialize",
-                    "initialized",
-                    "thread/resume",
-                    "thread/resume",
-                    "turn/start",
-                ]
-                with pytest.raises(wake.WakeError, match=r"^codex_rpc_rejected$"):
-                    await app.request("reject", {})
-            finally:
-                await app.close()
+        async with connected_app(tmp_path, server) as app:
+            await app.resume()
+            await app.run_turn("synthetic event")
+            assert app.last_turn_started and app.active_turn is None
+            count = len(server.calls)
+            await asyncio.sleep(0.03)
+            assert len(server.calls) == count
+            assert [c["method"] for c in server.calls] == [
+                "initialize",
+                "initialized",
+                "thread/resume",
+                "thread/resume",
+                "turn/start",
+            ]
+            with pytest.raises(wake.WakeError, match=r"^codex_rpc_rejected$"):
+                await app.request("reject", {})
 
     asyncio.run(scenario())
 
@@ -187,20 +51,14 @@ def test_each_event_resumes_task_after_previous_turn_unloaded_it(tmp_path):
     async def scenario():
         server = MockServer()
         server.unload_after_turn = True
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            try:
-                await app.connect()
-                for _ in range(2):
-                    await app.run_turn("synthetic event")
-                    assert app.last_turn_started and not server.loaded
-                methods = [c["method"] for c in server.calls][2:]
-                assert methods == ["thread/resume", "turn/start", "thread/resume", "turn/start"]
-                assert server.counter == 2
-                assert all(c["params"]["threadId"] == THREAD for c in server.calls if c["method"] == "turn/start")
-            finally:
-                await app.close()
+        async with connected_app(tmp_path, server) as app:
+            for _ in range(2):
+                await app.run_turn("synthetic event")
+                assert app.last_turn_started and not server.loaded
+            methods = [c["method"] for c in server.calls][2:]
+            assert methods == ["thread/resume", "turn/start", "thread/resume", "turn/start"]
+            assert server.counter == 2
+            assert all(c["params"]["threadId"] == THREAD for c in server.calls if c["method"] == "turn/start")
 
     asyncio.run(scenario())
 
@@ -210,25 +68,19 @@ def test_explicit_rejection_is_visible_and_pauseable_without_retry(tmp_path, met
     async def scenario():
         server = MockServer()
         server.reject_method = method
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            try:
-                await app.connect()
-                dispatcher = wake.WakeDispatcher(app, 123)
-                dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
-                await asyncio.wait_for(dispatcher.work(), 2)
-                assert not dispatcher.enabled and not app.outcome_unknown
-                assert dispatcher.last_error == (
-                    "codex_thread_resume_rejected" if method == "thread/resume" else "codex_turn_start_rejected"
-                )
-                assert dispatcher.status()["rpc_error_code"] == -32600
-                assert "private" not in json.dumps(dispatcher.status())
-                assert server.counter == 0
-                await dispatcher.pause()
-                assert sum(c["method"] == method for c in server.calls) == 1
-            finally:
-                await app.close()
+        async with connected_app(tmp_path, server) as app:
+            dispatcher = wake.WakeDispatcher(app, 123)
+            dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
+            await asyncio.wait_for(dispatcher.work(), 2)
+            assert not dispatcher.enabled and not app.outcome_unknown
+            assert dispatcher.last_error == (
+                "codex_thread_resume_rejected" if method == "thread/resume" else "codex_turn_start_rejected"
+            )
+            assert dispatcher.status()["rpc_error_code"] == -32600
+            assert "private" not in json.dumps(dispatcher.status())
+            assert server.counter == 0
+            await dispatcher.pause()
+            assert sum(c["method"] == method for c in server.calls) == 1
 
     asyncio.run(scenario())
 
@@ -548,22 +400,16 @@ def test_event_on_active_owner_task_fails_closed_without_starting_or_interruptin
     async def scenario():
         server = MockServer()
         server.thread_status = "active"
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            try:
-                await app.connect()
-                dispatcher = wake.WakeDispatcher(app, 123)
-                for event_id in ("inbound-1", "inbound-2"):
-                    dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
-                await asyncio.wait_for(dispatcher.work(), 2)
-                assert not dispatcher.enabled and dispatcher.failed == 1
-                assert dispatcher.last_error == "codex_thread_busy"
-                assert dispatcher.queue.qsize() == 1
-                assert not app.outcome_unknown and app.active_turn is None
-                await dispatcher.pause()
-            finally:
-                await app.close()
+        async with connected_app(tmp_path, server) as app:
+            dispatcher = wake.WakeDispatcher(app, 123)
+            for event_id in ("inbound-1", "inbound-2"):
+                dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
+            await asyncio.wait_for(dispatcher.work(), 2)
+            assert not dispatcher.enabled and dispatcher.failed == 1
+            assert dispatcher.last_error == "codex_thread_busy"
+            assert dispatcher.queue.qsize() == 1
+            assert not app.outcome_unknown and app.active_turn is None
+            await dispatcher.pause()
         assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
         assert server.counter == 0
 

@@ -4,7 +4,7 @@ import asyncio
 import json
 from contextlib import suppress
 
-from test_telegram_wake import THREAD
+from telegram_wake_fakes import THREAD
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_wake as wake

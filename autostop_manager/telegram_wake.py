@@ -60,6 +60,13 @@ class RPCRejected(WakeError):
     """The server explicitly rejected a request; distinct from a lost response."""
 
 
+async def _cancel_task(task: asyncio.Task[None] | None) -> None:
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 def rpc_entity(result: Any, key: str) -> dict[str, Any]:
     """Validate response entities before using them to route or track a turn."""
     entity = result.get(key) if isinstance(result, dict) else None
@@ -119,7 +126,6 @@ class AppServer:
         from websockets.exceptions import WebSocketException
 
         await self._drop_connection()
-        self.generation += 1
         generation = self.generation
         try:
             websocket = await unix_connect(
@@ -148,10 +154,7 @@ class AppServer:
         reader, websocket = self.reader, self.websocket
         self.reader = None
         self.websocket = None
-        if reader is not None:
-            reader.cancel()
-            with suppress(asyncio.CancelledError):
-                await reader
+        await _cancel_task(reader)
         for future in self.pending.values():
             if not future.done():
                 future.set_exception(TransportLost("codex_disconnected"))
@@ -323,6 +326,8 @@ class AppServer:
             self.recovery_state = "reconnecting"
             self.ready_event.clear()
             await self._drop_connection()
+            if self.pausing or self.blocked:
+                return
             self.reconnect_attempts += 1
             delay = RECONNECT_DELAYS[min(attempt, len(RECONNECT_DELAYS) - 1)]
             attempt += 1
@@ -443,12 +448,9 @@ class AppServer:
                 if not self.managed or self.pausing:
                     raise WakeError("codex_turn_outcome_unknown")
                 recovered = True
-                await self.ensure_ready()
             if recovered and not self.pausing:
-                if self.managed:
-                    # A socket is marked connected before initialize/resume.
-                    # Every metadata retry must wait for their completion.
-                    await self.ensure_ready()
+                # Recovery waits for initialize/resume before reading metadata.
+                await self.ensure_ready()
                 self.recovery_state = "reconciling"
                 turn_generation = self.generation
                 try:
@@ -473,7 +475,6 @@ class AppServer:
                 if not self.managed or self.pausing:
                     raise WakeError("codex_turn_outcome_unknown")
                 recovered = True
-                await self.ensure_ready()
                 continue
             turn = message.get("params", {}).get("turn", {})
             if not isinstance(turn, dict) or turn.get("id") != self.active_turn:
@@ -597,10 +598,7 @@ class WakeDispatcher:
         self.app.pausing = True
         self.app.recovery_state = "paused"
         self.app.ready_event.set()
-        if self.supervisor is not None:
-            self.supervisor.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.supervisor
+        await _cancel_task(self.supervisor)
         try:
             await self.app.interrupt()
             if self.worker is not None and not self.worker.done() and self.active:
@@ -609,9 +607,7 @@ class WakeDispatcher:
             # Unknown pause outcomes stay visible, but no recovery timer or
             # pending worker may start later after control has been disabled.
             if self.worker is not None and not self.worker.done():
-                self.worker.cancel()
-                with suppress(asyncio.CancelledError):
-                    await self.worker
+                await _cancel_task(self.worker)
         while not self.queue.empty():
             self.queue.get_nowait()
             self.queue.task_done()
@@ -675,14 +671,8 @@ async def daemon(config: WakeConfig) -> None:
             await stopping.wait()
             await dispatcher.pause()
     finally:
-        if dispatcher.supervisor is not None:
-            dispatcher.supervisor.cancel()
-            with suppress(asyncio.CancelledError):
-                await dispatcher.supervisor
-        if dispatcher.worker is not None:
-            dispatcher.worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await dispatcher.worker
+        await _cancel_task(dispatcher.supervisor)
+        await _cancel_task(dispatcher.worker)
         await app.close()
         SOCKET_PATH.unlink(missing_ok=True)
 
