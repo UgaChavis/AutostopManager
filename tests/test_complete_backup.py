@@ -128,8 +128,8 @@ def test_changed_store_file_across_dump_prevents_publish_and_preserves_old_bundl
 def test_crm_shared_file_changes_during_sqlite_copy_prevent_publish(layout, monkeypatch):
     original = backup.sqlite_backup
 
-    def mutate(source, destination, guard):
-        original(source, destination, guard)
+    def mutate(source, destination, guard, **kwargs):
+        original(source, destination, guard, **kwargs)
         if source == layout.crm / "change_feed.sqlite3":
             (layout.crm / "shared-files/synthetic.txt").write_text("independent writer changed file")
 
@@ -517,6 +517,90 @@ def owner_probe_root():
         finally:
             os.seteuid(uid)
             os.setegid(gid)
+
+
+def test_crm_expensive_archive_and_integrity_run_outside_native_lock(layout, monkeypatch):
+    original_lock, original_archive = backup.lock, backup.archive
+    original_copy, original_check, original_digest = backup.sqlite_backup, backup.sqlite_check, backup.digest
+    events = []
+
+    def held():
+        try:
+            with original_lock(layout.crm / "state.lock", timeout=0, create=False):
+                return False
+        except backup.BackupError as exc:
+            assert str(exc) == "backup_lock_busy"
+            return True
+
+    def archive(source, destination, **kwargs):
+        if source == layout.crm:
+            assert not held()
+            events.append("archive_outside")
+        return original_archive(source, destination, **kwargs)
+
+    def copy(source, destination, guard, *, validate=True):
+        if source == layout.crm / "change_feed.sqlite3":
+            assert held() and validate is False
+            events.append("snapshot_inside")
+        return original_copy(source, destination, guard, validate=validate)
+
+    def check(path, guard=lambda: None):
+        if path.name == "change_feed.sqlite3":
+            assert not held()
+            events.append("integrity_outside")
+        return original_check(path, guard)
+
+    def digest(path, guard=lambda: None):
+        if path.is_relative_to(layout.crm) and held():
+            events.append("fingerprint_inside")
+        return original_digest(path, guard)
+
+    monkeypatch.setattr(backup, "archive", archive)
+    monkeypatch.setattr(backup, "sqlite_backup", copy)
+    monkeypatch.setattr(backup, "sqlite_check", check)
+    monkeypatch.setattr(backup, "digest", digest)
+    result = backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+    assert result["ok"] is True
+    snapshot = events.index("snapshot_inside")
+    assert events.index("archive_outside") < events.index("fingerprint_inside") < snapshot
+    assert "fingerprint_inside" in events[snapshot + 1 : events.index("integrity_outside")]
+    manifest = json.loads((Path(result["backup"]) / "manifest.json").read_text())
+    assert 0 <= manifest["components"]["crm"]["lock_seconds"] < 8
+
+
+def test_crm_change_after_prepared_archive_rejects_before_sqlite_snapshot(layout, monkeypatch):
+    original = backup.archive
+
+    def change(source, destination, **kwargs):
+        result = original(source, destination, **kwargs)
+        if source == layout.crm:
+            (source / "shared-files/synthetic.txt").write_text("changed before state flock")
+        return result
+
+    monkeypatch.setattr(backup, "archive", change)
+    with pytest.raises(backup.BackupError, match="backup_crm_files_changed_before_sqlite_snapshot"):
+        backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+    assert not list(layout.root.glob(".partial-*"))
+    with backup.lock(layout.crm / "state.lock", timeout=0, create=False):
+        pass
+
+
+def test_deferred_crm_integrity_failure_preserves_old_bundle_and_releases_lock(layout, monkeypatch):
+    first = backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+    original = backup.sqlite_backup
+
+    def corrupt(source, destination, guard, *, validate=True):
+        original(source, destination, guard, validate=validate)
+        if source == layout.crm / "change_feed.sqlite3":
+            destination.write_bytes(b"corrupt synthetic database")
+
+    monkeypatch.setattr(backup, "sqlite_backup", corrupt)
+    with pytest.raises(sqlite3.DatabaseError):
+        backup.Backup(layout, reserve=0, retention=1, postgres=FakePostgres()).create()
+    assert Path(first["backup"]).exists()
+    assert not list(layout.root.glob(".partial-*"))
+    with backup.lock(layout.crm / "state.lock", timeout=0, create=False):
+        pass
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="real effective-identity integration requires root")

@@ -39,13 +39,16 @@ environment, runtime tokens, owner identities или customer поля; сам b
 действующие бизнес/auth-данные и доступен только root.
 
 CRM state.lock совместим с ProcessFileLock/flock. Attachment bytes пишутся до
-commit metadata, удаляются после tombstone. Весь файловый набор хешируется до
-feed snapshot и после архивации; независимые shared-file/printing writers не
+commit metadata, удаляются после tombstone. Архив и полная сверка copied bytes
+готовятся до state.lock. Под lock полный regular-file fingerprint сравнивается
+с этим архивом до и после online feed snapshot; полная integrity_check снимка
+выполняется после освобождения lock. Независимые shared-file/printing writers не
 объявляются защищёнными одним state.lock. Изменение файла прерывает attempt,
 copied archive bytes также сравниваются с source SHA. Lock budget — 8 секунд,
 ожидание — 3 секунды. CRM native writer timeout по текущему source — 10 секунд;
 короткая задержка или operator failure всё же возможны. Первый capture требует
-тихого окна и проверки длительности. Новый root-owned state.lock не создаётся.
+тихого окна и проверки длительности; lock_seconds сохраняется в manifest.
+Новый root-owned state.lock не создаётся.
 Standalone runner работает в одном потоке: target открывается root-private с
 memory journal, source online backup выполняется под effective UID/GID владельца
 БД, затем finally возвращает root identity и target journal_mode=DELETE. Поэтому

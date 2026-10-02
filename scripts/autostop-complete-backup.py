@@ -178,7 +178,7 @@ def source_identity(source: Path):
             os.setegid(previous_gid)
 
 
-def sqlite_backup(source: Path, destination: Path, guard=lambda: None) -> None:
+def sqlite_backup(source: Path, destination: Path, guard=lambda: None, *, validate: bool = True) -> None:
     if source.is_symlink() or not source.is_file():
         raise BackupError("backup_sqlite_source_invalid")
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -194,7 +194,8 @@ def sqlite_backup(source: Path, destination: Path, guard=lambda: None) -> None:
         target.execute("PRAGMA journal_mode=DELETE")
         target.commit()
     destination.chmod(0o600)
-    sqlite_check(destination, guard)
+    if validate:
+        sqlite_check(destination, guard)
 
 
 def sqlite_check(path: Path, guard=lambda: None) -> None:
@@ -531,11 +532,16 @@ class Backup:
                     "dump_linked": True,
                 }
                 started = stamp()
+                # Compression and copied-byte verification can be slow. Prepare
+                # the stable regular-file archive before blocking CRM writers.
+                crm_info = archive(layout.crm, temporary / "crm-files.tar.gz", crm=True, guard=self.guard)
+                archived_crm = archive_hashes(temporary / "crm-files.tar.gz", self.guard)
                 # State metadata is committed under this exact CRM flock. Bytes
                 # are written before upload metadata and removed after tombstones.
                 # The whole-tree hashes additionally guard independent writers.
                 with lock(layout.crm / "state.lock", create=False):
-                    deadline = time.monotonic() + 8
+                    lock_started = time.monotonic()
+                    deadline = lock_started + 8
 
                     def crm_guard():
                         self.guard()
@@ -547,21 +553,32 @@ class Backup:
                         for name, path in entries(layout.crm, crm=True).items()
                         if name not in CRM_SQLITES
                     }
+                    if before_crm != archived_crm:
+                        raise BackupError("backup_crm_files_changed_before_sqlite_snapshot")
                     sqlite_files = {
                         name: path for name, path in entries(layout.crm, crm=True).items() if name in CRM_SQLITES
                     }
                     sqlite_metadata = {name: restore_metadata(path) for name, path in sqlite_files.items()}
                     for name, path in sqlite_files.items():
-                        sqlite_backup(path, temporary / "crm-sqlite" / name, crm_guard)
-                    crm_info = archive(layout.crm, temporary / "crm-files.tar.gz", crm=True, guard=crm_guard)
-                    if archive_hashes(temporary / "crm-files.tar.gz", crm_guard) != before_crm:
+                        sqlite_backup(path, temporary / "crm-sqlite" / name, crm_guard, validate=False)
+                    after_crm = {
+                        name: digest(path, crm_guard)
+                        for name, path in entries(layout.crm, crm=True).items()
+                        if name not in CRM_SQLITES
+                    }
+                    if after_crm != archived_crm:
                         raise BackupError("backup_crm_files_changed_during_sqlite_snapshot")
+                    crm_guard()
+                    locked_seconds = time.monotonic() - lock_started
+                for name in sqlite_files:
+                    sqlite_check(temporary / "crm-sqlite" / name, self.guard)
                 components["crm"] = {
                     "started_at": started,
                     "completed_at": stamp(),
                     **crm_info,
                     "sqlite_files": len(sqlite_files),
                     "sqlite_restore_metadata": sqlite_metadata,
+                    "lock_seconds": locked_seconds,
                 }
                 for name, source in [("manager", layout.manager), ("scheduler", layout.scheduler)]:
                     started = stamp()
