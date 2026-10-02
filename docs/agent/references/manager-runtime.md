@@ -54,6 +54,7 @@ Source-команды запускай из checkout/worktree с `/opt/AutostopM
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate|--activate-under-hold`, `--replace-unit`, `--release-attempt-key`. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |
 | `scripts/backup-manager-automation-state.py` | Online backup: `--output PATH [--source PATH]`, root-owned `0700`. |
+| `scripts/autostop-complete-backup.py` | `plan` проверяет ёмкость и runtime без записи; `create` создаёт локальную копию данных, `verify --backup PATH` проверяет её. `daily` сохраняет канонический PostgreSQL backup при отказе полной копии. Root-only данные, установка/активация отдельно: [правила backup](complete-backup.md). |
 | `scripts/install-j1-worker.sh` | Runtime installer: `--activate [--replace-unit]`. |
 | `scripts/install-j1-browser-stack.sh` | Docker/unit installer: `--activate`, `--verify`, `--replace-unit`; memory/swap gate. |
 | `scripts/run-j1-browser-stack.sh` | `revision` read-only; `start|stop` меняют containers. |
