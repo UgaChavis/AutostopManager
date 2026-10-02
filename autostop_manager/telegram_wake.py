@@ -375,9 +375,15 @@ class AppServer:
                     if self.pausing:
                         raise WakeError("codex_paused")
                     self.last_rpc_error_code = None
+                    resume_generation = self.generation
                     await self.resume()
                     if self.pausing:
                         raise WakeError("codex_paused")
+                    # An idle response only authorizes the connection that
+                    # produced it. A replacement must finish setup and pass
+                    # its own idle check before it may receive turn/start.
+                    if resume_generation != self.generation or (self.managed and not self.ready_event.is_set()):
+                        continue
                     if not self.connected:
                         raise TransportLost("codex_disconnected")
                     turn_generation = self.generation
@@ -412,7 +418,11 @@ class AppServer:
                     raise WakeError("codex_turn_outcome_unknown")
                 recovered = True
                 await self.ensure_ready()
-            if recovered:
+            if recovered and not self.pausing:
+                if self.managed:
+                    # A socket is marked connected before initialize/resume.
+                    # Every metadata retry must wait for their completion.
+                    await self.ensure_ready()
                 self.recovery_state = "reconciling"
                 turn_generation = self.generation
                 try:
@@ -425,7 +435,7 @@ class AppServer:
                     self._complete_turn(status, recovered=True)
                     return
             try:
-                if recovered:
+                if recovered and not self.pausing:
                     message = await asyncio.wait_for(self.events.get(), RECOVERY_POLL_INTERVAL)
                 else:
                     message = await self.events.get()
