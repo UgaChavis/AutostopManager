@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -728,7 +729,8 @@ def test_work_telegram_duty_control_has_explicit_enable_and_disable_paths() -> N
     assert "AUTOSTOP_WORK_TELEGRAM_OWNER" not in text
     assert 'release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"' in text
     assert '[[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/*' in text
-    assert all(forbidden not in text for forbidden in (" dialogs", " send", " search", " read"))
+    # Match complete content commands: technical `ready` is not Telegram `read`.
+    assert not re.search(r" (?:dialogs|send|search|read)\b", text)
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="duty-control fixture requires its root-only path")

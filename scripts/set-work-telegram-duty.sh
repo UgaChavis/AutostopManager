@@ -8,6 +8,7 @@ venv_python="/opt/autostop-work-telegram-venv/bin/python"
 monitor_env="/etc/autostop-work-telegram/monitor.env"
 control_lock="/run/autostop-work-telegram-control.lock"
 pending_monitor_env=""
+preserve_existing_duty=0
 wake_unit="autostop-codex-wake.service"
 wake_config="/etc/autostop-work-telegram/wake.json"
 wake_python="/opt/AutostopManager/.venv/bin/python"
@@ -112,7 +113,12 @@ enable_duty() {
     systemctl enable --now "${wake_unit}" || return 1
     for _attempt in {1..15}; do
       if PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status \
-        | "${venv_python}" -c 'import json,sys; s=json.load(sys.stdin); sys.exit(not(s.get("enabled") and s.get("connected")))'; then
+        | "${venv_python}" -c '
+import json,sys
+s=json.load(sys.stdin)
+recovering=s.get("recovery_state") in {"starting", "reconnecting", "reconciling"}
+ready=s.get("ready", s.get("connected", False))
+sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
         wake_ready=1
         break
       fi
@@ -151,7 +157,8 @@ enable_duty() {
 cleanup_incomplete_duty() {
   local exit_code="$?"
   if [[ -n "${pending_monitor_env}" && -f "${pending_monitor_env}" && ! -L "${pending_monitor_env}" ]]; then unlink -- "${pending_monitor_env}" || true; fi
-  disable_duty || true
+  # A failed repeated enable must preserve an existing queue or blocked turn.
+  if [[ "${preserve_existing_duty}" -eq 0 ]]; then disable_duty || true; fi
   return "${exit_code}"
 }
 
@@ -175,16 +182,35 @@ case "${operation}" in
     bridge_state="$(bridge_status)" || { printf '%s\n' '{"ok":false,"transport_ready":false,"error":"bridge_unavailable"}'; exit 1; }
     wake_active=false
     if [[ -f "${wake_config}" ]] && systemctl is-active --quiet "${wake_unit}"; then wake_active=true; fi
-    BRIDGE_STATE="${bridge_state}" WAKE_ACTIVE="${wake_active}" "${venv_python}" -c '
+    wake_state='{}'
+    if [[ "${wake_active}" == true ]]; then
+      wake_state="$(PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status)" \
+        || wake_state='{}'
+    fi
+    BRIDGE_STATE="${bridge_state}" WAKE_ACTIVE="${wake_active}" WAKE_STATE="${wake_state}" "${venv_python}" -c '
 import json, os
 s=json.loads(os.environ["BRIDGE_STATE"])
+try:
+  w=json.loads(os.environ["WAKE_STATE"])
+except (ValueError, TypeError):
+  w={}
+if not isinstance(w, dict):
+  w={}
 inbound=bool(s.get("inbound_enabled"))
+connected=bool(w.get("ok") and w.get("connected"))
+ready=bool(w.get("ok") and w.get("enabled") and w.get("ready", connected))
+recovery_state=w.get("recovery_state", "ready" if ready else "unavailable")
+if recovery_state not in {"starting", "ready", "reconnecting", "reconciling", "blocked", "paused", "unavailable"}:
+  recovery_state="unavailable"
 print(json.dumps({
   "ok": bool(s.get("ok")),
   "transport_ready": bool(s.get("transport_ready")),
   "inbound_enabled": inbound,
   "owner_notification_configured": bool(s.get("owner_notification_configured")),
   "wake_active": os.environ["WAKE_ACTIVE"] == "true",
+  "wake_connected": connected,
+  "wake_ready": ready,
+  "wake_recovery_state": recovery_state,
   "state": "inbound_enabled" if inbound else "outbound_only",
   "polling": False,
 }, separators=(",", ":"), sort_keys=True))'
@@ -196,6 +222,9 @@ print(json.dumps({
     printf '%s\n' "work_telegram_duty=disabled" "monitoring=off" "outbound=ready"
     ;;
   --enable)
+    if [[ -f "${monitor_env}" ]] && grep -qx 'AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1' "${monitor_env}"; then
+      preserve_existing_duty=1
+    fi
     trap cleanup_incomplete_duty EXIT
     enable_duty || { echo "work_telegram_duty_enable_failed=true" >&2; exit 1; }
     trap - EXIT
