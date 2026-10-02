@@ -32,6 +32,15 @@ DAILY_NAME = re.compile(r"autostop24-\d{8}T\d{6}Z\.dump\Z")
 CRM_TRANSIENT = {"logs", "searxng", "backups", "maintenance-backups", "maintenance"}
 SQLITE_SUFFIXES = {".sqlite3", ".sqlite", ".db"}
 CRM_SQLITES = {"change_feed.sqlite3"}
+CRM_AGENT_FILES = {
+    "system_prompt.md",
+    "memory.md",
+    "tasks.json",
+    "schedules.json",
+    "status.json",
+    "runs.jsonl",
+    "actions.jsonl",
+}
 CRM_LOCKS = {
     "state.lock",
     "state.json.lock",
@@ -46,6 +55,7 @@ CRM_LOCKS = {
 }
 REQUIRED_ARTIFACTS = {
     "crm-files.tar.gz",
+    "crm-agent.tar.gz",
     "crm-sqlite/change_feed.sqlite3",
     "manager.sqlite3",
     "scheduler.sqlite3",
@@ -130,14 +140,14 @@ def lock(path: Path, *, timeout: float = 3.0, create: bool = True):
         os.close(fd)
 
 
-def entries(root: Path, *, crm: bool = False) -> dict[str, Path]:
+def entries(root: Path, *, crm: bool = False, exclude: set[str] | None = None) -> dict[str, Path]:
     if root.is_symlink() or not root.is_dir():
         raise BackupError("backup_source_directory_invalid")
     result = {}
     for parent, directories, files in os.walk(root, followlinks=False):
         relative = Path(parent).relative_to(root)
         if crm and relative == Path("."):
-            directories[:] = [name for name in directories if name not in CRM_TRANSIENT]
+            directories[:] = [name for name in directories if name not in CRM_TRANSIENT and name != "agent"]
         for name in directories + files:
             path = Path(parent) / name
             info = path.lstat()
@@ -146,6 +156,8 @@ def entries(root: Path, *, crm: bool = False) -> dict[str, Path]:
         for name in files:
             path = Path(parent) / name
             relative_name = path.relative_to(root).as_posix()
+            if exclude and relative_name in exclude:
+                continue
             if crm and (
                 relative_name in CRM_LOCKS
                 or relative_name in {".agent-gateway-maintenance", ".agent-gateway-maintenance.lock"}
@@ -218,8 +230,10 @@ class GuardedReader:
         return result
 
 
-def archive(source: Path, destination: Path, *, crm: bool = False, guard=lambda: None) -> dict[str, int]:
-    files = entries(source, crm=crm)
+def archive(
+    source: Path, destination: Path, *, crm: bool = False, exclude: set[str] | None = None, guard=lambda: None
+) -> dict[str, int]:
+    files = entries(source, crm=crm, exclude=exclude)
     regular = {name: path for name, path in files.items() if not (crm and name in CRM_SQLITES)}
     before = {name: digest(path, guard) for name, path in regular.items()}
     with tarfile.open(destination, "w:gz", compresslevel=1) as target:
@@ -228,7 +242,7 @@ def archive(source: Path, destination: Path, *, crm: bool = False, guard=lambda:
             with path.open("rb") as handle:
                 target.addfile(target.gettarinfo(path, arcname=name), GuardedReader(handle, guard))
     destination.chmod(0o600)
-    after_files = entries(source, crm=crm)
+    after_files = entries(source, crm=crm, exclude=exclude)
     after = {name: digest(path, guard) for name, path in after_files.items() if not (crm and name in CRM_SQLITES)}
     if before != after or archive_hashes(destination, guard) != before:
         raise BackupError("backup_source_changed")
@@ -425,6 +439,8 @@ def verify(directory: Path, postgres: Postgres) -> dict:
             names = archive_hashes(path)
             if name == "crm-files.tar.gz" and "state.json" not in names:
                 raise BackupError("backup_manifest_coverage_missing")
+            if name == "crm-agent.tar.gz" and not CRM_AGENT_FILES.issubset(names):
+                raise BackupError("backup_manifest_coverage_missing")
     postgres.verify(directory / "store.dump")
     return manifest
 
@@ -466,6 +482,9 @@ class Backup:
         file_bytes += layout.manager.stat().st_size + layout.scheduler.stat().st_size
         for path in [layout.uploads, layout.photos, layout.roles]:
             file_bytes += sum(file.stat().st_size for file in entries(path).values())
+        file_bytes += sum(
+            file.stat().st_size for file in entries(layout.crm / "agent", exclude={"agent.lock"}).values()
+        )
         dumps = list(daily_files(layout.daily))
         if not dumps:
             raise BackupError("backup_postgres_size_baseline_missing")
@@ -488,6 +507,36 @@ class Backup:
             "capacity_for_additional_runs_without_prune": max(0, (free - self.reserve - transient) // data_estimate),
             "retention_capacity_ready_without_prune": free >= self.reserve + transient + data_estimate * self.retention,
             "steady_peak_capacity_ready": free >= self.reserve + transient + data_estimate * (self.retention + 1),
+        }
+
+    def capture_agent(self, temporary: Path) -> dict:
+        started = stamp()
+        agent_directory = self.layout.crm / "agent"
+        agent_metadata = restore_metadata(agent_directory)
+        # Status/task writers use this native lock. Public prompt/memory
+        # writers can run independently, so full byte stability is also
+        # required. Never hold this flock together with state.lock.
+        with lock(agent_directory / "agent.lock", create=False):
+            agent_started = time.monotonic()
+            agent_deadline = agent_started + 8
+
+            def agent_guard():
+                self.guard()
+                if time.monotonic() > agent_deadline:
+                    raise BackupError("backup_crm_agent_lock_budget_exceeded")
+
+            agent_info = archive(
+                agent_directory, temporary / "crm-agent.tar.gz", exclude={"agent.lock"}, guard=agent_guard
+            )
+            agent_guard()
+            agent_locked_seconds = time.monotonic() - agent_started
+        return {
+            "started_at": started,
+            "completed_at": stamp(),
+            **agent_info,
+            "restore_path": "agent/",
+            "lock_seconds": agent_locked_seconds,
+            "directory_restore_metadata": agent_metadata,
         }
 
     def create(self) -> dict:
@@ -531,6 +580,7 @@ class Backup:
                     "canonical_dump": canonical_dump,
                     "dump_linked": True,
                 }
+                components["crm_agent"] = self.capture_agent(temporary)
                 started = stamp()
                 # Compression and copied-byte verification can be slow. Prepare
                 # the stable regular-file archive before blocking CRM writers.

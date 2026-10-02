@@ -12,6 +12,7 @@ Store source revision сам по себе не доказывает installed s
 | Store files | uploads.tar.gz, photos.tar.gz: SHA всего набора неизменны от начала canonical dump до окончания архивов |
 | CRM data | crm-files.tar.gz: state, attachments, shared-files, repair-orders, durable JSON/audit/config data; raw SQLite отдельно |
 | CRM native SQLite | exact top-level change_feed.sqlite3: online snapshot под существующим state.lock, journal_mode=DELETE, полная integrity_check |
+| CRM agent | required crm-agent.tar.gz: весь agent/ под существующим exact agent/agent.lock, кроме самого native lock; byte stability/copy validation |
 | Manager DB | manager.sqlite3: online snapshot, integrity_check |
 | Scheduler registry | scheduler.sqlite3: online snapshot, integrity_check |
 | M2 журнал | roles.tar.gz: проверенная файловая копия |
@@ -49,6 +50,14 @@ copied archive bytes также сравниваются с source SHA. Lock bud
 короткая задержка или operator failure всё же возможны. Первый capture требует
 тихого окна и проверки длительности; lock_seconds сохраняется в manifest.
 Новый root-owned state.lock не создаётся.
+Top-level agent/ выделен из core CRM archive/fingerprints только потому, что
+обязательный отдельный архив сохраняет весь этот компонент. Agent lock ожидается
+не более 3 секунд и удерживается с budget8; state.lock одновременно не удерживается.
+Status (включая board_control), tasks, schedules, runs/actions пишутся под этим
+ProcessFileLock; public prompt/memory writers и initensure не всегда берут lock,
+поэтому archive source before/after и copied-byte hashes обязательны. Все их файлы
+сохраняются, payload suffixes непрозрачны. Manifest crm_agent содержит interval,
+lock_seconds, restore_path=agent/ и directory UID/GID/mode metadata. Единой CRM/agent транзакции нет.
 Standalone runner работает в одном потоке: target открывается root-private с
 memory journal, source online backup выполняется под effective UID/GID владельца
 БД, затем finally возвращает root identity и target journal_mode=DELETE. Поэтому

@@ -9,6 +9,7 @@ import subprocess
 import sqlite3
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,12 @@ def layout(tmp_path):
         directory = crm / name
         directory.mkdir()
         (directory / "synthetic.txt").write_text(name)
+    agent = crm / "agent"
+    agent.mkdir(mode=0o700)
+    (agent / "agent.lock").touch(mode=0o644)
+    for name in backup.CRM_AGENT_FILES:
+        (agent / name).write_text("synthetic fixture")
+    (agent / "status.json").write_text(json.dumps({"state": "idle", "board_control": {"enabled": False}}))
     (crm / "state.json").write_text(json.dumps({"cards": []}))
     (crm / "shared_files_index.json").write_text(json.dumps({"files": []}))
     (crm / "state.lock").touch(mode=0o644)
@@ -96,6 +103,10 @@ def test_complete_backup_covers_files_sqlites_and_empty_store_volume(layout):
     directory = Path(result["backup"])
     manifest = backup.verify(directory, backend)
     assert manifest["global_atomic_snapshot"] is False
+    assert manifest["components"]["crm_agent"]["restore_path"] == "agent/"
+    assert manifest["components"]["crm_agent"]["directory_restore_metadata"] == backup.restore_metadata(
+        layout.crm / "agent"
+    )
     assert manifest["components"]["crm"]["sqlite_restore_metadata"]["change_feed.sqlite3"] == backup.restore_metadata(
         layout.crm / "change_feed.sqlite3"
     )
@@ -252,13 +263,32 @@ def test_missing_live_crm_lock_is_not_created_by_root(layout):
 
 
 def test_crm_lock_budget_aborts_and_releases_live_lock(layout, monkeypatch):
-    clock = iter(range(0, 10000, 2))
-    monkeypatch.setattr(backup.time, "monotonic", lambda: next(clock))
+    advance_clock_under_lock(monkeypatch, layout.crm / "state.lock")
     with pytest.raises(backup.BackupError, match="backup_crm_lock_budget_exceeded"):
         backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
     with backup.lock(layout.crm / "state.lock", timeout=0, create=False):
         pass
     assert not list(layout.root.glob(".partial-*"))
+
+
+def advance_clock_under_lock(monkeypatch, path):
+    clock = iter(range(0, 10000, 2))
+    original = backup.lock
+    held = [False]
+
+    @contextmanager
+    def observe(candidate, **kwargs):
+        with original(candidate, **kwargs):
+            if candidate == path:
+                held[0] = True
+            try:
+                yield
+            finally:
+                if candidate == path:
+                    held[0] = False
+
+    monkeypatch.setattr(backup, "lock", observe)
+    monkeypatch.setattr(backup.time, "monotonic", lambda: next(clock) if held[0] else 0)
 
 
 def test_verifier_rejects_missing_coverage_and_artifact_path_escape(layout):
@@ -601,6 +631,86 @@ def test_deferred_crm_integrity_failure_preserves_old_bundle_and_releases_lock(l
     assert not list(layout.root.glob(".partial-*"))
     with backup.lock(layout.crm / "state.lock", timeout=0, create=False):
         pass
+
+
+def test_agent_component_covers_durable_files_board_control_and_opaque_names(layout):
+    directory = layout.crm / "agent"
+    names = ["opaque.lock", "opaque-wal", "opaque.db", "opaque.sqlite3"]
+    for name in names:
+        (directory / name).write_text("synthetic opaque data")
+    backend = FakePostgres()
+    result = backup.Backup(layout, reserve=0, postgres=backend).create()
+    bundle = Path(result["backup"])
+    manifest = backup.verify(bundle, backend)
+    hashes = backup.archive_hashes(bundle / "crm-agent.tar.gz")
+    assert backup.CRM_AGENT_FILES | set(names) <= hashes.keys()
+    assert "agent.lock" not in hashes
+    assert hashes["status.json"] == backup.digest(directory / "status.json")
+    assert not any(name.startswith("agent/") for name in backup.archive_hashes(bundle / "crm-files.tar.gz"))
+    assert 0 <= manifest["components"]["crm_agent"]["lock_seconds"] < 8
+    assert manifest["global_atomic_snapshot"] is False
+
+
+def test_agent_native_lock_is_held_alone_during_archive(layout, monkeypatch):
+    original = backup.archive
+
+    def inspect(source, destination, **kwargs):
+        if source == layout.crm / "agent":
+            with pytest.raises(backup.BackupError, match="backup_lock_busy"):
+                with backup.lock(source / "agent.lock", timeout=0, create=False):
+                    pass
+            with backup.lock(layout.crm / "state.lock", timeout=0, create=False):
+                pass
+        if source == layout.crm:
+            with backup.lock(layout.crm / "agent/agent.lock", timeout=0, create=False):
+                pass
+        return original(source, destination, **kwargs)
+
+    monkeypatch.setattr(backup, "archive", inspect)
+    backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+
+
+def test_agent_unlocked_memory_write_is_detected_by_byte_checks(layout, monkeypatch):
+    first = backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+    original = backup.tarfile.TarFile.addfile
+
+    def change(archive, info, handle=None):
+        result = original(archive, info, handle)
+        if info.name == "memory.md":
+            (layout.crm / "agent/memory.md").write_text("independent synthetic memory writer")
+        return result
+
+    monkeypatch.setattr(backup.tarfile.TarFile, "addfile", change)
+    with pytest.raises(backup.BackupError, match="backup_source_changed"):
+        backup.Backup(layout, reserve=0, retention=1, postgres=FakePostgres()).create()
+    assert Path(first["backup"]).exists()
+    assert not list(layout.root.glob(".partial-*"))
+    with backup.lock(layout.crm / "agent/agent.lock", timeout=0, create=False):
+        pass
+
+
+@pytest.mark.parametrize("missing", ["agent.lock", "subtree", "status.json"])
+def test_required_agent_component_rejects_missing_lock_subtree_or_state(layout, missing):
+    source = layout.crm / "agent"
+    if missing == "subtree":
+        source.rename(layout.crm / "unrelated-agent-source")
+    else:
+        (source / missing).unlink()
+    with pytest.raises((backup.BackupError, FileNotFoundError)):
+        backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+    assert not list(layout.root.glob(".partial-*"))
+    assert not (source / "agent.lock").exists() if missing in {"agent.lock", "subtree"} else True
+
+
+def test_agent_lock_budget_releases_native_lock_and_preserves_old_bundles(layout, monkeypatch):
+    first = backup.Backup(layout, reserve=0, postgres=FakePostgres()).create()
+    advance_clock_under_lock(monkeypatch, layout.crm / "agent/agent.lock")
+    with pytest.raises(backup.BackupError, match="backup_crm_agent_lock_budget_exceeded"):
+        backup.Backup(layout, reserve=0, retention=1, postgres=FakePostgres()).create()
+    with backup.lock(layout.crm / "agent/agent.lock", timeout=0, create=False):
+        pass
+    assert Path(first["backup"]).exists()
+    assert not list(layout.root.glob(".partial-*"))
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="real effective-identity integration requires root")
