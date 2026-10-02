@@ -1,6 +1,7 @@
 """Regression cases found by independent review of PR 43."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -174,5 +175,105 @@ def test_pause_does_not_restart_metadata_recovery_on_replacement_socket():
             await asyncio.wait_for(app._wait_turn(1), 1)
         app._turn_metadata.assert_not_awaited()
         assert app.recovery_state == "paused" and not app.outcome_unknown
+
+    asyncio.run(scenario())
+
+
+def test_transport_loss_sending_server_request_refusal_remains_reconnectable():
+    class LostSocket:
+        close_code = 1006
+
+        async def __aiter__(self):
+            yield json.dumps({"id": 41, "method": "item/tool/requestUserInput", "params": {}})
+
+        async def send(self, raw):
+            response = json.loads(raw)
+            assert response["id"] == 41 and response["error"]["code"] == -32601
+            raise OSError("synthetic refusal transport loss")
+
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.managed = app.connected = True
+        app.ready_event.set()
+        app.websocket = LostSocket()
+        app.active_turn = "synthetic-turn"
+        app.outcome_unknown = True
+        await app._read(app.websocket, app.generation)
+        dispatcher = wake.WakeDispatcher(app, 123)
+        assert not app.blocked and app.recovery_state == "reconnecting"
+        assert app.disconnected.is_set() and not app.ready_event.is_set()
+        assert app.active_turn == "synthetic-turn" and app.outcome_unknown
+        assert dispatcher.status()["enabled"] and not dispatcher.status()["ready"]
+        assert dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)["ok"]
+
+    asyncio.run(scenario())
+
+
+def test_malformed_frame_during_metadata_releases_worker_and_preserves_known_turn():
+    class InvalidMetadataSocket:
+        close_code = None
+
+        def __init__(self):
+            self.frames = asyncio.Queue()
+
+        async def __aiter__(self):
+            while True:
+                yield await self.frames.get()
+
+        async def send(self, raw):
+            assert json.loads(raw)["method"] == "thread/turns/list"
+            await self.frames.put(json.dumps({"id": [], "result": {}}))
+
+        async def close(self):
+            pass
+
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.managed = app.connected = True
+        app.generation = 2
+        app.ready_event.set()
+        app.active_turn = "synthetic-turn"
+        app.outcome_unknown = True
+        app.websocket = InvalidMetadataSocket()
+        app.reader = asyncio.create_task(app._read(app.websocket, app.generation))
+
+        async def wait_known_turn(_text):
+            await app._wait_turn(1)
+
+        app.run_turn = AsyncMock(side_effect=wait_known_turn)
+        dispatcher = wake.WakeDispatcher(app, 123)
+        for number in (1, 2):
+            dispatcher.accept({"operation": "event", "event_id": f"inbound-{number}"}, 123)
+        dispatcher.worker = asyncio.create_task(dispatcher.work())
+        try:
+            await asyncio.wait_for(dispatcher.worker, 1)
+            assert app.blocked and dispatcher.status()["recovery_state"] == "blocked"
+            assert not dispatcher.active and not dispatcher.enabled
+            assert dispatcher.failed == 1 and dispatcher.completed == 0 and dispatcher.queue.qsize() == 1
+            assert dispatcher.last_error == "codex_rpc_frame_invalid"
+            assert app.active_turn == "synthetic-turn" and app.outcome_unknown
+            app.run_turn.assert_awaited_once()
+        finally:
+            dispatcher.worker.cancel()
+            await asyncio.gather(dispatcher.worker, return_exceptions=True)
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("state", ["blocked", "paused"])
+def test_ensure_ready_terminal_state_does_not_wait_for_cleared_signal(state):
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.managed = app.connected = True
+        if state == "blocked":
+            app.block("codex_rpc_frame_invalid")
+            error = "codex_rpc_frame_invalid"
+        else:
+            app.pausing = True
+            error = "codex_paused"
+        app.ready_event.clear()
+        with pytest.raises(wake.WakeError, match=error):
+            await asyncio.wait_for(app.ensure_ready(), 0.2)
 
     asyncio.run(scenario())

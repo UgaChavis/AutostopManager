@@ -1,83 +1,10 @@
 """Exercise duty controls against disposable shell mocks, including non-root CI."""
 
 import json
-import os
 import subprocess
-import sys
-from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def duty_fixture(tmp_path, state):
-    releases = tmp_path / "releases"
-    release = releases / "revision"
-    release.mkdir(parents=True)
-    current = releases / "current"
-    current.symlink_to(release)
-    monitor = tmp_path / "monitor.env"
-    intent = (
-        "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n"
-        "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET=/run/autostop-codex-wake/wake.sock\n"
-    )
-    monitor.write_text(intent)
-    config = tmp_path / "wake.json"
-    config.write_text("{}")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "calls"
-    mocks = {
-        "wake-python": '#!/bin/sh\nprintf "%s\\n" "$WAKE_STATE"\n',
-        "systemctl": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_LOG"\nexit 0\n',
-        "sudo": (
-            '#!/bin/sh\nprintf "%s\\n" '
-            "'"
-            + json.dumps(
-                {
-                    "ok": True,
-                    "transport_ready": True,
-                    "inbound_enabled": True,
-                    "enabled": True,
-                    "retention": "memory_only",
-                }
-            )
-            + "'\n"
-        ),
-        "stat": '#!/bin/sh\nprintf "%s\\n" root:root:644\n',
-        "chown": "#!/bin/sh\nexit 0\n",
-        "sleep": "#!/bin/sh\nexit 0\n",
-    }
-    for name, text in mocks.items():
-        path = bin_dir / name
-        path.write_text(text)
-        path.chmod(0o755)
-    source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
-    # Production's root gate and file ownership check are separate contracts;
-    # replace only the root gate so the behavioral fixture also runs in CI.
-    replacements = {
-        'if [[ "${EUID}" -ne 0 ]]; then': "if false; then",
-        'release_link="/opt/autostop-work-telegram-releases/current"': f'release_link="{current}"',
-        'venv_python="/opt/autostop-work-telegram-venv/bin/python"': f'venv_python="{sys.executable}"',
-        'wake_python="/opt/AutostopManager/.venv/bin/python"': f'wake_python="{bin_dir / "wake-python"}"',
-        'wake_config="/etc/autostop-work-telegram/wake.json"': f'wake_config="{config}"',
-        'monitor_env="/etc/autostop-work-telegram/monitor.env"': f'monitor_env="{monitor}"',
-        'control_lock="/run/autostop-work-telegram-control.lock"': f'control_lock="{tmp_path / "lock"}"',
-        "/opt/autostop-work-telegram-releases/*": f"{releases}/*",
-    }
-    for old, new in replacements.items():
-        assert old in source
-        source = source.replace(old, new, 1)
-    script = tmp_path / "duty.sh"
-    script.write_text(source)
-    env = {
-        **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "FAKE_LOG": str(log),
-        "WAKE_STATE": json.dumps(state),
-    }
-    return script, env, monitor, intent, log
+from telegram_duty_fakes import duty_fixture
 
 
 @pytest.mark.parametrize("state", ["starting", "reconnecting", "reconciling"])

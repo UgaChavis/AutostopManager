@@ -7,7 +7,6 @@ import os
 import re
 import signal
 import subprocess
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from string import Formatter
@@ -15,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram_duty_fakes import duty_fixture
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_bridge as bridge
@@ -22,6 +22,13 @@ from autostop_manager import telegram_wake as wake
 
 THREAD = "00000000-0000-4000-8000-000000000001"
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def ready_app():
+    app = wake.AppServer(wake.WakeConfig(THREAD))
+    app.connected = True
+    app.recovery_state = "ready"
+    return app
 
 
 class MockServer:
@@ -316,14 +323,14 @@ def test_pause_interrupts_active_turn_including_start_race(tmp_path, during_star
     ],
 )
 def test_fixed_target_and_uid_boundaries(payload, uid, error):
-    dispatcher = wake.WakeDispatcher(SimpleNamespace(connected=True), 123)
+    dispatcher = wake.WakeDispatcher(ready_app(), 123)
     with pytest.raises(wake.WakeError, match=error):
         dispatcher.accept(payload, uid)
     assert dispatcher.accepted == 0
 
 
 def test_overflow_is_visible_and_disconnected_events_remain_queued():
-    app = SimpleNamespace(connected=True)
+    app = ready_app()
     dispatcher = wake.WakeDispatcher(app, 123)
     for n in range(1, bridge.MAX_INBOUND_MONITOR_EVENTS + 1):
         dispatcher.accept({"operation": "event", "event_id": f"inbound-{n}"}, 123)
@@ -342,7 +349,8 @@ def test_overflow_is_visible_and_disconnected_events_remain_queued():
 
 
 def test_status_identifies_loaded_instruction_without_processing_queued_events():
-    app = SimpleNamespace(connected=True, run_turn=AsyncMock())
+    app = ready_app()
+    app.run_turn = AsyncMock()
     dispatcher = wake.WakeDispatcher(app, 123)
     dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
     status = dispatcher.status()
@@ -369,7 +377,7 @@ def test_bridge_to_dispatcher_text_and_attachments_use_only_ref(monkeypatch, tmp
     async def scenario():
         path = tmp_path / "wake.sock"
         # Local socket credential test uses the current uid as the synthetic bridge.
-        app = SimpleNamespace(connected=True)
+        app = ready_app()
         dispatcher = wake.WakeDispatcher(app, os.geteuid())
         server = await asyncio.start_unix_server(dispatcher.serve, path=str(path), limit=1024)
         monkeypatch.setenv(bridge.WORK_WAKE_ENVIRONMENT, str(path))
@@ -665,45 +673,15 @@ def test_service_and_instructions_are_event_only():
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="control script root gate")
 def test_repeated_enable_with_wake_preserves_bridge_and_queue(tmp_path):
-    release_root = tmp_path / "releases"
-    release = release_root / "revision"
-    release.mkdir(parents=True)
-    current = release_root / "current"
-    current.symlink_to(release)
-    monitor = tmp_path / "monitor.env"
-    intent = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\nAUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET=/run/autostop-codex-wake/wake.sock\n"
-    monitor.write_text(intent)
-    config = tmp_path / "wake.json"
-    config.write_text("{}")
-    log = tmp_path / "calls"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    wake_python = fake_bin / "wake-python"
-    wake_python.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"enabled":true,"connected":true,"queued":3}\'\n')
-    (fake_bin / "sudo").write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"enabled": true,"retention": "memory_only"}\'\n')
-    (fake_bin / "systemctl").write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_LOG"\nexit 0\n')
-    for path in fake_bin.iterdir():
-        path.chmod(0o755)
-    source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
-    for old, new in (
-        ('release_link="/opt/autostop-work-telegram-releases/current"', f'release_link="{current}"'),
-        ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{sys.executable}"'),
-        ('wake_python="/opt/AutostopManager/.venv/bin/python"', f'wake_python="{wake_python}"'),
-        ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
-        ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
-        ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
-        ("/opt/autostop-work-telegram-releases/*", f"{release_root}/*"),
-    ):
-        assert old in source
-        source = source.replace(old, new, 1)
-    script = tmp_path / "control.sh"
-    script.write_text(source)
+    script, env, monitor, intent, log = duty_fixture(
+        tmp_path, {"ok": True, "enabled": True, "connected": True, "queued": 3}, bypass_root=False
+    )
     for _ in range(2):
         result = subprocess.run(
             ["bash", str(script), "--enable"],
             capture_output=True,
             text=True,
-            env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "FAKE_LOG": str(log)},
+            env=env,
         )
         assert result.returncode == 0, result.stderr
         assert monitor.read_text() == intent
@@ -716,63 +694,14 @@ def test_repeated_enable_with_wake_preserves_bridge_and_queue(tmp_path):
 @pytest.mark.skipif(os.geteuid() != 0, reason="control script root gate")
 @pytest.mark.parametrize("scenario", ["outbound_only", "inbound_enabled", "bridge_unavailable"])
 def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario):
-    config = tmp_path / "wake.json"
-    config.write_text("{}")
-    monitor = tmp_path / "monitor.env"
-    if scenario == "inbound_enabled":
-        monitor.write_text("AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n")
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    venv_python = tmp_path / "venv-python"
-    venv_python.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = -c ]; then exec "$REAL_PYTHON" "$@"; fi\n'
-        'if [ "$FAKE_SCENARIO" = bridge_unavailable ]; then exit 1; fi\n'
-        'if [ "$FAKE_SCENARIO" = inbound_enabled ]; then inbound=true; else inbound=false; fi\n'
-        'printf \'{"ok":true,"transport_ready":true,"inbound_enabled":%s,'
-        '"owner_notification_configured":true}\\n\' "$inbound"\n'
+    script, env, _, _, log = duty_fixture(
+        tmp_path,
+        {"ok": True, "enabled": True, "connected": True, "ready": True, "recovery_state": "ready"},
+        inbound=scenario == "inbound_enabled",
+        bridge_available=scenario != "bridge_unavailable",
+        bypass_root=False,
     )
-    wake_python = tmp_path / "wake-python"
-    wake_python.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"enabled":true,"connected":true,'
-        '"ready":true,"recovery_state":"ready"}\'\n'
-    )
-    (fake_bin / "sudo").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')
-    systemctl = fake_bin / "systemctl"
-    systemctl.write_text(
-        "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >> "$FAKE_LOG"\n'
-        '[ "$1" = is-active ] || exit 90\n'
-        '[ "$FAKE_SCENARIO" = inbound_enabled ]\n'
-    )
-    for path in (venv_python, wake_python, fake_bin / "sudo", systemctl):
-        path.chmod(0o755)
-    source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
-    for old, new in (
-        ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
-        ('wake_python="/opt/AutostopManager/.venv/bin/python"', f'wake_python="{wake_python}"'),
-        ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
-        ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
-        ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
-    ):
-        assert old in source
-        source = source.replace(old, new, 1)
-    script = tmp_path / "control.sh"
-    script.write_text(source)
-    log = tmp_path / "calls"
-    result = subprocess.run(
-        ["bash", str(script), "--status"],
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "FAKE_LOG": str(log),
-            "FAKE_SCENARIO": scenario,
-            "REAL_PYTHON": sys.executable,
-        },
-        timeout=10,
-    )
+    result = subprocess.run(["bash", str(script), "--status"], capture_output=True, text=True, env=env, timeout=10)
     payload = json.loads(result.stdout)
     assert payload["ok"] is (scenario != "bridge_unavailable")
     assert result.returncode == (1 if scenario == "bridge_unavailable" else 0)
