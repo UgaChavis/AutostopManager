@@ -6,37 +6,12 @@ import os
 from unittest.mock import AsyncMock
 
 import pytest
-from test_telegram_wake import THREAD, MockServer
+from telegram_wake_fakes import THREAD, MockServer, event, managed_wake, stop, until
+from telegram_wake_fakes import quick_recovery as quick_recovery
 from websockets.asyncio.server import unix_serve
 from websockets.frames import OP_PING
 
 from autostop_manager import telegram_wake as wake
-
-
-async def until(predicate):
-    async with asyncio.timeout(3):
-        while not predicate():
-            await asyncio.sleep(0.001)
-
-
-@pytest.fixture
-def quick_recovery(monkeypatch):
-    monkeypatch.setattr(wake, "RECONNECT_DELAYS", (0.01,))
-    monkeypatch.setattr(wake, "RECOVERY_POLL_INTERVAL", 0.01)
-
-
-def event(number):
-    return {"operation": "event", "event_id": f"inbound-{number}"}
-
-
-async def stop(dispatcher):
-    try:
-        await dispatcher.pause()
-    except wake.WakeError:
-        # Unknown side effects must remain visible; cleanup never retries them.
-        pass
-    finally:
-        await dispatcher.app.close()
 
 
 @pytest.mark.parametrize("frame", [{"id": [], "result": {}}, {"method": []}, ["private-payload"]])
@@ -135,31 +110,23 @@ def test_known_turn_completed_during_disconnect_is_reconciled_without_replay(tmp
         server = MockServer(complete=False)
         server.disconnect_after_start_response = True
         server.emit_started = False
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                await until(lambda: server.counter == 1 and not app.connected)
-                server.turn_statuses["1"] = "completed"
-                await asyncio.wait_for(dispatcher.queue.join(), 3)
-                assert server.metadata_calls >= 1 and len(server.sockets) >= 2
-                assert server.counter == dispatcher.completed == 1 and dispatcher.failed == 0
-                assert dispatcher.enabled and not app.outcome_unknown and app.active_turn is None
-                metadata = [call["params"] for call in server.calls if call["method"] == "thread/turns/list"]
-                assert all(
-                    params["threadId"] == THREAD
-                    and params["itemsView"] == "notLoaded"
-                    and params["sortDirection"] == "desc"
-                    and params["limit"] == 20
-                    for params in metadata
-                )
-                assert not any(call["method"] in {"thread/read", "turn/interrupt"} for call in server.calls)
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            await until(lambda: server.counter == 1 and not app.connected)
+            server.turn_statuses["1"] = "completed"
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            assert server.metadata_calls >= 1 and len(server.sockets) >= 2
+            assert server.counter == dispatcher.completed == 1 and dispatcher.failed == 0
+            assert dispatcher.enabled and not app.outcome_unknown and app.active_turn is None
+            metadata = [call["params"] for call in server.calls if call["method"] == "thread/turns/list"]
+            assert all(
+                params["threadId"] == THREAD
+                and params["itemsView"] == "notLoaded"
+                and params["sortDirection"] == "desc"
+                and params["limit"] == 20
+                for params in metadata
+            )
+            assert not any(call["method"] in {"thread/read", "turn/interrupt"} for call in server.calls)
 
     asyncio.run(scenario())
 
@@ -168,25 +135,17 @@ def test_known_inprogress_turn_waits_for_completion_notification_then_processes_
     async def scenario():
         server = MockServer(complete=False)
         server.disconnect_after_start_response = True
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                dispatcher.accept(event(2), 123)
-                await until(lambda: server.metadata_calls >= 1)
-                assert server.counter == 1 and dispatcher.completed == 0
-                assert app.active_turn == "1" and app.outcome_unknown
-                server.complete = True
-                params = {"threadId": THREAD, "turn": {"id": "1", "status": "completed"}}
-                await server.sockets[-1].send(json.dumps({"method": "turn/completed", "params": params}))
-                await asyncio.wait_for(dispatcher.queue.join(), 3)
-                assert server.counter == dispatcher.completed == 2 and dispatcher.failed == 0
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: server.metadata_calls >= 1)
+            assert server.counter == 1 and dispatcher.completed == 0
+            assert app.active_turn == "1" and app.outcome_unknown
+            server.complete = True
+            params = {"threadId": THREAD, "turn": {"id": "1", "status": "completed"}}
+            await server.sockets[-1].send(json.dumps({"method": "turn/completed", "params": params}))
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            assert server.counter == dispatcher.completed == 2 and dispatcher.failed == 0
 
     asyncio.run(scenario())
 
@@ -196,21 +155,13 @@ def test_reconciliation_transport_failure_reconnects_without_replaying_turn(tmp_
         server = MockServer(complete=False)
         server.disconnect_after_start_response = True
         server.disconnect_metadata_once = True
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                await until(lambda: server.counter == 1 and not app.connected)
-                server.turn_statuses["1"] = "completed"
-                await asyncio.wait_for(dispatcher.queue.join(), 3)
-                assert server.metadata_calls == 2 and len(server.sockets) >= 3
-                assert server.counter == dispatcher.completed == 1 and dispatcher.failed == 0
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            await until(lambda: server.counter == 1 and not app.connected)
+            server.turn_statuses["1"] = "completed"
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            assert server.metadata_calls == 2 and len(server.sockets) >= 3
+            assert server.counter == dispatcher.completed == 1 and dispatcher.failed == 0
 
     asyncio.run(scenario())
 
@@ -218,25 +169,17 @@ def test_reconciliation_transport_failure_reconnects_without_replaying_turn(tmp_
 def test_lost_start_response_blocks_without_guessing_turn_id_or_retry(tmp_path, quick_recovery):
     async def scenario():
         server = MockServer(disconnect=True)
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                dispatcher.accept(event(2), 123)
-                await until(lambda: not dispatcher.enabled)
-                assert app.outcome_unknown and app.active_turn is None
-                assert dispatcher.failed == 1 and dispatcher.completed == 0 and dispatcher.queue.qsize() == 1
-                await asyncio.sleep(0.04)
-                assert server.counter == 1 and server.metadata_calls == 0
-                assert dispatcher.status()["recovery_state"] == "blocked"
-                with pytest.raises(wake.WakeError, match="wake_not_ready"):
-                    dispatcher.accept(event(3), 123)
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled)
+            assert app.outcome_unknown and app.active_turn is None
+            assert dispatcher.failed == 1 and dispatcher.completed == 0 and dispatcher.queue.qsize() == 1
+            await asyncio.sleep(0.04)
+            assert server.counter == 1 and server.metadata_calls == 0
+            assert dispatcher.status()["recovery_state"] == "blocked"
+            with pytest.raises(wake.WakeError, match="wake_not_ready"):
+                dispatcher.accept(event(3), 123)
 
     asyncio.run(scenario())
 
@@ -249,19 +192,11 @@ def test_exact_known_turn_can_be_found_on_fifth_metadata_page(tmp_path, quick_re
             {"data": [{"id": f"unrelated-{page}", "status": "completed"}], "nextCursor": str(page + 1)}
             for page in range(4)
         ] + [{"data": [{"id": "1", "status": "completed"}], "nextCursor": None}]
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                await asyncio.wait_for(dispatcher.queue.join(), 3)
-                assert server.metadata_calls == 5 and server.counter == dispatcher.completed == 1
-                assert dispatcher.failed == 0 and not app.outcome_unknown
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            assert server.metadata_calls == 5 and server.counter == dispatcher.completed == 1
+            assert dispatcher.failed == 0 and not app.outcome_unknown
 
     asyncio.run(scenario())
 
@@ -284,29 +219,21 @@ def test_unresolvable_known_turn_blocks_queue_without_replay(tmp_path, quick_rec
         server = MockServer(complete=False)
         server.disconnect_after_start_response = True
         server.metadata_response = metadata
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                dispatcher.accept(event(2), 123)
-                await until(lambda: not dispatcher.enabled)
-                assert server.counter == 1 and dispatcher.completed == 0
-                assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
-                assert dispatcher.status()["recovery_state"] == "blocked"
-                assert server.metadata_calls <= 5
-                assert "private" not in json.dumps(dispatcher.status())
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (_app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled)
+            assert server.counter == 1 and dispatcher.completed == 0
+            assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
+            assert dispatcher.status()["recovery_state"] == "blocked"
+            assert server.metadata_calls <= 5
+            assert "private" not in json.dumps(dispatcher.status())
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("phase", ["backoff", "initialize", "resume"])
-def test_pause_during_recovery_cannot_be_undone_by_late_connection(tmp_path, quick_recovery, phase):
+@pytest.mark.parametrize("phase", ["backoff", "initialize", "resume", "teardown"])
+def test_pause_during_recovery_cannot_be_undone_by_late_connection(tmp_path, quick_recovery, monkeypatch, phase):
     async def scenario():
         server = MockServer()
         if phase == "initialize":
@@ -323,11 +250,33 @@ def test_pause_during_recovery_cannot_be_undone_by_late_connection(tmp_path, qui
         try:
             if phase == "backoff":
                 await until(lambda: app.reconnect_attempts >= 1)
+            elif phase == "teardown":
+                await asyncio.wait_for(app.ready_event.wait(), 3)
+                reader = app.reader
+                cleaning = asyncio.Event()
+
+                async def delayed_reader():
+                    try:
+                        await reader
+                    finally:
+                        cleaning.set()
+                        await asyncio.Event().wait()
+
+                app.reader = asyncio.create_task(delayed_reader())
+                await asyncio.sleep(0)
+                app.disconnected.set()
+                await asyncio.wait_for(cleaning.wait(), 3)
             else:
                 marker = server.initializing if phase == "initialize" else server.resuming
                 await asyncio.wait_for(marker.wait(), 3)
             dispatcher.accept(event(1), 123)
-            await asyncio.wait_for(dispatcher.pause(), 3)
+            with monkeypatch.context() as patch:
+                if phase == "teardown":
+                    sleep = AsyncMock()
+                    patch.setattr(wake.asyncio, "sleep", sleep)
+                await asyncio.wait_for(dispatcher.pause(), 3)
+                if phase == "teardown":
+                    sleep.assert_not_awaited()
             server.release_initialize.set()
             server.release_resume.set()
             await asyncio.sleep(0.04)
@@ -349,19 +298,11 @@ def test_prestart_transport_loss_can_retry_target_resolution_without_duplicate_t
     async def scenario():
         server = MockServer()
         server.disconnect_resume_on_call = 2
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                await asyncio.wait_for(dispatcher.queue.join(), 3)
-                assert len(server.sockets) == 2 and server.counter == dispatcher.completed == 1
-                assert dispatcher.failed == 0 and dispatcher.enabled and not app.outcome_unknown
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            assert len(server.sockets) == 2 and server.counter == dispatcher.completed == 1
+            assert dispatcher.failed == 0 and dispatcher.enabled and not app.outcome_unknown
 
     asyncio.run(scenario())
 
@@ -371,13 +312,8 @@ def test_metadata_and_notification_complete_same_turn_once_and_ignore_late_dupli
         server = MockServer(complete=False)
         server.disconnect_after_start_response = True
         server.release_metadata.clear()
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
+        async with managed_wake(tmp_path, server) as (_app, dispatcher):
             try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
                 dispatcher.accept(event(1), 123)
                 dispatcher.accept(event(2), 123)
                 await asyncio.wait_for(server.metadata_requested.wait(), 3)
@@ -399,7 +335,6 @@ def test_metadata_and_notification_complete_same_turn_once_and_ignore_late_dupli
                 assert server.counter == dispatcher.completed == 3 and dispatcher.failed == 0
             finally:
                 server.release_metadata.set()
-                await stop(dispatcher)
 
     asyncio.run(scenario())
 
@@ -409,24 +344,16 @@ def test_metadata_rpc_rejection_blocks_and_retains_exact_known_id(tmp_path, quic
         server = MockServer(complete=False)
         server.disconnect_after_start_response = True
         server.reject_method = "thread/turns/list"
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                dispatcher.accept(event(2), 123)
-                await until(lambda: not dispatcher.enabled)
-                assert app.active_turn == "1" and app.outcome_unknown
-                assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
-                assert dispatcher.status()["rpc_error_code"] == -32600
-                assert "private" not in json.dumps(dispatcher.status())
-                assert server.counter == 1
-                assert sum(call["method"] == "thread/turns/list" for call in server.calls) == 1
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled)
+            assert app.active_turn == "1" and app.outcome_unknown
+            assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
+            assert dispatcher.status()["rpc_error_code"] == -32600
+            assert "private" not in json.dumps(dispatcher.status())
+            assert server.counter == 1
+            assert sum(call["method"] == "thread/turns/list" for call in server.calls) == 1
 
     asyncio.run(scenario())
 
@@ -435,23 +362,15 @@ def test_foreign_owner_turn_is_never_interrupted_or_queued_behind_by_recovery(tm
     async def scenario():
         server = MockServer()
         server.thread_status = "active"
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                assert dispatcher.status()["ready"]
-                dispatcher.accept(event(1), 123)
-                dispatcher.accept(event(2), 123)
-                await until(lambda: not dispatcher.enabled)
-                assert dispatcher.last_error == "codex_thread_busy"
-                assert not app.outcome_unknown and app.active_turn is None
-                assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
-                assert not any(call["method"] in {"turn/start", "turn/interrupt"} for call in server.calls)
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            assert dispatcher.status()["ready"]
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled)
+            assert dispatcher.last_error == "codex_thread_busy"
+            assert not app.outcome_unknown and app.active_turn is None
+            assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
+            assert not any(call["method"] in {"turn/start", "turn/interrupt"} for call in server.calls)
 
     asyncio.run(scenario())
 
@@ -468,27 +387,19 @@ def test_old_reader_generation_cannot_disconnect_or_complete_current_connection(
 
     async def scenario():
         server = MockServer()
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                generation = app.generation
-                stale = {
-                    "method": "turn/completed",
-                    "params": {"threadId": THREAD, "turn": {"id": "1", "status": "completed"}},
-                }
-                await app._read(DelayedOldSocket(stale), generation - 1)
-                assert app.connected and app.generation == generation
-                assert app.events.empty() and not app.disconnected.is_set()
-                assert dispatcher.status()["ready"] and dispatcher.completed == 0
-                dispatcher.accept(event(1), 123)
-                await asyncio.wait_for(dispatcher.queue.join(), 3)
-                assert dispatcher.completed == server.counter == 1 and dispatcher.failed == 0
-            finally:
-                await stop(dispatcher)
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            generation = app.generation
+            stale = {
+                "method": "turn/completed",
+                "params": {"threadId": THREAD, "turn": {"id": "1", "status": "completed"}},
+            }
+            await app._read(DelayedOldSocket(stale), generation - 1)
+            assert app.connected and app.generation == generation
+            assert app.events.empty() and not app.disconnected.is_set()
+            assert dispatcher.status()["ready"] and dispatcher.completed == 0
+            dispatcher.accept(event(1), 123)
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            assert dispatcher.completed == server.counter == 1 and dispatcher.failed == 0
 
     asyncio.run(scenario())
 
@@ -499,28 +410,20 @@ def test_heartbeat_timeout_reconnects_without_model_or_telegram_calls(tmp_path, 
 
     async def scenario():
         server = MockServer()
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.start()
-            try:
-                await asyncio.wait_for(app.ready_event.wait(), 3)
-                assert app.websocket.ping_interval == app.websocket.ping_timeout / 2 == 0.01
-                protocol = server.sockets[0].protocol
-                recv_frame = protocol.recv_frame
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            assert app.websocket.ping_interval == app.websocket.ping_timeout / 2 == 0.01
+            protocol = server.sockets[0].protocol
+            recv_frame = protocol.recv_frame
 
-                def suppress_pong(frame):
-                    if frame.opcode != OP_PING:
-                        recv_frame(frame)
+            def suppress_pong(frame):
+                if frame.opcode != OP_PING:
+                    recv_frame(frame)
 
-                monkeypatch.setattr(protocol, "recv_frame", suppress_pong)
-                await until(lambda: len(server.sockets) >= 2 and dispatcher.status()["ready"])
-                assert server.counter == 0 and dispatcher.completed == dispatcher.failed == 0
-                assert dispatcher.status()["last_disconnect_at"]
-                assert all(call["method"] in {"initialize", "initialized", "thread/resume"} for call in server.calls)
-            finally:
-                await stop(dispatcher)
+            monkeypatch.setattr(protocol, "recv_frame", suppress_pong)
+            await until(lambda: len(server.sockets) >= 2 and dispatcher.status()["ready"])
+            assert server.counter == 0 and dispatcher.completed == dispatcher.failed == 0
+            assert dispatcher.status()["last_disconnect_at"]
+            assert all(call["method"] in {"initialize", "initialized", "thread/resume"} for call in server.calls)
 
     asyncio.run(scenario())
 
