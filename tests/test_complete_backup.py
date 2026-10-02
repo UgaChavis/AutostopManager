@@ -95,6 +95,11 @@ def test_complete_backup_covers_files_sqlites_and_empty_store_volume(layout):
     directory = Path(result["backup"])
     manifest = backup.verify(directory, backend)
     assert manifest["global_atomic_snapshot"] is False
+    assert manifest["components"]["crm"]["sqlite_restore_metadata"]["change_feed.sqlite3"] == backup.restore_metadata(
+        layout.crm / "change_feed.sqlite3"
+    )
+    assert manifest["components"]["manager"]["sqlite_restore_metadata"] == backup.restore_metadata(layout.manager)
+    assert manifest["components"]["scheduler"]["sqlite_restore_metadata"] == backup.restore_metadata(layout.scheduler)
     assert backup.REQUIRED_ARTIFACTS <= manifest["artifacts"].keys()
     assert {
         "attachments/synthetic.txt",

@@ -80,6 +80,11 @@ def stamp() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def restore_metadata(path: Path) -> dict:
+    info = path.stat()
+    return {"uid": info.st_uid, "gid": info.st_gid, "mode": f"{stat.S_IMODE(info.st_mode):04o}"}
+
+
 def digest(path: Path, guard=lambda: None) -> str:
     result = hashlib.sha256()
     with path.open("rb") as handle:
@@ -545,6 +550,7 @@ class Backup:
                     sqlite_files = {
                         name: path for name, path in entries(layout.crm, crm=True).items() if name in CRM_SQLITES
                     }
+                    sqlite_metadata = {name: restore_metadata(path) for name, path in sqlite_files.items()}
                     for name, path in sqlite_files.items():
                         sqlite_backup(path, temporary / "crm-sqlite" / name, crm_guard)
                     crm_info = archive(layout.crm, temporary / "crm-files.tar.gz", crm=True, guard=crm_guard)
@@ -555,11 +561,17 @@ class Backup:
                     "completed_at": stamp(),
                     **crm_info,
                     "sqlite_files": len(sqlite_files),
+                    "sqlite_restore_metadata": sqlite_metadata,
                 }
                 for name, source in [("manager", layout.manager), ("scheduler", layout.scheduler)]:
                     started = stamp()
+                    source_metadata = restore_metadata(source)
                     sqlite_backup(source, temporary / (name + ".sqlite3"), self.guard)
-                    components[name] = {"started_at": started, "completed_at": stamp()}
+                    components[name] = {
+                        "started_at": started,
+                        "completed_at": stamp(),
+                        "sqlite_restore_metadata": source_metadata,
+                    }
                 for name, source in [("roles", layout.roles)]:
                     started = stamp()
                     info = archive(source, temporary / (name + ".tar.gz"), guard=self.guard)

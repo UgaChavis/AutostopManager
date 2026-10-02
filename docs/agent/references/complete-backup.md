@@ -86,6 +86,10 @@ drop-in и daemon-reload возвращают исходный canonical helper 
 Restore выполняется отдельно, сначала в изоляции без сети/отправок. SQLite
 integrity и pg_restore в /dev/null не доказывают application recovery. Пишущие
 компоненты должны быть остановлены на согласованное quiet window; проверить
-exact revision/config и независимо прочитать результат. Не активировать scheduler
+exact revision/config и независимо прочитать результат. Пока writers остановлены,
+восстановить uid/gid/mode каждой live SQLite по component sqlite_restore_metadata:
+backup artifacts имеют root600 независимо от исходного app owner. Tar сохраняет
+исходную файловую ownership metadata; права каталогов проверяются до запуска writers.
+Не активировать scheduler
 и Telegram по старой очереди до сверки idempotency/outbox и внешних receipts.
 Offsite destination и шифрование согласуются отдельно; remote writes отсутствуют.
