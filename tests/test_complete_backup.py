@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -504,8 +505,23 @@ def test_crm_live_mount_must_match_backup_source(layout, monkeypatch, crm_bindin
             backend.check(layout)
 
 
+@pytest.fixture
+def owner_probe_root():
+    # Application UID needs traversal; shared pytest/gate ancestors stay private.
+    with tempfile.TemporaryDirectory(prefix="autostop-backup-owner-probe-", dir="/tmp") as directory:
+        root = Path(directory)
+        root.chmod(0o711)
+        uid, gid = os.geteuid(), os.getegid()
+        try:
+            yield root
+        finally:
+            os.seteuid(uid)
+            os.setegid(gid)
+
+
 @pytest.mark.skipif(os.geteuid() != 0, reason="real effective-identity integration requires root")
-def test_online_snapshot_does_not_create_root_owned_sidecars_and_restores_identity(tmp_path):
+def test_online_snapshot_does_not_create_root_owned_sidecars_and_restores_identity(owner_probe_root):
+    tmp_path = owner_probe_root
     source_dir, target_dir = tmp_path / "source", tmp_path / "target"
     source_dir.mkdir(mode=0o700)
     target_dir.mkdir(mode=0o700)
@@ -515,12 +531,7 @@ def test_online_snapshot_does_not_create_root_owned_sidecars_and_restores_identi
     connection.execute("CREATE TABLE fixture(value TEXT)")
     connection.execute("INSERT INTO fixture VALUES ('committed-only-in-wal')")
     connection.commit()
-    # Keep all source ancestors accessible to the application UID while the
-    # independent destination remains root-only. Fixtures contain no live data.
-    os.chown(tmp_path, 10001, 10001)
-    for ancestor in tmp_path.parents:
-        if ancestor.name.startswith("pytest-"):
-            ancestor.chmod(0o711)
+    # Only this fixture's source is owned by the application UID; target stays private.
     os.chown(source_dir, 10001, 10001)
     for path in source_dir.iterdir():
         os.chown(path, 10001, 10001)
