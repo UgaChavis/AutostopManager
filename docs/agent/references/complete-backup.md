@@ -11,7 +11,7 @@ Store source revision сам по себе не доказывает installed s
 | Store PostgreSQL | свежий dump канонического `/usr/local/sbin/autostop24-db-backup`, hardlink store.dump на том же filesystem |
 | Store files | uploads.tar.gz, photos.tar.gz: SHA всего набора неизменны от начала canonical dump до окончания архивов |
 | CRM data | crm-files.tar.gz: state, attachments, shared-files, repair-orders, durable JSON/audit/config data; raw SQLite отдельно |
-| CRM SQLite | online snapshots под существующим state.lock, journal_mode=DELETE, полная integrity_check |
+| CRM native SQLite | exact top-level change_feed.sqlite3: online snapshot под существующим state.lock, journal_mode=DELETE, полная integrity_check |
 | Manager DB | manager.sqlite3: online snapshot, integrity_check |
 | Scheduler registry | scheduler.sqlite3: online snapshot, integrity_check |
 | M2 журнал | roles.tar.gz: проверенная файловая копия |
@@ -46,10 +46,17 @@ copied archive bytes также сравниваются с source SHA. Lock bud
 ожидание — 3 секунды. CRM native writer timeout по текущему source — 10 секунд;
 короткая задержка или operator failure всё же возможны. Первый capture требует
 тихого окна и проверки длительности. Новый root-owned state.lock не создаётся.
+Standalone runner работает в одном потоке: target открывается root-private с
+memory journal, source online backup выполняется под effective UID/GID владельца
+БД, затем finally возвращает root identity и target journal_mode=DELETE. Поэтому
+новые native WAL/SHM получают app owner, а target остаётся root600.
 
-Исключены SQLite WAL/SHM/journals, locks, CRM logs, searxng cache, maintenance
+Исключены только exact known CRM native SQLite WAL/SHM/journals, native lock paths,
+CRM logs, searxng cache, maintenance
 reports и вложенные backup. Telegram sessions, VPN profiles, исходники, ОС,
 /etc runtime config, environment secrets и provider snapshots не входят.
+Payload filenames в attachments/shared-files/repair-orders/Store volumes непрозрачны:
+.lock/.db/.sqlite3/-wal/-shm/-journal не исключаются и не открываются как SQLite.
 Для recovery нужны отдельные source/revision anchors, config и reprovision secrets.
 
 Plan выполняет read-only runtime/helper/mount checks и метаданные объёмов.

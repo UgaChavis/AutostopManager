@@ -31,6 +31,19 @@ HELPER_SHA256 = "5c86ce33d54271c6848ff293e610c1af0be39f543404508b2281a49c3c399d9
 DAILY_NAME = re.compile(r"autostop24-\d{8}T\d{6}Z\.dump\Z")
 CRM_TRANSIENT = {"logs", "searxng", "backups", "maintenance-backups", "maintenance"}
 SQLITE_SUFFIXES = {".sqlite3", ".sqlite", ".db"}
+CRM_SQLITES = {"change_feed.sqlite3"}
+CRM_LOCKS = {
+    "state.lock",
+    "state.json.lock",
+    "shared_files_index.lock",
+    "manager_structure.lock",
+    "mcp-oauth-state.lock",
+    "users.lock",
+    "settings.lock",
+    "app.instance.lock",
+    "printing/completion_act_forms.lock",
+    "audit/.audit-archive.lock",
+}
 REQUIRED_ARTIFACTS = {
     "crm-files.tar.gz",
     "crm-sqlite/change_feed.sqlite3",
@@ -126,24 +139,55 @@ def entries(root: Path, *, crm: bool = False) -> dict[str, Path]:
             if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 raise BackupError("backup_source_special_file")
         for name in files:
-            if name.endswith((".lock", "-wal", "-shm", "-journal")) or name.startswith(".agent-gateway-maintenance"):
-                continue
             path = Path(parent) / name
-            result[path.relative_to(root).as_posix()] = path
+            relative_name = path.relative_to(root).as_posix()
+            if crm and (
+                relative_name in CRM_LOCKS
+                or relative_name in {".agent-gateway-maintenance", ".agent-gateway-maintenance.lock"}
+                or any(
+                    relative_name == database + sidecar
+                    for database in CRM_SQLITES
+                    for sidecar in ("-wal", "-shm", "-journal")
+                )
+            ):
+                continue
+            result[relative_name] = path
     return result
+
+
+@contextmanager
+def source_identity(source: Path):
+    previous_uid, previous_gid = os.geteuid(), os.getegid()
+    info = source.stat()
+    try:
+        if previous_uid == 0:
+            os.setegid(info.st_gid)
+            os.seteuid(info.st_uid)
+        elif previous_uid != info.st_uid:
+            raise BackupError("backup_sqlite_source_owner_mismatch")
+        yield
+    finally:
+        if os.geteuid() != previous_uid:
+            os.seteuid(previous_uid)
+        if os.getegid() != previous_gid:
+            os.setegid(previous_gid)
 
 
 def sqlite_backup(source: Path, destination: Path, guard=lambda: None) -> None:
     if source.is_symlink() or not source.is_file():
         raise BackupError("backup_sqlite_source_invalid")
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=3)) as origin:
-        with closing(sqlite3.connect(destination, timeout=3)) as target:
+    with closing(sqlite3.connect(destination, timeout=3)) as target:
+        # Open the root-private destination before changing effective identity.
+        # Its rollback journal stays in memory while SQLite reads the live source
+        # as its owner, preventing new root-owned WAL/SHM in app directories.
+        target.execute("PRAGMA journal_mode=MEMORY")
+        with source_identity(source), closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=3)) as origin:
             origin.backup(target, pages=256, progress=lambda *_: guard(), sleep=0.05)
             # A source WAL database preserves its journal mode in online backup.
             # Publish a standalone database, with no required snapshot sidecars.
-            target.execute("PRAGMA journal_mode=DELETE")
-            target.commit()
+        target.execute("PRAGMA journal_mode=DELETE")
+        target.commit()
     destination.chmod(0o600)
     sqlite_check(destination, guard)
 
@@ -170,7 +214,7 @@ class GuardedReader:
 
 def archive(source: Path, destination: Path, *, crm: bool = False, guard=lambda: None) -> dict[str, int]:
     files = entries(source, crm=crm)
-    regular = {name: path for name, path in files.items() if not (crm and path.suffix in SQLITE_SUFFIXES)}
+    regular = {name: path for name, path in files.items() if not (crm and name in CRM_SQLITES)}
     before = {name: digest(path, guard) for name, path in regular.items()}
     with tarfile.open(destination, "w:gz", compresslevel=1) as target:
         for name, path in sorted(regular.items()):
@@ -179,9 +223,7 @@ def archive(source: Path, destination: Path, *, crm: bool = False, guard=lambda:
                 target.addfile(target.gettarinfo(path, arcname=name), GuardedReader(handle, guard))
     destination.chmod(0o600)
     after_files = entries(source, crm=crm)
-    after = {
-        name: digest(path, guard) for name, path in after_files.items() if not (crm and path.suffix in SQLITE_SUFFIXES)
-    }
+    after = {name: digest(path, guard) for name, path in after_files.items() if not (crm and name in CRM_SQLITES)}
     if before != after or archive_hashes(destination, guard) != before:
         raise BackupError("backup_source_changed")
     return {"files": len(before), "source_bytes": sum(path.stat().st_size for path in regular.values())}
@@ -255,6 +297,11 @@ class Postgres:
         }
         if any(mount_paths.get(key) != value for key, value in expected.items()):
             raise BackupError("backup_store_mounts_invalid")
+        crm_mounts = {
+            m["Destination"]: Path(m["Source"]) for m in result["autostopcrm"]["mounts"] if m["Type"] == "bind"
+        }
+        if crm_mounts.get("/home/autostop/.minimal-kanban") != layout.crm:
+            raise BackupError("backup_crm_mount_invalid")
         git = subprocess.run(
             ["git", "-C", str(layout.store_source), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=15
         )
@@ -493,12 +540,10 @@ class Backup:
                     before_crm = {
                         name: digest(path, crm_guard)
                         for name, path in entries(layout.crm, crm=True).items()
-                        if path.suffix not in SQLITE_SUFFIXES
+                        if name not in CRM_SQLITES
                     }
                     sqlite_files = {
-                        name: path
-                        for name, path in entries(layout.crm, crm=True).items()
-                        if path.suffix in SQLITE_SUFFIXES
+                        name: path for name, path in entries(layout.crm, crm=True).items() if name in CRM_SQLITES
                     }
                     for name, path in sqlite_files.items():
                         sqlite_backup(path, temporary / "crm-sqlite" / name, crm_guard)

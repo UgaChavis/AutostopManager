@@ -4,6 +4,8 @@ import importlib.util
 import json
 import itertools
 import os
+import stat
+import subprocess
 import sqlite3
 import sys
 from pathlib import Path
@@ -353,6 +355,20 @@ def test_exact_canonical_helper_identity_and_permissions_are_required(tmp_path, 
     layout = backup.Layout(helper=helper)
     monkeypatch.setattr(backup, "HELPER_SHA256", backup.digest(helper))
     backend = backup.Postgres()
+    if os.geteuid() != 0:
+        with pytest.raises(backup.BackupError, match="backup_canonical_helper_unsafe"):
+            backend.check_helper(layout)
+        original = Path.lstat
+
+        def root_owned(path):
+            info = original(path)
+            if path == helper:
+                fields = list(info)
+                fields[stat.ST_UID] = 0
+                return os.stat_result(fields)
+            return info
+
+        monkeypatch.setattr(Path, "lstat", root_owned)
     backend.check_helper(layout)
     helper.write_text("#!/bin/sh\nexit 1\n")
     with pytest.raises(backup.BackupError, match="backup_canonical_helper_changed"):
@@ -403,3 +419,126 @@ def test_daily_unsupported_full_runtime_still_runs_canonical_once(layout):
     result = backup.Backup(layout, reserve=0, postgres=backend).daily(runtime_supported=False)
     assert result["error"] == "backup_supported_sqlite_runtime_required"
     assert result["canonical_succeeded"] is True and backend.helper_calls == 1
+
+
+def test_payload_filenames_are_opaque_in_every_application_file_tree(layout):
+    names = ["payload.lock", "payload-wal", "payload-shm", "payload-journal", "payload.db", "payload.sqlite3"]
+    directories = [
+        layout.crm / "shared-files",
+        layout.crm / "attachments",
+        layout.crm / "repair-orders",
+        layout.uploads,
+        layout.photos,
+    ]
+    for directory in directories:
+        for name in names:
+            (directory / name).write_bytes(b"opaque synthetic payload, not a SQLite database")
+    (layout.crm / "change_feed.sqlite3-shm").write_bytes(b"native sidecar excluded")
+    backend = FakePostgres()
+    result = backup.Backup(layout, reserve=0, postgres=backend).create()
+    bundle = Path(result["backup"])
+    backup.verify(bundle, backend)
+    crm_names = backup.archive_hashes(bundle / "crm-files.tar.gz")
+    for directory in directories[:3]:
+        assert {directory.name + "/" + name for name in names} <= crm_names.keys()
+    assert "change_feed.sqlite3-shm" not in crm_names
+    assert "state.lock" not in crm_names
+    assert set(names) <= backup.archive_hashes(bundle / "uploads.tar.gz").keys()
+    assert set(names) <= backup.archive_hashes(bundle / "photos.tar.gz").keys()
+
+
+@pytest.mark.parametrize("crm_binding", ["correct", "wrong_source", "wrong_destination"])
+def test_crm_live_mount_must_match_backup_source(layout, monkeypatch, crm_binding):
+    backend = backup.Postgres()
+    monkeypatch.setattr(backend, "check_helper", lambda _: None)
+
+    def observe(args, **kwargs):
+        if args[0] == "git":
+            output = "c" * 40
+        elif args[-2] == "{{.State.Health.Status}}":
+            output = "healthy"
+        else:
+            name = args[-1]
+            mounts = []
+            if name == "autostopcrm":
+                mounts = [
+                    {
+                        "Type": "bind",
+                        "Source": str(layout.crm) if crm_binding != "wrong_source" else "/wrong-data",
+                        "Destination": "/home/autostop/.minimal-kanban"
+                        if crm_binding != "wrong_destination"
+                        else "/app/data",
+                    }
+                ]
+            elif name == "autostop-app":
+                mounts = [
+                    {"Type": "volume", "Source": str(layout.uploads), "Destination": "/var/data/uploads"},
+                    {
+                        "Type": "volume",
+                        "Source": str(layout.photos),
+                        "Destination": "/var/data/quote-request-vin-photos",
+                    },
+                ]
+            output = json.dumps(
+                {
+                    "id": name,
+                    "image": "synthetic",
+                    "started_at": "2026-10-03",
+                    "running": True,
+                    "mounts": mounts,
+                    "revision": "a" * 40,
+                }
+            )
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(backup.subprocess, "run", observe)
+    if crm_binding == "correct":
+        assert backend.check(layout)["autostopcrm"]["running"] is True
+    else:
+        with pytest.raises(backup.BackupError, match="backup_crm_mount_invalid"):
+            backend.check(layout)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="real effective-identity integration requires root")
+def test_online_snapshot_does_not_create_root_owned_sidecars_and_restores_identity(tmp_path):
+    source_dir, target_dir = tmp_path / "source", tmp_path / "target"
+    source_dir.mkdir(mode=0o700)
+    target_dir.mkdir(mode=0o700)
+    source, target = source_dir / "fixture.sqlite3", target_dir / "snapshot.sqlite3"
+    connection = sqlite3.connect(source)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("CREATE TABLE fixture(value TEXT)")
+    connection.execute("INSERT INTO fixture VALUES ('committed-only-in-wal')")
+    connection.commit()
+    # Keep all source ancestors accessible to the application UID while the
+    # independent destination remains root-only. Fixtures contain no live data.
+    os.chown(tmp_path, 10001, 10001)
+    for ancestor in tmp_path.parents:
+        if ancestor.name.startswith("pytest-"):
+            ancestor.chmod(0o711)
+    os.chown(source_dir, 10001, 10001)
+    for path in source_dir.iterdir():
+        os.chown(path, 10001, 10001)
+    before = os.geteuid(), os.getegid()
+    backup.sqlite_backup(source, target)
+    assert (os.geteuid(), os.getegid()) == before
+    assert target.stat().st_uid == 0 and target.stat().st_mode & 0o777 == 0o600
+    assert all(
+        path.stat().st_uid == 10001 and path.stat().st_gid == 10001
+        for path in source_dir.iterdir()
+        if path.name.endswith(("-wal", "-shm"))
+    )
+    with sqlite3.connect(f"file:{target}?immutable=1", uri=True) as restored:
+        assert restored.execute("SELECT value FROM fixture").fetchone() == ("committed-only-in-wal",)
+    connection.close()
+    assert not source.with_name(source.name + "-wal").exists()
+    backup.sqlite_backup(source, target_dir / "second.sqlite3")
+    sidecars = [path for path in source_dir.iterdir() if path.name.endswith(("-wal", "-shm"))]
+    assert sidecars and all(path.stat().st_uid == 10001 and path.stat().st_gid == 10001 for path in sidecars)
+
+    def fail():
+        raise backup.BackupError("synthetic_guard_failure")
+
+    with pytest.raises(backup.BackupError, match="synthetic_guard_failure"):
+        backup.sqlite_backup(source, target_dir / "aborted.sqlite3", fail)
+    assert (os.geteuid(), os.getegid()) == before
