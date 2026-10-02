@@ -42,7 +42,7 @@ PARTSAPI_METHOD_ENV_NAMES = sorted(set(PARTSAPI_METHOD_KEY_ENV_NAMES.values()))
 
 
 def _clear_partsapi_method_env(monkeypatch):
-    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/tmp/autostop-manager-test-empty.env")
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
     monkeypatch.setattr(manager_config, "_ENV_LOADED", False)
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)
     for name in PARTSAPI_METHOD_ENV_NAMES:
@@ -94,6 +94,236 @@ def partsapi_vin_env(monkeypatch):
 
 def _vin_row(**fields):
     return {"carId": 12345, "carType": "PC", "manuName": "TEST", "modelName": "MODEL", **fields}
+
+
+def _partsapi_vin_readback(monkeypatch, payload, *, transmission=None):
+    methods = []
+
+    def respond(request, **_kwargs):
+        method = parse_qs(urlsplit(request.full_url).query)["method"][0]
+        methods.append(method)
+        return _FakeResponse(
+            {
+                "VINdecode": payload,
+                "getSearchTree": [{"NODE_3_TEXT": "Колодки тормозные", "NODE_3_STR_ID": 100470}],
+                "getArticles": [{"ART_ID": 1, "ART_NUM": "TEST-1", "SUP_BRAND": "TEST"}],
+            }[method]
+        )
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
+    monkeypatch.setattr(
+        vin_oem_resolver,
+        "decode_vehicle_identity",
+        lambda *_a, **_k: {
+            "confidence_label": "medium",
+            "vehicle_profile": {
+                "make": "TEST",
+                "model": "MODEL",
+                **({"transmission": transmission} if transmission else {}),
+            },
+            "conflicts": [],
+        },
+    )
+    decoded = partsapi_catalog_lookup(operation="vin_decode", identifier="A" * 17, max_attempts=3)
+    methods.clear()
+    resolved = vin_oem_resolver.resolve_vin_oem_parts(
+        identifier="A" * 17, requested_part="передние колодки", live_partsapi_oem=True, live_vpic=False
+    )
+    assert resolved["readiness"]["ready_for_crm_writeback"] is False
+    for candidate in resolved["article_candidates"]:
+        assert candidate["vin_fitment_confirmed"] is False
+        assert candidate["manual_review_required"] is True
+    return decoded, resolved, methods
+
+
+@pytest.mark.parametrize(
+    ("parent_fields", "children", "expected_transmissions", "agreement"),
+    [
+        pytest.param({"kp": "6MT"}, [_vin_row()], ["6MT"], "conflict", id="inherit-transmission"),
+        pytest.param({"kp": "6MT"}, [_vin_row(kp="")], ["6MT"], "conflict", id="empty-child-field"),
+        pytest.param(
+            {"kp": "6MT"},
+            [_vin_row(carId=67890, kp="6AT")],
+            ["6MT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="distinct-modifications",
+        ),
+        pytest.param(
+            {"kp": "6MT"},
+            [_vin_row(kpp="6AT")],
+            ["6MT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="conflicting-alias",
+        ),
+        pytest.param(
+            {"kp": "6AT"},
+            [_vin_row(manuName="OTHER", kp="6AT")],
+            ["6AT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="conflicting-make",
+        ),
+        pytest.param(
+            {"kp": "6AT"},
+            [_vin_row(modelName="OTHER", kp="6AT")],
+            ["6AT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="conflicting-model",
+        ),
+        pytest.param(
+            {"kp": "6AT"},
+            [_vin_row(carType="LCV", kp="6AT")],
+            ["6AT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="conflicting-type",
+        ),
+        pytest.param(
+            {"kp": "6AT", "carType": "pc"},
+            [_vin_row(carId="12345")],
+            ["6AT"],
+            "matched",
+            id="same-id-and-type-normalized",
+        ),
+        pytest.param({"carId": None, "kp": "6AT"}, [_vin_row()], ["6AT"], "matched", id="shared-wrapper"),
+        pytest.param({"carId": None, "kp": "6MT"}, [_vin_row()], ["6MT"], "conflict", id="shared-wrapper-conflict"),
+        pytest.param(
+            {"carId": 0, "kp": "6AT"},
+            [_vin_row(kp="6AT")],
+            ["6AT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="nonpositive-parent-id",
+        ),
+        pytest.param(
+            {"kp": "6AT"},
+            [_vin_row(carId=True, kp="6AT")],
+            ["6AT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="boolean-child-id",
+        ),
+        pytest.param(
+            {"kp": "6AT"},
+            [_vin_row(carId=None, kp="6AT")],
+            ["6AT", "6AT"],
+            "ambiguous_vehicle_modification",
+            id="missing-child-id",
+        ),
+        pytest.param(
+            {"kp": "6MT"},
+            [_vin_row(), _vin_row(carId=67890, kp="6AT")],
+            ["6MT", None, "6AT"],
+            "ambiguous_vehicle_modification",
+            id="multiple-children",
+        ),
+    ],
+)
+def test_partsapi_nested_profiles_preserve_parent_context(
+    partsapi_vin_env, monkeypatch, parent_fields, children, expected_transmissions, agreement
+):
+    payload = _vin_row(vin="A" * 17, result=children, **parent_fields)
+    before = json.dumps(payload, sort_keys=True)
+    decoded, resolved, methods = _partsapi_vin_readback(monkeypatch, payload, transmission="6AT")
+    assert [profile.get("transmission") for profile in decoded["vehicle_profiles"]] == expected_transmissions
+    assert decoded["identifier_matches_request"] is True
+    assert resolved["tecdoc_vehicle"]["identity_agreement"] == agreement
+    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if agreement == "matched" else ["VINdecode"])
+    assert json.dumps(payload, sort_keys=True) == before
+
+
+@pytest.mark.parametrize(
+    "alias_fields",
+    [
+        {"TYPE_ID": 67890, "CAR_TYPE": "PC", "brend": "TEST", "modely": "MODEL"},
+        {"typeNumber": 67890, "carType": "PC", "manuShortName": "TEST", "modelName": "MODEL"},
+        {"TecDocExternalId": 67890, "CAR_TYPE": "PC"},
+        {"CAR_TYPE": "PC", "manuShortName": "TEST", "modely": "MODEL"},
+        {"carId": 0, "carType": "PC"},
+        {"TecDocExternalId": 0, "CAR_TYPE": "PC"},
+    ],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_partsapi_supported_alias_card_cannot_hide_foreign_vin(partsapi_vin_env, monkeypatch, alias_fields, reverse):
+    rows = [_vin_row(vin="A" * 17), {"vin": "B" * 17, **alias_fields}]
+    if reverse:
+        rows.reverse()
+    decoded, resolved, methods = _partsapi_vin_readback(monkeypatch, {"result": rows})
+    assert len(decoded["vehicle_profiles"]) == 2
+    assert [profile["identifier_matches_request"] for profile in decoded["vehicle_profiles"]] == (
+        [False, True] if reverse else [True, False]
+    )
+    assert decoded["ok"] is False
+    assert decoded["outcome"] == "identifier_mismatch"
+    assert resolved["tecdoc_vehicle"]["identity_agreement"] == "identifier_mismatch"
+    assert methods == ["VINdecode"]
+
+
+@pytest.mark.parametrize("ignored_key", ["metadata", "meta", "request", "params", "echo"])
+def test_partsapi_metadata_card_cannot_confirm_response_vin(partsapi_vin_env, monkeypatch, ignored_key):
+    decoded, resolved, methods = _partsapi_vin_readback(
+        monkeypatch, {ignored_key: _vin_row(vin="A" * 17), "result": {"vin": "B" * 17}}
+    )
+    assert decoded["vehicle_profiles"] == []
+    assert decoded["outcome"] == "unparsed_response"
+    assert decoded.get("identifier_matches_request") is None
+    assert resolved["tecdoc_vehicle"]["identity_agreement"] == "provider_failed"
+    assert methods == ["VINdecode"]
+
+
+@pytest.mark.parametrize(
+    ("extractor", "row", "empty_row"),
+    [
+        (extract_partsapi_cross_candidates, {"crossBrand": "TEST", "crossNumber": "TEST-1"}, {"crossNumber": ""}),
+        (extract_partsapi_parts_by_vin_candidates, {"parts": "TEST|TEST-1"}, {"parts": ""}),
+        (extract_partsapi_article_candidates, {"ART_ID": 1, "ART_ARTICLE_NR": "TEST-1"}, {"ART_ID": None}),
+    ],
+)
+@pytest.mark.parametrize("envelope", ["row", "list", "data", "items", "empty", "scalar"])
+def test_partsapi_candidate_parsers_filter_noise_and_duplicates(extractor, row, empty_row, envelope):
+    rows = [row, {"unrecognized": "ignore"}, None, row]
+    payload = {
+        "row": row,
+        "list": rows,
+        "data": {"data": {"result": rows}},
+        "items": {"items": {"data": row}},
+        "empty": empty_row,
+        "scalar": "unrecognized",
+    }[envelope]
+    candidates = extractor(payload=payload)
+    if envelope in {"empty", "scalar"}:
+        assert candidates == []
+        return
+    assert len(candidates) == 1
+    assert candidates[0]["part_number"] == "TEST-1"
+    assert candidates[0]["fitment_evidence"].get("fitment_confirmed") is not True
+    assert candidates[0]["fitment_evidence"].get("is_fit_for_this_vin") is not True
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected"),
+    [("TEST-1", [(None, "TEST-1")]), ("TEST|TEST-1|TEST-2", [("TEST", "TEST-1"), (None, "TEST-2")]), ("|||", [])],
+)
+def test_partsapi_vin_scoped_tokens_do_not_confirm_fitment(parts, expected):
+    candidates = extract_partsapi_parts_by_vin_candidates(payload={"parts": parts, "group": "brakes"})
+    assert [(item["brand"], item["part_number"]) for item in candidates] == expected
+    assert all(item["fitment_evidence"]["fitment_status"] == "unconfirmed" for item in candidates)
+    assert all(item["confidence"] == 0.72 for item in candidates)
+
+
+@pytest.mark.parametrize(
+    ("call_fields", "profile_fields", "allowed"),
+    [
+        ({}, {"identifier_matches_request": True}, True),
+        ({"ok": False}, {"identifier_matches_request": True}, False),
+        ({"dry_run": True}, {"identifier_matches_request": True}, False),
+        ({"outcome": "identifier_mismatch"}, {"identifier_matches_request": True}, False),
+        ({}, {"identifier_matches_request": False}, False),
+        ({}, {"identifier_matches_request": "true"}, False),
+        ({}, {"requires_exact_identifier_confirmation": True}, False),
+        ({"outcome": "identifier_unverified"}, {"requires_exact_identifier_confirmation": True}, True),
+        ({"outcome": "identifier_unverified"}, {}, False),
+    ],
+)
+def test_partsapi_candidate_gate_requires_explicit_identifier_evidence(call_fields, profile_fields, allowed):
+    call = {"ok": True, "outcome": "success", "vehicle_profiles": [profile_fields], **call_fields}
+    assert catalog_clients_module.partsapi_identifier_allows_candidate_lookup(call) is allowed
 
 
 @pytest.mark.parametrize("operation", ["vin_decode", "decodeVINus"])
@@ -156,8 +386,7 @@ def test_partsapi_uses_one_normalized_vin(partsapi_vin_env, monkeypatch, identif
 )
 def test_partsapi_vin_correlation_across_response_branches(partsapi_vin_env, monkeypatch, payload, matches):
     before = json.dumps(payload, sort_keys=True)
-    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(payload))
-    result = partsapi_catalog_lookup(operation="vin_decode", identifier="A" * 17, max_attempts=3)
+    result, resolved, methods = _partsapi_vin_readback(monkeypatch, payload)
     assert result["identifier_matches_request"] is matches
     assert result["requires_exact_identifier_confirmation"] is (matches is not True)
     assert result["outcome"] == (
@@ -172,39 +401,9 @@ def test_partsapi_vin_correlation_across_response_branches(partsapi_vin_env, mon
     assert "B" * 17 not in str(result["vehicle_profiles"])
     assert json.dumps(payload, sort_keys=True) == before
 
-    monkeypatch.setattr(
-        vin_oem_resolver,
-        "decode_vehicle_identity",
-        lambda *_a, **_k: {
-            "confidence_label": "medium",
-            "vehicle_profile": {"make": "TEST", "model": "MODEL"},
-            "conflicts": [],
-        },
-    )
-    methods = []
-
-    def respond(request, **_kwargs):
-        method = parse_qs(urlsplit(request.full_url).query)["method"][0]
-        methods.append(method)
-        return _FakeResponse(
-            {
-                "VINdecode": payload,
-                "getSearchTree": [{"NODE_3_TEXT": "Колодки тормозные", "NODE_3_STR_ID": 100470}],
-                "getArticles": [{"ART_ID": 1, "ART_NUM": "TEST-1", "SUP_BRAND": "TEST"}],
-            }[method]
-        )
-
-    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
-    resolved = vin_oem_resolver.resolve_vin_oem_parts(
-        identifier="A" * 17, requested_part="передние колодки", live_partsapi_oem=True, live_vpic=False
-    )
     allowed = matches is not False and len(result["vehicle_profiles"]) == 1
     assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode"])
     assert resolved["tecdoc_vehicle"]["identifier_matches_request"] is matches
-    assert resolved["readiness"]["ready_for_crm_writeback"] is False
-    for candidate in resolved["article_candidates"]:
-        assert candidate["vin_fitment_confirmed"] is False
-        assert candidate["manual_review_required"] is True
 
 
 @pytest.mark.parametrize("parallel", [False, True])

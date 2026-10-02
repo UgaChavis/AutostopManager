@@ -49,6 +49,7 @@ Source-команды запускай из checkout/worktree с `/opt/AutostopM
 | --- | --- |
 | `scripts/doctor.sh` | Wrapper передаёт аргументы в `doctor`; обычный режим read-only, `--full` требует одноразовой среды. |
 | `scripts/release-gates.sh` | Локальные проверки с disposable данными, не deploy. |
+| `scripts/check-e2-branch-coverage.py` | Читает coverage JSON; требует 82% ветвей E2, не меняет данные. |
 | `scripts/install-manager-mcp.sh` | Runtime installer: `--activate [--replace-unit]`. |
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate|--activate-under-hold`, `--replace-unit`, `--release-attempt-key`. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |

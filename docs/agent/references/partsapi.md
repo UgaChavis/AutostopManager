@@ -39,6 +39,8 @@ VINdecode → сверка VIN/вариантов и независимое со
 
 VIN каждой карточки проверяется вместе с VIN её родительских оболочек; все варианты регистра поля учитываются. Эхо запроса и соседние ветви не подтверждают карточку. Чужой полный VIN в любой найденной карточке блокирует весь ответ. Пустой, частичный или маскированный VIN сам совпадение не подтверждает; несколько модификаций нельзя автоматически свести к первой.
 
+Характеристики автомобиля из родительской карточки сохраняются при сверке вложенной. Противоречие или другой carId нельзя скрыть выбором дочерней карточки. Поддерживаемые альтернативные имена полей берутся из той же схемы, что и нормализованный профиль; metadata и эхо запроса не являются карточками автомобиля.
+
 Без подтверждённого VIN выставляется `requires_exact_identifier_confirmation=true`. Поиск кандидатов требует одного профиля, совпадения марки/модели с независимым контекстом, confidence medium/high, отсутствия выявленных противоречий, положительного carId и согласованного carType. `vin_fitment_confirmed=false`, ручная проверка обязательна, автоматическая запись в CRM запрещена. Transport, auth, quota, empty и unparsed сохраняют отдельные исходы.
 
 `VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. `docs/agent/partsapi_category_index.json` хранит непроверенные числовые cat hints старого getPartsbyVIN только как legacy fixture, не активный query path.
@@ -46,3 +48,7 @@ VIN каждой карточки проверяется вместе с VIN е�
 GetNormsModels.makeNameSEO берётся из GetNormsMakes, не TecDoc make ID; последующие model/motor IDs — из того же Autonorms catalog. getArticle требует ART_NUM/SUP_ID, media/crosses/criteria — ART_ID. Для getEngine, getPassengerCarInfo и части maintenance методов response tables неполны: parsing provisional до разрешённого live ответа. Generic payload сам не доказывает OEM/fitment.
 
 Различай transport, auth, HTTP 5xx, malformed payload и genuine empty. Ошибка не доказывает отсутствия автомобиля/детали. Provider quota и доступ проверяются bounded вызовами по поручению.
+
+## Проверки исходников
+
+CI и release gates требуют общее покрытие проекта не ниже 82% и отдельное покрытие ветвей E2 не ниже 82%. Для E2 суммируются покрытые и все ветви `catalog_clients.py`, `vin_oem_resolver.py`, `vin_parts_benchmark.py` из полного прогона тестов. Проверка — `scripts/check-e2-branch-coverage.py`; отсутствие данных по файлу или измерения ветвей останавливает gate.

@@ -7,6 +7,7 @@ import pytest
 from autostop_manager.catalog_clients import extract_partsapi_article_candidates
 from autostop_manager.vin_oem_resolver import (
     _assess_partsapi_identity_agreement,
+    _rank_article_candidate,
     resolve_vin_oem_parts,
 )
 
@@ -286,6 +287,7 @@ def test_resolver_prioritizes_foreign_row_over_modification_ambiguity(reverse):
         "high_conflict",
         "medium_conflict",
         "invalid_car_id",
+        "boolean_car_id",
         "unknown_car_type",
         "car_type_conflict",
     ],
@@ -304,8 +306,8 @@ def test_resolver_unverified_candidates_require_identity_guards(monkeypatch, gua
         identity["conflicts"] = [
             {"field": "model_year", "severity": "medium" if guard == "medium_conflict" else "high"}
         ]
-    elif guard == "invalid_car_id":
-        profile["tecdoc_car_id"] = "0"
+    elif guard in {"invalid_car_id", "boolean_car_id"}:
+        profile["tecdoc_car_id"] = True if guard == "boolean_car_id" else "0"
     elif guard == "unknown_car_type":
         profile.pop("vehicle_type")
     else:
@@ -457,21 +459,26 @@ def test_resolver_counts_retry_attempts_against_total_live_budget(monkeypatch):
     assert result["live_call_count"] == 3
 
 
-def test_resolver_reports_provider_failure_without_claiming_no_parts(monkeypatch):
-    calls = _install_fakes(monkeypatch, failures={"search_tree"})
+@pytest.mark.parametrize("operation", ["vin_decode", "search_tree", "articles"])
+def test_resolver_reports_provider_failure_without_claiming_no_parts(monkeypatch, operation):
+    calls = _install_fakes(monkeypatch, failures={operation})
     result = resolve_vin_oem_parts(
         identifier=SYNTHETIC_VIN,
         requested_part="передние колодки",
         live_vpic=False,
         live_partsapi_oem=True,
     )
-    assert [call["operation"] for call in calls] == ["vin_decode", "search_tree"]
+    chain = ["vin_decode", "search_tree", "articles"]
+    assert [call["operation"] for call in calls] == chain[: chain.index(operation) + 1]
     assert result["status"] == "tecdoc_lookup_provider_failed"
-    assert result["tecdoc_lookup_outcome"]["outcome"] == "not_attempted"
+    assert result["tecdoc_lookup_outcome"]["outcome"] == (
+        "provider_failed" if operation == "articles" else "not_attempted"
+    )
+    assert result["article_candidates"] == []
     assert any(item["stage"] == "partsapi_tecdoc_lookup" for item in result["blockers"])
 
 
-@pytest.mark.parametrize("broken_operation", ["search_tree", "articles"])
+@pytest.mark.parametrize("broken_operation", ["vin_decode", "search_tree", "articles"])
 def test_resolver_reports_unparsed_nonempty_payload(monkeypatch, broken_operation):
     calls = _install_fakes(monkeypatch)
     original = _fake_lookup([])
@@ -486,6 +493,7 @@ def test_resolver_reports_unparsed_nonempty_payload(monkeypatch, broken_operatio
                 failure_class="adapter_unparsed_response",
                 empty_payload=False,
                 response_shape={"kind": "dict"},
+                vehicle_profiles=[],
                 search_tree_rows=[],
                 article_candidates=[],
             )
@@ -698,3 +706,97 @@ def test_vin_decode_profile_uses_shared_identity_comparison(field, left, right, 
         {"ok": True, "vehicle_profiles": [{field: right}]},
     )
     assert result["status"] == status
+
+
+@pytest.mark.parametrize(
+    ("identifier", "part", "status", "action"),
+    [
+        ("", "передние колодки", "needs_vin_or_frame", "request_identifier"),
+        ("123", "передние колодки", "unsupported_identifier_for_vin_decode", "confirm_identifier"),
+        (SYNTHETIC_VIN, "неизвестная деталь", "needs_part_clarification", "clarify_part"),
+        (SYNTHETIC_VIN, "колодки", "needs_part_clarification", "clarify_part_position"),
+    ],
+)
+def test_resolver_incomplete_input_preserves_manual_next_step(monkeypatch, identifier, part, status, action):
+    calls = _install_fakes(monkeypatch)
+    result = resolve_vin_oem_parts(identifier=identifier, requested_part=part, live_vpic=False, live_partsapi_oem=True)
+    assert result["status"] == status
+    assert action in {item["code"] for item in result["manual_actions"]}
+    assert [call["operation"] for call in calls] == (["vin_decode"] if identifier == SYNTHETIC_VIN else [])
+    assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert result["identity"]["ready_for_crm_writeback"] is False
+    assert result["article_candidates"] == []
+
+
+@pytest.mark.parametrize(
+    ("profile_update", "reason"),
+    [
+        ({"model": "Civic"}, "partsapi_identity_conflict"),
+        ({"model": ""}, "partsapi_identity_insufficient_agreement"),
+        ({"tecdoc_car_id": ""}, "partsapi_identity_missing_tecdoc_car_id"),
+    ],
+)
+def test_resolver_preserves_existing_identity_blocker(monkeypatch, profile_update, reason):
+    profile = {"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877", "vehicle_type": "PC"}
+    profile.update(profile_update)
+    calls = _install_fakes(monkeypatch, profiles=[profile])
+    identity = _medium_identity()
+    identity["parts_lookup_readiness"]["blocking_reasons"].append(reason)
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *_a, **_k: identity)
+    result = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN, requested_part="передние колодки", live_vpic=False, live_partsapi_oem=True
+    )
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    assert result["readiness"]["blocking_reasons"].count(reason) == 1
+    assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert result["article_candidates"] == []
+
+
+@pytest.mark.parametrize(
+    ("part", "candidate", "coordinates", "match"),
+    [
+        ({"intent_id": "rear_brake_pads"}, {"product_name": "Rear brake pads"}, {"axle": "rear"}, "matched"),
+        (
+            {"intent_id": "inner_cv_joint", "explicit_position_context": {"axle": "front", "side": "left"}},
+            {"product_name": "Front left inner CV joint"},
+            {"axle": "front", "side": "left", "inner_outer": "inner"},
+            "matched",
+        ),
+        (
+            {"intent_id": "outer_cv_joint", "raw": "передний правый ШРУС"},
+            {"product_name": "Front right outer CV joint"},
+            {"axle": "front", "side": "right", "inner_outer": "outer"},
+            "matched",
+        ),
+        ({"raw": "термостат"}, {"product_name": "Thermostat"}, {}, "not_required"),
+        (
+            {"intent_id": "front_brake_pads"},
+            {"product_name": "Front or rear brake pads", "fitment_evidence": []},
+            {"axle": "front"},
+            "ambiguous",
+        ),
+    ],
+)
+def test_article_ranking_checks_all_requested_coordinates(part, candidate, coordinates, match):
+    ranked = _rank_article_candidate(candidate, part_profile=part, category="100470", index=1)
+    assert ranked["requested_position_coordinates"] == coordinates
+    assert ranked["position_match"] == match
+    assert ("candidate_position_ambiguous" in ranked["blocking_reasons"]) is (match == "ambiguous")
+    assert ranked["vin_fitment_confirmed"] is False
+    assert ranked["oem_number_confirmed"] is False
+    assert ranked["manual_review_required"] is True
+
+
+def test_resolver_live_identity_keeps_catalog_plan_dry(monkeypatch):
+    calls = _install_fakes(monkeypatch)
+    result = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN,
+        requested_part="передние колодки",
+        live_vpic=False,
+        live_partsapi_identity=True,
+    )
+    assert [(call["operation"], call["dry_run"]) for call in calls] == [("vin_decode", False), ("search_tree", True)]
+    assert result["status"] == "ready_for_live_tecdoc_lookup"
+    assert result["live_call_count"] == 1
+    assert "run_live_tecdoc_search_tree" in {item["code"] for item in result["manual_actions"]}
+    assert result["article_candidates"] == []

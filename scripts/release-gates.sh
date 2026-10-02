@@ -89,6 +89,8 @@ json_gate local-checks "$PYTHON" -m autostop_manager.cli doctor
     --basetemp "$gate_dir/pytest"
 )
 "$PYTHON" -m coverage report --fail-under=82
+"$PYTHON" -m coverage json -o "$gate_dir/coverage.json"
+"$PYTHON" scripts/check-e2-branch-coverage.py "$gate_dir/coverage.json"
 
 git diff --check
 git diff --cached --check
