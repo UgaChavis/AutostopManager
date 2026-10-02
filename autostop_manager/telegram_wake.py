@@ -194,7 +194,6 @@ class AppServer:
     async def _read(self, websocket: Any, generation: int) -> None:
         from websockets.exceptions import WebSocketException
 
-        close_code = None
         try:
             async for line in websocket:
                 if generation != self.generation:
@@ -219,7 +218,7 @@ class AppServer:
                     params = message.get("params", {})
                     if isinstance(params, dict) and params.get("threadId") == self.config.thread_id:
                         self.events.put_nowait(message)
-        except (OSError, WebSocketException):
+        except (OSError, WebSocketException, TransportLost):
             pass
         except Exception:  # noqa: BLE001 - malformed/private RPC payloads fail closed with a fixed code.
             if generation == self.generation:
@@ -305,7 +304,7 @@ class AppServer:
 
     async def ensure_ready(self) -> None:
         while True:
-            if self.managed:
+            if self.managed and not (self.pausing or self.blocked):
                 await self.ready_event.wait()
             if self.pausing:
                 raise WakeError("codex_paused")
@@ -491,23 +490,21 @@ class WakeDispatcher:
     def status(self) -> dict[str, Any]:
         return {
             "ok": True,
-            "enabled": self.enabled and not getattr(self.app, "blocked", False),
-            "ready": bool(
-                self.enabled and self.app.connected and getattr(self.app, "recovery_state", "ready") == "ready"
-            ),
-            "recovery_state": getattr(self.app, "recovery_state", "ready"),
-            "reconnect_attempts": getattr(self.app, "reconnect_attempts", 0),
-            "last_disconnect_at": getattr(self.app, "last_disconnect_at", None),
-            "last_disconnect_code": getattr(self.app, "last_disconnect_code", None),
-            "outcome_unknown": getattr(self.app, "outcome_unknown", False),
+            "enabled": self.enabled and not self.app.blocked,
+            "ready": self.enabled and self.app.connected and self.app.recovery_state == "ready",
+            "recovery_state": self.app.recovery_state,
+            "reconnect_attempts": self.app.reconnect_attempts,
+            "last_disconnect_at": self.app.last_disconnect_at,
+            "last_disconnect_code": self.app.last_disconnect_code,
+            "outcome_unknown": self.app.outcome_unknown,
             "connected": self.app.connected,
             "active": self.active,
             "queued": self.queue.qsize(),
             "accepted": self.accepted,
             "completed": self.completed,
             "failed": self.failed,
-            "last_error": self.last_error or getattr(self.app, "recovery_error", None),
-            "rpc_error_code": getattr(self.app, "last_rpc_error_code", None),
+            "last_error": self.last_error or self.app.recovery_error,
+            "rpc_error_code": self.app.last_rpc_error_code,
             "retention": "memory_only",
             "trigger": "telegram_event",
             "polling": False,
@@ -522,7 +519,7 @@ class WakeDispatcher:
         event_id = request["event_id"]
         if not isinstance(event_id, str) or not INBOUND_EVENT_ID_PATTERN.fullmatch(event_id):
             raise WakeError("wake_event_invalid")
-        if not self.enabled or getattr(self.app, "blocked", False):
+        if not self.enabled or self.app.blocked:
             raise WakeError("wake_not_ready")
         if event_id in self.seen:
             return {"ok": True, "duplicate": True}
@@ -558,7 +555,7 @@ class WakeDispatcher:
                         self.last_error = "wake_worker_failed"
                 # Unknown side effects are not replayed and no new turn overlaps them.
                 self.enabled = False
-                if not getattr(self.app, "pausing", False):
+                if not self.app.pausing:
                     self.app.block(self.last_error or "wake_worker_failed")
             finally:
                 self.active = False

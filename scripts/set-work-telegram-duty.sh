@@ -162,21 +162,6 @@ cleanup_incomplete_duty() {
   return "${exit_code}"
 }
 
-duty_is_paused() {
-  local value
-  [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || return 1
-  value="$(systemctl show --property=LoadState --value "${wake_unit}")" || return 1
-  [[ "${value}" == "loaded" ]] || return 1
-  value="$(systemctl show --property=ActiveState --value "${wake_unit}")" || return 1
-  [[ "${value}" == "inactive" ]] || return 1
-  value="$(systemctl show --property=UnitFileState --value "${wake_unit}")" || return 1
-  [[ "${value}" == "disabled" ]] || return 1
-  systemctl is-active --quiet "${service_unit}" || return 1
-  value="$(systemctl show --property=UnitFileState --value "${service_unit}")" || return 1
-  [[ "${value}" == "enabled" ]] || return 1
-  wait_for_outbound_only
-}
-
 case "${operation}" in
   --status)
     bridge_state="$(bridge_status)" || { printf '%s\n' '{"ok":false,"transport_ready":false,"error":"bridge_unavailable"}'; exit 1; }
