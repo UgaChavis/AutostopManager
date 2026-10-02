@@ -384,6 +384,91 @@ def test_container_change_during_capture_rejects_bundle(layout):
     assert not list(layout.root.glob(".partial-*"))
 
 
+@pytest.fixture
+def container_observations(layout, monkeypatch):
+    backend = backup.Postgres()
+    monkeypatch.setattr(backend, "check_helper", lambda _: None)
+
+    def mount(source, destination, kind="volume"):
+        return {
+            "Type": kind,
+            "Name": "synthetic-volume",
+            "Source": str(source),
+            "Destination": destination,
+            "Driver": "local",
+            "Mode": "rw",
+            "RW": True,
+            "Propagation": "rprivate",
+            "FutureMountField": {"synthetic": "value"},
+        }
+
+    records = {
+        "autostopcrm": {
+            "mounts": [mount(layout.crm, "/home/autostop/.minimal-kanban", "bind"), mount("/extra", "/extra")]
+        },
+        "autostop-app": {
+            "mounts": [
+                mount(layout.uploads, "/var/data/uploads"),
+                mount(layout.photos, "/var/data/quote-request-vin-photos"),
+                mount("/extra", "/extra"),
+            ]
+        },
+        "autostop-db": {"mounts": [mount("/synthetic-pg", "/synthetic-pg"), mount("/extra", "/extra")]},
+    }
+    for name, record in records.items():
+        record.update(id=name, image="sha256:synthetic", started_at="synthetic-time", revision="a" * 40, running=True)
+
+    def observe(args, **kwargs):
+        if args[0] == "git":
+            return subprocess.CompletedProcess(args, 0, "c" * 40 + "\n")
+        if args[3] == "{{.State.Health.Status}}":
+            return subprocess.CompletedProcess(args, 0, "healthy\n")
+        return subprocess.CompletedProcess(args, 0, json.dumps(records[args[-1]]))
+
+    monkeypatch.setattr(backup.subprocess, "run", observe)
+    return backend, records
+
+
+def test_mount_order_variation_preserves_complete_container_fingerprint(layout, container_observations):
+    backend, records = container_observations
+    before = backend.check(layout)
+    for record in records.values():
+        record["mounts"].reverse()
+    assert backend.check(layout) == before
+    assert before["autostopcrm"]["mounts"][0].keys() == records["autostopcrm"]["mounts"][0].keys()
+
+
+@pytest.mark.parametrize(
+    "field", ["Source", "Destination", "Type", "Name", "Driver", "Mode", "RW", "Propagation", "FutureMountField"]
+)
+@pytest.mark.parametrize("container", ["autostopcrm", "autostop-app", "autostop-db"])
+def test_real_mount_record_change_changes_fingerprint(layout, container_observations, container, field):
+    backend, records = container_observations
+    before = backend.check(layout)
+    extra = next(mount for mount in records[container]["mounts"] if mount["Destination"] == "/extra")
+    extra[field] = False if field == "RW" else "synthetic-changed"
+    records[container]["mounts"].reverse()
+    assert backend.check(layout) != before
+
+
+@pytest.mark.parametrize("field", ["id", "image", "started_at", "revision"])
+@pytest.mark.parametrize("container", ["autostopcrm", "autostop-app", "autostop-db"])
+def test_real_container_identity_change_changes_fingerprint(layout, container_observations, container, field):
+    backend, records = container_observations
+    before = backend.check(layout)
+    records[container][field] = "synthetic-changed"
+    assert backend.check(layout) != before
+
+
+@pytest.mark.parametrize("container", ["autostopcrm", "autostop-app"])
+def test_canonicalized_mounts_still_reject_wrong_required_destination(layout, container_observations, container):
+    backend, records = container_observations
+    records[container]["mounts"][0]["Destination"] = "/wrong-synthetic-target"
+    error = "backup_crm_mount_invalid" if container == "autostopcrm" else "backup_store_mounts_invalid"
+    with pytest.raises(backup.BackupError, match=error):
+        backend.check(layout)
+
+
 def test_exact_canonical_helper_identity_and_permissions_are_required(tmp_path, monkeypatch):
     helper = tmp_path / "canonical-helper"
     helper.write_text("#!/bin/sh\nexit 0\n")

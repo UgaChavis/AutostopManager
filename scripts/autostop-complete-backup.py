@@ -301,6 +301,8 @@ class Postgres:
             if observed.returncode:
                 raise BackupError("backup_container_inspect_failed")
             result[name] = json.loads(observed.stdout)
+            # Docker mount order is unstable; retain every field in each record.
+            result[name]["mounts"] = sorted(result[name]["mounts"], key=lambda mount: json.dumps(mount, sort_keys=True))
             if result[name].get("running") is not True:
                 raise BackupError("backup_container_not_running")
         health = subprocess.run(
