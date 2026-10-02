@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from .catalog_clients import partsapi_catalog_lookup
+from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import decode_vehicle_identity, identity_values_agree
 from .vin_lookup import classify_identifier
@@ -258,6 +258,7 @@ def _call_digest(call: dict[str, Any]) -> dict[str, Any]:
         "oem_candidate_count": len(call.get("oem_candidates") or []),
         "cross_candidate_count": len(call.get("cross_candidates") or []),
         "article_candidate_count": len(call.get("article_candidates") or []),
+        **(_partsapi_identifier_evidence(call) if call.get("operation") == "vin_decode" else {}),
     }
 
 
@@ -303,19 +304,38 @@ def _partsapi_vehicle_profile(call: dict[str, Any]) -> dict[str, Any]:
     return profiles[0] if len(profiles) == 1 else {}
 
 
+def _partsapi_identifier_evidence(call: dict[str, Any]) -> dict[str, Any]:
+    """Keep VIN verification separate from agreement on vehicle characteristics."""
+    profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
+    mismatch = call.get("outcome") == "identifier_mismatch" or any(
+        profile.get("identifier_matches_request") is False for profile in profiles
+    )
+    matches = None
+    if mismatch:
+        matches = False
+    elif profiles and all(profile.get("identifier_matches_request") is True for profile in profiles):
+        matches = True
+    return {
+        "identifier_matches_request": matches,
+        "requires_exact_identifier_confirmation": matches is not True,
+        "provider_outcome": call.get("outcome"),
+    }
+
+
 def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
+    evidence = {"matched_fields": [], "conflicting_fields": [], **_partsapi_identifier_evidence(call)}
     if call.get("dry_run"):
-        return {"status": "not_checked", "matched_fields": [], "conflicting_fields": []}
+        return {**evidence, "status": "not_checked"}
+    if evidence["identifier_matches_request"] is False:
+        return {**evidence, "status": "identifier_mismatch"}
     if not call.get("ok"):
-        return {"status": "provider_failed", "matched_fields": [], "conflicting_fields": [], "error": call.get("error")}
+        return {**evidence, "status": "provider_failed", "error": call.get("error")}
     profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
     if len(profiles) > 1:
-        return {"status": "ambiguous_vehicle_modification", "matched_fields": [], "conflicting_fields": []}
+        return {**evidence, "status": "ambiguous_vehicle_modification"}
     vehicle_profile = _partsapi_vehicle_profile(call)
     if not vehicle_profile:
-        return {"status": "no_profile", "matched_fields": [], "conflicting_fields": []}
-    if vehicle_profile.get("identifier_matches_request") is False:
-        return {"status": "identifier_mismatch", "matched_fields": [], "conflicting_fields": []}
+        return {**evidence, "status": "no_profile"}
     profile = identity.get("vehicle_profile") or {}
     compare_fields = {
         "make": (profile.get("make"), vehicle_profile.get("make")),
@@ -338,6 +358,7 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
             conflicts.append({"field": field, "identity": left, "partsapi_value": right})
     if conflicts:
         return {
+            **evidence,
             "status": "conflict",
             "matched_fields": matched,
             "conflicting_fields": conflicts,
@@ -345,12 +366,14 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
         }
     if {"make", "model"}.issubset(matched):
         return {
+            **evidence,
             "status": "matched",
             "matched_fields": matched,
             "conflicting_fields": [],
             "partsapi_profile": vehicle_profile,
         }
     return {
+        **evidence,
         "status": "partial_match" if matched else "profile_present_uncompared",
         "matched_fields": matched,
         "conflicting_fields": [],
@@ -358,13 +381,21 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
     }
 
 
-def _identity_with_partsapi_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
+def _identity_with_partsapi_agreement(
+    identity: dict[str, Any], call: dict[str, Any], *, vehicle_type: str | None = None
+) -> dict[str, Any]:
     updated = {**identity}
     readiness = dict(identity.get("parts_lookup_readiness") or {})
     agreement = _assess_partsapi_identity_agreement(identity, call)
-    high_conflict = any(item.get("severity") == "high" for item in identity.get("conflicts") or [])
+    known_conflict = bool(identity.get("conflicts") or [])
     confidence_label = str(identity.get("confidence_label") or "")
-    can_read = agreement["status"] == "matched" and confidence_label in {"medium", "high"} and not high_conflict
+    can_read = (
+        partsapi_identifier_allows_candidate_lookup(call)
+        and _partsapi_vehicle_type_allows_candidate_lookup(call, vehicle_type)
+        and agreement["status"] == "matched"
+        and confidence_label in {"medium", "high"}
+        and not known_conflict
+    )
     if not _positive_tecdoc_id(_partsapi_vehicle_profile(call).get("tecdoc_car_id")):
         can_read = False
     blocking = list(readiness.get("blocking_reasons") or [])
@@ -408,6 +439,14 @@ def _positive_tecdoc_id(value: Any) -> str | None:
 def _canonical_vehicle_type(value: Any) -> str:
     text = _compact(value)
     return {"pc": "PC", "cv": "CV", "motorcycle": "Motorcycle"}.get(text.casefold(), text)
+
+
+def _partsapi_vehicle_type_allows_candidate_lookup(call: dict[str, Any], vehicle_type: str | None = None) -> bool:
+    provider_type = _canonical_vehicle_type(_partsapi_vehicle_profile(call).get("vehicle_type"))
+    requested_type = _canonical_vehicle_type(vehicle_type)
+    return (requested_type or provider_type) in {"PC", "CV", "Motorcycle"} and not (
+        requested_type and provider_type and requested_type != provider_type
+    )
 
 
 def _manual_action(code: str, message: str | None = None, *, priority: int = 1, **context: Any) -> dict[str, Any]:
@@ -586,10 +625,10 @@ def _status(
             if identity_call and not identity_call.get("dry_run")
             else "ready_for_live_tecdoc_lookup"
         )
-    if not readiness["ready_for_tecdoc_identity"]:
-        return "needs_identity_confirmation"
     if not readiness["vehicle_type_known"]:
         return "needs_vehicle_type"
+    if not readiness["ready_for_tecdoc_identity"]:
+        return "needs_identity_confirmation"
     if _is_parser_gap(search_call, "search_tree_rows"):
         return "tecdoc_parser_gap"
     if search_call and not search_call.get("dry_run") and not search_call.get("ok"):
@@ -829,7 +868,7 @@ def resolve_vin_oem_parts(
             live_allowed=live_partsapi_identity or live_partsapi_oem,
             identifier=classification.normalized,
         )
-        identity = _identity_with_partsapi_agreement(identity, identity_call)
+        identity = _identity_with_partsapi_agreement(identity, identity_call, vehicle_type=requested_vehicle_type)
     elif raw_identifier:
         manual_actions.append(
             _manual_action(
@@ -843,7 +882,7 @@ def resolve_vin_oem_parts(
         "conflict",
         "identifier_mismatch",
         "ambiguous_vehicle_modification",
-    } or any(item.get("severity") == "high" for item in identity.get("conflicts") or [])
+    } or bool(identity.get("conflicts") or [])
     can_read_catalog = bool(identity_readiness.get("ready_for_tecdoc_candidate_lookup")) and not identity_conflict
     part_actionable = bool(part_profile.get("recognized")) and not bool(part_profile.get("clarification_required"))
     vehicle_profile = _partsapi_vehicle_profile(identity_call or {})
@@ -855,11 +894,7 @@ def resolve_vin_oem_parts(
     )
     car_id = (
         _positive_tecdoc_id(vehicle_profile.get("tecdoc_car_id"))
-        if identity_call
-        and identity_call.get("ok")
-        and not identity_call.get("dry_run")
-        and not identity_conflict
-        and vehicle_profile.get("identifier_matches_request") is not False
+        if partsapi_identifier_allows_candidate_lookup(identity_call or {}) and not identity_conflict
         else None
     )
     vehicle_type_known = normalized_vehicle_type in {"PC", "CV", "Motorcycle"} and not vehicle_type_conflict
@@ -1006,6 +1041,7 @@ def resolve_vin_oem_parts(
         "identity": _identity_digest(identity),
         "part_intent": part_profile,
         "tecdoc_vehicle": {
+            **_partsapi_identifier_evidence(identity_call or {}),
             "car_id": car_id,
             "vehicle_type": normalized_vehicle_type,
             "vehicle_type_source": vehicle_type_source,

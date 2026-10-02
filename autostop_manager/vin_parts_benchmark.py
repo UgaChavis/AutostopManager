@@ -5,10 +5,15 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from .catalog_adapters import _redact_identifier, build_oem_parts_provider_plan, catalog_provider_status
-from .catalog_clients import partsapi_catalog_lookup
+from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import _as_mapping, decode_vehicle_identities, identity_values_agree
-from .vin_oem_resolver import _redact_sensitive_output, resolve_vin_oem_parts
+from .vin_oem_resolver import (
+    _partsapi_identifier_evidence,
+    _partsapi_vehicle_type_allows_candidate_lookup,
+    _redact_sensitive_output,
+    resolve_vin_oem_parts,
+)
 from .vin_lookup import classify_identifier, normalize_vin
 
 
@@ -88,14 +93,20 @@ def _partsapi_vehicle_profile(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
+    evidence = {
+        "source": "PartsAPI VINdecode",
+        "matched_fields": [],
+        "conflicting_fields": [],
+        **_partsapi_identifier_evidence(call),
+    }
     if call.get("dry_run"):
-        return {"status": "not_checked", "source": "PartsAPI VINdecode", "matched_fields": [], "conflicting_fields": []}
+        return {**evidence, "status": "not_checked"}
+    if evidence["identifier_matches_request"] is False:
+        return {**evidence, "status": "identifier_mismatch"}
     if not call.get("ok"):
         return {
+            **evidence,
             "status": "provider_failed",
-            "source": "PartsAPI VINdecode",
-            "matched_fields": [],
-            "conflicting_fields": [],
             "error": call.get("error"),
             "missing_env_names": call.get("missing_env_names")
             or (call.get("request_plan") or {}).get("missing_env_names")
@@ -105,27 +116,10 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
     local_profile = identity.get("vehicle_profile") or {}
     profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
     if len(profiles) > 1:
-        return {
-            "status": "ambiguous_vehicle_modification",
-            "source": "PartsAPI VINdecode",
-            "matched_fields": [],
-            "conflicting_fields": [],
-        }
+        return {**evidence, "status": "ambiguous_vehicle_modification"}
     vehicle_profile = _partsapi_vehicle_profile(call)
     if not vehicle_profile:
-        return {
-            "status": "no_profile",
-            "source": "PartsAPI VINdecode",
-            "matched_fields": [],
-            "conflicting_fields": [],
-        }
-    if vehicle_profile.get("identifier_matches_request") is False:
-        return {
-            "status": "identifier_mismatch",
-            "source": "PartsAPI VINdecode",
-            "matched_fields": [],
-            "conflicting_fields": [],
-        }
+        return {**evidence, "status": "no_profile"}
 
     field_pairs = {
         "make": (local_profile.get("make"), vehicle_profile.get("make")),
@@ -158,8 +152,8 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
         status = "profile_present_uncompared"
 
     return {
+        **evidence,
         "status": status,
-        "source": "PartsAPI VINdecode",
         "matched_fields": matched_fields,
         "conflicting_fields": conflicting_fields,
         "compared_fields": sorted(set(compared_fields)),
@@ -171,14 +165,20 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
     }
 
 
-def _identity_with_partsapi_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
+def _identity_with_partsapi_agreement(
+    identity: dict[str, Any], call: dict[str, Any], *, vehicle_type: str | None = None
+) -> dict[str, Any]:
     updated = {**identity}
     readiness = dict(identity.get("parts_lookup_readiness") or {})
     agreement = _assess_partsapi_identity_agreement(identity, call)
-    high_conflict = any(item.get("severity") == "high" for item in identity.get("conflicts", []))
+    known_conflict = bool(identity.get("conflicts") or [])
     confidence_label = str(identity.get("confidence_label") or "")
     can_read_candidates = (
-        agreement["status"] == "matched" and confidence_label in {"medium", "high"} and not high_conflict
+        partsapi_identifier_allows_candidate_lookup(call)
+        and _partsapi_vehicle_type_allows_candidate_lookup(call, vehicle_type)
+        and agreement["status"] == "matched"
+        and confidence_label in {"medium", "high"}
+        and not known_conflict
     )
     car_id = str(_partsapi_vehicle_profile(call).get("tecdoc_car_id") or "").strip()
     if not (car_id.isascii() and car_id.isdigit() and int(car_id) > 0):
@@ -312,6 +312,7 @@ def _partsapi_lookup_calls(
     part_profile: dict[str, Any],
     *,
     identity_call: dict[str, Any] | None = None,
+    candidate_ready: bool = False,
     vehicle_type: str | None = None,
     dry_run: bool = True,
 ) -> list[dict[str, Any]]:
@@ -323,12 +324,7 @@ def _partsapi_lookup_calls(
         else [partsapi_catalog_lookup(operation="vin_decode", identifier=identifier, dry_run=dry_run)]
     )
     profiles = [profile for profile in (identity_call or {}).get("vehicle_profiles") or [] if isinstance(profile, dict)]
-    if (
-        identity_call
-        and identity_call.get("ok")
-        and len(profiles) == 1
-        and profiles[0].get("identifier_matches_request") is not False
-    ):
+    if candidate_ready and partsapi_identifier_allows_candidate_lookup(identity_call or {}):
         car_id = str(profiles[0].get("tecdoc_car_id") or "").strip()
     else:
         car_id = ""
@@ -367,6 +363,10 @@ def _adapter_digest(call: dict[str, Any]) -> dict[str, Any]:
         "operation": call.get("operation"),
         "ok": bool(call.get("ok")),
         "dry_run": bool(call.get("dry_run")),
+        "outcome": call.get("outcome"),
+        "failure_class": call.get("failure_class"),
+        "retryable": bool(call.get("retryable")),
+        "requires_fallback": bool(call.get("requires_fallback")),
         "docs_url": call.get("docs_url"),
         "partsapi_method": call.get("partsapi_method"),
         "configured": bool(request_plan.get("configured")),
@@ -375,6 +375,7 @@ def _adapter_digest(call: dict[str, Any]) -> dict[str, Any]:
         "request_param_names": sorted(params),
         "error": call.get("error"),
         "privacy": {"raw_identifier_redacted_from_benchmark": True, "secret_exposed": False},
+        **(_partsapi_identifier_evidence(call) if call.get("operation") == "vin_decode" else {}),
     }
 
 
@@ -462,6 +463,15 @@ def benchmark_vin_parts_lookup(
         classification = classify_identifier(identifier)
         item_requested_part = _compact(item.get("requested_part")) or requested_part
         context = _merged_item_context(item)
+        item_vehicle_type = (
+            _compact(
+                item.get("vehicle_type")
+                or item.get("car_type")
+                or context.get("vehicle_type")
+                or context.get("car_type")
+            )
+            or None
+        )
         part_profile = normalize_part_intent(
             item_requested_part,
             axle=_compact(item.get("axle") or context.get("axle")),
@@ -481,7 +491,9 @@ def benchmark_vin_parts_lookup(
             )
             if call_is_live:
                 partsapi_live_calls_used += max(0, int(partsapi_identity_call.get("attempt_count") or 0))
-                identity = _identity_with_partsapi_agreement(identity, partsapi_identity_call)
+                identity = _identity_with_partsapi_agreement(
+                    identity, partsapi_identity_call, vehicle_type=item_vehicle_type
+                )
         oem_resolution = None
         if resolve_oem:
             oem_resolution = resolve_vin_oem_parts(
@@ -501,13 +513,7 @@ def benchmark_vin_parts_lookup(
                 live_vpic=live_vpic,
                 live_partsapi_identity=live_partsapi_identity,
                 live_partsapi_oem=live_partsapi_oem,
-                vehicle_type=_compact(
-                    item.get("vehicle_type")
-                    or item.get("car_type")
-                    or context.get("vehicle_type")
-                    or context.get("car_type")
-                )
-                or None,
+                vehicle_type=item_vehicle_type,
                 max_live_calls=max(0, int(max_live_calls) - partsapi_live_calls_used),
                 max_candidates=max_candidates,
                 timeout=partsapi_timeout,
@@ -526,13 +532,10 @@ def benchmark_vin_parts_lookup(
                 identifier,
                 part_profile,
                 identity_call=partsapi_identity_call,
-                vehicle_type=_compact(
-                    item.get("vehicle_type")
-                    or item.get("car_type")
-                    or context.get("vehicle_type")
-                    or context.get("car_type")
-                )
-                or None,
+                candidate_ready=bool(
+                    (identity.get("parts_lookup_readiness") or {}).get("ready_for_tecdoc_candidate_lookup")
+                ),
+                vehicle_type=item_vehicle_type,
                 dry_run=True,
             )
             if include_partsapi_dry_run
