@@ -306,6 +306,11 @@ def _partsapi_identifier_evidence(call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _partsapi_year(value: Any) -> int | None:
+    match = re.fullmatch(r"((?:19|20)\d{2})(?:[-/]?(?:0[1-9]|1[0-2]))?", _compact(value))
+    return int(match.group(1)) if match else None
+
+
 def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
     evidence = {"matched_fields": [], "conflicting_fields": [], **_partsapi_identifier_evidence(call)}
     if call.get("dry_run"):
@@ -328,18 +333,40 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
             vehicle_profile.get("model") or vehicle_profile.get("model_family"),
         ),
         "transmission": (profile.get("transmission"), vehicle_profile.get("transmission")),
+        "engine": (profile.get("engine"), vehicle_profile.get("engine_code") or vehicle_profile.get("engine")),
+        "market": (profile.get("market"), vehicle_profile.get("market")),
+        "model_year": (profile.get("model_year"), vehicle_profile.get("model_year")),
     }
     matched: list[str] = []
     conflicts: list[dict[str, Any]] = []
-    for field, (left, right) in compare_fields.items():
-        left_norm = _normalize_compare_value(left)
-        right_norm = _normalize_compare_value(right)
-        if not left_norm or not right_norm:
+    year: int | None = None
+    for field, (profile_value, right) in compare_fields.items():
+        field_evidence = [item for item in identity.get("field_evidence") or [] if item.get("field") == field]
+        sources = {"CRM context"} if field == "market" else {"CRM context", "NHTSA vPIC"}
+        values = [item.get("value", profile_value) for item in field_evidence if item.get("source") in sources]
+        # Geographic and platform hints do not establish exact engine/market facts.
+        if not field_evidence or (not values and field not in {"engine", "market"}):
+            values = [profile_value]
+        values = [value for value in values if _normalize_compare_value(value)]
+        if field == "model_year" and values:
+            year = _partsapi_year(values[0])
+        if values and any(not identity_values_agree(field, values[0], value) for value in values[1:]):
+            conflicts.append({"field": field, "identity": values, "partsapi_value": right})
             continue
-        if identity_values_agree(field, left, right):
-            matched.append(field)
-        else:
-            conflicts.append({"field": field, "identity": left, "partsapi_value": right})
+        for left in values:
+            if not _normalize_compare_value(right):
+                continue
+            if identity_values_agree(field, left, right):
+                if field not in matched:
+                    matched.append(field)
+            else:
+                conflicts.append({"field": field, "identity": left, "partsapi_value": right})
+    year_from = _partsapi_year(vehicle_profile.get("model_year_from"))
+    year_to = _partsapi_year(vehicle_profile.get("model_year_to"))
+    if year and ((year_from and year < year_from) or (year_to and year > year_to)):
+        conflicts.append(
+            {"field": "model_year", "identity": year, "partsapi_value": {"from": year_from, "to": year_to}}
+        )
     if conflicts:
         return {
             **evidence,

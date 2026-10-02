@@ -7,8 +7,9 @@ from urllib.parse import quote_plus
 from .catalog_adapters import _redact_identifier, build_oem_parts_provider_plan, catalog_provider_status
 from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import _as_mapping, decode_vehicle_identities, identity_values_agree
+from .vehicle_identity import _as_mapping, decode_vehicle_identities
 from .vin_oem_resolver import (
+    _assess_partsapi_identity_agreement as _assess_partsapi_vehicle_agreement,
     _partsapi_identifier_evidence,
     _partsapi_vehicle_type_allows_candidate_lookup,
     _redact_sensitive_output,
@@ -93,76 +94,25 @@ def _partsapi_vehicle_profile(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
-    evidence = {
+    agreement = {
         "source": "PartsAPI VINdecode",
-        "matched_fields": [],
-        "conflicting_fields": [],
-        **_partsapi_identifier_evidence(call),
+        **_assess_partsapi_vehicle_agreement(identity, call),
     }
-    if call.get("dry_run"):
-        return {**evidence, "status": "not_checked"}
-    if evidence["identifier_matches_request"] is False:
-        return {**evidence, "status": "identifier_mismatch"}
-    if not call.get("ok"):
-        return {
-            **evidence,
-            "status": "provider_failed",
-            "error": call.get("error"),
-            "missing_env_names": call.get("missing_env_names")
-            or (call.get("request_plan") or {}).get("missing_env_names")
-            or [],
+    if agreement["status"] == "provider_failed":
+        agreement["missing_env_names"] = (
+            call.get("missing_env_names") or (call.get("request_plan") or {}).get("missing_env_names") or []
+        )
+    if "partsapi_profile" in agreement:
+        for conflict in agreement["conflicting_fields"]:
+            conflict["identity_value"] = conflict.pop("identity")
+        agreement["compared_fields"] = sorted(
+            set(agreement["matched_fields"]) | {conflict["field"] for conflict in agreement["conflicting_fields"]}
+        )
+        profile = agreement["partsapi_profile"]
+        agreement["partsapi_profile"] = {
+            key: value for key, value in profile.items() if key not in {"raw_keys", "redacted_identifier", "warning"}
         }
-
-    local_profile = identity.get("vehicle_profile") or {}
-    profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
-    if len(profiles) > 1:
-        return {**evidence, "status": "ambiguous_vehicle_modification"}
-    vehicle_profile = _partsapi_vehicle_profile(call)
-    if not vehicle_profile:
-        return {**evidence, "status": "no_profile"}
-
-    field_pairs = {
-        "make": (local_profile.get("make"), vehicle_profile.get("make")),
-        "model": (
-            _first_nonempty(local_profile.get("model"), local_profile.get("model_family")),
-            _first_nonempty(vehicle_profile.get("model"), vehicle_profile.get("model_family")),
-        ),
-        "model_year": (local_profile.get("model_year"), vehicle_profile.get("model_year")),
-        "transmission": (local_profile.get("transmission"), vehicle_profile.get("transmission")),
-    }
-    matched_fields: list[str] = []
-    conflicting_fields: list[dict[str, Any]] = []
-    compared_fields: list[str] = []
-    for field, (left, right) in field_pairs.items():
-        if left in (None, "") or right in (None, ""):
-            continue
-        compared_fields.append(field)
-        if identity_values_agree(field, left, right):
-            matched_fields.append(field)
-        else:
-            conflicting_fields.append({"field": field, "identity_value": left, "partsapi_value": right})
-
-    if conflicting_fields:
-        status = "conflict"
-    elif {"make", "model"}.issubset(matched_fields):
-        status = "matched"
-    elif matched_fields:
-        status = "partial_match"
-    else:
-        status = "profile_present_uncompared"
-
-    return {
-        **evidence,
-        "status": status,
-        "matched_fields": matched_fields,
-        "conflicting_fields": conflicting_fields,
-        "compared_fields": sorted(set(compared_fields)),
-        "partsapi_profile": {
-            key: vehicle_profile.get(key)
-            for key in ("make", "model", "model_family", "model_year", "transmission", "tecdoc_car_id", "vehicle_type")
-            if vehicle_profile.get(key) not in (None, "")
-        },
-    }
+    return agreement
 
 
 def _identity_with_partsapi_agreement(

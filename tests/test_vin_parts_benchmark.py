@@ -559,3 +559,91 @@ def test_benchmark_distinguishes_empty_batch_from_identity_ready(monkeypatch, co
     assert result["summary"]["ready_for_oem_candidate_lookup_count"] == (count if ready else 0)
     assert result["summary"]["ready_for_crm_writeback_count"] == 0
     assert result["summary"]["oem_candidate_count"] == 0
+
+
+@pytest.mark.parametrize("verified", [False, True])
+@pytest.mark.parametrize(
+    ("fields", "conflict", "field_sources"),
+    [
+        ({"engine_code": "ENGINE-B"}, "engine", None),
+        ({"market": "US"}, "market", None),
+        ({"model_year_from": 202001, "model_year_to": 202412}, "model_year", None),
+        ({"engine": "engine.a", "market": "eu", "model_year_from": "2010", "model_year_to": "2010"}, None, None),
+        ({"model_year_from": "unparsed", "model_year_to": None}, None, None),
+        ({}, None, None),
+        ({"engine_code": "ENGINE-B"}, "engine", ("engine", ["rule", ("NHTSA vPIC", "ENGINE-A")])),
+        ({"engine_code": "ENGINE-A"}, None, ("engine", ["rule", ("NHTSA vPIC", "ENGINE-A")])),
+        ({}, "engine", ("engine", ["CRM context", ("NHTSA vPIC", "ENGINE-B")])),
+        ({}, None, ("engine", ["CRM context", ("NHTSA vPIC", "ENGINE-A")])),
+        *[
+            (
+                {field: value if provider_present else None},
+                None if agreed else field,
+                (field, [("CRM context", value), ("NHTSA vPIC", value if agreed else other)]),
+            )
+            for field, value, other in [
+                ("make", "HONDA", "TOYOTA"),
+                ("model", "Accord", "Civic"),
+                ("transmission", "6AT", "6MT"),
+                ("model_year", 2010, 2015),
+            ]
+            for provider_present in [False, True]
+            for agreed in [False, True]
+        ],
+        (
+            {"model_year_from": 2010, "model_year_to": 2010},
+            "model_year",
+            ("model_year", [("rule", 2010), ("NHTSA vPIC", 2015)]),
+        ),
+        (
+            {"model_year_from": 2015, "model_year_to": 2015},
+            None,
+            ("model_year", [("rule", 2010), ("NHTSA vPIC", 2015)]),
+        ),
+        ({"model": None, "model_family": "Accord"}, None, None),
+    ],
+)
+def test_benchmark_known_characteristics_guard_candidate_readiness(
+    monkeypatch, verified, fields, conflict, field_sources
+):
+    identity = _medium_identity()
+    identity["vehicle_profile"].update(engine="ENGINE-A", market="EU", model_year=2010, transmission="6AT")
+    if "model_family" in fields:
+        identity["vehicle_profile"].update(model=None, model_family="Accord")
+    if field_sources:
+        field, sources = field_sources
+        known_value = identity["vehicle_profile"][field]
+        hint = "Europe/global" if field == "market" else "ENGINE-HINT likely"
+        sources = [
+            (source, known_value if source == "CRM context" else hint) if isinstance(source, str) else source
+            for source in sources
+        ]
+        identity["field_evidence"] = [{"field": field, "source": source, "value": value} for source, value in sources]
+        identity["vehicle_profile"][field] = identity["field_evidence"][0]["value"]
+    _install_batch(monkeypatch, identity)
+    profiles = [{"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877", "vehicle_type": "PC", **fields}]
+    profiles[0]["identifier_matches_request"] = True if verified else None
+    calls = []
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup", _fake_lookup(calls, profiles=profiles)
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        live_partsapi_identity=True,
+    )
+    digest = result["items"][0]["identity"]
+    agreement = digest["cross_source_agreement"]
+    can_read = not conflict and bool(
+        profiles[0].get("make") and (profiles[0].get("model") or profiles[0].get("model_family"))
+    )
+    assert agreement["status"] == ("conflict" if conflict else "matched" if can_read else "partial_match")
+    assert [item["field"] for item in agreement["conflicting_fields"]] == ([conflict] if conflict else [])
+    if not fields and field_sources:
+        assert "engine" not in agreement["matched_fields"]
+    assert [call["operation"] for call in calls] == (["vin_decode", "search_tree"] if can_read else ["vin_decode"])
+    assert digest["ready_for_tecdoc_candidate_lookup"] is can_read
+    assert digest["ready_for_crm_writeback"] is False
+    assert result["summary"]["oem_candidate_count"] == result["summary"]["tecdoc_article_candidate_count"] == 0

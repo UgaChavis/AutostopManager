@@ -1496,15 +1496,25 @@ def _partsapi_explicitly_empty_payload(payload: Any) -> bool:
     )
 
 
-def _partsapi_provider_declared_error(payload: Any) -> bool:
+def _partsapi_provider_declared_error(payload: Any, *, depth: int = 0) -> bool:
     """Recognise the common successful-HTTP error envelopes without guessing data."""
+    if depth > 5:
+        return False
+    if isinstance(payload, list):
+        return any(_partsapi_provider_declared_error(item, depth=depth + 1) for item in payload)
     if not isinstance(payload, dict):
         return False
     if any(payload.get(key) not in (None, "", [], {}) for key in ("error", "errors", "exception")):
         return True
     if payload.get("success") is False or payload.get("ok") is False:
         return True
-    return str(payload.get("status") or "").strip().casefold() in {"error", "failed", "failure", "fail"}
+    if str(payload.get("status") or "").strip().casefold() in {"error", "failed", "failure", "fail"}:
+        return True
+    return any(
+        _partsapi_provider_declared_error(nested, depth=depth + 1)
+        for key, nested in payload.items()
+        if str(key).casefold() in {"data", "result", "array", "items"}
+    )
 
 
 _PARTSAPI_ERROR_BODY_LIMIT = 4096
@@ -1772,11 +1782,21 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
 
 
 def _partsapi_profile_values(item: dict[str, Any]) -> dict[str, Any]:
-    return {
+    values = {
         field: value
         for field, aliases in _PARTSAPI_PROFILE_FIELDS.items()
         if (value := _first_value(item, aliases)) not in (None, "")
     }
+    transmissions = list(
+        dict.fromkeys(
+            str(item[key]).strip()
+            for key in _PARTSAPI_PROFILE_FIELDS["transmission"]
+            if item.get(key) not in (None, "") and str(item[key]).strip()
+        )
+    )
+    if transmissions:
+        values["transmission"] = " / ".join(transmissions)
+    return values
 
 
 def _partsapi_vehicle_profile_from_item(item: dict[str, Any], *, operation: str | None = None) -> dict[str, Any]:
@@ -1897,7 +1917,7 @@ def _partsapi_identifier(value: Any) -> str:
 def _partsapi_wrapped_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
     """Retain identifier-only response wrappers without reading unrelated metadata."""
     if depth > 5:
-        return ()
+        raise ValueError("VINdecode response exceeds the parser depth limit.")
     if isinstance(payload, list):
         return tuple(value for item in payload for value in _partsapi_wrapped_identifiers(item, depth=depth + 1))
     if not isinstance(payload, dict):
@@ -1916,10 +1936,10 @@ def _partsapi_wrapped_identifiers(payload: Any, *, depth: int = 0) -> tuple[str,
 
 def _partsapi_vin_decode_records(
     payload: Any, *, depth: int = 0, identifiers: tuple[str, ...] = ()
-) -> list[tuple[dict[str, Any], tuple[str, ...]]]:
+) -> list[tuple[dict[str, Any], tuple[str, ...], tuple[str, ...]]]:
     """Find VINdecode vehicle rows across provider envelopes without choosing a modification."""
     if depth > 5:
-        return []
+        raise ValueError("VINdecode response exceeds the parser depth limit.")
     if isinstance(payload, list):
         return [
             record
@@ -1928,6 +1948,21 @@ def _partsapi_vin_decode_records(
         ]
     if not isinstance(payload, dict):
         return []
+    for field in ("tecdoc_car_id", "transmission", "vehicle_type"):
+        aliases = [
+            str(payload[key]).strip()
+            for key in _PARTSAPI_PROFILE_FIELDS[field]
+            if payload.get(key) not in (None, "") and str(payload[key]).strip()
+        ]
+        if field == "tecdoc_car_id":
+            canonical = {int(value) if value.isascii() and value.isdigit() else value.casefold() for value in aliases}
+            if len(canonical) > 1:
+                raise ValueError("VINdecode returned conflicting vehicle ID aliases.")
+        elif len(aliases) > 1:
+            from .vehicle_identity import identity_values_agree
+
+            if not all(identity_values_agree(field, aliases[0], value) for value in aliases[1:]):
+                raise ValueError("VINdecode returned conflicting vehicle aliases.")
     identifiers += tuple(
         _partsapi_identifier(value)
         for key, value in payload.items()
@@ -1936,7 +1971,7 @@ def _partsapi_vin_decode_records(
     records = [
         record
         for key, nested in payload.items()
-        if str(key).casefold()
+        if str(key).replace("_", "").casefold()
         not in {
             "request",
             "params",
@@ -1944,8 +1979,8 @@ def _partsapi_vin_decode_records(
             "query",
             "input",
             "echo",
-            "request_params",
-            "request_parameters",
+            "requestparams",
+            "requestparameters",
             "metadata",
             "meta",
         }
@@ -1953,13 +1988,12 @@ def _partsapi_vin_decode_records(
         for record in _partsapi_vin_decode_records(nested, depth=depth + 1, identifiers=identifiers)
     ]
     values = _partsapi_profile_values(payload)
-    has_tecdoc_id = "tecdoc_car_id" in values or "tecdoc_external_id" in values
-    if not has_tecdoc_id and not {"make", "model"}.issubset(values):
+    if not values:
         return records
     if not records:
-        return [(payload, identifiers + _partsapi_wrapped_identifiers(payload, depth=depth))]
+        return [(payload, identifiers, _partsapi_wrapped_identifiers(payload, depth=depth))]
     if len(records) == 1:
-        child, child_identifiers = records[0]
+        child, child_identifiers, child_descendants = records[0]
         child_values = _partsapi_profile_values(child)
         parent_id = str(values.get("tecdoc_car_id", "")).strip()
         child_id = str(child_values.get("tecdoc_car_id", "")).strip()
@@ -1980,10 +2014,10 @@ def _partsapi_vin_decode_records(
         if same_vehicle and compatible:
             # Keep missing ancestor characteristics; empty child fields cannot erase them.
             merged = {**payload, **{key: value for key, value in child.items() if value not in (None, "")}}
-            return [(merged, child_identifiers)]
+            return [(merged, child_identifiers, child_descendants)]
     # Separate modifications and contradictions remain visible.  Parent evidence
     # excludes child/sibling VINs; descendants already inherited this parent's VIN.
-    return [(payload, identifiers), *records]
+    return [(payload, identifiers, ()), *records]
 
 
 def extract_partsapi_vehicle_profiles(
@@ -2013,10 +2047,15 @@ def extract_partsapi_vehicle_profiles(
     elif operation == "plate_to_vin":
         items.extend(_partsapi_plate_vin_records(payload))
 
-    records = _partsapi_vin_decode_records(payload) if operation == "vin_decode" else [(item, ()) for item in items]
+    try:
+        records = (
+            _partsapi_vin_decode_records(payload) if operation == "vin_decode" else [(item, (), ()) for item in items]
+        )
+    except ValueError:
+        return []
     requested = _partsapi_identifier(requested_identifier)
     profiles = []
-    for item, identifiers in records:
+    for item, identifiers, descendants in records:
         profile = _partsapi_vehicle_profile_from_item(item, operation=operation)
         if len(profile) <= 3:
             continue
@@ -2025,7 +2064,18 @@ def extract_partsapi_vehicle_profiles(
             full_identifiers = [
                 value for value in identifiers if len(value) == 17 and value.isascii() and value.isalnum()
             ]
-            matches = all(value == requested for value in full_identifiers) if requested and full_identifiers else None
+            related_identifiers = [
+                value for value in descendants if len(value) == 17 and value.isascii() and value.isalnum()
+            ]
+            matches = None
+            if requested:
+                matches = (
+                    False
+                    if any(value != requested for value in full_identifiers + related_identifiers)
+                    else True
+                    if full_identifiers
+                    else None
+                )
             profile["identifier_matches_request"] = matches
             profile["requires_exact_identifier_confirmation"] = matches is not True
             if identifiers:

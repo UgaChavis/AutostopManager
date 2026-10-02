@@ -800,3 +800,105 @@ def test_resolver_live_identity_keeps_catalog_plan_dry(monkeypatch):
     assert result["live_call_count"] == 1
     assert "run_live_tecdoc_search_tree" in {item["code"] for item in result["manual_actions"]}
     assert result["article_candidates"] == []
+
+
+@pytest.mark.parametrize("verified", [False, True])
+@pytest.mark.parametrize(
+    ("fields", "conflict", "field_sources"),
+    [
+        ({"engine": "ENGINE-B"}, "engine", None),
+        ({"engine": "ENGINE-A", "engine_code": "ENGINE-B"}, "engine", None),
+        ({"market": "US"}, "market", None),
+        ({"model_year_from": "2020", "model_year_to": "2024"}, "model_year", None),
+        ({"model_year_from": 202001, "model_year_to": 202412}, "model_year", None),
+        ({"model_year_from": "2020-01"}, "model_year", None),
+        ({"model_year_to": "2009/12"}, "model_year", None),
+        ({"engine": "engine.a", "market": "eu"}, None, None),
+        ({"engine_code": "ENGINE-A", "engine": "marketing description"}, None, None),
+        ({"model_year_from": "2010", "model_year_to": "2010"}, None, None),
+        ({"model_year_from": "201001", "model_year_to": "2010/12"}, None, None),
+        ({"model_year_from": None, "model_year_to": "2010"}, None, None),
+        ({"model_year_from": "2010-01", "model_year_to": ""}, None, None),
+        ({"model_year_from": "unparsed", "model_year_to": True}, None, None),
+        ({}, None, None),
+        ({"market": "US"}, "market", ("market", ["CRM context", "local WMI hint"])),
+        ({"market": "Europe"}, None, ("market", ["local WMI hint"])),
+        ({"engine_code": "ENGINE-A"}, None, ("engine", ["synthetic platform rule"])),
+        ({"engine_code": "ENGINE-B"}, "engine", ("engine", ["CRM context", "synthetic platform rule"])),
+        ({"engine_code": "ENGINE-B"}, "engine", ("engine", ["rule", ("NHTSA vPIC", "ENGINE-A")])),
+        ({"engine_code": "ENGINE-A"}, None, ("engine", ["rule", ("NHTSA vPIC", "ENGINE-A")])),
+        ({"engine_code": "ENGINE-A"}, "engine", ("engine", ["CRM context", ("NHTSA vPIC", "ENGINE-B")])),
+        ({}, "engine", ("engine", ["CRM context", ("NHTSA vPIC", "ENGINE-B")])),
+        ({}, None, ("engine", ["CRM context", ("NHTSA vPIC", "ENGINE-A")])),
+        *[
+            (
+                {field: value if provider_present else None},
+                None if agreed else field,
+                (field, [("CRM context", value), ("NHTSA vPIC", value if agreed else other)]),
+            )
+            for field, value, other in [
+                ("make", "HONDA", "TOYOTA"),
+                ("model", "Accord", "Civic"),
+                ("transmission", "6AT", "6MT"),
+                ("model_year", 2010, 2015),
+            ]
+            for provider_present in [False, True]
+            for agreed in [False, True]
+        ],
+        (
+            {"model_year_from": 2010, "model_year_to": 2010},
+            "model_year",
+            ("model_year", [("rule", 2010), ("NHTSA vPIC", 2015)]),
+        ),
+        (
+            {"model_year_from": 2015, "model_year_to": 2015},
+            None,
+            ("model_year", [("rule", 2010), ("NHTSA vPIC", 2015)]),
+        ),
+        ({"model": None, "model_family": "Accord"}, None, None),
+    ],
+)
+def test_resolver_known_characteristics_guard_catalog(monkeypatch, verified, fields, conflict, field_sources):
+    profile = {"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877", "vehicle_type": "PC", **fields}
+    profile["identifier_matches_request"] = True if verified else None
+    calls = _install_fakes(monkeypatch, profiles=[profile])
+    identity = _medium_identity()
+    identity["vehicle_profile"].update(engine="ENGINE-A", market="EU", model_year=2010, transmission="6AT")
+    if "model_family" in fields:
+        identity["vehicle_profile"].update(model=None, model_family="Accord")
+    if field_sources:
+        field, sources = field_sources
+        known_value = identity["vehicle_profile"][field]
+        hint = "Europe/global" if field == "market" else "ENGINE-HINT likely"
+        sources = [
+            (source, known_value if source == "CRM context" else hint) if isinstance(source, str) else source
+            for source in sources
+        ]
+        identity["field_evidence"] = [{"field": field, "source": source, "value": value} for source, value in sources]
+        identity["vehicle_profile"][field] = identity["field_evidence"][0]["value"]
+    monkeypatch.setattr("autostop_manager.vin_oem_resolver.decode_vehicle_identity", lambda *_a, **_k: identity)
+    result = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN, requested_part="передние колодки", live_vpic=False, live_partsapi_oem=True
+    )
+    agreement = result["identity"]["cross_source_agreement"]
+    can_read = not conflict and bool(profile.get("make") and (profile.get("model") or profile.get("model_family")))
+    assert agreement["identifier_matches_request"] is (True if verified else None)
+    assert agreement["status"] == ("conflict" if conflict else "matched" if can_read else "partial_match")
+    assert [item["field"] for item in agreement["conflicting_fields"]] == ([conflict] if conflict else [])
+    if not fields and field_sources:
+        assert "engine" not in agreement["matched_fields"]
+        if conflict:
+            assert agreement["conflicting_fields"][0] == {
+                "field": "engine",
+                "identity": ["ENGINE-A", "ENGINE-B"],
+                "partsapi_value": None,
+            }
+    assert [call["operation"] for call in calls] == (
+        ["vin_decode", "search_tree", "articles"] if can_read else ["vin_decode"]
+    )
+    assert result["article_candidate_count"] == int(can_read)
+    assert result["readiness"]["ready_for_crm_writeback"] is False
+    assert all(
+        not item["vin_fitment_confirmed"] and not item["oem_number_confirmed"] and item["manual_review_required"]
+        for item in result["article_candidates"]
+    )

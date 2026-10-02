@@ -255,7 +255,9 @@ def test_partsapi_supported_alias_card_cannot_hide_foreign_vin(partsapi_vin_env,
     assert methods == ["VINdecode"]
 
 
-@pytest.mark.parametrize("ignored_key", ["metadata", "meta", "request", "params", "echo"])
+@pytest.mark.parametrize(
+    "ignored_key", ["metadata", "meta", "request", "params", "echo", "requestParams", "requestParameters"]
+)
 def test_partsapi_metadata_card_cannot_confirm_response_vin(partsapi_vin_env, monkeypatch, ignored_key):
     decoded, resolved, methods = _partsapi_vin_readback(
         monkeypatch, {ignored_key: _vin_row(vin="A" * 17), "result": {"vin": "B" * 17}}
@@ -265,6 +267,89 @@ def test_partsapi_metadata_card_cannot_confirm_response_vin(partsapi_vin_env, mo
     assert decoded.get("identifier_matches_request") is None
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == "provider_failed"
     assert methods == ["VINdecode"]
+
+
+@pytest.mark.parametrize(
+    ("context", "child", "agreement", "count"),
+    [
+        ({"kp": "6MT"}, _vin_row(), "conflict", 1),
+        ({"kp": "6AT"}, _vin_row(), "matched", 1),
+        ({"manuName": "OTHER"}, _vin_row(), "ambiguous_vehicle_modification", 2),
+        ({"modelName": "OTHER"}, _vin_row(), "ambiguous_vehicle_modification", 2),
+        ({"carType": "CV"}, _vin_row(), "ambiguous_vehicle_modification", 2),
+        ({"engine": "OTHER"}, _vin_row(engine="CURRENT"), "ambiguous_vehicle_modification", 2),
+    ],
+)
+def test_partsapi_sparse_ancestor_context_survives(partsapi_vin_env, monkeypatch, context, child, agreement, count):
+    decoded, resolved, methods = _partsapi_vin_readback(
+        monkeypatch, {"vin": "A" * 17, **context, "result": [child]}, transmission="6AT"
+    )
+    assert len(decoded["vehicle_profiles"]) == count
+    assert resolved["tecdoc_vehicle"]["identity_agreement"] == agreement
+    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if agreement == "matched" else ["VINdecode"])
+    if "kp" in context:
+        assert decoded["vehicle_profiles"][0]["transmission"] == context["kp"]
+
+
+@pytest.mark.parametrize("fields", [{"manuName": "OTHER"}, {"carType": "PC"}, {"kp": "6MT"}])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_partsapi_foreign_sparse_row_blocks_complete_row(partsapi_vin_env, monkeypatch, fields, reverse):
+    rows = [_vin_row(vin="A" * 17), {"vin": "B" * 17, **fields}]
+    decoded, resolved, methods = _partsapi_vin_readback(monkeypatch, {"result": rows[::-1] if reverse else rows})
+    assert len(decoded["vehicle_profiles"]) == 2
+    assert decoded["outcome"] == "identifier_mismatch"
+    assert decoded["identifier_matches_request"] is False
+    assert resolved["tecdoc_vehicle"]["identity_agreement"] == "identifier_mismatch"
+    assert methods == ["VINdecode"]
+
+
+@pytest.mark.parametrize("envelope", ["data", "result", "array", "items"])
+@pytest.mark.parametrize("error_fields", [{"ok": False}, {"error": "Synthetic rejection"}, {"status": "failed"}])
+def test_partsapi_nested_provider_rejection_blocks_candidate_lookup(
+    partsapi_vin_env, monkeypatch, envelope, error_fields
+):
+    decoded, resolved, methods = _partsapi_vin_readback(
+        monkeypatch, {envelope: {**error_fields, "array": [_vin_row(vin="A" * 17)]}}
+    )
+    assert decoded["ok"] is False
+    assert decoded["outcome"] == "provider_rejected"
+    assert decoded["attempt_count"] == 1
+    assert decoded["retryable"] is False
+    assert resolved["tecdoc_vehicle"]["identity_agreement"] == "provider_failed"
+    assert methods == ["VINdecode"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "transmission", "outcome", "matches", "allowed"),
+    [
+        (_vin_row(vin="A" * 17, TYPE_ID=67890), "6AT", "unparsed_response", None, False),
+        (_vin_row(vin="A" * 17, CAR_TYPE="CV"), "6AT", "unparsed_response", None, False),
+        (_vin_row(vin="A" * 17, CAR_TYPE="pc"), "6AT", "success", True, True),
+        (_vin_row(vin="A" * 17, kp="6AT", kpp="6MT"), "6AT", "unparsed_response", None, False),
+        (_vin_row(vin="A" * 17, carId="00123", TYPE_ID=123), "6AT", "success", True, True),
+        (_vin_row(vin="A" * 17, kp="6AT", kpp="6 speed automatic"), "6AT", "success", True, True),
+        (_vin_row(vin="A" * 17, kp="Automatic", kpp="6AT"), "6AT", "success", True, True),
+        (_vin_row(vin="A" * 17, kp="Automatic", kpp="6AT"), "8AT", "success", True, False),
+        ("depth_overflow", "6AT", "unparsed_response", None, False),
+    ],
+)
+def test_partsapi_incomplete_or_conflicting_profile_cannot_hide_evidence(
+    partsapi_vin_env, monkeypatch, payload, transmission, outcome, matches, allowed
+):
+    if payload == "depth_overflow":
+        foreign = _vin_row(vin="B" * 17)
+        for _ in range(4):
+            foreign = {"data": foreign}
+        payload = {"result": [_vin_row(vin="A" * 17), foreign]}
+    decoded, resolved, methods = _partsapi_vin_readback(monkeypatch, payload, transmission=transmission)
+    assert decoded["outcome"] == outcome
+    assert decoded.get("identifier_matches_request") is matches
+    assert decoded["attempt_count"] == 1
+    assert decoded["retryable"] is False
+    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode"])
+    assert resolved["tecdoc_vehicle"]["requires_exact_identifier_confirmation"] is (matches is not True)
+    if outcome == "success" and payload.get("kp"):
+        assert decoded["vehicle_profiles"][0]["transmission"] == f"{payload['kp']} / {payload['kpp']}"
 
 
 @pytest.mark.parametrize(
@@ -379,6 +464,11 @@ def test_partsapi_uses_one_normalized_vin(partsapi_vin_env, monkeypatch, identif
         (_vin_row(), None),
         ({"request": _vin_row(vin="A" * 17), "result": [_vin_row()]}, None),
         ({"metadata": {"vin": "B" * 17}, "result": [_vin_row(vin="A" * 17)]}, True),
+        ({"requestParams": _vin_row(vin="B" * 17), "result": [_vin_row(vin="A" * 17)]}, True),
+        ({"requestParameters": _vin_row(vin="B" * 17), "result": [_vin_row(vin="A" * 17)]}, True),
+        (_vin_row(vin="A" * 17, metadata={"error": "Unrelated metadata"}), True),
+        (_vin_row(result={"Vin": "A" * 17}), None),
+        (_vin_row(result={"Vin": "B" * 17}), False),
         ({"result": [_vin_row(vin="A" * 17), _vin_row(vin="B" * 17)]}, False),
         ({"result": [_vin_row(vin="B" * 17), _vin_row(vin="A" * 17)]}, False),
         ({"result": [_vin_row(vin="A" * 17), _vin_row(vin="A" * 17, carId=67890)]}, True),
