@@ -258,6 +258,7 @@ class InboundMonitor:
         self._next_sequence = secrets.randbits(128) or 1
         self._dropped_events = 0
         self._dropped_open_events = 0
+        self._rejected_events = 0
 
     @staticmethod
     def _event_id(event: InboundMonitorEvent) -> str:
@@ -266,10 +267,15 @@ class InboundMonitor:
     def _state(self, event: InboundMonitorEvent) -> str:
         return self._states.get(event.sequence, INBOUND_EVENT_OPEN)
 
-    def _evict_for_new_event(self) -> None:
+    def _evict_for_new_event(self, *, preserve_open: bool = False) -> None:
         """Keep unresolved opaque refs ahead of already closed refs when bounded."""
 
-        removed = next((event for event in self._events if self._state(event) != INBOUND_EVENT_OPEN), self._events[0])
+        removed = next((event for event in self._events if self._state(event) != INBOUND_EVENT_OPEN), None)
+        if removed is None:
+            if preserve_open:
+                self._rejected_events += 1
+                raise BridgeError("inbound_monitor_full")
+            removed = self._events[0]
         if self._state(removed) == INBOUND_EVENT_OPEN:
             self._dropped_open_events += 1
         self._events.remove(removed)
@@ -279,7 +285,7 @@ class InboundMonitor:
         self._voice_stage_by_event.pop(removed.sequence, None)
         self._dropped_events += 1
 
-    def record(self, event: Any) -> str | None:
+    def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
         """Remember only an incoming private message locator; never its body or media."""
 
         if not bool(getattr(event, "is_private", False)) or bool(getattr(event, "out", False)):
@@ -292,7 +298,7 @@ class InboundMonitor:
         if peer_id <= 0 or message_id <= 0 or (peer_id, message_id) in self._seen:
             return None
         if len(self._events) == self._max_events:
-            self._evict_for_new_event()
+            self._evict_for_new_event(preserve_open=preserve_open)
         event_ref = InboundMonitorEvent(
             sequence=self._next_sequence,
             peer_id=peer_id,
@@ -320,6 +326,7 @@ class InboundMonitor:
             "no_reply_needed_events": state_counts[INBOUND_EVENT_NO_REPLY_NEEDED],
             "dropped_events": self._dropped_events,
             "dropped_open_events": self._dropped_open_events,
+            "rejected_events": self._rejected_events,
             "retention": "memory_only",
         }
 
@@ -2880,11 +2887,15 @@ async def _serve_client(
 
 
 async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
+    wake_socket = os.environ.get(WORK_WAKE_ENVIRONMENT)
     try:
-        event_id = monitor.record(event)
+        event_id = monitor.record(event, preserve_open=bool(wake_socket))
+    except BridgeError as exc:
+        if str(exc) == "inbound_monitor_full":
+            print("work_telegram_monitor_full=true", file=sys.stderr, flush=True)
+        return
     except Exception:  # noqa: BLE001 - one malformed provider update must not stop the bridge.
         return
-    wake_socket = os.environ.get(WORK_WAKE_ENVIRONMENT)
     if event_id is not None and wake_socket:
         try:
             from autostop_manager.telegram_wake import local_request
