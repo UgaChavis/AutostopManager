@@ -79,7 +79,11 @@ Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 
 def _systemctl(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+    # systemctl is not the service main process and must not notify on its behalf.
+    child_environment = os.environ.copy()
+    for name in ("NOTIFY_SOCKET", "WATCHDOG_PID", "WATCHDOG_USEC"):
+        child_environment.pop(name, None)
+    return subprocess.run(command, capture_output=True, text=True, timeout=5, check=False, env=child_environment)
 
 
 class SystemTimerController:

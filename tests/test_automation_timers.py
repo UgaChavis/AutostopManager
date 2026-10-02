@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -10,7 +12,7 @@ import pytest
 
 from autostop_manager.automation_registry import AutomationError, AutomationStore
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
-from autostop_manager.automation_timers import SystemTimerController, SystemTimerPolicy
+from autostop_manager.automation_timers import SystemTimerController, SystemTimerPolicy, _systemctl
 
 
 def fake_systemctl(command):
@@ -26,6 +28,41 @@ def fake_systemctl(command):
         ),
         stderr="",
     )
+
+
+@pytest.mark.parametrize("notification_context", [False, True])
+def test_systemctl_child_does_not_inherit_parent_notification_context(monkeypatch, notification_context):
+    service_values = {
+        "NOTIFY_SOCKET": "@autostop-timer-test-notify",
+        "WATCHDOG_PID": str(os.getpid()),
+        "WATCHDOG_USEC": "30000000",
+    }
+    for name, value in service_values.items():
+        if notification_context:
+            monkeypatch.setenv(name, value)
+        else:
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_DB", "/tmp/autostop-timer-test-registry.sqlite3")
+    parent_values = {name: os.environ.get(name) for name in (*service_values, "PATH", "AUTOSTOP_AUTOMATION_DB")}
+
+    result = _systemctl(
+        [
+            sys.executable,
+            "-c",
+            "import json, os; "
+            "print(json.dumps({name: os.environ.get(name) for name in "
+            "('NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'PATH', 'AUTOSTOP_AUTOMATION_DB')}))",
+        ]
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {
+        **parent_values,
+        "NOTIFY_SOCKET": None,
+        "WATCHDOG_PID": None,
+        "WATCHDOG_USEC": None,
+    }
+    assert {name: os.environ.get(name) for name in parent_values} == parent_values
 
 
 def test_system_timer_allowlist_locks_read_only_and_adopts_current(tmp_path: Path):
