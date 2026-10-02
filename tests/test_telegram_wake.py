@@ -38,22 +38,55 @@ class MockServer:
         self.unload_after_turn = False
         self.reject_method = None
         self.thread_status = "idle"
+        self.sockets = []
+        self.loaded_by_socket = {}
+        self.turn_statuses = {}
+        self.disconnect_after_start_response = False
+        self.metadata_pages = None
+        self.metadata_response = None
+        self.metadata_calls = 0
+        self.disconnect_metadata_once = False
+        self.release_initialize = asyncio.Event()
+        self.release_initialize.set()
+        self.release_resume = asyncio.Event()
+        self.release_resume.set()
+        self.initializing = asyncio.Event()
+        self.resuming = asyncio.Event()
+        self.emit_started = True
+        self.resume_calls = 0
+        self.disconnect_resume_on_call = None
+        self.metadata_requested = asyncio.Event()
+        self.release_metadata = asyncio.Event()
+        self.release_metadata.set()
 
     async def handle(self, socket):
+        self.sockets.append(socket)
+        self.loaded_by_socket[socket] = False
         async for raw in socket:
             msg = json.loads(raw)
             self.calls.append(msg)
             method = msg.get("method")
             if "id" not in msg:
                 continue
-            if method == self.reject_method or (method == "turn/start" and not self.loaded):
+            if method == self.reject_method or (method == "turn/start" and not self.loaded_by_socket[socket]):
                 await socket.send(
                     json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "private error details"}})
                 )
                 continue
             result = {}
+            if method == "initialize":
+                self.initializing.set()
+                await self.release_initialize.wait()
+            if method == "thread/resume":
+                self.resume_calls += 1
+                self.resuming.set()
+                await self.release_resume.wait()
+                if self.resume_calls == self.disconnect_resume_on_call:
+                    await socket.close()
+                    return
             if method in {"thread/start", "thread/resume"}:
                 self.loaded = True
+                self.loaded_by_socket[socket] = True
             if method in {"thread/start", "thread/resume", "thread/read"}:
                 result = {
                     "thread": {
@@ -67,9 +100,13 @@ class MockServer:
             if method == "turn/start":
                 self.counter += 1
                 turn = {"id": str(self.counter), "status": "inProgress"}
+                self.turn_statuses[str(self.counter)] = "inProgress"
                 self.started.set()
                 await self.release_start.wait()
-                await socket.send(json.dumps({"method": "turn/started", "params": {"threadId": THREAD, "turn": turn}}))
+                if self.emit_started:
+                    await socket.send(
+                        json.dumps({"method": "turn/started", "params": {"threadId": THREAD, "turn": turn}})
+                    )
                 result = {"turn": turn}
             if method == "reject":
                 await socket.send(json.dumps({"id": msg["id"], "error": {"message": "private payload"}}))
@@ -77,12 +114,36 @@ class MockServer:
             if method == "turn/start" and self.disconnect:
                 await socket.close()
                 return
+            if method == "thread/turns/list":
+                self.metadata_calls += 1
+                self.metadata_requested.set()
+                await self.release_metadata.wait()
+                if self.disconnect_metadata_once:
+                    self.disconnect_metadata_once = False
+                    await socket.close()
+                    return
+                if self.metadata_response is not None:
+                    result = self.metadata_response
+                elif self.metadata_pages is not None:
+                    page = int(msg["params"].get("cursor") or "0")
+                    result = self.metadata_pages[page]
+                else:
+                    result = {
+                        "data": [{"id": ident, "status": status} for ident, status in self.turn_statuses.items()],
+                        "nextCursor": None,
+                    }
             await socket.send(json.dumps({"id": msg["id"], "result": result}))
+            if method == "turn/start" and self.disconnect_after_start_response:
+                self.disconnect_after_start_response = False
+                await socket.close()
+                return
             if (method == "turn/start" and self.complete) or method == "turn/interrupt":
                 status = "interrupted" if method == "turn/interrupt" else self.status
                 params = {"threadId": THREAD, "turn": {"id": str(self.counter), "status": status}}
                 if self.unload_after_turn:
                     self.loaded = False
+                    self.loaded_by_socket[socket] = False
+                self.turn_statuses[str(self.counter)] = status
                 await socket.send(json.dumps({"method": "turn/completed", "params": params}))
 
 
@@ -261,7 +322,7 @@ def test_fixed_target_and_uid_boundaries(payload, uid, error):
     assert dispatcher.accepted == 0
 
 
-def test_overflow_and_disconnected_are_visible_without_retry():
+def test_overflow_is_visible_and_disconnected_events_remain_queued():
     app = SimpleNamespace(connected=True)
     dispatcher = wake.WakeDispatcher(app, 123)
     for n in range(1, bridge.MAX_INBOUND_MONITOR_EVENTS + 1):
@@ -272,8 +333,12 @@ def test_overflow_and_disconnected_are_visible_without_retry():
     assert status["last_error"] == "wake_queue_full" and status["failed"] == 1
     assert "inbound-" not in json.dumps(status)
     app.connected = False
-    with pytest.raises(wake.WakeError, match="wake_not_ready"):
+    with pytest.raises(wake.WakeError, match="wake_queue_full"):
         dispatcher.accept({"operation": "event", "event_id": "inbound-999"}, 123)
+    assert dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)["duplicate"]
+    queued = wake.WakeDispatcher(app, 123)
+    assert queued.accept({"operation": "event", "event_id": "inbound-1"}, 123)["ok"]
+    assert queued.queue.qsize() == 1 and queued.enabled
 
 
 def test_status_identifies_loaded_instruction_without_processing_queued_events():
@@ -413,7 +478,9 @@ def test_resume_rpc_rejection_is_not_bypassed_when_active_is_allowed(allow_activ
         app.request = AsyncMock(side_effect=wake.RPCRejected("private RPC payload"))
         with pytest.raises(wake.WakeError, match=r"^codex_thread_resume_rejected$"):
             await app.resume(allow_active=allow_active)
-        app.request.assert_awaited_once_with("thread/resume", {"threadId": THREAD, "cwd": wake.PROJECT_DIR})
+        app.request.assert_awaited_once_with(
+            "thread/resume", {"threadId": THREAD, "cwd": wake.PROJECT_DIR, "excludeTurns": True}
+        )
         assert app.active_turn is None and not app.outcome_unknown
 
     asyncio.run(scenario())
@@ -450,6 +517,12 @@ def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupt
             task = asyncio.create_task(wake.daemon(wake.WakeConfig(THREAD, app_socket=app_socket)))
             try:
                 await asyncio.wait_for(ready.wait(), 2)
+                async with asyncio.timeout(2):
+                    while True:
+                        status = await wake.local_request({"operation": "status"}, path=wake_socket)
+                        if status["ready"]:
+                            break
+                        await asyncio.sleep(0.001)
                 status = await wake.local_request({"operation": "status"}, path=wake_socket)
                 assert status["enabled"] and status["connected"]
                 assert not status["active"] and status["queued"] == status["accepted"] == 0
@@ -659,6 +732,11 @@ def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario
         'printf \'{"ok":true,"transport_ready":true,"inbound_enabled":%s,'
         '"owner_notification_configured":true}\\n\' "$inbound"\n'
     )
+    wake_python = tmp_path / "wake-python"
+    wake_python.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok":true,"enabled":true,"connected":true,'
+        '"ready":true,"recovery_state":"ready"}\'\n'
+    )
     (fake_bin / "sudo").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')
     systemctl = fake_bin / "systemctl"
     systemctl.write_text(
@@ -667,11 +745,12 @@ def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario
         '[ "$1" = is-active ] || exit 90\n'
         '[ "$FAKE_SCENARIO" = inbound_enabled ]\n'
     )
-    for path in (venv_python, fake_bin / "sudo", systemctl):
+    for path in (venv_python, wake_python, fake_bin / "sudo", systemctl):
         path.chmod(0o755)
     source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
     for old, new in (
         ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
+        ('wake_python="/opt/AutostopManager/.venv/bin/python"', f'wake_python="{wake_python}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{config}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{tmp_path / "lock"}"'),
