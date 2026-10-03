@@ -1,0 +1,11 @@
+[Unit]
+Description=AutoStop maintenance recovery after boot or interruption
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=autostop-disk-maintenance-recovery.service
+
+[Install]
+WantedBy=timers.target

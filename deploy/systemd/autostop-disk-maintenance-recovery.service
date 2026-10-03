@@ -1,0 +1,18 @@
+[Unit]
+Description=Recover an interrupted AutoStop CI maintenance pause
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/local/sbin/autostop-disk-maintenance recover-ci
+TimeoutStartSec=5min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/autostop-manager/private /run/lock
