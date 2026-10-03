@@ -1,0 +1,25 @@
+[Unit]
+Description=Bounded AutoStop disk retention on MNG1
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=LD_LIBRARY_PATH=/opt/autostop-sqlite/3.51.3/lib
+ExecStart=/usr/local/sbin/autostop-disk-maintenance maintain
+ExecStopPost=/usr/local/sbin/autostop-disk-maintenance recover-ci
+TimeoutStartSec=50min
+TimeoutStopSec=5min
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/autostop-manager/private /run/lock /root/.cache /var/cache/apt /root/autostopcrm-backups/agent-gateway-v2 /opt/autostop-app-backups /opt/autostop-manager-releases /opt/autostop-work-telegram-releases /opt/autostop-work-telegram-runtimes /var/backups/autostop24/database /var/backups/autostop-complete/.backup.lock /opt/autostopcrm/.autostop-deploy.lock /run/autostop-work-telegram-control.lock

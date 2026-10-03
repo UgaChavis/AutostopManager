@@ -27,6 +27,8 @@ Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd акт
 
 Регулярная локальная копия данных CRM, Manager, scheduler и Store: [complete-backup.md](complete-backup.md). Установка timer требует проверенной новой копии и ёмкости для retention; восстановление и offsite выполняются отдельно.
 
+Освобождение места на MNG1 и ночное сохранение current+rollback/трёх дней PG: [disk-maintenance.md](disk-maintenance.md). Используй private manifest, native locks, cold verification и восстановление CI; после нового выпуска перечитывай pinned policy.
+
 Перед обновлением ОС сохрани root-only пакетный перечень, config служб/сети/proxy, свежий проверенный dump и `/proc/sys/kernel/random/boot_id`. Используй поддерживаемые обновления без снятия vendor phasing и автоматического удаления данных. Reboot — отдельное поручение, после окончания deploy/backup процессов. После него проверь новый boot ID, `uname -r`, SHA, systemd, containers, публичный TLS/HTTP, Gateway/MCP, G1, Telegram duty, J1 static/browser и Codex.
 
 Локальные gates Manager: `scripts/release-gates.sh` с одноразовой БД; CRM: `run_checks.ps1 -Profile ci` и текущий runbook; Store: `scripts/run-backend-tests.sh --agent-write-smoke`, затем `--full`. При failed backup/rollback gate, mandatory CI или неверном target SHA выпуск останавливается. Порядок и восстановление: [deployment.md](deployment.md), текущие `/opt/autostopcrm/docs/OPERATIONS_RUNBOOK.md` и `/opt/autostopapp/docs/deploy_rollback.md`.

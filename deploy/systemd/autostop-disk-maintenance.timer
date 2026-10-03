@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily AutoStop disk retention at 04:00 Krasnoyarsk
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Krasnoyarsk
+AccuracySec=1min
+Persistent=false
+Unit=autostop-disk-maintenance.service
+
+[Install]
+WantedBy=timers.target
