@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -90,6 +91,7 @@ def test_search_sends_bounded_request_and_returns_normalized_non_pii_listing(mon
         "url": "https://www.avito.ru/krasnoyarsk/zapchasti_i_aksessuary/bamper_8386499447",
         "title": "Бампер Toyota Camry",
         "description": "Б/у, хорошее состояние. Телефон [redacted]; email [redacted]",
+        "description_source": "description",
         "price_rub": 35_900,
         "price_text": "35 900 ₽",
         "price_qualifier": "fixed",
@@ -105,6 +107,7 @@ def test_search_sends_bounded_request_and_returns_normalized_non_pii_listing(mon
         "delivery": {"available": True, "label": "Авито Доставка"},
         "availability": None,
         "published_at": "2026-09-16T19:51:58Z",
+        "published_or_raised_text": None,
         "observed_at": result["listings"][0]["observed_at"],
         "status": "lead",
         "fitment_confirmed": False,
@@ -170,7 +173,14 @@ def test_search_returns_malformed_response_for_excessive_json_numbers_or_nesting
 
     result = avito_listings.avito_search_listings("synthetic part")
 
-    assert result == {"ok": False, "source": "avito", "error": "malformed_response"}
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "malformed_response",
+        "provider_code": None,
+        "http_status": 200,
+        "retryable": False,
+    }
     assert len(calls) == 1
 
 
@@ -205,7 +215,16 @@ def test_search_skips_rows_without_original_avito_source_url(monkeypatch, overri
 
     result = avito_listings.avito_search_listings("part")
 
-    assert result == {"ok": False, "source": "avito", "error": "malformed_response"}
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "malformed_response",
+        "provider_count": 1,
+        "scanned_count": 1,
+        "rejected_count": 1,
+        "duplicate_count": 0,
+        "unscanned_count": 0,
+    }
 
 
 @pytest.mark.parametrize(
@@ -307,6 +326,11 @@ def test_search_empty_results_are_a_valid_live_response(monkeypatch):
         "verification": "provider_response_received",
         "count": 0,
         "listings": [],
+        "provider_count": 0,
+        "scanned_count": 0,
+        "rejected_count": 0,
+        "duplicate_count": 0,
+        "unscanned_count": 0,
     }
 
 
@@ -364,15 +388,19 @@ def test_search_malformed_response_is_sanitized(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("status", "error"),
+    ("status", "error", "retryable"),
     [
-        (401, "authentication_failed"),
-        (403, "provider_forbidden"),
-        (429, "rate_limited"),
-        (503, "provider_unavailable"),
+        (401, "authentication_failed", False),
+        (402, "quota_exceeded", False),
+        (403, "provider_forbidden", False),
+        (404, "listing_not_found", False),
+        (429, "rate_limited", True),
+        (502, "provider_unavailable", True),
+        (503, "provider_unavailable", True),
+        (504, "provider_timeout", True),
     ],
 )
-def test_search_maps_http_errors_without_echoing_response_or_key(monkeypatch, status, error):
+def test_search_maps_http_errors_without_echoing_response_or_key(monkeypatch, status, error, retryable):
     monkeypatch.setenv("REEFAPI_API_KEY", "reef-secret-test-key")
     monkeypatch.setattr(avito_listings, "_API_BASE_URL", "http://127.0.0.1:8765")
 
@@ -382,7 +410,14 @@ def test_search_maps_http_errors_without_echoing_response_or_key(monkeypatch, st
     monkeypatch.setattr(avito_listings, "_open_request", fail_request)
     result = avito_listings.avito_search_listings("part")
 
-    assert result == {"ok": False, "source": "avito", "error": error}
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": error,
+        "provider_code": None,
+        "http_status": status,
+        "retryable": retryable,
+    }
     assert "reef-secret-test-key" not in repr(result)
 
 
@@ -398,7 +433,14 @@ def test_search_timeout_is_bounded_and_does_not_retry_a_chargeable_request(monke
 
     result = avito_listings.avito_search_listings("part")
 
-    assert result == {"ok": False, "source": "avito", "error": "provider_unavailable"}
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "provider_timeout",
+        "provider_code": None,
+        "http_status": None,
+        "retryable": True,
+    }
     assert calls == [30.0]
     assert "reef-secret-test-key" not in repr(result)
 
@@ -415,7 +457,14 @@ def test_search_provider_error_maps_rate_limit_and_hides_provider_message(monkey
 
     result = avito_listings.avito_search_listings("part")
 
-    assert result == {"ok": False, "source": "avito", "error": "rate_limited"}
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "rate_limited",
+        "provider_code": "RATE_LIMITED",
+        "http_status": 200,
+        "retryable": True,
+    }
     assert "reef-secret-test-key" not in repr(result)
 
 
@@ -526,7 +575,10 @@ def test_listing_url_must_reference_the_same_returned_id(monkeypatch, operation)
         else avito_listings.avito_search_listings("synthetic part")
     )
 
-    assert result == {"ok": False, "source": "avito", "error": "malformed_response"}
+    expected = {"ok": False, "source": "avito", "error": "malformed_response"}
+    if operation == "search":
+        expected.update(provider_count=1, scanned_count=1, rejected_count=1, duplicate_count=0, unscanned_count=0)
+    assert result == expected
 
 
 def test_read_listing_preserves_known_target_fallback_for_missing_fields(monkeypatch):
@@ -619,3 +671,287 @@ def test_api_key_with_header_control_characters_is_rejected(monkeypatch):
     result = avito_listings.avito_search_listings("part")
 
     assert result == {"ok": False, "source": "avito", "error": "api_key_invalid"}
+
+
+def test_current_detail_contract_preserves_condition_delivery_and_relative_publication(monkeypatch):
+    row = _listing(
+        condition="Б/у",
+        params=[{"attribute_id": "condition", "name": "Состояние", "value": "Новое"}],
+        parameters=[{"name": "Состояние", "value": "Б/у"}],
+        delivery_available=True,
+        delivery_text="Авито Доставка",
+        delivery={"available": False, "label": "Доставка недоступна"},
+        published_at=None,
+        published_or_raised_text="Поднято сегодня в 10:00",
+    )
+    _install_response(monkeypatch, {"ok": True, "data": {"listing": row}})
+
+    result = avito_listings.avito_read_listing("8386499447")
+
+    assert result["ok"] is True
+    listing = result["listing"]
+    assert listing["condition"] == "Новое"
+    assert listing["delivery"] == {"available": True, "label": "Авито Доставка"}
+    assert listing["published_at"] is None
+    assert listing["published_or_raised_text"] == "Поднято сегодня в 10:00"
+    assert listing["status"] == "lead"
+    assert listing["fitment_confirmed"] is False
+    assert listing["availability_confirmed"] is False
+
+
+@pytest.mark.parametrize("unknown", [None, "", False, [], {}])
+def test_authoritative_current_condition_does_not_resurrect_a_legacy_condition(unknown):
+    row = _listing(params=[{"name": "Состояние", "value": unknown}], condition="Новое")
+    listing = avito_listings._normalize_listing(row)
+    assert listing is not None
+    assert listing["condition"] is None
+
+
+@pytest.mark.parametrize(
+    ("current", "legacy", "text", "expected"),
+    [
+        (False, {"available": True, "label": "Авито Доставка"}, None, {"available": False, "label": None}),
+        (True, {"available": False, "label": "Недоступна"}, None, {"available": True, "label": None}),
+        (True, {"available": True, "label": "Доставка"}, None, {"available": True, "label": "Доставка"}),
+        (False, {"available": False, "label": "Недоступна"}, None, {"available": False, "label": "Недоступна"}),
+        (False, None, "Недоступна", {"available": False, "label": "Недоступна"}),
+        (None, {"available": False, "label": "Недоступна"}, None, {"available": False, "label": "Недоступна"}),
+        (None, None, "Подробности доставки", {"available": None, "label": "Подробности доставки"}),
+        (None, None, None, None),
+    ],
+)
+def test_current_delivery_preserves_false_unknown_and_compatible_legacy_labels(current, legacy, text, expected):
+    row = _listing(delivery_available=current, delivery=legacy, delivery_text=text)
+    listing = avito_listings._normalize_listing(row)
+    assert listing is not None
+    assert listing["delivery"] == expected
+
+
+@pytest.mark.parametrize(
+    ("description", "snippet", "expected_text", "expected_source"),
+    [
+        ("Полное описание", "Краткое описание", "Полное описание", "description"),
+        (None, "<b>03C115561H</b> +7 999 123-45-67", "03C115561H [redacted]", "description_snippet"),
+        ("   ", "Краткое описание", "Краткое описание", "description_snippet"),
+        ([], "Краткое описание", "Краткое описание", "description_snippet"),
+        (None, None, "", None),
+    ],
+)
+def test_description_current_snippet_fallback_has_provenance(description, snippet, expected_text, expected_source):
+    listing = avito_listings._normalize_listing(_listing(description=description, description_snippet=snippet))
+    assert listing is not None
+    assert listing["description"] == expected_text
+    assert listing["description_source"] == expected_source
+
+
+def test_search_limit_counts_only_accepted_unique_rows(monkeypatch):
+    second = _listing(ad_id="8386499450", url="https://www.avito.ru/item/8386499450")
+    later = _listing(ad_id="8386499451", url="https://www.avito.ru/item/8386499451")
+    rows = [{"title": "Неполная строка"}, _listing(), _listing(), second, later]
+    calls = _install_response(monkeypatch, {"ok": True, "data": {"listings": rows}})
+
+    result = avito_listings.avito_search_listings("03C115561H", limit=2)
+
+    assert result["ok"] is True
+    assert [listing["listing_id"] for listing in result["listings"]] == ["8386499447", "8386499450"]
+    assert result["count"] == 2
+    assert {
+        key: result[key]
+        for key in ("provider_count", "scanned_count", "rejected_count", "duplicate_count", "unscanned_count")
+    } == {
+        "provider_count": 5,
+        "scanned_count": 4,
+        "rejected_count": 1,
+        "duplicate_count": 1,
+        "unscanned_count": 1,
+    }
+    assert len(calls) == 1
+
+
+def test_limit_one_can_return_a_valid_row_after_a_malformed_first_row(monkeypatch):
+    calls = _install_response(monkeypatch, {"ok": True, "data": {"listings": [None, _listing()]}})
+    result = avito_listings.avito_search_listings("03C115561H", limit=1)
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["scanned_count"] == 2
+    assert result["rejected_count"] == 1
+    assert len(calls) == 1
+
+
+def test_search_does_not_scan_beyond_the_provider_page_bound(monkeypatch):
+    calls = _install_response(monkeypatch, {"ok": True, "data": {"listings": [None] * 50 + [_listing()]}})
+    result = avito_listings.avito_search_listings("03C115561H", limit=1)
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "malformed_response",
+        "provider_count": 51,
+        "scanned_count": 50,
+        "rejected_count": 50,
+        "duplicate_count": 0,
+        "unscanned_count": 1,
+    }
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("operation", ["search", "read_id", "read_url"])
+def test_listing_slug_and_numeric_id_do_not_form_a_false_vin(monkeypatch, operation):
+    url = "https://www.avito.ru/krasnoyarsk/zapchasti_i_aksessuary/bamper_toyota_camry_8386499447"
+    row = _listing(url=url)
+    data = {"listings": [row]} if operation == "search" else {"listing": row}
+    calls = _install_response(monkeypatch, {"ok": True, "data": data})
+    if operation == "search":
+        result = avito_listings.avito_search_listings("03C115561H")
+        listing = result["listings"][0]
+    else:
+        result = avito_listings.avito_read_listing(url if operation == "read_url" else "8386499447")
+        listing = result["listing"]
+    assert result["ok"] is True
+    assert listing["url"] == url
+    assert listing["listing_id"] == "8386499447"
+    assert len(calls) == 1
+
+
+def test_numeric_listing_id_is_not_interpreted_as_a_phone_number(monkeypatch):
+    listing_id = "89991112233"
+    calls = _install_response(
+        monkeypatch,
+        {"ok": True, "data": _listing(ad_id=listing_id, url=f"https://www.avito.ru/item/{listing_id}")},
+    )
+    result = avito_listings.avito_read_listing(listing_id)
+    assert result["ok"] is True
+    assert result["listing"]["listing_id"] == listing_id
+    assert json.loads(calls[0][0].data) == {"ad_id": listing_id}
+
+
+# Expected classifications follow ReefAPI's documented global error contract.
+_DOCUMENTED_ERROR_CASES = [
+    (400, "MISSING_PARAM", "request_rejected", False),
+    (400, "INVALID_PARAM", "request_rejected", False),
+    (401, "AUTH_FAILED", "authentication_failed", False),
+    (402, "QUOTA_EXCEEDED", "quota_exceeded", False),
+    (404, "NOT_FOUND", "listing_not_found", False),
+    (429, "RATE_LIMITED", "rate_limited", True),
+    (502, "TARGET_BLOCKED", "source_blocked", True),
+    (502, "PARSE_ERROR", "provider_parse_error", False),
+    (503, "DISABLED", "provider_disabled", False),
+    (504, "UPSTREAM_TIMEOUT", "provider_timeout", True),
+    (500, "INTERNAL", "provider_unavailable", True),
+]
+
+
+@pytest.mark.parametrize(("status", "code", "error", "retryable"), _DOCUMENTED_ERROR_CASES)
+@pytest.mark.parametrize("transport", ["json", "http_error"])
+def test_documented_errors_remain_distinct_and_never_trigger_a_hidden_retry(
+    monkeypatch, status, code, error, retryable, transport
+):
+    payload = {"ok": False, "error": {"code": code, "message": "password=private-error-value; parts@example.org"}}
+    if transport == "json":
+        calls = _install_response(monkeypatch, payload)
+        actual_status = 200
+        body = None
+    else:
+        monkeypatch.setenv("REEFAPI_API_KEY", "reef-secret-test-key")
+        calls = []
+        body = io.BytesIO(json.dumps(payload).encode())
+
+        def fail_request(request, timeout):
+            calls.append((request, timeout))
+            raise HTTPError("https://api.reefapi.com/avito/v1/listing", status, "private-error-value", {}, body)
+
+        monkeypatch.setattr(avito_listings, "_open_request", fail_request)
+        actual_status = status
+    result = avito_listings.avito_read_listing("8386499447")
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": error,
+        "provider_code": code,
+        "http_status": actual_status,
+        "retryable": retryable,
+    }
+    assert len(calls) == 1
+    assert "private-error-value" not in repr(result)
+    assert "parts@example.org" not in repr(result)
+    assert "reef-secret-test-key" not in repr(result)
+    if body is not None:
+        assert body.closed
+
+
+@pytest.mark.parametrize(
+    ("code", "retryable", "expected"),
+    [("TARGET_BLOCKED", False, False), ("PARSE_ERROR", True, True), ("QUOTA_EXCEEDED", "true", False)],
+)
+def test_only_a_real_boolean_provider_retryable_value_overrides_the_documented_default(
+    monkeypatch, code, retryable, expected
+):
+    calls = _install_response(monkeypatch, {"ok": False, "error": {"code": code, "retryable": retryable}})
+    result = avito_listings.avito_search_listings("03C115561H")
+    assert result["retryable"] is expected
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("code", ["UNKNOWN_SAFE_CODE", "api_key=private-error-value", ["QUOTA_EXCEEDED"], None])
+def test_unknown_provider_codes_and_retry_claims_are_not_returned(monkeypatch, code):
+    _install_response(
+        monkeypatch, {"ok": False, "error": {"code": code, "retryable": True, "message": "private-error-value"}}
+    )
+    result = avito_listings.avito_search_listings("03C115561H")
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "provider_error",
+        "provider_code": None,
+        "http_status": 200,
+        "retryable": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"not-json password=private-error-value", b"[]", b"x" * 64_001, b'{"ok":true,"error":{"code":"AUTH_FAILED"}}'],
+)
+def test_bad_http_error_bodies_do_not_hide_a_useful_status_or_leak_payload(monkeypatch, body):
+    monkeypatch.setenv("REEFAPI_API_KEY", "reef-secret-test-key")
+    stream = io.BytesIO(body)
+
+    def fail_request(_request, timeout):
+        raise HTTPError("https://api.reefapi.com/avito/v1/listing", 402, "private-error-value", {}, stream)
+
+    monkeypatch.setattr(avito_listings, "_open_request", fail_request)
+    result = avito_listings.avito_read_listing("8386499447")
+    assert result == {
+        "ok": False,
+        "source": "avito",
+        "error": "quota_exceeded",
+        "provider_code": None,
+        "http_status": 402,
+        "retryable": False,
+    }
+    assert "private-error-value" not in repr(result)
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    ("exception", "error"),
+    [
+        (URLError(TimeoutError("private-error-value")), "provider_timeout"),
+        (URLError("private-error-value"), "provider_unavailable"),
+    ],
+)
+def test_transport_errors_have_safe_distinct_causes_without_retries(monkeypatch, exception, error):
+    monkeypatch.setenv("REEFAPI_API_KEY", "reef-secret-test-key")
+    calls = []
+
+    def fail_request(_request, timeout):
+        calls.append(timeout)
+        raise exception
+
+    monkeypatch.setattr(avito_listings, "_open_request", fail_request)
+    result = avito_listings.avito_search_listings("03C115561H")
+    assert result["error"] == error
+    assert result["http_status"] is None
+    assert result["provider_code"] is None
+    assert result["retryable"] is True
+    assert "private-error-value" not in repr(result)
+    assert calls == [30.0]

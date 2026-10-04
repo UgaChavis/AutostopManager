@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from typing import Any
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -16,8 +17,8 @@ from autostop_manager.storage import StoreState
 
 class _ToolServer:
     def __init__(self) -> None:
-        self.tools = {}
-        self.options = {}
+        self.tools: dict[str, Any] = {}
+        self.options: dict[str, Any] = {}
 
     def tool(self, *, name, description="", **kwargs):
         def register(function):
@@ -97,8 +98,11 @@ def test_marketplace_mcp_tools_are_independent_and_forward_arguments(monkeypatch
     server = _ToolServer()
     mcp_tools.register_manager_tools(server, store=StoreState(tmp_path / "memory.sqlite3"))
 
-    assert server.tools["avito_search_listings"]("filter", dry_run=True)["name"] == "avito_search_listings"
-    assert server.tools["avito_read_listing"]("123", dry_run=True)["name"] == "avito_read_listing"
+    async def call_avito():
+        assert (await server.tools["avito_search_listings"]("filter", dry_run=True))["name"] == "avito_search_listings"
+        assert (await server.tools["avito_read_listing"]("123", dry_run=True))["name"] == "avito_read_listing"
+
+    asyncio.run(call_avito())
     assert server.tools["drom_start_parts_search"]("filter", dry_run=True)["name"] == "drom_start_parts_search"
     assert server.tools["drom_get_parts_search"](12, "uid")["name"] == "drom_get_parts_search"
     assert [name for name, _ in calls] == [

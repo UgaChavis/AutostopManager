@@ -14,16 +14,32 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .avito_listing_identity import clean_avito_listing_url
 from .j1_fetch import contains_sensitive, redact_sensitive
 
 _API_BASE_URL = "https://api.reefapi.com"
 _API_KEY_ENV = "REEFAPI_API_KEY"
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _MAX_RESPONSE_BYTES = 5_000_000
+_MAX_ERROR_RESPONSE_BYTES = 64_000
+_MAX_PROVIDER_ROWS = 50
 _MAX_QUERY_CHARS = 256
 _MAX_TEXT_CHARS = 8_000
-_AD_ID = re.compile(r"^\d{6,20}$")
-_SAFE_PROVIDER_CODE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+_AD_ID = re.compile(r"^[0-9]{6,20}$")
+_PROVIDER_ERRORS = {
+    "MISSING_PARAM": ("request_rejected", False),
+    "INVALID_PARAM": ("request_rejected", False),
+    "AUTH_FAILED": ("authentication_failed", False),
+    "QUOTA_EXCEEDED": ("quota_exceeded", False),
+    "NOT_FOUND": ("listing_not_found", False),
+    "RATE_LIMITED": ("rate_limited", True),
+    "TARGET_BLOCKED": ("source_blocked", True),
+    "UPSTREAM_TIMEOUT": ("provider_timeout", True),
+    "PARSE_ERROR": ("provider_parse_error", False),
+    "DISABLED": ("provider_disabled", False),
+    "INTERNAL": ("provider_unavailable", True),
+}
+_RETRYABLE_ERRORS = frozenset({"rate_limited", "source_blocked", "provider_timeout", "provider_unavailable"})
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -81,45 +97,51 @@ def avito_search_listings(
 
     response = _request_json("search", request_payload)
     if not response["ok"]:
-        return _failure(response["error"])
+        return _failure(response["error"], details=response)
 
     data = response["data"]
     rows = data.get("listings") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         return _failure("malformed_response")
-    if not rows:
-        return {
-            "ok": True,
-            "source": "avito",
-            "verification": "provider_response_received",
-            "count": 0,
-            "listings": [],
-        }
-
     listings = []
     seen_ids: set[str] = set()
     seen_urls: set[str] = set()
-    for item in rows[:limit]:
+    scanned_count = rejected_count = duplicate_count = 0
+    for item in rows[:_MAX_PROVIDER_ROWS]:
+        scanned_count += 1
         if not isinstance(item, dict):
+            rejected_count += 1
             continue
         normalized = _normalize_listing(item)
         if normalized is None:
+            rejected_count += 1
             continue
         listing_id = normalized["listing_id"]
         url = normalized["url"]
         if listing_id in seen_ids or url in seen_urls:
+            duplicate_count += 1
             continue
         seen_ids.add(listing_id)
         seen_urls.add(url)
         listings.append(normalized)
-    if not listings:
-        return _failure("malformed_response")
+        if len(listings) == limit:
+            break
+    counts = {
+        "provider_count": len(rows),
+        "scanned_count": scanned_count,
+        "rejected_count": rejected_count,
+        "duplicate_count": duplicate_count,
+        "unscanned_count": len(rows) - scanned_count,
+    }
+    if rows and not listings:
+        return {**_failure("malformed_response"), **counts}
     return {
         "ok": True,
         "source": "avito",
         "verification": "provider_response_received",
         "count": len(listings),
         "listings": listings,
+        **counts,
     }
 
 
@@ -142,7 +164,7 @@ def avito_read_listing(ad_id: str, dry_run: bool = False) -> dict[str, Any]:
 
     response = _request_json("listing", {"ad_id": normalized_id})
     if not response["ok"]:
-        return _failure(response["error"])
+        return _failure(response["error"], details=response)
 
     raw = response["data"]
     if isinstance(raw, dict) and isinstance(raw.get("listing"), dict):
@@ -228,37 +250,19 @@ def _parse_listing_identifier(value: Any) -> dict[str, Any]:
     if not isinstance(value, str):
         return {"ok": False, "error": "invalid_listing_id"}
     raw = value.strip()
-    if not raw or len(raw) > 2_048 or contains_sensitive(raw):
+    if not raw or len(raw) > 2_048:
         return {"ok": False, "error": "invalid_or_sensitive_listing_id"}
     if _AD_ID.fullmatch(raw):
         return {"ok": True, "listing_id": raw, "url": None}
 
-    try:
-        parsed = urlsplit(raw)
-        hostname = (parsed.hostname or "").casefold()
-        port = parsed.port
-    except ValueError:
-        return {"ok": False, "error": "invalid_listing_url"}
-    if (
-        parsed.scheme not in {"http", "https"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in {None, 80, 443}
-        or not _is_avito_host(hostname)
-    ):
-        return {"ok": False, "error": "listing_url_must_be_avito"}
-    match = re.search(r"(?:_|/)(\d{6,20})/?$", parsed.path)
+    url = clean_avito_listing_url(raw, allow_http=True, allow_tracking=True)
+    if url is None:
+        return {"ok": False, "error": "invalid_or_sensitive_listing_id"}
+    match = re.search(r"(?:_|/)([0-9]{6,20})\Z", urlsplit(url).path)
     if not match:
         return {"ok": False, "error": "invalid_listing_url"}
     listing_id = match.group(1)
-    # Tracking parameters and fragments are unnecessary for a listing lookup.
-    clean_path = parsed.path.rstrip("/")
-    url = urlunsplit(("https", hostname, clean_path, "", ""))
     return {"ok": True, "listing_id": listing_id, "url": url}
-
-
-def _is_avito_host(hostname: str) -> bool:
-    return hostname == "avito.ru" or hostname.endswith(".avito.ru")
 
 
 def _request_json(action: str, payload: dict[str, Any], *, base_url: str | None = None) -> dict[str, Any]:
@@ -280,39 +284,82 @@ def _request_json(action: str, payload: dict[str, Any], *, base_url: str | None 
         headers={"x-api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
+    http_status = None
     try:
         with _open_request(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+            http_status = _safe_http_status(getattr(response, "status", 200))
             body = response.read(_MAX_RESPONSE_BYTES + 1)
         if not isinstance(body, bytes):
-            return {"ok": False, "error": "malformed_response"}
+            return _provider_failure("malformed_response", http_status=http_status)
         if len(body) > _MAX_RESPONSE_BYTES:
-            return {"ok": False, "error": "response_too_large"}
+            return _provider_failure("response_too_large", http_status=http_status)
         parsed_body = json.loads(body.decode("utf-8"))
     except HTTPError as exc:
-        return {"ok": False, "error": _http_error_code(exc.code)}
-    except (TimeoutError, URLError, OSError, http.client.HTTPException):
-        return {"ok": False, "error": "provider_unavailable"}
+        return _http_failure(exc)
+    except TimeoutError:
+        return _provider_failure("provider_timeout", http_status=http_status)
+    except URLError as exc:
+        error = "provider_timeout" if isinstance(exc.reason, TimeoutError) else "provider_unavailable"
+        return _provider_failure(error, http_status=http_status)
+    except (OSError, http.client.HTTPException):
+        return _provider_failure("provider_unavailable", http_status=http_status)
     except (UnicodeDecodeError, ValueError, RecursionError):
-        return {"ok": False, "error": "malformed_response"}
+        return _provider_failure("malformed_response", http_status=http_status)
 
     if not isinstance(parsed_body, dict):
-        return {"ok": False, "error": "malformed_response"}
+        return _provider_failure("malformed_response", http_status=http_status)
     if parsed_body.get("ok") is not True:
-        provider_error = parsed_body.get("error")
-        provider_code = provider_error.get("code") if isinstance(provider_error, dict) else None
-        safe_code = (
-            provider_code if isinstance(provider_code, str) and _SAFE_PROVIDER_CODE.fullmatch(provider_code) else None
-        )
-        if safe_code == "RATE_LIMITED":
-            return {"ok": False, "error": "rate_limited"}
-        if safe_code == "AUTH_FAILED":
-            return {"ok": False, "error": "authentication_failed"}
-        if safe_code == "TARGET_BLOCKED":
-            return {"ok": False, "error": "source_blocked"}
-        return {"ok": False, "error": "provider_error"}
+        return _normalized_provider_error(parsed_body.get("error"), http_status=http_status)
     if "data" not in parsed_body:
-        return {"ok": False, "error": "malformed_response"}
+        return _provider_failure("malformed_response", http_status=http_status)
     return {"ok": True, "data": parsed_body["data"]}
+
+
+def _safe_http_status(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599 else None
+
+
+def _provider_failure(
+    error: str, *, http_status: int | None = None, provider_code: str | None = None, retryable: bool | None = None
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": error,
+        "provider_code": provider_code if provider_code in _PROVIDER_ERRORS else None,
+        "http_status": _safe_http_status(http_status),
+        "retryable": retryable if isinstance(retryable, bool) else error in _RETRYABLE_ERRORS,
+    }
+
+
+def _normalized_provider_error(value: Any, *, http_status: int | None) -> dict[str, Any]:
+    code = value.get("code") if isinstance(value, dict) else None
+    if isinstance(code, str) and code in _PROVIDER_ERRORS:
+        error, default_retryable = _PROVIDER_ERRORS[code]
+        retryable = value.get("retryable")
+        return _provider_failure(
+            error,
+            http_status=http_status,
+            provider_code=code,
+            retryable=retryable if isinstance(retryable, bool) else default_retryable,
+        )
+    error = _http_error_code(http_status) if http_status is not None and http_status >= 400 else "provider_error"
+    return _provider_failure(error, http_status=http_status)
+
+
+def _http_failure(exc: HTTPError) -> dict[str, Any]:
+    provider_error = None
+    try:
+        if exc.fp is not None:
+            body = exc.read(_MAX_ERROR_RESPONSE_BYTES + 1)
+            if isinstance(body, bytes) and len(body) <= _MAX_ERROR_RESPONSE_BYTES:
+                parsed = json.loads(body.decode("utf-8"))
+                if isinstance(parsed, dict) and parsed.get("ok") is False:
+                    provider_error = parsed.get("error")
+    except (OSError, http.client.HTTPException, UnicodeDecodeError, ValueError, RecursionError):
+        pass  # The HTTP status remains useful even if its error body is bad.
+    finally:
+        exc.close()
+    return _normalized_provider_error(provider_error, http_status=_safe_http_status(exc.code))
 
 
 def _safe_base_url(value: str) -> str | None:
@@ -346,8 +393,14 @@ def _http_error_code(status: int) -> str:
         return "authentication_failed"
     if status == 403:
         return "provider_forbidden"
+    if status == 402:
+        return "quota_exceeded"
+    if status == 404:
+        return "listing_not_found"
     if status == 429:
         return "rate_limited"
+    if status == 504:
+        return "provider_timeout"
     if 500 <= status <= 599:
         return "provider_unavailable"
     return "request_rejected"
@@ -376,23 +429,29 @@ def _normalize_listing(
     city_value = location.get("name") if isinstance(location, dict) else location
     if not isinstance(city_value, str):
         city_value = raw.get("city")
+    description = _clean_text(raw.get("description"), limit=_MAX_TEXT_CHARS)
+    description_source = "description" if description else None
+    if not description:
+        description = _clean_text(raw.get("description_snippet"), limit=_MAX_TEXT_CHARS)
+        if description:
+            description_source = "description_snippet"
 
     return {
         "source": "avito",
         "listing_id": listing_id,
         "url": url,
         "title": title,
-        "description": _clean_text(raw.get("description"), limit=_MAX_TEXT_CHARS),
+        "description": description,
+        "description_source": description_source,
         "price_rub": price_rub,
         "price_text": price_text,
         "price_qualifier": price_qualifier,
         "city": _clean_text(city_value, limit=120) or None,
         "condition": _listing_condition(raw),
         "seller": _public_seller_fields(raw.get("seller")),
-        "delivery": _public_delivery_field(
-            raw.get("delivery") if raw.get("delivery") is not None else raw.get("avito_delivery")
-        ),
+        "delivery": _listing_delivery(raw),
         "published_at": _clean_text(raw.get("published_at"), limit=80) or None,
+        "published_or_raised_text": _clean_text(raw.get("published_or_raised_text"), limit=120) or None,
         "availability": None,
         "observed_at": datetime.now(UTC).isoformat(),
         "status": "lead",
@@ -410,25 +469,7 @@ def _normalize_listing_id(value: Any) -> str | None:
 
 
 def _clean_avito_url(value: Any) -> str | None:
-    if not isinstance(value, str) or not value or len(value) > 2_048:
-        return None
-    try:
-        parsed = urlsplit(value.strip())
-        hostname = (parsed.hostname or "").casefold()
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme not in {"http", "https"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in {None, 80, 443}
-        or not _is_avito_host(hostname)
-    ):
-        return None
-    if contains_sensitive(value):
-        return None
-    return urlunsplit(("https", hostname, parsed.path, "", ""))
+    return clean_avito_listing_url(value, allow_http=True, allow_tracking=True)
 
 
 def _normalize_price(raw: dict[str, Any]) -> tuple[int | None, str | None, str]:
@@ -489,6 +530,11 @@ def _nonnegative_integer(value: Any) -> int | None:
 
 
 def _listing_condition(raw: dict[str, Any]) -> str | None:
+    parameters = raw.get("params")
+    if isinstance(parameters, list):
+        for parameter in parameters:
+            if isinstance(parameter, dict) and _condition_parameter_name(parameter):
+                return _condition_parameter_value(parameter)
     direct = raw.get("condition")
     if isinstance(direct, str) and direct.strip():
         return _clean_text(direct, limit=120)
@@ -498,11 +544,33 @@ def _listing_condition(raw: dict[str, Any]) -> str | None:
     for parameter in parameters:
         if not isinstance(parameter, dict):
             continue
-        name = parameter.get("name", parameter.get("title"))
-        if isinstance(name, str) and name.strip().casefold() in {"состояние", "condition"}:
-            value = parameter.get("value", parameter.get("description"))
-            return _clean_text(value, limit=120) or None
+        if _condition_parameter_name(parameter):
+            return _condition_parameter_value(parameter)
     return None
+
+
+def _condition_parameter_name(value: dict[str, Any]) -> bool:
+    name = value.get("name", value.get("title"))
+    return isinstance(name, str) and name.strip().casefold() in {"состояние", "condition"}
+
+
+def _condition_parameter_value(value: dict[str, Any]) -> str | None:
+    return _clean_text(value.get("value", value.get("description")), limit=120) or None
+
+
+def _listing_delivery(raw: dict[str, Any]) -> dict[str, Any] | None:
+    available = raw.get("delivery_available")
+    label = _clean_text(raw.get("delivery_text"), limit=100) or None
+    legacy = _public_delivery_field(
+        raw.get("delivery") if raw.get("delivery") is not None else raw.get("avito_delivery")
+    )
+    if isinstance(available, bool):
+        if label is None and legacy is not None and legacy["available"] is available:
+            label = legacy["label"]
+        return {"available": available, "label": label}
+    if label is not None:
+        return {"available": legacy["available"] if legacy is not None else None, "label": label}
+    return legacy
 
 
 def _public_seller_fields(value: Any) -> dict[str, Any] | None:
@@ -559,6 +627,16 @@ def _clean_text(value: Any, *, limit: int) -> str:
     return redact_sensitive(text, limit=limit)
 
 
-def _failure(code: Any) -> dict[str, Any]:
+def _failure(code: Any, *, details: dict[str, Any] | None = None) -> dict[str, Any]:
     safe = code if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]{1,48}", code) else "provider_error"
-    return {"ok": False, "source": "avito", "error": safe}
+    result: dict[str, Any] = {"ok": False, "source": "avito", "error": safe}
+    if details is not None and isinstance(details.get("retryable"), bool):
+        provider_code = details.get("provider_code")
+        result.update(
+            provider_code=provider_code
+            if isinstance(provider_code, str) and provider_code in _PROVIDER_ERRORS
+            else None,
+            http_status=_safe_http_status(details.get("http_status")),
+            retryable=details["retryable"],
+        )
+    return result
