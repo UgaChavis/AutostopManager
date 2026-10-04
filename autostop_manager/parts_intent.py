@@ -603,7 +603,7 @@ def _match_parts(text: str) -> list[PartIntentRule]:
     return list({rule.intent_id: rule for _, _, rule in _match_part_spans(text)}.values())
 
 
-_ITEM_SEPARATOR = re.compile(r"[,;\n]|\s+(?:и|а\s+также|and|also|[+&/])\s+", re.IGNORECASE)
+_ITEM_SEPARATOR = re.compile(r"[,;\n+]|\s+(?:и|а\s+также|and|also|[&/])\s+", re.IGNORECASE)
 _ITEM_QUANTITY = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:шт\w*|компл\w*|пар\w*|pcs?\b|pieces?\b|sets?\b)", re.IGNORECASE)
 _UNMAPPED_PART_NAME = re.compile(
     r"\b(?:проклад\w*|сальник\w*|уплотнен\w*|кольц\w*|пыльник\w*|втулк\w*|патруб\w*|"
@@ -642,14 +642,20 @@ def _has_explicit_part_list(text: str) -> bool:
     if len(clauses) < 2:
         return False
     item_count = 0
-    for index, clause in enumerate(clauses):
+    assembly_attachments = False
+    for clause in clauses:
         known = bool(_match_parts(clause))
         quantity = bool(_ITEM_QUANTITY.search(clause))
+        # A comma before the item's quantity does not start another item.
+        if quantity and not any(character.isalpha() for character in _ITEM_QUANTITY.sub("", clause)):
+            continue
         if not (known or quantity or _UNMAPPED_PART_NAME.search(clause)):
             continue
-        if not known and not quantity and index and _ASSEMBLY_ATTACHMENT.search(clauses[index - 1]):
+        if not known and not quantity and assembly_attachments:
             continue
         item_count += 1
+        # Keep attachment scope across a list, until a new named/quantified item.
+        assembly_attachments = bool(known and _ASSEMBLY_ATTACHMENT.search(clause))
     return item_count > 1
 
 
