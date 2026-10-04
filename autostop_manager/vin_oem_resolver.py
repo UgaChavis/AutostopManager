@@ -7,7 +7,8 @@ from typing import Any
 
 from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import decode_vehicle_identity, identity_values_agree
+from .vehicle_identity import decode_vehicle_identity, identity_values_agree, invalid_identity_result
+from .vehicle_identity_inputs import validate_identity_input
 from .vehicle_identity_policy import identity_allows_lookup, identity_has_blocking_conflicts
 from .vin_lookup import classify_identifier
 
@@ -847,6 +848,42 @@ def resolve_vin_oem_parts(
     )
 
 
+def _binding_context_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _compact(value)
+    if isinstance(value, list):
+        return [_binding_context_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _binding_context_value(item) for key, item in value.items()}
+    return value
+
+
+def _predecoded_identity_input_matches(
+    binding: dict[str, Any] | None,
+    identifier: str,
+    context: dict[str, Any],
+    *,
+    identifier_type: str,
+) -> bool:
+    """Reuse only the row paired with this canonical input, never recover a VIN from redacted output."""
+    if not isinstance(binding, dict) or binding.get("ok") is not True or binding.get("errors"):
+        return False
+    bound = validate_identity_input(
+        binding.get("identifier"),
+        binding.get("context"),
+        identifier_type=binding.get("identifier_type", "auto"),
+    )
+    requested = validate_identity_input(identifier, context, identifier_type=identifier_type)
+    if not bound["ok"] or not requested["ok"]:
+        return False
+    bound_id = classify_identifier(bound["identifier"], identifier_type=bound["identifier_type"])
+    requested_id = classify_identifier(requested["identifier"], identifier_type=requested["identifier_type"])
+    return (bound_id.normalized, bound_id.kind) == (
+        requested_id.normalized,
+        requested_id.kind,
+    ) and _binding_context_value(bound["context"]) == _binding_context_value(requested["context"])
+
+
 def _resolve_vin_oem_parts(
     *,
     identifier: str,
@@ -874,6 +911,8 @@ def _resolve_vin_oem_parts(
     vehicle_type: str | None = None,
     dry_run: bool = False,
     _decoded_identity: dict[str, Any] | None = None,
+    _decoded_identity_input: dict[str, Any] | None = None,
+    identifier_type: str = "auto",
 ) -> dict[str, Any]:
     """Research TecDoc articles using the VINdecode -> tree -> articles chain.
 
@@ -883,7 +922,7 @@ def _resolve_vin_oem_parts(
 
     _ = partsapi_category_index  # Retained for older callers; getArticles uses a tree strId.
     raw_identifier = _compact(identifier)
-    classification = classify_identifier(raw_identifier)
+    classification = classify_identifier(raw_identifier, identifier_type=identifier_type)
     vin_supported = classification.kind == "vin"
     part_text = _compact(requested_part)
     requested_vehicle_type = _canonical_vehicle_type(vehicle_type)
@@ -902,6 +941,19 @@ def _resolve_vin_oem_parts(
         "inner_outer": _compact(inner_outer),
         "requested_part": part_text,
     }
+    if _decoded_identity is not None:
+        binding_context = _decoded_identity_input.get("context") if isinstance(_decoded_identity_input, dict) else None
+        if isinstance(binding_context, dict):
+            context = {**binding_context, **{key: value for key, value in context.items() if value not in (None, "")}}
+        if not _predecoded_identity_input_matches(
+            _decoded_identity_input,
+            raw_identifier,
+            context,
+            identifier_type=identifier_type,
+        ):
+            _decoded_identity = invalid_identity_result(
+                [{"code": "predecoded_identity_input_mismatch", "field": "identifier", "stage": "identity_binding"}]
+            )
     identity: dict[str, Any] = (
         _decoded_identity
         if _decoded_identity is not None
@@ -913,6 +965,7 @@ def _resolve_vin_oem_parts(
                 make_hint=make,
                 live_vpic=live_vpic and not dry_run,
                 live_wmi=live_vpic and not dry_run,
+                identifier_type=identifier_type,
             )
             if raw_identifier
             else {

@@ -327,6 +327,9 @@ def _http_failure(exc: BaseException) -> dict[str, Any]:
 
 
 def _record(result: dict[str, Any]) -> None:
+    if result.get("outcome") == "deadline_exceeded":
+        # A caller's exhausted budget neither fails nor recovers the provider.
+        return
     _PROVIDER_CIRCUIT.record(
         transient=bool(result.get("retryable")),
         success=not result.get("retryable", False),
@@ -354,6 +357,7 @@ def _run_sync(job: _Job, budget: IdentityBudget) -> dict[str, Any]:
         if not _PROVIDER_SLOTS.acquire(timeout=budget.remaining):
             return lookup._provider_failure("deadline_exceeded")
         begun = False
+        deadline_limited = False
         try:
             reason = budget.reason() or _PROVIDER_CIRCUIT.blocked() or budget.begin()
             if reason:
@@ -362,9 +366,17 @@ def _run_sync(job: _Job, budget: IdentityBudget) -> dict[str, Any]:
             if retrying:
                 budget.retry_count += 1
             url, data = job.request()
-            result = job.parse(lookup._vpic_request_json(url, timeout=min(8.0, budget.remaining), data=data))
+            remaining = budget.remaining
+            deadline_limited = remaining <= 8.0
+            result = job.parse(lookup._vpic_request_json(url, timeout=min(8.0, remaining), data=data))
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
-            result = _http_failure(exc)
+            socket_timeout = isinstance(exc, TimeoutError) or (
+                isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
+            )
+            if deadline_limited and budget.remaining <= 0 and socket_timeout:
+                result = lookup._provider_failure("deadline_exceeded")
+            else:
+                result = _http_failure(exc)
         finally:
             if begun:
                 budget.finish()
@@ -410,6 +422,8 @@ async def _run_async(job: _Job, budget: IdentityBudget, client: httpx.AsyncClien
             return lookup._provider_failure(reason)
         acquired = False
         begun = False
+        attempt_timeout: asyncio.Timeout | None = None
+        deadline_limited = False
         try:
             while not _PROVIDER_SLOTS.acquire(blocking=False):
                 if budget.reason():
@@ -422,10 +436,21 @@ async def _run_async(job: _Job, budget: IdentityBudget, client: httpx.AsyncClien
             begun = True
             if retrying:
                 budget.retry_count += 1
-            async with asyncio.timeout(min(8.0, budget.remaining)):
+            remaining = budget.remaining
+            deadline_limited = remaining <= 8.0
+            attempt_timeout = asyncio.timeout(min(8.0, remaining))
+            async with attempt_timeout:
                 result = await _request_async(client, job, budget)
         except (httpx.HTTPError, TimeoutError, OSError, ValueError) as exc:
-            result = _http_failure(exc)
+            if (
+                isinstance(exc, TimeoutError)
+                and attempt_timeout is not None
+                and attempt_timeout.expired()
+                and deadline_limited
+            ):
+                result = lookup._provider_failure("deadline_exceeded")
+            else:
+                result = _http_failure(exc)
         finally:
             if begun:
                 budget.finish()

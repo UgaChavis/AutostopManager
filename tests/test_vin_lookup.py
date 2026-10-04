@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager.vin_lookup import (
     build_lookup_plan,
     classify_identifier,
@@ -311,6 +313,33 @@ def test_vpic_extended_decode_uses_extended_endpoint(monkeypatch):
     assert "DecodeVinValuesExtended" in captured["url"]
     assert result["vehicle"]["fueltypeprimary"] == "Gasoline"
     assert result["vehicle"]["displacementl"] == "3.0"
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("year_hint", [None, 2014, "2014"])
+def test_vpic_wrapper_preserves_year_hint_when_injected_into_identity(monkeypatch, extended, year_hint):
+    from autostop_manager.vehicle_identity import decode_vehicle_identity
+
+    vin = "WBA" + "0" * 14
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout: _FakeResponse(
+            {"Results": [{"VIN": vin, "Make": "BMW", "Model": "Synthetic", "ModelYear": "2014", "ErrorCode": "0"}]}
+        ),
+    )
+    source = decode_vin_vpic(vin, model_year=year_hint, extended=extended)
+    if year_hint is None:
+        assert "model_year_hint_requested" not in source
+    else:
+        assert source["model_year_hint_requested"] == 2014
+
+    result = decode_vehicle_identity(vin, model_year=2014, vpic_result=source, live_vpic=False, live_wmi=False)
+    provider_year = next(
+        row for row in result["field_evidence"] if row["field"] == "model_year" and row["source"] == "NHTSA vPIC"
+    )
+    assert provider_year["independent"] is (year_hint is None)
+    assert provider_year["depends_on"] == ([] if year_hint is None else ["caller.model_year"])
+    assert result["field_statuses"]["model_year"]["status"] == ("supported" if year_hint is None else "candidate")
 
 
 def test_vpic_wmi_decode_returns_wmi_profile(monkeypatch):

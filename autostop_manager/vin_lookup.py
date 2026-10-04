@@ -624,6 +624,8 @@ def decode_vin_vpic(
     result["request_url"] = request_url
     result["vin"] = normalize_vin(vin)
     result["extended"] = extended
+    if model_year is not None:
+        result["model_year_hint_requested"] = _provider_year(model_year)
     return result
 
 

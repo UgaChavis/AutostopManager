@@ -98,6 +98,57 @@ def test_native_year_validation_and_batch_row_isolation():
     asyncio.run(run())
 
 
+def test_native_batch_preserves_context_and_equivalent_aliases_around_malformed_metadata():
+    async def run():
+        identifier = "WDD" + "212034" + "A" + "1" * 7
+        context = {
+            "make": "Mercedes-Benz",
+            "model": "E200",
+            "model_year": 2010,
+            "engine": "M274.920",
+        }
+        items = [
+            {"identifier": identifier, "crm_context": context, "model": None, "engine": None},
+            {
+                "identifier": identifier,
+                "crm_context": {
+                    **context,
+                    "input_alias_conflicts": [
+                        {"field": [], "canonical_value": "E200", "alias_value": "E200", "source": "model_display"}
+                    ],
+                },
+            },
+            {"identifier": identifier, "crm_context": {**context, "model_display": "Е200"}},
+            {"identifier": identifier, "crm_context": context},
+        ]
+        async with native_server() as url:
+            async with streamable_http_client(url) as (reader, writer, _):
+                async with ClientSession(reader, writer) as session:
+                    await session.initialize()
+                    response = await asyncio.wait_for(
+                        session.call_tool("decode_vehicle_identities", {"items": items, "live_vpic": False}), 5
+                    )
+                    assert response.isError is False
+                    payload = response.structuredContent or json.loads(response.content[0].text)
+                    assert payload["count"] == 4
+                    rows = payload["results"]
+                    assert [row["item_index"] for row in rows] == [0, 1, 2, 3]
+                    assert all(row.keys() == rows[0].keys() for row in rows)
+                    assert rows[1]["ok"] is False
+                    assert rows[1]["vehicle_profile"] == {}
+                    assert rows[1]["errors"]
+                    for index in (0, 2, 3):
+                        assert rows[index]["ok"] is True
+                        assert rows[index]["vehicle_profile"]["model"] == "E200"
+                        assert rows[index]["vehicle_profile"]["engine"] == "M274.920"
+                        assert rows[index]["parts_lookup_readiness"]["ready_for_vehicle_lookup"] is True
+                        assert rows[index]["parts_lookup_readiness"]["ready_for_crm_writeback"] is False
+                    assert not rows[2]["conflicts"]
+                    await session.send_ping()
+
+    asyncio.run(run())
+
+
 def test_native_ping_remains_responsive_during_provider_wait(monkeypatch):
     original = mcp_tools.decode_vehicle_identity_async
 

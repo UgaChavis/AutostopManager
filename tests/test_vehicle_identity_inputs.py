@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import json
 
 import pytest
 
@@ -91,3 +92,55 @@ def test_structures_cannot_be_silently_coerced_to_identity_strings(field, value)
     result = validate_identity_input("", {field: value})
     assert result["ok"] is False
     assert field not in result["context"]
+
+
+@pytest.mark.parametrize("field", [[], {}])
+def test_malformed_alias_metadata_field_is_a_structured_input_error(field):
+    result = validate_identity_item(
+        {
+            "identifier": "",
+            "crm_context": {
+                "input_alias_conflicts": [
+                    {
+                        "field": field,
+                        "canonical_value": "rejected-value",
+                        "alias_value": "other-value",
+                        "source": "model_display",
+                    }
+                ]
+            },
+        }
+    )
+    assert result["ok"] is False
+    assert result["errors"] == [
+        {
+            "code": "expected_string",
+            "field": "input_alias_conflicts[0].field",
+            "stage": "input_validation",
+        }
+    ]
+    assert "rejected-value" not in str(result["errors"])
+
+
+@pytest.mark.parametrize("empty", [None, "", " \t "])
+@pytest.mark.parametrize("carrier", ["crm_context", "vehicle_profile", "vehicle_profile_compact"])
+def test_flat_empty_fields_fall_back_to_nonempty_nested_facts(empty, carrier):
+    facts = {"make": "Mercedes-Benz", "model": "E200", "model_year": 2010, "engine": "M274.920"}
+    if carrier == "crm_context":
+        item = {carrier: facts}
+    else:
+        item = {"crm_context": {carrier: json.dumps(facts) if carrier.endswith("compact") else facts}}
+    item.update(dict.fromkeys(facts, empty))
+    result = validate_identity_item(item)
+    assert result["ok"] is True
+    assert all(result["context"][field] == value for field, value in facts.items())
+
+
+def test_flat_nonempty_fact_overrides_nested_but_bad_types_are_not_fallbacks():
+    base = {"crm_context": {"engine": "ENGINE-A"}}
+    updated = validate_identity_item({**base, "engine": "ENGINE-B"})
+    assert updated["ok"] is True
+    assert updated["context"]["engine"] == "ENGINE-B"
+    invalid = validate_identity_item({**base, "engine": {}})
+    assert invalid["ok"] is False
+    assert any(error["field"] == "engine" for error in invalid["errors"])

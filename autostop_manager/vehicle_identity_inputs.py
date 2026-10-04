@@ -65,6 +65,41 @@ def _mapping(value: Any, field: str, errors: list[dict[str, str]]) -> dict[str, 
     return value
 
 
+def _merge_nonempty(target: dict[str, Any], values: dict[str, Any]) -> None:
+    for key, value in values.items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        target[key] = value
+
+
+def _alias_conflicts(value: Any, errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        errors.append(_issue("expected_list", "input_alias_conflicts"))
+        return []
+    conflicts: list[dict[str, Any]] = []
+    for index, row in enumerate(value):
+        path = f"input_alias_conflicts[{index}]"
+        if not isinstance(row, dict):
+            errors.append(_issue("expected_object", path))
+            continue
+        field = row.get("field")
+        if not isinstance(field, str):
+            errors.append(_issue("expected_string", f"{path}.field"))
+            continue
+        if field not in STRING_FIELDS - {"frame", "vin", "vehicle"}:
+            continue
+        invalid_keys = [
+            key for key in ("canonical_value", "alias_value", "source") if not isinstance(row.get(key), str)
+        ]
+        if invalid_keys:
+            errors.extend(_issue("expected_string", f"{path}.{key}") for key in invalid_keys)
+            continue
+        conflicts.append({key: row[key] for key in ("field", "canonical_value", "alias_value", "source")})
+    return conflicts
+
+
 def flatten_identity_context(value: Any) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, Any]]]:
     """Keep supported facts and alias disagreements; production year is not MY."""
     errors: list[dict[str, str]] = []
@@ -74,21 +109,9 @@ def flatten_identity_context(value: Any) -> tuple[dict[str, Any], list[dict[str,
         return {}, [_issue("expected_object", "crm_context")], []
     merged: dict[str, Any] = {}
     for key in PROFILE_KEYS:
-        merged.update(_mapping(value.get(key), key, errors))
-    merged.update(value)
-    alias_conflicts = (
-        [
-            row
-            for row in value.get("input_alias_conflicts", [])
-            if isinstance(row, dict)
-            and row.get("field") in STRING_FIELDS - {"frame", "vin", "vehicle"}
-            and isinstance(row.get("canonical_value"), str)
-            and isinstance(row.get("alias_value"), str)
-            and isinstance(row.get("source"), str)
-        ]
-        if isinstance(value.get("input_alias_conflicts"), list)
-        else []
-    )
+        _merge_nonempty(merged, _mapping(value.get(key), key, errors))
+    _merge_nonempty(merged, value)
+    alias_conflicts = _alias_conflicts(merged.get("input_alias_conflicts"), errors)
     for alias, canonical in ALIASES.items():
         alternate = merged.get(alias)
         chosen = merged.get(canonical)
@@ -223,7 +246,7 @@ def validate_identity_item(item: Any) -> dict[str, Any]:
     if "crm_context" in item and nested is not None and not isinstance(nested, dict):
         return validate_identity_input(item.get("identifier", ""), crm_context=nested)
     context = dict(nested or {})
-    context.update({key: value for key, value in item.items() if key != "crm_context"})
+    _merge_nonempty(context, {key: value for key, value in item.items() if key != "crm_context"})
     flattened, _errors, _aliases = flatten_identity_context(context)
     identifier = next(
         (

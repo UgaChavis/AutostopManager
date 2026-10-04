@@ -246,6 +246,60 @@ def test_async_deadline_cancels_provider_attempt_and_stops_new_work():
     assert result["processing"]["http_attempts"] == 2
 
 
+def test_async_request_deadline_keeps_provider_available_for_following_calls():
+    async def healthy_but_delayed(request):
+        await asyncio.sleep(1)
+        return healthy_response(request)
+
+    result = run_async(inputs(51), healthy_but_delayed, budget=transport.IdentityBudget(deadline_seconds=0.03))
+    following = run_async(inputs(1), healthy_response)
+
+    assert result["processing"]["deadline_exceeded"] is True
+    assert result["processing"]["provider_circuit_open"] is False
+    assert {row["outcome"] for row in result["vpic_results"]} == {"deadline_exceeded"}
+    assert all(row["retryable"] is False for row in result["vpic_results"])
+    assert result["processing"]["retry_count"] == 0
+    assert following["vpic_results"][0]["ok"] is True
+    assert following["processing"]["http_attempts"] == 1
+
+
+def test_async_request_deadline_preserves_previous_provider_failure():
+    transport._PROVIDER_CIRCUIT.record(transient=True, success=False)
+
+    async def healthy_but_delayed(request):
+        await asyncio.sleep(1)
+        return healthy_response(request)
+
+    result = run_async(inputs(51), healthy_but_delayed, budget=transport.IdentityBudget(deadline_seconds=0.03))
+    assert result["processing"]["provider_circuit_open"] is False
+    assert transport._PROVIDER_CIRCUIT.failures == 1
+
+    def timed_out(request):
+        raise httpx.ReadTimeout("synthetic provider timeout", request=request)
+
+    following = run_async(inputs(1), timed_out, use_vpic_batch=False)
+    assert following["processing"]["provider_circuit_open"] is True
+    assert following["processing"]["http_attempts"] == 1
+
+
+@pytest.mark.parametrize("httpx_timeout", [False, True])
+def test_async_provider_timeout_before_short_request_deadline_still_opens_circuit(monkeypatch, httpx_timeout):
+    monkeypatch.setattr(transport, "RETRY_BACKOFF_SECONDS", 0.0)
+
+    def timed_out(request):
+        if httpx_timeout:
+            raise httpx.ReadTimeout("synthetic provider timeout", request=request)
+        raise TimeoutError("synthetic provider timeout")
+
+    budget = transport.IdentityBudget(max_attempts=2, deadline_seconds=1)
+    result = run_async(inputs(1), timed_out, use_vpic_batch=False, budget=budget)
+    assert result["vpic_results"][0]["outcome"] == "timeout"
+    assert result["processing"]["deadline_exceeded"] is False
+    assert result["processing"]["provider_circuit_open"] is True
+    assert result["processing"]["http_attempts"] == 2
+    assert result["processing"]["retry_count"] == 1
+
+
 def test_async_cancellation_propagates_and_releases_global_slots():
     async def run():
         started = asyncio.Event()
@@ -404,6 +458,57 @@ def test_sync_outage_is_bounded_and_has_no_per_row_fanout(monkeypatch):
     assert len(calls) == 2
     assert len(result["vpic_results"]) == 51
     assert result["processing"]["partial"] is True
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_sync_request_deadline_does_not_change_provider_circuit(monkeypatch, wrapped):
+    from urllib.error import URLError
+
+    transport._PROVIDER_CIRCUIT.record(transient=True, success=False)
+    budget = transport.IdentityBudget(max_attempts=2, deadline_seconds=1)
+
+    def elapsed_request(request, timeout):
+        assert timeout <= 1
+        budget.started_at -= 1
+        error = TimeoutError("synthetic request deadline")
+        raise URLError(error) if wrapped else error
+
+    monkeypatch.setattr(vin_lookup, "urlopen", elapsed_request)
+    result = transport.collect_identity_provider_results(inputs(1), use_vpic_batch=False, budget=budget)
+    assert result["vpic_results"][0]["outcome"] == "deadline_exceeded"
+    assert result["vpic_results"][0]["retryable"] is False
+    assert result["processing"]["provider_circuit_open"] is False
+    assert result["processing"]["retry_count"] == 0
+    assert transport._PROVIDER_CIRCUIT.failures == 1
+
+    monkeypatch.setattr(
+        vin_lookup,
+        "urlopen",
+        lambda request, timeout: FakeResponse({"Results": [{"VIN": synthetic_vin(), "Make": "Honda"}]}),
+    )
+    following = transport.collect_identity_provider_results(inputs(1), use_vpic_batch=False)
+    assert following["vpic_results"][0]["ok"] is True
+    assert following["processing"]["http_attempts"] == 1
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_sync_provider_timeout_before_short_request_deadline_still_opens_circuit(monkeypatch, wrapped):
+    from urllib.error import URLError
+
+    monkeypatch.setattr(transport, "RETRY_BACKOFF_SECONDS", 0.0)
+
+    def timed_out(request, timeout):
+        error = TimeoutError("synthetic provider timeout")
+        raise URLError(error) if wrapped else error
+
+    monkeypatch.setattr(vin_lookup, "urlopen", timed_out)
+    budget = transport.IdentityBudget(max_attempts=2, deadline_seconds=1)
+    result = transport.collect_identity_provider_results(inputs(1), use_vpic_batch=False, budget=budget)
+    assert result["vpic_results"][0]["outcome"] == ("network_error" if wrapped else "timeout")
+    assert result["processing"]["deadline_exceeded"] is False
+    assert result["processing"]["provider_circuit_open"] is True
+    assert result["processing"]["http_attempts"] == 2
+    assert result["processing"]["retry_count"] == 1
 
 
 def test_501_items_are_rejected_without_provider_work():

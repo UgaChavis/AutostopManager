@@ -449,9 +449,14 @@ def build_oem_parts_provider_plan(
     vehicle_identity: dict[str, Any] | None = None,
     city: str = "Красноярск",
 ) -> dict[str, Any]:
-    classification = classify_identifier(identifier)
     part_profile = normalize_part_intent(requested_part)
     identity = vehicle_identity or {}
+    identity_identifier = identity.get("identifier")
+    kind = identity_identifier.get("kind", "auto") if isinstance(identity_identifier, dict) else "auto"
+    identifier_type = (
+        kind if isinstance(kind, str) and kind in {"vin", "vin_partial", "frame_number", "market_code"} else "auto"
+    )
+    classification = classify_identifier(identifier, identifier_type=identifier_type)
     profile = identity.get("vehicle_profile") or {}
     confidence_label = identity.get("confidence_label") or "unknown"
     readiness = identity.get("parts_lookup_readiness") or {}

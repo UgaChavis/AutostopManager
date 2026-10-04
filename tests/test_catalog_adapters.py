@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from autostop_manager import config as manager_config
 from autostop_manager.catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from autostop_manager.catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES
@@ -374,3 +376,17 @@ def test_provider_plan_does_not_restore_disputed_model_through_family_alias():
     plan = build_oem_parts_provider_plan(identifier="", requested_part="передние колодки", vehicle_identity=identity)
     assert plan["lookup_scope"] == "family"
     assert all("Accord" not in row["query"] for row in plan["manual_public_search_queries"])
+
+
+@pytest.mark.parametrize("kind", [[], {}])
+def test_provider_plan_ignores_malformed_optional_identity_kind(kind):
+    from autostop_manager.catalog_adapters import build_oem_parts_provider_plan
+
+    result = build_oem_parts_provider_plan(
+        identifier="A" * 17,
+        requested_part="передние колодки",
+        vehicle_identity={"identifier": {"kind": kind}, "vehicle_profile": {}, "parts_lookup_readiness": {}},
+    )
+    assert result["ok"] is True
+    assert result["identifier"]["kind"] == "vin"
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False

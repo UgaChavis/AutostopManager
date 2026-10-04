@@ -366,6 +366,14 @@ def _normalize_model(value: Any) -> Any:
     return text.replace("Е", "E").replace("е", "e")
 
 
+def _normalize_identity_field(field: str, value: Any) -> Any:
+    if field == "make":
+        return _normalize_make(value)
+    if field == "model":
+        return _normalize_model(value)
+    return value
+
+
 def _as_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -487,10 +495,7 @@ def _merge_field(
     if value in (None, "", []):
         return
     raw_value = value
-    if field == "make":
-        value = _normalize_make(value)
-    elif field == "model":
-        value = _normalize_model(value)
+    value = _normalize_identity_field(field, value)
     key = field
     current = profile.get(key)
     if current in (None, ""):
@@ -533,7 +538,7 @@ def _uses_strict_north_american_vin(profile: dict[str, Any]) -> bool:
 
 
 def _normalized_identity_value(field: str, value: Any) -> str:
-    normalized_value = _normalize_make(value) if field == "make" else value
+    normalized_value = _normalize_identity_field(field, value)
     return re.sub(r"[^0-9a-zа-яё]+", "", _compact(normalized_value).casefold())
 
 
@@ -1242,7 +1247,8 @@ def _evidence_metadata(
                 {
                     "source": "CRM alias:" + str(alias.get("source") or "alias"),
                     "field": alias["field"],
-                    "value": alias.get("alias_value"),
+                    "value": _normalize_identity_field(alias["field"], alias.get("alias_value")),
+                    "raw_value": alias.get("alias_value"),
                     "confidence": 0.55,
                 }
             )
@@ -1271,6 +1277,7 @@ def _evidence_metadata(
             and row["field"] == "model_year"
             and provider is not None
             and provider.get("model_year_hint_requested") is not None
+            and identity_values_agree("model_year", row["value"], provider["model_year_hint_requested"])
         )
         source_kind = (
             "caller"

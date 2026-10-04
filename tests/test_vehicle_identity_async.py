@@ -139,3 +139,112 @@ def test_async_normal_batch_cannot_trigger_hidden_sync_provider_request(monkeypa
     assert result["count"] == 1
     assert result["results"][0]["ok"] is True
     assert result["processing"]["http_attempts"] == 1
+
+
+def test_async_batch_malformed_alias_metadata_keeps_valid_neighbors():
+    identifier = "WDD" + "212034" + "A" + "1" * 7
+    facts = {"make": "Mercedes-Benz", "model": "E200"}
+    result = asyncio.run(
+        driver.decode_vehicle_identities_async(
+            [
+                {"identifier": identifier, "crm_context": facts},
+                {
+                    "identifier": identifier,
+                    "crm_context": {
+                        **facts,
+                        "input_alias_conflicts": [
+                            {
+                                "field": {},
+                                "canonical_value": "rejected-value",
+                                "alias_value": "other-value",
+                                "source": "model_display",
+                            }
+                        ],
+                    },
+                },
+                {"identifier": identifier, "crm_context": facts},
+            ],
+            live_vpic=False,
+        )
+    )
+    assert result["count"] == 3
+    assert [row["item_index"] for row in result["results"]] == [0, 1, 2]
+    assert [row["ok"] for row in result["results"]] == [True, False, True]
+    invalid = result["results"][1]
+    assert invalid["status"] == "invalid_input"
+    assert invalid["errors"][0]["stage"] == "input_validation"
+    assert "rejected-value" not in json.dumps(invalid)
+    assert result["processing"]["http_attempts"] == 0
+
+
+@pytest.mark.parametrize("empty", [None, ""])
+def test_async_batch_flat_empty_fields_preserve_nested_identity_readiness(empty):
+    identifier = "WDD" + "212034" + "A" + "1" * 7
+    facts = {
+        "make": "Mercedes-Benz",
+        "model": "E200",
+        "model_year": 2010,
+        "engine": "M274.920",
+        "source_confidence": 0.99,
+    }
+    result = asyncio.run(
+        driver.decode_vehicle_identities_async(
+            [
+                {
+                    "identifier": identifier,
+                    "crm_context": facts,
+                    **dict.fromkeys(("make", "model", "model_year", "engine"), empty),
+                }
+            ],
+            live_vpic=False,
+        )
+    )
+    row = result["results"][0]
+    assert row["ok"] is True
+    assert all(row["vehicle_profile"][field] == facts[field] for field in ("make", "model", "model_year", "engine"))
+    assert row["parts_lookup_readiness"]["ready_for_vehicle_lookup"] is True
+    assert result["processing"]["http_attempts"] == 0
+
+
+@pytest.mark.parametrize("returned,disputed", [(2019, False), (2015, True)])
+def test_async_provider_year_hint_echo_or_disagreement_uses_returned_fact(returned, disputed):
+    identifier = "WAU" + "ZZZ4H" + "A" * 9
+
+    async def run():
+        def handler(request):
+            assert request.url.params["modelyear"] == "2019"
+            return httpx.Response(
+                200,
+                json={
+                    "Results": [
+                        {
+                            "VIN": identifier,
+                            "Make": "Audi",
+                            "Model": "A8",
+                            "ModelYear": str(returned),
+                            "ErrorCode": "0",
+                        }
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await driver.decode_vehicle_identity_async(
+                identifier,
+                crm_context={"make": "Audi", "model": "A8", "model_year": 2019, "source_confidence": 1.0},
+                live_wmi=False,
+                client=client,
+            )
+
+    result = asyncio.run(run())
+    assert result["field_statuses"]["model_year"]["status"] == ("disputed" if disputed else "candidate")
+    assert result["parts_lookup_readiness"]["ready_for_family_lookup"] is True
+    assert result["parts_lookup_readiness"]["ready_for_vehicle_lookup"] is not disputed
+    assert result["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] is not disputed
+    evidence = next(
+        row for row in result["field_evidence"] if row["field"] == "model_year" and row["source"] == "NHTSA vPIC"
+    )
+    assert evidence["independent"] is disputed
+    assert evidence["depends_on"] == ([] if disputed else ["caller.model_year"])
+    assert ("model_year" in result["vehicle_profile"]) is not disputed
+    assert result["processing"]["http_attempts"] == 1

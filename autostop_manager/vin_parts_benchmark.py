@@ -8,7 +8,7 @@ from .catalog_adapters import _redact_identifier, build_oem_parts_provider_plan,
 from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import _as_mapping, decode_vehicle_identities, invalid_identity_result
-from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS
+from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS, PROFILE_KEYS, validate_identity_item
 from .vehicle_identity_policy import identity_allows_lookup, identity_has_blocking_conflicts
 from .vin_oem_resolver import (
     _assess_partsapi_identity_agreement as _assess_partsapi_vehicle_agreement,
@@ -44,17 +44,32 @@ def _merged_item_context(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _item_identifier(item: dict[str, Any]) -> str:
-    context = _merged_item_context(item)
-    return _compact(
-        item.get("identifier")
-        or item.get("vin")
-        or item.get("frame")
-        or item.get("body_number")
-        or context.get("vin")
-        or context.get("frame")
-        or context.get("body_number")
-        or context.get("chassis_number")
-    )
+    return _canonical_identity_input(item)["identifier"]
+
+
+def _canonical_identity_input(item: Any) -> dict[str, Any]:
+    prepared = validate_identity_item(item)
+    prepared["_raw_identifier"] = prepared["identifier"]
+    if prepared["ok"]:
+        classification = classify_identifier(prepared["identifier"], identifier_type=prepared["identifier_type"])
+        prepared["identifier"] = classification.normalized
+        if classification.kind in {"vin", "vin_partial", "frame_number", "market_code"}:
+            prepared["identifier_type"] = classification.kind
+    return prepared
+
+
+def _item_redaction_identifiers(item: dict[str, Any], prepared: dict[str, Any]) -> set[str]:
+    # Mask original aliases even when only one identifier is selected for E4/E5.
+    identifiers = {prepared["identifier"], prepared["_raw_identifier"]}
+    sources = [item, _as_mapping(item.get("crm_context"))]
+    for source in tuple(sources):
+        sources.extend(_as_mapping(source.get(key)) for key in PROFILE_KEYS)
+    for source in sources:
+        for key in ("identifier", "vin", "frame", "chassis_number", "body_number"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                identifiers.add(value.strip())
+    return {identifier for identifier in identifiers if identifier}
 
 
 def _identifier_variants(identifier: str) -> set[str]:
@@ -295,8 +310,9 @@ def _partsapi_lookup_calls(
     candidate_ready: bool = False,
     vehicle_type: str | None = None,
     dry_run: bool = True,
+    identifier_type: str = "auto",
 ) -> list[dict[str, Any]]:
-    if classify_identifier(identifier).kind != "vin":
+    if classify_identifier(identifier, identifier_type=identifier_type).kind != "vin":
         return []
     calls = (
         [identity_call]
@@ -410,8 +426,15 @@ def _benchmark_status(summary: dict[str, Any]) -> str:
     return "partial_identity_or_part_intent_coverage"
 
 
-def _benchmark_error_item(index: int, identity: dict[str, Any], identifier: str, requested_part: str) -> dict[str, Any]:
-    classification = classify_identifier(identifier)
+def _benchmark_error_item(
+    index: int,
+    identity: dict[str, Any],
+    identifier: str,
+    requested_part: str,
+    *,
+    identifier_type: str = "auto",
+) -> dict[str, Any]:
+    classification = classify_identifier(identifier, identifier_type=identifier_type)
     return {
         "index": index,
         "identifier": {
@@ -466,7 +489,18 @@ def benchmark_vin_parts_lookup(
             "items": [],
         }
 
-    identity_batch = decode_vehicle_identities(items, live_vpic=live_vpic, use_vpic_batch=use_vpic_batch)
+    prepared_inputs = [_canonical_identity_input(item) for item in items]
+    decode_inputs = [
+        {
+            "identifier": prepared["identifier"],
+            "identifier_type": prepared["identifier_type"],
+            "crm_context": prepared["context"],
+        }
+        if prepared["ok"]
+        else item
+        for item, prepared in zip(items, prepared_inputs, strict=True)
+    ]
+    identity_batch = decode_vehicle_identities(decode_inputs, live_vpic=live_vpic, use_vpic_batch=use_vpic_batch)
     if identity_batch.get("ok") is False and not identity_batch.get("results"):
         return {
             **invalid_identity_result(
@@ -494,28 +528,44 @@ def benchmark_vin_parts_lookup(
             )
         )
         item = raw_item if isinstance(raw_item, dict) else {}
-        identifier = _item_identifier(item)
-        classification = classify_identifier(identifier)
+        prepared = prepared_inputs[index - 1]
+        identifier = prepared["identifier"]
+        identifier_type = prepared["identifier_type"]
+        classification = classify_identifier(identifier, identifier_type=identifier_type)
         item_requested_part = _compact(item.get("requested_part")) or requested_part
+        if not prepared["ok"]:
+            identity = invalid_identity_result(prepared["errors"], item_index=index - 1)
         if identity.get("ok") is False or identity.get("errors"):
-            benchmark_items.append(_benchmark_error_item(index, identity, identifier, item_requested_part))
+            benchmark_items.append(
+                _benchmark_error_item(
+                    index,
+                    identity,
+                    identifier,
+                    item_requested_part,
+                    identifier_type=identifier_type,
+                )
+            )
             continue
-        context = _merged_item_context(item)
+        identity = {**identity}
+        if prepared["normalization_notes"]:
+            identity["normalization_notes"] = prepared["normalization_notes"]
+        context = prepared["context"]
+        request_context = _merged_item_context(item)
         item_vehicle_type = (
             _compact(
                 item.get("vehicle_type")
                 or item.get("car_type")
-                or context.get("vehicle_type")
-                or context.get("car_type")
+                or request_context.get("vehicle_type")
+                or request_context.get("car_type")
             )
             or None
         )
         part_profile = normalize_part_intent(
             item_requested_part,
-            axle=_compact(item.get("axle") or context.get("axle")),
-            side=_compact(item.get("side") or context.get("side")),
-            position=_compact(item.get("position") or context.get("position")),
-            inner_outer=_compact(item.get("inner_outer") or context.get("inner_outer")),
+            axle=_compact(item.get("axle") or request_context.get("axle")),
+            side=_compact(item.get("side") or request_context.get("side")),
+            position=_compact(item.get("position") or request_context.get("position")),
+            inner_outer=_compact(item.get("inner_outer") or request_context.get("inner_outer")),
         )
         partsapi_identity_call = None
         identifier_valid = (identity.get("identifier_validation") or {}).get("ok") is not False
@@ -538,17 +588,17 @@ def benchmark_vin_parts_lookup(
             oem_resolution = _resolve_vin_oem_parts(
                 identifier=identifier,
                 requested_part=item_requested_part,
-                make=_compact(item.get("make") or context.get("make")),
-                model=_compact(item.get("model") or context.get("model")),
-                model_year=item.get("model_year") or context.get("model_year"),
-                engine=_compact(item.get("engine") or context.get("engine")),
-                transmission=_compact(item.get("transmission") or context.get("transmission")),
-                market=_compact(item.get("market") or context.get("market")),
-                drivetrain=_compact(item.get("drivetrain") or context.get("drivetrain")),
-                axle=_compact(item.get("axle") or context.get("axle")),
-                side=_compact(item.get("side") or context.get("side")),
-                position=_compact(item.get("position") or context.get("position")),
-                inner_outer=_compact(item.get("inner_outer") or context.get("inner_outer")),
+                make=context.get("make"),
+                model=context.get("model"),
+                model_year=context.get("model_year"),
+                engine=context.get("engine"),
+                transmission=context.get("transmission"),
+                market=context.get("market"),
+                drivetrain=context.get("drivetrain"),
+                axle=_compact(item.get("axle") or request_context.get("axle")),
+                side=_compact(item.get("side") or request_context.get("side")),
+                position=_compact(item.get("position") or request_context.get("position")),
+                inner_outer=_compact(item.get("inner_outer") or request_context.get("inner_outer")),
                 live_vpic=live_vpic,
                 live_partsapi_identity=live_partsapi_identity,
                 live_partsapi_oem=live_partsapi_oem,
@@ -558,6 +608,8 @@ def benchmark_vin_parts_lookup(
                 timeout=partsapi_timeout,
                 partsapi_category_index=partsapi_category_index,
                 _decoded_identity=identity,
+                _decoded_identity_input=prepared,
+                identifier_type=identifier_type,
             )
             partsapi_live_calls_used += max(0, int(oem_resolution.get("live_call_count") or 0))
             resolved_identity = oem_resolution.get("identity") or {}
@@ -598,6 +650,7 @@ def benchmark_vin_parts_lookup(
                 ),
                 vehicle_type=item_vehicle_type,
                 dry_run=True,
+                identifier_type=identifier_type,
             )
             if include_partsapi_dry_run and identifier_valid
             else []
@@ -768,7 +821,10 @@ def benchmark_vin_parts_lookup(
         },
         "items": benchmark_items,
     }
-    for item in items:
+    redaction_identifiers: set[str] = set()
+    for item, prepared in zip(items, prepared_inputs, strict=True):
         if isinstance(item, dict):
-            result = _redact_sensitive_output(result, _item_identifier(item))
+            redaction_identifiers.update(_item_redaction_identifiers(item, prepared))
+    for identifier in sorted(redaction_identifiers, key=len, reverse=True):
+        result = _redact_sensitive_output(result, identifier)
     return result

@@ -1041,3 +1041,44 @@ def test_resolver_invalid_identity_does_not_reach_partsapi(monkeypatch, input_er
     assert result["readiness"]["ready_for_vehicle_lookup"] is False
     assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is False
     assert result["readiness"]["ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize("mismatch", ["identifier", "identifier_type", "model_year", "missing_binding"])
+def test_private_resolver_rejects_unbound_predecoded_identity_without_catalog_calls(monkeypatch, mismatch):
+    from autostop_manager.vin_oem_resolver import _resolve_vin_oem_parts
+    from autostop_manager.vehicle_identity_inputs import validate_identity_input
+
+    vin_a = "WAU" + "ZZZ4H" + "A" * 9
+    vin_b = "WAU" + "ZZZ4H" + "B" * 9
+    identity = _medium_identity()
+    binding = validate_identity_input(vin_a, {"make": "HONDA", "model": "Accord", "model_year": 2010})
+    kwargs = {"identifier": vin_a, "identifier_type": "vin", "model_year": 2010}
+    if mismatch == "identifier":
+        kwargs["identifier"] = vin_b
+    elif mismatch == "identifier_type":
+        kwargs["identifier_type"] = "frame_number"
+    elif mismatch == "model_year":
+        kwargs["model_year"] = 2020
+    else:
+        binding = None
+    monkeypatch.setattr(
+        "autostop_manager.vin_oem_resolver.decode_vehicle_identity",
+        lambda *_a, **_k: pytest.fail("Unbound identity was redecoded"),
+    )
+    monkeypatch.setattr(
+        "autostop_manager.vin_oem_resolver.partsapi_catalog_lookup",
+        lambda **_k: pytest.fail("Unbound identity reached PartsAPI"),
+    )
+    result = _resolve_vin_oem_parts(
+        requested_part="передние колодки",
+        _decoded_identity=identity,
+        _decoded_identity_input=binding,
+        live_partsapi_oem=True,
+        **kwargs,
+    )
+    assert result["identity"]["ok"] is False
+    assert result["identity"]["errors"][0]["code"] == "predecoded_identity_input_mismatch"
+    assert result["call_count"] == result["live_call_count"] == 0
+    assert result["identity"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert result["readiness"]["ready_for_crm_writeback"] is False
+    assert vin_a not in json.dumps(result) and vin_b not in json.dumps(result)
