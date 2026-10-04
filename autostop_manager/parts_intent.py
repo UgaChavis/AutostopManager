@@ -605,13 +605,15 @@ def _match_parts(text: str) -> list[PartIntentRule]:
 
 _ITEM_SEPARATOR = re.compile(r"[,;\n+]|\s+(?:и|а\s+также|and|also|[&/])\s+", re.IGNORECASE)
 _ITEM_QUANTITY = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:шт\w*|компл\w*|пар\w*|pcs?\b|pieces?\b|sets?\b)", re.IGNORECASE)
+_QUANTITY_LABEL = re.compile(r"^\s*(?:количество|кол-во|quantity|qty\.?|count)\b\s*[:=]?\s*", re.IGNORECASE)
 _UNMAPPED_PART_NAME = re.compile(
     r"\b(?:проклад\w*|сальник\w*|уплотнен\w*|кольц\w*|пыльник\w*|втулк\w*|патруб\w*|"
     r"шланг\w*|кронштейн\w*|болт\w*|гайк\w*|gaskets?|seals?|o[ -]?rings?|bushings?|hoses?|brackets?|bolts?|nuts?)\b",
     re.IGNORECASE,
 )
 _ASSEMBLY_ATTACHMENT = re.compile(
-    r"\b(?:с|со)\s+(?:крышк\w*|корпус\w*)\b|\b(?:with|including)\s+(?:a\s+)?(?:housing|cover)\b",
+    r"\b(?:с|со)\s+(?:(?:нов\w*|пластиков\w*)\s+){0,2}(?:крышк\w*|корпус\w*)\b|"
+    r"\b(?:with|including)\s+(?:(?:a|an|the)\s+)?(?:(?:new|plastic)\s+){0,2}(?:housing|cover)\b",
     re.IGNORECASE,
 )
 
@@ -647,7 +649,8 @@ def _has_explicit_part_list(text: str) -> bool:
         known = bool(_match_parts(clause))
         quantity = bool(_ITEM_QUANTITY.search(clause))
         # A comma before the item's quantity does not start another item.
-        if quantity and not any(character.isalpha() for character in _ITEM_QUANTITY.sub("", clause)):
+        quantity_remainder = _QUANTITY_LABEL.sub("", _ITEM_QUANTITY.sub("", clause))
+        if quantity and not any(character.isalpha() for character in quantity_remainder):
             continue
         if not (known or quantity or _UNMAPPED_PART_NAME.search(clause)):
             continue
