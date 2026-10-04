@@ -9,6 +9,7 @@ from .catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES, PARTSAPI_OPERATIONS,
 from .config import load_runtime_env
 from .drom_listings import drom_listings_enabled
 from .parts_intent import normalize_part_intent
+from .vehicle_identity_policy import identity_allows_lookup
 from .vin_sources import AMAYAMA_SOURCE_ID, PARTSOUQ_SOURCE_ID, PUBLIC_CATALOG_SOURCE_ALIASES
 from .vin_lookup import classify_identifier
 
@@ -453,14 +454,69 @@ def build_oem_parts_provider_plan(
     identity = vehicle_identity or {}
     profile = identity.get("vehicle_profile") or {}
     confidence_label = identity.get("confidence_label") or "unknown"
-    strict_identity_ready = confidence_label == "high" and not any(
-        conflict.get("severity") == "high" for conflict in identity.get("conflicts", [])
-    )
     readiness = identity.get("parts_lookup_readiness") or {}
-    identity_ready = bool(
-        readiness.get("ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup", strict_identity_ready))
+    identity_ready = identity_allows_lookup(identity, scope="vehicle")
+    family_ready = identity_allows_lookup(identity, scope="family")
+    writeback_ready = readiness.get("ready_for_crm_writeback") is True and identity_ready
+    field_statuses = identity.get("field_statuses") or {}
+    query_disputes = {
+        item["field"]
+        for item in (readiness.get("cross_source_agreement") or {}).get("conflicting_fields") or []
+        if isinstance(item, dict) and isinstance(item.get("field"), str)
+    }
+    if isinstance(field_statuses, dict):
+        query_disputes.update(
+            field
+            for field, status in field_statuses.items()
+            if isinstance(status, dict) and status.get("status") == "disputed"
+        )
+    if "model" in query_disputes:
+        query_disputes.add("model_family")
+    query_profile = {key: value for key, value in profile.items() if key not in query_disputes}
+    manual_queries = _manual_public_search_queries(
+        requested_part=requested_part, part_profile=part_profile, vehicle_profile=query_profile, city=city
     )
-    writeback_ready = bool(readiness.get("ready_for_crm_writeback", strict_identity_ready))
+    if identity.get("ok") is False or identity.get("errors"):
+        manual_queries = []
+    elif (
+        family_ready
+        and not identity_ready
+        and identity.get("family_candidates")
+        and not (query_profile.get("make") and (query_profile.get("model") or query_profile.get("model_family")))
+    ):
+        # Each family is coherent source evidence. Do not attach canonical engine/year
+        # facts from another alternative or select a concrete catalog modification.
+        manual_queries = []
+        seen_families: set[tuple[str, str]] = set()
+        for candidate in identity["family_candidates"]:
+            if not isinstance(candidate, dict):
+                continue
+            make = candidate.get("make")
+            model = candidate.get("model") or candidate.get("model_family")
+            if not isinstance(make, str) or not isinstance(model, str) or not make.strip() or not model.strip():
+                continue
+            family_key = (make.strip().casefold(), model.strip().casefold())
+            if family_key in seen_families:
+                continue
+            if len(seen_families) == 3:
+                break
+            seen_families.add(family_key)
+            for query in _manual_public_search_queries(
+                requested_part=requested_part,
+                part_profile=part_profile,
+                vehicle_profile={"make": make, "model": model},
+                city=city,
+            ):
+                if query["source_id"] in {PARTSOUQ_SOURCE_ID, AMAYAMA_SOURCE_ID}:
+                    manual_queries.append(
+                        {
+                            **query,
+                            "lookup_scope": "family",
+                            "family_candidate_index": len(seen_families),
+                            "evidence_ids": candidate.get("evidence_ids") or [],
+                            "exact_fitment_confirmed": False,
+                        }
+                    )
 
     identity_providers = _pick_configured(_providers_for_stage("identity"))
     oem_providers = _pick_configured(_providers_for_stage("oem_catalog"))
@@ -545,15 +601,31 @@ def build_oem_parts_provider_plan(
                 "model_family",
                 "platform",
                 "model_year",
+                "production_year",
+                "production_date",
                 "engine",
                 "transmission",
+                "transmission_speeds",
                 "drivetrain",
                 "market",
+                "trim",
+                "series",
+                "series2",
+                "modification",
+                "options",
             ]
             if profile.get(key) not in (None, "")
         },
+        "field_statuses": identity.get("field_statuses") or {},
+        "field_evidence": identity.get("field_evidence") or [],
+        "provenance": identity.get("provenance") or {},
+        "missing_fields": identity.get("missing_fields") or [],
+        "family_candidates": identity.get("family_candidates") or [],
+        "lookup_scope": "vehicle" if identity_ready else "family" if family_ready else "blocked",
         "identity_confidence": confidence_label,
         "live_capability": {
+            "identity_ready_for_family_lookup": family_ready,
+            "identity_ready_for_vehicle_lookup": identity_ready,
             "identity_ready_for_parts": identity_ready,
             "identity_ready_for_oem_candidate_lookup": identity_ready,
             "identity_ready_for_crm_writeback": writeback_ready,
@@ -629,12 +701,7 @@ def build_oem_parts_provider_plan(
                 "acceptance": "Enabled marketplace announcements are transient sourcing leads; confirm the card, seller and fitment before a quote",
             },
         ],
-        "manual_public_search_queries": _manual_public_search_queries(
-            requested_part=requested_part,
-            part_profile=part_profile,
-            vehicle_profile=profile,
-            city=city,
-        ),
+        "manual_public_search_queries": manual_queries,
         "blockers": blockers,
         "provider_status": catalog_provider_status(),
         "privacy": {

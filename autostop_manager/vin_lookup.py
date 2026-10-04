@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from contextlib import suppress
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 import json
+import math
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -189,10 +190,41 @@ def _redact_identifier_payload(value: Any, identifier: str | None) -> Any:
     return value
 
 
-def classify_identifier(raw: str) -> IdentifierClassification:
+def classify_identifier(raw: str, *, identifier_type: str = "auto") -> IdentifierClassification:
+    if not isinstance(raw, str):
+        return IdentifierClassification("", "", "unknown", None, 0.0, ["identifier must be text"])
+    if not isinstance(identifier_type, str) or identifier_type not in {
+        "auto",
+        "vin",
+        "vin_partial",
+        "frame_number",
+        "market_code",
+    }:
+        return IdentifierClassification(raw.strip(), "", "unknown", None, 0.0, ["invalid explicit identifier type"])
     original = raw.strip()
     compact = _compact_text(raw)
     notes: list[str] = []
+
+    if identifier_type != "auto":
+        candidate = normalize_vin(raw) if identifier_type in {"vin", "vin_partial"} else compact
+        valid = {
+            "vin": len(candidate) == 17 and "*" not in candidate and bool(_VIN_ALLOWED.fullmatch(candidate)),
+            "vin_partial": 8 <= len(candidate) <= 17 and bool(_VIN_ALLOWED.fullmatch(candidate)),
+            "frame_number": bool(_FRAME_ALLOWED.fullmatch(candidate)),
+            "market_code": bool(re.fullmatch(r"[A-Z0-9-]{4,32}", candidate)),
+        }.get(identifier_type, False)
+        if not valid:
+            return IdentifierClassification(
+                original, compact, "unknown", None, 0.0, ["invalid explicit identifier type"]
+            )
+        return IdentifierClassification(
+            original,
+            candidate,
+            cast(LookupKind, identifier_type),
+            "global" if identifier_type.startswith("vin") else None,
+            0.99 if identifier_type == "vin" else 0.82,
+            ["explicit identifier type"],
+        )
 
     if not compact:
         return IdentifierClassification(
@@ -258,45 +290,91 @@ def classify_identifier(raw: str) -> IdentifierClassification:
     )
 
 
+_VPIC_FIELDS = (
+    "VIN",
+    "VehicleDescriptor",
+    "Make",
+    "Manufacturer",
+    "ManufacturerName",
+    "Model",
+    "ModelYear",
+    "Trim",
+    "Series",
+    "Series2",
+    "BodyClass",
+    "VehicleType",
+    "PlantCountry",
+    "PlantCity",
+    "PlantCompanyName",
+    "PlantState",
+    "EngineModel",
+    "EngineConfiguration",
+    "EngineCylinders",
+    "DisplacementL",
+    "DisplacementCC",
+    "EngineHP",
+    "FuelTypePrimary",
+    "FuelTypeSecondary",
+    "Turbo",
+    "TransmissionStyle",
+    "TransmissionSpeeds",
+    "DriveType",
+    "Doors",
+    "Seats",
+    "GVWR",
+)
+_VPIC_NUMERIC_FIELDS = {
+    "EngineCylinders",
+    "DisplacementL",
+    "DisplacementCC",
+    "EngineHP",
+    "TransmissionSpeeds",
+    "Doors",
+    "Seats",
+}
+_VPIC_BASE_URL = "https://vpic.nhtsa.dot.gov/api/vehicles/"
+MAX_VPIC_RESPONSE_BYTES = 5 * 1024 * 1024
+
+
+def _finite_number(value: int | float) -> bool:
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _validate_vpic_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("vPIC returned a non-object JSON payload")
+    results = payload.get("Results")
+    if not isinstance(results, list) or any(not isinstance(row, dict) for row in results):
+        raise ValueError("vPIC returned a malformed Results payload")
+    return payload
+
+
+def _provider_year(value: Any) -> int:
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{4}", value.strip()):
+        value = int(value.strip())
+    if isinstance(value, bool) or not isinstance(value, int) or not 1900 <= value <= datetime.now(UTC).year + 1:
+        raise ValueError("vPIC returned a malformed ModelYear field")
+    return value
+
+
 def _extract_vpic_vehicle(result: dict[str, Any]) -> dict[str, Any]:
-    keys = [
-        "VIN",
-        "VehicleDescriptor",
-        "Make",
-        "Manufacturer",
-        "ManufacturerName",
-        "Model",
-        "ModelYear",
-        "Trim",
-        "Series",
-        "Series2",
-        "BodyClass",
-        "VehicleType",
-        "PlantCountry",
-        "PlantCity",
-        "PlantCompanyName",
-        "PlantState",
-        "EngineModel",
-        "EngineConfiguration",
-        "EngineCylinders",
-        "DisplacementL",
-        "DisplacementCC",
-        "EngineHP",
-        "FuelTypePrimary",
-        "FuelTypeSecondary",
-        "Turbo",
-        "TransmissionStyle",
-        "TransmissionSpeeds",
-        "DriveType",
-        "Doors",
-        "Seats",
-        "GVWR",
-    ]
-    vehicle = {key.lower(): result.get(key) for key in keys if result.get(key) not in (None, "", "Not Applicable")}
-    model_year_value = vehicle.get("modelyear")
-    if model_year_value is not None:
-        with suppress(TypeError, ValueError):
-            vehicle["modelyear"] = int(model_year_value)
+    vehicle: dict[str, Any] = {}
+    for key in _VPIC_FIELDS:
+        value = result.get(key)
+        if value is None or value == "" or value == "Not Applicable":
+            continue
+        if key == "ModelYear":
+            value = _provider_year(value)
+        elif key in _VPIC_NUMERIC_FIELDS and isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not _finite_number(value):
+                raise ValueError("vPIC returned a malformed numeric field")
+            value = str(value)
+        elif not isinstance(value, str):
+            raise ValueError("vPIC returned a malformed vehicle field")
+        vehicle[key.lower()] = value
     return vehicle
 
 
@@ -305,17 +383,16 @@ def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None =
     if data is not None:
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
     with urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("vPIC returned a non-object JSON payload")
-    results = payload.get("Results")
-    if results is not None and (not isinstance(results, list) or any(not isinstance(row, dict) for row in results)):
-        raise ValueError("vPIC returned a malformed Results payload")
-    return payload
+        raw = response.read(MAX_VPIC_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_VPIC_RESPONSE_BYTES:
+        raise ValueError("vPIC response exceeds the response size limit")
+    return _validate_vpic_payload(json.loads(raw.decode("utf-8")))
 
 
 def _vpic_failure_details(exc: BaseException) -> tuple[str, bool]:
     if isinstance(exc, HTTPError):
+        if int(exc.code) == 429:
+            return "provider_throttled", True
         return ("provider_http_5xx", True) if 500 <= int(exc.code) <= 599 else ("provider_http_4xx", False)
     if isinstance(exc, TimeoutError):
         return "timeout", True
@@ -326,224 +403,314 @@ def _vpic_failure_details(exc: BaseException) -> tuple[str, bool]:
     return "adapter_error", False
 
 
-def decode_vin_vpic(
-    vin: str,
-    *,
-    model_year: int | None = None,
-    timeout: float = 10.0,
-    extended: bool = False,
+def _provider_failure(
+    outcome: str, *, source: str = "NHTSA vPIC", retryable: bool = False, error: str | None = None
 ) -> dict[str, Any]:
-    normalized = normalize_vin(vin)
-    if len(normalized) < 8:
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC",
-            "error": "VIN is too short for vPIC decoding",
-            "vin": normalized,
-            "outcome": "invalid_input",
-            "retryable": False,
-            "requires_fallback": False,
-        }
-    endpoint = "DecodeVinValuesExtended" if extended else "DecodeVinValues"
-    base_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/{endpoint}/{quote(normalized, safe='*')}"
-    params = ["format=json"]
-    if model_year is not None:
-        params.append(f"modelyear={int(model_year)}")
-    request_url = f"{base_url}?{'&'.join(params)}"
-
-    try:
-        payload = _vpic_request_json(request_url, timeout=timeout)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
-        outcome, retryable = _vpic_failure_details(exc)
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
-            "request_url": request_url,
-            "vin": normalized,
-            "error": str(exc),
-            "extended": extended,
-            "outcome": outcome,
-            "retryable": retryable,
-            "requires_fallback": True,
-        }
-
-    results = payload.get("Results") or []
-    if not results:
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
-            "request_url": request_url,
-            "vin": normalized,
-            "error": "vPIC returned no results",
-            "payload": payload,
-            "extended": extended,
-            "outcome": "empty_result",
-            "retryable": False,
-            "requires_fallback": True,
-        }
-
-    first = results[0]
-    vehicle = _extract_vpic_vehicle(first)
-    clean_diagnostics = str(first.get("ErrorCode") or "") in {"", "0"}
+    # Never expose exception strings: HTTP/transport exceptions commonly include the request VIN URL.
     return {
-        "ok": True,
-        "source": "NHTSA vPIC Extended" if extended else "NHTSA vPIC",
-        "request_url": request_url,
-        "vin": normalized,
-        "vehicle": vehicle,
-        "error_code": first.get("ErrorCode"),
-        "error_text": first.get("ErrorText"),
-        "payload": payload,
-        "extended": extended,
-        "outcome": "success",
-        "retryable": False,
-        "requires_fallback": False,
-        "coverage": "basic" if clean_diagnostics else "partial_or_unsupported",
+        "ok": False,
+        "source": source,
+        "outcome": outcome,
+        "error": error or outcome,
+        "retryable": retryable,
+        "requires_fallback": outcome not in {"invalid_input", "identity_mismatch"},
+        "vehicle": {},
         "epc_confirmed": False,
     }
 
 
-def decode_wmi_vpic(wmi: str, *, timeout: float = 10.0) -> dict[str, Any]:
-    normalized = normalize_vin(wmi)[:3]
-    if len(normalized) != 3:
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC WMI",
-            "wmi": normalized,
-            "error": "WMI must be 3 characters",
-            "outcome": "invalid_input",
-            "retryable": False,
-            "requires_fallback": False,
-        }
-    request_url = f"https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/{quote(normalized)}?format=json"
+def _identifier_binding(expected: str, echo: Any, *, partial: bool = False) -> dict[str, Any]:
+    if not isinstance(echo, str) or not echo.strip():
+        return {"status": "missing", "verified": False}
+    returned = normalize_vin(echo)
+    if not 8 <= len(returned) <= 17 or not _VIN_ALLOWED.fullmatch(returned):
+        return {"status": "mismatch", "verified": False}
+    if not partial:
+        matches = returned == expected
+        return {"status": "exact" if matches else "mismatch", "verified": matches}
+    # Every known input position must be echoed; an asterisk in the response cannot prove a known character.
+    matches = len(returned) >= len(expected) and all(
+        char == "*" or returned[index] == char for index, char in enumerate(expected)
+    )
+    return {"status": "compatible_partial" if matches else "mismatch", "verified": False}
+
+
+def _parse_vpic_row(row: dict[str, Any], vin: str, *, source: str, partial: bool = False) -> dict[str, Any]:
+    binding = _identifier_binding(vin, row.get("VIN"), partial=partial)
+    if binding["status"] in {"missing", "mismatch"}:
+        result = _provider_failure(
+            "identity_unverified" if binding["status"] == "missing" else "identity_mismatch", source=source
+        )
+        result["identifier_binding"] = binding
+        return result
     try:
-        payload = _vpic_request_json(request_url, timeout=timeout)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
-        outcome, retryable = _vpic_failure_details(exc)
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC WMI",
-            "request_url": request_url,
-            "wmi": normalized,
-            "error": str(exc),
-            "outcome": outcome,
-            "retryable": retryable,
-            "requires_fallback": True,
-        }
+        vehicle = _extract_vpic_vehicle(row)
+        error_code = row.get("ErrorCode")
+        error_text = row.get("ErrorText")
+        if error_code is not None and (isinstance(error_code, bool) or not isinstance(error_code, (str, int))):
+            raise ValueError("vPIC returned a malformed ErrorCode field")
+        if error_text is not None and not isinstance(error_text, str):
+            raise ValueError("vPIC returned a malformed ErrorText field")
+    except ValueError as exc:
+        result = _provider_failure("adapter_malformed_payload", source=source, error=str(exc))
+        result["identifier_binding"] = binding
+        return result
+    if not any(vehicle.get(key) for key in ("make", "model", "manufacturer", "manufacturername", "vehicletype")):
+        result = _provider_failure("empty_result", source=source)
+        result["identifier_binding"] = binding
+        return result
+    clean = error_code in ("0", 0)
+    return {
+        "ok": True,
+        "source": source,
+        "vin": vin,
+        "vehicle": vehicle,
+        "error_code": error_code,
+        "error_text": error_text,
+        "outcome": "success",
+        "retryable": False,
+        "requires_fallback": False,
+        "coverage": "basic" if clean and not partial else "partial_or_unsupported",
+        "identifier_binding": binding,
+        "diagnostics_status": "reported" if error_code not in (None, "") else "missing",
+        "epc_confirmed": False,
+    }
 
-    results = payload.get("Results") or []
-    if not results:
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC WMI",
-            "request_url": request_url,
-            "wmi": normalized,
-            "error": "vPIC returned no WMI results",
-            "payload": payload,
-            "outcome": "empty_result",
-            "retryable": False,
-            "requires_fallback": True,
-        }
 
-    first = results[0]
+def _vin_request(vin: str, *, model_year: int | None = None, extended: bool = False) -> str:
+    normalized = normalize_vin(vin)
+    if not 8 <= len(normalized) <= 17 or not _VIN_ALLOWED.fullmatch(normalized):
+        raise ValueError("invalid_input")
+    if model_year is not None:
+        _provider_year(model_year)
+    endpoint = "DecodeVinValuesExtended" if extended else "DecodeVinValues"
+    params = {"format": "json"}
+    if model_year is not None:
+        params["modelyear"] = str(model_year)
+    return f"{_VPIC_BASE_URL}{endpoint}/{quote(normalized, safe='*')}?{urlencode(params)}"
+
+
+def _parse_vin_payload(
+    payload: dict[str, Any], vin: str, *, partial: bool = False, extended: bool = False
+) -> dict[str, Any]:
+    source = "NHTSA vPIC Extended" if extended else "NHTSA vPIC"
+    _validate_vpic_payload(payload)
+    rows = payload["Results"]
+    if not rows:
+        return _provider_failure("empty_result", source=source)
+    # A single decode is a single request-bound row, not an arbitrary selection from a result list.
+    if len(rows) != 1:
+        return _provider_failure("adapter_malformed_payload", source=source)
+    result = _parse_vpic_row(rows[0], vin, source=source, partial=partial)
+    result["extended"] = extended
+    return result
+
+
+def _wmi_request(wmi: str) -> str:
+    if not isinstance(wmi, str):
+        raise ValueError("invalid_input")
+    normalized = normalize_vin(wmi)
+    if len(normalized) not in {3, 6} or not _VIN_ALLOWED.fullmatch(normalized) or "*" in normalized:
+        raise ValueError("invalid_input")
+    return f"{_VPIC_BASE_URL}DecodeWMI/{quote(normalized)}?format=json"
+
+
+def _parse_wmi_payload(payload: dict[str, Any], wmi: str) -> dict[str, Any]:
+    _validate_vpic_payload(payload)
+    rows = payload["Results"]
+    if not rows:
+        return _provider_failure("empty_result", source="NHTSA vPIC WMI")
+    if len(rows) != 1:
+        return _provider_failure("adapter_malformed_payload", source="NHTSA vPIC WMI")
+    row = rows[0]
+    echo = row.get("WMI")
+    binding = {"status": "missing", "verified": False}
+    if isinstance(echo, str) and echo.strip():
+        matches = normalize_vin(echo) == wmi
+        binding = {"status": "exact" if matches else "mismatch", "verified": matches}
+    if not binding["verified"]:
+        result = _provider_failure(
+            "identity_unverified" if binding["status"] == "missing" else "identity_mismatch", source="NHTSA vPIC WMI"
+        )
+        result["identifier_binding"] = binding
+        return result
+    profile: dict[str, Any] = {}
+    for key, value in row.items():
+        if value is None or value == "" or value == "Not Applicable":
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            return _provider_failure("adapter_malformed_payload", source="NHTSA vPIC WMI")
+        if isinstance(value, (int, float)) and (
+            not _finite_number(value) or key not in {"ManufacturerId", "VehicleTypeId", "Id"}
+        ):
+            return _provider_failure("adapter_malformed_payload", source="NHTSA vPIC WMI")
+        profile[key.lower()] = value
+    if not any(profile.get(key) for key in ("name", "manufacturername", "make")):
+        return _provider_failure("empty_result", source="NHTSA vPIC WMI")
     return {
         "ok": True,
         "source": "NHTSA vPIC WMI",
-        "request_url": request_url,
-        "wmi": normalized,
-        "wmi_profile": {
-            key.lower(): value for key, value in first.items() if value not in (None, "", "Not Applicable")
-        },
-        "payload": payload,
+        "wmi": wmi,
+        "wmi_profile": profile,
         "outcome": "success",
         "retryable": False,
         "requires_fallback": False,
         "coverage": "basic",
+        "identifier_binding": binding,
         "epc_confirmed": False,
     }
 
 
+def _batch_request(rows: list[tuple[str, int | None]]) -> tuple[str, bytes]:
+    if not rows or len(rows) > 50:
+        raise ValueError("invalid_batch_size")
+    data = ";".join(f"{vin},{year}" if year is not None else vin for vin, year in rows)
+    return f"{_VPIC_BASE_URL}DecodeVINValuesBatch/", urlencode({"format": "json", "data": data}).encode("utf-8")
+
+
+def _parse_batch_payload(payload: dict[str, Any], rows: list[tuple[str, int | None]]) -> dict[str, Any]:
+    _validate_vpic_payload(payload)
+    by_vin: dict[str, list[dict[str, Any]]] = {}
+    for row in payload["Results"]:
+        echo = row.get("VIN")
+        if isinstance(echo, str):
+            by_vin.setdefault(normalize_vin(echo), []).append(row)
+    results: dict[str, dict[str, Any]] = {}
+    for vin, _year in rows:
+        matches = by_vin.get(vin, [])
+        if not matches and (len(vin) < 17 or "*" in vin):
+            # NHTSA may complete a partial input. Bind by its known positions only when unique.
+            matches = [
+                row
+                for row in payload["Results"]
+                if _identifier_binding(vin, row.get("VIN"), partial=True)["status"] == "compatible_partial"
+            ]
+        if len(matches) != 1:
+            results[vin] = _provider_failure(
+                "empty_result" if not matches else "ambiguous_provider_result", source="NHTSA vPIC Batch"
+            )
+            continue
+        result = _parse_vpic_row(matches[0], vin, source="NHTSA vPIC Batch", partial=len(vin) < 17 or "*" in vin)
+        result["batch"] = True
+        results[vin] = result
+    return {
+        "ok": bool(results) and all(result.get("ok") for result in results.values()),
+        "source": "NHTSA vPIC Batch",
+        "count": len(rows),
+        "results_by_vin": results,
+        "outcome": "success" if results and all(row.get("ok") for row in results.values()) else "partial",
+        "retryable": False,
+        "requires_fallback": any(not row.get("ok") for row in results.values()),
+    }
+
+
+def decode_vin_vpic(
+    vin: str, *, model_year: int | None = None, timeout: float = 8.0, extended: bool = False
+) -> dict[str, Any]:
+    try:
+        request_url = _vin_request(vin, model_year=model_year, extended=extended)
+    except (ValueError, TypeError, AttributeError):
+        return _provider_failure("invalid_input")
+    try:
+        payload = _vpic_request_json(request_url, timeout=min(timeout, 8.0))
+        result = _parse_vin_payload(
+            payload, normalize_vin(vin), partial=len(normalize_vin(vin)) < 17 or "*" in vin, extended=extended
+        )
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        outcome, retryable = _vpic_failure_details(exc)
+        result = _provider_failure(
+            outcome, retryable=retryable, error=str(exc) if isinstance(exc, ValueError) else None
+        )
+    result["request_url"] = request_url
+    result["vin"] = normalize_vin(vin)
+    result["extended"] = extended
+    return result
+
+
+def decode_wmi_vpic(wmi: str, *, timeout: float = 8.0) -> dict[str, Any]:
+    try:
+        request_url = _wmi_request(wmi)
+    except (ValueError, TypeError, AttributeError):
+        return _provider_failure("invalid_input", source="NHTSA vPIC WMI")
+    normalized = normalize_vin(wmi)
+    try:
+        result = _parse_wmi_payload(_vpic_request_json(request_url, timeout=min(timeout, 8.0)), normalized)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        outcome, retryable = _vpic_failure_details(exc)
+        result = _provider_failure(
+            outcome,
+            source="NHTSA vPIC WMI",
+            retryable=retryable,
+            error=str(exc) if isinstance(exc, ValueError) else None,
+        )
+    result.update({"request_url": request_url, "wmi": normalized})
+    return result
+
+
 def _batch_item(item: str | dict[str, Any]) -> tuple[str, int | None]:
     if isinstance(item, dict):
-        identifier = str(item.get("identifier") or item.get("vin") or "")
-        model_year = item.get("model_year") or item.get("production_year")
+        identifier = item.get("identifier") or item.get("vin") or ""
+        model_year = item.get("model_year")
+        identifier_type = item.get("identifier_type", "auto")
     else:
-        identifier = str(item)
-        model_year = None
+        identifier, model_year, identifier_type = item, None, "auto"
+    if not isinstance(identifier, str):
+        return "", None
+    classification = classify_identifier(identifier, identifier_type=identifier_type)
+    if classification.kind not in {"vin", "vin_partial"}:
+        return "", None
     try:
-        year = int(model_year) if model_year not in (None, "") else None
-    except (TypeError, ValueError):
-        year = None
-    return normalize_vin(identifier), year
+        year = _provider_year(model_year) if model_year not in (None, "") else None
+    except ValueError:
+        return "", None
+    return classification.normalized, year
 
 
 def decode_vins_vpic_batch(items: list[str | dict[str, Any]], *, timeout: float = 20.0) -> dict[str, Any]:
-    normalized_items = [_batch_item(item) for item in items]
-    vin_rows = [
-        (vin, year) for vin, year in normalized_items if classify_identifier(vin).kind in {"vin", "vin_partial"}
+    # The collector handles <=50-row chunks, incompatible year hints and the shared request budget.
+    from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS
+    from .vehicle_identity_transport import IdentityBudget, collect_identity_provider_results
+
+    if not isinstance(items, list) or len(items) > MAX_IDENTITY_ITEMS:
+        return {**_provider_failure("invalid_input", source="NHTSA vPIC Batch"), "count": 0, "results_by_vin": {}}
+    rows = [_batch_item(item) for item in items]
+    rows = [(vin, year) for vin, year in rows if vin]
+    inputs = [
+        {
+            "ok": True,
+            "identifier": vin,
+            "identifier_type": "vin_partial" if len(vin) < 17 or "*" in vin else "vin",
+            "context": {"model_year": year} if year is not None else {},
+        }
+        for vin, year in rows
     ]
-    if not vin_rows:
-        return {
-            "ok": True,
-            "source": "NHTSA vPIC Batch",
-            "count": 0,
-            "results_by_vin": {},
-            "request_url": None,
-            "outcome": "empty_result",
-            "retryable": False,
-            "requires_fallback": False,
-        }
-
-    data_rows = [f"{vin},{year}" if year is not None else vin for vin, year in vin_rows]
-    request_url = "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/"
-    body = urlencode({"format": "json", "data": ";".join(data_rows)}).encode("utf-8")
-    try:
-        payload = _vpic_request_json(request_url, timeout=timeout, data=body)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
-        outcome, retryable = _vpic_failure_details(exc)
-        return {
-            "ok": False,
-            "source": "NHTSA vPIC Batch",
-            "request_url": request_url,
-            "count": len(vin_rows),
-            "error": str(exc),
-            "results_by_vin": {},
-            "outcome": outcome,
-            "retryable": retryable,
-            "requires_fallback": True,
-        }
-
-    results_by_vin: dict[str, dict[str, Any]] = {}
-    for row in payload.get("Results") or []:
-        vin = normalize_vin(str(row.get("VIN") or ""))
-        if not vin:
-            continue
-        results_by_vin[vin] = {
-            "ok": True,
-            "source": "NHTSA vPIC Batch",
-            "request_url": request_url,
-            "vin": vin,
-            "vehicle": _extract_vpic_vehicle(row),
-            "error_code": row.get("ErrorCode"),
-            "error_text": row.get("ErrorText"),
-            "payload": {"Results": [row]},
-            "batch": True,
-            "outcome": "success",
-            "retryable": False,
-            "requires_fallback": False,
-            "coverage": "basic" if str(row.get("ErrorCode") or "") in {"", "0"} else "partial_or_unsupported",
-            "epc_confirmed": False,
-        }
+    budget = IdentityBudget(max_attempts=20, deadline_seconds=min(max(timeout, 0.0), 30.0))
+    collected = collect_identity_provider_results(inputs, live_wmi=False, budget=budget)
+    variants: dict[str, set[int | None]] = {}
+    for vin, year in rows:
+        variants.setdefault(vin, set()).add(year)
+    by_vin = {
+        vin: result
+        for (vin, _year), result in zip(rows, collected["vpic_results"], strict=True)
+        if len(variants[vin]) == 1 and result is not None and result.get("ok")
+    }
+    by_request = [
+        {"vin": vin, "model_year_hint": year, "result": result}
+        for (vin, year), result in zip(rows, collected["vpic_results"], strict=True)
+    ]
+    errors = [result for result in collected["vpic_results"] if result and not result.get("ok")]
     return {
-        "ok": True,
+        "ok": not errors,
         "source": "NHTSA vPIC Batch",
-        "request_url": request_url,
-        "count": len(vin_rows),
-        "results_by_vin": results_by_vin,
-        "payload": payload,
-        "outcome": "success" if results_by_vin else "empty_result",
+        "count": len(rows),
+        "results_by_vin": by_vin,
+        "results_by_request": by_request,
+        "request_url": f"{_VPIC_BASE_URL}DecodeVINValuesBatch/" if rows else None,
+        "outcome": "partial" if errors else ("success" if rows else "empty_result"),
+        "error": errors[0].get("error") if errors else None,
         "retryable": False,
-        "requires_fallback": not bool(results_by_vin),
+        "requires_fallback": bool(errors),
+        "processing": collected["processing"],
     }
 
 
@@ -1033,6 +1200,7 @@ def build_lookup_plan(
     *,
     model_year: int | None = None,
     make_hint: str | None = None,
+    identifier_type: str = "auto",
     live_vpic: bool = True,
     vpic_result: dict[str, Any] | None = None,
     part_name: str | None = None,
@@ -1045,7 +1213,7 @@ def build_lookup_plan(
     captured_supersedes: str | None = None,
     captured_note: str | None = None,
 ) -> dict[str, Any]:
-    classification = classify_identifier(raw_identifier)
+    classification = classify_identifier(raw_identifier, identifier_type=identifier_type)
     public_query = _redact_identifier(classification.normalized)["display"]
     plan: dict[str, Any] = {
         "ok": True,

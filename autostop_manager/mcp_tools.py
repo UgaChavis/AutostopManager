@@ -5,7 +5,9 @@ import json
 from collections.abc import Collection
 from typing import Any, Literal, cast
 
+from mcp.server.fastmcp import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import StrictFloat, StrictInt
 
 from .action_contract import prepare_action_contract
 from .automation_control import AutomationControlClient
@@ -53,7 +55,8 @@ from .store_analytics import get_store_analytics_report
 from .store_integration import StoreIntegration
 from .store_owner_api import StoreOwnerApiClient
 from .store_quote_conductor import StoreQuoteConductor, StoreQuoteOwnerApi
-from .vehicle_identity import decode_vehicle_identities, decode_vehicle_identity
+from .vehicle_identity_async import decode_vehicle_identities_async, decode_vehicle_identity_async
+from .vehicle_identity_request import run_identity_request
 from .vin_parts_benchmark import benchmark_vin_parts_lookup
 from .vin_oem_resolver import resolve_vin_oem_parts
 from .vin_lookup import lookup_original_parts
@@ -742,46 +745,77 @@ def register_manager_tools(  # noqa: C901
             destructiveHint=False,
         ),
     )
-    def decode_vehicle_identity_tool(
+    async def decode_vehicle_identity_tool(
         identifier: str,
         vehicle: str | None = None,
         make: str | None = None,
         model: str | None = None,
-        model_year: int | None = None,
+        model_year: StrictInt | None = None,
         engine: str | None = None,
         transmission: str | None = None,
         drivetrain: str | None = None,
         market: str | None = None,
-        source_confidence: float | None = None,
+        source_confidence: StrictFloat | StrictInt | None = None,
         live_vpic: bool = True,
         live_wmi: bool = True,
+        production_year: StrictInt | None = None,
+        production_date: str | None = None,
+        modification: str | None = None,
+        trim: str | None = None,
+        series: str | None = None,
+        options: list[str] | None = None,
+        transmission_speeds: StrictInt | None = None,
+        identifier_type: Literal["auto", "vin", "vin_partial", "frame_number", "market_code"] = "auto",
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
-        return decode_vehicle_identity(
-            identifier,
-            crm_context={
-                "vehicle": vehicle,
-                "make": make,
-                "model": model,
-                "model_year": model_year,
-                "engine": engine,
-                "transmission": transmission,
-                "drivetrain": drivetrain,
-                "market": market,
-                "source_confidence": source_confidence,
-            },
-            model_year=model_year,
-            make_hint=make,
-            live_vpic=live_vpic,
-            live_wmi=live_wmi,
+        return await run_identity_request(
+            decode_vehicle_identity_async(
+                identifier,
+                crm_context={
+                    "vehicle": vehicle,
+                    "make": make,
+                    "model": model,
+                    "model_year": model_year,
+                    "production_year": production_year,
+                    "production_date": production_date,
+                    "modification": modification,
+                    "trim": trim,
+                    "series": series,
+                    "options": options,
+                    "transmission_speeds": transmission_speeds,
+                    "engine": engine,
+                    "transmission": transmission,
+                    "drivetrain": drivetrain,
+                    "market": market,
+                    "source_confidence": source_confidence,
+                },
+                model_year=model_year,
+                make_hint=make,
+                identifier_type=identifier_type,
+                live_vpic=live_vpic,
+                live_wmi=live_wmi,
+            ),
+            ctx,
         )
 
-    server.tool(
+    @server.tool(
         name="decode_vehicle_identities",
         description=(
             "Batch vehicle identity dossiers for VIN/frame/body-number lists. "
             "Returns per-identifier confidence, conflicts, adapter status, and required next EPC/API sources."
         ),
-    )(decode_vehicle_identities)
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    )
+    async def decode_vehicle_identities_tool(
+        items: list[dict[str, Any]],
+        live_vpic: bool = True,
+        use_vpic_batch: bool = True,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        return await run_identity_request(
+            decode_vehicle_identities_async(items, live_vpic=live_vpic, use_vpic_batch=use_vpic_batch),
+            ctx,
+        )
 
     @server.tool(
         name="catalog_provider_status",

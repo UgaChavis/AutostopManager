@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import inspect
 from pathlib import Path
@@ -60,17 +61,17 @@ class _FakeServer:
 def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_decode_vehicle_identity(identifier, **kwargs):
+    async def fake_decode_vehicle_identity(identifier, **kwargs):
         captured["identifier"] = identifier
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity", fake_decode_vehicle_identity)
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", fake_decode_vehicle_identity)
     server = _FakeServer()
     store = StoreState(tmp_path / "memory.sqlite3")
 
     register_manager_tools(server, store)
-    result = server.tools["decode_vehicle_identity"]("WBA00000000000000", live_vpic=False, live_wmi=False)
+    result = asyncio.run(server.tools["decode_vehicle_identity"]("WBA00000000000000", live_vpic=False, live_wmi=False))
 
     assert result["ok"] is True
     assert captured["identifier"] == "WBA00000000000000"
@@ -84,6 +85,7 @@ def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
 
     for name in (
         "decode_vehicle_identity",
+        "decode_vehicle_identities",
         "partsapi_catalog_lookup",
         "resolve_vin_oem_parts",
         "lookup_original_parts",

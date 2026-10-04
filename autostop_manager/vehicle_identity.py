@@ -4,18 +4,22 @@ from dataclasses import dataclass
 import json
 import math
 import re
+import unicodedata
+from itertools import combinations
 from typing import Any
 
 from .catalog_adapters import catalog_provider_status
+from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS, validate_identity_input, validate_identity_item
+from .vehicle_identity_policy import build_parts_lookup_readiness
+from .vehicle_identity_transport import wmi_for_vin
 from .vin_lookup import (
+    _finite_number,
     _public_identifier,
     _redact_identifier,
     _redact_identifier_payload,
     build_lookup_plan,
     classify_identifier,
-    decode_vin_vpic,
-    decode_vins_vpic_batch,
-    decode_wmi_vpic,
+    _identifier_binding,
 )
 from .vin_sources import load_source_registry
 
@@ -328,7 +332,8 @@ def _compact(value: Any) -> str:
 
 def _normalize_make(value: Any) -> Any:
     text = _compact(value)
-    key = re.sub(r"[^a-z0-9]+", "", text.casefold())
+    unaccented = "".join(char for char in unicodedata.normalize("NFKD", text) if not unicodedata.combining(char))
+    key = re.sub(r"[^a-z0-9]+", "", unaccented.casefold())
     for corporate_prefix, canonical_key in (
         ("toyotamotor", "toyota"),
         ("mitsubishimotors", "mitsubishi"),
@@ -383,7 +388,6 @@ def _flatten_crm_context(context: dict[str, Any] | None) -> dict[str, Any]:
     aliases = {
         "make_display": "make",
         "model_display": "model",
-        "production_year": "model_year",
         "engine_model": "engine",
         "gearbox_model": "transmission",
         "chassis_number": "frame",
@@ -409,6 +413,13 @@ def _clean_context(context: dict[str, Any] | None) -> dict[str, Any]:
         "model",
         "model_year",
         "production_year",
+        "production_date",
+        "modification",
+        "trim",
+        "series",
+        "options",
+        "transmission_speeds",
+        "transmission_code",
         "engine",
         "engine_model",
         "transmission",
@@ -418,10 +429,9 @@ def _clean_context(context: dict[str, Any] | None) -> dict[str, Any]:
         "source_summary",
         "source_confidence",
         "oem_notes",
+        "input_alias_conflicts",
     ]
     result = {key: context.get(key) for key in allowed if context.get(key) not in (None, "")}
-    if "production_year" in result and "model_year" not in result:
-        result["model_year"] = result["production_year"]
     if "engine_model" in result and "engine" not in result:
         result["engine"] = result["engine_model"]
     if "gearbox_model" in result and "transmission" not in result:
@@ -476,11 +486,16 @@ def _merge_field(
 ) -> None:
     if value in (None, "", []):
         return
+    raw_value = value
+    if field == "make":
+        value = _normalize_make(value)
+    elif field == "model":
+        value = _normalize_model(value)
     key = field
     current = profile.get(key)
     if current in (None, ""):
         profile[key] = value
-    evidence.append({"source": source, "field": key, "value": value, "confidence": confidence})
+    evidence.append({"source": source, "field": key, "value": value, "raw_value": raw_value, "confidence": confidence})
 
 
 def _matching_platform_rule(identifier: str) -> PlatformRule | None:
@@ -513,18 +528,8 @@ def _source_requirements(identifier_kind: str, profile: dict[str, Any]) -> list[
 def _uses_strict_north_american_vin(profile: dict[str, Any]) -> bool:
     market = _compact(profile.get("market")).lower()
     manufacturer = _compact(profile.get("manufacturer")).lower()
-    plant_country = _compact(profile.get("plant_country")).lower()
-    return (
-        "north america" in market
-        or "fca us" in manufacturer
-        or plant_country
-        in {
-            "united states",
-            "united states (usa)",
-            "canada",
-            "mexico",
-        }
-    )
+    # Assembly location is not a sales-market assertion.
+    return "north america" in market or "fca us" in manufacturer
 
 
 def _normalized_identity_value(field: str, value: Any) -> str:
@@ -620,7 +625,43 @@ def identity_values_agree(field: str, left: Any, right: Any) -> bool:
         return _model_family_values_agree(left, right)
     if field == "transmission":
         return _transmission_values_agree(left, right)
+    if field == "engine":
+        return _engine_values_agree(left, right)
+    if field == "market":
+        return _market_values_agree(left, right)
+    if field == "drivetrain":
+        aliases = {"4wd": "awd", "4wd4wheeldrive4x4": "awd", "4wheeldrive4x4": "awd", "allwheeldrive": "awd"}
+        return aliases.get(left_normalized, left_normalized) == aliases.get(right_normalized, right_normalized)
     return False
+
+
+def _engine_values_agree(left: Any, right: Any) -> bool:
+    def engine_code(value: Any) -> str | None:
+        for token in re.findall(r"[A-Z0-9]+(?:[.-][A-Z0-9]+)*", _compact(value).upper()):
+            code = re.sub(r"[^A-Z0-9]", "", token)
+            if (
+                len(code) >= 3
+                and any(char.isdigit() for char in code)
+                and any(char.isalpha() for char in code)
+                and not code.endswith(("CC", "HP", "KW"))
+                and not re.fullmatch(r"\d+(?:L|T|V|PS|BHP|RPM)|EURO\d+", code)
+            ):
+                return code
+        return None
+
+    left_code, right_code = engine_code(left), engine_code(right)
+    return bool(left_code and left_code == right_code)
+
+
+def _market_values_agree(left: Any, right: Any) -> bool:
+    aliases = {"eu": "europe", "usa": "northamerica", "us": "northamerica", "jp": "japan"}
+    a, b = (_normalized_identity_value("market", value) for value in (left, right))
+    a, b = aliases.get(a, a), aliases.get(b, b)
+    if a == b:
+        return True
+    # A broad local coverage hint is compatible, but never sales-market proof.
+    broad = {"global", "row", "europeglobal", "europerow"}
+    return a in broad or b in broad
 
 
 def _consensus_vin_evidence_conflicts(
@@ -725,7 +766,23 @@ def _merge_crm_context_fields(
     field_evidence: list[dict[str, Any]],
     crm: dict[str, Any],
 ) -> None:
-    for field in ("make", "model", "model_year", "engine", "transmission", "drivetrain", "market"):
+    for field in (
+        "make",
+        "model",
+        "model_year",
+        "production_year",
+        "production_date",
+        "engine",
+        "transmission",
+        "transmission_speeds",
+        "transmission_code",
+        "drivetrain",
+        "market",
+        "modification",
+        "trim",
+        "series",
+        "options",
+    ):
         if crm.get(field) not in (None, ""):
             _merge_field(profile, field_evidence, field, crm[field], "CRM context", 0.55)
     if crm.get("vehicle") and not profile.get("model"):
@@ -743,7 +800,7 @@ def _merge_local_wmi_hint(
         return None
     for key, value in wmi_hint.items():
         if key == "country":
-            _merge_field(profile, field_evidence, "plant_country", value, "local WMI hint", 0.55)
+            _merge_field(profile, field_evidence, "manufacturer_country", value, "local WMI hint", 0.55)
         elif key == "vehicle_type":
             _merge_field(profile, field_evidence, "vehicle_type", value, "local WMI hint", 0.5)
         else:
@@ -791,17 +848,28 @@ def _merge_vpic_result(
     vehicle = raw_vehicle if isinstance(raw_vehicle, dict) else {}
     if not result.get("ok"):
         warnings.append(str(result.get("error") or "vPIC decode failed"))
-        evidence_sources.append({"source": "NHTSA vPIC", "status": "failed", "error": result.get("error")})
+        evidence_sources.append(
+            {
+                "source": "NHTSA vPIC",
+                "status": "failed",
+                "error": result.get("error"),
+                "outcome": result.get("outcome"),
+                "retryable": bool(result.get("retryable")),
+                "identifier_binding": result.get("identifier_binding"),
+            }
+        )
         return
 
-    error_code = str(result.get("error_code") or "")
-    vpic_clean = error_code in {"", "0"}
+    vpic_clean = _vpic_has_clean_diagnostics(result) and bool((result.get("identifier_binding") or {}).get("verified"))
     coverage = str(result.get("coverage") or ("basic" if vpic_clean else "partial_or_unsupported"))
     vpic_field_confidence = 0.75 if vpic_clean else 0.45
     field_map = {
         "make": "make",
         "model": "model",
         "modelyear": "model_year",
+        "trim": "trim",
+        "series": "series",
+        "series2": "series2",
         "bodyclass": "body_class",
         "vehicletype": "vehicle_type",
         "plantcountry": "plant_country",
@@ -810,6 +878,7 @@ def _merge_vpic_result(
         "enginecylinders": "engine_cylinders",
         "drivetype": "drivetrain",
         "transmissionstyle": "transmission",
+        "transmissionspeeds": "transmission_speeds",
         "fueltypeprimary": "fuel_type",
         "displacementl": "engine_displacement_l",
         "enginehp": "engine_power_hp",
@@ -821,6 +890,10 @@ def _merge_vpic_result(
         "enginecylinders",
         "drivetype",
         "transmissionstyle",
+        "transmissionspeeds",
+        "trim",
+        "series",
+        "series2",
         "fueltypeprimary",
         "displacementl",
         "enginehp",
@@ -847,6 +920,7 @@ def _merge_vpic_result(
             "epc_confirmed": False,
             "limitations": "Basic manufacturer-reported VIN decode; not an EPC and often partial for ROW/JDM/Russia/CIS VINs.",
             "request_url": result.get("request_url"),
+            "identifier_binding": result.get("identifier_binding"),
         }
     )
     if not vpic_clean:
@@ -869,7 +943,15 @@ def _merge_wmi_result(
     profile_wmi = raw_profile if isinstance(raw_profile, dict) else {}
     if not result.get("ok"):
         evidence_sources.append(
-            {"source": "NHTSA vPIC WMI", "status": "failed", "wmi": wmi, "error": result.get("error")}
+            {
+                "source": "NHTSA vPIC WMI",
+                "status": "failed",
+                "wmi": wmi,
+                "error": result.get("error"),
+                "outcome": result.get("outcome"),
+                "retryable": bool(result.get("retryable")),
+                "identifier_binding": result.get("identifier_binding"),
+            }
         )
         return
     field_map = {
@@ -877,7 +959,7 @@ def _merge_wmi_result(
         "manufacturername": "manufacturer",
         "make": "make",
         "vehicletype": "vehicle_type",
-        "country": "plant_country",
+        "country": "manufacturer_country",
     }
     for source_field, target_field in field_map.items():
         _merge_field(profile, field_evidence, target_field, profile_wmi.get(source_field), "NHTSA vPIC WMI", 0.6)
@@ -888,6 +970,7 @@ def _merge_wmi_result(
             "wmi": wmi,
             "decoded_fields": sorted(str(key) for key in profile_wmi),
             "request_url": result.get("request_url"),
+            "identifier_binding": result.get("identifier_binding"),
         }
     )
 
@@ -902,6 +985,11 @@ def _bounded_confidence(value: Any, *, default: float) -> float:
     if not math.isfinite(number):
         return default
     return max(0.0, min(number, 1.0))
+
+
+def _vpic_has_clean_diagnostics(result: dict[str, Any]) -> bool:
+    value = result.get("error_code")
+    return not isinstance(value, bool) and value in ("0", 0)
 
 
 def _identity_score(
@@ -922,13 +1010,17 @@ def _identity_score(
     raw_vpic_vehicle = vpic_result.get("vehicle") if vpic_result else None
     vpic_vehicle = raw_vpic_vehicle if isinstance(raw_vpic_vehicle, dict) else {}
     if vpic_result and vpic_result.get("ok") and vpic_vehicle.get("make"):
-        score += 0.3 if str(vpic_result.get("error_code") or "") in {"", "0"} else 0.12
+        score += 0.3 if _vpic_has_clean_diagnostics(vpic_result) else 0.12
     if wmi_result and wmi_result.get("ok"):
         score += 0.06
-    if crm:
+    has_identity_context = any(
+        crm.get(field) not in (None, "", [])
+        for field in ("make", "model", "model_year", "engine", "transmission", "market", "drivetrain")
+    )
+    if has_identity_context:
         score += _bounded_confidence(crm.get("source_confidence"), default=0.75) * 0.2
     has_high_conflict = any(item.get("severity") == "high" for item in conflicts)
-    if crm and platform_rule is not None and not has_high_conflict:
+    if has_identity_context and platform_rule is not None and not has_high_conflict:
         crm_source_confidence = _bounded_confidence(crm.get("source_confidence"), default=0.0)
         if profile.get("make") and (profile.get("model") or profile.get("model_family")):
             if identifier_kind in {"frame_number", "market_code"} and platform_rule.kind.endswith("frame"):
@@ -942,6 +1034,513 @@ def _identity_score(
     return max(0.0, min(round(score, 2), 0.95))
 
 
+IDENTITY_FIELDS = (
+    "make",
+    "model",
+    "model_year",
+    "production_year",
+    "production_date",
+    "engine",
+    "transmission",
+    "transmission_speeds",
+    "drivetrain",
+    "market",
+    "modification",
+    "trim",
+    "series",
+    "options",
+)
+
+
+def invalid_identity_result(errors: list[dict[str, Any]], item_index: int | None = None) -> dict[str, Any]:
+    """Return a complete row for invalid input without echoing rejected values."""
+    result: dict[str, Any] = {
+        "ok": False,
+        "status": "invalid_input",
+        "schema_version": 2,
+        "identifier": _public_identifier(classify_identifier("")),
+        "normalized_query": "",
+        "privacy": {
+            "raw_identifier_is_sensitive": True,
+            "raw_identifier_redacted_from_output": True,
+            "persistence_rule": "Do not store raw customer VIN/frame in durable memory or Git fixtures.",
+        },
+        "vehicle_profile": {},
+        "diagnostics": {
+            "model_year": {"status": "not_applicable"},
+            "check_digit": {"status": "not_applicable"},
+            "frame_query_hint": None,
+        },
+        "identifier_validation": {"ok": False, "valid_for_vehicle_lookup": False, "status": "invalid_input"},
+        "confidence": 0.0,
+        "confidence_label": "low",
+        "confidence_semantics": "Heuristic evidence score, not a calibrated probability or measured vehicle accuracy.",
+        "field_evidence": [],
+        "field_statuses": {
+            field: {"status": "missing", "evidence_ids": [], "alternatives": []} for field in IDENTITY_FIELDS
+        },
+        "provenance": {},
+        "missing_fields": list(IDENTITY_FIELDS),
+        "family_candidates": [],
+        "evidence_sources": [],
+        "conflicts": [],
+        "warnings": [],
+        "errors": [
+            {key: row[key] for key in ("code", "field", "stage") if key in row}
+            for row in errors
+            if isinstance(row, dict)
+        ],
+        "provider_errors": [],
+        "normalization_notes": [],
+        "required_next_sources": [],
+        "adapter_status": [],
+        "lookup_plan": {"ok": False, "steps": [], "hints": [], "warnings": ["invalid_input"]},
+        "registry_version": load_source_registry().get("version", 0),
+    }
+    if item_index is not None:
+        result["item_index"] = item_index
+    result["parts_lookup_readiness"] = build_parts_lookup_readiness(result)
+    return result
+
+
+def summarize_identity_batch(
+    results: list[dict[str, Any]], *, vpic_batch: dict[str, Any] | None = None, processing: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Preserve row order and legacy coverage counters while exposing partial failures."""
+    counts = {
+        label: sum(row.get("confidence_label") == label for row in results) for label in ("high", "medium", "low")
+    }
+    successful = sum(row.get("ok") is not False for row in results)
+    partial = sum(row.get("status") == "partial" for row in results)
+    providers = catalog_provider_status().get("providers") or []
+    paid = [
+        row
+        for row in providers
+        if row.get("stage") in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
+    ]
+    readiness = [row.get("parts_lookup_readiness") or {} for row in results]
+    result: dict[str, Any] = {
+        "ok": successful == len(results),
+        "status": "ok" if successful == len(results) and not partial else "partial" if successful else "failed",
+        "count": len(results),
+        "success_count": successful,
+        "error_count": len(results) - successful,
+        "partial_count": partial,
+        "high_confidence_count": counts["high"],
+        "medium_confidence_count": counts["medium"],
+        "low_confidence_count": counts["low"],
+        "identity_coverage": {
+            "high_ratio": round(counts["high"] / len(results), 2) if results else 0,
+            "ready_for_family_lookup_count": sum(bool(row.get("ready_for_family_lookup")) for row in readiness),
+            "ready_for_vehicle_lookup_count": sum(bool(row.get("ready_for_vehicle_lookup")) for row in readiness),
+            "ready_for_oem_lookup_count": sum(bool(row.get("ready_for_oem_lookup")) for row in readiness),
+            "ready_for_oem_candidate_lookup_count": sum(
+                bool(row.get("ready_for_oem_candidate_lookup")) for row in readiness
+            ),
+            "ready_for_crm_writeback_count": sum(bool(row.get("ready_for_crm_writeback")) for row in readiness),
+            "needs_epc_or_document_check_count": sum(bool(row.get("required_next_sources")) for row in results),
+        },
+        "vpic_batch": vpic_batch or {"attempted": False, "ok": True, "decoded_count": 0, "error": None},
+        "configured_paid_sources": [row["source_id"] for row in paid if row.get("configured")],
+        "missing_paid_sources": [row["source_id"] for row in paid if not row.get("configured")],
+        "results": results,
+    }
+    if processing is not None:
+        result["processing"] = processing
+    return result
+
+
+def _bound_vpic_result(result: dict[str, Any] | None, identifier: str, *, partial: bool) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        return _malformed_provider_result("NHTSA vPIC")
+    safe = dict(result)
+    raw_vehicle = result.get("vehicle")
+    vehicle: dict[str, Any] = raw_vehicle if isinstance(raw_vehicle, dict) else {}
+    if result.get("ok"):
+        if not isinstance(raw_vehicle, dict) or not _provider_fields_are_valid(vehicle, wmi=False):
+            return _malformed_provider_result("NHTSA vPIC")
+        binding = _identifier_binding(identifier, vehicle.get("vin") or result.get("vin"), partial=partial)
+        safe["identifier_binding"] = binding
+        if binding["status"] in {"mismatch", "missing"}:
+            safe.update(
+                ok=False,
+                vehicle={},
+                outcome="identity_mismatch" if binding["status"] == "mismatch" else "identity_unverified",
+                error="Provider vehicle identity does not bind to the requested identifier.",
+            )
+    return safe
+
+
+def _bound_wmi_result(result: dict[str, Any] | None, wmi: str) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        return _malformed_provider_result("NHTSA vPIC WMI")
+    safe = dict(result)
+    raw_profile = result.get("wmi_profile")
+    profile: dict[str, Any] = raw_profile if isinstance(raw_profile, dict) else {}
+    if result.get("ok"):
+        if not isinstance(raw_profile, dict) or not _provider_fields_are_valid(profile, wmi=True):
+            return _malformed_provider_result("NHTSA vPIC WMI")
+        echo = profile.get("wmi") or result.get("wmi")
+        normalized_echo = re.sub(r"[\s-]+", "", echo.upper()) if isinstance(echo, str) else ""
+        matches = normalized_echo == wmi and bool(wmi)
+        binding = {"status": "exact" if matches else "mismatch" if normalized_echo else "missing", "verified": matches}
+        safe["identifier_binding"] = binding
+        if not binding["verified"]:
+            safe.update(
+                ok=False,
+                wmi_profile={},
+                outcome="identity_mismatch" if binding["status"] == "mismatch" else "identity_unverified",
+                error="Provider WMI identity does not bind to the requested WMI.",
+            )
+    return safe
+
+
+def _malformed_provider_result(source: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source": source,
+        "outcome": "adapter_malformed_payload",
+        "retryable": False,
+        "vehicle": {},
+        "wmi_profile": {},
+        "error": "Provider returned malformed vehicle fields.",
+    }
+
+
+def _provider_fields_are_valid(fields: dict[str, Any], *, wmi: bool) -> bool:
+    numeric = (
+        {"manufacturerid", "vehicletypeid", "id"}
+        if wmi
+        else {"modelyear", "transmissionspeeds", "enginecylinders", "displacementl", "enginehp"}
+    )
+    for field, value in fields.items():
+        if value in (None, ""):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            return False
+        if isinstance(value, (int, float)) and (field not in numeric or not _finite_number(value)):
+            return False
+        if field == "modelyear" and not validate_identity_input("", {"model_year": value})["ok"]:
+            return False
+    return True
+
+
+def _evidence_metadata(
+    evidence: list[dict[str, Any]],
+    crm: dict[str, Any],
+    vpic_result: dict[str, Any] | None,
+    wmi_result: dict[str, Any] | None,
+    raw_context: dict[str, Any],
+) -> None:
+    for alias in crm.get("input_alias_conflicts") or []:
+        if isinstance(alias, dict) and alias.get("field") in IDENTITY_FIELDS:
+            evidence.append(
+                {
+                    "source": "CRM alias:" + str(alias.get("source") or "alias"),
+                    "field": alias["field"],
+                    "value": alias.get("alias_value"),
+                    "confidence": 0.55,
+                }
+            )
+    for index, row in enumerate(evidence):
+        source = row["source"]
+        row["raw_value"] = (
+            raw_context.get(row["field"], row["value"])
+            if source == "CRM context"
+            else row.get("raw_value", row["value"])
+        )
+        row["normalization"] = {
+            "method": "make_alias_unicode"
+            if row["field"] == "make"
+            else "model_script_alias"
+            if row["field"] == "model"
+            else "validated_scalar",
+            "changed": row["value"] != row["raw_value"],
+        }
+        provider = vpic_result if source == "NHTSA vPIC" else wmi_result if source == "NHTSA vPIC WMI" else None
+        binding = (provider or {}).get("identifier_binding") or {}
+        clean = bool(
+            provider and provider.get("ok") and (source == "NHTSA vPIC WMI" or _vpic_has_clean_diagnostics(provider))
+        )
+        caller_derived = bool(
+            source == "NHTSA vPIC"
+            and row["field"] == "model_year"
+            and provider is not None
+            and provider.get("model_year_hint_requested") is not None
+        )
+        source_kind = (
+            "caller"
+            if source.startswith("CRM")
+            else "provider"
+            if provider
+            else "local_hint"
+            if source in {"local WMI hint", "local WMI hints"}
+            else "local_rule"
+        )
+        row.update(
+            evidence_id=f"e{index + 1:04d}",
+            source_kind=source_kind,
+            independent=bool(source_kind != "caller" and not caller_derived),
+            identifier_binding=binding.get("status", "local_pattern" if source_kind.startswith("local") else "caller"),
+            bound=bool(binding.get("verified")),
+            strength="supported" if clean and binding.get("verified") and not caller_derived else "candidate",
+            depends_on=["caller.model_year"] if caller_derived else [],
+        )
+
+
+def _effective_transmission(row: dict[str, Any], evidence: list[dict[str, Any]]) -> Any:
+    speeds = next(
+        (
+            item["value"]
+            for item in evidence
+            if item["source"] == row["source"] and item["field"] == "transmission_speeds"
+        ),
+        None,
+    )
+    return f"{speeds}-speed {row['value']}" if speeds not in (None, "") else row["value"]
+
+
+def _evidence_pair_agrees(
+    field: str, left: dict[str, Any], right: dict[str, Any], evidence: list[dict[str, Any]]
+) -> bool:
+    if field == "transmission":
+        return identity_values_agree(
+            field, _effective_transmission(left, evidence), _effective_transmission(right, evidence)
+        )
+    return identity_values_agree(field, left["value"], right["value"])
+
+
+def _is_conflict_evidence(row: dict[str, Any]) -> bool:
+    return bool(
+        row.get("source_kind") == "caller"
+        or row.get("strength") == "supported"
+        or (row.get("source_kind") == "local_rule" and row.get("confidence", 0) >= 0.7)
+    )
+
+
+def _semantic_field_conflicts(evidence: list[dict[str, Any]], legacy: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    conflicts = [dict(row, blocking_scopes=["vehicle"], code="vin_diagnostic_conflict") for row in legacy]
+    for field in IDENTITY_FIELDS:
+        rows = [row for row in evidence if row["field"] == field and _is_conflict_evidence(row)]
+        differing = [
+            (a, b)
+            for a, b in combinations(rows, 2)
+            if a["source"] != b["source"] and not _evidence_pair_agrees(field, a, b, evidence)
+        ]
+        if not differing:
+            continue
+        ids = sorted({row["evidence_id"] for pair in differing for row in pair})
+        sources = sorted({row["source"] for pair in differing for row in pair})
+        existing = next((row for row in conflicts if row["field"] == field), None)
+        if existing:
+            existing.update(code="field_disagreement", evidence_ids=ids)
+            continue
+        provider_disagreement = any(a["source_kind"] != "caller" and b["source_kind"] != "caller" for a, b in differing)
+        conflicts.append(
+            {
+                "field": field,
+                "code": "source_disagreement" if provider_disagreement else "caller_disagreement",
+                "severity": "high" if provider_disagreement and field in {"make", "model"} else "medium",
+                "blocking_scopes": ["vehicle"],
+                "evidence_ids": ids,
+                "evidence_sources": sources,
+                "note": "Contradictory identity facts require reconciliation; bounded family research remains available.",
+            }
+        )
+    return conflicts
+
+
+def _field_status_and_provenance(
+    profile: dict[str, Any], evidence: list[dict[str, Any]], conflicts: list[dict[str, Any]]
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    statuses: dict[str, Any] = {}
+    provenance: dict[str, Any] = {}
+    disputed = {row["field"] for row in conflicts if "vehicle" in row.get("blocking_scopes", [])}
+    for field in dict.fromkeys((*IDENTITY_FIELDS, *(row["field"] for row in evidence))):
+        rows = [row for row in evidence if row["field"] == field]
+        alternatives: list[dict[str, Any]] = []
+        for row in rows:
+            alternate = next(
+                (item for item in alternatives if identity_values_agree(field, item["value"], row["value"])), None
+            )
+            if alternate is None:
+                alternatives.append({"value": row["value"], "evidence_ids": [row["evidence_id"]]})
+            else:
+                alternate["evidence_ids"].append(row["evidence_id"])
+        status = (
+            "disputed"
+            if field in disputed
+            else "missing"
+            if not rows
+            else "supported"
+            if any(row.get("strength") == "supported" for row in rows)
+            else "candidate"
+        )
+        statuses[field] = {
+            "status": status,
+            "evidence_ids": [row["evidence_id"] for row in rows],
+            "alternatives": alternatives,
+        }
+        provenance[field] = [
+            {
+                key: row[key]
+                for key in (
+                    "evidence_id",
+                    "source",
+                    "source_kind",
+                    "value",
+                    "raw_value",
+                    "normalization",
+                    "independent",
+                    "identifier_binding",
+                    "depends_on",
+                )
+            }
+            for row in rows
+        ]
+        if status == "disputed":
+            profile.pop(field, None)
+    missing = [field for field in IDENTITY_FIELDS if statuses[field]["status"] == "missing"]
+    return statuses, provenance, missing
+
+
+def _family_candidates(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for source in dict.fromkeys(row["source"] for row in evidence):
+        fields = {row["field"]: row for row in evidence if row["source"] == source}
+        make, model = fields.get("make"), fields.get("model") or fields.get("model_family")
+        if not make or not model:
+            continue
+        candidate = next(
+            (
+                row
+                for row in candidates
+                if identity_values_agree("make", row["make"], make["value"])
+                and identity_values_agree("model", row["model"], model["value"])
+            ),
+            None,
+        )
+        ids = [make["evidence_id"], model["evidence_id"]]
+        if candidate is None:
+            candidates.append({"make": make["value"], "model": model["value"], "source": source, "evidence_ids": ids})
+        else:
+            candidate["evidence_ids"].extend(ids)
+    return candidates
+
+
+def _binding_conflicts(vpic_result: dict[str, Any] | None, wmi_result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    conflicts = []
+    for source, result in (("NHTSA vPIC", vpic_result), ("NHTSA vPIC WMI", wmi_result)):
+        binding = (result or {}).get("identifier_binding") or {}
+        if binding.get("status") not in {"mismatch", "missing"}:
+            continue
+        conflicts.append(
+            {
+                "field": "identifier_binding",
+                "code": "provider_identity_" + binding["status"],
+                "source": source,
+                "severity": "high" if binding["status"] == "mismatch" else "medium",
+                "blocking_scopes": ["vehicle"],
+                "note": "Provider response cannot confirm the requested vehicle; local family research remains possible.",
+            }
+        )
+    return conflicts
+
+
+def _year_relationship_conflicts(
+    profile: dict[str, Any],
+    diagnostics: dict[str, Any],
+    evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    conflicts = []
+    years = diagnostics["model_year"].get("candidate_years") or []
+    if years and _uses_strict_north_american_vin(profile):
+        disputed = [
+            row
+            for row in evidence
+            if row["field"] == "model_year" and str(row["value"]) not in {str(year) for year in years}
+        ]
+        if disputed:
+            conflicts.append(
+                {
+                    "field": "model_year",
+                    "code": "vin_model_year_disagreement",
+                    "severity": "medium",
+                    "blocking_scopes": ["vehicle"],
+                    "decoded_candidates": years,
+                    "evidence_ids": [row["evidence_id"] for row in disputed],
+                    "evidence_sources": ["VIN model-year encoding", *sorted({row["source"] for row in disputed})],
+                    "note": "VIN model-year encoding disagrees with a reported model year; production/registration dates are separate facts.",
+                }
+            )
+    year, build_date = profile.get("production_year"), profile.get("production_date")
+    if year is not None and build_date and str(year) != str(build_date)[:4]:
+        for field in ("production_year", "production_date"):
+            conflicts.append(
+                {
+                    "field": field,
+                    "code": "production_date_year_disagreement",
+                    "severity": "medium",
+                    "blocking_scopes": ["vehicle"],
+                    "evidence_ids": [
+                        row["evidence_id"] for row in evidence if row["field"] in {"production_year", "production_date"}
+                    ],
+                    "note": "Production year and build date disagree; model year is a separate field.",
+                }
+            )
+    return conflicts
+
+
+def _provider_diagnostics(
+    vpic_result: dict[str, Any] | None,
+    wmi_result: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    rows = []
+    for source, result in (("NHTSA vPIC", vpic_result), ("NHTSA vPIC WMI", wmi_result)):
+        if result is not None and not result.get("ok"):
+            rows.append(
+                {"code": result.get("outcome") or "provider_error", "source": source, "stage": "provider_decode"}
+            )
+    if vpic_result and vpic_result.get("ok") and not _vpic_has_clean_diagnostics(vpic_result):
+        rows.append({"code": "provider_partial_evidence", "source": "NHTSA vPIC", "stage": "provider_decode"})
+    return rows
+
+
+def _identifier_validation(
+    classification: Any,
+    profile: dict[str, Any],
+    diagnostics: dict[str, Any],
+    platform_rule: PlatformRule | None,
+) -> dict[str, Any]:
+    valid = classification.kind == "vin" or bool(
+        classification.kind in {"frame_number", "market_code"}
+        and platform_rule
+        and platform_rule.kind.endswith("frame")
+    )
+    reasons = []
+    if classification.kind == "unknown":
+        reasons.append("identifier_missing" if not classification.normalized else "identifier_unrecognized")
+    if classification.kind == "vin_partial":
+        reasons.append("partial_identifier")
+    if (
+        classification.kind == "vin"
+        and diagnostics["check_digit"].get("status") == "fail"
+        and _uses_strict_north_american_vin(profile)
+    ):
+        valid = False
+        reasons.append("north_american_check_digit_failed")
+    return {
+        "ok": True,
+        "status": "valid" if valid else "partial" if classification.kind == "vin_partial" else "unresolved",
+        "valid_for_vehicle_lookup": valid,
+        "reasons": reasons,
+    }
+
+
 def decode_vehicle_identity(
     identifier: str,
     *,
@@ -951,33 +1550,59 @@ def decode_vehicle_identity(
     live_vpic: bool = True,
     vpic_result: dict[str, Any] | None = None,
     live_wmi: bool = True,
+    wmi_result: dict[str, Any] | None = None,
+    identifier_type: str = "auto",
 ) -> dict[str, Any]:
-    classification = classify_identifier(identifier)
+    validated = validate_identity_input(
+        identifier,
+        crm_context,
+        model_year=model_year,
+        make_hint=make_hint,
+        identifier_type=identifier_type,
+    )
+    if not validated["ok"]:
+        return invalid_identity_result(validated["errors"])
+    identifier = validated["identifier"]
+    classification = classify_identifier(identifier, identifier_type=validated["identifier_type"])
     normalized = classification.normalized
-    crm = _clean_context(crm_context)
-    if model_year is not None and "model_year" not in crm:
-        crm["model_year"] = model_year
-    if make_hint and "make" not in crm:
-        crm["make"] = make_hint
+    crm = _clean_context(validated["context"])
+    processing = None
+    if (live_vpic and vpic_result is None) or (live_wmi and wmi_result is None):
+        from .vehicle_identity_transport import (
+            SINGLE_HTTP_ATTEMPT_CAP,
+            IdentityBudget,
+            collect_identity_provider_results,
+        )
 
+        collected = collect_identity_provider_results(
+            [validated],
+            live_vpic=live_vpic and vpic_result is None,
+            live_wmi=live_wmi and wmi_result is None,
+            use_vpic_batch=False,
+            budget=IdentityBudget(max_attempts=SINGLE_HTTP_ATTEMPT_CAP),
+        )
+        vpic_result = vpic_result if vpic_result is not None else collected["vpic_results"][0]
+        wmi_result = wmi_result if wmi_result is not None else collected["wmi_results"][0]
+        processing = collected["processing"]
+    # A pure merge also checks injected data; transport binding metadata alone is insufficient.
+    vpic_result = _bound_vpic_result(vpic_result, normalized, partial=classification.kind == "vin_partial")
+    wmi = wmi_for_vin(normalized)
+    wmi_result = _bound_wmi_result(wmi_result, wmi)
     profile: dict[str, Any] = {}
     field_evidence: list[dict[str, Any]] = []
     evidence_sources: list[dict[str, Any]] = []
     warnings: list[str] = []
     _merge_crm_context_fields(profile, field_evidence, crm)
-
     diagnostics: dict[str, Any] = {
         "model_year": _vin_model_year(normalized),
         "check_digit": _check_digit(normalized),
         "frame_query_hint": _frame_query_hint(normalized),
     }
-
-    wmi = normalized[:3] if len(normalized) >= 3 else ""
-    wmi_hint = _merge_local_wmi_hint(wmi, profile, field_evidence, evidence_sources)
+    wmi_hint = _merge_local_wmi_hint(wmi[:3], profile, field_evidence, evidence_sources)
     platform_rule = _merge_platform_rule(normalized, profile, field_evidence, evidence_sources)
-
-    if vpic_result is None and live_vpic and classification.kind in {"vin", "vin_partial"}:
-        vpic_result = decode_vin_vpic(normalized, model_year=model_year or crm.get("model_year"))
+    if classification.kind not in {"vin", "vin_partial"}:
+        vpic_result = None
+        wmi_result = None
     _merge_vpic_result(
         vpic_result,
         identifier_kind=classification.kind,
@@ -986,42 +1611,42 @@ def decode_vehicle_identity(
         evidence_sources=evidence_sources,
         warnings=warnings,
     )
-
-    wmi_result: dict[str, Any] | None = None
-    if live_wmi and classification.kind in {"vin", "vin_partial"} and wmi:
-        raw_vpic_vehicle = vpic_result.get("vehicle") if vpic_result else None
-        vpic_vehicle = raw_vpic_vehicle if isinstance(raw_vpic_vehicle, dict) else {}
-        needs_wmi = (
-            not vpic_result
-            or not vpic_vehicle.get("make")
-            or any(_compact(source.get("source")) == "local WMI hints" for source in evidence_sources)
+    if wmi_result is not None:
+        _merge_wmi_result(
+            wmi_result, wmi=wmi, profile=profile, field_evidence=field_evidence, evidence_sources=evidence_sources
         )
-        if needs_wmi:
-            wmi_result = decode_wmi_vpic(wmi)
-            _merge_wmi_result(
-                wmi_result,
-                wmi=wmi,
-                profile=profile,
-                field_evidence=field_evidence,
-                evidence_sources=evidence_sources,
-            )
-
     if diagnostics["frame_query_hint"]:
         warnings.append(f"Try frame query form {diagnostics['frame_query_hint']} in Japan/EPC catalogs.")
     if diagnostics["check_digit"].get("status") in {"fail", "invalid_characters"}:
         warnings.append("VIN requires document/EPC verification before VIN-critical parts orders.")
     if classification.kind == "market_code":
         warnings.append("Identifier is market/JDM-frame-like; do not treat it as a 17-character ISO VIN.")
-
-    conflicts = _conflicts(profile, crm, diagnostics, field_evidence)
-    lookup_plan = build_lookup_plan(
-        normalized,
-        model_year=model_year or crm.get("model_year"),
-        make_hint=profile.get("make") or make_hint,
-        live_vpic=live_vpic,
-        vpic_result=vpic_result,
-    )
-
+    validation = _identifier_validation(classification, profile, diagnostics, platform_rule)
+    _evidence_metadata(field_evidence, crm, vpic_result, wmi_result, validated["context"])
+    conflicts = _semantic_field_conflicts(field_evidence, _conflicts(profile, crm, diagnostics, field_evidence))
+    conflicts.extend(_year_relationship_conflicts(profile, diagnostics, field_evidence))
+    conflicts.extend(_binding_conflicts(vpic_result, wmi_result))
+    provider_diagnostics = _provider_diagnostics(vpic_result, wmi_result)
+    if any(row["code"] == "provider_partial_evidence" for row in provider_diagnostics):
+        conflicts.append(
+            {
+                "field": "provider_decode",
+                "code": "provider_partial_evidence",
+                "severity": "low",
+                "blocking_scopes": ["vehicle"],
+                "note": "A partial decoder response supports family candidates, not a resolved vehicle configuration.",
+            }
+        )
+    if not validation["valid_for_vehicle_lookup"]:
+        conflicts.append(
+            {
+                "field": "identifier",
+                "code": validation["reasons"][0] if validation["reasons"] else "identifier_unresolved",
+                "severity": "medium",
+                "blocking_scopes": ["vehicle"],
+                "note": "Identifier is not sufficient for vehicle-specific lookup; family research remains possible.",
+            }
+        )
     score = _identity_score(
         classification_confidence=classification.confidence,
         identifier_kind=classification.kind,
@@ -1033,23 +1658,28 @@ def decode_vehicle_identity(
         wmi_result=wmi_result,
         conflicts=conflicts,
     )
-
-    required_sources = _source_requirements(classification.kind, profile)
-    adapters = [
-        provider
-        for provider in catalog_provider_status()["providers"]
-        if provider["stage"] in {"oem_catalog", "catalog_cross"}
-    ]
-    has_high_conflict = any(item["severity"] == "high" for item in conflicts)
-    ready_for_parts = _confidence_label(score) == "high" and not has_high_conflict
-    blocking_reasons = []
-    if has_high_conflict:
-        blocking_reasons.append("high_severity_identity_conflict")
-    if _confidence_label(score) != "high":
-        blocking_reasons.append("identity_confidence_below_high")
-
-    result = {
+    if conflicts:
+        score = min(score, 0.79)
+    if classification.kind == "unknown":
+        score = min(score, 0.64)
+    statuses, provenance, missing = _field_status_and_provenance(profile, field_evidence, conflicts)
+    families = _family_candidates(field_evidence)
+    # Route from reconciled fields only. Disputed provider fields cannot silently choose a brand.
+    lookup_plan = build_lookup_plan(
+        identifier,
+        model_year=profile.get("model_year"),
+        make_hint=profile.get("make"),
+        live_vpic=False,
+        identifier_type=validated["identifier_type"],
+        vpic_result={"ok": bool(profile.get("make")), "vehicle": {"make": profile.get("make")}},
+    )
+    lookup_plan["family_candidates"] = families
+    lookup_plan["routing_basis"] = "reconciled_identity"
+    provider_partial = bool(provider_diagnostics)
+    result: dict[str, Any] = {
         "ok": True,
+        "status": "partial" if provider_partial else "ok",
+        "schema_version": 2,
         "identifier": _public_identifier(classification),
         "normalized_query": _redact_identifier(normalized)["display"],
         "privacy": {
@@ -1059,121 +1689,94 @@ def decode_vehicle_identity(
         },
         "vehicle_profile": profile,
         "diagnostics": diagnostics,
+        "identifier_validation": validation,
         "confidence": score,
         "confidence_label": _confidence_label(score),
-        "parts_lookup_readiness": {
-            "ready_for_oem_lookup": ready_for_parts,
-            "ready_for_oem_candidate_lookup": ready_for_parts,
-            # Identity can unlock read-only research, but has not selected a
-            # part or proved its applicability for a concrete record.
-            "ready_for_crm_writeback": False,
-            "identity_is_lead": True,
-            "epc_confirmation_required": True,
-            "cross_source_agreement": {
-                "status": "not_checked",
-                "sources": ["NHTSA vPIC", "PartsAPI VINdecode"],
-                "matched_fields": [],
-                "conflicting_fields": [],
-            },
-            "blocking_reasons": blocking_reasons,
-            "reason": "High-confidence identity without high-severity conflicts is required before OEM lookup."
-            if not ready_for_parts
-            else "Identity is sufficient for read-only OEM research; final fitment and any writeback still require EPC/source attribution.",
-        },
+        "confidence_semantics": "Heuristic evidence score, not a calibrated probability or measured vehicle accuracy.",
+        "field_statuses": statuses,
+        "provenance": provenance,
+        "missing_fields": missing,
+        "family_candidates": families,
         "field_evidence": field_evidence,
         "evidence_sources": evidence_sources,
         "conflicts": conflicts,
         "warnings": warnings,
-        "required_next_sources": required_sources,
-        "adapter_status": adapters,
+        "errors": [],
+        "provider_errors": provider_diagnostics,
+        "normalization_notes": validated["normalization_notes"],
+        "required_next_sources": _source_requirements(classification.kind, profile),
+        "adapter_status": [
+            provider
+            for provider in catalog_provider_status()["providers"]
+            if provider["stage"] in {"oem_catalog", "catalog_cross"}
+        ],
         "lookup_plan": lookup_plan,
         "registry_version": load_source_registry().get("version", 0),
     }
+    result["parts_lookup_readiness"] = build_parts_lookup_readiness(result)
+    if processing is not None:
+        result["processing"] = processing
     return _redact_identifier_payload(result, normalized)
 
 
 def decode_vehicle_identities(
-    items: list[dict[str, Any]], *, live_vpic: bool = True, use_vpic_batch: bool = True
+    items: list[dict[str, Any]],
+    *,
+    live_vpic: bool = True,
+    use_vpic_batch: bool = True,
 ) -> dict[str, Any]:
-    results = []
-    prepared_items: list[tuple[dict[str, Any], dict[str, Any], str]] = []
-    for item in items:
-        context = _flatten_crm_context(item.get("crm_context") or item)
-        identifier = str(
-            item.get("identifier")
-            or item.get("vin")
-            or item.get("frame")
-            or context.get("vin")
-            or context.get("frame")
-            or ""
-        )
-        prepared_items.append((item, context, identifier))
-
-    batch_result = (
-        decode_vins_vpic_batch(
-            [
+    if not isinstance(items, list) or len(items) > MAX_IDENTITY_ITEMS:
+        return {
+            "ok": False,
+            "status": "invalid_input",
+            "count": 0,
+            "results": [],
+            "errors": [
                 {
-                    "identifier": identifier,
-                    "model_year": item.get("model_year") or item.get("production_year") or context.get("model_year"),
+                    "code": "identity_batch_too_large" if isinstance(items, list) else "expected_list",
+                    "field": "items",
+                    "stage": "input_validation",
                 }
-                for item, context, identifier in prepared_items
-            ]
-        )
-        if live_vpic and use_vpic_batch
-        else {"ok": True, "results_by_vin": {}}
+            ],
+        }
+    from .vehicle_identity_transport import (
+        BATCH_HTTP_ATTEMPT_CAP,
+        IdentityBudget,
+        collect_identity_provider_results,
     )
-    raw_batch_by_vin = batch_result.get("results_by_vin")
-    batch_by_vin = raw_batch_by_vin if isinstance(raw_batch_by_vin, dict) else {}
 
-    for item, context, identifier in prepared_items:
-        batch_vpic = batch_by_vin.get(str(identifier).upper().replace(" ", "").replace("-", ""))
-        results.append(
-            decode_vehicle_identity(
-                identifier,
-                crm_context=context,
-                model_year=item.get("model_year") or item.get("production_year") or context.get("model_year"),
-                make_hint=item.get("make") or item.get("make_display") or context.get("make"),
-                live_vpic=live_vpic and batch_vpic is None,
-                vpic_result=batch_vpic,
-                live_wmi=live_vpic,
+    prepared = [validate_identity_item(item) for item in items]
+    collected = collect_identity_provider_results(
+        prepared,
+        live_vpic=live_vpic,
+        live_wmi=live_vpic,
+        use_vpic_batch=use_vpic_batch,
+        budget=IdentityBudget(max_attempts=BATCH_HTTP_ATTEMPT_CAP),
+    )
+    results = []
+    for index, item in enumerate(prepared):
+        if not item["ok"]:
+            results.append(invalid_identity_result(item["errors"], item_index=index))
+            continue
+        try:
+            result = decode_vehicle_identity(
+                item["identifier"],
+                crm_context=item["context"],
+                identifier_type=item["identifier_type"],
+                live_vpic=False,
+                live_wmi=False,
+                vpic_result=collected["vpic_results"][index],
+                wmi_result=collected["wmi_results"][index],
             )
-        )
-    high = sum(1 for item in results if item["confidence_label"] == "high")
-    medium = sum(1 for item in results if item["confidence_label"] == "medium")
-    low = sum(1 for item in results if item["confidence_label"] == "low")
-    ready_oem = sum(1 for item in results if item["parts_lookup_readiness"]["ready_for_oem_lookup"])
-    ready_candidate = sum(1 for item in results if item["parts_lookup_readiness"].get("ready_for_oem_candidate_lookup"))
-    ready_writeback = sum(1 for item in results if item["parts_lookup_readiness"].get("ready_for_crm_writeback"))
-    return {
-        "ok": True,
-        "count": len(results),
-        "high_confidence_count": high,
-        "medium_confidence_count": medium,
-        "low_confidence_count": low,
-        "identity_coverage": {
-            "high_ratio": round(high / len(results), 2) if results else 0,
-            "ready_for_oem_lookup_count": ready_oem,
-            "ready_for_oem_candidate_lookup_count": ready_candidate,
-            "ready_for_crm_writeback_count": ready_writeback,
-            "needs_epc_or_document_check_count": sum(1 for item in results if item["required_next_sources"]),
-        },
-        "vpic_batch": {
-            "attempted": bool(live_vpic and use_vpic_batch),
-            "ok": bool(batch_result.get("ok")),
-            "decoded_count": len(batch_by_vin),
-            "error": batch_result.get("error"),
-        },
-        "configured_paid_sources": [
-            source["source_id"]
-            for source in catalog_provider_status()["providers"]
-            if source["configured"]
-            and source["stage"] in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
-        ],
-        "missing_paid_sources": [
-            source["source_id"]
-            for source in catalog_provider_status()["providers"]
-            if not source["configured"]
-            and source["stage"] in {"oem_catalog", "catalog_cross", "procurement_price", "market_price"}
-        ],
-        "results": results,
-    }
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            result = invalid_identity_result(
+                [
+                    {"code": "identity_processing_error", "field": "item", "stage": "identity_merge"},
+                ],
+                item_index=index,
+            )
+        result["item_index"] = index
+        if item["normalization_notes"]:
+            result["normalization_notes"] = item["normalization_notes"]
+        results.append(result)
+    return summarize_identity_batch(results, vpic_batch=collected["vpic_batch"], processing=collected["processing"])
