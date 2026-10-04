@@ -160,6 +160,33 @@ def test_resolver_uses_current_three_method_chain_and_keeps_fitment_manual(monke
 
 
 @pytest.mark.parametrize(
+    "phrase",
+    [
+        "передние колодки 1 комплект и прокладка клапанной крышки 1 шт",
+        "передние колодки 1 комплект и передние колодки 2 комплекта",
+        "передние колодки и задние амортизаторы",
+    ],
+)
+def test_resolver_does_not_lookup_one_category_for_an_explicit_item_list(monkeypatch, phrase):
+    calls = _install_fakes(monkeypatch)
+    result = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN,
+        requested_part=phrase,
+        live_vpic=False,
+        live_partsapi_identity=True,
+        live_partsapi_oem=True,
+    )
+
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    assert result["status"] == "needs_part_clarification"
+    assert result["part_intent"]["raw"] == phrase
+    assert result["part_intent"]["clarification_fields"] == ["split_by_part"]
+    assert result["readiness"]["ready_for_category_lookup"] is False
+    assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert result["article_candidates"] == []
+
+
+@pytest.mark.parametrize(
     ("field", "title", "expected_match"),
     [
         ("ART_PRODUCT_NAME", "Rear brake pads", "conflict"),

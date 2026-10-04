@@ -583,7 +583,7 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
 )
 
 
-def _match_parts(text: str) -> list[PartIntentRule]:
+def _match_part_spans(text: str) -> list[tuple[int, int, PartIntentRule]]:
     # Prefer complete names over contained generic names (injector washer / injector).
     text = text.casefold()
     candidates = [
@@ -596,7 +596,57 @@ def _match_parts(text: str) -> list[PartIntentRule]:
     for start, end, rule in sorted(candidates, key=lambda item: (item[0] - item[1], item[0])):
         if all(end <= other_start or start >= other_end for other_start, other_end, _ in selected):
             selected.append((start, end, rule))
-    return list({rule.intent_id: rule for _, _, rule in sorted(selected, key=lambda item: item[0])}.values())
+    return sorted(selected, key=lambda item: item[0])
+
+
+def _match_parts(text: str) -> list[PartIntentRule]:
+    return list({rule.intent_id: rule for _, _, rule in _match_part_spans(text)}.values())
+
+
+_ITEM_SEPARATOR = re.compile(r"[,;\n]|\s+(?:и|а\s+также|and|also|[+&/])\s+", re.IGNORECASE)
+_ITEM_QUANTITY = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:шт\w*|компл\w*|пар\w*|pcs?\b|pieces?\b|sets?\b)", re.IGNORECASE)
+_UNMAPPED_PART_NAME = re.compile(
+    r"\b(?:проклад\w*|сальник\w*|уплотнен\w*|кольц\w*|пыльник\w*|втулк\w*|патруб\w*|"
+    r"шланг\w*|кронштейн\w*|болт\w*|гайк\w*|gaskets?|seals?|o[ -]?rings?|bushings?|hoses?|brackets?|bolts?|nuts?)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_explicit_part_list(text: str) -> bool:
+    """Catch item lists even when rules are missing or repeat the same intent.
+
+    Unknown clauses need a part-name or an explicit unit quantity. Conjunctions
+    in known names and unquantified assembly attachments remain one request.
+    This is a bounded guard, not a general language or quantity parser.
+    """
+
+    normalized = text.casefold()
+    spans = _match_part_spans(normalized)
+    clauses: list[str] = []
+    start = 0
+    for separator in _ITEM_SEPARATOR.finditer(normalized):
+        if any(left <= separator.start() and separator.end() <= right for left, right, _ in spans):
+            continue
+        if (
+            separator.group() == ","
+            and normalized[separator.start() - 1 : separator.end() + 1].replace(",", "").isdigit()
+        ):
+            continue
+        clauses.append(normalized[start : separator.start()].strip())
+        start = separator.end()
+    clauses.append(normalized[start:].strip())
+    if len(clauses) < 2:
+        return False
+    item_count = 0
+    for index, clause in enumerate(clauses):
+        known = bool(_match_parts(clause))
+        quantity = bool(_ITEM_QUANTITY.search(clause))
+        if not (known or quantity or _UNMAPPED_PART_NAME.search(clause)):
+            continue
+        if not known and not quantity and index and re.search(r"\b(?:с|со|with|including)\b", clauses[index - 1]):
+            continue
+        item_count += 1
+    return item_count > 1
 
 
 def _legacy_position_coordinates(position: str | None) -> tuple[str | None, str | None]:
@@ -677,7 +727,7 @@ def normalize_part_intent(
     effective_inner_outer = inner_outer or legacy_inner_outer or inferred_context.get("inner_outer")
     explicit_positions = list(dict.fromkeys(value for value in [axle, side, position, inner_outer] if value))
     matches = _match_parts(text)
-    matched = matches[0] if len(matches) == 1 else None
+    matched = matches[0] if len(matches) == 1 and not _has_explicit_part_list(text) else None
 
     if matched is None:
         missing_fields = (
