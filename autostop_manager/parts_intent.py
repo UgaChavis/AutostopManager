@@ -610,6 +610,10 @@ _UNMAPPED_PART_NAME = re.compile(
     r"шланг\w*|кронштейн\w*|болт\w*|гайк\w*|gaskets?|seals?|o[ -]?rings?|bushings?|hoses?|brackets?|bolts?|nuts?)\b",
     re.IGNORECASE,
 )
+_ASSEMBLY_ATTACHMENT = re.compile(
+    r"\b(?:с|со)\s+(?:крышк\w*|корпус\w*)\b|\b(?:with|including)\s+(?:a\s+)?(?:housing|cover)\b",
+    re.IGNORECASE,
+)
 
 
 def _has_explicit_part_list(text: str) -> bool:
@@ -643,7 +647,7 @@ def _has_explicit_part_list(text: str) -> bool:
         quantity = bool(_ITEM_QUANTITY.search(clause))
         if not (known or quantity or _UNMAPPED_PART_NAME.search(clause)):
             continue
-        if not known and not quantity and index and re.search(r"\b(?:с|со|with|including)\b", clauses[index - 1]):
+        if not known and not quantity and index and _ASSEMBLY_ATTACHMENT.search(clauses[index - 1]):
             continue
         item_count += 1
     return item_count > 1

@@ -100,6 +100,8 @@ def test_compound_request_preserves_distinct_parts_without_single_category(phras
         "масляный фильтр 1 шт и прокладка клапанной крышки 1 шт",
         "прокладка клапанной крышки 1 шт и масляный фильтр 1 шт",
         "масляный фильтр и прокладка клапанной крышки",
+        "масляный фильтр с доставкой и прокладка клапанной крышки",
+        "oil filter with delivery and valve cover gasket",
         "oil filter 1 pc and valve cover gasket 1 pc",
         "масляный фильтр 1 шт, неизвестная деталь 2 шт",
         "масляный фильтр 1 шт; неизвестная деталь 2 шт",
