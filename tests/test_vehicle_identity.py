@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 
 import pytest
 
@@ -10,6 +11,15 @@ from autostop_manager.vehicle_identity import (
     identity_values_agree,
 )
 from autostop_manager.vin_lookup import classify_identifier
+
+
+@pytest.fixture(autouse=True)
+def block_network(monkeypatch):
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("Identity tests must use injected provider evidence")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr("autostop_manager.vehicle_identity.catalog_provider_status", lambda: {"providers": []})
 
 
 def test_identity_comparison_is_field_aware_and_never_uses_model_prefixes():
@@ -33,11 +43,12 @@ def test_identity_comparison_preserves_safe_transmission_compatibility():
     assert identity_values_agree("transmission", "DQ200", "DQ250") is False
 
 
-def test_decode_vehicle_identity_builds_high_confidence_clean_us_vin(monkeypatch):
+def test_decode_vehicle_identity_builds_high_confidence_clean_us_vin():
     def fake_decode_vin_vpic(vin: str, *, model_year: int | None = None, timeout: float = 10.0):
         return {
             "ok": True,
             "source": "NHTSA vPIC",
+            "error_code": "0",
             "request_url": "https://vpic.example.test",
             "vin": vin,
             "vehicle": {
@@ -51,10 +62,12 @@ def test_decode_vehicle_identity_builds_high_confidence_clean_us_vin(monkeypatch
             },
         }
 
-    monkeypatch.setattr("autostop_manager.vehicle_identity.decode_vin_vpic", fake_decode_vin_vpic)
-
+    identifier = "1C4" + "RJFCT9" + "CC" + "0" * 6
     result = decode_vehicle_identity(
-        "1C4RJFCT9CC000000",
+        identifier,
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result=fake_decode_vin_vpic(identifier),
         crm_context={"make": "Jeep", "model": "Grand Cherokee", "model_year": 2012},
     )
 
@@ -74,6 +87,7 @@ def test_decode_vehicle_identity_handles_jdm_frame_without_pretending_it_is_iso_
         "MR41S123456",
         crm_context={"make": "Suzuki", "model": "Hustler", "model_year": 2018},
         live_vpic=False,
+        live_wmi=False,
     )
 
     assert result["identifier"]["kind"] == "market_code"
@@ -85,20 +99,23 @@ def test_decode_vehicle_identity_handles_jdm_frame_without_pretending_it_is_iso_
     assert any("not treat it as a 17-character ISO VIN" in warning for warning in result["warnings"])
 
 
-def test_decode_vehicle_identity_reports_row_vin_caveats_without_demoting_identity(monkeypatch):
+def test_decode_vehicle_identity_reports_row_vin_caveats_without_demoting_identity():
     def fake_decode_vin_vpic(vin: str, *, model_year: int | None = None, timeout: float = 10.0):
         return {
             "ok": True,
             "source": "NHTSA vPIC",
+            "error_code": "0",
             "request_url": "https://vpic.example.test",
             "vin": vin,
             "vehicle": {},
         }
 
-    monkeypatch.setattr("autostop_manager.vehicle_identity.decode_vin_vpic", fake_decode_vin_vpic)
-
+    identifier = "XW8" + "AC2NH9" + "JK" + "0" * 6
     result = decode_vehicle_identity(
-        "XW8AC2NH9JK000000",
+        identifier,
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result=fake_decode_vin_vpic(identifier),
         crm_context={"make": "Skoda", "model": "Rapid", "model_year": 2020},
     )
 
@@ -118,6 +135,7 @@ def test_decode_vehicle_identity_blocks_clean_vin_consensus_conflicting_with_crm
         vpic_result={
             "ok": True,
             "error_code": "0",
+            "vin": "WAUZZZ4H" + "A" * 9,
             "vehicle": {"make": "Audi", "model": "A8"},
         },
     )
@@ -142,6 +160,7 @@ def test_decode_vehicle_identity_blocks_compatible_model_family_consensus_agains
         vpic_result={
             "ok": True,
             "error_code": "0",
+            "vin": "JTEBU29J" + "A" * 9,
             "vehicle": {"make": "Toyota", "model": "Land Cruiser"},
         },
     )
@@ -161,6 +180,7 @@ def test_decode_vehicle_identity_does_not_block_on_partial_vpic_against_crm():
         vpic_result={
             "ok": True,
             "error_code": "5",
+            "vin": "WAUZZZ4H" + "A" * 9,
             "vehicle": {"make": "Audi", "model": "A8"},
         },
     )
@@ -195,7 +215,8 @@ def test_decode_vehicle_identities_reads_nested_crm_vehicle_profile():
     item = result["results"][0]
     assert item["vehicle_profile"]["make"] == "Suzuki"
     assert item["vehicle_profile"]["model"] == "Hustler"
-    assert item["vehicle_profile"]["model_year"] == 2018
+    assert item["vehicle_profile"]["production_year"] == 2018
+    assert "model_year" not in item["vehicle_profile"]
     assert result["identity_coverage"]["needs_epc_or_document_check_count"] == 1
 
 
@@ -223,8 +244,7 @@ def test_decode_vehicle_identities_offline_blocks_all_vpic_requests(monkeypatch,
     def unexpected_network(*_args, **_kwargs):
         raise AssertionError("Offline batch must not request VIN, WMI or batch decoding")
 
-    for function in ("decode_vin_vpic", "decode_wmi_vpic", "decode_vins_vpic_batch"):
-        monkeypatch.setattr(f"autostop_manager.vehicle_identity.{function}", unexpected_network)
+    monkeypatch.setattr("autostop_manager.vin_lookup._vpic_request_json", unexpected_network)
     monkeypatch.setattr("autostop_manager.vin_lookup.decode_vin_vpic", unexpected_network)
     monkeypatch.setattr("autostop_manager.vehicle_identity.catalog_provider_status", lambda: {"providers": []})
     result = decode_vehicle_identities(
@@ -235,7 +255,7 @@ def test_decode_vehicle_identities_offline_blocks_all_vpic_requests(monkeypatch,
     assert result["vpic_batch"]["attempted"] is False
 
 
-def test_decode_vehicle_identity_tolerates_invalid_crm_source_confidence():
+def test_decode_vehicle_identity_rejects_invalid_crm_source_confidence():
     result = decode_vehicle_identity(
         "MR41S123456",
         crm_context={
@@ -247,37 +267,31 @@ def test_decode_vehicle_identity_tolerates_invalid_crm_source_confidence():
         live_wmi=False,
     )
 
-    assert result["ok"] is True
-    assert result["vehicle_profile"]["make"] == "Suzuki"
-    assert 0.0 <= result["confidence"] <= 0.95
+    assert result["ok"] is False
+    assert result["status"] == "invalid_input"
+    assert result["errors"][0]["field"] == "source_confidence"
+    assert result["parts_lookup_readiness"]["ready_for_family_lookup"] is False
 
 
-def test_decode_vehicle_identities_ignores_malformed_batch_map(monkeypatch):
+def test_decode_vehicle_identities_preserves_partial_provider_failure(monkeypatch):
     monkeypatch.setattr(
-        "autostop_manager.vehicle_identity.decode_vins_vpic_batch",
-        lambda *_args, **_kwargs: {"ok": True, "results_by_vin": ["unexpected"]},
-    )
-    monkeypatch.setattr(
-        "autostop_manager.vehicle_identity.decode_vehicle_identity",
+        "autostop_manager.vehicle_identity_transport.collect_identity_provider_results",
         lambda *_args, **_kwargs: {
-            "confidence_label": "low",
-            "parts_lookup_readiness": {
-                "ready_for_oem_lookup": False,
-                "ready_for_oem_candidate_lookup": False,
-                "ready_for_crm_writeback": False,
-            },
-            "required_next_sources": [],
+            "vpic_results": [{"ok": False, "outcome": "adapter_malformed_payload", "vehicle": {}}],
+            "wmi_results": [None],
+            "vpic_batch": {"attempted": True, "decoded_count": 0},
+            "processing": {},
         },
     )
-
     result = decode_vehicle_identities(
-        [{"identifier": "1HGCM82633A004352"}],
+        [{"identifier": "1HG" + "CM8263" + "3A" + "0" * 6}],
         live_vpic=True,
         use_vpic_batch=True,
     )
-
     assert result["count"] == 1
     assert result["vpic_batch"]["decoded_count"] == 0
+    assert result["results"][0]["status"] == "partial"
+    assert result["partial_count"] == 1
 
 
 def test_decode_vehicle_identity_treats_european_check_digit_failure_as_caveat_not_conflict():
@@ -285,6 +299,7 @@ def test_decode_vehicle_identity_treats_european_check_digit_failure_as_caveat_n
         "WVWZZZAUZFP000000",
         crm_context={"make": "Volkswagen", "model": "Golf", "model_year": 2014, "source_confidence": 0.95},
         live_vpic=False,
+        live_wmi=False,
     )
 
     assert result["vehicle_profile"]["make"] == "Volkswagen"
@@ -299,6 +314,7 @@ def test_decode_vehicle_identity_recognizes_honda_es1_frame_pattern():
         "ES19999999",
         crm_context={"make": "Honda", "model": "Civic", "source_confidence": 0.95},
         live_vpic=False,
+        live_wmi=False,
     )
 
     assert result["identifier"]["kind"] == "market_code"
@@ -313,7 +329,6 @@ def test_decode_vehicle_identity_redacts_raw_identifier_and_honors_no_live_vpic(
     def fail_decode(*args, **kwargs):
         raise AssertionError("vPIC should not be called when live_vpic is false")
 
-    monkeypatch.setattr("autostop_manager.vehicle_identity.decode_vin_vpic", fail_decode)
     monkeypatch.setattr("autostop_manager.vin_lookup.decode_vin_vpic", fail_decode)
 
     result = decode_vehicle_identity(raw_vin, live_vpic=False, live_wmi=False)
@@ -334,6 +349,7 @@ def test_nonclean_vpic_does_not_promote_unreliable_variant_fields():
         vpic_result={
             "ok": True,
             "error_code": "1,11,400",
+            "vin": "WAUZZZ4H" + "A" * 9,
             "vehicle": {
                 "make": "AUDI",
                 "model": "A8",

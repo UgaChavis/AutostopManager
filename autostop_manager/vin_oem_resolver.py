@@ -7,7 +7,9 @@ from typing import Any
 
 from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import decode_vehicle_identity, identity_values_agree
+from .vehicle_identity import decode_vehicle_identity, identity_values_agree, invalid_identity_result
+from .vehicle_identity_inputs import validate_identity_input
+from .vehicle_identity_policy import identity_allows_lookup, identity_has_blocking_conflicts
 from .vin_lookup import classify_identifier
 
 _VIN_IN_TEXT = re.compile(r"(?<![A-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Z0-9])", re.IGNORECASE)
@@ -250,8 +252,13 @@ def _identity_digest(identity: dict[str, Any]) -> dict[str, Any]:
     readiness = identity.get("parts_lookup_readiness") or {}
     profile = identity.get("vehicle_profile") or {}
     return {
+        "ok": identity.get("ok", True),
+        "status": identity.get("status"),
+        "errors": identity.get("errors") or [],
         "confidence": identity.get("confidence"),
         "confidence_label": identity.get("confidence_label"),
+        "ready_for_family_lookup": identity_allows_lookup(identity, scope="family"),
+        "ready_for_vehicle_lookup": identity_allows_lookup(identity, scope="vehicle"),
         "ready_for_oem_lookup": readiness.get("ready_for_oem_lookup"),
         "ready_for_oem_candidate_lookup": readiness.get(
             "ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")
@@ -268,13 +275,27 @@ def _identity_digest(identity: dict[str, Any]) -> dict[str, Any]:
                 "model_family",
                 "platform",
                 "model_year",
+                "production_year",
+                "production_date",
                 "engine",
                 "transmission",
+                "transmission_speeds",
                 "market",
-                "production_date",
+                "trim",
+                "series",
+                "series2",
+                "modification",
+                "options",
             )
             if profile.get(key) not in (None, "")
         },
+        "field_statuses": identity.get("field_statuses") or {},
+        "field_evidence": identity.get("field_evidence") or [],
+        "provenance": identity.get("provenance") or {},
+        "missing_fields": identity.get("missing_fields") or [],
+        "family_candidates": identity.get("family_candidates") or [],
+        "identifier_validation": identity.get("identifier_validation") or {},
+        "conflicts": identity.get("conflicts") or [],
         "conflict_count": len(identity.get("conflicts") or []),
         "high_severity_conflict_count": sum(
             1 for item in identity.get("conflicts") or [] if item.get("severity") == "high"
@@ -398,7 +419,7 @@ def _identity_with_partsapi_agreement(
     updated = {**identity}
     readiness = dict(identity.get("parts_lookup_readiness") or {})
     agreement = _assess_partsapi_identity_agreement(identity, call)
-    known_conflict = bool(identity.get("conflicts") or [])
+    known_conflict = identity_has_blocking_conflicts(identity, scope="vehicle")
     confidence_label = str(identity.get("confidence_label") or "")
     can_read = (
         partsapi_identifier_allows_candidate_lookup(call)
@@ -436,6 +457,14 @@ def _identity_with_partsapi_agreement(
             "blocking_reasons": blocking,
         }
     )
+    if known_conflict or agreement["status"] in {"conflict", "identifier_mismatch", "ambiguous_vehicle_modification"}:
+        readiness.update(
+            {
+                "ready_for_vehicle_lookup": False,
+                "ready_for_oem_lookup": False,
+                "ready_for_oem_candidate_lookup": False,
+            }
+        )
     updated["parts_lookup_readiness"] = readiness
     return updated
 
@@ -790,6 +819,101 @@ def resolve_vin_oem_parts(
     vehicle_type: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    """Research TecDoc candidates; exact OEM fitment still requires EPC evidence."""
+    return _resolve_vin_oem_parts(
+        identifier=identifier,
+        requested_part=requested_part,
+        make=make,
+        model=model,
+        model_year=model_year,
+        engine=engine,
+        transmission=transmission,
+        market=market,
+        drivetrain=drivetrain,
+        axle=axle,
+        side=side,
+        position=position,
+        inner_outer=inner_outer,
+        live_vpic=live_vpic,
+        live_partsapi_identity=live_partsapi_identity,
+        live_partsapi_oem=live_partsapi_oem,
+        max_live_calls=max_live_calls,
+        max_candidates=max_candidates,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        partsapi_category_index=partsapi_category_index,
+        tecdoc_tree_node_id=tecdoc_tree_node_id,
+        vehicle_type=vehicle_type,
+        dry_run=dry_run,
+    )
+
+
+def _binding_context_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _compact(value)
+    if isinstance(value, list):
+        return [_binding_context_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _binding_context_value(item) for key, item in value.items()}
+    return value
+
+
+def _predecoded_identity_input_matches(
+    binding: dict[str, Any] | None,
+    identifier: str,
+    context: dict[str, Any],
+    *,
+    identifier_type: str,
+) -> bool:
+    """Reuse only the row paired with this canonical input, never recover a VIN from redacted output."""
+    if not isinstance(binding, dict) or binding.get("ok") is not True or binding.get("errors"):
+        return False
+    bound = validate_identity_input(
+        binding.get("identifier"),
+        binding.get("context"),
+        identifier_type=binding.get("identifier_type", "auto"),
+    )
+    requested = validate_identity_input(identifier, context, identifier_type=identifier_type)
+    if not bound["ok"] or not requested["ok"]:
+        return False
+    bound_id = classify_identifier(bound["identifier"], identifier_type=bound["identifier_type"])
+    requested_id = classify_identifier(requested["identifier"], identifier_type=requested["identifier_type"])
+    return (bound_id.normalized, bound_id.kind) == (
+        requested_id.normalized,
+        requested_id.kind,
+    ) and _binding_context_value(bound["context"]) == _binding_context_value(requested["context"])
+
+
+def _resolve_vin_oem_parts(
+    *,
+    identifier: str,
+    requested_part: str,
+    make: str | None = None,
+    model: str | None = None,
+    model_year: int | None = None,
+    engine: str | None = None,
+    transmission: str | None = None,
+    market: str | None = None,
+    drivetrain: str | None = None,
+    axle: str | None = None,
+    side: str | None = None,
+    position: str | None = None,
+    inner_outer: str | None = None,
+    live_vpic: bool = True,
+    live_partsapi_identity: bool = False,
+    live_partsapi_oem: bool = False,
+    max_live_calls: int = 3,
+    max_candidates: int = 3,
+    timeout: float = 20.0,
+    max_attempts: int = 1,
+    partsapi_category_index: str | None = None,
+    tecdoc_tree_node_id: str | int | None = None,
+    vehicle_type: str | None = None,
+    dry_run: bool = False,
+    _decoded_identity: dict[str, Any] | None = None,
+    _decoded_identity_input: dict[str, Any] | None = None,
+    identifier_type: str = "auto",
+) -> dict[str, Any]:
     """Research TecDoc articles using the VINdecode -> tree -> articles chain.
 
     A TecDoc article is aftermarket catalog evidence. Neither the VIN decode
@@ -798,7 +922,7 @@ def resolve_vin_oem_parts(
 
     _ = partsapi_category_index  # Retained for older callers; getArticles uses a tree strId.
     raw_identifier = _compact(identifier)
-    classification = classify_identifier(raw_identifier)
+    classification = classify_identifier(raw_identifier, identifier_type=identifier_type)
     vin_supported = classification.kind == "vin"
     part_text = _compact(requested_part)
     requested_vehicle_type = _canonical_vehicle_type(vehicle_type)
@@ -817,29 +941,47 @@ def resolve_vin_oem_parts(
         "inner_outer": _compact(inner_outer),
         "requested_part": part_text,
     }
-    identity: dict[str, Any] = (
-        decode_vehicle_identity(
+    if _decoded_identity is not None:
+        binding_context = _decoded_identity_input.get("context") if isinstance(_decoded_identity_input, dict) else None
+        if isinstance(binding_context, dict):
+            context = {**binding_context, **{key: value for key, value in context.items() if value not in (None, "")}}
+        if not _predecoded_identity_input_matches(
+            _decoded_identity_input,
             raw_identifier,
-            crm_context=context,
-            model_year=model_year,
-            make_hint=make,
-            live_vpic=live_vpic and not dry_run,
-            live_wmi=live_vpic and not dry_run,
+            context,
+            identifier_type=identifier_type,
+        ):
+            _decoded_identity = invalid_identity_result(
+                [{"code": "predecoded_identity_input_mismatch", "field": "identifier", "stage": "identity_binding"}]
+            )
+    identity: dict[str, Any] = (
+        _decoded_identity
+        if _decoded_identity is not None
+        else (
+            decode_vehicle_identity(
+                raw_identifier,
+                crm_context=context,
+                model_year=model_year,
+                make_hint=make,
+                live_vpic=live_vpic and not dry_run,
+                live_wmi=live_vpic and not dry_run,
+                identifier_type=identifier_type,
+            )
+            if raw_identifier
+            else {
+                "confidence": 0.0,
+                "confidence_label": "low",
+                "vehicle_profile": {},
+                "parts_lookup_readiness": {
+                    "ready_for_oem_lookup": False,
+                    "ready_for_oem_candidate_lookup": False,
+                    "ready_for_crm_writeback": False,
+                    "blocking_reasons": ["missing_identifier"],
+                },
+                "conflicts": [],
+                "warnings": [],
+            }
         )
-        if raw_identifier
-        else {
-            "confidence": 0.0,
-            "confidence_label": "low",
-            "vehicle_profile": {},
-            "parts_lookup_readiness": {
-                "ready_for_oem_lookup": False,
-                "ready_for_oem_candidate_lookup": False,
-                "ready_for_crm_writeback": False,
-                "blocking_reasons": ["missing_identifier"],
-            },
-            "conflicts": [],
-            "warnings": [],
-        }
     )
 
     calls: list[dict[str, Any]] = []
@@ -873,7 +1015,8 @@ def resolve_vin_oem_parts(
         return call
 
     identity_call: dict[str, Any] | None = None
-    if vin_supported:
+    identifier_valid = (identity.get("identifier_validation") or {}).get("ok") is not False
+    if vin_supported and identifier_valid and identity.get("ok") is not False and not identity.get("errors"):
         identity_call = partsapi_call(
             "vin_decode",
             live_allowed=live_partsapi_identity or live_partsapi_oem,
@@ -893,7 +1036,7 @@ def resolve_vin_oem_parts(
         "conflict",
         "identifier_mismatch",
         "ambiguous_vehicle_modification",
-    } or bool(identity.get("conflicts") or [])
+    } or identity_has_blocking_conflicts(identity, scope="vehicle")
     can_read_catalog = bool(identity_readiness.get("ready_for_tecdoc_candidate_lookup")) and not identity_conflict
     part_actionable = bool(part_profile.get("recognized")) and not bool(part_profile.get("clarification_required"))
     vehicle_profile = _partsapi_vehicle_profile(identity_call or {})
@@ -1007,10 +1150,22 @@ def resolve_vin_oem_parts(
         "needs_partsapi_category_mapping": needs_tree_node,  # Legacy probe field; now a tree strId.
         "ready_for_tecdoc_candidate_lookup": bool(can_read_catalog and part_actionable and car_id and selected_node_id),
         "ready_for_oem_candidate_lookup": False,
+        "ready_for_family_lookup": identity_allows_lookup(identity, scope="family"),
+        "ready_for_vehicle_lookup": identity_allows_lookup(identity, scope="vehicle"),
         "ready_for_applicability_enrichment": False,
         "ready_for_crm_writeback": False,
         "blocking_reasons": list(identity_readiness.get("blocking_reasons") or []),
     }
+    if readiness["ready_for_family_lookup"] and not readiness["ready_for_vehicle_lookup"]:
+        manual_actions.append(
+            _manual_action(
+                "research_vehicle_family",
+                "Исследовать семейство по согласованным марке и модели; спорные характеристики требуют подтверждения.",
+                lookup_scope="family",
+                candidates=(identity.get("family_candidates") or [])[:3],
+                exact_fitment_confirmed=False,
+            )
+        )
     manual_actions = _resolution_manual_actions(
         existing=manual_actions,
         raw_identifier=raw_identifier,

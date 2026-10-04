@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from autostop_manager import config as manager_config
 from autostop_manager.catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status
 from autostop_manager.catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES
@@ -293,3 +295,98 @@ def test_oem_parts_provider_plan_redacts_identifier_and_reports_blockers(monkeyp
     combined_queries = "\n".join(item["query"] + "\n" + item["url"] for item in plan["manual_public_search_queries"])
     assert "MR41S123456" not in combined_queries
     assert "Suzuki" in combined_queries
+
+
+def test_provider_plan_preserves_e4_field_statuses_and_default_writeback_false():
+    identity = {
+        "confidence_label": "high",
+        "vehicle_profile": {"make": "Toyota", "model": "Corolla", "model_year": 2010, "production_year": 2009},
+        "parts_lookup_readiness": {"ready_for_family_lookup": True, "ready_for_vehicle_lookup": True},
+        "field_statuses": {"model_year": {"status": "supported", "evidence_ids": ["a"], "alternatives": [2010]}},
+        "field_evidence": [{"field": "model_year", "value": 2010, "source": "source-a", "evidence_id": "a"}],
+        "provenance": {"model_year": {"evidence_ids": ["a"]}},
+        "missing_fields": ["production_date", "options"],
+    }
+    plan = build_oem_parts_provider_plan(identifier="", requested_part="воздушный фильтр", vehicle_identity=identity)
+    for key in ("field_statuses", "field_evidence", "provenance", "missing_fields"):
+        assert plan[key] == identity[key]
+    assert plan["vehicle_profile"]["model_year"] == 2010
+    assert plan["vehicle_profile"]["production_year"] == 2009
+    assert plan["live_capability"]["identity_ready_for_vehicle_lookup"] is True
+    assert plan["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+def test_provider_plan_bounds_coherent_family_alternatives_without_variant_mixing():
+    identity = {
+        "vehicle_profile": {"engine": "ENGINE-A", "model_year": 2010},
+        "parts_lookup_readiness": {"ready_for_family_lookup": True, "ready_for_vehicle_lookup": False},
+        "field_statuses": {"model": {"status": "disputed", "evidence_ids": ["a", "b"]}},
+        "conflicts": [{"field": "model", "severity": "high", "blocking_scopes": ["vehicle"]}],
+        "family_candidates": [
+            {"make": "Honda", "model": "Accord", "source": "source-a", "evidence_ids": ["a"]},
+            {"make": "Honda", "model": "Accord", "source": "source-b", "evidence_ids": ["b"]},
+            {"make": "Toyota", "model": "Camry", "source": "source-c", "evidence_ids": ["c"]},
+            {"make": "Nissan", "model": "Teana", "source": "source-d", "evidence_ids": ["d"]},
+            {"make": "Mazda", "model": "6", "source": "source-e", "evidence_ids": ["e"]},
+        ],
+    }
+    plan = build_oem_parts_provider_plan(identifier="", requested_part="передние колодки", vehicle_identity=identity)
+    queries = plan["manual_public_search_queries"]
+    assert plan["lookup_scope"] == "family"
+    assert plan["live_capability"]["identity_ready_for_family_lookup"] is True
+    assert plan["live_capability"]["identity_ready_for_vehicle_lookup"] is False
+    assert len(queries) == 6
+    assert {row["source_id"] for row in queries} == {"partsouq_catalog", "amayama_catalog"}
+    assert {row["family_candidate_index"] for row in queries} == {1, 2, 3}
+    assert all(row["lookup_scope"] == "family" and row["exact_fitment_confirmed"] is False for row in queries)
+    assert all(
+        "ENGINE-A" not in row["query"] and "2010" not in row["query"] and "Mazda" not in row["query"] for row in queries
+    )
+    assert [row["evidence_ids"] for row in queries] == [["a"], ["a"], ["c"], ["c"], ["d"], ["d"]]
+
+
+def test_provider_plan_invalid_input_keeps_all_identity_and_writeback_gates_closed():
+    identity = {
+        "ok": False,
+        "errors": [{"code": "expected_string", "field": "model", "stage": "input_validation"}],
+        "vehicle_profile": {"make": "Honda", "model": "Accord"},
+        "parts_lookup_readiness": {
+            "ready_for_family_lookup": True,
+            "ready_for_vehicle_lookup": True,
+            "ready_for_crm_writeback": True,
+        },
+    }
+    plan = build_oem_parts_provider_plan(identifier="", requested_part="передние колодки", vehicle_identity=identity)
+    assert plan["lookup_scope"] == "blocked"
+    assert plan["live_capability"]["identity_ready_for_family_lookup"] is False
+    assert plan["live_capability"]["identity_ready_for_vehicle_lookup"] is False
+    assert plan["live_capability"]["identity_ready_for_crm_writeback"] is False
+    assert plan["manual_public_search_queries"] == []
+
+
+def test_provider_plan_does_not_restore_disputed_model_through_family_alias():
+    identity = {
+        "vehicle_profile": {"make": "Honda", "model": "Accord", "model_family": "Accord"},
+        "parts_lookup_readiness": {
+            "ready_for_family_lookup": True,
+            "ready_for_vehicle_lookup": False,
+            "cross_source_agreement": {"status": "conflict", "conflicting_fields": [{"field": "model"}]},
+        },
+    }
+    plan = build_oem_parts_provider_plan(identifier="", requested_part="передние колодки", vehicle_identity=identity)
+    assert plan["lookup_scope"] == "family"
+    assert all("Accord" not in row["query"] for row in plan["manual_public_search_queries"])
+
+
+@pytest.mark.parametrize("kind", [[], {}])
+def test_provider_plan_ignores_malformed_optional_identity_kind(kind):
+    from autostop_manager.catalog_adapters import build_oem_parts_provider_plan
+
+    result = build_oem_parts_provider_plan(
+        identifier="A" * 17,
+        requested_part="передние колодки",
+        vehicle_identity={"identifier": {"kind": kind}, "vehicle_profile": {}, "parts_lookup_readiness": {}},
+    )
+    assert result["ok"] is True
+    assert result["identifier"]["kind"] == "vin"
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False

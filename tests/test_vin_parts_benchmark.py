@@ -366,7 +366,7 @@ def test_benchmark_attaches_article_resolution_without_claiming_oem(monkeypatch)
         }
 
     monkeypatch.setattr(
-        "autostop_manager.vin_parts_benchmark.resolve_vin_oem_parts",
+        "autostop_manager.vin_parts_benchmark._resolve_vin_oem_parts",
         fake_resolver,
     )
     result = benchmark_vin_parts_lookup(
@@ -395,7 +395,7 @@ def test_benchmark_attaches_article_resolution_without_claiming_oem(monkeypatch)
     assert {key: forwarded[0][key] for key in ("make", "model", "model_year", "engine", "transmission")} == {
         "make": "HONDA",
         "model": "Accord",
-        "model_year": 2003,
+        "model_year": None,
         "engine": "ENGINE-1",
         "transmission": "6AT",
     }
@@ -510,7 +510,7 @@ def test_benchmark_aggregates_provider_and_resolver_requirements(monkeypatch):
     )
     identity = _medium_identity()
     monkeypatch.setattr(
-        "autostop_manager.vin_parts_benchmark.resolve_vin_oem_parts",
+        "autostop_manager.vin_parts_benchmark._resolve_vin_oem_parts",
         lambda **_k: {
             "identity": {**identity, **identity["parts_lookup_readiness"]},
             "candidate_count": 0,
@@ -647,3 +647,470 @@ def test_benchmark_known_characteristics_guard_candidate_readiness(
     assert digest["ready_for_tecdoc_candidate_lookup"] is can_read
     assert digest["ready_for_crm_writeback"] is False
     assert result["summary"]["oem_candidate_count"] == result["summary"]["tecdoc_article_candidate_count"] == 0
+
+
+@pytest.mark.parametrize("items", [[{"identifier": SYNTHETIC_VIN}] * 501, {"items": []}])
+def test_benchmark_rejects_invalid_outer_batch_without_decoding_or_catalogs(monkeypatch, items):
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.decode_vehicle_identities",
+        lambda *_a, **_k: pytest.fail("Rejected batch reached E4"),
+    )
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup",
+        lambda **_k: pytest.fail("Rejected batch reached PartsAPI"),
+    )
+    result = benchmark_vin_parts_lookup(items, requested_part="передние колодки")
+    assert result["ok"] is False
+    assert result["status"] == "invalid_input"
+    assert result["errors"][0]["field"] == "items"
+    assert result["summary"]["count"] == result["summary"]["partsapi_live_call_count"] == 0
+    assert result["items"] == []
+    assert SYNTHETIC_VIN not in json.dumps(result)
+
+
+def test_benchmark_preserves_invalid_and_missing_row_positions_without_catalog_calls(monkeypatch):
+    from autostop_manager.vehicle_identity import invalid_identity_result
+
+    invalid = invalid_identity_result(
+        [{"code": "expected_string", "field": "model", "stage": "input_validation"}], item_index=1
+    )
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.decode_vehicle_identities",
+        lambda items, **_k: {"ok": True, "count": len(items), "results": [_medium_identity(), invalid]},
+    )
+    plan_calls = []
+
+    def fake_plan(**kwargs):
+        plan_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr("autostop_manager.vin_parts_benchmark.build_oem_parts_provider_plan", fake_plan)
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup",
+        lambda **_k: pytest.fail("Disabled or invalid row reached PartsAPI"),
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}, {"identifier": SYNTHETIC_VIN, "model": {}}, None],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        include_partsapi_dry_run=False,
+    )
+    assert result["summary"]["count"] == 3
+    assert result["summary"]["error_count"] == 2
+    assert [item["index"] for item in result["items"]] == [1, 2, 3]
+    assert len(plan_calls) == 1
+    for offset in (1, 2):
+        row = result["items"][offset]
+        assert row["identity"]["ok"] is False
+        assert row["identity"]["item_index"] == offset
+        assert row["prepared_calls"]["partsapi"] == []
+        assert row["oem_resolution"] is None
+        assert row["manual_public_search"]["count"] == 0
+        assert row["identity"]["ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize("resolve_oem", [False, True])
+def test_benchmark_input_error_never_calls_provider_plan_or_resolver(monkeypatch, resolve_oem):
+    from autostop_manager.vehicle_identity import invalid_identity_result
+
+    _install_batch(
+        monkeypatch,
+        invalid_identity_result(
+            [{"code": "expected_integer_year", "field": "model_year", "stage": "input_validation"}]
+        ),
+    )
+    for name in ("partsapi_catalog_lookup", "build_oem_parts_provider_plan", "_resolve_vin_oem_parts"):
+        monkeypatch.setattr(
+            f"autostop_manager.vin_parts_benchmark.{name}",
+            lambda **_k: pytest.fail("Input error reached a catalog consumer"),
+        )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        live_partsapi_identity=True,
+        resolve_oem=resolve_oem,
+    )
+    assert result["summary"]["error_count"] == 1
+    assert result["summary"]["partsapi_live_call_count"] == 0
+
+
+def test_benchmark_keeps_batch_provenance_and_disputes_through_oem_resolution(monkeypatch):
+    from autostop_manager import vin_oem_resolver
+
+    identity = _medium_identity()
+    identity["vehicle_profile"].update(production_year=2009, production_date="2009-12", modification="variant-a")
+    identity["parts_lookup_readiness"].update(ready_for_family_lookup=True, ready_for_vehicle_lookup=False)
+    identity["conflicts"] = [{"field": "engine", "severity": "high", "blocking_scopes": ["vehicle"]}]
+    identity["field_statuses"] = {
+        "engine": {"status": "disputed", "evidence_ids": ["a", "b"], "alternatives": ["A", "B"]}
+    }
+    identity["field_evidence"] = [{"field": "engine", "value": "A", "source": "source-a", "evidence_id": "a"}]
+    identity["provenance"] = {"engine": {"evidence_ids": ["a", "b"]}}
+    identity["missing_fields"] = ["options"]
+    identity["family_candidates"] = [
+        {"make": "HONDA", "model": "Accord", "source": "source-a", "evidence_ids": ["family-a"]}
+    ]
+    _install_batch(monkeypatch, identity)
+    monkeypatch.setattr(
+        vin_oem_resolver, "decode_vehicle_identity", lambda *_a, **_k: pytest.fail("Benchmark repeated E4 decoding")
+    )
+    calls = []
+    monkeypatch.setattr(
+        vin_oem_resolver,
+        "partsapi_catalog_lookup",
+        _fake_lookup(
+            calls,
+            profiles=[
+                {
+                    "make": "HONDA",
+                    "model": "Accord",
+                    "tecdoc_car_id": "9877",
+                    "vehicle_type": "PC",
+                    "identifier_matches_request": True,
+                }
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup",
+        lambda **_k: pytest.fail("A disabled preparation called PartsAPI"),
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        resolve_oem=True,
+        live_partsapi_oem=True,
+        include_partsapi_dry_run=False,
+    )
+    digest = result["items"][0]["identity"]
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    assert digest["ready_for_family_lookup"] is True
+    assert digest["ready_for_vehicle_lookup"] is False
+    assert digest["ready_for_tecdoc_candidate_lookup"] is False
+    assert digest["vehicle_profile"]["production_year"] == 2009
+    assert digest["vehicle_profile"]["production_date"] == "2009-12"
+    for key in ("field_statuses", "field_evidence", "provenance", "missing_fields", "family_candidates", "conflicts"):
+        assert digest[key] == identity[key]
+    assert result["summary"]["ready_for_family_lookup_count"] == 1
+    assert result["summary"]["ready_for_vehicle_lookup_count"] == 0
+
+
+def test_benchmark_missing_writeback_permission_stays_false(monkeypatch):
+    identity = _medium_identity()
+    identity["confidence_label"] = "high"
+    identity["parts_lookup_readiness"] = {"ready_for_oem_lookup": True}
+    _install_batch(monkeypatch, identity)
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        include_partsapi_dry_run=False,
+    )
+    assert result["items"][0]["identity"]["ready_for_oem_candidate_lookup"] is True
+    assert result["items"][0]["identity"]["ready_for_crm_writeback"] is False
+    assert result["summary"]["ready_for_crm_writeback_count"] == 0
+
+
+def test_benchmark_provider_plan_honors_resolver_identifier_mismatch(monkeypatch):
+    from autostop_manager import vin_oem_resolver
+
+    identity = _medium_identity()
+    identity["confidence_label"] = "high"
+    identity["parts_lookup_readiness"].update(
+        ready_for_family_lookup=True,
+        ready_for_vehicle_lookup=True,
+        ready_for_oem_lookup=True,
+        ready_for_oem_candidate_lookup=True,
+    )
+    _install_batch(monkeypatch, identity)
+    monkeypatch.setattr(
+        vin_oem_resolver, "decode_vehicle_identity", lambda *_a, **_k: pytest.fail("Benchmark repeated E4 decoding")
+    )
+    calls = []
+    monkeypatch.setattr(
+        vin_oem_resolver,
+        "partsapi_catalog_lookup",
+        _fake_lookup(
+            calls,
+            profiles=[
+                {
+                    "make": "HONDA",
+                    "model": "Accord",
+                    "tecdoc_car_id": "9877",
+                    "vehicle_type": "PC",
+                    "identifier_matches_request": False,
+                }
+            ],
+        ),
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        resolve_oem=True,
+        live_partsapi_oem=True,
+        include_partsapi_dry_run=False,
+    )
+    row = result["items"][0]
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    assert row["identity"]["cross_source_agreement"]["status"] == "identifier_mismatch"
+    assert row["identity"]["ready_for_vehicle_lookup"] is False
+    assert row["live_capability"]["identity_ready_for_vehicle_lookup"] is False
+    assert row["live_capability"]["identity_ready_for_family_lookup"] is True
+    assert row["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+def test_benchmark_family_queries_omit_supported_engine_after_catalog_disagreement(monkeypatch):
+    from autostop_manager import vin_oem_resolver
+
+    identity = _medium_identity()
+    identity["vehicle_profile"]["engine"] = "ENGINE-A"
+    identity["field_statuses"] = {"engine": {"status": "supported", "evidence_ids": ["a"]}}
+    identity["field_evidence"] = [{"field": "engine", "source": "CRM context", "value": "ENGINE-A"}]
+    identity["parts_lookup_readiness"].update(ready_for_family_lookup=True, ready_for_vehicle_lookup=True)
+    _install_batch(monkeypatch, identity)
+    calls = []
+    monkeypatch.setattr(
+        vin_oem_resolver,
+        "partsapi_catalog_lookup",
+        _fake_lookup(
+            calls,
+            profiles=[
+                {
+                    "make": "HONDA",
+                    "model": "Accord",
+                    "engine": "ENGINE-B",
+                    "tecdoc_car_id": "9877",
+                    "vehicle_type": "PC",
+                    "identifier_matches_request": True,
+                }
+            ],
+        ),
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": SYNTHETIC_VIN}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        use_vpic_batch=False,
+        resolve_oem=True,
+        live_partsapi_oem=True,
+        include_partsapi_dry_run=False,
+    )
+    row = result["items"][0]
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    assert [conflict["field"] for conflict in row["identity"]["cross_source_agreement"]["conflicting_fields"]] == [
+        "engine"
+    ]
+    assert row["identity"]["ready_for_vehicle_lookup"] is False
+    assert row["live_capability"]["identity_ready_for_vehicle_lookup"] is False
+    assert row["live_capability"]["identity_ready_for_family_lookup"] is True
+    assert row["manual_public_search"]["count"] > 0
+    assert all(
+        "ENGINE-A" not in query["query"] and "ENGINE-B" not in query["query"]
+        for query in row["manual_public_search"]["queries"]
+    )
+
+
+def _bound_audi_identity(identifier, *, identifier_type="auto", context=None):
+    from autostop_manager.vehicle_identity import decode_vehicle_identity
+
+    return decode_vehicle_identity(
+        identifier,
+        identifier_type=identifier_type,
+        crm_context={"make": "Audi", "model": "A8", **(context or {})},
+        live_vpic=False,
+        live_wmi=False,
+        vpic_result={
+            "ok": True,
+            "source": "NHTSA vPIC",
+            "vin": identifier.replace("-", ""),
+            "error_code": "0",
+            "vehicle": {"vin": identifier.replace("-", ""), "make": "Audi", "model": "A8", "enginemodel": "ENGINE-A"},
+        },
+    )
+
+
+def test_benchmark_uses_e4_canonical_identifier_with_predecoded_profile(monkeypatch):
+    from autostop_manager import vin_oem_resolver
+    from autostop_manager.vehicle_identity_inputs import validate_identity_item
+
+    vin_a = "WAU" + "ZZZ4H" + "A" * 9
+    vin_b = "WAU" + "ZZZ4H" + "B" * 9
+    item = {"chassis_number": vin_a, "body_number": vin_b, "make": "Audi", "model": "A8"}
+    assert validate_identity_item(item)["identifier"] == vin_a
+    identity = _bound_audi_identity(vin_a)
+    _install_batch(monkeypatch, identity)
+    monkeypatch.setattr(
+        vin_oem_resolver, "decode_vehicle_identity", lambda *_a, **_k: pytest.fail("Redundant E4 decoding")
+    )
+    calls = []
+    monkeypatch.setattr(
+        vin_oem_resolver,
+        "partsapi_catalog_lookup",
+        _fake_lookup(
+            calls,
+            profiles=[
+                {
+                    "make": "Audi",
+                    "model": "A8",
+                    "tecdoc_car_id": "9877",
+                    "vehicle_type": "PC",
+                    "identifier_matches_request": True,
+                }
+            ],
+        ),
+    )
+    result = benchmark_vin_parts_lookup(
+        [item],
+        requested_part="передние колодки",
+        live_vpic=False,
+        resolve_oem=True,
+        live_partsapi_identity=True,
+        include_partsapi_dry_run=False,
+    )
+    assert calls[0]["identifier"] == vin_a
+    assert result["items"][0]["identity"]["vehicle_profile"]["engine"] == "ENGINE-A"
+    assert result["items"][0]["identity"]["ready_for_crm_writeback"] is False
+    assert vin_a not in json.dumps(result) and vin_b not in json.dumps(result)
+
+
+@pytest.mark.parametrize("resolve_oem", [False, True])
+@pytest.mark.parametrize("identifier_type", ["vin", "frame_number"])
+def test_benchmark_explicit_identifier_type_controls_all_partsapi_paths(monkeypatch, resolve_oem, identifier_type):
+    from autostop_manager import vin_oem_resolver
+
+    vin = "WAU" + "ZZZ4H" + "A" * 9
+    identifier = vin[:8] + "-" + vin[8:] if identifier_type == "vin" else vin
+    identity = _bound_audi_identity(identifier, identifier_type=identifier_type)
+    _install_batch(monkeypatch, identity)
+    calls = []
+    lookup = _fake_lookup(
+        calls,
+        profiles=[
+            {
+                "make": "Audi",
+                "model": "A8",
+                "tecdoc_car_id": "9877",
+                "vehicle_type": "PC",
+                "identifier_matches_request": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(vin_oem_resolver, "partsapi_catalog_lookup", lookup)
+    monkeypatch.setattr("autostop_manager.vin_parts_benchmark.partsapi_catalog_lookup", lookup)
+    monkeypatch.setattr(
+        vin_oem_resolver, "decode_vehicle_identity", lambda *_a, **_k: pytest.fail("Redundant E4 decoding")
+    )
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": identifier, "identifier_type": identifier_type}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        resolve_oem=resolve_oem,
+        live_partsapi_identity=True,
+        include_partsapi_dry_run=True,
+    )
+    assert result["items"][0]["identifier"]["kind"] == identifier_type
+    if identifier_type == "vin":
+        assert calls and calls[0]["operation"] == "vin_decode" and calls[0]["identifier"] == vin
+    else:
+        assert calls == []
+        assert result["items"][0]["prepared_calls"]["partsapi"] == []
+    assert result["items"][0]["identity"]["ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize("resolve_oem", [False, True])
+def test_benchmark_freezes_auto_frame_kind_before_lossy_normalization(monkeypatch, resolve_oem):
+    from autostop_manager import vin_lookup, vin_oem_resolver, vin_parts_benchmark
+
+    vin = "WAU" + "ZZZ4H" + "A" * 9
+    frame = vin[:8] + "-" + vin[8:]
+    # The scheduling boundary must remain safe even when a frame normalizer drops its separator.
+    monkeypatch.setattr(vin_lookup, "normalize_frame_number", lambda value: value.replace("-", ""))
+    original_decode = vin_parts_benchmark.decode_vehicle_identities
+    decode_inputs = []
+
+    def decode(items, **kwargs):
+        decode_inputs.extend(items)
+        return original_decode(items, **kwargs)
+
+    monkeypatch.setattr(vin_parts_benchmark, "decode_vehicle_identities", decode)
+    original_plan = vin_parts_benchmark.build_oem_parts_provider_plan
+    plans = []
+
+    def plan(**kwargs):
+        result = original_plan(**kwargs)
+        plans.append(result)
+        return result
+
+    monkeypatch.setattr(vin_parts_benchmark, "build_oem_parts_provider_plan", plan)
+    for module in (vin_parts_benchmark, vin_oem_resolver):
+        monkeypatch.setattr(module, "partsapi_catalog_lookup", lambda **_k: pytest.fail("Frame reached VIN provider"))
+    result = benchmark_vin_parts_lookup(
+        [{"identifier": frame, "make": "Audi", "model": "A8"}],
+        requested_part="передние колодки",
+        live_vpic=False,
+        resolve_oem=resolve_oem,
+        live_partsapi_identity=True,
+        include_partsapi_dry_run=True,
+    )
+    assert decode_inputs[0]["identifier"] == vin
+    assert decode_inputs[0]["identifier_type"] == "frame_number"
+    assert result["items"][0]["identifier"]["kind"] == "frame_number"
+    assert plans[0]["identifier"]["kind"] == "frame_number"
+    assert result["items"][0]["prepared_calls"]["partsapi"] == []
+    if resolve_oem:
+        assert result["items"][0]["oem_resolution"]["identifier"]["kind"] == "frame_number"
+
+
+@pytest.mark.parametrize("identifier_source", ["identifier", "chassis_body", "crm_context", "vehicle_profile_json"])
+def test_benchmark_redacts_original_and_canonical_identifier_aliases_everywhere(monkeypatch, identifier_source):
+    from autostop_manager import vin_parts_benchmark
+
+    canonical_a = "WAU" + "ZZZ4H" + "A" * 9
+    canonical_b = "WAU" + "ZZZ4H" + "B" * 9
+    raw_a = canonical_a[:8] + "-" + canonical_a[8:]
+    raw_b = canonical_b[:8] + "-" + canonical_b[8:]
+    aliases = {"chassis_number": raw_a, "body_number": raw_b}
+    if identifier_source == "identifier":
+        item = {"identifier": raw_a}
+        identifiers = [raw_a, canonical_a]
+    elif identifier_source == "chassis_body":
+        item = aliases
+        identifiers = [raw_a, canonical_a, raw_b, canonical_b]
+    elif identifier_source == "crm_context":
+        item = {"crm_context": aliases}
+        identifiers = [raw_a, canonical_a, raw_b, canonical_b]
+    else:
+        item = {"vehicle_profile": json.dumps(aliases)}
+        identifiers = [raw_a, canonical_a, raw_b, canonical_b]
+    item["identifier_type"] = "vin"
+    requested_part = "передние колодки " + " ".join(identifiers)
+    item["requested_part"] = requested_part
+    decode_inputs = []
+
+    def decode(items, **kwargs):
+        decode_inputs.extend(items)
+        return {"ok": True, "count": len(items), "results": [_medium_identity() for _ in items]}
+
+    monkeypatch.setattr(vin_parts_benchmark, "decode_vehicle_identities", decode)
+    monkeypatch.setattr(
+        vin_parts_benchmark, "partsapi_catalog_lookup", lambda **_k: pytest.fail("Unexpected provider call")
+    )
+    result = benchmark_vin_parts_lookup(
+        [item],
+        requested_part=requested_part,
+        live_vpic=False,
+        include_partsapi_dry_run=False,
+    )
+    assert decode_inputs[0]["identifier"] == canonical_a
+    assert decode_inputs[0]["identifier_type"] == "vin"
+    serialized = json.dumps(result, ensure_ascii=False).casefold()
+    for identifier in identifiers:
+        assert identifier.casefold() not in serialized

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from autostop_manager.vin_lookup import (
     build_lookup_plan,
     classify_identifier,
@@ -250,8 +252,9 @@ class _FakeResponse:
     def __exit__(self, _exc_type, _exc, _tb):
         return False
 
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
+    def read(self, size: int = -1) -> bytes:
+        data = json.dumps(self._payload).encode("utf-8")
+        return data[:size] if size >= 0 else data
 
 
 def test_vpic_decode_request_uses_model_year_and_json(monkeypatch):
@@ -310,6 +313,33 @@ def test_vpic_extended_decode_uses_extended_endpoint(monkeypatch):
     assert "DecodeVinValuesExtended" in captured["url"]
     assert result["vehicle"]["fueltypeprimary"] == "Gasoline"
     assert result["vehicle"]["displacementl"] == "3.0"
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("year_hint", [None, 2014, "2014"])
+def test_vpic_wrapper_preserves_year_hint_when_injected_into_identity(monkeypatch, extended, year_hint):
+    from autostop_manager.vehicle_identity import decode_vehicle_identity
+
+    vin = "WBA" + "0" * 14
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout: _FakeResponse(
+            {"Results": [{"VIN": vin, "Make": "BMW", "Model": "Synthetic", "ModelYear": "2014", "ErrorCode": "0"}]}
+        ),
+    )
+    source = decode_vin_vpic(vin, model_year=year_hint, extended=extended)
+    if year_hint is None:
+        assert "model_year_hint_requested" not in source
+    else:
+        assert source["model_year_hint_requested"] == 2014
+
+    result = decode_vehicle_identity(vin, model_year=2014, vpic_result=source, live_vpic=False, live_wmi=False)
+    provider_year = next(
+        row for row in result["field_evidence"] if row["field"] == "model_year" and row["source"] == "NHTSA vPIC"
+    )
+    assert provider_year["independent"] is (year_hint is None)
+    assert provider_year["depends_on"] == ([] if year_hint is None else ["caller.model_year"])
+    assert result["field_statuses"]["model_year"]["status"] == ("supported" if year_hint is None else "candidate")
 
 
 def test_vpic_wmi_decode_returns_wmi_profile(monkeypatch):
@@ -400,3 +430,138 @@ def test_vpic_batch_rejects_malformed_results_without_crashing(monkeypatch):
     assert result["ok"] is False
     assert result["error"] == "vPIC returned a malformed Results payload"
     assert result["results_by_vin"] == {}
+
+
+def _synthetic_vin(index=1):
+    return "1HG" + "CM8263" + f"{index:08d}"
+
+
+def test_explicit_identifier_type_preserves_shape_and_requires_valid_characters():
+    raw = _synthetic_vin()
+    assert classify_identifier(raw[:12]).kind == "market_code"
+    assert classify_identifier(raw[:12], identifier_type="vin_partial").kind == "vin_partial"
+    assert classify_identifier(raw[:5] + "-" + raw[5:]).kind == "frame_number"
+    assert classify_identifier(raw[:5] + "-" + raw[5:], identifier_type="vin").kind == "vin"
+    assert classify_identifier("invalid!", identifier_type="vin_partial").kind == "unknown"
+    assert classify_identifier(raw, identifier_type={}).kind == "unknown"
+    assert classify_identifier(None).kind == "unknown"
+
+
+def test_vpic_never_promotes_foreign_or_missing_source_vin(monkeypatch):
+    vin = _synthetic_vin()
+    for echo in (_synthetic_vin(2), None, True):
+        monkeypatch.setattr(
+            "autostop_manager.vin_lookup.urlopen",
+            lambda request, timeout, echo=echo: _FakeResponse(
+                {"Results": [{"VIN": echo, "Make": "Foreign", "Model": "Foreign"}]}
+            ),
+        )
+        result = decode_vin_vpic(vin)
+        assert result["ok"] is False
+        assert result["vehicle"] == {}
+        assert result["identifier_binding"]["verified"] is False
+        assert "Foreign" not in json.dumps(result)
+
+
+def test_vpic_partial_echo_is_a_bound_candidate_and_incompatible_completion_rejected(monkeypatch):
+    vin = _synthetic_vin()
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout: _FakeResponse({"Results": [{"VIN": vin, "Make": "Honda", "Model": "Accord"}]}),
+    )
+    result = decode_vin_vpic(vin[:12])
+    assert result["ok"] is True
+    assert result["identifier_binding"] == {"status": "compatible_partial", "verified": False}
+    assert result["coverage"] == "partial_or_unsupported"
+    assert decode_vin_vpic("JHG" + vin[3:12])["outcome"] == "identity_mismatch"
+
+
+def test_vpic_vehicle_fields_and_error_diagnostics_are_validated(monkeypatch):
+    vin = _synthetic_vin()
+    invalid_fields = [
+        {"Make": {}},
+        {"Model": []},
+        {"ModelYear": True},
+        {"ModelYear": {}},
+        {"EngineCylinders": False},
+        {"ErrorCode": []},
+        {"ErrorText": {"text": "bad"}},
+        {"DisplacementL": float("inf")},
+    ]
+    for invalid in invalid_fields:
+        monkeypatch.setattr(
+            "autostop_manager.vin_lookup.urlopen",
+            lambda request, timeout, invalid=invalid: _FakeResponse(
+                {"Results": [{"VIN": vin, "Make": "Honda", **invalid}]}
+            ),
+        )
+        result = decode_vin_vpic(vin)
+        assert result["ok"] is False
+        assert result["outcome"] == "adapter_malformed_payload"
+        assert result["vehicle"] == {}
+
+
+def test_vpic_empty_rows_and_bool_year_do_not_start_or_confirm_work(monkeypatch):
+    calls = []
+
+    def fake(request, timeout):
+        calls.append(request)
+        return _FakeResponse({"Results": [{}]})
+
+    monkeypatch.setattr("autostop_manager.vin_lookup.urlopen", fake)
+    assert decode_vin_vpic(_synthetic_vin(), model_year=True)["outcome"] == "invalid_input"
+    assert calls == []
+    assert decode_vin_vpic(_synthetic_vin())["ok"] is False
+
+
+def test_wmi_accepts_three_or_six_characters_and_checks_echo(monkeypatch):
+    urls = []
+
+    def fake(request, timeout):
+        urls.append(request.full_url)
+        echo = request.full_url.split("/DecodeWMI/")[1].split("?")[0]
+        return _FakeResponse({"Results": [{"WMI": echo, "Name": "Synthetic Manufacturer"}]})
+
+    monkeypatch.setattr("autostop_manager.vin_lookup.urlopen", fake)
+    assert decode_wmi_vpic("WDD")["ok"] is True
+    assert decode_wmi_vpic("1G9" + "123")["wmi"] == "1G9" + "123"
+    assert decode_wmi_vpic(_synthetic_vin())["outcome"] == "invalid_input"
+    assert len(urls) == 2
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout: _FakeResponse({"Results": [{"WMI": "JTD", "Name": "Foreign"}]}),
+    )
+    assert decode_wmi_vpic("WDD")["outcome"] == "identity_mismatch"
+
+
+def test_wmi_empty_or_nested_fields_are_not_success(monkeypatch):
+    for row in ({}, {"WMI": "WDD"}, {"WMI": "WDD", "Name": []}):
+        monkeypatch.setattr(
+            "autostop_manager.vin_lookup.urlopen", lambda request, timeout, row=row: _FakeResponse({"Results": [row]})
+        )
+        assert decode_wmi_vpic("WDD")["ok"] is False
+
+
+def test_missing_provider_error_code_is_partial_candidate_not_clean(monkeypatch):
+    vin = _synthetic_vin()
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout: _FakeResponse({"Results": [{"VIN": vin, "Make": "Honda"}]}),
+    )
+    result = decode_vin_vpic(vin)
+    assert result["ok"] is True
+    assert result["diagnostics_status"] == "missing"
+    assert result["coverage"] == "partial_or_unsupported"
+
+
+def test_provider_numeric_overflow_is_structured_failure(monkeypatch):
+    vin = _synthetic_vin()
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda request, timeout: _FakeResponse(
+            {"Results": [{"VIN": vin, "Make": "Honda", "EngineCylinders": 10**400}]}
+        ),
+    )
+    result = decode_vin_vpic(vin)
+    assert result["ok"] is False
+    assert result["outcome"] == "adapter_malformed_payload"
