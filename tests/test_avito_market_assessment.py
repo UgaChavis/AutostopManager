@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from autostop_manager.avito_listings import _normalize_listing
 from autostop_manager.avito_market_assessment import assess_avito_price_sample
 from autostop_manager.mcp_tools import register_manager_tools
@@ -140,6 +142,83 @@ def test_newer_read_detail_replaces_search_row_for_the_same_ad():
     assert result["excluded_listings"] == [{"listing_index": 0, "code": "duplicate_listing_id"}]
     assert result["segments"][0]["sample_median_price_rub"] == 6_000
     assert next(row for row in result["accepted_listings"] if row["listing_id"] == "12345678")["price_rub"] == 5_500
+
+
+def test_listing_slug_and_numeric_identity_are_not_mistaken_for_a_vin():
+    listing_id = "8386499447"
+    url = f"https://www.avito.ru/krasnoyarsk/zapchasti_i_aksessuary/bamper_toyota_camry_{listing_id}"
+
+    result = assess_avito_price_sample(part_number="1712024", listings=[_listing(listing_id, 5_000, url=url)])
+
+    assert result["accepted_count"] == 1
+    assert result["excluded_listings"] == []
+    assert result["accepted_listings"][0]["url"] == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://www.avito.ru/krasnoyarsk/detal_12345678",
+        "https://www.avito.ru/krasnoyarsk/detal_12345678?utm_source=sample",
+        "https://www.avito.ru/krasnoyarsk/detal_12345678#sample",
+        "https://avito.ru.evil.example/krasnoyarsk/detal_12345678",
+        "https://avito.ru@evil.example/krasnoyarsk/detal_12345678",
+        "https://user:password@www.avito.ru/krasnoyarsk/detal_12345678",
+        "https://www.avito.ru:8443/krasnoyarsk/detal_12345678",
+        "https://www.avito.ru/krasnoyarsk/detal_99999999",
+        "https://www.avito.ru/krasnoyarsk/1M8GDM9AXKP042788_detal_12345678",
+        "https://www.avito.ru/krasnoyarsk/+7-900-111-22-33_detal_12345678",
+        "https://www.avito.ru/krasnoyarsk/+7_900_111_22_33_detal_12345678",
+        "https://www.avito.ru/krasnoyarsk/sample@example.com/detal_12345678",
+        "https://www.avito.ru/krasnoyarsk/sample@example.com_detal_12345678",
+    ],
+)
+def test_sample_listing_url_retains_source_identity_and_sensitive_data_guards(url):
+    result = assess_avito_price_sample(part_number="1712024", listings=[_listing("12345678", 5_000, url=url)])
+
+    assert result["accepted_count"] == 0
+    assert result["excluded_listings"] == [{"listing_index": 0, "code": "source_identity_invalid"}]
+
+
+@pytest.mark.parametrize(
+    "observed_at",
+    [
+        "0001-01-01T00:00:00+14:00",
+        "9999-12-31T23:59:59-14:00",
+        "2025-02-30T00:00:00+00:00",
+        "2025-01-01T00:00:00",
+        "2025-01-01T00:00:00+24:00",
+        "9999-12-30T00:00:00+00:00",
+    ],
+)
+def test_bad_observation_time_excludes_one_row_without_aborting_good_sample(observed_at):
+    rows = [_listing(str(12345678 + i), price) for i, price in enumerate((5_000, 6_000, 7_000))]
+    rows.append(_listing("12345681", 9_000, observed_at=observed_at))
+
+    result = assess_avito_price_sample(part_number="1712024", listings=rows)
+
+    assert result["ok"] is True
+    assert result["accepted_count"] == 3
+    assert result["excluded_listings"] == [{"listing_index": 3, "code": "observed_at_invalid"}]
+    assert result["segments"][0]["sample_median_price_rub"] == 6_000
+
+
+@pytest.mark.parametrize(
+    ("observed_at", "canonical_observed_at"),
+    [
+        ("2025-01-01", "2025-01-01"),
+        ("2025-01-01T07:00:00+07:00", "2025-01-01T00:00:00+00:00"),
+        ("2025-01-01T00:00:00Z", "2025-01-01T00:00:00+00:00"),
+    ],
+)
+def test_supported_observation_times_keep_their_existing_utc_normalization(observed_at, canonical_observed_at):
+    result = assess_avito_price_sample(
+        part_number="1712024", listings=[_listing("12345678", 5_000, observed_at=observed_at)]
+    )
+
+    assert result["accepted_count"] == 1
+    assert result["excluded_listings"] == []
+    assert result["accepted_listings"][0]["observed_at"] == canonical_observed_at
 
 
 def test_invalid_target_filters_and_oversized_sample_fail_without_a_price():

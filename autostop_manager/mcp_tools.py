@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Collection
-from typing import Any, Literal, cast
+from functools import partial
+from typing import Annotated, Any, Literal, cast
 
 from mcp.server.fastmcp import Context
+from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import StrictFloat, StrictInt
+from pydantic import Field, StrictBool, StrictFloat, StrictInt
 
 from .action_contract import prepare_action_contract
 from .automation_control import AutomationControlClient
@@ -39,6 +41,7 @@ from .j1_research import (
     research_status,
     start_research,
 )
+from .listing_executor import run_listing_request
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
     search_partsapi_category_index,
@@ -62,6 +65,35 @@ from .vin_oem_resolver import resolve_vin_oem_parts
 from .vin_lookup import lookup_original_parts
 from .work_pricing import estimate_repair_work_cost
 from .web_research_gateway import fetch_page_browser, fetch_page_excerpt, search_web_multi
+
+
+class _ListingScalarMetadata(FuncMetadata):
+    """Validate E10's flat arguments as originally received on the JSON wire.
+
+    The SDK pre-parser otherwise turns a string ``"null"`` into ``None`` before
+    validating optional StrictInt filters. Other tools keep the SDK's normal
+    support for JSON strings representing nested lists and objects.
+    """
+
+    def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
+        return data.copy()
+
+
+def _preserve_listing_scalar_inputs(server: Any) -> None:
+    manager = getattr(server, "_tool_manager", None)
+    if manager is None:
+        return
+    for name in ("avito_search_listings", "avito_read_listing"):
+        tool = manager.get_tool(name)
+        if tool is None:
+            continue
+        metadata = tool.fn_metadata
+        tool.fn_metadata = _ListingScalarMetadata(
+            arg_model=metadata.arg_model,
+            output_schema=metadata.output_schema,
+            output_model=metadata.output_model,
+            wrap_output=metadata.wrap_output,
+        )
 
 
 # Registration is intentionally declarative; each nested tool delegates to tested domain functions or storage methods.
@@ -846,26 +878,30 @@ def register_manager_tools(  # noqa: C901
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
     )
-    def avito_search_listings_tool(
+    async def avito_search_listings_tool(
         query: str,
         location: str = "krasnoyarsk",
         category: str = "zapchasti_i_aksessuary",
-        page: int = 1,
-        limit: int = 50,
-        price_min: int | None = None,
-        price_max: int | None = None,
-        delivery_only: bool = False,
-        dry_run: bool = False,
+        page: Annotated[StrictInt, Field(ge=1, le=30)] = 1,
+        limit: Annotated[StrictInt, Field(ge=1, le=50)] = 50,
+        price_min: Annotated[StrictInt, Field(ge=0, le=2_000_000_000)] | None = None,
+        price_max: Annotated[StrictInt, Field(ge=0, le=2_000_000_000)] | None = None,
+        delivery_only: StrictBool = False,
+        dry_run: StrictBool = False,
     ) -> dict[str, Any]:
-        return avito_search_listings(
-            query=query,
-            location=location,
-            category=category,
-            page=page,
-            limit=limit,
-            price_min=price_min,
-            price_max=price_max,
-            delivery_only=delivery_only,
+        return await run_listing_request(
+            partial(
+                avito_search_listings,
+                query=query,
+                location=location,
+                category=category,
+                page=page,
+                limit=limit,
+                price_min=price_min,
+                price_max=price_max,
+                delivery_only=delivery_only,
+                dry_run=dry_run,
+            ),
             dry_run=dry_run,
         )
 
@@ -878,8 +914,8 @@ def register_manager_tools(  # noqa: C901
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
     )
-    def avito_read_listing_tool(ad_id: str, dry_run: bool = False) -> dict[str, Any]:
-        return avito_read_listing(ad_id=ad_id, dry_run=dry_run)
+    async def avito_read_listing_tool(ad_id: str, dry_run: StrictBool = False) -> dict[str, Any]:
+        return await run_listing_request(partial(avito_read_listing, ad_id=ad_id, dry_run=dry_run), dry_run=dry_run)
 
     server.tool(
         name="assess_avito_price_sample",
@@ -1353,6 +1389,7 @@ def register_manager_tools(  # noqa: C901
 
     if include_tools is not None:
         server.tool = original_tool
+    _preserve_listing_scalar_inputs(server)
 
 
 def register_manager_memory_tools(

@@ -17,7 +17,25 @@ Drom switch по умолчанию выключен; без разрешённ�
 
 Общая модель listing: `source`, `listing_id`, `url`, `title`, `description`, `price_rub`, `price_text`, `price_qualifier`, `city`, `condition`, `seller`, `delivery`, `availability`, `published_at`, `observed_at`, `status`, `fitment_confirmed`, `availability_confirmed`. Seller содержит публичные `name/type/rating/reviews_count/reviews`; delivery — `available/label`; неизвестное остаётся null.
 
+### Контракт E10
+
+Поиск выполняет один запрос страницы, без скрытого перехода на следующие страницы. `page` допускает 1–30, `limit` — 1–50 принятых уникальных объявлений после проверки и удаления дублей. Обрабатывается максимум 50 строк ответа. Технические счётчики `provider_count`, `scanned_count`, `rejected_count`, `duplicate_count`, `unscanned_count` объясняют охват полученного массива; это не общее число объявлений на Авито.
+
+MCP принимает целые JSON numbers для страницы, limit и цены 0–2 000 000 000 рублей, boolean для `delivery_only` и `dry_run`. Строки и boolean вместо целого отклоняются до обращения к поставщику. Ошибка схемы имеет MCP `isError=true`; доменный отказ сохраняет совместимый результат `ok=false`, `source="avito"`, `error` при MCP `isError=false`.
+
+Поиск и чтение выполняются вне основного цикла MCP: максимум два одновременно работающих адаптера и два дополнительных ожидающих вызова на процесс. Бюджет ожидания — 30 секунд, включая очередь. Переполнение возвращает `provider_busy` с `stage="admission"`, истечение бюджета — `provider_wait_timeout`. `adapter_started` и `adapter_may_continue` показывают, началось ли выполнение и может ли оно продолжаться после ответа. Отмена или таймаут ожидания не останавливают уже выполняющийся HTTP; слот остаётся занят до завершения работы. Просроченный ожидающий вызов не обращается к адаптеру, автоматического повтора нет. `dry_run` выполняет только проверку запроса и не занимает очередь поставщика.
+
+Нормализация поддерживает текущие поля ReefAPI и прежние fixtures: краткое `description_snippet`, параметры `params`/`parameters`, `delivery_available`/`delivery_text` и прежнее `delivery`/`avito_delivery`. Явное отсутствие доставки (`false`) сохраняется. Относительное `published_or_raised_text` не превращается в точный `published_at`; время наблюдения Manager остаётся отдельным фактом.
+
+Состояние из `params` имеет приоритет над прежними полями; явное пустое значение не заменяется старым состоянием. Boolean `delivery_available` имеет приоритет над прежней доставкой; при противоречии ему не переносится старый label. `description_source` различает `description`, неполное `description_snippet` и отсутствие текста (`null`). Текст проходит ограничение длины и удаление чувствительных сведений; происхождение не гарантирует его полноту.
+
+URL разбирается как адрес объявления с собственным ID. Обычное название детали рядом с ID не считается VIN; реальные VIN, контакты, секреты, другой домен и несовпадение ID/URL отклоняются. Адаптер удаляет безопасные tracking-параметры и fragment; оценщик принимает уже нормализованный HTTPS URL без них.
+
+Отказы поставщика содержат безопасные `provider_code`, `http_status`, `retryable` без полного vendor message. `quota_exceeded`, `listing_not_found`, `rate_limited`, `authentication_failed`, `source_blocked`, `provider_timeout`, `provider_parse_error`, `provider_disabled` различают причины. Неизвестная ошибка остаётся общей. `retryable` описывает возможность повторения; адаптер не повторяет запрос автоматически. [Коды ReefAPI](https://reefapi.com/docs#errors).
+
 `assess_avito_price_sample` без provider вызова принимает до 60 нормализованных listing и точный part number. Принимаются только явный артикул в title/description, фиксированная положительная цена, известное состояние, город, URL и observed time. Duplicate ID/URL учитывается один раз; состояние/города разделяются. Медиана появляется с трёх distinct ads в одном сегменте и описывает лишь выборку Avito. Она не равна E9 медиане независимых доменов и не подтверждает цену/наличие/fitment. Search ranking/page coverage ограничивают выборку.
+
+Некорректное или будущее время наблюдения, а также дата-время без часового пояса исключают одну строку с `observed_at_invalid`; UTC overflow также не прерывает оценку остальных строк. Поддерживаемый формат даты без времени сохраняется. Оценщик сохраняет правило последнего подходящего наблюдения и не устанавливает новый предел давности этой выборки.
 
 Webbee: create → start → poll → JSON results. Queued response не означает completion; читай `drom_get_parts_search` с возвращёнными task ID/run UID, соблюдая quota и избегая duplicate starts. `elementCountLimit`/`pageCountLimit` ограничивают запуск; фактическая pagination робота проверяется live sample. Новый robot alias/export требует fixture update и свежего sample.
 

@@ -7,8 +7,9 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from statistics import median
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
+from .avito_listing_identity import clean_avito_listing_url
 from .j1_fetch import contains_sensitive
 
 
@@ -53,29 +54,13 @@ def _city_key(value: str) -> str:
 
 
 def _avito_url(value: Any, listing_id: str) -> str | None:
-    if not isinstance(value, str) or not value or len(value) > 2048 or contains_sensitive(value):
+    url = clean_avito_listing_url(value)
+    if url is None:
         return None
-    try:
-        parsed = urlsplit(value)
-        host = (parsed.hostname or "").casefold()
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme != "https"
-        or not (host == "avito.ru" or host.endswith(".avito.ru"))
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in {None, 443}
-        or parsed.query
-        or parsed.fragment
-        or parsed.path in {"", "/"}
-    ):
-        return None
-    path_id = re.search(r"(?:_|/)(\d{6,20})/?\Z", parsed.path)
+    path_id = re.search(r"(?:_|/)(\d{6,20})/?\Z", urlsplit(url).path)
     if path_id is None or path_id.group(1) != listing_id:
         return None
-    return urlunsplit(("https", host, parsed.path, "", ""))
+    return url
 
 
 def _observed_at(value: Any) -> tuple[str, datetime] | None:
@@ -91,7 +76,7 @@ def _observed_at(value: Any) -> tuple[str, datetime] | None:
                 return None
             observed = parsed.astimezone(UTC)
             display = observed.isoformat()
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
     if observed > datetime.now(UTC):
         return None
