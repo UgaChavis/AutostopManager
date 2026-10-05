@@ -9,15 +9,15 @@ from pathlib import Path
 import re
 import sys
 import tomllib
-from urllib.parse import unquote, urlsplit
-
-# Use this checkout's shared parser even when invoked outside the project or
-# through a venv whose editable install points at another checkout.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from autostop_manager.markdown_links import visible_markdown_links
 
 PROJECT = Path(__file__).resolve().parents[1]
+# Use this checkout's shared parsers even when invoked outside the project or
+# through a venv whose editable install points at another checkout.
+sys.path.insert(0, str(PROJECT))
+
+from autostop_manager.document_links import local_document_link_target  # noqa: E402
+from autostop_manager.markdown_links import visible_markdown_links  # noqa: E402
+
 CODEX = Path("/root/.codex")
 PACKAGES = (
     "gmail",
@@ -84,10 +84,10 @@ def project_documents(project):
             continue
         text = path.read_text(encoding="utf-8")
         for target_link in visible_markdown_links(text):
-            parsed = urlsplit(target_link)
-            if parsed.scheme or not parsed.path:
+            destination = local_document_link_target(target_link)
+            if destination is None:
                 continue
-            target = path.parent / re.sub(r":\d+$", "", unquote(parsed.path))
+            target = path.parent / destination
             target = target.resolve()
             if target.is_relative_to(project) and target.suffix in {".md", ".json"}:
                 pending.append(target)
