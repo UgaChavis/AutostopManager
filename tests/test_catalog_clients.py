@@ -1316,13 +1316,21 @@ def test_resolve_partsapi_category_rejects_untrusted_explicit_text():
     assert result["category_unresolved"] is True
 
 
-def test_compound_part_request_does_not_automatically_select_one_index_category():
-    phrase = "передние колодки и задние амортизаторы"
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "передние колодки и задние амортизаторы",
+        "передние колодки 1 комплект и прокладка клапанной крышки 1 шт",
+        "передние колодки 1 комплект и передние колодки 2 комплекта",
+    ],
+)
+def test_compound_part_request_does_not_automatically_select_one_index_category(phrase):
     result = resolve_partsapi_category(phrase)
     assert result["part_intent"]["intent_id"] == "multiple_parts"
     assert result["index_matches"]  # Retain useful hints without selecting one for the whole request.
     assert result["category"] is None
     assert result["category_unresolved"] is True
+    assert result["legacy_category_hint"] is None
     assert resolve_partsapi_category(phrase, explicit_category="1191")["legacy_category_hint"] == "1191"
 
 
