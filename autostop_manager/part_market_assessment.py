@@ -17,9 +17,11 @@ _MAX_PRICE_RUB = 10_000_000
 _CURRENT_OBSERVATION_MAX_AGE_DAYS = 7
 _ARTICLE_TOKEN = re.compile(r"[^\W_][\w._/\\-]*", re.UNICODE)
 _PRICE_IN_RUB = re.compile(
-    r"(?<!\d)(\d{1,3}(?:[\s\u00a0]\d{3})+|\d{1,9})\s*(?:₽|руб(?:\.|лей|ля)?|р\.?|rub)(?=$|[\s,.;:])",
+    r"(?<![\w.,:+\-−–—/'’‘\\])(?P<amount>[+\-−]?\s*[.,]?[^\W\d_]*\d[\w]*"
+    r"(?:[\s.,:/'’‘\\\-−–—]+\d[\w]*)*[.,]?)\s*(?:₽|руб(?:\.|лей|ля)?|р\.?|rub)(?!\w)",
     re.IGNORECASE,
 )
+_WHOLE_RUBLE_AMOUNT = re.compile(r"(?P<whole>\d{1,3}(?: \d{3})+|\d+)(?:[.,](?P<fraction>\d{1,2}))?\Z")
 _DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
 _VIN_LIKE = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:"
@@ -49,9 +51,22 @@ _CONDITION_ALIASES = {
     "неизвестно": "unknown",
 }
 _CONDITION_MARKERS = {
-    "new": ("новый", "новая", "новое", "new", "не использ"),
-    "used": ("б/у", " бу ", "used", "с разборки", "контрактн"),
+    "new": re.compile(
+        r"(?<!\w)(?:нов(?:ый|ая|ое|ые)|(?:brand[\s\-‐‑‒–—−]+)?new|unused|"
+        r"не\s+использова(?:л(?:ся|ась|ось|ись)|н(?:а|о|ы)?))(?!\w)",
+        re.IGNORECASE,
+    ),
+    "used": re.compile(
+        r"(?<!\w)(?:б\s*/\s*у|бу|used|с\s+разборки|контрактн(?:ый|ая|ое|ые))(?!\w)",
+        re.IGNORECASE,
+    ),
 }
+_CONDITION_MODIFIER = re.compile(
+    r"(?<!\w)(?P<operator>не|ни|нет|not|no|never|как|like|as)"
+    r"(?:[\s\-‐‑‒–—−\"'«»()\[\]:]+(?:совсем|очень|полностью|абсолютно|совершенно|"
+    r"действительно|really|quite|entirely|totally|как|like|as))*[\s\-‐‑‒–—−\"'«»()\[\]:]+\Z",
+    re.IGNORECASE,
+)
 _SEGMENT_ORDER = tuple(
     (kind, condition, region_scope)
     for kind in ("original", "analog")
@@ -79,20 +94,50 @@ def _contains_article(excerpt: str, article: str) -> bool:
     return any(_normalize_article(token) == article for token in _ARTICLE_TOKEN.findall(excerpt))
 
 
-def _contains_brand(excerpt: str, raw_brand: Any) -> bool:
+def _brand_pattern(raw_brand: Any) -> str:
     tokens = re.findall(r"[^\W_]+", _compact(raw_brand, limit=80), re.UNICODE)
     if not tokens:
-        return False
-    pattern = r"(?<![^\W_])" + r"[\s._/\\-]*".join(re.escape(token) for token in tokens) + r"(?![^\W_])"
-    return re.search(pattern, excerpt, re.IGNORECASE) is not None
+        return ""
+    return r"(?<![^\W_])" + r"[\s._/\\-]*".join(re.escape(token) for token in tokens) + r"(?![^\W_])"
 
 
-def _prices_in_excerpt(excerpt: str) -> set[int]:
-    prices: set[int] = set()
+def _contains_brand(excerpt: str, raw_brand: Any) -> bool:
+    pattern = _brand_pattern(raw_brand)
+    return bool(pattern and re.search(pattern, excerpt, re.IGNORECASE))
+
+
+def _integer_ruble_amount(amount: str) -> int | None:
+    matched = _WHOLE_RUBLE_AMOUNT.fullmatch(amount.removeprefix("+").strip())
+    if matched is None or any(digit != "0" for digit in matched.group("fraction") or ""):
+        return None
+    return int(matched.group("whole").replace(" ", ""))
+
+
+def _money_tokens(excerpt: str, *, allowed_articles: set[str]) -> list[tuple[int, int | None]]:
+    prices: list[tuple[int, int | None]] = []
     for match in _PRICE_IN_RUB.finditer(excerpt):
-        numeric = re.sub(r"\D", "", match.group(1))
-        if numeric:
-            prices.add(int(numeric))
+        amount = match.group("amount")
+        start = match.start("amount")
+        start += len(amount) - len(amount.lstrip())
+        amount = amount.lstrip()
+        price = _integer_ruble_amount(amount)
+        # Only an exact known SKU can separate an otherwise invalid numeric run
+        # from its price. A valid whole amount always takes precedence: article
+        # 123 must not turn the monetary amount "123 500" into 500 rubles.
+        if price is None:
+            prefix = _ARTICLE_TOKEN.match(amount)
+            separator = re.match(r"(?:\s+|:\s*)", amount[prefix.end() :]) if prefix else None
+            if prefix and separator and _normalize_article(prefix[0]) in allowed_articles:
+                punctuation = not prefix[0].isalnum() or ":" in separator[0]
+                previous_article = _contains_article(excerpt[:start], _normalize_article(prefix[0]))
+                remainder_start = prefix.end() + separator.end()
+                remainder_price = _integer_ruble_amount(amount[remainder_start:])
+                if remainder_price is not None and not (punctuation and previous_article):
+                    start += remainder_start
+                    price = remainder_price
+        # Unsupported amounts remain evidence of ambiguity next to a valid
+        # price; never silently discard a fractional or negative money token.
+        prices.append((start, price))
     return prices
 
 
@@ -103,14 +148,22 @@ def _sku_like_token(token: str) -> bool:
     return not (normalized.isdigit() and len(normalized) == 4 and 1900 <= int(normalized) <= 2099)
 
 
-def _price_tied_to_article(excerpt: str, *, article: str, target_article: str, kind: str, price_rub: int) -> bool:
+def _price_tied_to_article(
+    excerpt: str,
+    *,
+    article: str,
+    target_article: str,
+    kind: str,
+    price_rub: int,
+    money_tokens: list[tuple[int, int | None]],
+) -> bool:
     allowed_articles = {article, target_article} if kind == "analog" else {article}
-    for price_match in _PRICE_IN_RUB.finditer(excerpt):
-        if int(re.sub(r"\D", "", price_match.group(1))) != price_rub:
+    for price_position, price in money_tokens:
+        if price != price_rub:
             continue
         preceding_tokens = [
             (match.start(), _normalize_article(match.group()))
-            for match in _ARTICLE_TOKEN.finditer(excerpt, 0, price_match.start())
+            for match in _ARTICLE_TOKEN.finditer(excerpt, 0, price_position)
         ]
         article_positions = [position for position, token in preceding_tokens if token == article]
         if not article_positions:
@@ -210,11 +263,33 @@ def _condition(value: Any) -> str:
     return _CONDITION_ALIASES.get(_compact(value, limit=30).casefold(), "")
 
 
-def _condition_supported(excerpt: str, condition: str) -> bool:
+def _condition_supported(excerpt: str, condition: str, *, articles: set[str], brands: tuple[Any, ...]) -> bool:
     if condition == "unknown":
         return True
-    folded = f" {excerpt.casefold()} "
-    return any(marker in folded for marker in _CONDITION_MARKERS[condition])
+    # Mask known identity spans using a non-whitespace separator, so a SKU or
+    # brand cannot prove a state or join a condition phrase across that span.
+    spans = [marker.span() for marker in _ARTICLE_TOKEN.finditer(excerpt) if _normalize_article(marker[0]) in articles]
+    for raw_brand in brands:
+        brand_pattern = _brand_pattern(raw_brand)
+        if brand_pattern:
+            spans.extend(marker.span() for marker in re.finditer(brand_pattern, excerpt, re.IGNORECASE))
+    condition_text = list(excerpt)
+    for start, end in spans:
+        condition_text[start:end] = "\0" * (end - start)
+    evidence_text = "".join(condition_text)
+    affirmed: set[str] = set()
+    denied: set[str] = set()
+    for candidate, pattern in _CONDITION_MARKERS.items():
+        for marker in pattern.finditer(evidence_text):
+            modifier = _CONDITION_MODIFIER.search(excerpt[: marker.start()])
+            operator = modifier["operator"].casefold() if modifier is not None else ""
+            if not operator or (candidate == "used" and operator in {"как", "as"}):
+                affirmed.add(candidate)
+            elif operator not in {"как", "like", "as"}:
+                denied.add(candidate)
+    # A negated or conflicting claim must never enter a known-condition median.
+    # Explicit non-use phrases are complete new markers, not negated used ones.
+    return affirmed == {condition} and condition not in denied
 
 
 def _region_scope(value: Any, target_region: str) -> str:
@@ -238,6 +313,7 @@ def _validated_observation(
     target_article: str,
     target_brand: str,
     target_region: str,
+    target_brand_name: str | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not isinstance(row, Mapping):
         return None, _reject(index, "observation_not_object")
@@ -253,7 +329,8 @@ def _validated_observation(
     condition = _condition(row.get("condition"))
     region_scope = _region_scope(row.get("region"), target_region)
     if (
-        not all((article, brand, source, excerpt, price_rub, kind, condition, region_scope))
+        not all((article, brand, source, excerpt, kind, condition, region_scope))
+        or price_rub is None
         or url is None
         or observed is None
         or publication is None
@@ -263,16 +340,27 @@ def _validated_observation(
         return None, _reject(index, "article_not_in_source_excerpt")
     if not _contains_brand(excerpt, row.get("brand")):
         return None, _reject(index, "brand_not_in_source_excerpt")
-    excerpt_prices = _prices_in_excerpt(excerpt)
+    money_tokens = _money_tokens(excerpt, allowed_articles={article, target_article} if kind == "analog" else {article})
+    excerpt_prices = {price for _position, price in money_tokens}
     if price_rub not in excerpt_prices:
         return None, _reject(index, "price_not_in_source_excerpt")
     if len(excerpt_prices) != 1:
         return None, _reject(index, "price_ambiguous_in_source_excerpt")
     if not _price_tied_to_article(
-        excerpt, article=article, target_article=target_article, kind=kind, price_rub=price_rub
+        excerpt,
+        article=article,
+        target_article=target_article,
+        kind=kind,
+        price_rub=price_rub,
+        money_tokens=money_tokens,
     ):
         return None, _reject(index, "price_not_tied_to_article_in_source_excerpt")
-    if not _condition_supported(excerpt, condition):
+    if not _condition_supported(
+        excerpt,
+        condition,
+        articles={article, target_article},
+        brands=(row.get("brand"), target_brand_name),
+    ):
         return None, _reject(index, "condition_not_in_source_excerpt")
     if kind == "original" and (article != target_article or (target_brand and brand != target_brand)):
         return None, _reject(index, "original_not_exact_target_match")
@@ -392,6 +480,7 @@ def assess_part_market(
             target_article=target_article,
             target_brand=target_brand,
             target_region=safe_target_region,
+            target_brand_name=brand,
         )
         if candidate is not None:
             candidates.append(candidate)
