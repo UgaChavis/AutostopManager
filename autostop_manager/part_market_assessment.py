@@ -17,9 +17,11 @@ _MAX_PRICE_RUB = 10_000_000
 _CURRENT_OBSERVATION_MAX_AGE_DAYS = 7
 _ARTICLE_TOKEN = re.compile(r"[^\W_][\w._/\\-]*", re.UNICODE)
 _PRICE_IN_RUB = re.compile(
-    r"(?<!\d)(\d{1,3}(?:[\s\u00a0]\d{3})+|\d{1,9})\s*(?:₽|руб(?:\.|лей|ля)?|р\.?|rub)(?=$|[\s,.;:])",
+    r"(?<![\w.,:+\-−–—/'’‘\\])(?P<amount>[+\-−]?\s*[.,]?[^\W\d_]*\d[\w]*"
+    r"(?:[\s.,:/'’‘\\\-−–—]+\d[\w]*)*[.,]?)\s*(?:₽|руб(?:\.|лей|ля)?|р\.?|rub)(?!\w)",
     re.IGNORECASE,
 )
+_WHOLE_RUBLE_AMOUNT = re.compile(r"(?P<whole>\d{1,3}(?: \d{3})+|\d+)(?:[.,](?P<fraction>\d{1,2}))?\Z")
 _DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
 _VIN_LIKE = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:"
@@ -87,12 +89,38 @@ def _contains_brand(excerpt: str, raw_brand: Any) -> bool:
     return re.search(pattern, excerpt, re.IGNORECASE) is not None
 
 
-def _prices_in_excerpt(excerpt: str) -> set[int]:
-    prices: set[int] = set()
+def _integer_ruble_amount(amount: str) -> int | None:
+    matched = _WHOLE_RUBLE_AMOUNT.fullmatch(amount.removeprefix("+").strip())
+    if matched is None or any(digit != "0" for digit in matched.group("fraction") or ""):
+        return None
+    return int(matched.group("whole").replace(" ", ""))
+
+
+def _money_tokens(excerpt: str, *, allowed_articles: set[str]) -> list[tuple[int, int | None]]:
+    prices: list[tuple[int, int | None]] = []
     for match in _PRICE_IN_RUB.finditer(excerpt):
-        numeric = re.sub(r"\D", "", match.group(1))
-        if numeric:
-            prices.add(int(numeric))
+        amount = match.group("amount")
+        start = match.start("amount")
+        start += len(amount) - len(amount.lstrip())
+        amount = amount.lstrip()
+        price = _integer_ruble_amount(amount)
+        # Only an exact known SKU can separate an otherwise invalid numeric run
+        # from its price. A valid whole amount always takes precedence: article
+        # 123 must not turn the monetary amount "123 500" into 500 rubles.
+        if price is None:
+            prefix = _ARTICLE_TOKEN.match(amount)
+            separator = re.match(r"(?:\s+|:\s*)", amount[prefix.end() :]) if prefix else None
+            if prefix and separator and _normalize_article(prefix[0]) in allowed_articles:
+                punctuation = not prefix[0].isalnum() or ":" in separator[0]
+                previous_article = _contains_article(excerpt[:start], _normalize_article(prefix[0]))
+                remainder_start = prefix.end() + separator.end()
+                remainder_price = _integer_ruble_amount(amount[remainder_start:])
+                if remainder_price is not None and not (punctuation and previous_article):
+                    start += remainder_start
+                    price = remainder_price
+        # Unsupported amounts remain evidence of ambiguity next to a valid
+        # price; never silently discard a fractional or negative money token.
+        prices.append((start, price))
     return prices
 
 
@@ -103,14 +131,22 @@ def _sku_like_token(token: str) -> bool:
     return not (normalized.isdigit() and len(normalized) == 4 and 1900 <= int(normalized) <= 2099)
 
 
-def _price_tied_to_article(excerpt: str, *, article: str, target_article: str, kind: str, price_rub: int) -> bool:
+def _price_tied_to_article(
+    excerpt: str,
+    *,
+    article: str,
+    target_article: str,
+    kind: str,
+    price_rub: int,
+    money_tokens: list[tuple[int, int | None]],
+) -> bool:
     allowed_articles = {article, target_article} if kind == "analog" else {article}
-    for price_match in _PRICE_IN_RUB.finditer(excerpt):
-        if int(re.sub(r"\D", "", price_match.group(1))) != price_rub:
+    for price_position, price in money_tokens:
+        if price != price_rub:
             continue
         preceding_tokens = [
             (match.start(), _normalize_article(match.group()))
-            for match in _ARTICLE_TOKEN.finditer(excerpt, 0, price_match.start())
+            for match in _ARTICLE_TOKEN.finditer(excerpt, 0, price_position)
         ]
         article_positions = [position for position, token in preceding_tokens if token == article]
         if not article_positions:
@@ -253,7 +289,8 @@ def _validated_observation(
     condition = _condition(row.get("condition"))
     region_scope = _region_scope(row.get("region"), target_region)
     if (
-        not all((article, brand, source, excerpt, price_rub, kind, condition, region_scope))
+        not all((article, brand, source, excerpt, kind, condition, region_scope))
+        or price_rub is None
         or url is None
         or observed is None
         or publication is None
@@ -263,13 +300,19 @@ def _validated_observation(
         return None, _reject(index, "article_not_in_source_excerpt")
     if not _contains_brand(excerpt, row.get("brand")):
         return None, _reject(index, "brand_not_in_source_excerpt")
-    excerpt_prices = _prices_in_excerpt(excerpt)
+    money_tokens = _money_tokens(excerpt, allowed_articles={article, target_article} if kind == "analog" else {article})
+    excerpt_prices = {price for _position, price in money_tokens}
     if price_rub not in excerpt_prices:
         return None, _reject(index, "price_not_in_source_excerpt")
     if len(excerpt_prices) != 1:
         return None, _reject(index, "price_ambiguous_in_source_excerpt")
     if not _price_tied_to_article(
-        excerpt, article=article, target_article=target_article, kind=kind, price_rub=price_rub
+        excerpt,
+        article=article,
+        target_article=target_article,
+        kind=kind,
+        price_rub=price_rub,
+        money_tokens=money_tokens,
     ):
         return None, _reject(index, "price_not_tied_to_article_in_source_excerpt")
     if not _condition_supported(excerpt, condition):

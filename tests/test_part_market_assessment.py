@@ -398,6 +398,144 @@ def test_assessment_accepts_one_price_after_the_requested_sku():
     assert result["rejected_observations"] == []
 
 
+@pytest.mark.parametrize(
+    ("money_text", "claimed_price"),
+    [
+        ("1999,50 ₽", 50),
+        ("99,50 рублей", 50),
+        ("49.90 RUB", 90),
+        ("1 999,50 руб.", 50),
+        ("1.500 ₽", 500),
+        ("19 99 ₽", 99),
+        ("-5000 ₽", 5000),
+        ("- 5 000 ₽", 5000),
+        ("−5000 ₽", 5000),
+        ("ZX5000 ₽", 5000),
+        ("1'999 ₽", 999),
+        ("1’999 ₽", 999),
+        ("10–50 ₽", 50),
+        ("10—50 ₽", 50),
+        ("−1999/50 ₽", 50),
+        ("99:50 ₽", 50),
+    ],
+)
+def test_assessment_never_uses_a_money_suffix_as_the_full_ruble_price(money_text, claimed_price):
+    observations = [
+        _observation(source=f"Synthetic {index}", host=f"money-{index}.example", price_rub=claimed_price)
+        for index in range(3)
+    ]
+    for observation in observations:
+        observation["source_excerpt"] = f"Ford 1712024 новый, цена {money_text}"
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    assert result["ok"] is False
+    assert result["status"] == "no_valid_public_evidence"
+    assert result["accepted_offer_count"] == 0
+    assert all(segment["median_price_rub"] is None for segment in result["segments"])
+
+
+@pytest.mark.parametrize(
+    "other_money",
+    [
+        "99,50 ₽",
+        "-50 ₽",
+        "19 99 ₽",
+        "1.500 ₽",
+        "10–50 ₽",
+        "1’050 ₽",
+        "(99,50 ₽)",
+        "[99,50 ₽]",
+        "«99,50 ₽»",
+        "99:50 ₽",
+    ],
+)
+def test_assessment_does_not_hide_an_unsupported_money_amount_beside_a_valid_price(other_money):
+    observations = [
+        _observation(source=f"Synthetic {index}", host=f"mixed-money-{index}.example", price_rub=50)
+        for index in range(3)
+    ]
+    for observation in observations:
+        observation["source_excerpt"] = f"Ford 1712024 новый, {other_money}; цена 50 ₽"
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [
+        {"observation_index": index, "code": "price_ambiguous_in_source_excerpt"} for index in range(3)
+    ]
+    assert all(segment["median_price_rub"] is None for segment in result["segments"])
+
+
+@pytest.mark.parametrize(
+    "excerpt",
+    [
+        "Ford 1712024 новый цена 5000 ₽",
+        "Ford 1712024 новый цена 5 000 рублей.",
+        "Ford 1712024 новый цена 5\u00a0000 руб.",
+        "Ford 1712024 новый цена 5\u202f000 RUB",
+        "Ford 1712024 новый цена 5000,00 ₽",
+        "Ford 1712024 новый цена 5 000.00 р.",
+        "Ford 1712024 5000 ₽ новый",
+        "Ford 1712024 новый цена (5000 ₽)",
+        "Ford 1712024 новый цена [5 000 руб.]",
+        "Ford 1712024 новый цена «5000руб»",
+        "Ford: 1712024 5000 ₽ новый",
+        "Ford; 1712024 5000 ₽ новый",
+        "Ford ( 1712024 5000 ₽) новый",
+        "Ford 1712024:5000 ₽ новый",
+        "Ford 171-2024 5000 ₽ новый",
+        "Ford 171.2024 5000 ₽ новый",
+        "Ford 171/2024 5000 ₽ новый",
+    ],
+)
+def test_assessment_preserves_exact_whole_ruble_prices_and_numeric_article_boundary(excerpt):
+    observations = [
+        _observation(source=f"Synthetic {index}", host=f"whole-money-{index}.example", price_rub=5000)
+        for index in range(3)
+    ]
+    for observation in observations:
+        observation["source_excerpt"] = excerpt
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+
+    assert result["ok"] is True
+    assert result["accepted_offer_count"] == 3
+    assert _segment(result, "original", "new", "krasnoyarsk")["median_price_rub"] == 5000
+
+
+@pytest.mark.parametrize(
+    ("money_text", "claimed_price", "accepted"),
+    [("123 500 ₽", 500, False), ("123 500 ₽", 123500, True), ("123 456 789 ₽", 456789, False)],
+)
+def test_assessment_never_strips_a_known_article_from_a_valid_whole_money_amount(money_text, claimed_price, accepted):
+    observations = [
+        _observation(
+            source=f"Synthetic {index}", host=f"numeric-sku-{index}.example", price_rub=claimed_price, article="123"
+        )
+        for index in range(3)
+    ]
+    for observation in observations:
+        observation["source_excerpt"] = f"Ford 123 новый, цена {money_text}"
+
+    result = assess_part_market(article="123", brand="Ford", observations=observations)
+
+    assert result["accepted_offer_count"] == (3 if accepted else 0)
+    assert _segment(result, "original", "new", "krasnoyarsk")["median_price_rub"] == (
+        claimed_price if accepted else None
+    )
+
+
+def test_assessment_cannot_reinterpret_a_repeated_article_as_the_prefix_of_a_malformed_price():
+    observation = _observation(source="Synthetic", host="repeated-article.example", price_rub=50, article="123")
+    observation["source_excerpt"] = "Ford 123 новый, цена 123:50 ₽"
+
+    result = assess_part_market(article="123", brand="Ford", observations=[observation])
+
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [{"observation_index": 0, "code": "price_not_in_source_excerpt"}]
+
+
 def test_assessment_cannot_label_another_target_city_as_krasnoyarsk():
     result = assess_part_market(
         article="1712024",
