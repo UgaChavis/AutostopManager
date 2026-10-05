@@ -546,3 +546,90 @@ def test_source_condition_evidence_controls_known_segments_and_medians(
     if declared_condition == "unknown":
         assert segment["median_eligible"] is False
         assert segment["median_exclusion_reasons"] == {"unknown_condition": 3}
+
+
+@pytest.mark.parametrize(
+    ("article", "brand", "source_condition", "supported_condition"),
+    [
+        ("NEW-1712024", "Ford", "", None),
+        ("USED-1712024", "Ford", "", None),
+        ("UNUSED-1712024", "Ford", "", None),
+        ("1712024", "New Era", "", None),
+        ("1712024", "Used Parts", "", None),
+        ("1712024", "Brand New", "", None),
+        ("NEW-1712024", "Ford", "новый", "new"),
+        ("NEW-1712024", "Ford", "б/у", "used"),
+        ("USED-1712024", "Ford", "new", "new"),
+        ("USED-1712024", "Ford", "used", "used"),
+        ("1712024", "New Era", "new", "new"),
+        ("1712024", "New Era", "б/у", "used"),
+        ("1712024", "Used Parts", "новый", "new"),
+        ("1712024", "Used Parts", "used", "used"),
+        ("1712024", "Brand New", "new", "new"),
+        ("1712024", "Brand New", "б/у", "used"),
+        ("NEW", "Ford", "новый", "new"),
+        ("USED", "Ford", "б/у", "used"),
+        ("1712024", "New", "новый", "new"),
+        ("1712024", "Used", "б/у", "used"),
+    ],
+)
+@pytest.mark.parametrize("declared_condition", ["new", "used", "unknown"])
+def test_condition_evidence_excludes_known_identity_without_losing_separate_state(
+    article, brand, source_condition, supported_condition, declared_condition
+):
+    observations = []
+    for index, price in enumerate((5_000, 6_000, 7_000)):
+        row = _observation(
+            source="Synthetic",
+            host=f"identity-{index}.example",
+            price_rub=price,
+            article=article,
+            brand=brand,
+            condition=declared_condition,
+        )
+        row["source_excerpt"] = f"{brand} {article}: {source_condition}; цена {price} ₽"
+        observations.append(row)
+    result = assess_part_market(article=article, brand=brand, observations=observations)
+    accepted = declared_condition == "unknown" or declared_condition == supported_condition
+    assert result["accepted_offer_count"] == (3 if accepted else 0)
+    segment = _segment(result, "original", declared_condition, "krasnoyarsk")
+    assert segment["median_price_rub"] == (6_000 if accepted and declared_condition != "unknown" else None)
+    assert all(offer["condition"] == declared_condition for offer in segment["offers"])
+    if not accepted:
+        assert [row["code"] for row in result["rejected_observations"]] == ["condition_not_in_source_excerpt"] * 3
+
+
+def test_masked_identity_cannot_join_non_use_phrase_across_brand():
+    row = _observation(source="Synthetic", host="identity-gap.example", price_rub=5_000, brand="New Era")
+    row["source_excerpt"] = "1712024: не New Era использован; цена 5000 ₽"
+    result = assess_part_market(article="1712024", brand="New Era", observations=[row])
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [{"observation_index": 0, "code": "condition_not_in_source_excerpt"}]
+
+
+@pytest.mark.parametrize("target_brand", ["Ford", "New Era", "Used Parts"])
+@pytest.mark.parametrize("condition", ["new", "used"])
+def test_analog_target_identity_does_not_supply_conflicting_condition(target_brand, condition):
+    row = _observation(
+        source="Synthetic",
+        host="analog-condition.example",
+        price_rub=5_000,
+        kind="analog",
+        article="AN12345",
+        brand="SynthBrand",
+        condition=condition,
+    )
+    source_condition = "новый" if condition == "new" else "б/у"
+    row["source_excerpt"] = f"{target_brand} NEW-1712024; SynthBrand AN12345: {source_condition}; цена 5000 ₽"
+    result = assess_part_market(article="NEW-1712024", brand=target_brand, observations=[row])
+    assert result["accepted_offer_count"] == 1
+    assert _segment(result, "analog", condition, "krasnoyarsk")["independent_offer_count"] == 1
+
+
+@pytest.mark.parametrize(("brand", "source_condition"), [("Not", "not new"), ("Like", "like new"), ("As", "as new")])
+def test_identity_mask_preserves_original_negation_and_comparison_operators(brand, source_condition):
+    row = _observation(source="Synthetic", host="identity-operator.example", price_rub=5_000, brand=brand)
+    row["source_excerpt"] = f"{brand} 1712024: {source_condition}; цена 5000 ₽"
+    result = assess_part_market(article="1712024", brand=brand, observations=[row])
+    assert result["accepted_offer_count"] == 0
+    assert result["rejected_observations"] == [{"observation_index": 0, "code": "condition_not_in_source_excerpt"}]

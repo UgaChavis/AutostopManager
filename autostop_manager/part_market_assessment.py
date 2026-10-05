@@ -92,12 +92,16 @@ def _contains_article(excerpt: str, article: str) -> bool:
     return any(_normalize_article(token) == article for token in _ARTICLE_TOKEN.findall(excerpt))
 
 
-def _contains_brand(excerpt: str, raw_brand: Any) -> bool:
+def _brand_pattern(raw_brand: Any) -> str:
     tokens = re.findall(r"[^\W_]+", _compact(raw_brand, limit=80), re.UNICODE)
     if not tokens:
-        return False
-    pattern = r"(?<![^\W_])" + r"[\s._/\\-]*".join(re.escape(token) for token in tokens) + r"(?![^\W_])"
-    return re.search(pattern, excerpt, re.IGNORECASE) is not None
+        return ""
+    return r"(?<![^\W_])" + r"[\s._/\\-]*".join(re.escape(token) for token in tokens) + r"(?![^\W_])"
+
+
+def _contains_brand(excerpt: str, raw_brand: Any) -> bool:
+    pattern = _brand_pattern(raw_brand)
+    return bool(pattern and re.search(pattern, excerpt, re.IGNORECASE))
 
 
 def _prices_in_excerpt(excerpt: str) -> set[int]:
@@ -223,13 +227,24 @@ def _condition(value: Any) -> str:
     return _CONDITION_ALIASES.get(_compact(value, limit=30).casefold(), "")
 
 
-def _condition_supported(excerpt: str, condition: str) -> bool:
+def _condition_supported(excerpt: str, condition: str, *, articles: set[str], brands: tuple[Any, ...]) -> bool:
     if condition == "unknown":
         return True
+    # Mask known identity spans using a non-whitespace separator, so a SKU or
+    # brand cannot prove a state or join a condition phrase across that span.
+    spans = [marker.span() for marker in _ARTICLE_TOKEN.finditer(excerpt) if _normalize_article(marker[0]) in articles]
+    for raw_brand in brands:
+        brand_pattern = _brand_pattern(raw_brand)
+        if brand_pattern:
+            spans.extend(marker.span() for marker in re.finditer(brand_pattern, excerpt, re.IGNORECASE))
+    condition_text = list(excerpt)
+    for start, end in spans:
+        condition_text[start:end] = "\0" * (end - start)
+    evidence_text = "".join(condition_text)
     affirmed: set[str] = set()
     denied: set[str] = set()
     for candidate, pattern in _CONDITION_MARKERS.items():
-        for marker in pattern.finditer(excerpt):
+        for marker in pattern.finditer(evidence_text):
             modifier = _CONDITION_MODIFIER.search(excerpt[: marker.start()])
             operator = modifier["operator"].casefold() if modifier is not None else ""
             if not operator or (candidate == "used" and operator in {"как", "as"}):
@@ -262,6 +277,7 @@ def _validated_observation(
     target_article: str,
     target_brand: str,
     target_region: str,
+    target_brand_name: str | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not isinstance(row, Mapping):
         return None, _reject(index, "observation_not_object")
@@ -296,7 +312,12 @@ def _validated_observation(
         excerpt, article=article, target_article=target_article, kind=kind, price_rub=price_rub
     ):
         return None, _reject(index, "price_not_tied_to_article_in_source_excerpt")
-    if not _condition_supported(excerpt, condition):
+    if not _condition_supported(
+        excerpt,
+        condition,
+        articles={article, target_article},
+        brands=(row.get("brand"), target_brand_name),
+    ):
         return None, _reject(index, "condition_not_in_source_excerpt")
     if kind == "original" and (article != target_article or (target_brand and brand != target_brand)):
         return None, _reject(index, "original_not_exact_target_match")
@@ -416,6 +437,7 @@ def assess_part_market(
             target_article=target_article,
             target_brand=target_brand,
             target_region=safe_target_region,
+            target_brand_name=brand,
         )
         if candidate is not None:
             candidates.append(candidate)
