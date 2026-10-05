@@ -421,3 +421,128 @@ def test_assessment_rejects_original_brand_or_article_mismatch_and_unsafe_url():
         {"observation_index": 0, "code": "original_not_exact_target_match"},
         {"observation_index": 1, "code": "observation_fields_invalid"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("source_condition", "supported_condition"),
+    [
+        ("новый", "new"),
+        ("НОВАЯ", "new"),
+        ("новое", "new"),
+        ("новые", "new"),
+        ("new", "new"),
+        ("brand new", "new"),
+        ("brand-new", "new"),
+        ("brand‑new", "new"),
+        ("unused", "new"),
+        ("не использовался", "new"),
+        ("не использовалась", "new"),
+        ("не использовалось", "new"),
+        ("не использовались", "new"),
+        ("не использован", "new"),
+        ("не использована", "new"),
+        ("не использовано", "new"),
+        ("не использованы", "new"),
+        ("новый, не использовался", "new"),
+        ("не б/у, новый", "new"),
+        ("not used, new", "new"),
+        ("не совсем б/у, новый", "new"),
+        ("б/у", "used"),
+        ("(б/у)", "used"),
+        ("б / у", "used"),
+        ("бу,", "used"),
+        ("used", "used"),
+        ("с разборки", "used"),
+        ("контрактный", "used"),
+        ("контрактная", "used"),
+        ("контрактное", "used"),
+        ("контрактные", "used"),
+        ("б/у, не новый", "used"),
+        ("не новый, с разборки", "used"),
+        ("not new, used", "used"),
+        ("б/у, как новый", "used"),
+        ("used, like new", "used"),
+        ("used, as new", "used"),
+        ("продаётся как б/у", "used"),
+        ("sold as used", "used"),
+        ("like used", None),
+        ("не как б/у", None),
+        ("not as used", None),
+        ("not like used", None),
+        ("состояние не указано", None),
+        ("renewed", None),
+        ("newton", None),
+        ("misused", None),
+        ("контрактник", None),
+        ("не используется", None),
+        ("не новый", None),
+        ("не совсем новый", None),
+        ("не очень новый", None),
+        ("не полностью новый", None),
+        ("не «новый»", None),
+        ("не (новый)", None),
+        ("не — новый", None),
+        ("не – новый", None),
+        ("не‑новый", None),
+        ("не—новый", None),
+        ("не−новый", None),
+        ("not — new", None),
+        ("новый, но не — новый", None),
+        ("б/у, но не — б/у", None),
+        ("не как новый", None),
+        ("not as new", None),
+        ("not like new", None),
+        ("not new", None),
+        ("not brand new", None),
+        ("not-brand-new", None),
+        ("не б/у", None),
+        ("not used", None),
+        ("never used", None),
+        ("not unused", None),
+        ("как новый", None),
+        ("like new", None),
+        ("as new", None),
+        ("новый, б/у", None),
+        ("новый/б/у", None),
+        ("new and used", None),
+        ("unused, used", None),
+        ("новый, но не новый", None),
+        ("used, not used", None),
+        ("не новый и не б/у", None),
+        ("не не использовался", None),
+    ],
+)
+@pytest.mark.parametrize("declared_condition", ["new", "used", "unknown"])
+def test_source_condition_evidence_controls_known_segments_and_medians(
+    source_condition, supported_condition, declared_condition
+):
+    today = datetime.now(UTC).date().isoformat()
+    observations = []
+    for index, price_rub in enumerate((5_000, 6_000, 7_000)):
+        observation = _observation(
+            source=f"Synthetic condition {index}",
+            host=f"condition-{index}.example",
+            price_rub=price_rub,
+            condition=declared_condition,
+            published_at=today,
+        )
+        observation["source_excerpt"] = f"Ford 1712024: {source_condition}; цена {price_rub} ₽"
+        observations.append(observation)
+
+    result = assess_part_market(article="1712024", brand="Ford", observations=observations)
+    accepted = declared_condition == "unknown" or declared_condition == supported_condition
+    assert result["accepted_offer_count"] == (3 if accepted else 0)
+    segment = _segment(result, "original", declared_condition, "krasnoyarsk")
+    expected_median = 6_000 if accepted and declared_condition != "unknown" else None
+    assert segment["median_price_rub"] == expected_median
+    assert segment["median_input_offer_count"] == (3 if expected_median is not None else 0)
+    assert segment["independent_offer_count"] == (3 if accepted else 0)
+    assert all(offer["condition"] == declared_condition for offer in segment["offers"])
+    assert all(
+        item["median_price_rub"] is None for item in result["segments"] if item["condition"] != declared_condition
+    )
+    if not accepted:
+        assert [row["code"] for row in result["rejected_observations"]] == ["condition_not_in_source_excerpt"] * 3
+    if declared_condition == "unknown":
+        assert segment["median_eligible"] is False
+        assert segment["median_exclusion_reasons"] == {"unknown_condition": 3}

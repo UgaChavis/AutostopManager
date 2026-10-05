@@ -49,9 +49,22 @@ _CONDITION_ALIASES = {
     "неизвестно": "unknown",
 }
 _CONDITION_MARKERS = {
-    "new": ("новый", "новая", "новое", "new", "не использ"),
-    "used": ("б/у", " бу ", "used", "с разборки", "контрактн"),
+    "new": re.compile(
+        r"(?<!\w)(?:нов(?:ый|ая|ое|ые)|(?:brand[\s\-‐‑‒–—−]+)?new|unused|"
+        r"не\s+использова(?:л(?:ся|ась|ось|ись)|н(?:а|о|ы)?))(?!\w)",
+        re.IGNORECASE,
+    ),
+    "used": re.compile(
+        r"(?<!\w)(?:б\s*/\s*у|бу|used|с\s+разборки|контрактн(?:ый|ая|ое|ые))(?!\w)",
+        re.IGNORECASE,
+    ),
 }
+_CONDITION_MODIFIER = re.compile(
+    r"(?<!\w)(?P<operator>не|ни|нет|not|no|never|как|like|as)"
+    r"(?:[\s\-‐‑‒–—−\"'«»()\[\]:]+(?:совсем|очень|полностью|абсолютно|совершенно|"
+    r"действительно|really|quite|entirely|totally|как|like|as))*[\s\-‐‑‒–—−\"'«»()\[\]:]+\Z",
+    re.IGNORECASE,
+)
 _SEGMENT_ORDER = tuple(
     (kind, condition, region_scope)
     for kind in ("original", "analog")
@@ -213,8 +226,19 @@ def _condition(value: Any) -> str:
 def _condition_supported(excerpt: str, condition: str) -> bool:
     if condition == "unknown":
         return True
-    folded = f" {excerpt.casefold()} "
-    return any(marker in folded for marker in _CONDITION_MARKERS[condition])
+    affirmed: set[str] = set()
+    denied: set[str] = set()
+    for candidate, pattern in _CONDITION_MARKERS.items():
+        for marker in pattern.finditer(excerpt):
+            modifier = _CONDITION_MODIFIER.search(excerpt[: marker.start()])
+            operator = modifier["operator"].casefold() if modifier is not None else ""
+            if not operator or (candidate == "used" and operator in {"как", "as"}):
+                affirmed.add(candidate)
+            elif operator not in {"как", "like", "as"}:
+                denied.add(candidate)
+    # A negated or conflicting claim must never enter a known-condition median.
+    # Explicit non-use phrases are complete new markers, not negated used ones.
+    return affirmed == {condition} and condition not in denied
 
 
 def _region_scope(value: Any, target_region: str) -> str:
