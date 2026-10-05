@@ -264,6 +264,9 @@ def test_catalog_script_uses_its_own_checkout_with_an_isolated_interpreter(tmp_p
         "autostop_manager/markdown_links.py",
     ):
         write(project / name, (ROOT / name).read_text())
+    document_links = ROOT / "autostop_manager/document_links.py"
+    if document_links.is_file():
+        write(project / "autostop_manager/document_links.py", document_links.read_text())
     write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)")
     write(project / "docs/agent/modules/A1.md", "# A1")
 
