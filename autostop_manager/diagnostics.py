@@ -7,9 +7,10 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
 
 from .config import PROJECT_ROOT
+from .document_links import local_document_link_target
+from .markdown_links import visible_markdown_links
 
 MODULE_PARENTS: dict[str, str | None] = {
     "A1": None,
@@ -104,18 +105,13 @@ def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
 
 
 def _document_links(text: str) -> list[str]:
-    inline = re.findall(r"\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]+)?\s*\)", text)
-    references = re.findall(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))", text)
-    return [angled or plain for angled, plain in (*inline, *references)]
+    return visible_markdown_links(text)
 
 
 def _local_link_path(link: str, document: Path, root: Path, *, check_external_links: bool = True) -> Path | None:
-    parsed = urlsplit(link)
-    if parsed.scheme or not parsed.path:
+    target = local_document_link_target(link)
+    if target is None:
         return None
-    target = unquote(parsed.path)
-    # App-rendered file links may include a one-based line number.
-    target = re.sub(r":\d+$", "", target)
     candidate = Path(normpath(document.parent / target))
     document_name = document.relative_to(root).as_posix()
     if not check_external_links and not candidate.is_relative_to(root):
