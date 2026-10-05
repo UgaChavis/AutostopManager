@@ -88,6 +88,133 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
     assert not diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
 
 
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "[unused-e10]: E10.md",
+        "```markdown\n[E10](E10.md)\n```",
+        "~~~markdown\n[E10](E10.md)\n~~~",
+        "````markdown\n```\n[E10](E10.md)\n```\n````",
+        "```markdown\n[E10](E10.md)",
+        "```markdown\n[E10](E10.md)\n````",
+        "`[E10](E10.md)`",
+        "``[E10](E10.md)``",
+        "`spanning\n[E10](E10.md)\ncode`",
+        "<!--\n[E10](E10.md)\n-->",
+        r"\[E10](E10.md)",
+        "![sample](E10.md)",
+        "![sample][e10]\n\n[e10]: E10.md",
+        "![e10][]\n\n[e10]: E10.md",
+        "![e10]\n\n[e10]: E10.md",
+        "![sample [E10](E10.md)](img.png)",
+        '<span data-link="[E10](E10.md)">ordinary</span>',
+        '<span title="[E10](E10.md)">ordinary</span>',
+        "<div>\n[E10](E10.md)\n</div>",
+        "<script>\n[E10](E10.md)\n</script>",
+        "    [E10](E10.md)",
+        "Intro\n[e10]: E10.md\n\n[E10]",
+    ],
+)
+def test_document_navigation_requires_a_visible_module_link(docs, literal):
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation.write_text(text + "\n" + literal + "\n")
+
+    report = diagnostics.audit_documentation(docs, check_external_links=False)
+
+    assert report["ok"] is False
+    assert "module_link_missing:docs/agent/modules/A1.md:docs/agent/modules/E10.md" in report["warnings"]
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [
+        '[E10](E10.md "Avito module")',
+        '[E10][Avito Module]\n\n[avito   module]: <E10.md> "Avito module"',
+        "[E10][]\n\n[e10]: E10.md",
+        "[E10]\n\n[e10]: E10.md",
+        r"\![E10](E10.md)",
+        r"\\[E10](E10.md)",
+        "ordinary paragraph\n    [E10](E10.md)",
+        "ordinary paragraph\n\t[E10](E10.md)",
+        "> [E10](E10.md)",
+        "- [E10](E10.md)",
+        "> ```example``` [E10](E10.md)",
+        "- ```example``` [E10](E10.md)",
+        '[E10](E10.md "<!-- sample")',
+        "[![sample [literal](missing.md)](img.png)](E10.md)",
+        "Module | Role\n--- | ---\n[E10](E10.md) | Avito",
+    ],
+)
+def test_document_navigation_accepts_visible_inline_and_used_reference_links(docs, visible):
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation.write_text(text + "\n" + visible + "\n")
+
+    assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        r"\``",
+        "`unmatched opening",
+        "`<!--`",
+        "~~~markdown\n<!--\n~~~",
+        "<!--\n~~~markdown\n-->",
+    ],
+)
+def test_document_navigation_survives_literal_markers_and_escaped_code_openings(docs, prefix):
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation.write_text(text + "\n" + prefix + "\n[E10](E10.md)\n")
+
+    assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
+@pytest.mark.parametrize(
+    "separator", ["\n\n", "\n \t\n", "\r\n\r\n", "\n~~~\nexample\n~~~\n", "\n# Section\n", "\n> Section\n"]
+)
+def test_document_navigation_in_a_separate_paragraph_survives_unmatched_code_markers(docs, separator):
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation.write_text(text + "\n` unmatched" + separator + "[E10](E10.md)" + separator + "trailing `\n")
+
+    assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
+@pytest.mark.parametrize(
+    "container",
+    [
+        "> ```markdown\n> [E10](E10.md)\n",
+        "> > ~~~markdown\n> > [E10](E10.md)\n",
+        "- ```markdown\n  [E10](E10.md)\n",
+        "1. ~~~markdown\n   [E10](E10.md)\n",
+    ],
+)
+def test_document_navigation_ignores_code_in_container_fences(docs, container):
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation.write_text(text + "\n" + container)
+
+    report = diagnostics.audit_documentation(docs, check_external_links=False)
+
+    assert report["ok"] is False
+    assert "module_link_missing:docs/agent/modules/A1.md:docs/agent/modules/E10.md" in report["warnings"]
+    assert not any("format_unsupported" in warning for warning in report["warnings"])
+
+
+def test_document_examples_and_unused_definitions_do_not_require_nonexistent_files(docs):
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    navigation.write_text(
+        navigation.read_text()
+        + "\n[unused]: missing.md\n```markdown\n[Example](also-missing.md)\n```\n"
+        + "<!-- [Hidden](hidden-missing.md) -->\n`[Literal](code-missing.md)`\n"
+    )
+
+    assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
 @pytest.mark.parametrize("kind", ["document", "link", "module"])
 def test_document_checks_report_symlink_loops_without_crashing(docs, kind):
     if kind == "link":

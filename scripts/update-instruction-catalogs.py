@@ -7,8 +7,15 @@ from datetime import date, datetime, UTC
 import json
 from pathlib import Path
 import re
+import sys
 import tomllib
 from urllib.parse import unquote, urlsplit
+
+# Use this checkout's shared parser even when invoked outside the project or
+# through a venv whose editable install points at another checkout.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from autostop_manager.markdown_links import visible_markdown_links
 
 PROJECT = Path(__file__).resolve().parents[1]
 CODEX = Path("/root/.codex")
@@ -76,10 +83,8 @@ def project_documents(project):
         if path.suffix != ".md" or path.name in {"A4.md", "A5.md"}:
             continue
         text = path.read_text(encoding="utf-8")
-        inline = re.findall(r"\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]+)?\s*\)", text)
-        references = re.findall(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))", text)
-        for angled, plain in (*inline, *references):
-            parsed = urlsplit(angled or plain)
+        for target_link in visible_markdown_links(text):
+            parsed = urlsplit(target_link)
             if parsed.scheme or not parsed.path:
                 continue
             target = path.parent / re.sub(r":\d+$", "", unquote(parsed.path))

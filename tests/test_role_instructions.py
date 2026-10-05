@@ -4,6 +4,8 @@ from datetime import datetime, UTC
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -111,6 +113,171 @@ def test_catalogs_refuse_linked_retired_or_missing_instructions(tmp_path):
     write(tmp_path / "docs/archive/old.md", "# history")
     with pytest.raises(ValueError, match="Retired"):
         catalogs.project_documents(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "[unused]: docs/missing.md",
+        "```markdown\n[Missing](docs/missing.md)\n```",
+        "~~~markdown\n[Missing](docs/missing.md)\n~~~",
+        "`[Missing](docs/missing.md)`",
+        "<!-- [Missing](docs/missing.md) -->",
+        r"\[Missing](docs/missing.md)",
+        "````markdown\n> ```\n> [Missing](docs/missing.md)\n````",
+        "<!--\n> ~~~\n[Missing](docs/missing.md)\n-->",
+        "![sample](docs/missing.md)",
+        "![sample][missing]\n\n[missing]: docs/missing.md",
+        "![missing][]\n\n[missing]: docs/missing.md",
+        "![missing]\n\n[missing]: docs/missing.md",
+        "![sample [Missing](docs/missing.md)](img.png)",
+        '<span data-link="[Missing](docs/missing.md)">ordinary</span>',
+        '<span title="[Missing](docs/missing.md)">ordinary</span>',
+        "<div>\n[Missing](docs/missing.md)\n</div>",
+        "<script>\n[Missing](docs/missing.md)\n</script>",
+        "\n    [Missing](docs/missing.md)",
+        "Intro\n[missing]: docs/missing.md\n\n[missing]",
+    ],
+)
+def test_catalogs_follow_visible_navigation_and_ignore_documentation_literals(tmp_path, example):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)\n" + example)
+    write(project / "docs/agent/modules/A1.md", "# A1")
+
+    _, a5, summary = catalogs.build_catalogs(project, codex, "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md", "docs/agent/modules/A1.md"]
+    assert "docs/missing.md" not in a5
+
+
+@pytest.mark.parametrize("usage", ["[Guide][Current Guide]", "[current guide][]", "[CURRENT GUIDE]"])
+def test_catalogs_index_used_reference_targets_and_leave_unused_documents_out(tmp_path, usage):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)")
+    write(
+        project / "docs/agent/modules/A1.md",
+        "# A1\n"
+        + usage
+        + '\n\n[current   guide]: <../references/Live Guide.md> "Current guide"\n'
+        + "[unused]: ../references/unused.md\n",
+    )
+    write(project / "docs/agent/references/Live Guide.md", "# Current guide")
+    write(project / "docs/agent/references/unused.md", "# Unused guide")
+
+    _, a5, summary = catalogs.build_catalogs(project, codex, "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md", "docs/agent/modules/A1.md", "docs/agent/references/Live Guide.md"]
+    assert "Live Guide.md" in a5 and "unused.md" not in a5
+
+
+@pytest.mark.parametrize(
+    "separator", ["\n\n", "\n \t\n", "\r\n\r\n", "\n~~~\nexample\n~~~\n", "\n# Section\n", "\n> Section\n"]
+)
+def test_catalogs_follow_visible_links_in_separate_paragraphs_between_unmatched_code_markers(tmp_path, separator):
+    write(tmp_path / "AGENTS.md", "` unmatched" + separator + "[Guide](docs/live.md)" + separator + "trailing `\n")
+    write(tmp_path / "docs/live.md", "# Guide")
+
+    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md", "docs/live.md"]
+
+
+@pytest.mark.parametrize(
+    "container",
+    [
+        "> ```markdown\n> [Missing](docs/missing.md)\n",
+        "> > ~~~markdown\n> > [Missing](docs/missing.md)\n",
+        "- ```markdown\n  [Missing](docs/missing.md)\n",
+        "1. ~~~markdown\n   [Missing](docs/missing.md)\n",
+    ],
+)
+def test_catalogs_ignore_code_in_container_fences(tmp_path, container):
+    write(tmp_path / "AGENTS.md", "# Project\n" + container)
+
+    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md"]
+
+
+@pytest.mark.parametrize(
+    "navigation",
+    [
+        "ordinary paragraph\n    [Guide](docs/live.md)",
+        "ordinary paragraph\n\t[Guide](docs/live.md)",
+        "> [Guide](docs/live.md)",
+        "- [Guide](docs/live.md)",
+        "> ```example``` [Guide](docs/live.md)",
+        "- ```example``` [Guide](docs/live.md)",
+        '[Guide](docs/live.md "<!-- sample")',
+        "[![sample [literal](missing.md)](img.png)](docs/live.md)",
+        "Module | Role\n--- | ---\n[Guide](docs/live.md) | Current guide",
+    ],
+)
+def test_catalogs_follow_real_links_with_contextual_markdown_syntax(tmp_path, navigation):
+    write(tmp_path / "AGENTS.md", navigation)
+    write(tmp_path / "docs/live.md", "# Guide")
+
+    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md", "docs/live.md"]
+
+
+def test_catalogs_reject_a_missing_target_of_a_used_reference_link(tmp_path):
+    write(tmp_path / "AGENTS.md", "[Guide][required]\n\n[required]: missing.md")
+
+    with pytest.raises(ValueError, match="Missing"):
+        catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+
+
+@pytest.mark.parametrize(
+    "navigation",
+    [
+        "[Guide](docs/Guide(one).md)",
+        r"[Guide](docs/Guide\(one\).md)",
+        '[Guide](<docs/Guide(one).md> "Current guide")',
+    ],
+)
+def test_catalogs_preserve_real_destinations_with_parentheses(tmp_path, navigation):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    write(project / "AGENTS.md", navigation)
+    write(project / "docs/Guide(one).md", "# Guide")
+
+    _, _, summary = catalogs.build_catalogs(project, codex, "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md", "docs/Guide(one).md"]
+
+
+def test_catalogs_use_the_first_reference_definition_without_following_shadowed_targets(tmp_path):
+    write(tmp_path / "AGENTS.md", "[Guide][current]\n\n[current]: docs/live.md\n[current]: missing.md")
+    write(tmp_path / "docs/live.md", "# Guide")
+
+    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+
+    assert summary["project_paths"] == ["AGENTS.md", "docs/live.md"]
+
+
+def test_catalog_script_uses_its_own_checkout_with_an_isolated_interpreter(tmp_path):
+    project = tmp_path / "project"
+    for name in (
+        "scripts/update-instruction-catalogs.py",
+        "autostop_manager/__init__.py",
+        "autostop_manager/markdown_links.py",
+    ):
+        write(project / name, (ROOT / name).read_text())
+    write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)")
+    write(project / "docs/agent/modules/A1.md", "# A1")
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", str(project / "scripts/update-instruction-catalogs.py"), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--check" in result.stdout
 
 
 def test_catalogs_respect_disabled_skill_paths_and_refuse_ambiguous_versions(tmp_path):
