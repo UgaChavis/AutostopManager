@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
+from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolRequest, CallToolRequestParams
 import pytest
 
 from autostop_manager.catalog_clients import extract_partsapi_article_candidates
+from autostop_manager.mcp_tools import register_manager_tools
+from autostop_manager.storage import StoreState
 from autostop_manager.vin_oem_resolver import (
     _assess_partsapi_identity_agreement,
     _rank_article_candidate,
@@ -184,6 +189,86 @@ def test_resolver_does_not_lookup_one_category_for_an_explicit_item_list(monkeyp
     assert result["readiness"]["ready_for_category_lookup"] is False
     assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is False
     assert result["article_candidates"] == []
+
+
+def _resolver_newline_request(channel, phrase, tmp_path, monkeypatch):
+    arguments = {
+        "identifier": SYNTHETIC_VIN,
+        "requested_part": phrase,
+        "live_vpic": False,
+        "live_partsapi_identity": True,
+        "live_partsapi_oem": True,
+    }
+    if channel == "public":
+        return resolve_vin_oem_parts(**arguments)
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
+    monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "config.sqlite3"))
+
+    async def native():
+        server = FastMCP("isolated-resolver-newlines")
+        register_manager_tools(server, StoreState(tmp_path / "store.sqlite3"))
+        handler = server._mcp_server.request_handlers[CallToolRequest]
+        response = await handler(
+            CallToolRequest(params=CallToolRequestParams(name="resolve_vin_oem_parts", arguments=arguments))
+        )
+        result = response.root
+        assert result.isError is False
+        assert isinstance(result.structuredContent, dict)
+        return result.structuredContent
+
+    return asyncio.run(native())
+
+
+@pytest.mark.parametrize("channel", ["public", "native"])
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "масляный фильтр 1 шт\nнеизвестная деталь 2 шт",
+        "масляный фильтр 1 шт\r\nнеизвестная деталь 2 шт",
+        "масляный фильтр 1 шт\n\nнеизвестная деталь 2 шт",
+        "масляный фильтр 1 шт\nмасляный фильтр 2 шт",
+        "масляный фильтр 1 шт\r\nмасляный фильтр 2 шт",
+    ],
+)
+def test_resolver_preserves_newline_item_boundaries(channel, phrase, tmp_path, monkeypatch):
+    calls = _install_fakes(monkeypatch, rows=[{"NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": 100470}])
+
+    result = _resolver_newline_request(channel, phrase, tmp_path, monkeypatch)
+
+    assert result["part_intent"]["raw"] == phrase
+    assert result["part_intent"]["intent_id"] == "multiple_parts"
+    assert result["part_intent"]["clarification_fields"] == ["split_by_part"]
+    assert result["status"] == "needs_part_clarification"
+    assert [call["operation"] for call in calls] == ["vin_decode"]
+    assert result["readiness"]["ready_for_category_lookup"] is False
+    assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert result["readiness"]["ready_for_crm_writeback"] is False
+    assert result["article_candidates"] == []
+
+
+@pytest.mark.parametrize("channel", ["public", "native"])
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "масляный\nфильтр",
+        "масляный\r\nфильтр",
+        "масляный фильтр\nс доставкой",
+        "масляный фильтр\nколичество 2 шт",
+        " \nмасляный\nфильтр \r\n",
+    ],
+)
+def test_resolver_preserves_wrapped_single_part_names(channel, phrase, tmp_path, monkeypatch):
+    calls = _install_fakes(monkeypatch, rows=[{"NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": 100470}], articles=[])
+
+    result = _resolver_newline_request(channel, phrase, tmp_path, monkeypatch)
+
+    assert result["part_intent"]["raw"] == phrase.strip()
+    assert result["part_intent"]["intent_id"] == "oil_filter"
+    assert result["part_intent"]["clarification_required"] is False
+    assert [call["operation"] for call in calls] == ["vin_decode", "search_tree", "articles"]
+    assert result["readiness"]["ready_for_category_lookup"] is True
+    assert result["readiness"]["ready_for_tecdoc_candidate_lookup"] is True
+    assert result["readiness"]["ready_for_crm_writeback"] is False
 
 
 @pytest.mark.parametrize(

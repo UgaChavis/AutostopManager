@@ -924,7 +924,7 @@ def _resolve_vin_oem_parts(
     raw_identifier = _compact(identifier)
     classification = classify_identifier(raw_identifier, identifier_type=identifier_type)
     vin_supported = classification.kind == "vin"
-    part_text = _compact(requested_part)
+    part_text = str(requested_part or "").strip()
     requested_vehicle_type = _canonical_vehicle_type(vehicle_type)
     part_profile = normalize_part_intent(part_text, axle=axle, side=side, position=position, inner_outer=inner_outer)
     context = {
