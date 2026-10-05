@@ -7,10 +7,14 @@ from datetime import date, datetime, UTC
 import json
 from pathlib import Path
 import re
+import sys
 import tomllib
-from urllib.parse import unquote, urlsplit
 
 PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT))
+
+from autostop_manager.document_links import local_document_link_target  # noqa: E402
+
 CODEX = Path("/root/.codex")
 PACKAGES = (
     "gmail",
@@ -79,10 +83,10 @@ def project_documents(project):
         inline = re.findall(r"\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]+)?\s*\)", text)
         references = re.findall(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))", text)
         for angled, plain in (*inline, *references):
-            parsed = urlsplit(angled or plain)
-            if parsed.scheme or not parsed.path:
+            destination = local_document_link_target(angled or plain)
+            if destination is None:
                 continue
-            target = path.parent / re.sub(r":\d+$", "", unquote(parsed.path))
+            target = path.parent / destination
             target = target.resolve()
             if target.is_relative_to(project) and target.suffix in {".md", ".json"}:
                 pending.append(target)

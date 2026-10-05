@@ -7,9 +7,9 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
 
 from .config import PROJECT_ROOT
+from .document_links import local_document_link_target
 
 MODULE_PARENTS: dict[str, str | None] = {
     "A1": None,
@@ -110,12 +110,9 @@ def _document_links(text: str) -> list[str]:
 
 
 def _local_link_path(link: str, document: Path, root: Path, *, check_external_links: bool = True) -> Path | None:
-    parsed = urlsplit(link)
-    if parsed.scheme or not parsed.path:
+    target = local_document_link_target(link)
+    if target is None:
         return None
-    target = unquote(parsed.path)
-    # App-rendered file links may include a one-based line number.
-    target = re.sub(r":\d+$", "", target)
     candidate = Path(normpath(document.parent / target))
     document_name = document.relative_to(root).as_posix()
     if not check_external_links and not candidate.is_relative_to(root):
