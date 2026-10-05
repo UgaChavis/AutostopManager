@@ -95,6 +95,78 @@ def test_compound_request_preserves_distinct_parts_without_single_category(phras
 
 
 @pytest.mark.parametrize(
+    "phrase",
+    [
+        "масляный фильтр 1 шт и прокладка клапанной крышки 1 шт",
+        "прокладка клапанной крышки 1 шт и масляный фильтр 1 шт",
+        "масляный фильтр и прокладка клапанной крышки",
+        "масляный фильтр с доставкой и прокладка клапанной крышки",
+        "oil filter with delivery and valve cover gasket",
+        "oil filter 1 pc and valve cover gasket 1 pc",
+        "масляный фильтр 1 шт, неизвестная деталь 2 шт",
+        "масляный фильтр 1 шт; неизвестная деталь 2 шт",
+        "масляный фильтр 1 шт\nнеизвестная деталь 2 шт",
+        "масляный фильтр 1 шт + неизвестная деталь 2 шт",
+        "масляный фильтр 1 шт+неизвестная деталь 2 шт",
+        "масляный фильтр 1 шт / неизвестная деталь 2 шт",
+        "масляный фильтр 1 шт и масляный фильтр 2 шт",
+        "передние амортизаторы 2 шт и задние амортизаторы 2 шт",
+        "water pump and thermostat",
+        "масляный фильтр с крышкой, прокладкой и салонный фильтр",
+        "масляный фильтр с крышкой, прокладкой и болтами 2 шт",
+        "oil filter with housing, seal and air filter",
+        "oil filter with housing, seal and bolts 2 pcs",
+        "масляный фильтр, количество прокладок 2 шт",
+        "oil filter, quantity of gaskets 2 pcs",
+    ],
+)
+def test_explicit_item_list_cannot_be_collapsed_to_one_known_intent(phrase):
+    result = normalize_part_intent(phrase)
+
+    assert result["intent_id"] == "multiple_parts"
+    assert result["recognized"] is True
+    assert result["raw"] == phrase
+    assert result["catalog_search_terms"] == [phrase]
+    assert result["clarification_fields"] == ["split_by_part"]
+    assert result["clarification_required"] is True
+    assert result["partsapi_category_candidates"] == []
+
+
+@pytest.mark.parametrize(
+    ("phrase", "intent"),
+    [
+        ("фара ближнего и дальнего света", "headlight"),
+        ("injector seal and washer", "injector_seal_washer"),
+        ("масляный фильтр с крышкой и прокладкой", "oil_filter"),
+        ("oil filter with housing and seal", "oil_filter"),
+        ("масляный фильтр с крышкой, прокладкой и болтами", "oil_filter"),
+        ("oil filter with housing, seal and bolts", "oil_filter"),
+        ("масляный фильтр, 1 шт", "oil_filter"),
+        ("oil filter, 1 pc", "oil_filter"),
+        ("передние колодки, 1 комплект", "front_brake_pads"),
+        ("масляный фильтр, количество 1 шт", "oil_filter"),
+        ("oil filter, quantity 1 pc", "oil_filter"),
+        ("масляный фильтр, кол-во: 1 шт", "oil_filter"),
+        ("oil filter, qty: 1 pc", "oil_filter"),
+        ("oil filter, count = 1 pc", "oil_filter"),
+        ("масляный фильтр с новым корпусом и прокладкой", "oil_filter"),
+        ("масляный фильтр с пластиковой крышкой и уплотнением", "oil_filter"),
+        ("oil filter with a new housing and seal", "oil_filter"),
+        ("oil filter with the plastic cover and seal", "oil_filter"),
+        ("масляный фильтр, пожалуйста", "oil_filter"),
+        ("масляный фильтр 1,5 шт", "oil_filter"),
+        ("a/c compressor", "ac_compressor"),
+        ("передние и задние амортизаторы", "shock_absorber"),
+    ],
+)
+def test_name_modifiers_and_assembly_attachments_do_not_create_extra_items(phrase, intent):
+    result = normalize_part_intent(phrase)
+
+    assert result["intent_id"] == intent
+    assert result["raw"] == phrase
+
+
+@pytest.mark.parametrize(
     ("phrase", "intent"),
     [
         ("внутренний ШРУС", "inner_cv_joint"),
