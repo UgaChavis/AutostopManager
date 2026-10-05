@@ -174,6 +174,25 @@ finalize_work_candidate_runtime() {
   model_manifest_path="${model_manifest_dir}/faster-whisper-small.sha256"
 }
 
+validate_bridge_imports() {
+  "${venv_root}/bin/python" -I -B -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from autostop_manager.telegram_bridge import InboundMonitor
+from autostop_manager.telegram_automation_control import (
+    TelegramAutomationIncomingCoordinator,
+    build_runtime_owner_adapter,
+)
+InboundMonitor()
+TelegramAutomationIncomingCoordinator(build_runtime_owner_adapter(
+    owner_peer_id=1,
+    socket_path=Path("/nonexistent/autostop-telegram-import-probe.sock"),
+    idempotency_secret=b"0" * 32,
+))
+' "${PROJECT_ROOT}"
+}
+
 install_model_manifest() {
   local expected_payloads=(config.json model.bin tokenizer.json vocabulary.txt)
   local -a actual_payloads=()
@@ -331,6 +350,10 @@ if [[ -f "${config_dir}/credentials" ]] \
 fi
 
 if [[ "${account}" == "work" && "${work_candidate_reused}" -eq 1 ]]; then
+  if ! validate_bridge_imports; then
+    echo "telegram_enabled_lane_import_failed=true" >&2
+    exit 1
+  fi
   echo "telegram_bridge_installed=true"
   echo "account=work"
   echo "runtime_candidate=reused"
@@ -358,6 +381,10 @@ fi
   -r "${requirements_lock}"
 if ! "${venv_root}/bin/python" -m pip check; then
   echo "telegram_dependency_check_failed=true" >&2
+  exit 1
+fi
+if ! validate_bridge_imports; then
+  echo "telegram_enabled_lane_import_failed=true" >&2
   exit 1
 fi
 if [[ "${account}" == "work" ]]; then

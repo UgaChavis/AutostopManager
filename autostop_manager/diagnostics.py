@@ -10,7 +10,6 @@ from typing import Any
 
 from .config import PROJECT_ROOT
 from .document_links import local_document_link_target
-from .markdown_links import visible_markdown_links
 
 MODULE_PARENTS: dict[str, str | None] = {
     "A1": None,
@@ -105,6 +104,9 @@ def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
 
 
 def _document_links(text: str) -> list[str]:
+    # The Telegram control client only needs instruction_paths, not the parser.
+    from .markdown_links import visible_markdown_links
+
     return visible_markdown_links(text)
 
 
