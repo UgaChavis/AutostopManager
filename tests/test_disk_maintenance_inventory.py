@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -389,12 +390,17 @@ def test_archive_verification_rejects_traversal_without_extracting(tmp_path):
     assert not (tmp_path.parent / "escaped").exists()
 
 
-def test_read_only_current_tuple_verifies_gitarchive_without_inventing_manifest(tmp_path):
+def runtime_tuple(tmp_path, *, standalone=False):
     revision = "a" * 40
     manager_root, telegram_root, runtime_root = [tmp_path / name for name in ("managers", "telegrams", "runtimes")]
     for root in (manager_root, telegram_root, runtime_root):
         root.mkdir()
-    manager = manager_root / f"20261002T164351Z-{'b' * 12}-100-manager-{revision[:12]}"
+    name = (
+        f"20261006T052555Z-client-{revision[:12]}-1439935"
+        if standalone
+        else f"20261002T164351Z-{'b' * 12}-100-manager-{revision[:12]}"
+    )
+    manager = manager_root / name
     telegram = telegram_root / f"20261002T165049Z-{revision[:12]}"
     runtime = runtime_root / revision
     manager.mkdir()
@@ -427,12 +433,111 @@ def test_read_only_current_tuple_verifies_gitarchive_without_inventing_manifest(
             "coherent_keep_paths": [[str(manager), str(telegram), str(runtime)]],
         }
     }
+    return policy, manager, telegram, runtime
+
+
+@pytest.mark.parametrize("standalone", [False, True])
+def test_read_only_current_tuple_verifies_gitarchive_without_inventing_manifest(tmp_path, standalone):
+    policy, _, telegram, _ = runtime_tuple(tmp_path, standalone=standalone)
     result = inv.collect_current_tuple(policy)
     assert result["ok"] is True and result["policy_refresh_required"] is False
     assert not (telegram / "REVISION").exists() and not (telegram / "MANIFEST.sha256").exists()
     write(telegram / "autostop_manager/telegram_bridge.py", "untrusted source change")
     with pytest.raises(inv.MaintenanceError, match="work_release_source_mismatch"):
         inv.collect_current_tuple(policy)
+
+
+def test_current_manager_binding_ignores_retired_retry_but_does_not_fallback_on_corruption(tmp_path):
+    policy, manager, _, _ = runtime_tuple(tmp_path, standalone=True)
+    retry = manager.parent / f"20261006T052114Z-client-{'a' * 12}-1435561"
+    shutil.copytree(manager, retry)
+    result = inv.collect_current_tuple(policy)
+    assert result["current_tuple"][0] == str(manager)
+    write(manager / "autostop_manager/telegram_bridge.py", "corrupted current; cold retry is still valid")
+    with pytest.raises(inv.MaintenanceError, match="preserved_hash_mismatch"):
+        inv.collect_current_tuple(policy)
+
+
+@pytest.mark.parametrize("binding", ["explicit", "ambiguous", "missing", "outside_root"])
+def test_retained_telegram_requires_one_manager_binding_when_revision_has_retries(tmp_path, binding):
+    policy, manager, telegram, runtime = runtime_tuple(tmp_path, standalone=True)
+    retry = manager.parent / f"20261006T052114Z-client-{'a' * 12}-1435561"
+    shutil.copytree(manager, retry)
+    previous = telegram.parent / f"20261001T165049Z-{'a' * 12}"
+    shutil.copytree(telegram, previous)
+    coherent = policy["inventory"]["coherent_keep_paths"]
+    if binding == "explicit":
+        coherent.append([str(retry), str(previous), str(runtime)])
+        write(manager / "autostop_manager/telegram_bridge.py", "current is not the previous Telegram's binding")
+        assert inv._verify_work_release(previous, policy) == "a" * 40
+    else:
+        if binding == "ambiguous":
+            coherent.extend([[str(path), str(previous), str(runtime)] for path in (manager, retry)])
+        elif binding == "outside_root":
+            coherent.append([str(tmp_path / "outside"), str(previous), str(runtime)])
+        with pytest.raises(inv.MaintenanceError, match="work_release_manager_binding_invalid"):
+            inv._verify_work_release(previous, policy)
+
+
+@pytest.mark.parametrize("previous", [False, True])
+def test_work_release_rejects_bound_manager_revision_substitution(tmp_path, previous):
+    policy, manager, telegram, runtime = runtime_tuple(tmp_path, standalone=True)
+    if previous:
+        retry = manager.parent / f"20261006T052114Z-client-{'a' * 12}-1435561"
+        shutil.copytree(manager, retry)
+        retained = telegram.parent / f"20261001T165049Z-{'a' * 12}"
+        shutil.copytree(telegram, retained)
+        policy["inventory"]["coherent_keep_paths"].append([str(retry), str(retained), str(runtime)])
+        manager, telegram = retry, retained
+    write(manager / "REVISION", "b" * 40)
+    with pytest.raises(inv.MaintenanceError, match="work_release_revision_invalid"):
+        inv._verify_work_release(telegram, policy)
+
+
+def test_preserved_standalone_snapshot_is_cold_verified(tmp_path, monkeypatch):
+    policy, manager, _, _ = runtime_tuple(tmp_path, standalone=True)
+    # Isolate coherent runtime verification from unrelated DB/image inventory.
+    monkeypatch.setattr(inv, "collect", lambda _: {"keepers": {}, "protected": [], "fingerprint": "fixture"})
+    result = inv.verify_protected(policy)
+    assert result["ok"] is True
+    assert any(row["path"] == str(manager) and row["ok"] for row in result["receipts"])
+    write(manager / "autostop_manager/telegram_bridge.py", "corrupted retained source")
+    with pytest.raises(inv.MaintenanceError, match="preserved_hash_mismatch"):
+        inv.verify_protected(policy)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "20261006T052555Z-client-" + "b" * 12 + "-1439935",
+        "20261006T052555Z-client-" + "a" * 12,
+        "20261006T052555Z-client-" + "a" * 12 + "-1439935-unexpected",
+    ],
+)
+def test_preserved_standalone_snapshot_rejects_name_revision_mismatch(tmp_path, monkeypatch, name):
+    policy, manager, _, _ = runtime_tuple(tmp_path, standalone=True)
+    renamed = manager.with_name(name)
+    manager.rename(renamed)
+    (manager.parent / "current").unlink()
+    (manager.parent / "current").symlink_to(renamed, target_is_directory=True)
+    policy["inventory"]["coherent_keep_paths"][0][0] = str(renamed)
+    monkeypatch.setattr(inv, "collect", lambda _: {"keepers": {}, "protected": [], "fingerprint": "fixture"})
+    with pytest.raises(inv.MaintenanceError, match="preserved_revision_invalid"):
+        inv.verify_protected(policy)
+
+
+def test_retired_standalone_cleanup_checks_revision_before_proposing_delete(tmp_path):
+    policy, manager, _, _ = runtime_tuple(tmp_path, standalone=True)
+    retry = manager.parent / f"20261006T052114Z-client-{'a' * 12}-1435561"
+    shutil.copytree(manager, retry)
+    candidates, protected, skipped = [], [], []
+    inv._versioned(policy, candidates, protected, skipped)
+    assert [row["path"] for row in candidates] == [str(retry)]
+    write(retry / "REVISION", "b" * 40)
+    candidates, protected, skipped = [], [], []
+    inv._versioned(policy, candidates, protected, skipped)
+    assert candidates == []
+    assert {"path": str(retry), "reason": "invalid_release_metadata"} in skipped
 
 
 def test_versioned_cleanup_skips_after_current_binding_changes(tmp_path):
