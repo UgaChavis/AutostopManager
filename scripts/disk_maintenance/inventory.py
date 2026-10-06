@@ -38,7 +38,10 @@ PG_NAME = re.compile(r"autostop24-([0-9]{8}T[0-9]{6})Z\.dump")
 FULL_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}")
 CRM_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-[0-9]+")
 STORE_NAME = re.compile(r"(?:pre-rollback-)?([0-9]{8}-[0-9]{6})-([0-9a-f]{40})")
-MANAGER_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-[0-9]+-manager-([0-9a-f]{12})")
+MANAGER_NAME = re.compile(
+    r"(?:[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-[0-9]+-manager-([0-9a-f]{12})"
+    r"|[0-9]{8}T[0-9]{6}Z-client-([0-9a-f]{12})-[0-9]+)"
+)
 TELEGRAM_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-([0-9a-f]{12})")
 SHA = re.compile(r"[0-9a-f]{40}")
 HASH = re.compile(r"[0-9a-f]{64}")
@@ -99,6 +102,11 @@ def _hash(value: Any) -> str:
 
 def _identity(path: Path) -> dict:
     return {**file_identity(path), "ctime_ns": path.lstat().st_ctime_ns}
+
+
+def _manager_name_matches_revision(path: Path, revision: str) -> bool:
+    match = MANAGER_NAME.fullmatch(path.name)
+    return bool(SHA.fullmatch(revision) and match and revision[:12] in match.groups())
 
 
 def _inventory(policy: dict) -> dict:
@@ -630,7 +638,7 @@ def _versioned(policy: dict, candidates: list, protected: list, skipped: list) -
                         raise MaintenanceError("runtime_marker_invalid")
                 elif component == "manager":
                     revision = (path / "REVISION").read_text().strip()
-                    if not SHA.fullmatch(revision) or not path.name.endswith(revision[:12]):
+                    if not _manager_name_matches_revision(path, revision):
                         raise MaintenanceError("release_revision_invalid")
                     _regular(path / "MANIFEST.sha256")
                 else:
@@ -858,8 +866,9 @@ def verify_protected(policy: dict) -> dict:
         for raw in _flatten(_inventory(policy).get("coherent_keep_paths", [])):
             path = Path(raw)
             if (path / "REVISION").is_file():
+                _regular(path / "REVISION")
                 revision = (path / "REVISION").read_text().strip()
-                if not SHA.fullmatch(revision) or not path.name.endswith(revision[:12]):
+                if not _manager_name_matches_revision(path, revision):
                     raise MaintenanceError("preserved_revision_invalid")
                 _verify_checksum_list(path, path / "MANIFEST.sha256")
             elif SHA.fullmatch(path.name):
@@ -903,13 +912,24 @@ def _verify_work_release(path: Path, policy: dict) -> str:
     matches = [
         child
         for child in managers.iterdir()
-        if MANAGER_NAME.fullmatch(child.name) and child.name.endswith("-manager-" + match[1])
+        if (manager_match := MANAGER_NAME.fullmatch(child.name)) and match[1] in manager_match.groups()
     ]
+    telegrams = _root(policy, "work_tg_releases")
+    if telegrams and (telegrams / "current").resolve() == path:
+        # A retried release can leave two cold snapshots of the same revision.
+        # Only the actual current Manager is the current Telegram's binding.
+        matches = [child for child in matches if child == (managers / "current").resolve()]
+    else:
+        tuples = [item for item in _inventory(policy).get("coherent_keep_paths", []) if str(path) in _flatten(item)]
+        bound = {Path(raw) for item in tuples for raw in _flatten(item) if Path(raw).parent == managers}
+        if tuples:
+            matches = [child for child in matches if child in bound]
     if len(matches) != 1:
         raise MaintenanceError("work_release_manager_binding_invalid")
     manager = matches[0]
+    _regular(manager / "REVISION")
     revision = (manager / "REVISION").read_text().strip()
-    if not SHA.fullmatch(revision) or revision[:12] != match[1]:
+    if not _manager_name_matches_revision(manager, revision) or revision[:12] != match[1]:
         raise MaintenanceError("work_release_revision_invalid")
     _verify_checksum_list(manager, manager / "MANIFEST.sha256")
     trusted = _checksum_rows(manager / "MANIFEST.sha256")
