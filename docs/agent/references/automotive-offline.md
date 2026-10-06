@@ -109,6 +109,8 @@ Runtime workers получают VIN по stdin, не argv. Python запуск�
 read paths. Workers закрывают публичные socket/HTTP/fetch/DNS API; сам выбранный
 decode core обращается только к local readonly SQLite. No-network stage
 дополнительно подтверждается isolated network namespace.
+Corgi Node запускается с `--jitless`: decoder работает при включённом
+systemd `MemoryDenyWriteExecute=yes`, без разрешения executable memory.
 На installed MCP с RestrictNamespaces создание новой namespace может быть
 запрещено: ordinary decode использует тот же pinned no-network code path,
 не создаёт namespace и не требует снятия systemd guards.
