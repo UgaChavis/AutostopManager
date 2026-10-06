@@ -120,10 +120,11 @@ def _context_rows(context: dict[str, Any], *, depth: int = 0) -> list[dict[str, 
 
 
 def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None) -> dict[str, list[Any]]:
+    from .automotive_contracts import context_field_evidence
+
     values: dict[str, list[Any]] = {field: [] for field in _FIELDS}
     evidence = list(identity.get("field_evidence") or [])
-    for row in _context_rows(context or {}):
-        evidence.extend({"field": key, "value": value, "source": "CRM context"} for key, value in row.items())
+    evidence.extend(context_field_evidence(context or {}))
     for row in evidence:
         if not isinstance(row, dict):
             continue

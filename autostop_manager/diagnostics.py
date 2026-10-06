@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from os.path import normpath
 import re
 import subprocess
@@ -33,16 +34,20 @@ MODULE_PARENTS: dict[str, str | None] = {
     "D4": "D2",
     "D5": "D3",
     "E1": None,
-    "E2": None,
-    "E3": None,
+    "E2": "E1",
+    "E3": "E1",
     "E4": "E1",
     "E5": "E1",
     "E6": "E1",
     "E7": "E1",
-    "E8": None,
+    "E8": "E1",
     "E9": "E1",
-    "E10": None,
-    "E11": None,
+    "E10": "E1",
+    "E11": "E1",
+    "E12": "E1",
+    "E13": "E1",
+    "E14": "E1",
+    "E15": "E1",
     "F1": None,
     "F2": None,
     "F3": "F2",
@@ -165,6 +170,21 @@ def _codex_skill_entrypoint(path: Path, *, resolve_roots: bool = False) -> bool:
     return False
 
 
+def _automotive_instruction_inventory(root: Path) -> set[str]:
+    try:
+        catalog = json.loads((root / "docs/agent/automotive_tools.json").read_text())
+        return {tool["instruction_ref"] for tool in catalog["tools"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        # The independent catalogue checker reports the exact malformed field.
+        # Missing declared cards also fail the existing inventory comparison.
+        return set()
+
+
+def _e1_plan_inventory(root: Path) -> set[str]:
+    plan = "docs/agent/drafts/e1-modernization-implementation-plan.md"
+    return {plan} if (root / plan).is_file() else set()
+
+
 def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool = True) -> dict[str, Any]:
     """Validate source documents without opening or creating a Manager database."""
     root = root.resolve()
@@ -176,6 +196,8 @@ def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool
     for skill in SKILL_DOCUMENTS:
         directory = (root / skill).parent
         references.update(str(p.relative_to(root)) for p in directory.rglob("*.md") if p.name != "SKILL.md")
+    references.update(_automotive_instruction_inventory(root))
+    references.update(_e1_plan_inventory(root))
     if actual != set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS) | references:
         warnings.append("instruction_inventory_mismatch")
     size = 0

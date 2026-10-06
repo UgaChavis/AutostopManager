@@ -1,6 +1,6 @@
 # PartsAPI: контракт магазина
 
-Сценарий: [E2](../modules/E2.md). Текущий поддерживаемый контракт основан на owner export `partsapi.ru/account/shop` от 2026-09-25: 43 метода. Private export, keys, sample URLs и customer responses не помещаются в Git/docs. Код: [partsapi_methods.py](../../../autostop_manager/partsapi_methods.py), [catalog_clients.py](../../../autostop_manager/catalog_clients.py).
+Карта задач: [E1](../modules/E1.md); 43 операции распределены по профильным подмодулям; exact invocation указан в едином registry. Текущий поддерживаемый контракт основан на owner export `partsapi.ru/account/shop` от 2026-09-25: 43 метода. Private export, keys, sample URLs и customer responses не помещаются в Git/docs. Код: [partsapi_methods.py](../../../autostop_manager/partsapi_methods.py), [catalog_clients.py](../../../autostop_manager/catalog_clients.py).
 
 ## Доступ и параметры
 

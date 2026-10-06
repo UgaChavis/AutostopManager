@@ -1,6 +1,6 @@
 # Объявления Avito и Baza.Drom
 
-Сценарии: [E10 — Avito](../modules/E10.md), [E11 — Drom](../modules/E11.md). Независимые on-demand adapters читают внешние источники; они не связываются с продавцом и не меняют CRM/Store/marketplace.
+Сценарии: [E10 — Avito](../modules/E10.md), [E10 — Drom](../modules/E10.md). Независимые on-demand adapters читают внешние источники; они не связываются с продавцом и не меняют CRM/Store/marketplace.
 
 | Источник | Private настройки | Инструменты и contract |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ URL разбирается как адрес объявления с собст�
 
 Отказы поставщика содержат безопасные `provider_code`, `http_status`, `retryable` без полного vendor message. `quota_exceeded`, `listing_not_found`, `rate_limited`, `authentication_failed`, `source_blocked`, `provider_timeout`, `provider_parse_error`, `provider_disabled` различают причины. Неизвестная ошибка остаётся общей. `retryable` описывает возможность повторения; адаптер не повторяет запрос автоматически. [Коды ReefAPI](https://reefapi.com/docs#errors).
 
-`assess_avito_price_sample` без provider вызова принимает до 60 нормализованных listing и точный part number. Принимаются только явный артикул в title/description, фиксированная положительная цена, известное состояние, город, URL и observed time. Duplicate ID/URL учитывается один раз; состояние/города разделяются. Медиана появляется с трёх distinct ads в одном сегменте и описывает лишь выборку Avito. Она не равна E9 медиане независимых доменов и не подтверждает цену/наличие/fitment. Search ranking/page coverage ограничивают выборку.
+`assess_avito_price_sample` без provider вызова принимает до 60 нормализованных listing и точный part number. Принимаются только явный артикул в title/description, фиксированная положительная цена, известное состояние, город, URL и observed time. Duplicate ID/URL учитывается один раз; состояние/города разделяются. Медиана появляется с трёх distinct ads в одном сегменте и описывает лишь выборку Avito. Она не равна E11 медиане независимых доменов и не подтверждает цену/наличие/fitment. Search ranking/page coverage ограничивают выборку.
 
 Некорректное или будущее время наблюдения, а также дата-время без часового пояса исключают одну строку с `observed_at_invalid`; UTC overflow также не прерывает оценку остальных строк. Поддерживаемый формат даты без времени сохраняется. Оценщик сохраняет правило последнего подходящего наблюдения и не устанавливает новый предел давности этой выборки.
 

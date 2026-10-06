@@ -76,6 +76,9 @@ if problems:
 PY
 }
 
+json_gate automotive-catalog "$PYTHON" scripts/check-automotive-catalog.py
+"$PYTHON" scripts/generate-automotive-instructions.py --check
+
 json_gate local-checks "$PYTHON" -m autostop_manager.cli doctor
 
 "$PYTHON" -m ruff check .

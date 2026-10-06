@@ -174,7 +174,7 @@ def test_native_e10_schema_bounds_and_read_only_annotations_are_preserved(native
 def test_scalar_preparser_is_scoped_to_two_e10_tools_and_preserves_other_tools(native_server):
     server = build_server()
     tools = server._tool_manager._tools
-    assert len(tools) == 48
+    assert len(tools) == 67
     for name, tool in tools.items():
         if name in {"avito_search_listings", "avito_read_listing"}:
             assert isinstance(tool.fn_metadata, mcp_tools._ListingScalarMetadata)

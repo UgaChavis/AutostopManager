@@ -1,6 +1,6 @@
 # Офлайн-каталоги запчастей
 
-Сценарий: [E3](../modules/E3.md). Source: [offline_catalogs.py](../../../autostop_manager/offline_catalogs.py). Private index — `data/offline_parts_catalogs/catalog_index.json`, производный текст — соседний text/. Root по умолчанию рядом с `AUTOSTOP_MANAGER_DB`; отдельный разрешённый release может задать абсолютный `AUTOSTOP_OFFLINE_CATALOG_ROOT` на общий cache. Индексация исходников не меняет runtime config.
+Сценарий: [E9](../modules/E9.md). Source: [offline_catalogs.py](../../../autostop_manager/offline_catalogs.py). Private index — `data/offline_parts_catalogs/catalog_index.json`, производный текст — соседний text/. Root по умолчанию рядом с `AUTOSTOP_MANAGER_DB`; отдельный разрешённый release может задать абсолютный `AUTOSTOP_OFFLINE_CATALOG_ROOT` на общий cache. Индексация исходников не меняет runtime config.
 
 ## Поиск
 

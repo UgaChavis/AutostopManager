@@ -264,7 +264,7 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
         }
     assert report["checks"]["native_ping"]["ok"] is True
     assert report["checks"]["tools_list"]["ok"] is True
-    assert report["checks"]["tools_list"]["tool_count"] == 48
+    assert report["checks"]["tools_list"]["tool_count"] == 67
     assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 5
     assert report["checks"]["tools_list"]["annotation_mismatch_tools"] == []
     assert report["checks"]["catalog_provider_status"]["ok"] is True
