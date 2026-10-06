@@ -1,8 +1,10 @@
 ---
 name: manage-owner-telegram
-description: Диалоги AutoStop и входящие Telegram.
+description: Общий вход для Telegram AutoStop: рабочее событие, адресат и выбор инструкции по роли через B2; поручения владельца и личный аккаунт.
 ---
 
-# Рабочий Telegram AutoStop
+# Telegram AutoStop — общий вход
 
-Для рабочего обращения прочитай [B2](../../../docs/agent/modules/B2.md); для текущего события — [B4](../../../docs/agent/modules/B4.md). Команды и личный аккаунт описаны в [B1](../../../docs/agent/modules/B1.md) и [B3](../../../docs/agent/modules/B3.md). Этот навык направляет к действующим модулям. Полномочия — [AGENTS.md](../../../AGENTS.md).
+Полномочия — [AGENTS.md](../../../AGENTS.md). Для текущего рабочего события прочитай [B4](../../../docs/agent/modules/B4.md) и пройди [B2](../../../docs/agent/modules/B2.md): он разрешает точного адресата и роль, затем задаёт обязательную инструкцию. Этот общий вход не заменяет полный клиентский скилл, который B2 выбирает только после определения клиента; для владельца сохраняется путь поручения через модули.
+
+Команды, транспорт, отправка и медиа — [B1](../../../docs/agent/modules/B1.md) и [Telegram runtime](../../../docs/agent/references/telegram-runtime.md); личный аккаунт — [B3](../../../docs/agent/modules/B3.md).

@@ -1118,7 +1118,11 @@ def _next_actions(
             "with available cross references; analogs and forum matches remain unconfirmed until applicability "
             "is checked."
         )
-        actions.append("Keep full EPC evidence outside CRM; write only concise OEM/result/next-action summary.")
+        actions.append(
+            "Keep full EPC evidence outside CRM; the catalog section contains a concise OEM/result, evidence links, "
+            "and next-action summary. The timing and complete client card follow "
+            ".agents/skills/manage-autostop-client/SKILL.md."
+        )
     if missing_context:
         actions.append("Collect missing context before making a purchase recommendation.")
     return list(dict.fromkeys(actions))
