@@ -50,6 +50,13 @@ Source-команды запускай из checkout/worktree с `/opt/AutostopM
 | `scripts/doctor.sh` | Wrapper передаёт аргументы в `doctor`; обычный режим read-only, `--full` требует одноразовой среды. |
 | `scripts/release-gates.sh` | Локальные проверки с disposable данными, не deploy. |
 | `scripts/check-e2-branch-coverage.py` | Читает coverage JSON; требует 82% ветвей E2, не меняет данные. |
+| `scripts/check-automotive-catalog.py` | Disposable state: сверяет registry, exact native schemas, все 43 PartsAPI и MD references; providers не вызывает. |
+| `scripts/generate-automotive-instructions.py` | Создаёт operation MD из registry/schema; `--check` сравнивает без записи. |
+| `scripts/export-automotive-tools.py` | `--revision EXACT_PUBLISHED_SHA --output PATH`: экспорт immutable Git snapshot в self-contained CRM bundle; сеть и business state не используются. |
+| `scripts/prepare-automotive-offline.py` | Административная подготовка pinned VINinfo/Corgi в новый `--output PATH`; проверяет архивы, DB, licenses и Node; active current/services не меняет. |
+| `scripts/check-automotive-offline.py` | `--runtime EXACT_PATH`: реальные public/synthetic positive/negative offline probes; данные клиентов не читает. |
+| `scripts/automotive-vininfo-worker.py` | Внутренний bounded Python worker; public decoder читает VIN по stdin и attested package path; сеть запрещена. |
+| `scripts/automotive-corgi-worker.mjs` | Внутренний Node worker; stdin и readonly pinned SQLite; сеть/download/fallback отсутствуют. |
 | `scripts/install-manager-mcp.sh` | Runtime installer: `--activate [--replace-unit]`. |
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate|--activate-under-hold`, `--replace-unit`, `--release-attempt-key`. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "autostop.automotive-tools.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "modules", "providers", "tools", "native_inventory", "migration"],
+  "properties": {
+    "schema_version": {"const": "autostop.automotive-tools.v1"},
+    "modules": {"type": "array", "minItems": 15, "maxItems": 15, "items": {"$ref": "#/$defs/module"}},
+    "providers": {"type": "array", "items": {"type": "object", "required": ["provider_id", "primary_data_source", "reference"], "properties": {"provider_id": {"type": "string"}, "primary_data_source": {"type": "string"}, "reference": {"type": "string"}}}},
+    "tools": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/tool"}},
+    "native_inventory": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["tool_name", "classification", "tool_ids", "reference"], "properties": {"tool_name": {"type": "string"}, "classification": {"enum": ["active", "outside", "historical", "diagnostic"]}, "tool_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "reference": {"type": "string"}}}},
+    "migration": {"type": "object", "required": ["old_to_new", "relation_strategy"], "properties": {"old_to_new": {"type": "object"}, "relation_strategy": {"type": "string"}}}
+  },
+  "$defs": {
+    "module": {"type": "object", "additionalProperties": false, "required": ["element_id", "module_key", "title", "purpose", "parent", "instruction_ref", "evidence_rules", "input_notes", "reference"], "properties": {"element_id": {"type": "string", "pattern": "^E([1-9]|1[0-5])$"}, "module_key": {"type": "string", "pattern": "^[a-z_]+$"}, "title": {"type": "string", "minLength": 1}, "purpose": {"type": "string", "minLength": 1}, "parent": {"type": ["string", "null"]}, "instruction_ref": {"type": "string"}, "evidence_rules": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "input_notes": {"type": "array", "items": {"type": "string"}}, "reference": {"type": "string"}}},
+    "tool": {"type": "object", "additionalProperties": false, "required": ["tool_id", "primary_module", "also_used_in", "classification", "title", "purpose", "provider_id", "primary_data_source", "execution_kind", "implementation_state", "instruction_ref", "input_fields", "defaults", "outputs", "errors", "limitations", "example", "invalid_example", "reference", "invocation"], "properties": {"tool_id": {"type": "string", "pattern": "^[a-zA-Z0-9_.-]+$"}, "primary_module": {"type": "string"}, "also_used_in": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "classification": {"enum": ["active", "outside", "historical", "diagnostic"]}, "title": {"type": "string", "minLength": 1}, "purpose": {"type": "string", "minLength": 1}, "provider_id": {"type": "string"}, "primary_data_source": {"type": "string"}, "execution_kind": {"enum": ["pure", "local_read", "network_read", "composed", "job_read", "job_write", "business_write"]}, "implementation_state": {"enum": ["implemented", "planned", "retired"]}, "instruction_ref": {"type": "string"}, "input_fields": {"type": "array", "items": {"type": "string"}}, "defaults": {"type": "object"}, "outputs": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "errors": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "limitations": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "example": {"type": ["object", "null"]}, "invalid_example": {"type": ["object", "null"]}, "reference": {"type": "string"}, "invocation": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["transport", "tool_name"], "properties": {"transport": {"const": "manager_mcp"}, "tool_name": {"type": "string"}, "operation": {"type": "string"}, "api_method": {"type": "string"}, "provider": {"type": "string"}}}]}}}
+  }
+}

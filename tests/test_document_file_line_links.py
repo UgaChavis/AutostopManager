@@ -61,7 +61,7 @@ def navigation_project(tmp_path: Path) -> Path:
     ],
 )
 def test_public_audit_accepts_module_navigation_with_file_line(navigation_project: Path, target: str) -> None:
-    index = navigation_project / diagnostics.MODULE_DOCUMENTS["A1"]
+    index = navigation_project / diagnostics.MODULE_DOCUMENTS["E1"]
     index.write_text(index.read_text().replace("[E10](E10.md)", f"[E10]({target})"))
 
     report = diagnostics.audit_documentation(navigation_project, check_external_links=False)
@@ -112,7 +112,7 @@ def test_generated_catalog_reports_missing_unseeded_file_line_reference(tmp_path
 @pytest.mark.parametrize("prefix", ["", "./"])
 @pytest.mark.parametrize("line", ["0", "00", "-1", "+1", "١٢", "%30"])
 def test_public_audit_rejects_invalid_numeric_file_line(navigation_project: Path, prefix: str, line: str) -> None:
-    index_name = diagnostics.MODULE_DOCUMENTS["A1"]
+    index_name = diagnostics.MODULE_DOCUMENTS["E1"]
     index = navigation_project / index_name
     index.write_text(index.read_text().replace("[E10](E10.md)", f"[E10]({prefix}E10.md:{line})"))
 

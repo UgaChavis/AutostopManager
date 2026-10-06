@@ -929,6 +929,8 @@ def resolve_vin_oem_parts(
     vehicle_type: str | None = None,
     dry_run: bool = False,
     crm_context: dict[str, Any] | None = None,
+    vehicle_identity: dict[str, Any] | None = None,
+    identifier_type: str = "auto",
 ) -> dict[str, Any]:
     """Research TecDoc candidates; exact OEM fitment still requires EPC evidence."""
     return _resolve_vin_oem_parts(
@@ -957,6 +959,8 @@ def resolve_vin_oem_parts(
         vehicle_type=vehicle_type,
         dry_run=dry_run,
         crm_context=crm_context,
+        vehicle_identity=vehicle_identity,
+        identifier_type=identifier_type,
     )
 
 
@@ -1023,6 +1027,28 @@ def _resolver_identity_context(
     return context, context_errors
 
 
+def _reuse_public_identity(
+    vehicle_identity: dict[str, Any] | None,
+    raw_identifier: str,
+    identifier_type: str,
+    context: dict[str, Any],
+    decoded: dict[str, Any] | None,
+    decoded_input: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+    if vehicle_identity is None:
+        return decoded, decoded_input, []
+    from .automotive_contracts import ready_identity
+
+    reusable, errors = ready_identity(
+        vehicle_identity, raw_identifier, identifier_type=identifier_type, context=context
+    )
+    return (
+        reusable if reusable is not None else invalid_identity_result(errors),
+        validate_identity_input(raw_identifier, context, identifier_type=identifier_type),
+        errors,
+    )
+
+
 def _resolve_vin_oem_parts(
     *,
     identifier: str,
@@ -1053,6 +1079,7 @@ def _resolve_vin_oem_parts(
     _decoded_identity_input: dict[str, Any] | None = None,
     identifier_type: str = "auto",
     crm_context: dict[str, Any] | None = None,
+    vehicle_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Research TecDoc articles using the VINdecode -> tree -> articles chain.
 
@@ -1082,6 +1109,10 @@ def _resolve_vin_oem_parts(
         "requested_part": part_text,
     }
     context, context_errors = _resolver_identity_context(raw_identifier, crm_context, identifier_type, explicit_context)
+    _decoded_identity, _decoded_identity_input, reuse_errors = _reuse_public_identity(
+        vehicle_identity, raw_identifier, identifier_type, context, _decoded_identity, _decoded_identity_input
+    )
+    context_errors.extend(reuse_errors)
     if _decoded_identity is not None:
         binding_context = _decoded_identity_input.get("context") if isinstance(_decoded_identity_input, dict) else None
         if isinstance(binding_context, dict):
@@ -1158,7 +1189,13 @@ def _resolve_vin_oem_parts(
 
     identity_call: dict[str, Any] | None = None
     identifier_valid = (identity.get("identifier_validation") or {}).get("ok") is not False
-    if vin_supported and identifier_valid and identity.get("ok") is not False and not identity.get("errors"):
+    if (
+        vehicle_identity is None
+        and vin_supported
+        and identifier_valid
+        and identity.get("ok") is not False
+        and not identity.get("errors")
+    ):
         identity_call = partsapi_call(
             "vin_decode",
             live_allowed=live_partsapi_identity or live_partsapi_oem,

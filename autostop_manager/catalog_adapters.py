@@ -54,7 +54,7 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         priority="baseline",
         role="Local hints for common AutoStop ROW/JDM patterns and CRM identity conflicts.",
         limits="Rules are not VIN-specific EPC confirmation; cannot prove options or OEM parts alone.",
-        docs_url="docs/agent/modules/E4.md",
+        docs_url="docs/agent/modules/E2.md",
     ),
     CatalogProvider(
         source_id="partsapi_ru",

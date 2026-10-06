@@ -57,7 +57,7 @@ def _safe_source_from_url(url: str) -> str:
     return "public_web_search"
 
 
-def _ddg_search(query: str, *, timeout_seconds: int = PUBLIC_RESEARCH_TIMEOUT_SECONDS) -> dict[str, Any]:
+def _ddg_search(query: str, *, timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_SECONDS) -> dict[str, Any]:
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     request = Request(url, headers={"User-Agent": PUBLIC_RESEARCH_USER_AGENT})
     with urlopen(request, timeout=timeout_seconds) as response:

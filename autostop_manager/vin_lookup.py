@@ -1349,9 +1349,34 @@ def lookup_original_parts(
     captured_source: str | None = None,
     captured_supersedes: str | None = None,
     captured_note: str | None = None,
+    vehicle_identity: dict[str, Any] | None = None,
+    live_vpic: bool = True,
+    identifier_type: str = "auto",
 ) -> dict[str, Any]:
+    from .automotive_contracts import ready_identity
+
+    prepared = None
+    if vehicle_identity is not None:
+        identity, conflicts = ready_identity(
+            vehicle_identity,
+            raw_identifier,
+            identifier_type=identifier_type,
+            context={"make": make_hint, "model_year": model_year},
+        )
+        if conflicts or identity is None:
+            return {
+                "ok": False,
+                "error": "invalid_ready_identity",
+                "conflicts": conflicts,
+                "execution": {"network_calls": 0},
+                "oem_candidates": [],
+            }
+        prepared = {"ok": True, "vehicle": identity["vehicle_profile"]}
     return build_lookup_plan(
         raw_identifier,
+        identifier_type=identifier_type,
+        live_vpic=live_vpic and vehicle_identity is None,
+        vpic_result=prepared,
         model_year=model_year,
         make_hint=make_hint,
         part_name=part_name,

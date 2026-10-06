@@ -12,6 +12,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field, StrictBool, StrictFloat, StrictInt
 
 from .action_contract import prepare_action_contract
+from .automotive_mcp import register_automotive_tools
 from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
 from .avito_listings import avito_read_listing, avito_search_listings
@@ -705,6 +706,9 @@ def register_manager_tools(  # noqa: C901
         captured_source: str | None = None,
         captured_supersedes: str | None = None,
         captured_note: str | None = None,
+        vehicle_identity: dict[str, Any] | None = None,
+        live_vpic: bool = True,
+        identifier_type: str = "auto",
     ) -> dict[str, Any]:
         return lookup_original_parts(
             identifier,
@@ -719,6 +723,9 @@ def register_manager_tools(  # noqa: C901
             captured_source=captured_source,
             captured_supersedes=captured_supersedes,
             captured_note=captured_note,
+            vehicle_identity=vehicle_identity,
+            live_vpic=live_vpic,
+            identifier_type=identifier_type,
         )
 
     @server.tool(
@@ -745,6 +752,8 @@ def register_manager_tools(  # noqa: C901
         auto_research: bool = True,
         labor_time_policy: str = "public_only",
         use_internal_experience: bool = True,
+        price_evidence: dict[str, Any] | None = None,
+        internal_experience_json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return estimate_repair_work_cost(
             vehicle=vehicle,
@@ -762,6 +771,8 @@ def register_manager_tools(  # noqa: C901
             auto_research=auto_research,
             labor_time_policy=labor_time_policy,
             use_internal_experience=use_internal_experience,
+            price_evidence=price_evidence,
+            internal_experience_json=internal_experience_json,
         )
 
     @server.tool(
@@ -1011,6 +1022,7 @@ def register_manager_tools(  # noqa: C901
         timeout: float = 20.0,
         max_attempts: int = 1,
         dry_run: bool = False,
+        catalog_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return partsapi_catalog_lookup(
             operation=operation,
@@ -1035,6 +1047,7 @@ def register_manager_tools(  # noqa: C901
             timeout=timeout,
             max_attempts=max_attempts,
             dry_run=dry_run,
+            catalog_context=catalog_context,
         )
 
     server.tool(
@@ -1387,6 +1400,7 @@ def register_manager_tools(  # noqa: C901
             idempotency_key=idempotency_key,
         )
 
+    register_automotive_tools(server)
     if include_tools is not None:
         server.tool = original_tool
     _preserve_listing_scalar_inputs(server)

@@ -1,0 +1,11 @@
+# Технические автомобильные источники
+
+[E14](../modules/E14.md) получает существующие NHTSA recalls/TSB metadata и Mercedes/ZF research routes.
+[E15](../modules/E15.md) ищет и читает публичные материалы с URL/time/primary lineage.
+recommend_automotive_sources — локальный реестр маршрутов, не API/лицензия/подключение базы.
+lookup_public_automotive_evidence сохраняет ограниченную область model/year/system.
+Model recall не VIN campaign status и не диагноз конкретного автомобиля.
+Полный EPC/service procedures/DTC/frame extension требует законно доступной базы и реального adapter contract.
+Roadmap карточки не имеют executable invocation. Купить доступ этим рефакторингом не разрешено.
+Public materials не подтверждают узкие engine/KPP/options/date условия без первичных evidence.
+Для fitment используй [E6](../modules/E6.md), сохраняя unknown/conflict.

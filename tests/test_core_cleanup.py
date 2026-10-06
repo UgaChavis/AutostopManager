@@ -11,6 +11,7 @@ import pytest
 
 from autostop_manager import cli, diagnostics
 from autostop_manager.catalog_adapters import catalog_provider_status
+from autostop_manager.mcp_contract import validate_manager_mcp_surface
 from autostop_manager.mcp_server import build_server
 from autostop_manager.storage import StoreState
 
@@ -107,14 +108,16 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
     ],
 )
 def test_document_navigation_requires_a_visible_module_link(docs, literal):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + literal + "\n")
 
     report = diagnostics.audit_documentation(docs, check_external_links=False)
 
     assert report["ok"] is False
-    assert "module_link_missing:docs/agent/modules/A1.md:docs/agent/modules/E10.md" in report["warnings"]
+    assert "module_link_missing:docs/agent/modules/E1.md:docs/agent/modules/E10.md" in report["warnings"]
 
 
 @pytest.mark.parametrize(
@@ -138,8 +141,10 @@ def test_document_navigation_requires_a_visible_module_link(docs, literal):
     ],
 )
 def test_document_navigation_accepts_visible_inline_and_used_reference_links(docs, visible):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + visible + "\n")
 
     assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
@@ -156,8 +161,10 @@ def test_document_navigation_accepts_visible_inline_and_used_reference_links(doc
     ],
 )
 def test_document_navigation_survives_literal_markers_and_escaped_code_openings(docs, prefix):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + prefix + "\n[E10](E10.md)\n")
 
     assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
@@ -167,8 +174,10 @@ def test_document_navigation_survives_literal_markers_and_escaped_code_openings(
     "separator", ["\n\n", "\n \t\n", "\r\n\r\n", "\n~~~\nexample\n~~~\n", "\n# Section\n", "\n> Section\n"]
 )
 def test_document_navigation_in_a_separate_paragraph_survives_unmatched_code_markers(docs, separator):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n` unmatched" + separator + "[E10](E10.md)" + separator + "trailing `\n")
 
     assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
@@ -184,19 +193,21 @@ def test_document_navigation_in_a_separate_paragraph_survives_unmatched_code_mar
     ],
 )
 def test_document_navigation_ignores_code_in_container_fences(docs, container):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + container)
 
     report = diagnostics.audit_documentation(docs, check_external_links=False)
 
     assert report["ok"] is False
-    assert "module_link_missing:docs/agent/modules/A1.md:docs/agent/modules/E10.md" in report["warnings"]
+    assert "module_link_missing:docs/agent/modules/E1.md:docs/agent/modules/E10.md" in report["warnings"]
     assert not any("format_unsupported" in warning for warning in report["warnings"])
 
 
 def test_document_examples_and_unused_definitions_do_not_require_nonexistent_files(docs):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
     navigation.write_text(
         navigation.read_text()
         + "\n[unused]: missing.md\n```markdown\n[Example](also-missing.md)\n```\n"
@@ -307,7 +318,10 @@ def test_old_database_history_is_preserved_without_being_read(tmp_path):
 
 def test_retired_tools_and_providers_are_absent():
     tools = build_server()._tool_manager._tools
-    assert len(tools) == 48
+    assert (
+        len(tools)
+        == validate_manager_mcp_surface({name: tool.parameters for name, tool in tools.items()})["expected_tool_count"]
+    )
     assert (
         not {
             "remember",

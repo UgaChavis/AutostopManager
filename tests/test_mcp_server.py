@@ -36,7 +36,8 @@ def test_build_server_uses_runtime_transport_config_and_registers_tools(monkeypa
     assert "AGENTS.md" in server.kwargs["instructions"]
     assert "docs/agent/modules/A1.md" in server.kwargs["instructions"]
     assert "catalog_provider_status" in server.kwargs["instructions"]
-    assert "E10/E11" in server.kwargs["instructions"]
+    assert "E11" in server.kwargs["instructions"]
+    assert "E10" in server.kwargs["instructions"]
 
 
 def test_main_runs_streamable_http_server(monkeypatch):

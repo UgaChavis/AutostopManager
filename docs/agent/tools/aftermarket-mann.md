@@ -1,0 +1,31 @@
+# aftermarket.mann — MANN каталог
+
+Известный номер → изделие и OE references
+
+Основной модуль: E4; ссылки: E5, E6. Состояние реализации: implemented.
+Источник: mann; первичная база: MANN-FILTER public catalog. Исполнение: network_read.
+
+Вызов: native Manager MCP `public_aftermarket_catalog_lookup`.
+provider: `mann`.
+
+Входы: `provider`, `part_number`, `page_size`, `country`, `include_detail`, `dry_run`.
+Defaults: `{"country":"europe","dry_run":false,"include_detail":true,"page_size":5}`.
+Обязательные facade поля: `provider`, `part_number`.
+Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+
+Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
+```json
+{"dry_run":true,"part_number":"DEMO-ARTICLE-001","provider":"mann"}
+```
+Отрицательный вход:
+```json
+{"part_number":"DEMO-ARTICLE-001","provider":null}
+```
+
+Выход: Legacy flat: ok/provider/operation/docs_url/role/request_plan/privacy/items/total_count.; MANN adds page_info; product/vehicle/OE/cross-reference details remain catalogue observations..
+Ошибки и неполнота: ok=false/error for invalid request, unavailable configuration/transport or malformed response; empty/partial responses remain distinct..
+
+- Selected public aftermarket catalogue read; dry_run=true only produces a request plan.
+- Product vehicle lists, OE references and cross references are candidates and do not confirm a VIN-specific original part or stock.
+
+Подробный контракт: [справочник](../references/public-aftermarket-catalogs.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.

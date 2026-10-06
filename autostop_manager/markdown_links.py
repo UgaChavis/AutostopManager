@@ -7,13 +7,16 @@ create navigation. The parser does not render HTML or access target files.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from markdown_it import MarkdownIt
 
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
 
 
-def visible_markdown_links(text: str) -> list[str]:
-    """Return actual link destinations in document order, with no I/O."""
+@lru_cache(maxsize=256)
+def _link_destinations(text: str) -> tuple[str, ...]:
+    """Cache only pure parsing of exact content; filesystem checks stay fresh."""
     links: list[str] = []
     for token in _MARKDOWN.parse(text):
         if token.type != "inline":
@@ -23,4 +26,9 @@ def visible_markdown_links(text: str) -> list[str]:
                 href = child.attrGet("href")
                 if isinstance(href, str):
                     links.append(href)
-    return links
+    return tuple(links)
+
+
+def visible_markdown_links(text: str) -> list[str]:
+    """Return a fresh list of actual destinations in document order, with no I/O."""
+    return list(_link_destinations(text))

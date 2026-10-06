@@ -2757,6 +2757,7 @@ def partsapi_catalog_lookup(
     timeout: float = 20.0,
     max_attempts: int = 1,
     dry_run: bool = False,
+    catalog_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if operation.startswith("norms_"):
         max_attempts = _bounded_attempt_count(max_attempts, limit=2)
@@ -2813,7 +2814,14 @@ def partsapi_catalog_lookup(
         or not isinstance(value, (str, int, float))
         or (isinstance(value, float) and not math.isfinite(value))
     ]
-    if invalid:
+    from .automotive_contracts import validate_catalog_context
+
+    context_errors = validate_catalog_context(
+        operation,
+        {api_name: overrides.get(api_name, input_values.get(source)) for api_name, source in spec["params"].items()},
+        catalog_context,
+    )
+    if invalid or context_errors:
         return {
             "ok": False,
             "provider": "partsapi_ru",
@@ -2824,6 +2832,7 @@ def partsapi_catalog_lookup(
             "retryable": False,
             "requires_fallback": False,
             "attempt_count": 0,
+            "errors": context_errors,
         }
     for api_name, value in overrides.items():
         input_values[spec["params"][api_name]] = value
@@ -2866,6 +2875,12 @@ def partsapi_catalog_lookup(
         "request_plan": _safe_request_plan(request_plan, omit={"url"}),
         "redacted_identifier": _redact_identifier(identifier or "") if identifier else None,
         "redacted_requested_identifier": _redact_identifier(identifier or "") if identifier else None,
+        "catalog_binding": {
+            "status": "validated_reference" if catalog_context is not None else "raw_parameters_unverified",
+            "exact_vehicle_confirmed": False,
+            "fitment_confirmed": False,
+            "category_queryable": operation == "articles" and catalog_context is not None,
+        },
         "redacted_registration_number": _redact_identifier(registration_number or "") if registration_number else None,
         "privacy": {
             "raw_identifier_is_sensitive": bool(identifier or registration_number),
