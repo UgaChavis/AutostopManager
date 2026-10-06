@@ -515,6 +515,28 @@ def _wmi_request(wmi: str) -> str:
     return f"{_VPIC_BASE_URL}DecodeWMI/{quote(normalized)}?format=json"
 
 
+def _wmi_identifier_binding(payload: dict[str, Any], row: dict[str, Any], wmi: str) -> dict[str, Any]:
+    echo = row.get("WMI")
+    binding = {"status": "missing", "verified": False}
+    if isinstance(echo, str) and echo.strip():
+        matches = normalize_vin(echo) == wmi
+        binding = {"status": "exact" if matches else "mismatch", "verified": matches}
+    if "SearchCriteria" in payload:
+        criteria = payload["SearchCriteria"]
+        matched = (
+            re.fullmatch(r"WMI:[ \t]*([A-HJ-NPR-Z0-9]{3}(?:[A-HJ-NPR-Z0-9]{3})?)", criteria.strip(), re.IGNORECASE)
+            if isinstance(criteria, str)
+            else None
+        )
+        if matched is None:
+            return {"status": "unverified", "verified": False}
+        if matched[1].upper() != wmi:
+            return {"status": "mismatch", "verified": False}
+        if "WMI" not in row:
+            return {"status": "exact", "verified": True}
+    return binding
+
+
 def _parse_wmi_payload(payload: dict[str, Any], wmi: str) -> dict[str, Any]:
     _validate_vpic_payload(payload)
     rows = payload["Results"]
@@ -523,14 +545,10 @@ def _parse_wmi_payload(payload: dict[str, Any], wmi: str) -> dict[str, Any]:
     if len(rows) != 1:
         return _provider_failure("adapter_malformed_payload", source="NHTSA vPIC WMI")
     row = rows[0]
-    echo = row.get("WMI")
-    binding = {"status": "missing", "verified": False}
-    if isinstance(echo, str) and echo.strip():
-        matches = normalize_vin(echo) == wmi
-        binding = {"status": "exact" if matches else "mismatch", "verified": matches}
+    binding = _wmi_identifier_binding(payload, row, wmi)
     if not binding["verified"]:
         result = _provider_failure(
-            "identity_unverified" if binding["status"] == "missing" else "identity_mismatch", source="NHTSA vPIC WMI"
+            "identity_mismatch" if binding["status"] == "mismatch" else "identity_unverified", source="NHTSA vPIC WMI"
         )
         result["identifier_binding"] = binding
         return result

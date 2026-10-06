@@ -299,7 +299,15 @@ def corgi_decode(identifier: str, model_year: int | None = None, timeout_seconds
         return result(tool_id, "configuration_missing", {}, warnings=["node_runtime_hash_mismatch"])
     worker = Path(__file__).resolve().parent.parent / "scripts" / "automotive-corgi-worker.mjs"
     decoded, error = _worker(
-        [node, "--permission", f"--allow-fs-read={root}", f"--allow-fs-read={worker}", str(worker), str(root)],
+        [
+            node,
+            "--jitless",
+            "--permission",
+            f"--allow-fs-read={root}",
+            f"--allow-fs-read={worker}",
+            str(worker),
+            str(root),
+        ],
         {"identifier": normalized, "model_year": model_year},
         timeout_seconds,
     )
