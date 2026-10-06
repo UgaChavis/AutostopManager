@@ -321,14 +321,17 @@ def test_resolver_requires_unambiguous_matching_vehicle_modification(monkeypatch
     assert [call["operation"] for call in calls] == ["vin_decode"]
     assert result["article_candidates"] == []
     assert result["readiness"]["has_tecdoc_car_id"] is False
-    assert result["status"] in {"needs_identity_confirmation", "needs_vehicle_modification"}
+    if any(profile.get("identifier_matches_request") is False for profile in profiles):
+        assert result["status"] == "tecdoc_lookup_provider_failed"
+    else:
+        assert result["status"] in {"needs_identity_confirmation", "needs_vehicle_modification"}
 
 
 @pytest.mark.parametrize(
     ("matches", "outcome", "confirmation", "allowed"),
     [
         (True, "success", False, True),
-        (None, "identifier_unverified", True, True),
+        (None, "identifier_unverified", True, False),
         (None, "success", True, False),
         (None, "identifier_unverified", False, False),
         (False, "identifier_mismatch", True, False),
@@ -699,7 +702,16 @@ def test_resolver_redacts_compact_and_hyphenated_frame_aliases(monkeypatch):
 
 def test_resolver_uses_provider_vehicle_type_and_blocks_conflict(monkeypatch):
     calls = _install_fakes(
-        monkeypatch, profiles=[{"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877", "vehicle_type": "CV"}]
+        monkeypatch,
+        profiles=[
+            {
+                "make": "HONDA",
+                "model": "Accord",
+                "tecdoc_car_id": "9877",
+                "vehicle_type": "CV",
+                "identifier_matches_request": True,
+            }
+        ],
     )
     result = resolve_vin_oem_parts(
         identifier=SYNTHETIC_VIN,
@@ -736,7 +748,17 @@ def test_resolver_uses_provider_vehicle_type_and_blocks_conflict(monkeypatch):
 
 
 def test_resolver_requires_car_type_when_provider_does_not_supply_it(monkeypatch):
-    calls = _install_fakes(monkeypatch, profiles=[{"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877"}])
+    calls = _install_fakes(
+        monkeypatch,
+        profiles=[
+            {
+                "make": "HONDA",
+                "model": "Accord",
+                "tecdoc_car_id": "9877",
+                "identifier_matches_request": True,
+            }
+        ],
+    )
     result = resolve_vin_oem_parts(
         identifier=SYNTHETIC_VIN,
         requested_part="передние колодки",
@@ -761,7 +783,17 @@ def test_resolver_requires_car_type_when_provider_does_not_supply_it(monkeypatch
 
 
 def test_resolver_does_not_spend_tree_quota_on_make_only_match(monkeypatch):
-    calls = _install_fakes(monkeypatch, profiles=[{"make": "HONDA", "tecdoc_car_id": "9877", "vehicle_type": "PC"}])
+    calls = _install_fakes(
+        monkeypatch,
+        profiles=[
+            {
+                "make": "HONDA",
+                "tecdoc_car_id": "9877",
+                "vehicle_type": "PC",
+                "identifier_matches_request": True,
+            }
+        ],
+    )
     result = resolve_vin_oem_parts(
         identifier=SYNTHETIC_VIN,
         requested_part="передние колодки",
@@ -790,7 +822,17 @@ def test_resolver_redacts_vins_embedded_in_part_text(monkeypatch):
 
 @pytest.mark.parametrize(("vehicle_type", "expected"), [("pc", "PC"), ("motorcycle", "Motorcycle")])
 def test_resolver_normalizes_caller_vehicle_type(monkeypatch, vehicle_type, expected):
-    calls = _install_fakes(monkeypatch, profiles=[{"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877"}])
+    calls = _install_fakes(
+        monkeypatch,
+        profiles=[
+            {
+                "make": "HONDA",
+                "model": "Accord",
+                "tecdoc_car_id": "9877",
+                "identifier_matches_request": True,
+            }
+        ],
+    )
     result = resolve_vin_oem_parts(
         identifier=SYNTHETIC_VIN,
         requested_part="передние колодки",
@@ -849,7 +891,13 @@ def test_resolver_incomplete_input_preserves_manual_next_step(monkeypatch, ident
     ],
 )
 def test_resolver_preserves_existing_identity_blocker(monkeypatch, profile_update, reason):
-    profile = {"make": "HONDA", "model": "Accord", "tecdoc_car_id": "9877", "vehicle_type": "PC"}
+    profile = {
+        "make": "HONDA",
+        "model": "Accord",
+        "tecdoc_car_id": "9877",
+        "vehicle_type": "PC",
+        "identifier_matches_request": True,
+    }
     profile.update(profile_update)
     calls = _install_fakes(monkeypatch, profiles=[profile])
     identity = _medium_identity()
@@ -993,9 +1041,12 @@ def test_resolver_known_characteristics_guard_catalog(monkeypatch, verified, fie
         identifier=SYNTHETIC_VIN, requested_part="передние колодки", live_vpic=False, live_partsapi_oem=True
     )
     agreement = result["identity"]["cross_source_agreement"]
-    can_read = not conflict and bool(profile.get("make") and (profile.get("model") or profile.get("model_family")))
+    characteristics_agree = not conflict and bool(
+        profile.get("make") and (profile.get("model") or profile.get("model_family"))
+    )
+    can_read = verified and characteristics_agree
     assert agreement["identifier_matches_request"] is (True if verified else None)
-    assert agreement["status"] == ("conflict" if conflict else "matched" if can_read else "partial_match")
+    assert agreement["status"] == ("conflict" if conflict else "matched" if characteristics_agree else "partial_match")
     assert [item["field"] for item in agreement["conflicting_fields"]] == ([conflict] if conflict else [])
     if not fields and field_sources:
         assert "engine" not in agreement["matched_fields"]
@@ -1060,7 +1111,7 @@ def test_resolver_soft_scoped_disagreement_keeps_independent_medium_upgrade(monk
 
 
 @pytest.mark.parametrize(
-    ("profiles", "status"),
+    ("profiles", "status", "independent_ready"),
     [
         (
             [
@@ -1073,6 +1124,7 @@ def test_resolver_soft_scoped_disagreement_keeps_independent_medium_upgrade(monk
                 }
             ],
             "identifier_mismatch",
+            True,
         ),
         (
             [
@@ -1086,6 +1138,7 @@ def test_resolver_soft_scoped_disagreement_keeps_independent_medium_upgrade(monk
                 for car in (1, 2)
             ],
             "ambiguous_vehicle_modification",
+            True,
         ),
         (
             [
@@ -1098,10 +1151,18 @@ def test_resolver_soft_scoped_disagreement_keeps_independent_medium_upgrade(monk
                 }
             ],
             "conflict",
+            False,
+        ),
+        (
+            [{"make": "HONDA", "model": "Civic", "tecdoc_car_id": "1", "vehicle_type": "PC"}],
+            "conflict",
+            True,
         ),
     ],
 )
-def test_resolver_catalog_disagreement_revokes_all_exact_readiness(monkeypatch, profiles, status):
+def test_resolver_catalog_source_error_preserves_independent_readiness_but_real_conflict_revokes_it(
+    monkeypatch, profiles, status, independent_ready
+):
     calls = _install_fakes(monkeypatch, profiles=profiles)
     identity = _medium_identity()
     identity["confidence_label"] = "high"
@@ -1118,15 +1179,15 @@ def test_resolver_catalog_disagreement_revokes_all_exact_readiness(monkeypatch, 
     assert [call["operation"] for call in calls] == ["vin_decode"]
     assert result["identity"]["cross_source_agreement"]["status"] == status
     assert result["readiness"]["ready_for_family_lookup"] is True
-    assert result["readiness"]["ready_for_vehicle_lookup"] is False
+    assert result["readiness"]["ready_for_vehicle_lookup"] is independent_ready
     for flag in [
         "ready_for_vehicle_lookup",
         "ready_for_oem_lookup",
         "ready_for_oem_candidate_lookup",
-        "ready_for_tecdoc_candidate_lookup",
-        "ready_for_crm_writeback",
     ]:
-        assert result["identity"][flag] is False
+        assert result["identity"][flag] is independent_ready
+    assert result["identity"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert result["identity"]["ready_for_crm_writeback"] is False
     assert result["tecdoc_vehicle"]["car_id"] is None
 
 
