@@ -5,12 +5,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import net from 'node:net';
-import http from 'node:http';
 import https from 'node:https';
 import dns from 'node:dns';
 import tls from 'node:tls';
 import dgram from 'node:dgram';
-import { syncBuiltinESMExports } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+
+const http = createRequire(import.meta.url)('node:http');
 
 function denied() { throw new Error('offline_network_denied'); }
 globalThis.fetch = denied;

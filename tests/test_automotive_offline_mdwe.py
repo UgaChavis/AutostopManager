@@ -28,7 +28,7 @@ def test_corgi_worker_decodes_readonly_sqlite_with_executable_memory_denied(tmp_
     core.write_text(
         "export async function decodeVIN(identifier, db) {\n"
         "  let networkDenied = false;\n"
-        "  try { await fetch('https://example.com/'); }\n"
+        "  try { await fetch('data:text/plain,synthetic-fixture'); }\n"
         "  catch (error) { networkDenied = error.message === 'offline_network_denied'; }\n"
         "  if (!networkDenied) throw new Error('worker_network_guard_missing');\n"
         "  const [result] = await db.exec('SELECT make, model FROM Wmi');\n"
@@ -62,10 +62,18 @@ assert libc.mprotect(ctypes.c_void_p(address), mmap.PAGESIZE, mmap.PROT_READ | m
 assert ctypes.get_errno() in (errno.EPERM, errno.EACCES)
 sys.path.insert(0, sys.argv[1])
 os.environ['AUTOSTOP_AUTOMOTIVE_OFFLINE_RUNTIME'] = sys.argv[2]
-from autostop_manager.automotive_offline import corgi_decode
-positive = corgi_decode('AAA00000000000000')
-negative = corgi_decode('INVALID')
-print(json.dumps({'positive': positive, 'negative': negative, 'MDWE': libc.prctl(66, 0, 0, 0, 0)}))
+from autostop_manager import automotive_offline as offline
+actual_run = offline.subprocess.run
+worker_diagnostics = []
+def trace_worker(*args, **kwargs):
+    result = actual_run(*args, **kwargs)
+    worker_diagnostics.append({'returncode': result.returncode, 'stderr': result.stderr[:2000]})
+    return result
+offline.subprocess.run = trace_worker
+positive = offline.corgi_decode('AAA00000000000000')
+negative = offline.corgi_decode('INVALID')
+print(json.dumps({'positive': positive, 'negative': negative, 'MDWE': libc.prctl(66, 0, 0, 0, 0),
+                  'worker_diagnostics': worker_diagnostics}))
 """
     response = subprocess.run(
         [sys.executable, "-I", "-B", "-c", child, str(Path(__file__).resolve().parents[1]), str(tmp_path)],
@@ -79,7 +87,10 @@ print(json.dumps({'positive': positive, 'negative': negative, 'MDWE': libc.prctl
     assert response.returncode == 0, response.stderr
     result = json.loads(response.stdout)
     assert result["MDWE"] == 1
-    assert result["positive"]["outcome"] == "partial"
+    assert result["positive"]["outcome"] == "partial", {
+        "node_version": version,
+        "worker_diagnostics": result["worker_diagnostics"],
+    }
     assert result["positive"]["data"]["vehicle_profile"] == {"make": "DEMO", "model": "MDWE fixture"}
     assert result["positive"]["execution"]["network_calls"] == 0
     assert result["negative"]["outcome"] == "invalid_input"
