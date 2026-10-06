@@ -10,10 +10,12 @@ from .parts_intent import normalize_part_intent
 from .vehicle_identity import _as_mapping, decode_vehicle_identities, invalid_identity_result
 from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS, PROFILE_KEYS, validate_identity_item
 from .vehicle_identity_policy import identity_allows_lookup, identity_has_blocking_conflicts
+from .tecdoc_vehicle_selection import resolve_tecdoc_vehicle
 from .vin_oem_resolver import (
     _assess_partsapi_identity_agreement as _assess_partsapi_vehicle_agreement,
     _partsapi_identifier_evidence,
-    _partsapi_vehicle_type_allows_candidate_lookup,
+    _identity_with_partsapi_agreement as _apply_partsapi_agreement,
+    _identity_with_tecdoc_selection,
     _redact_sensitive_output,
     _resolve_vin_oem_parts,
 )
@@ -109,10 +111,15 @@ def _partsapi_vehicle_profile(call: dict[str, Any]) -> dict[str, Any]:
     return profiles[0] if len(profiles) == 1 else {}
 
 
-def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str, Any]) -> dict[str, Any]:
+def _assess_partsapi_identity_agreement(
+    identity: dict[str, Any],
+    call: dict[str, Any],
+    *,
+    independent_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     agreement = {
         "source": "PartsAPI VINdecode",
-        **_assess_partsapi_vehicle_agreement(identity, call),
+        **_assess_partsapi_vehicle_agreement(identity, call, independent_context=independent_context),
     }
     if agreement["status"] == "provider_failed":
         agreement["missing_env_names"] = (
@@ -132,79 +139,28 @@ def _assess_partsapi_identity_agreement(identity: dict[str, Any], call: dict[str
 
 
 def _identity_with_partsapi_agreement(
-    identity: dict[str, Any], call: dict[str, Any], *, vehicle_type: str | None = None
+    identity: dict[str, Any],
+    call: dict[str, Any],
+    *,
+    vehicle_type: str | None = None,
+    independent_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    updated = {**identity}
-    readiness = dict(identity.get("parts_lookup_readiness") or {})
-    agreement = _assess_partsapi_identity_agreement(identity, call)
-    known_conflict = identity_has_blocking_conflicts(identity, scope="vehicle")
-    confidence_label = str(identity.get("confidence_label") or "")
-    can_read_candidates = (
-        partsapi_identifier_allows_candidate_lookup(call)
-        and _partsapi_vehicle_type_allows_candidate_lookup(call, vehicle_type)
-        and agreement["status"] == "matched"
-        and confidence_label in {"medium", "high"}
-        and not known_conflict
+    updated = _apply_partsapi_agreement(
+        identity, call, vehicle_type=vehicle_type, independent_context=independent_context
     )
-    car_id = str(_partsapi_vehicle_profile(call).get("tecdoc_car_id") or "").strip()
-    if not (car_id.isascii() and car_id.isdigit() and int(car_id) > 0):
-        can_read_candidates = False
-
-    blocking_reasons = list(readiness.get("blocking_reasons") or [])
-    if can_read_candidates:
-        blocking_reasons = [reason for reason in blocking_reasons if reason != "identity_confidence_below_high"]
-    if agreement["status"] in {"conflict", "identifier_mismatch", "ambiguous_vehicle_modification"}:
-        reason = f"partsapi_identity_{agreement['status']}"
-        if reason not in blocking_reasons:
-            blocking_reasons.append(reason)
-    if agreement["status"] in {"partial_match", "profile_present_uncompared"}:
-        reason = "partsapi_identity_insufficient_agreement"
-        if reason not in blocking_reasons:
-            blocking_reasons.append(reason)
-    if not can_read_candidates and agreement["status"] in {
-        "provider_failed",
-        "no_profile",
-        "profile_present_uncompared",
-    }:
-        reason = f"partsapi_identity_{agreement['status']}"
-        if reason not in blocking_reasons:
-            blocking_reasons.append(reason)
-    if not car_id and call.get("ok") and not call.get("dry_run"):
-        reason = "partsapi_identity_missing_tecdoc_car_id"
-        if reason not in blocking_reasons:
-            blocking_reasons.append(reason)
-
-    readiness.update(
-        {
-            "ready_for_tecdoc_candidate_lookup": can_read_candidates,
-            "ready_for_crm_writeback": False,
-            "cross_source_agreement": agreement,
-            "blocking_reasons": blocking_reasons,
-            "reason": (
-                "PartsAPI VINdecode agrees with decoded identity; read-only TecDoc research is allowed, while fitment and OEM still need manual confirmation."
-                if can_read_candidates
-                else readiness.get("reason")
-            ),
-        }
-    )
-    if known_conflict or agreement["status"] in {"conflict", "identifier_mismatch", "ambiguous_vehicle_modification"}:
-        readiness.update(
-            {
-                "ready_for_vehicle_lookup": False,
-                "ready_for_oem_lookup": False,
-                "ready_for_oem_candidate_lookup": False,
-            }
-        )
-    updated["parts_lookup_readiness"] = readiness
-    evidence_sources = list(updated.get("evidence_sources") or [])
-    evidence_sources.append(
+    agreement = _assess_partsapi_identity_agreement(identity, call, independent_context=independent_context)
+    updated["parts_lookup_readiness"] = {
+        **updated["parts_lookup_readiness"],
+        "cross_source_agreement": agreement,
+    }
+    updated["evidence_sources"] = [
+        *(identity.get("evidence_sources") or []),
         {
             "source": "PartsAPI VINdecode",
             "status": agreement["status"],
             "matched_fields": agreement.get("matched_fields", []),
-        }
-    )
-    updated["evidence_sources"] = evidence_sources
+        },
+    ]
     return updated
 
 
@@ -311,6 +267,7 @@ def _partsapi_lookup_calls(
     vehicle_type: str | None = None,
     dry_run: bool = True,
     identifier_type: str = "auto",
+    selected_profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if classify_identifier(identifier, identifier_type=identifier_type).kind != "vin":
         return []
@@ -320,7 +277,9 @@ def _partsapi_lookup_calls(
         else [partsapi_catalog_lookup(operation="vin_decode", identifier=identifier, dry_run=dry_run)]
     )
     profiles = [profile for profile in (identity_call or {}).get("vehicle_profiles") or [] if isinstance(profile, dict)]
-    if candidate_ready and partsapi_identifier_allows_candidate_lookup(identity_call or {}):
+    if selected_profile:
+        profiles = [selected_profile]
+    if candidate_ready and (selected_profile or partsapi_identifier_allows_candidate_lookup(identity_call or {})):
         car_id = str(profiles[0].get("tecdoc_car_id") or "").strip()
     else:
         car_id = ""
@@ -568,6 +527,8 @@ def benchmark_vin_parts_lookup(
             inner_outer=_compact(item.get("inner_outer") or request_context.get("inner_outer")),
         )
         partsapi_identity_call = None
+        fallback = None
+        fallback_calls: list[dict[str, Any]] = []
         identifier_valid = (identity.get("identifier_validation") or {}).get("ok") is not False
         if live_partsapi_identity and not resolve_oem and classification.kind == "vin" and identifier_valid:
             call_is_live = partsapi_live_calls_used < max(0, int(max_live_calls))
@@ -581,8 +542,49 @@ def benchmark_vin_parts_lookup(
             if call_is_live:
                 partsapi_live_calls_used += max(0, int(partsapi_identity_call.get("attempt_count") or 0))
                 identity = _identity_with_partsapi_agreement(
-                    identity, partsapi_identity_call, vehicle_type=item_vehicle_type
+                    identity,
+                    partsapi_identity_call,
+                    vehicle_type=item_vehicle_type,
+                    independent_context=context,
                 )
+        if (
+            partsapi_identity_call is not None
+            and not partsapi_identity_call.get("dry_run")
+            and not (identity.get("parts_lookup_readiness") or {}).get("ready_for_tecdoc_candidate_lookup")
+            and not identity_has_blocking_conflicts(identity, scope="vehicle")
+            and not (
+                ((identity.get("parts_lookup_readiness") or {}).get("cross_source_agreement") or {}).get("status")
+                == "conflict"
+                and ((identity.get("parts_lookup_readiness") or {}).get("cross_source_agreement") or {}).get(
+                    "blocks_vehicle_lookup", True
+                )
+            )
+        ):
+
+            def fallback_call(
+                operation: str, call_rows: list[dict[str, Any]] = fallback_calls, **kwargs: Any
+            ) -> dict[str, Any]:
+                nonlocal partsapi_live_calls_used
+                call_is_live = partsapi_live_calls_used < max(0, int(max_live_calls))
+                response = partsapi_catalog_lookup(
+                    operation=operation,
+                    timeout=partsapi_timeout,
+                    max_attempts=1,
+                    dry_run=not call_is_live,
+                    **kwargs,
+                )
+                if call_is_live:
+                    partsapi_live_calls_used += max(0, int(response.get("attempt_count") or 0))
+                call_rows.append(response)
+                return response
+
+            fallback = resolve_tecdoc_vehicle(
+                identity,
+                vehicle_type=item_vehicle_type,
+                independent_context=request_context,
+                call=fallback_call,
+            )
+            identity = _identity_with_tecdoc_selection(identity, fallback)
         oem_resolution = None
         if resolve_oem:
             oem_resolution = _resolve_vin_oem_parts(
@@ -591,6 +593,7 @@ def benchmark_vin_parts_lookup(
                 make=context.get("make"),
                 model=context.get("model"),
                 model_year=context.get("model_year"),
+                crm_context=request_context,
                 engine=context.get("engine"),
                 transmission=context.get("transmission"),
                 market=context.get("market"),
@@ -651,11 +654,13 @@ def benchmark_vin_parts_lookup(
                 vehicle_type=item_vehicle_type,
                 dry_run=True,
                 identifier_type=identifier_type,
+                selected_profile=(fallback or {}).get("selected_profile"),
             )
             if include_partsapi_dry_run and identifier_valid
             else []
         )
 
+        partsapi_calls.extend(_adapter_digest(call) for call in fallback_calls)
         missing_env_names.update(_missing_env_from_plan(provider_plan))
         for call in partsapi_calls:
             missing_env_names.update(call.get("missing_env_names") or [])
@@ -693,6 +698,7 @@ def benchmark_vin_parts_lookup(
                     "partsapi": partsapi_calls,
                 },
                 "oem_resolution": oem_resolution,
+                "tecdoc_vehicle_fallback": fallback,
                 "manual_public_search": {
                     "count": len(public_queries),
                     "queries": public_queries,
