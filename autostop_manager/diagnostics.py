@@ -63,6 +63,7 @@ MODULE_DOCUMENTS = {
 }
 SKILL_DOCUMENTS = (
     ".agents/skills/manage-owner-telegram/SKILL.md",
+    ".agents/skills/manage-autostop-client/SKILL.md",
     ".agents/skills/manage-autostop-store/SKILL.md",
     ".agents/skills/manage-fst-vpn/SKILL.md",
     ".agents/skills/manage-owner-instagram/SKILL.md",

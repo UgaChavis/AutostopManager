@@ -1394,7 +1394,11 @@ def estimate_repair_work_cost(
         "next_actions": _dedupe(next_actions),
         "manager_summary": {
             "lines": manager_lines,
-            "card_text_rule": "В карточку писать только короткий итог: работа, AutoStop цена, уверенность, что проверить.",
+            "card_text_rule": (
+                "В разделе расчёта работ кратко укажи работу, AutoStop цену, уверенность и что проверить. "
+                "Момент оформления и полный состав клиентской карточки определяет "
+                ".agents/skills/manage-autostop-client/SKILL.md."
+            ),
         },
         "formula": {
             "selection": "target_city_region_then_alternate_supported_region_then_public_labor_hours",

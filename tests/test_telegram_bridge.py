@@ -1084,8 +1084,10 @@ def test_work_media_sandbox_wrapper_is_scoped_and_has_no_bridge_access() -> None
     assert "telegram_bridge" not in text
 
 
-def test_telegram_skill_requires_verified_private_audio_cleanup() -> None:
-    text = (ROOT / "docs/agent/modules/B2.md").read_text(encoding="utf-8")
+def test_telegram_route_requires_verified_private_audio_cleanup() -> None:
+    entry = ROOT / "docs/agent/modules/B2.md"
+    assert "[B1](B1.md)" in entry.read_text(encoding="utf-8")
+    text = (entry.parent / "B1.md").read_text(encoding="utf-8")
 
     assert "--delete-after" in text
     assert "после ошибки" in text

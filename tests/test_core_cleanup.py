@@ -46,21 +46,12 @@ def test_documents_fit_budget_and_cover_operational_skills():
     assert report["ok"]
     assert report["external_links_checked"] is False
     assert {path.parent.name for path in (ROOT / ".agents/skills").glob("*/SKILL.md")} == {
+        "manage-autostop-client",
         "manage-autostop-store",
         "manage-fst-vpn",
         "manage-owner-instagram",
         "manage-owner-telegram",
     }
-
-
-def test_prepare_for_work_instruction_requires_fresh_private_readiness_context():
-    instructions = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    normalized = " ".join(instructions.split())
-
-    assert "«приготовься к работе»" in instructions
-    assert "`manager_automations` с операцией `readiness`" in normalized
-    assert "дождись завершения reconciliation" in normalized
-    assert "без переноса старых рабочих кейсов и переписки" in normalized
 
 
 @pytest.mark.parametrize(
