@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+e4 = [
+    "vininfo==1.11.0",
+]
 dev = [
     "coverage[toml]>=7.6",
     "mypy>=1.14",
@@ -33,6 +36,9 @@ include-package-data = false
 [tool.setuptools.packages.find]
 include = ["autostop_manager*"]
 exclude = ["data*", "docs*", "tests*"]
+
+[tool.setuptools.package-data]
+autostop_manager = ["resources/e4/corgi/*", "resources/e4/brand_rules/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -14,6 +14,8 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      AUTOSTOP_E4_CACHE_DIR: ${{ runner.temp }}/autostop-e4
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -25,7 +27,18 @@ jobs:
           cache: pip
 
       - name: Install project and development checks
-        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,e4]"
+
+      - name: Set up local E4 decoder runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Explicitly prepare and verify the local Corgi snapshot
+        run: |
+          python -m autostop_manager.cli e4-decoders prepare
+          python -m autostop_manager.cli e4-decoders status
 
       - name: Install offline catalog search dependency
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -41,6 +54,8 @@ jobs:
           python -m mypy autostop_manager
 
       - name: Enforce project and E2 coverage gates
+        env:
+          AUTOSTOP_E4_RUN_OPTIONAL_INTEGRATION: "1"
         run: |
           python -m coverage run -m pytest -q
           python -m coverage report --fail-under=82

@@ -929,6 +929,7 @@ def resolve_vin_oem_parts(
     vehicle_type: str | None = None,
     dry_run: bool = False,
     crm_context: dict[str, Any] | None = None,
+    identity_observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Research TecDoc candidates; exact OEM fitment still requires EPC evidence."""
     return _resolve_vin_oem_parts(
@@ -957,6 +958,7 @@ def resolve_vin_oem_parts(
         vehicle_type=vehicle_type,
         dry_run=dry_run,
         crm_context=crm_context,
+        identity_observations=identity_observations,
     )
 
 
@@ -1023,6 +1025,38 @@ def _resolver_identity_context(
     return context, context_errors
 
 
+def _reuse_resolver_identity(
+    raw_identifier: str,
+    context: dict[str, Any],
+    context_errors: list[dict[str, Any]],
+    identifier_type: str,
+    identity_observations: list[dict[str, Any]] | None,
+    decoded_identity: dict[str, Any] | None,
+    decoded_identity_input: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    if identity_observations is not None:
+        from .e4_identity import reconcile_vehicle_identity
+
+        decoded_identity = reconcile_vehicle_identity(
+            raw_identifier, identity_observations, crm_context=context, identifier_type=identifier_type
+        )
+    elif decoded_identity is not None:
+        binding_context = decoded_identity_input.get("context") if isinstance(decoded_identity_input, dict) else None
+        if isinstance(binding_context, dict):
+            context = {**binding_context, **{key: value for key, value in context.items() if value not in (None, "")}}
+        if not _predecoded_identity_input_matches(
+            decoded_identity_input,
+            raw_identifier,
+            context,
+            identifier_type=identifier_type,
+        ):
+            decoded_identity = invalid_identity_result(
+                [{"code": "predecoded_identity_input_mismatch", "field": "identifier", "stage": "identity_binding"}]
+            )
+    decoded_identity = invalid_identity_result(context_errors) if context_errors else decoded_identity
+    return decoded_identity, context
+
+
 def _resolve_vin_oem_parts(
     *,
     identifier: str,
@@ -1053,6 +1087,7 @@ def _resolve_vin_oem_parts(
     _decoded_identity_input: dict[str, Any] | None = None,
     identifier_type: str = "auto",
     crm_context: dict[str, Any] | None = None,
+    identity_observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Research TecDoc articles using the VINdecode -> tree -> articles chain.
 
@@ -1082,20 +1117,15 @@ def _resolve_vin_oem_parts(
         "requested_part": part_text,
     }
     context, context_errors = _resolver_identity_context(raw_identifier, crm_context, identifier_type, explicit_context)
-    if _decoded_identity is not None:
-        binding_context = _decoded_identity_input.get("context") if isinstance(_decoded_identity_input, dict) else None
-        if isinstance(binding_context, dict):
-            context = {**binding_context, **{key: value for key, value in context.items() if value not in (None, "")}}
-        if not _predecoded_identity_input_matches(
-            _decoded_identity_input,
-            raw_identifier,
-            context,
-            identifier_type=identifier_type,
-        ):
-            _decoded_identity = invalid_identity_result(
-                [{"code": "predecoded_identity_input_mismatch", "field": "identifier", "stage": "identity_binding"}]
-            )
-    _decoded_identity = invalid_identity_result(context_errors) if context_errors else _decoded_identity
+    _decoded_identity, context = _reuse_resolver_identity(
+        raw_identifier,
+        context,
+        context_errors,
+        identifier_type,
+        identity_observations,
+        _decoded_identity,
+        _decoded_identity_input,
+    )
     identity: dict[str, Any] = (
         _decoded_identity
         if _decoded_identity is not None

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "rules": [
+    {
+      "id": "quomation_vw_3c_family",
+      "pattern": "^WVWZZZ3C",
+      "kind": "vin_prefix",
+      "fields": {"make": "Volkswagen", "model_family": "Passat B6/B7 / CC", "platform": "3C"},
+      "source_url": "https://github.com/Quomation/vin-decoder/tree/73c40720ea04cf1ec8851e37832aef560bd95e0e",
+      "source_commit": "73c40720ea04cf1ec8851e37832aef560bd95e0e",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "market": "Europe/ROW",
+      "year_from": null,
+      "year_to": null,
+      "verification": "candidate",
+      "validation": "candidate",
+      "data_origin_id": "quomation_vin_rules"
+    },
+    {
+      "id": "quomation_audi_8k_family",
+      "pattern": "^WAUZZZ8K",
+      "kind": "vin_prefix",
+      "fields": {"make": "Audi", "model_family": "A4 B8", "platform": "8K"},
+      "source_url": "https://github.com/Quomation/vin-decoder/tree/73c40720ea04cf1ec8851e37832aef560bd95e0e",
+      "source_commit": "73c40720ea04cf1ec8851e37832aef560bd95e0e",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "market": "Europe/ROW",
+      "year_from": null,
+      "year_to": null,
+      "verification": "candidate",
+      "validation": "candidate",
+      "data_origin_id": "quomation_vin_rules"
+    }
+  ]
+}

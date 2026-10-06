@@ -1,0 +1,12 @@
+{
+  "name": "autostop-e4-corgi-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "dependencies": {
+    "@cardog/corgi": "2.0.4"
+  }
+}

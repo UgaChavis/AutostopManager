@@ -551,3 +551,79 @@ async def _collect_async(
     if live_wmi:
         await _stage_async(collection.wmi_jobs(), collection, client)
     return collection.result(live_vpic=live_vpic, live_wmi=live_wmi)
+
+
+def _source_jobs(
+    inputs: list[dict[str, Any]], source: Literal["vin", "wmi"], use_vpic_batch: bool
+) -> tuple[list[_Job], list[RequestKey | None]]:
+    """Prepare a selected provider operation without any cross-source fallback."""
+    if len(inputs) > MAX_IDENTITY_ITEMS:
+        raise ValueError("identity_batch_too_large")
+    if source == "vin":
+        collection = _Collection(inputs, IdentityBudget())
+        collection.prepare(use_vpic_batch=use_vpic_batch)
+        row_keys: list[RequestKey | None] = [None] * len(inputs)
+        for key, indices in collection.groups.items():
+            for index in indices:
+                row_keys[index] = key
+        return collection.primary_jobs, row_keys
+    row_keys = []
+    unique: dict[RequestKey, None] = {}
+    for item in inputs:
+        identifier = item.get("identifier")
+        if not item.get("ok", True) or not isinstance(identifier, str):
+            row_keys.append(None)
+            continue
+        try:
+            lookup._wmi_request(identifier)
+        except (ValueError, TypeError, AttributeError):
+            row_keys.append(None)
+            continue
+        key = (lookup.normalize_vin(identifier), None)
+        row_keys.append(key)
+        unique[key] = None
+    return [_Job("wmi", (key,)) for key in unique], row_keys
+
+
+def _selected_result(
+    collection: _Collection, row_keys: list[RequestKey | None], source: Literal["vin", "wmi"]
+) -> dict[str, Any]:
+    results: list[dict[str, Any] | None] = []
+    for key in row_keys:
+        if key is None:
+            results.append(None)
+        else:
+            row = collection.wmi_results.get(key[0]) if source == "wmi" else collection.results.get(key)
+            results.append(row or _stopped(collection.budget))
+    return {"results": results, "processing": collection.budget.diagnostics()}
+
+
+def collect_source_provider_results(
+    inputs: list[dict[str, Any]],
+    *,
+    source: Literal["vin", "wmi"],
+    use_vpic_batch: bool = True,
+    budget: IdentityBudget | None = None,
+) -> dict[str, Any]:
+    jobs, row_keys = _source_jobs(inputs, source, use_vpic_batch)
+    collection = _Collection(inputs, budget or IdentityBudget())
+    _stage_sync(jobs, collection)
+    return _selected_result(collection, row_keys, source)
+
+
+async def collect_source_provider_results_async(
+    inputs: list[dict[str, Any]],
+    *,
+    source: Literal["vin", "wmi"],
+    use_vpic_batch: bool = True,
+    budget: IdentityBudget | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    jobs, row_keys = _source_jobs(inputs, source, use_vpic_batch)
+    collection = _Collection(inputs, budget or IdentityBudget())
+    if client is None:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=False) as owned_client:
+            await _stage_async(jobs, collection, owned_client)
+    else:
+        await _stage_async(jobs, collection, client)
+    return _selected_result(collection, row_keys, source)

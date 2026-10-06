@@ -113,6 +113,9 @@ def register_manager_tools(  # noqa: C901
             return lambda function: function
 
         server.tool = filtered_tool
+    from .e4_mcp import register_e4_tools
+
+    register_e4_tools(server)
     memory = store or StoreState()
     store_adapter = StoreIntegration(
         client=store_client
@@ -705,6 +708,7 @@ def register_manager_tools(  # noqa: C901
         captured_source: str | None = None,
         captured_supersedes: str | None = None,
         captured_note: str | None = None,
+        identity_observations: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return lookup_original_parts(
             identifier,
@@ -719,6 +723,7 @@ def register_manager_tools(  # noqa: C901
             captured_source=captured_source,
             captured_supersedes=captured_supersedes,
             captured_note=captured_note,
+            identity_observations=identity_observations,
         )
 
     @server.tool(

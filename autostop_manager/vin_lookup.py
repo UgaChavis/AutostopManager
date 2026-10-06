@@ -18,6 +18,7 @@ from .vin_sources import (
     normalize_make,
     sources_for_inputs,
     sources_for_make,
+    source_names_for_make,
 )
 
 LookupKind = Literal["vin", "vin_partial", "frame_number", "market_code", "unknown"]
@@ -533,6 +534,14 @@ def _parse_wmi_payload(payload: dict[str, Any], wmi: str) -> dict[str, Any]:
             "identity_unverified" if binding["status"] == "missing" else "identity_mismatch", source="NHTSA vPIC WMI"
         )
         result["identifier_binding"] = binding
+        if binding["status"] == "missing":
+            # DecodeWMI commonly omits the input echo. Preserve informational
+            # manufacturer data, while keeping it outside any bound profile.
+            result["unverified_wmi_profile"] = {
+                key.lower(): value.strip()
+                for key in ("Name", "ManufacturerName", "Make", "Country", "VehicleType")
+                if isinstance((value := row.get(key)), str) and 0 < len(value.strip()) <= 4096
+            }
         return result
     profile: dict[str, Any] = {}
     for key, value in row.items():
@@ -746,12 +755,28 @@ def _step_from_source(source: dict[str, Any], query: str, notes_prefix: str = ""
 
 
 def _catalog_steps_for_vin(make: str | None, query: str) -> list[dict[str, Any]]:
+    matched = sources_for_make(make)
+    if matched:
+        return [
+            {**_step_from_source(source, query), "brand_applicability": "confirmed", "preferred": True}
+            for source in matched
+        ]
+    key = normalize_make(make)
     steps: list[dict[str, Any]] = []
-    for source in sources_for_make(make):
-        steps.append(_step_from_source(source, query))
-    if not steps:
-        for source in sources_for_inputs("vin"):
-            steps.append(_step_from_source(source, query))
+    for source in sources_for_inputs("vin"):
+        declared_brands = [normalize_make(brand) for brand in _as_list(source.get("brands"))]
+        # Explicit vehicle-brand portals cannot become a route for another brand
+        # merely because the mapped portal is missing from the source registry.
+        brand_match = bool(key and key in declared_brands)
+        if key and declared_brands and "MULTIBRAND" not in declared_brands and not brand_match:
+            continue
+        steps.append(
+            {
+                **_step_from_source(source, query),
+                "brand_applicability": "confirmed" if brand_match else "unverified",
+                "preferred": brand_match,
+            }
+        )
     return steps
 
 
@@ -910,6 +935,12 @@ def _build_oem_candidates(
     )
     if not validation["ok"]:
         confidence = "blocked"
+    identity = plan.get("identity")
+    if isinstance(identity, dict):
+        from .vehicle_identity_policy import identity_has_blocking_conflicts
+
+        if identity_has_blocking_conflicts(identity, scope="vehicle"):
+            confidence = "blocked"
     return [
         {
             "number": captured_oem_number.strip().upper(),
@@ -1077,7 +1108,10 @@ def _next_actions(
 ) -> list[str]:
     actions: list[str] = []
     family = _make_family(make)
-    preferred = next((route for route in catalog_routes if route.get("requires_login")), None)
+    preferred = next(
+        (route for route in catalog_routes if route.get("requires_login") and route.get("preferred", True)), None
+    )
+    applicable = [route for route in catalog_routes if route.get("preferred", True)]
     public_web_routes = [
         route
         for route in catalog_routes
@@ -1090,10 +1124,12 @@ def _next_actions(
         actions.append(
             f"Open {preferred['source_name']} and capture VIN-specific OEM number, supersession, and quantity."
         )
-    elif catalog_routes and not oem_candidates:
+    elif applicable and not oem_candidates:
         actions.append(
-            f"Open {catalog_routes[0]['source_name']} and capture the OEM number from the matching catalog group."
+            f"Open {applicable[0]['source_name']} and capture the OEM number from the matching catalog group."
         )
+    elif catalog_routes and not oem_candidates:
+        actions.append("Resolve the brand-specific catalog mapping before choosing an OEM portal.")
     if public_web_routes and not oem_candidates:
         web_source_names = ", ".join(route["source_name"] for route in public_web_routes)
         actions.append(
@@ -1154,6 +1190,9 @@ def _finalize_dossier(
         "captured_source": captured_source or "",
     }
     make = _resolved_make(plan, make_hint)
+    expected_routes = source_names_for_make(make)
+    if expected_routes and not sources_for_make(make):
+        plan["warnings"].append("catalog_mapping_gap: configured brand sources are absent from the registry")
     plan["catalog_vehicle"] = {
         "make": make,
         "family": _make_family(make),
@@ -1218,6 +1257,7 @@ def build_lookup_plan(
     captured_source: str | None = None,
     captured_supersedes: str | None = None,
     captured_note: str | None = None,
+    identity_observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     classification = classify_identifier(raw_identifier, identifier_type=identifier_type)
     public_query = _redact_identifier(classification.normalized)["display"]
@@ -1230,6 +1270,45 @@ def build_lookup_plan(
         "hints": [],
         "warnings": [],
     }
+
+    if identity_observations is not None:
+        from .e4_identity import reconcile_vehicle_identity
+
+        context = {
+            "make": make_hint,
+            "model_year": model_year,
+            "requested_part": part_name or part_group,
+            "side": side,
+            "position": position,
+        }
+        identity = reconcile_vehicle_identity(
+            raw_identifier, identity_observations, crm_context=context, identifier_type=identifier_type
+        )
+        profile = identity.get("vehicle_profile") or {}
+        plan["identity"] = identity
+        plan["ok"] = identity.get("ok", False)
+        plan["decoded_vehicle"] = profile
+        plan["warnings"].extend(identity.get("warnings") or [])
+        make = profile.get("make") or make_hint
+        if classification.kind in {"vin", "vin_partial"}:
+            plan["steps"] = _catalog_steps_for_vin(make, public_query)
+        elif classification.kind == "frame_number":
+            plan["steps"] = _catalog_steps_for_frame_number(public_query, make_hint=make)
+        else:
+            plan["steps"] = _catalog_steps_for_market_code(public_query, make_hint=make)
+        return _finalize_dossier(
+            plan,
+            make_hint=make_hint,
+            part_name=part_name,
+            part_group=part_group,
+            side=side,
+            position=position,
+            old_part_number=old_part_number,
+            captured_oem_number=captured_oem_number,
+            captured_source=captured_source,
+            captured_supersedes=captured_supersedes,
+            captured_note=captured_note,
+        )
 
     if classification.kind in {"vin", "vin_partial"}:
         if vpic_result is not None:
@@ -1349,6 +1428,7 @@ def lookup_original_parts(
     captured_source: str | None = None,
     captured_supersedes: str | None = None,
     captured_note: str | None = None,
+    identity_observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return build_lookup_plan(
         raw_identifier,
@@ -1363,4 +1443,5 @@ def lookup_original_parts(
         captured_source=captured_source,
         captured_supersedes=captured_supersedes,
         captured_note=captured_note,
+        identity_observations=identity_observations,
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from typing import Any
 
@@ -12,6 +13,7 @@ import pytest
 from autostop_manager import avito_listings, config, listing_executor, mcp_tools
 from autostop_manager.listing_executor import BoundedListingExecutor
 from autostop_manager.mcp_server import build_server
+from autostop_manager.mcp_contract import MANAGER_MCP_CATALOG_PATH
 from autostop_manager.storage import StoreState
 
 
@@ -174,7 +176,8 @@ def test_native_e10_schema_bounds_and_read_only_annotations_are_preserved(native
 def test_scalar_preparser_is_scoped_to_two_e10_tools_and_preserves_other_tools(native_server):
     server = build_server()
     tools = server._tool_manager._tools
-    assert len(tools) == 48
+    manifest = json.loads(MANAGER_MCP_CATALOG_PATH.read_text(encoding="utf-8"))
+    assert set(tools) == set(manifest["expected_tool_names"])
     for name, tool in tools.items():
         if name in {"avito_search_listings", "avito_read_listing"}:
             assert isinstance(tool.fn_metadata, mcp_tools._ListingScalarMetadata)

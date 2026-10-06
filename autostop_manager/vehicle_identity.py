@@ -8,7 +8,6 @@ import unicodedata
 from itertools import combinations
 from typing import Any
 
-from .catalog_adapters import catalog_provider_status
 from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS, validate_identity_input, validate_identity_item
 from .vehicle_identity_policy import build_parts_lookup_readiness
 from .vehicle_identity_transport import wmi_for_vin
@@ -22,6 +21,13 @@ from .vin_lookup import (
     _identifier_binding,
 )
 from .vin_sources import load_source_registry
+
+
+def catalog_provider_status() -> dict[str, Any]:
+    """Load optional catalog infrastructure only for the compatibility dossier."""
+    from .catalog_adapters import catalog_provider_status as provider_status
+
+    return provider_status()
 
 
 YEAR_CODE_SEQUENCE = "ABCDEFGHJKLMNPRSTVWXY123456789"
@@ -1569,10 +1575,6 @@ def decode_vehicle_identity(
     )
     if not validated["ok"]:
         return invalid_identity_result(validated["errors"])
-    identifier = validated["identifier"]
-    classification = classify_identifier(identifier, identifier_type=validated["identifier_type"])
-    normalized = classification.normalized
-    crm = _clean_context(validated["context"])
     processing = None
     if (live_vpic and vpic_result is None) or (live_wmi and wmi_result is None):
         from .vehicle_identity_transport import (
@@ -1591,6 +1593,36 @@ def decode_vehicle_identity(
         vpic_result = vpic_result if vpic_result is not None else collected["vpic_results"][0]
         wmi_result = wmi_result if wmi_result is not None else collected["wmi_results"][0]
         processing = collected["processing"]
+    local_sources = collect_legacy_local_sources(validated["identifier"])
+    return build_legacy_identity_dossier(
+        validated, vpic_result, wmi_result, local_sources=local_sources, processing=processing
+    )
+
+
+def collect_legacy_local_sources(identifier: str) -> dict[str, Any]:
+    """Collect compatibility hints explicitly, before the pure dossier builder."""
+    classification = classify_identifier(identifier)
+    profile: dict[str, Any] = {}
+    evidence: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    wmi_hint = _merge_local_wmi_hint(wmi_for_vin(classification.normalized)[:3], profile, evidence, sources)
+    platform_rule = _merge_platform_rule(classification.normalized, profile, evidence, sources)
+    return {"evidence": evidence, "sources": sources, "wmi_hint": wmi_hint, "platform_rule": platform_rule}
+
+
+def build_legacy_identity_dossier(
+    validated: dict[str, Any],
+    vpic_result: dict[str, Any] | None,
+    wmi_result: dict[str, Any] | None,
+    *,
+    local_sources: dict[str, Any] | None = None,
+    processing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Pure legacy builder; source collection and compatibility scoring stay separate."""
+    identifier = validated["identifier"]
+    classification = classify_identifier(identifier, identifier_type=validated["identifier_type"])
+    normalized = classification.normalized
+    crm = _clean_context(validated["context"])
     # A pure merge also checks injected data; transport binding metadata alone is insufficient.
     vpic_result = _bound_vpic_result(vpic_result, normalized, partial=classification.kind == "vin_partial")
     wmi = wmi_for_vin(normalized)
@@ -1605,8 +1637,12 @@ def decode_vehicle_identity(
         "check_digit": _check_digit(normalized),
         "frame_query_hint": _frame_query_hint(normalized),
     }
-    wmi_hint = _merge_local_wmi_hint(wmi[:3], profile, field_evidence, evidence_sources)
-    platform_rule = _merge_platform_rule(normalized, profile, field_evidence, evidence_sources)
+    local = local_sources or {}
+    for row in local.get("evidence", []):
+        _merge_field(profile, field_evidence, row["field"], row["raw_value"], row["source"], row["confidence"])
+    evidence_sources.extend(local.get("sources", []))
+    wmi_hint = local.get("wmi_hint")
+    platform_rule = local.get("platform_rule")
     if classification.kind not in {"vin", "vin_partial"}:
         vpic_result = None
         wmi_result = None

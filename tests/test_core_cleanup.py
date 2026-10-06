@@ -307,7 +307,8 @@ def test_old_database_history_is_preserved_without_being_read(tmp_path):
 
 def test_retired_tools_and_providers_are_absent():
     tools = build_server()._tool_manager._tools
-    assert len(tools) == 48
+    manifest = json.loads((ROOT / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
+    assert len(tools) == manifest["expected_tool_count"]
     assert (
         not {
             "remember",
