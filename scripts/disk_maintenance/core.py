@@ -136,6 +136,7 @@ def validate_policy(policy: dict) -> dict:
         raise MaintenanceError("inventory_policy_invalid")
     if set(inv["roots"]) - set(DEFAULT_POLICY["inventory"]["roots"]):
         raise MaintenanceError("inventory_root_unknown")
+    inventory.cold_registry.records(policy)
     for value in [*inv["roots"].values(), *inv.get("cache_roots", [])]:
         if len(_absolute(value).parts) < 3:
             raise MaintenanceError("inventory_root_too_broad")
@@ -324,16 +325,9 @@ def _protected_paths(manifest: dict, policy: dict) -> list[Path]:
         for entry in manifest["protected"]
         if isinstance(entry, dict) and isinstance(entry.get("path"), str)
     ]
-    values.extend(policy["inventory"].get("pinned_paths", []))
-
-    def flatten(items):
-        for item in items:
-            if isinstance(item, list):
-                yield from flatten(item)
-            elif isinstance(item, str):
-                yield item
-
-    values.extend(flatten(policy["inventory"].get("coherent_keep_paths", [])))
+    # Inventory and execution must share the same narrow attested-cold mapping.
+    # This still includes all explicit pins, hot tuples and cold carrier proofs.
+    values.extend(map(str, inventory._protected_paths(policy)))
     return [_absolute(value) for value in values]
 
 

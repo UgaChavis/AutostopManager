@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from disk_maintenance import core
+from disk_maintenance import cold_restore
 from disk_maintenance.util import MaintenanceError
 
 
@@ -27,6 +28,12 @@ def main(argv: list[str] | None = None) -> int:
     apply.add_argument("--approve", required=True)
     for name in ("maintain", "pg-retain", "recover-ci"):
         commands.add_parser(name)
+    restore = commands.add_parser("restore-tg-runtime", help="Copy-hydrate one attested historical public runtime")
+    restore.add_argument("--revision", required=True)
+    restore.add_argument("--approve", required=True, help="Exact cold manifest SHA256 from the private policy")
+    destination = restore.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--output", type=Path, help="New path within an existing root-private directory")
+    destination.add_argument("--activate-original", action="store_true", help="Atomically restore the absent historical path")
     arguments = parser.parse_args(argv)
     try:
         policy = core.load_policy(arguments.policy)
@@ -34,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
             result = core.save_plan(policy, arguments.output)
         elif arguments.command == "apply":
             result = core.apply(policy, arguments.manifest, arguments.approve)
+        elif arguments.command == "restore-tg-runtime":
+            result = cold_restore.restore(policy, arguments.revision, arguments.approve,
+                                          output=arguments.output, activate=arguments.activate_original)
         else:
             function = {"maintain": core.maintain, "pg-retain": core.pg_retain, "recover-ci": core.recover_ci}[
                 arguments.command
@@ -55,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
                 "ci_warnings",
                 "retention_pending",
                 "errors",
+                "activated_original_path",
+                "application_restart",
             )
             if key in result
         }

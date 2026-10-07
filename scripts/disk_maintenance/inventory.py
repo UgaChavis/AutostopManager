@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import cold_registry
 from .util import (
     MaintenanceError,
     checked_run,
@@ -138,7 +139,13 @@ def _flatten(value: Any) -> list[str]:
 
 def _protected_paths(policy: dict) -> set[Path]:
     inv = _inventory(policy)
-    raw = _flatten(inv.get("pinned_paths", [])) + _flatten(inv.get("coherent_keep_paths", []))
+    cold = cold_registry.records(policy)
+    for record in cold.values():
+        cold_registry.attest(record)
+    raw = _flatten(inv.get("pinned_paths", [])) + [
+        value for value in _flatten(inv.get("coherent_keep_paths", [])) if value not in cold
+    ]
+    raw += [value for row in cold.values() for value in (row["bundle_dir"], row["rehearsal_path"])]
     result = set()
     for value in raw:
         path = Path(value)
@@ -860,10 +867,14 @@ def verify_protected(policy: dict) -> dict:
             _pg_check(Path(entry["path"]), policy)
             receipts.append({"component": "pg", "path": entry["path"], "ok": True})
     if policy.get("operation") != "pg-retain":
+        receipts.extend(cold_registry.verify(policy, full=True))
+        cold_paths = cold_registry.records(policy)
         for path in _protected_paths(policy):
             if not path.exists():
                 raise MaintenanceError("protected_path_unavailable")
         for raw in _flatten(_inventory(policy).get("coherent_keep_paths", [])):
+            if raw in cold_paths:
+                continue
             path = Path(raw)
             if (path / "REVISION").is_file():
                 _regular(path / "REVISION")
