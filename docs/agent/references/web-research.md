@@ -6,6 +6,18 @@
 
 Короткий запрос: `search_web_multi` → `fetch_page_excerpt`; JS-страница — `fetch_page_browser` при готовом browser. Исследование: `j1_research_start` → status → results/document порциями → report (`autostop.j1.report.v1`). `add_queries/cancel` меняют только точную временную job, затем требуется status readback.
 
+Для простой сверки детали ориентир — два разных запроса и две целевые страницы;
+следующий вызов должен устранять конкретную неоднозначность. Пустая выдача отличается
+от ошибки провайдера, неизвестной разметки и challenge. Challenge не обходится.
+Безопасные HTTP/transport причины и upstream `retryable=false` сохраняются до Manager;
+старая generic ошибка остаётся с неизвестной причиной, не предполагаемым404.
+
+Excerpt сообщает известный HTTP-статус, content type, способ извлечения, запрошенный
+и эффективный размер, обрезку. Явный PDF-ответ может перейти в существующий bounded
+static J1 reader без browser или большой research job. На404 этот путь не запускается.
+Текст live HTML/PDF, ранее извлечённый текст и поисковый snippet — разные свидетельства;
+snippet и шаблон динамического OE-раздела не подтверждают прочитанный оригинальный номер.
+
 Automotive context: `make`, `model`, `year`, `engine`, `system`, `symptom`, `dtc`, `part_number`; полный VIN, контакты и секреты не передаются. Automotive profile — до 12 запросов/60 страниц; общий — 30/300. Лимиты: 50 000 символов документа, cache 250 МБ/семь дней. `canonical_url` удаляет только tracking; дубли не индексируются. Sources: A — OEM/регулятор/TSB, B — component manufacturer, C — catalog, D — форум/контекст. D не доказательство; частота оценивается лишь по измеримой совокупности A/B, иначе `not_measured`. Отчёт различает `exact/analog/general`, доступ, confidence и gaps.
 
 `start` создаёт job в `AUTOSTOP_J1_CACHE_DIR` и читает сеть. Status/results/document/report read-only; jobs не являются долговременной customer memory. Локальный `search_offline_parts_catalogs` — отдельное чтение файлов, не J1: [offline-catalogs.md](offline-catalogs.md).

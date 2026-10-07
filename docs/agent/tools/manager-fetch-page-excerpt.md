@@ -15,15 +15,15 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"max_chars":1200,"url":"https://example.com/"}
+{"url":"https://example.com/","max_chars":1200}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"url":null}
 ```
 
-Выход: Legacy flat web gateway: ok/schema/capability/read_only/url/final_url/domain/title/excerpt/links/access_flags/requires_human/status_code/mode/vin_redacted.; Failure returns ok=false and error={code,retryable}; no canonical automotive data/evidence/execution envelope..
-Ошибки и неполнота: web_page_url_invalid for unsafe/invalid URL; gateway/configuration/response errors and browser_render_failed remain distinct with retryable..
+Выход: Legacy flat web gateway: ok/schema/capability/read_only/url/final_url/domain/title/excerpt/links/access_flags/requires_human/status_code/mode/vin_redacted.; Failure returns ok=false and error={code,retryable}; no canonical automotive data/evidence/execution envelope.; Known HTTP status, content_type, requested/effective chars, extraction_method and truncated; explicit PDF uses the existing guarded static extractor..
+Ошибки и неполнота: web_page_url_invalid for unsafe/invalid URL; gateway/configuration/response errors and browser_render_failed remain distinct with retryable.; Safe HTTP/transport causes and upstream retryable=false are preserved; unknown legacy cause remains unknown. 404 does not start PDF/browser fallback..
 
 - Reads one bounded public page through installed CRM WebResearchGatewayV1 (E15); max_chars is bounded at 8000.
 - No login/captcha bypass; access_flags/requires_human report blocked content. A public page is evidence, not automatic fitment or repair authorization.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import os
-from typing import Any
+from typing import Any, Literal, get_args
 from urllib.parse import quote_plus
 
 from .catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES, PARTSAPI_OPERATIONS, partsapi_operation_status
@@ -12,6 +12,18 @@ from .parts_intent import normalize_part_intent
 from .vehicle_identity_policy import identity_allows_lookup
 from .vin_sources import AMAYAMA_SOURCE_ID, PARTSOUQ_SOURCE_ID, PUBLIC_CATALOG_SOURCE_ALIASES
 from .vin_lookup import classify_identifier
+
+
+CatalogStage = Literal[
+    "identity",
+    "oem_catalog",
+    "catalog_cross",
+    "aftermarket_catalog",
+    "procurement_price",
+    "market_price",
+    "market_listing",
+]
+CATALOG_STAGES = get_args(CatalogStage)
 
 
 @dataclass(frozen=True)
@@ -224,6 +236,17 @@ def _env_configured(
 
 
 def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
+    if stage is not None and stage not in CATALOG_STAGES:
+        return {
+            "ok": False,
+            "stage": stage,
+            "outcome": "invalid_stage",
+            "failure_class": "invalid_stage",
+            "error": "Unknown catalog stage; use one of available_stages.",
+            "available_stages": list(CATALOG_STAGES),
+            "providers": [],
+            "retryable": False,
+        }
     load_runtime_env()
     providers = []
     for provider in PROVIDERS:
@@ -312,15 +335,7 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
 
 
 def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    stage_order = [
-        "identity",
-        "oem_catalog",
-        "catalog_cross",
-        "aftermarket_catalog",
-        "procurement_price",
-        "market_price",
-        "market_listing",
-    ]
+    stage_order = CATALOG_STAGES
     stage_labels = {
         "identity": "identity",
         "oem_catalog": "OEM",

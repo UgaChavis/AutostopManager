@@ -17,18 +17,19 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"dry_run":true,"operation":"decodeVINus","provider_parameters":{"vin":"DEMO"}}
+{"operation":"decodeVINus","dry_run":true,"provider_parameters":{"vin":"DEMO"}}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: transport outcome, semantic completeness/missing fields and identifier binding; recognized NHTSA/vPIC provenance is shared with that primary source; unknown response provenance remains unknown.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
+- Repeated transports of one primary source are not independent evidence; partial diagnostics and an unverified VIN close exact fitment.
 
 Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.

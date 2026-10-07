@@ -9,6 +9,7 @@ remove VIN-like values before any provider invocation.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 import math
 import re
 from typing import Any, Protocol
@@ -29,6 +30,38 @@ _MAX_LIMIT = 10
 _MAX_PART_EVIDENCE_LIMIT = 5
 _MAX_PART_EVIDENCE_PAGES = 2
 _MAX_TIMEOUT_SECONDS = 60
+_PUBLIC_PAGE_ERRORS = frozenset(
+    {
+        "crm_mcp_transport_failed",
+        "crm_mcp_schema_discovery_failed",
+        "crm_mcp_capability_failed",
+        "crm_mcp_configuration_invalid",
+        "crm_mcp_capability_not_allowed",
+        "web_page_gateway_unavailable",
+        "http_not_found",
+        "http_error",
+        "access_restricted",
+        "rate_limited",
+        "http_server_error",
+        "timeout",
+        "fetch_failed",
+        "unsupported_media",
+        "pdf_extract_failed",
+        "pdf_runtime_unavailable",
+        "robots_disallowed",
+        "unsafe_url",
+        "unsafe_redirect",
+        "unsafe_dns_answer",
+        "redirect_robots_disallowed",
+        "robots_redirected",
+        "document_too_large",
+        "unsupported_content_encoding",
+        "too_many_redirects",
+        "fetch_rejected",
+        "empty_or_dynamic",
+        "requires_human",
+    }
+)
 _J1_BROWSER_ERROR_CODES = frozenset(
     {
         "browser_binary_unavailable",
@@ -250,9 +283,14 @@ def _compact_provider_attempts(value: Any) -> list[dict[str, Any]]:
         if not provider and not status:
             continue
         attempt: dict[str, Any] = {"provider": provider or "unknown", "status": status or "unknown"}
-        for field in ("result_count", "added_count"):
+        for field in ("result_count", "added_count", "article_filtered_count", "status_code"):
             if isinstance(row.get(field), int) and not isinstance(row.get(field), bool):
-                attempt[field] = max(0, min(int(row[field]), _MAX_LIMIT))
+                attempt[field] = max(0, min(int(row[field]), 599 if field == "status_code" else _MAX_LIMIT))
+        if isinstance(row.get("retryable"), bool):
+            attempt["retryable"] = row["retryable"]
+        code = row.get("error_code")
+        if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+            attempt["error_code"] = code
         reason = _compact(row.get("reason"), limit=80)
         if reason:
             attempt["reason"] = reason
@@ -437,7 +475,7 @@ def normalize_web_research_response(
             vin_redacted=redacted,
             error={"code": "web_research_gateway_invalid_response", "retryable": False},
         )
-    return _gateway_response(
+    response = _gateway_response(
         ok=True,
         query=safe_query,
         results=_compact_results(data.get("results"), allowed_domains=normalized_domains, limit=normalized_limit),
@@ -449,6 +487,17 @@ def normalize_web_research_response(
         capability=capability,
         vin_redacted=redacted or bool(data.get("vin_redacted")),
     )
+    response["acquisition_method"] = "search_index"
+    response["outcome"] = (
+        "results_found"
+        if response["results"]
+        else "empty_result"
+        if any(p.get("status") == "success" for p in response["providers"])
+        else "search_unavailable"
+        if response["providers"]
+        else "empty_result"
+    )
+    return response
 
 
 def _page_failure(capability: str, *, code: str, retryable: bool = False) -> dict[str, Any]:
@@ -471,25 +520,36 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
     if envelope.get("ok") is False:
         error = envelope.get("error")
         raw_code = error.get("code") if isinstance(error, Mapping) else ""
-        code = (
-            raw_code
-            if isinstance(raw_code, str)
-            and raw_code
+        code = raw_code if isinstance(raw_code, str) and raw_code in _PUBLIC_PAGE_ERRORS else "web_page_gateway_failed"
+        result = _page_failure(
+            capability,
+            code=code,
+            retryable=error["retryable"]
+            if isinstance(error, Mapping) and type(error.get("retryable")) is bool
+            else code
             in {
                 "crm_mcp_transport_failed",
                 "crm_mcp_schema_discovery_failed",
                 "crm_mcp_capability_failed",
-                "crm_mcp_configuration_invalid",
-                "crm_mcp_capability_not_allowed",
-                "web_page_gateway_unavailable",
-            }
-            else "web_page_gateway_failed"
+                "timeout",
+                "fetch_failed",
+                "rate_limited",
+                "http_server_error",
+                "web_page_gateway_failed",
+            },
         )
-        return _page_failure(
-            capability,
-            code=code,
-            retryable=code not in {"crm_mcp_configuration_invalid", "web_page_gateway_unavailable"},
+        status = envelope.get("status_code")
+        result["status_code"] = status if type(status) is int and 0 <= status <= 599 else 0
+        mime = envelope.get("content_type")
+        result["content_type"] = (
+            mime if isinstance(mime, str) and re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", mime) else ""
         )
+        result["cause_unknown"] = bool(envelope.get("cause_unknown")) or code in {
+            "crm_mcp_capability_failed",
+            "web_page_gateway_failed",
+        }
+        result["acquisition_method"] = "unavailable"
+        return result
     data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else envelope
     if not isinstance(data, Mapping) or data.get("ok") is not True:
         return _page_failure(capability, code="web_page_response_invalid")
@@ -535,6 +595,18 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
         "status_code": status_code,
         "mode": "browser" if capability == FETCH_PAGE_BROWSER_CAPABILITY else "http_excerpt",
         "vin_redacted": bool(data.get("vin_redacted")) or title_redacted or excerpt_redacted,
+        "content_type": _compact(data.get("content_type"), limit=100),
+        "requested_chars": _bounded_int(
+            data.get("requested_chars", max_chars), default=2500, minimum=1, maximum=100000
+        ),
+        "effective_chars": _bounded_int(max_chars, default=2500, minimum=1, maximum=8000),
+        "truncated": bool(data.get("truncated")) or len(str(data.get("excerpt") or "")) > len(excerpt),
+        "extraction_method": _compact(data.get("extraction_method"), limit=40),
+        "acquisition_method": data.get("acquisition_method")
+        if data.get("acquisition_method")
+        in {"live_http", "guarded_static_pdf", "browser_dom", "cached", "search_index"}
+        else "unknown",
+        "retrieved_at": _compact(data.get("retrieved_at"), limit=40),
     }
 
 
@@ -653,7 +725,68 @@ class CapabilityWebResearchGatewayAdapter:
             payload = self._invoke(capability, arguments)
         except Exception:  # noqa: BLE001 - do not expose transport or upstream details.
             return _page_failure(capability, code="web_page_gateway_failed", retryable=True)
-        return normalize_web_page_response(payload, capability=capability, url=safe_url, max_chars=bounded_chars)
+        result = normalize_web_page_response(payload, capability=capability, url=safe_url, max_chars=bounded_chars)
+        if (
+            capability == FETCH_PAGE_EXCERPT_CAPABILITY
+            and result.get("ok") is False
+            and result["error"]["code"] == "unsupported_media"
+            and result.get("status_code") == 200
+            and result.get("content_type") == "application/pdf"
+        ):
+            try:
+                from .j1_fetch import fetch_document
+
+                fetched = fetch_document(safe_url, allow_browser=False)
+            except (ImportError, OSError):
+                fetched = {"ok": False, "error": "pdf_runtime_unavailable"}
+            except Exception:  # noqa: BLE001 - guarded extractor failures never expose internals.
+                fetched = {"ok": False, "error": "pdf_extract_failed"}
+            if isinstance(fetched, Mapping) and fetched.get("ok") is True and fetched.get("kind") == "pdf":
+                text = str(fetched.get("text") or "")
+                result = normalize_web_page_response(
+                    {
+                        "ok": True,
+                        "data": {
+                            "ok": True,
+                            "final_url": fetched.get("url"),
+                            "title": fetched.get("title"),
+                            "excerpt": text[:bounded_chars],
+                            "status_code": 200,
+                            "content_type": "application/pdf",
+                            "truncated": len(text) > bounded_chars,
+                            "extraction_method": fetched.get("extraction_method"),
+                            "acquisition_method": "guarded_static_pdf",
+                            "retrieved_at": datetime.now(UTC).isoformat(),
+                        },
+                    },
+                    capability=capability,
+                    url=safe_url,
+                    max_chars=bounded_chars,
+                )
+            else:
+                raw_code = fetched.get("error") if isinstance(fetched, Mapping) else None
+                code = (
+                    raw_code
+                    if isinstance(raw_code, str) and raw_code in _PUBLIC_PAGE_ERRORS
+                    else "pdf_runtime_unavailable"
+                    if raw_code == "ocr_unavailable"
+                    else "pdf_extract_failed"
+                )
+                result = normalize_web_page_response(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": code,
+                            "retryable": code in {"fetch_failed", "http_server_error", "rate_limited", "timeout"},
+                        },
+                    },
+                    capability=capability,
+                    url=safe_url,
+                    max_chars=bounded_chars,
+                )
+        result["requested_chars"] = _bounded_int(max_chars, default=2500, minimum=1, maximum=100000)
+        result["effective_chars"] = bounded_chars
+        return result
 
     def fetch_page_excerpt(self, *, url: str, max_chars: int = 2500) -> dict[str, Any]:
         return self._call_page(capability=FETCH_PAGE_EXCERPT_CAPABILITY, url=url, max_chars=max_chars)

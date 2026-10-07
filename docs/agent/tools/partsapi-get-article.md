@@ -17,18 +17,19 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"dry_run":true,"operation":"article","part_number":"DEMO-ARTICLE-001","supplier_id":"42"}
+{"operation":"article","dry_run":true,"part_number":"DEMO-ARTICLE-001","supplier_id":"42"}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: article_candidates with article ID/part number/brand and typed oe_references from OEM_NUMBERS; criteria from ARTICLE_CRITERIA preserve labels, values and units; OEM candidates are not inferred by generic recursion.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
+- OE references are not directed supersession and do not confirm VIN fitment; the aftermarket article number remains separate.
 
 Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.

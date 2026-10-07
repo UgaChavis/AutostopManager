@@ -62,6 +62,36 @@ def _failure(code: str, *, retryable: bool) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "retryable": retryable}}
 
 
+def _capability_failure(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Preserve bounded upstream diagnostics without exception text or headers."""
+    body = dict(payload or {})
+    for _ in range(3):
+        nested = body.get("data")
+        if body.get("ok") is False or not isinstance(nested, Mapping):
+            break
+        body = dict(nested)
+    error = body.get("error")
+    code = error.get("code") if isinstance(error, Mapping) else None
+    valid = isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code)
+    result = _failure(
+        code if valid else "crm_mcp_capability_failed",
+        retryable=bool(error.get("retryable", True)) if isinstance(error, Mapping) else True,
+    )
+    result["cause_unknown"] = (
+        bool(body.get("cause_unknown"))
+        or not valid
+        or code in {"capability_failed", "crm_mcp_capability_failed", "cause_unknown"}
+    )
+    for name in ("status_code", "requested_chars", "effective_chars"):
+        value = body.get(name)
+        if type(value) is int and 0 <= value <= (599 if name == "status_code" else 100000):
+            result[name] = value
+    mime = body.get("content_type")
+    if isinstance(mime, str) and re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", mime):
+        result["content_type"] = mime
+    return result
+
+
 def _payload_from_tool_result(result: Any) -> dict[str, Any] | None:
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, Mapping):
@@ -197,22 +227,17 @@ class LoopbackCrmMcpWebResearchTransport:
                     )
                     payload = _payload_from_tool_result(result)
                     if bool(getattr(result, "isError", False)) or not isinstance(payload, Mapping):
-                        return _failure("crm_mcp_capability_failed", retryable=True)
+                        return _capability_failure(payload)
                     data = payload.get("data")
                     if payload.get("ok") is not True or not isinstance(data, Mapping):
-                        return _failure("crm_mcp_capability_failed", retryable=True)
+                        return _capability_failure(payload)
                     raw_data = dict(data)
                     # Gateway v2 may wrap a raw capability result in its own
                     # {ok, data} envelope. The adapter expects the capability
                     # body here, not another gateway envelope.
                     for _ in range(3):
                         if raw_data.get("ok") is False:
-                            error = raw_data.get("error")
-                            if isinstance(error, Mapping):
-                                code = error.get("code")
-                                if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
-                                    return _failure(code, retryable=bool(error.get("retryable", True)))
-                            return _failure("crm_mcp_capability_failed", retryable=True)
+                            return _capability_failure(raw_data)
                         nested = raw_data.get("data")
                         if raw_data.get("ok") is not True or not isinstance(nested, Mapping):
                             break

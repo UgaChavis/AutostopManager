@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 
 from autostop_manager import config
 from autostop_manager import catalog_clients
-from autostop_manager.catalog_adapters import catalog_provider_status
+from autostop_manager.catalog_adapters import CATALOG_STAGES, catalog_provider_status
 import autostop_manager.web_research_gateway as web_gateway
 import autostop_manager.store_api as store_api
 from autostop_manager.mcp_probe import (
@@ -47,7 +47,11 @@ def test_catalog_provider_status_native_transport_preserves_both_json_channels_c
         previous_tool = next(
             tool for tool in await previous_server.list_tools() if tool.name == "catalog_provider_status"
         )
-        assert manager_tool.inputSchema == previous_tool.inputSchema
+        properties = manager_tool.inputSchema["properties"]
+        assert properties["stage"]["anyOf"][0]["enum"] == list(CATALOG_STAGES)
+        assert properties["stage"]["default"] is None
+        assert properties["detail"]["enum"] == ["summary", "full"]
+        assert properties["detail"]["default"] == "full"
         assert manager_tool.outputSchema == previous_tool.outputSchema
 
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

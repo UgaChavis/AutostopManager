@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Collection
 from functools import partial
 from typing import Annotated, Any, Literal, cast
@@ -17,7 +18,12 @@ from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
 from .avito_listings import avito_read_listing, avito_search_listings
 from .avito_market_assessment import assess_avito_price_sample
-from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status as _catalog_provider_status
+from .catalog_adapters import (
+    CatalogStage,
+    build_oem_parts_provider_plan,
+    catalog_provider_status as _catalog_provider_status,
+)
+from .catalog_presentation import CatalogDetail, catalog_execution, invalid_catalog_detail, present_catalog
 from .catalog_clients import (
     PARTSAPI_OPERATIONS,
     exist_price_lookup,
@@ -864,12 +870,15 @@ def register_manager_tools(  # noqa: C901
         name="catalog_provider_status",
         description=(
             "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
-            "Use before claiming live catalog or supplier API access."
+            "Use before claiming live catalog or supplier API access. "
+            "detail=summary bounds each displayed list to 25 with counts; full preserves the complete response."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )
-    def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
-        payload = _catalog_provider_status(stage=stage)
+    def catalog_provider_status(*, stage: CatalogStage | None = None, detail: CatalogDetail = "full") -> dict[str, Any]:
+        payload = invalid_catalog_detail(detail)
+        if payload is None:
+            payload = present_catalog(_catalog_provider_status(stage=stage), detail)
         # FastMCP otherwise duplicates this detailed status as indented text.
         # Keep both MCP result channels and their parsed values unchanged.
         return cast(
@@ -991,7 +1000,8 @@ def register_manager_tools(  # noqa: C901
             "configured access does not prove provider success. VINdecode identifies a TecDoc carId; "
             "getSearchTree supplies strId for getArticles. The articles are unconfirmed fitment candidates. "
             "Shop operations accept provider_parameters with API names from operation_status.provider_params. "
-            "Never pass keys or method in that object."
+            "Never pass keys or method in that object. detail=summary omits raw payload and displays at most "
+            "25 rows per list after all parsing and safety checks; full preserves complete provider data."
         ),
         annotations=ToolAnnotations(
             title="PartsAPI Catalog Lookup",
@@ -1023,8 +1033,13 @@ def register_manager_tools(  # noqa: C901
         max_attempts: int = 1,
         dry_run: bool = False,
         catalog_context: dict[str, Any] | None = None,
+        detail: CatalogDetail = "full",
     ) -> dict[str, Any]:
-        return partsapi_catalog_lookup(
+        started = time.perf_counter()
+        invalid = invalid_catalog_detail(detail)
+        if invalid is not None:
+            return catalog_execution(invalid, elapsed_ms=0)
+        payload = partsapi_catalog_lookup(
             operation=operation,
             identifier=identifier,
             registration_number=registration_number,
@@ -1048,6 +1063,9 @@ def register_manager_tools(  # noqa: C901
             max_attempts=max_attempts,
             dry_run=dry_run,
             catalog_context=catalog_context,
+        )
+        return present_catalog(
+            catalog_execution(payload, elapsed_ms=(time.perf_counter() - started) * 1000, dry_run=dry_run), detail
         )
 
     server.tool(
