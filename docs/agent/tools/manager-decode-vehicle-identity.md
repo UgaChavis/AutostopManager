@@ -2,7 +2,8 @@
 
 Расшифровать автомобиль составным способом
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
 
 Вызов: native Manager MCP `decode_vehicle_identity`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"WVWZZZ1KZAW000001","live_vpic":false,"live_wmi":false}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null}
 ```

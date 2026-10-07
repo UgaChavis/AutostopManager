@@ -2,7 +2,8 @@
 
 Справочный/отдельный контур; не automotive workflow
 
-Основной модуль: outside; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: outside; другие модули: нет.
+Классификация: historical. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 
 Вызов: native Manager MCP `validate_partsapi_category_index`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"path":null}
+{"path":[]}
 ```
 
 Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.

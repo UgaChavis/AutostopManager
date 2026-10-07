@@ -4,8 +4,14 @@ Registry: docs/agent/automotive_tools.json; JSON Schema: automotive_tools.schema
 Модули имеют устойчивый module_key, инструменты — tool_id. E-code отображает задачу.
 Markdown является текстом правил; inputSchema авторитетна в code/MCP.
 Карточки генерирует scripts/generate-automotive-instructions.py; --check проверяет отсутствие drift.
+Ссылки и классификация карточек берутся из registry; модульные Markdown поддерживаются отдельно и проверяются по его названиям, reference и таблицам операций.
 Все actual native names учтены, 43 PartsAPI API-methods сопоставлены exact operation;
 outside/historical/diagnostic entries явно отделены от активных автомобильных операций.
+
+Положительный синтетический пример показывает форму входа, а не доступность поставщика.
+invalid_example обязан отвергаться facade inputSchema до исполнения; nullable defaults не являются отрицательным входом.
+Проверка этих примеров использует JSON Schema без вызова tools/providers. Доменные отказы проверяют отдельные unit tests;
+не запускай подряд примеры job_write/business_write или составных инструментов с acquisition defaults.
 
 ## Проверка и экспорт
 
@@ -38,10 +44,15 @@ Coordinated deploy сравнивает installed Manager REVISION и CRM pin/ha
 
 ## Статусы и права
 
+В viewmode клик/Enter/Space модуля открывает центральное окно с инструкцией и карточками.
+В editmode сохраняются выбор/drag/resize/connect конструктора.
 Manual states: not_commissioned/temporarily_unavailable/working; absence отображается красным без записи GET.
 Shared tool_id имеет одну запись tool_statuses. server назначает actor/time; owner/CAS/idempotency обязательны.
 set_tool_status меняет ровно одну запись, clear_tool_status возвращает прежнее отсутствие для технического smoke.
 Ни один цвет не запускает provider и не заменяет result evidence.
+Состояние хранит CRM manager_structure.json; смена цвета не включает источник.
+Каталог и Markdown поставляются readonly bundle: окно не читает dirty checkout и не обращается к providers.
+Source Git SHA и content hash раздельны; миграция E-кодов сохраняет tool_id и не переносит прежние indicators в ручные цвета.
 Полный release backup сохраняет statuses; portable graph template их не переносит.
 Graph replace/layout/upsert/reroute сохраняют map, новая catalog revision не стирает старые IDs.
 

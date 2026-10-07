@@ -2,7 +2,8 @@
 
 Точный контекст сущности Store
 
-Основной модуль: E9; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E9](../modules/E9.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: store; первичная база: AutoStop Store authoritative offer context. Исполнение: network_read.
 
 Вызов: native Manager MCP `store_entity_context`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"detail":"summary","entity":"store_part","entity_id":"DEMO"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"entity":null,"entity_id":"DEMO"}
 ```

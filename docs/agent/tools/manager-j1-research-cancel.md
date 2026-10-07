@@ -2,7 +2,8 @@
 
 Отменить собственный J1 job
 
-Основной модуль: E15; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: job_write.
 
 Вызов: native Manager MCP `j1_research_cancel`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"job_id":"00000000000000000000000000000000"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"job_id":null}
 ```

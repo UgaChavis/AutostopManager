@@ -2,7 +2,8 @@
 
 Составная оценка стоимости работ
 
-Основной модуль: E13; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E13](../modules/E13.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
 
 Вызов: native Manager MCP `estimate_repair_work_cost`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"auto_research":false,"make":"DEMO","use_internal_experience":false,"work_items":["замена передних тормозных колодок"]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"vehicle":null}
+{"vehicle":[]}
 ```
 
 Выход: Legacy flat: ok/mode/read_only/crm_write_allowed/vehicle_context/normalized_operations/operation_estimates.; labor_time_sample/labor_time_analysis/labor_time_range_hours/labor_time_average_hours/labor_time_confidence/labor_time_cross_check/overlap_adjustments.; sources_checked/pricing_basis/market_sample/market_average_rub/russia_average_rub/autostop_price_rub/total_works_rub/recommended_total_works_rub/confidence/decision_confidence.; missing_context/next_actions/manager_summary/formula/warnings/privacy/research/playbook/source_catalog..

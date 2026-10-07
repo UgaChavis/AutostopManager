@@ -2,7 +2,8 @@
 
 Проверить формат identifier
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `inspect_vehicle_identifier`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"WVWZZZ1KZAW000001"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null}
 ```

@@ -2,7 +2,8 @@
 
 Справочный/отдельный контур; не automotive workflow
 
-Основной модуль: outside; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: outside; другие модули: нет.
+Классификация: outside. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: business_write.
 
 Вызов: native Manager MCP `store_owner_api`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"operation_id":"DEMO"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"operation_id":null}
 ```

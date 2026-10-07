@@ -2,7 +2,8 @@
 
 Локальные WMI hints
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 
 Вызов: native Manager MCP `decode_wmi_local`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"wmi":"WVW"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"wmi":null}
 ```

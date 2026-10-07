@@ -2,7 +2,8 @@
 
 Сравнить готовые модификации
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `compare_vehicle_modifications`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"candidates":[{"make":"DEMO","transmission":"manual"},{"make":"DEMO","transmission":"automatic"}],"context":{"make":"DEMO"}}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"candidates":[{"make":"DEMO","transmission":"manual"},{"make":"DEMO","transmission":"automatic"}],"context":null}
 ```

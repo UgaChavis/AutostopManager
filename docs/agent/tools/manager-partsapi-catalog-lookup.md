@@ -2,7 +2,8 @@
 
 Один выбранный PartsAPI метод
 
-Основной модуль: E1; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E1](../modules/E1.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: partsapi_ru; первичная база: declared_by_provider; VIN/TecDoc/maintenance/AUTONORMS namespaces. Исполнение: network_read.
 
 Вызов: native Manager MCP `partsapi_catalog_lookup`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"operation":"search_articles","part_number":"DEMO-ARTICLE-001"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"operation":"getArticle"}
+{"operation":[]}
 ```
 
 Выход: Legacy flat adapter: ok/provider/operation/partsapi_method/docs_url/role/quota_cost_estimate/request_plan/privacy/catalog_binding.; outcome/failure_class/retryable/requires_fallback/attempt_count/max_attempts/attempts/payload/response_shape/empty_payload/record_counts.; vehicle_profiles/oem_candidates/cross_candidates/article_candidates/autonorms_rows/fill_volumes/search_tree_rows/article_criteria_rows; sensitive identifiers are redacted..

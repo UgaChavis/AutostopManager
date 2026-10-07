@@ -159,6 +159,163 @@ def test_catalog_rejects_ambiguous_provider_ownership(catalog):
         validate_registry(ROOT, broken, schemas, PARTSAPI_OPERATIONS)
 
 
+@pytest.mark.parametrize(
+    "tool_id,accepted_input",
+    [
+        ("manager.catalog_provider_status", {"stage": None}),
+        ("manager.recommend_automotive_sources", {"brand": None}),
+        ("manager.validate_partsapi_category_index", {"path": None}),
+        ("manager.search_partsapi_category_index", {"query": None}),
+        ("partsapi.getArticle", {"operation": "getArticle"}),
+    ],
+)
+def test_catalog_does_not_label_schema_accepted_defaults_or_domain_inputs_negative(catalog, tool_id, accepted_input):
+    registry, schemas = catalog
+    broken = deepcopy(registry)
+    next(tool for tool in broken["tools"] if tool["tool_id"] == tool_id)["invalid_example"] = accepted_input
+    with pytest.raises(ValueError, match="invalid_example_accepted_by_schema"):
+        validate_registry(ROOT, broken, schemas, PARTSAPI_OPERATIONS)
+
+
+@pytest.mark.parametrize("kind", ["module", "tool"])
+def test_catalog_rejects_missing_detailed_contracts(catalog, kind):
+    registry, schemas = catalog
+    broken = deepcopy(registry)
+    broken["modules" if kind == "module" else "tools"][0]["reference"] = "docs/agent/references/missing.md"
+    with pytest.raises(ValueError, match="invalid_instruction_ref"):
+        validate_registry(ROOT, broken, schemas, PARTSAPI_OPERATIONS)
+
+
+def test_offline_and_market_navigation_reaches_their_dedicated_contracts(catalog):
+    registry, _ = catalog
+    modules = {module["element_id"]: module for module in registry["modules"]}
+    tools = {tool["tool_id"]: tool for tool in registry["tools"]}
+    assert tools["manager.search_offline_parts_catalogs"]["primary_module"] == "E4"
+    assert tools["manager.search_offline_parts_catalogs"]["reference"] == "docs/agent/references/offline-catalogs.md"
+    assert (
+        modules["E11"]["reference"]
+        == tools["manager.assess_part_market"]["reference"]
+        == ("docs/agent/references/part-market.md")
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation,error",
+    [
+        ("empty", "module_document_title_mismatch"),
+        ("title", "module_document_title_mismatch"),
+        ("kind", "module_tool_table_contract_mismatch"),
+        ("missing_row", "module_tool_table_coverage_mismatch"),
+        ("duplicate_row", "module_tool_table_ownership_mismatch"),
+        ("foreign_row", "module_tool_table_ownership_mismatch"),
+    ],
+)
+def test_module_documentation_rejects_drift_from_operation_ownership(catalog, monkeypatch, mutation, error):
+    registry, schemas = catalog
+    reference = "docs/agent/modules/E14.md"
+    text = read_document(ROOT, reference)
+    row = next(line for line in text.splitlines() if "| [Маршруты исследования" in line)
+    if mutation == "empty":
+        text = ""
+    elif mutation == "title":
+        text = text.replace("# E14 — Техническая информация и диагностика", "# E14 — Старый поставщик", 1)
+    elif mutation == "kind":
+        text = text.replace("manager · local_read · implemented", "manager · pure · implemented", 1)
+    elif mutation == "missing_row":
+        text = text.replace(row + "\n", "", 1)
+    elif mutation == "duplicate_row":
+        text = text.replace(row, row + "\n" + row, 1)
+    else:
+        text = text.replace(
+            "../tools/manager-recommend-automotive-sources.md", "../tools/manager-assess-part-market.md", 1
+        )
+    original = read_document
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    with pytest.raises(ValueError, match=error):
+        validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
+
+
+def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypatch):
+    registry, schemas = catalog
+    reference = "docs/agent/modules/E14.md"
+    text = read_document(ROOT, reference)
+    start = text.index("| Инструмент / карточка |")
+    end = text.index("\n\n", start)
+    text = text[:start] + "```markdown\n" + text[start:end] + "\n```" + text[end:]
+    original = read_document
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    with pytest.raises(ValueError, match="module_tool_table_not_visible"):
+        validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
+
+
+@pytest.mark.parametrize(
+    "reference,old,new",
+    [
+        ("E13", "`calculate_work_price`", "`normalize_labor_time`"),
+        ("E12", "`partsapi_catalog_lookup · operation=norms_times`", "`partsapi_catalog_lookup · operation=article`"),
+        (
+            "E4",
+            "`public_aftermarket_catalog_lookup · provider=mann`",
+            "`public_aftermarket_catalog_lookup · provider=denso`",
+        ),
+        ("E14", "`Внешняя зависимость, без invocation`", "`j1_research_start`"),
+    ],
+)
+def test_module_operation_call_matches_native_facade_and_planned_contracts(catalog, monkeypatch, reference, old, new):
+    registry, schemas = catalog
+    reference = f"docs/agent/modules/{reference}.md"
+    original = read_document
+    text = original(ROOT, reference)
+    assert old in text
+    text = text.replace(old, new, 1)
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    with pytest.raises(ValueError, match="module_tool_table_contract_mismatch"):
+        validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
+
+
+@pytest.mark.parametrize("rendered", [True, False])
+def test_module_contract_navigation_uses_visible_commonmark_links(catalog, monkeypatch, rendered):
+    registry, schemas = catalog
+    reference = "docs/agent/modules/E1.md"
+    text = read_document(ROOT, reference)
+    old = "[Технический runtime](../references/manager-runtime.md)"
+    if rendered:
+        text = text.replace(old, "[Технический runtime][runtime]")
+        text += "\n[runtime]: ../references/manager-runtime.md:0002\n"
+    else:
+        text = text.replace(old, "```") + old + "\n```\n"
+    original = read_document
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    if rendered:
+        assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["ok"]
+    else:
+        with pytest.raises(ValueError, match="module_document_reference_mismatch"):
+            validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
+
+
+def test_catalog_validation_checks_all_examples_without_calling_their_tools(catalog, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("instruction validation attempted acquisition")
+
+    monkeypatch.setattr("socket.socket", forbidden)
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", forbidden)
+    monkeypatch.setattr("autostop_manager.work_pricing._load_labor_experience", forbidden)
+    registry, schemas = catalog
+    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["tools"] == 115
+
+
 def test_pure_helper_documentation_examples_execute_without_acquisition(catalog, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("instruction example attempted acquisition")

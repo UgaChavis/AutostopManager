@@ -2,7 +2,8 @@
 
 Оригинальные номера из переданных evidence
 
-Основной модуль: E4; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E4](../modules/E4.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
 
 Вызов: native Manager MCP `lookup_original_parts`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"WVWZZZ1KZAW000001","live_vpic":false,"make_hint":"Volkswagen","part_name":"передние колодки"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null}
 ```

@@ -2,7 +2,8 @@
 
 Только VIN endpoint vPIC
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: vpic; первичная база: NHTSA manufacturer-reported vPIC. Исполнение: network_read.
 
 Вызов: native Manager MCP `decode_vin_vpic`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"WVWZZZ1KZAW000001","timeout_seconds":8}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null,"timeout_seconds":8}
 ```

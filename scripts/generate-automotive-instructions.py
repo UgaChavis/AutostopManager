@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 from typing import Any
@@ -19,6 +20,12 @@ def compact(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def module_link(code: str) -> str:
+    if re.fullmatch(r"E(?:[1-9]|1[0-5])", code):
+        return f"[{code}](../modules/{code}.md)"
+    return code
+
+
 def render_card(tool: dict[str, Any], schemas: dict[str, Any]) -> str:
     invocation = tool["invocation"]
     lines = [
@@ -26,7 +33,8 @@ def render_card(tool: dict[str, Any], schemas: dict[str, Any]) -> str:
         "",
         tool["purpose"],
         "",
-        f"Основной модуль: {tool['primary_module']}; ссылки: {', '.join(tool['also_used_in']) or 'нет'}. Состояние реализации: {tool['implementation_state']}.",
+        f"Основной модуль: {module_link(tool['primary_module'])}; другие модули: {', '.join(module_link(code) for code in tool['also_used_in']) or 'нет'}.",
+        f"Классификация: {tool['classification']}. Состояние реализации: {tool['implementation_state']}.",
         f"Источник: {tool['provider_id']}; первичная база: {tool['primary_data_source']}. Исполнение: {tool['execution_kind']}.",
         "",
     ]
@@ -59,7 +67,7 @@ def render_card(tool: dict[str, Any], schemas: dict[str, Any]) -> str:
                 "```json",
                 compact(tool["example"]),
                 "```",
-                "Отрицательный вход:",
+                "Вход, отклоняемый схемой до исполнения инструмента:",
                 "```json",
                 compact(tool["invalid_example"]),
                 "```",

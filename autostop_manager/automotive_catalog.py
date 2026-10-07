@@ -14,6 +14,9 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .document_links import local_document_link_target
+from .markdown_links import visible_markdown_links
+
 REGISTRY_VERSION = "autostop.automotive-tools.v1"
 BUNDLE_VERSION = "autostop.automotive-tools.bundle.v1"
 
@@ -70,6 +73,68 @@ def _native_parameters(tool: dict[str, Any], schema: dict[str, Any]) -> None:
             raise ValueError("native_default_contract_mismatch")
 
 
+def _documentation_examples(tool: dict[str, Any], schema: dict[str, Any]) -> None:
+    validator = Draft202012Validator(schema)
+    validator.validate(tool["example"])
+    if validator.is_valid(tool["invalid_example"]):
+        raise ValueError(f"invalid_example_accepted_by_schema:{tool['tool_id']}")
+
+
+def _documented_invocation(tool: dict[str, Any]) -> str:
+    invocation = tool["invocation"]
+    if invocation is None:
+        return "`Внешняя зависимость, без invocation`"
+    parts = [invocation["tool_name"]]
+    parts.extend(f"{key}={invocation[key]}" for key in ("operation", "provider") if key in invocation)
+    return "`" + " · ".join(parts) + "`"
+
+
+def _module_documentation(root: Path, module: dict[str, Any], tools: dict[str, dict[str, Any]]) -> None:
+    text = read_document(root, module["instruction_ref"])
+    code = module["element_id"]
+    lines = text.splitlines()
+    if not lines or lines[0] != f"# {code} — {module['title']}":
+        raise ValueError(f"module_document_title_mismatch:{code}")
+    document = root / module["instruction_ref"]
+    references = set()
+    for link in visible_markdown_links(text):
+        target = local_document_link_target(link)
+        if target is not None:
+            references.add((document.parent / target).resolve())
+    if (root / module["reference"]).resolve() not in references:
+        raise ValueError(f"module_document_reference_mismatch:{code}")
+    if code == "E1":
+        return  # E1 is a task map, not a per-operation table.
+    expected = {
+        (root / tool["instruction_ref"]).resolve(): tool
+        for tool in tools.values()
+        if tool["classification"] == "active" and (tool["primary_module"] == code or code in tool["also_used_in"])
+    }
+    seen: set[Path] = set()
+    # These curated operation tables have one fixed row format; ordinary links
+    # above use the shared CommonMark parser, including reference-style links.
+    for line in text.splitlines():
+        row = re.fullmatch(r"\| \[([^\]]+)\]\(([^)]+)\) \| ([^|]+) \| ([^|]+) \|", line)
+        if row is None:
+            continue
+        target = (document.parent / row[2]).resolve()
+        if target not in references:
+            raise ValueError(f"module_tool_table_not_visible:{code}")
+        tool = expected.get(target)
+        if tool is None or target in seen:
+            raise ValueError(f"module_tool_table_ownership_mismatch:{code}")
+        seen.add(target)
+        service = [part.strip() for part in row[3].split("·")]
+        if (
+            row[1] != tool["title"]
+            or service != [tool["provider_id"], tool["execution_kind"], tool["implementation_state"]]
+            or row[4].strip() != _documented_invocation(tool)
+        ):
+            raise ValueError(f"module_tool_table_contract_mismatch:{code}:{tool['tool_id']}")
+    if seen != set(expected):
+        raise ValueError(f"module_tool_table_coverage_mismatch:{code}")
+
+
 def validate_registry(
     root: Path,
     registry: dict[str, Any],
@@ -91,12 +156,14 @@ def validate_registry(
         raise ValueError("duplicate_tool_id")
     for module in modules.values():
         read_document(root, module["instruction_ref"])
+        read_document(root, module["reference"])
         if module["element_id"] != "E1" and module["parent"] != "E1":
             raise ValueError("invalid_module_parent")
     covered_methods: dict[str, str] = {}
     native_ids: dict[str, list[str]] = {}
     for tool in tools.values():
         read_document(root, tool["instruction_ref"])
+        read_document(root, tool["reference"])
         if tool["classification"] == "active" and tool["primary_module"] not in modules:
             raise ValueError("invalid_primary_module")
         if any(m not in modules for m in tool["also_used_in"]):
@@ -109,7 +176,7 @@ def validate_registry(
         if not invocation or invocation["tool_name"] not in native_schemas:
             raise ValueError("tool_not_registered")
         name = invocation["tool_name"]
-        Draft202012Validator(native_schemas[name]).validate(tool["example"])
+        _documentation_examples(tool, native_schemas[name])
         _native_parameters(tool, native_schemas[name])
         native_ids.setdefault(name, []).append(tool["tool_id"])
         method = _provider_method(tool, partsapi_operations)
@@ -127,6 +194,8 @@ def validate_registry(
         if item["tool_ids"] != sorted(native_ids.get(name, [])):
             raise ValueError(f"native_ownership_mismatch:{name}")
         read_document(root, item["reference"])
+    for module in modules.values():
+        _module_documentation(root, module, tools)
     return {
         "ok": True,
         "modules": len(modules),

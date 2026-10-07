@@ -2,7 +2,8 @@
 
 Оценка веб-свидетельств номеров
 
-Основной модуль: E6; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E6](../modules/E6.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
 
 Вызов: native Manager MCP `verify_oem_candidates_web`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"candidates":null}
+{"candidates":{}}
 ```
 
 Выход: Legacy flat: ok/schema/mode/status/input_context/source_routes/candidate_evidence/conflicts/manual_actions/warnings/rules/privacy.; candidate_evidence includes oem_number/part_number/brand/query/search_url/evidence_status/evidence/sources/applicability_conditions/contradictions/fitment_confirmed..

@@ -2,7 +2,8 @@
 
 Справочный/отдельный контур; не automotive workflow
 
-Основной модуль: outside; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: outside; другие модули: нет.
+Классификация: diagnostic. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 
 Вызов: native Manager MCP `benchmark_vin_parts_lookup`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"items":[],"requested_part":"передние колодки 1 комплект"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"items":null,"requested_part":"передние колодки 1 комплект"}
 ```

@@ -2,7 +2,8 @@
 
 Чтение одного объявления Avito
 
-Основной модуль: E10; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E10](../modules/E10.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: reefapi; первичная база: Avito listings via ReefAPI. Исполнение: network_read.
 
 Вызов: native Manager MCP `avito_read_listing`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"ad_id":"123456789","dry_run":true}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"ad_id":null,"dry_run":true}
 ```

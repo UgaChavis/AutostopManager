@@ -2,7 +2,8 @@
 
 Список через один выбранный decoder
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
 
 Вызов: native Manager MCP `decode_vehicle_batch`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"decoder":"decode_wmi_local","items":["WVW","ZZZ"]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"decoder":"decode_wmi_local","items":null}
 ```

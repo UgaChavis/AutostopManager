@@ -2,7 +2,8 @@
 
 Применимость по готовым evidence
 
-Основной модуль: E6; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E6](../modules/E6.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `assess_part_fitment`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"criteria":{"engine":"DEMO-ENGINE"},"evidence":[{"declares_oem":true,"document_kind":"official_epc","fetched_at":"2026-01-01T00:00:00Z","locator":"https://example.com/oem","method":"document_read","primary_lineage":"DEMO official OEM document","provider":"manufacturer","scope":"family","version":"demo-v1"}],"part":{"brand":"DEMO","number":"DEMO-ARTICLE-001"},"scope":"family","vehicle":{"vehicle_profile":{"make":"DEMO"}}}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"criteria":{"engine":"DEMO-ENGINE"},"evidence":[{"declares_oem":true,"document_kind":"official_epc","fetched_at":"2026-01-01T00:00:00Z","locator":"https://example.com/oem","method":"document_read","primary_lineage":"DEMO official OEM document","provider":"manufacturer","scope":"family","version":"demo-v1"}],"part":{"brand":"DEMO","number":"DEMO-ARTICLE-001"},"scope":"family","vehicle":null}
 ```

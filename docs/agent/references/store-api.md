@@ -34,10 +34,11 @@ Sourcing — lookup-only: `store_sourcing_offer` не поддерживает e
 
 ## Проверки и восстановление
 
-Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH=/opt/autostop-manager-releases/current`:
+Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH`, равным физическому snapshot после разрешения current; source HEAD проверяется отдельно:
 
 ```bash
-env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
+manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
+env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
 ```
 
 Проверяй initialize/ping, manifest/schemas, `checks.store_runtime_status.ok`, `checks.store_owner_capabilities.ok`, `checks.store_order_search.ok`. Fingerprint mismatch между checkout и installed revision — drift, не автоматически неисправность Store. Write smoke выполняй в synthetic tests с одноразовыми состояниями, без live apply. Release gates: [deployment.md](deployment.md); Store `scripts/run-backend-tests.sh --agent-write-smoke`, затем `--full` проверяют контракт, не качество провайдера.

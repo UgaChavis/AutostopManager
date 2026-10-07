@@ -2,7 +2,8 @@
 
 Публичная цена Exist
 
-Основной модуль: E9; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E9](../modules/E9.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: exist; первичная база: Exist public retail. Исполнение: network_read.
 
 Вызов: native Manager MCP `exist_price_lookup`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"part_number":"DEMO-ARTICLE-001"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"dry_run":true,"part_number":null}
 ```

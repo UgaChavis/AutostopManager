@@ -2,7 +2,8 @@
 
 Локальная подготовленная vPIC DB Corgi
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: corgi; первичная база: NHTSA vPIC DB via Corgi; same lineage as online vPIC. Исполнение: local_read.
 
 Вызов: native Manager MCP `corgi_decode`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"5YJSA1E26HF000001"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null}
 ```

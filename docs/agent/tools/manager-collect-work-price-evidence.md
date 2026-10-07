@@ -2,7 +2,8 @@
 
 Отдельное получение ценовых свидетельств
 
-Основной модуль: E13; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E13](../modules/E13.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
 
 Вызов: native Manager MCP `collect_work_price_evidence`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"aggregate_evidence":{"observations":[]},"sources":["provided_aggregate"],"work_items":["DEMO работа"]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"aggregate_evidence":{"quotes":[]},"sources":["provided"],"work_items":null}
 ```

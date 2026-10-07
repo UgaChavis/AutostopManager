@@ -2,7 +2,8 @@
 
 Узлы готового связанного дерева
 
-Основной модуль: E4; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E4](../modules/E4.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `resolve_catalog_group`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"intent":"амортизатор","modification":{"carType":"PC","entity_kind":"modification","id":"42","namespace":"tecdoc","provider":"partsapi_ru"},"tree":{"modification":{"carType":"PC","entity_kind":"modification","id":"42","namespace":"tecdoc","provider":"partsapi_ru"},"rows":[{"NODE_3_STR_ID":"18","NODE_3_TEXT":"Амортизатор"}]}}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"intent":"передние колодки","modification":{"carType":"PC","entity_kind":"modification","id":"DEMO-CAR","namespace":"tecdoc","provider":"partsapi_ru"},"tree":null}
 ```
