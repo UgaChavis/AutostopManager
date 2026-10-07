@@ -58,6 +58,36 @@ def test_actual_registration_matches_independent_ast_and_all_provider_methods(ca
     assert {module["element_id"] for module in registry["modules"]} == {f"E{i}" for i in range(1, 16)}
 
 
+@pytest.mark.parametrize("fault", ["provider_reference", "provider_identity", "native_classification"])
+def test_export_rejects_broken_provider_navigation_and_contradictory_native_classification(catalog, fault):
+    registry, schemas = catalog
+    broken = deepcopy(registry)
+    if fault == "provider_reference":
+        broken["providers"][0]["reference"] = "docs/agent/references/missing-provider.md"
+        error = "invalid_instruction_ref"
+    elif fault == "provider_identity":
+        broken["providers"][0]["provider_id"] = "undeclared-provider"
+        error = "undeclared_provider_id"
+    else:
+        item = next(item for item in broken["native_inventory"] if item["classification"] == "active")
+        item["classification"] = "outside"
+        error = "native_classification_mismatch"
+    with pytest.raises(ValueError, match=error):
+        build_bundle(ROOT, broken, schemas, PARTSAPI_OPERATIONS, "a" * 40)
+
+
+def test_mixed_partsapi_facade_remains_active_with_outside_operations(catalog):
+    registry, schemas = catalog
+    tools = {tool["tool_id"]: tool for tool in registry["tools"]}
+    item = next(item for item in registry["native_inventory"] if item["tool_name"] == "partsapi_catalog_lookup")
+    assert {tools[tool_id]["classification"] for tool_id in item["tool_ids"]} == {"active", "outside"}
+    assert item["classification"] == "active"
+    assert (
+        build_bundle(ROOT, registry, schemas, PARTSAPI_OPERATIONS, "a" * 40)["native_inventory"]
+        == registry["native_inventory"]
+    )
+
+
 @pytest.mark.parametrize(
     "mutation,error",
     [

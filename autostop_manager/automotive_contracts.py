@@ -114,7 +114,7 @@ def ready_identity(
 def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
     """A request digest never overrides provider failure or disputed identity."""
     errors: list[dict[str, Any]] = []
-    for row in (envelope, data):
+    for row in (envelope,) if data is envelope else (envelope, data):
         if row.get("ok") is False or row.get("outcome") not in (None, "success", "partial"):
             errors.append({"field": "vehicle_identity", "code": "failed_ready_identity"})
         supplied = row.get("conflicts", [])
@@ -127,11 +127,19 @@ def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict
             for field, status in statuses.items():
                 if (status.get("status") if isinstance(status, dict) else status) == "disputed":
                     errors.append({"field": field, "code": "disputed_ready_identity"})
-    provider_binding = data.get("identifier_binding")
-    if provider_binding is not None and (
-        not isinstance(provider_binding, dict) or provider_binding.get("status") not in ("exact", "bound", "matched")
+        provider_binding = row.get("identifier_binding")
+        if provider_binding is not None and (
+            not isinstance(provider_binding, dict)
+            or provider_binding.get("status") not in ("exact", "bound", "matched")
+            or ("verified" in provider_binding and provider_binding["verified"] is not True)
+        ):
+            errors.append({"field": "identifier", "code": "provider_identifier_unverified"})
+    if (
+        envelope.get("input_binding") is not None
+        and data.get("input_binding") is not None
+        and envelope["input_binding"] != data["input_binding"]
     ):
-        errors.append({"field": "identifier", "code": "provider_identifier_unverified"})
+        errors.append({"field": "identifier", "code": "ready_identity_binding_conflict"})
     return errors
 
 

@@ -1128,6 +1128,20 @@ def _pricing_next_actions(
     return next_actions
 
 
+def _ready_price_context_matches(field: str, observed: Any, expected: Any) -> bool:
+    if observed in (None, ""):
+        return True
+    if field != "year":
+        return bool(observed == expected)
+    return (
+        isinstance(observed, (int, str))
+        and not isinstance(observed, bool)
+        and isinstance(expected, (int, str))
+        and not isinstance(expected, bool)
+        and str(observed).strip() == str(expected).strip()
+    )
+
+
 def _ready_price_evidence(
     price_evidence: dict[str, Any] | None, raw_work_items: list[str], context: dict[str, Any]
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -1154,7 +1168,7 @@ def _ready_price_evidence(
         ):
             return None, "invalid_ready_price_evidence"
         if any(
-            supplied_evidence.get("vehicle_context", {}).get(field) not in (None, "", value)
+            not _ready_price_context_matches(field, supplied_evidence.get("vehicle_context", {}).get(field), value)
             for field, value in context.items()
             if value not in (None, "")
         ):
@@ -1186,7 +1200,9 @@ def estimate_repair_work_cost(
 
     raw_work_items = _as_text_list(work_items)
     supplied_evidence, reuse_error = _ready_price_evidence(
-        price_evidence, raw_work_items, {"make": make, "model": model, "engine": engine, "transmission": transmission}
+        price_evidence,
+        raw_work_items,
+        {"make": make, "model": model, "year": year, "engine": engine, "transmission": transmission},
     )
     if reuse_error:
         return {"ok": False, "error": reuse_error, "execution": {"network_calls": 0}}

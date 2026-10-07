@@ -117,15 +117,17 @@ def collect_instruction_inventory(
                 continue
             if path not in contents:
                 contents[path] = read_instruction_bytes(path)
+            # Leaves still have a text contract. Skipping their outgoing links
+            # must not turn broken encoding into healthy instruction readiness.
+            text = contents[path].decode("utf-8")
             if candidate == catalog:
-                refs = _automotive_references(contents[path])
+                refs = _automotive_references(text)
                 pending.extend((root / ref, AUTOMOTIVE_CATALOG) for ref in refs)
             if path in found:
                 continue
             found.add(path)
             if path.suffix != ".md" or path.name in {"A4.md", "A5.md"} or not follow_links:
                 continue
-            text = contents[path].decode("utf-8")
         except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
             too_large = isinstance(exc, ValueError) and str(exc) == "instruction_too_large"
             unavailable[path] = "too_large" if too_large else "unavailable"
@@ -162,8 +164,8 @@ def _linked_instructions(
     return targets
 
 
-def _automotive_references(content: bytes) -> list[str]:
-    payload = json.loads(content.decode("utf-8"))
+def _automotive_references(text: str) -> list[str]:
+    payload = json.loads(text)
     if not isinstance(payload, dict) or not isinstance(payload.get("tools"), list):
         raise ValueError("instruction_catalog_invalid")
     refs: list[str] = []

@@ -229,9 +229,11 @@ def _operation_price(
         bounds = row.get("range_hours")
         if rate is None:
             return None, None
-        if isinstance(bounds, list) and len(bounds) == 2 and all(finite_number(value) is not None for value in bounds):
-            low, high = float(bounds[0]) * rate, float(bounds[1]) * rate
-            return ((low + high) / 2, [low, high]) if low <= high else (None, None)
+        if isinstance(bounds, list) and len(bounds) == 2:
+            lower, upper = finite_number(bounds[0]), finite_number(bounds[1])
+            if lower is not None and upper is not None:
+                low, high = lower * rate, upper * rate
+                return ((low + high) / 2, [low, high]) if low <= high else (None, None)
         if "range_hours" in row:
             return None, None
         return (hours * rate, [hours * rate, hours * rate]) if hours is not None else (None, None)

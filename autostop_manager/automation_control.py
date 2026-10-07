@@ -248,14 +248,27 @@ class AutomationControlService:
             **technical,
         }
 
+    def _provided_readiness(self) -> Mapping[str, Any]:
+        if self.readiness_provider is None:
+            return {}
+        try:
+            candidate = self.readiness_provider()
+            if (
+                isinstance(candidate, Mapping)
+                and type(candidate.get("ready")) is bool
+                and isinstance(candidate.get("checks", {}), Mapping)
+            ):
+                checks = dict(candidate.get("checks", {}))
+                if all(isinstance(key, str) and isinstance(value, str) for key, value in checks.items()):
+                    return {"ready": candidate["ready"], "checks": checks}
+        except Exception:  # noqa: BLE001 - preserve local status, never expose provider exception data.
+            pass
+        return {"ready": False, "checks": {"readiness_provider": "unavailable"}}
+
     def _readiness_from_status(self, data: Mapping[str, Any]) -> dict[str, Any]:
         baseline = data.get("readiness", {})
         baseline = baseline if isinstance(baseline, Mapping) else {}
-        provided: Mapping[str, Any] = {}
-        if self.readiness_provider is not None:
-            candidate = self.readiness_provider()
-            if isinstance(candidate, Mapping):
-                provided = candidate
+        provided = self._provided_readiness()
         checks = {**dict(baseline.get("checks", {})), **dict(provided.get("checks", {}))}
         ready = bool(baseline.get("ready"))
         if self.readiness_provider is not None:
@@ -480,8 +493,8 @@ class AutomationControlService:
             job_id = _required_text(payload, "job_id", maximum=64)
             if operation == "set_enabled":
                 if payload.get("enabled") is True and self.readiness_provider is not None:
-                    readiness = self.readiness_provider()
-                    if not isinstance(readiness, Mapping) or readiness.get("ready") is not True:
+                    readiness = self._provided_readiness()
+                    if readiness.get("ready") is not True:
                         raise AutomationError("automation_not_ready")
                 return self.store.set_enabled(
                     connection,

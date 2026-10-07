@@ -203,3 +203,17 @@ def test_inventory_reads_shared_targets_once_and_does_not_cache_across_operation
     assert before.contents[live] == b"# Before\n"
     assert after.contents[live] == b"# After\n"
     assert calls.count(live) == 2
+
+
+@pytest.mark.parametrize("leaf", ["docs/agent/modules/A4.md", "docs/agent/modules/A5.md", "docs/schema.json"])
+def test_text_leaves_with_invalid_encoding_fail_closed(tmp_path: Path, leaf: str) -> None:
+    write(tmp_path / "AGENTS.md", f"[Leaf]({leaf})\n")
+    target = write(tmp_path / leaf, "# Synthetic\n")
+    target.write_bytes(b"\xff")
+
+    inventory = collect_instruction_inventory(tmp_path)
+
+    assert any(item.code == "unreadable" and item.target == leaf for item in inventory.issues)
+    assert inventory.unavailable[target] == "unavailable"
+    with pytest.raises(ValueError, match="Invalid or unreadable"):
+        require_instruction_inventory(inventory)

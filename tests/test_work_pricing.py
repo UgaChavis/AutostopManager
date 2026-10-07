@@ -141,6 +141,53 @@ def _labor_time(source: str, hours: float, operation: str = "замена рул
     }
 
 
+@pytest.mark.parametrize("envelope", [False, True])
+@pytest.mark.parametrize(
+    "observed_year,requested_year,accepted",
+    [
+        (2000, 2025, False),
+        ("2000", "2025", False),
+        (False, 2025, False),
+        (2025, 2025, True),
+        ("2025", 2025, True),
+        (2025, "2025", True),
+        (" 2025 ", 2025, True),
+        (None, 2025, True),
+        ("", 2025, True),
+        (2000, None, True),
+    ],
+)
+def test_ready_price_evidence_checks_known_year_without_acquisition(
+    monkeypatch, envelope, observed_year, requested_year, accepted
+):
+    from autostop_manager.automotive_contracts import result
+
+    def denied(*args, **kwargs):
+        raise AssertionError("ready evidence attempted hidden acquisition")
+
+    monkeypatch.setattr(work_pricing, "_load_labor_experience", denied)
+    monkeypatch.setattr(work_pricing, "collect_public_work_pricing_research", denied)
+    evidence = {
+        "work_items": ["замена рулевой рейки"],
+        "observations": [_quote(f"source-{index}", 4000 + index * 500) for index in range(3)],
+        "labor": [],
+        "vehicle_context": {"make": "DEMO", "year": observed_year},
+    }
+    if envelope:
+        evidence = result("collect_work_price_evidence", "success", evidence)
+    estimated = estimate_repair_work_cost(
+        make="DEMO", year=requested_year, work_items=["замена рулевой рейки"], price_evidence=evidence
+    )
+    assert estimated["ok"] is accepted
+    if accepted:
+        assert estimated["vehicle_context"]["year"] == requested_year
+        assert estimated["operation_estimates"][0]["autostop_price_rub"] == 6500
+        assert estimated["operation_estimates"][0]["sample"]["valid_count"] == 3
+    else:
+        assert estimated["error"] == "ready_price_context_mismatch"
+        assert estimated["execution"]["network_calls"] == 0
+
+
 def test_shared_brake_adjective_does_not_match_a_different_operation():
     result = estimate_repair_work_cost(
         vehicle="Synthetic sedan",

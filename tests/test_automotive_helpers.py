@@ -565,7 +565,7 @@ def test_supersession_rejects_unrelated_document_endpoints(forbidden_network):
     assert parts.compare_part_relations([relation])["data"]["relations"][0]["type"] == "unverified_supersession"
 
 
-@pytest.mark.parametrize("bounds", [[2, None], [2, 1], None, "unknown"])
+@pytest.mark.parametrize("bounds", [[2, None], [2, 1], [False, 2], [1, True], None, "unknown"])
 def test_explicit_unknown_labor_range_never_falls_back_to_exact_hours(forbidden_network, bounds):
     row = labor.calculate_work_price(
         [{"operation_name": "demo", "hours": 1, "range_hours": bounds}],
@@ -573,6 +573,27 @@ def test_explicit_unknown_labor_range_never_falls_back_to_exact_hours(forbidden_
         hourly_rate=1000,
     )
     assert row["data"]["total"] is None and row["missing_fields"]
+
+
+@pytest.mark.parametrize(
+    "bounds,expected_range,expected_total",
+    [
+        (["1,5", "2,5"], [1500, 2500], 2000),
+        (["1.5", "2,5"], [1500, 2500], 2000),
+        ([1.5, 2.5], [1500, 2500], 2000),
+        (["0,0", "0"], [0, 0], 0),
+    ],
+)
+def test_labor_price_uses_the_validated_numeric_range(forbidden_network, bounds, expected_range, expected_total):
+    row = labor.calculate_work_price(
+        [{"operation_name": "demo", "range_hours": bounds}],
+        {"basis": "hourly_rate", "version": "1"},
+        hourly_rate=1000,
+    )
+    assert row["outcome"] == "success"
+    assert row["data"]["range"] == row["data"]["operations"][0]["range"] == expected_range
+    assert row["data"]["total"] == expected_total
+    assert row["execution"]["network_calls"] == 0
 
 
 def test_explicit_null_quantity_stays_unknown(forbidden_network):
@@ -672,6 +693,102 @@ def test_bound_fitment_never_promotes_failed_or_disputed_identity(forbidden_netw
     assert row["data"]["state"] == "conflict"
     assert row["outcome"] == "partial" and row["conflicts"]
     assert row["execution"]["network_calls"] == 0
+
+
+@pytest.fixture
+def bound_fitment_source():
+    return {
+        "provider": "DEMO",
+        "primary_lineage": "DEMO",
+        "method": "epc",
+        "locator": "https://example.com/epc",
+        "fetched_at": "2026-01-01T00:00:00Z",
+        "document_kind": "official_epc",
+        "fitment_assertion": True,
+        "part_number": "DEMO1",
+        "brand": "DEMO",
+        "scope": "exact_identifier",
+        "identifier_binding": binding(VIN),
+    }
+
+
+@pytest.mark.parametrize("level", ["raw", "outer", "inner"])
+@pytest.mark.parametrize(
+    "provider_binding",
+    [
+        {"status": "mismatch", "verified": False},
+        {"status": "exact", "verified": False},
+        {"status": "bound", "verified": 0},
+        {"status": "matched", "verified": None},
+        {"status": "exact", "verified": 1},
+        {"status": "exact", "verified": "true"},
+    ],
+)
+def test_provider_binding_failure_on_either_level_blocks_all_identity_consumers(
+    forbidden_network, bound_fitment_source, level, provider_binding
+):
+    from autostop_manager.vin_lookup import lookup_original_parts
+
+    data = {"input_binding": binding(VIN), "vehicle_profile": {"engine": "E1"}}
+    vehicle = data if level == "raw" else result("demo", "success", data)
+    target = data if level in {"raw", "inner"} else vehicle
+    target["identifier_binding"] = provider_binding
+    original = deepcopy(vehicle)
+
+    accepted, errors = ready_identity(vehicle, VIN)
+    assert accepted is None and errors[0]["code"] == "provider_identifier_unverified"
+    assert lookup_original_parts(VIN, vehicle_identity=vehicle)["error"] == "invalid_ready_identity"
+    reconciled = identity.reconcile_vehicle_identity(VIN, [vehicle])
+    assert "engine" not in reconciled["data"]["vehicle_profile"]
+    assert reconciled["conflicts"] and reconciled["execution"]["network_calls"] == 0
+    fitment = parts.assess_part_fitment(
+        vehicle, {"number": "DEMO1", "brand": "DEMO"}, {"engine": "E1"}, [bound_fitment_source], "exact_identifier"
+    )
+    assert fitment["data"]["state"] == "conflict" and fitment["data"]["checked_conditions"] == []
+    assert fitment["execution"]["network_calls"] == 0
+    assert vehicle == original
+
+
+def test_conflicting_envelope_request_binding_blocks_identity_and_exact_fitment(
+    forbidden_network, bound_fitment_source
+):
+    vehicle = result("demo", "success", {"input_binding": binding(VIN), "vehicle_profile": {"engine": "E1"}})
+    vehicle["input_binding"] = binding(OTHER_VIN)
+    accepted, errors = ready_identity(vehicle, VIN)
+    assert accepted is None and errors == [{"field": "identifier", "code": "ready_identity_binding_conflict"}]
+    reconciled = identity.reconcile_vehicle_identity(VIN, [vehicle])
+    assert "engine" not in reconciled["data"]["vehicle_profile"] and reconciled["conflicts"]
+    fitment = parts.assess_part_fitment(
+        vehicle, {"number": "DEMO1", "brand": "DEMO"}, {"engine": "E1"}, [bound_fitment_source], "exact_identifier"
+    )
+    assert fitment["data"]["state"] == "conflict"
+
+
+@pytest.mark.parametrize("status", ["exact", "bound", "matched"])
+@pytest.mark.parametrize("verified", [None, True], ids=["legacy-omitted", "verified"])
+def test_supported_provider_binding_keeps_legacy_compatibility(
+    forbidden_network, bound_fitment_source, status, verified
+):
+    provider_binding = {"status": status}
+    if verified is not None:
+        provider_binding["verified"] = verified
+    vehicle = result(
+        "demo",
+        "success",
+        {
+            "input_binding": binding(VIN),
+            "vehicle_profile": {"engine": "E1"},
+            "identifier_binding": provider_binding,
+        },
+    )
+    vehicle["input_binding"] = binding(VIN)
+    vehicle["identifier_binding"] = dict(provider_binding)
+    assert ready_identity(vehicle, VIN)[1] == []
+    assert identity.reconcile_vehicle_identity(VIN, [vehicle])["data"]["vehicle_profile"]["engine"] == "E1"
+    fitment = parts.assess_part_fitment(
+        vehicle, {"number": "DEMO1", "brand": "DEMO"}, {"engine": "E1"}, [bound_fitment_source], "exact_identifier"
+    )
+    assert fitment["data"]["state"] == "supported"
 
 
 @pytest.mark.parametrize(
