@@ -336,9 +336,10 @@ def _operation_name_for_query(query: str, operations: list[dict[str, Any]]) -> s
 
 
 def _observation_location(row: dict[str, Any]) -> tuple[str, str]:
-    source = row.get("evidence_source")
-    if not isinstance(source, dict):
-        source = row.get("source") if isinstance(row.get("source"), dict) else {}
+    supplied = row.get("evidence_source")
+    if not isinstance(supplied, dict):
+        supplied = row.get("source")
+    source = supplied if isinstance(supplied, dict) else {}
     city = str(row.get("city") or row.get("city_region") or row.get("region") or "").strip().casefold()
     locator = str(row.get("locator") or row.get("url") or source.get("locator") or "").strip()
     return city, locator
