@@ -18,6 +18,7 @@ from .vin_sources import (
     normalize_make,
     sources_for_inputs,
     sources_for_make,
+    source_supports_make,
 )
 
 LookupKind = Literal["vin", "vin_partial", "frame_number", "market_code", "unknown"]
@@ -458,6 +459,16 @@ def _parse_vpic_row(row: dict[str, Any], vin: str, *, source: str, partial: bool
     if not any(vehicle.get(key) for key in ("make", "model", "manufacturer", "manufacturername", "vehicletype")):
         result = _provider_failure("empty_result", source=source)
         result["identifier_binding"] = binding
+        result["error_codes"] = list(
+            dict.fromkeys(
+                str(int(token))
+                for token in re.split(r"[,;\s]+", "" if error_code is None else str(error_code))
+                if re.fullmatch(r"[0-9]{1,4}", token)
+            )
+        )
+        result["has_error_text"] = bool(error_text)
+        result["diagnostics_status"] = "reported" if error_code not in (None, "") else "missing"
+        result["coverage"] = "partial_or_unsupported"
         return result
     clean = error_code in ("0", 0)
     return {
@@ -766,10 +777,12 @@ def _step_from_source(source: dict[str, Any], query: str, notes_prefix: str = ""
 def _catalog_steps_for_vin(make: str | None, query: str) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     for source in sources_for_make(make):
-        steps.append(_step_from_source(source, query))
+        if source_supports_make(source, make):
+            steps.append(_step_from_source(source, query))
     if not steps:
         for source in sources_for_inputs("vin"):
-            steps.append(_step_from_source(source, query))
+            if source_supports_make(source, make):
+                steps.append(_step_from_source(source, query))
     return steps
 
 

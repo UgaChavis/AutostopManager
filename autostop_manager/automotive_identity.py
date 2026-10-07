@@ -19,7 +19,7 @@ from .automotive_contracts import (
     primary_lineage,
     result,
 )
-from .vehicle_identity import identity_values_agree
+from .vehicle_identity import _checked_vpic_diagnostics, identity_values_agree
 from .vehicle_identity_inputs import validate_identity_input
 from .vehicle_identity_policy import build_parts_lookup_readiness
 
@@ -44,6 +44,7 @@ FIELDS = (
     "trim",
     "options",
     "country",
+    "manufacturer_country",
     "vehicle_type",
 )
 
@@ -102,12 +103,20 @@ def _provider_result(tool_id: str, response: dict[str, Any], identifier: str, *,
             "identifier_binding": bound,
         }
     ]
+    diagnostics = response.get("diagnostics") or response.get("provider_errors") or []
+    if not wmi and any(
+        key in response for key in ("error_codes", "error_code", "has_error_text", "diagnostics_status")
+    ):
+        diagnostics = _checked_vpic_diagnostics(response)
+        coverage = response.get("coverage")
+        if isinstance(coverage, str) and coverage in {"basic", "partial_or_unsupported"}:
+            diagnostics["coverage"] = coverage
     data = {
         "vehicle_profile": profile,
         "input_binding": binding(identifier, "vin") if not wmi else None,
         "wmi": identifier if wmi else None,
         "identifier_binding": bound,
-        "diagnostics": response.get("diagnostics") or response.get("provider_errors") or [],
+        "diagnostics": diagnostics,
     }
     return result(
         tool_id,
@@ -168,6 +177,70 @@ def _source_lineage(row: dict[str, Any], index: int) -> str:
     return "+".join(primary) if primary else f"supplied_result_{index}"
 
 
+def _field_level(
+    row: dict[str, Any], data: dict[str, Any], field: str, origins: list[dict[str, Any]], *, wmi: bool
+) -> str:
+    """Keep an upstream level; agreement never upgrades a candidate."""
+    statuses = data.get("field_statuses")
+    declared = statuses.get(field) if isinstance(statuses, dict) else None
+    if declared is None:
+        statuses = row.get("field_statuses")
+        declared = statuses.get(field) if isinstance(statuses, dict) else None
+    declared = declared.get("status") if isinstance(declared, dict) else declared
+    if isinstance(declared, str) and declared in {"candidate", "supported", "disputed", "missing"}:
+        return "candidate" if wmi and declared == "supported" else declared
+    if wmi:
+        return "candidate"
+    strengths = {origin.get("strength") for origin in origins if isinstance(origin.get("strength"), str)}
+    if "supported" in strengths:
+        return "supported"
+    return "candidate" if "candidate" in strengths else "observed"
+
+
+def _reconciliation_variants(
+    row: dict[str, Any], data: dict[str, Any], lineage: str, index: int
+) -> tuple[list[dict[str, Any]], str | None]:
+    variant = {
+        "profile": _profile(row),
+        "source_lineage": lineage,
+        "result_index": index,
+        "outcome": row.get("outcome"),
+    }
+    for key in ("scope", "field_statuses", "field_evidence", "provenance", "field_provenance", "diagnostics"):
+        if key in data:
+            variant[key] = data[key]
+        elif key in row:
+            variant[key] = row[key]
+    variants = [variant]
+    for key in ("variants", "family_candidates"):
+        supplied = data.get(key) or []
+        if not isinstance(supplied, list) or any(not isinstance(item, dict) for item in supplied):
+            return [], "results." + key
+        for item in supplied:
+            child = {**item, "result_index": index}
+            child.setdefault("source_lineage", lineage)
+            if "scope" in variant:
+                child.setdefault("scope", variant["scope"])
+            if child not in variants:
+                variants.append(child)
+    return variants, None
+
+
+def _reconciliation_years(data: dict[str, Any]) -> tuple[list[Any], str | None]:
+    diagnostics = data.get("diagnostics")
+    year_diagnostics = diagnostics.get("model_year") if isinstance(diagnostics, dict) else None
+    diagnostic_years = year_diagnostics.get("candidate_years", []) if isinstance(year_diagnostics, dict) else []
+    years: list[Any] = []
+    for path, supplied in (
+        ("model_year_candidates", data.get("model_year_candidates", [])),
+        ("diagnostics.model_year.candidate_years", diagnostic_years),
+    ):
+        if not isinstance(supplied, list):
+            return [], "results." + path
+        years.extend(item for item in supplied if item not in years)
+    return years, None
+
+
 def reconcile_vehicle_identity(
     identifier: str,
     results: list[dict[str, Any]],
@@ -184,6 +257,8 @@ def reconcile_vehicle_identity(
         return invalid("reconcile_vehicle_identity", "identifier_or_results")
     expected = binding(identifier, identifier_type)
     values: dict[str, list[dict[str, Any]]] = {field: [] for field in FIELDS}
+    levels: dict[str, list[str]] = {field: [] for field in FIELDS}
+    disputed_fields: set[str] = set()
     warnings: list[str] = []
     conflicts: list[dict[str, Any]] = []
     variants: list[dict[str, Any]] = []
@@ -191,43 +266,49 @@ def reconcile_vehicle_identity(
     year_candidates: list[Any] = []
     for index, row in enumerate(results):
         data: dict[str, Any] = row["data"] if isinstance(row.get("data"), dict) else row
-        lineage = _source_lineage(row, index)
-        variants.append(
-            {"profile": _profile(row), "source_lineage": lineage, "result_index": index, "outcome": row.get("outcome")}
-        )
-        for key in ("variants", "family_candidates"):
-            supplied_variants = data.get(key) or []
-            if not isinstance(supplied_variants, list) or any(not isinstance(item, dict) for item in supplied_variants):
-                return invalid("reconcile_vehicle_identity", "results." + key)
-            variants.extend(
-                {**item, "result_index": index, "source_lineage": lineage}
-                for item in supplied_variants
-                if item not in variants
-            )
-        supplied_years = data.get("model_year_candidates") or []
-        if not isinstance(supplied_years, list):
-            return invalid("reconcile_vehicle_identity", "results.model_year_candidates")
-        year_candidates.extend(item for item in supplied_years if item not in year_candidates)
         upstream_errors = identity_errors(row, data)
         if upstream_errors:
             conflicts.extend({**item, "result_index": index} for item in upstream_errors)
+            disputed_fields.update(
+                item["field"]
+                for item in upstream_errors
+                if item.get("code") == "disputed_ready_identity" and item.get("field") in FIELDS
+            )
             warnings.append(f"result_{index}_not_usable_as_vehicle_facts")
             continue
         wmi = data.get("wmi")
         if data.get("input_binding") != expected and wmi != prepared["identifier"][:3]:
             conflicts.append({"field": "identifier", "code": "result_binding_mismatch", "result_index": index})
             continue
+        lineage = _source_lineage(row, index)
+        row_variants, error = _reconciliation_variants(row, data, lineage, index)
+        if error:
+            return invalid("reconcile_vehicle_identity", error)
+        variants.extend(row_variants)
+        # A WMI-only match cannot bind model-year alternatives to this VIN.
+        row_years, error = _reconciliation_years(data) if not wmi else ([], None)
+        if error:
+            return invalid("reconcile_vehicle_identity", error)
+        if row_years:
+            row_variants[0]["model_year_candidates"] = row_years
+            year_candidates.extend(item for item in row_years if item not in year_candidates)
         profile = _profile(row)
         supplied_evidence = row.get("evidence") or row.get("field_evidence") or []
         if not isinstance(supplied_evidence, list) or any(not isinstance(item, dict) for item in supplied_evidence):
             return invalid("reconcile_vehicle_identity", "results.evidence")
         for field in FIELDS:
             if profile.get(field) not in (None, "") and (
-                not wmi or field in {"make", "manufacturer", "country", "vehicle_type"}
+                not wmi or field in {"make", "manufacturer", "country", "manufacturer_country", "vehicle_type"}
             ):
-                for origin in field_origins(row, field, profile[field]):
+                origins = field_origins(row, field, profile[field])
+                level = _field_level(row, data, field, origins, wmi=bool(wmi))
+                if level == "missing":
+                    continue
+                levels[field].append(level)
+                for origin in origins:
                     values[field].append(
                         {
+                            **origin,
                             "value": profile[field],
                             "primary_lineage": primary_lineage(origin),
                             "independent": origin.get("independent") is True,
@@ -253,8 +334,17 @@ def reconcile_vehicle_identity(
             statuses[field] = "disputed"
         else:
             profile[field] = observations[0]["value"]
-            statuses[field] = "observed"
+            statuses[field] = (
+                "supported"
+                if "supported" in levels[field]
+                else "candidate"
+                if "candidate" in levels[field]
+                else "observed"
+            )
         provenance[field] = observations
+    for field in disputed_fields:
+        profile.pop(field, None)
+        statuses[field] = "disputed"
     missing = [
         field
         for field in ("make", "model", "engine", "transmission", "market", "production_date")
@@ -273,7 +363,7 @@ def reconcile_vehicle_identity(
         "conflicts": conflicts,
         "missing_fields": missing,
         "identifier": {"kind": expected["identifier_kind"]},
-        "diagnostics": {},
+        "diagnostics": {"model_year": {"candidate_years": year_candidates}} if year_candidates else {},
         "confidence": 0.0,
     }
     data["parts_lookup_readiness"] = build_parts_lookup_readiness(data)

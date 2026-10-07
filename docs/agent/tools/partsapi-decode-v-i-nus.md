@@ -24,8 +24,8 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 {"operation":[]}
 ```
 
-Выход: transport outcome, semantic completeness/missing fields and identifier binding; recognized NHTSA/vPIC provenance is shared with that primary source; unknown response provenance remains unknown.
-Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
+Выход: transport outcome, semantic completeness/missing fields and identifier binding; recognized NHTSA/vPIC provenance is shared with that primary source; unknown response provenance remains unknown; Spaced Error Code/Error Text aliases are normalized; summary preserves diagnostic codes and text-presence flags without raw provider text..
+Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника; Conflicting diagnostic aliases are a parse failure; diagnostics-only responses do not become vehicle facts..
 
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.

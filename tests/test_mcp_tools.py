@@ -79,6 +79,57 @@ def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeyp
     assert captured["live_wmi"] is False
 
 
+@pytest.mark.parametrize("detail", ["summary", "full", None])
+def test_decode_vehicle_identity_detail_preserves_safety_and_evidence(tmp_path, monkeypatch, detail):
+    expected = {
+        "ok": True,
+        "status": "partial",
+        "input_binding": {"identifier_kind": "vin", "identifier_sha256": "synthetic"},
+        "vehicle_profile": {"make": "Volkswagen Group"},
+        "field_statuses": {"make": {"status": "candidate"}},
+        "provenance": {"make": [{"source_kind": "local_hint", "bound": False}]},
+        "diagnostics": {"model_year": {"candidate_years": [1981, 2011]}},
+        "missing_fields": ["engine", "model"],
+        "conflicts": [{"field": "model", "code": "synthetic_conflict"}],
+        "provider_errors": [{"code": "empty_result", "error_codes": ["7"]}],
+        "processing": {"http_attempts": 0, "elapsed_ms": 1},
+        "parts_lookup_readiness": {"exact_applicability_confirmed": False},
+        "adapter_status": [{"source_id": "synthetic_provider"}],
+        "lookup_plan": {"catalog_routes": [{"source_id": "synthetic_route"}]},
+    }
+
+    async def fake_decode(identifier, **kwargs):
+        return expected
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", fake_decode)
+    server = _FakeServer()
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
+    kwargs = {} if detail is None else {"detail": detail}
+    response = asyncio.run(server.tools["decode_vehicle_identity"]("WVW00000000000000", **kwargs))
+    for key in expected.keys() - {"adapter_status", "lookup_plan"}:
+        assert response[key] == expected[key]
+    if detail == "summary":
+        assert "adapter_status" not in response and "lookup_plan" not in response
+        assert response["presentation"] == {"detail": "summary", "omitted_fields": ["adapter_status", "lookup_plan"]}
+    else:
+        assert response["adapter_status"] == expected["adapter_status"]
+        assert response["lookup_plan"] == expected["lookup_plan"]
+        assert "presentation" not in response
+    assert response["tool_execution"]["call_id"]
+    assert "adapter_status" in expected and "lookup_plan" in expected
+
+
+def test_decode_vehicle_identity_invalid_detail_never_calls_decoder(tmp_path, monkeypatch):
+    async def forbidden_decode(*args, **kwargs):
+        raise AssertionError("invalid detail must be rejected before decoder execution")
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", forbidden_decode)
+    server = _FakeServer()
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
+    with pytest.raises(ValueError, match="detail must be summary or full"):
+        asyncio.run(server.tools["decode_vehicle_identity"]("WVW00000000000000", detail="invalid"))
+
+
 def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
     server = _FakeServer()
     register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))

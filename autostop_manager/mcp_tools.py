@@ -816,9 +816,12 @@ def register_manager_tools(  # noqa: C901
         options: list[str] | None = None,
         transmission_speeds: StrictInt | None = None,
         identifier_type: Literal["auto", "vin", "vin_partial", "frame_number", "market_code"] = "auto",
+        detail: Literal["summary", "full"] = "full",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        return await run_identity_request(
+        if detail not in {"summary", "full"}:
+            raise ValueError("detail must be summary or full")
+        result = await run_identity_request(
             decode_vehicle_identity_async(
                 identifier,
                 crm_context={
@@ -847,6 +850,13 @@ def register_manager_tools(  # noqa: C901
             ),
             ctx,
         )
+        if detail == "full":
+            return result
+        omitted = [key for key in ("adapter_status", "lookup_plan") if key in result]
+        return {
+            **{key: value for key, value in result.items() if key not in omitted},
+            "presentation": {"detail": "summary", "omitted_fields": omitted},
+        }
 
     @server.tool(
         name="decode_vehicle_identities",

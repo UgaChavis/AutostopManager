@@ -1734,12 +1734,14 @@
       "defaults": {},
       "outputs": [
         "transport outcome, semantic completeness/missing fields and identifier binding",
-        "recognized NHTSA/vPIC provenance is shared with that primary source; unknown response provenance remains unknown"
+        "recognized NHTSA/vPIC provenance is shared with that primary source; unknown response provenance remains unknown",
+        "Spaced Error Code/Error Text aliases are normalized; summary preserves diagnostic codes and text-presence flags without raw provider text."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
         "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника",
+        "Conflicting diagnostic aliases are a parse failure; diagnostics-only responses do not become vehicle facts."
       ],
       "limitations": [
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
@@ -2491,7 +2493,8 @@
         "series",
         "options",
         "transmission_speeds",
-        "identifier_type"
+        "identifier_type",
+        "detail"
       ],
       "defaults": {
         "vehicle": null,
@@ -2512,12 +2515,14 @@
         "series": null,
         "options": null,
         "transmission_speeds": null,
-        "identifier_type": "auto"
+        "identifier_type": "auto",
+        "detail": "full"
       },
       "outputs": [
         "Legacy flat object: ok/status/schema_version=2/input_binding; invalid rows have input_binding=null.",
         "vehicle_profile, field_statuses, field_evidence, provenance, evidence_sources, family_candidates, missing_fields, conflicts, warnings, errors, provider_errors.",
-        "identifier/identifier_validation/privacy/normalization_notes; confidence/confidence_label/confidence_semantics; adapter_status/lookup_plan/registry_version/parts_lookup_readiness; optional processing."
+        "identifier/identifier_validation/privacy/normalization_notes; confidence/confidence_label/confidence_semantics; adapter_status/lookup_plan/registry_version/parts_lookup_readiness; optional processing.",
+        "detail=summary omits adapter_status/lookup_plan after complete identity checks; presentation lists omitted_fields; binding, provenance, diagnostics, conflicts, readiness and processing remain available."
       ],
       "errors": [
         "status=invalid_input and errors[] for malformed identifier, year or context; provider_errors[] records source failures; partial profile is separate from complete identity."
@@ -2525,12 +2530,14 @@
       "limitations": [
         "live_vpic=true and live_wmi=true are legacy defaults and may perform provider reads; set both false for local-only identity inspection.",
         "WMI and platform family do not establish engine or exact modification; model year and production date are separate fields.",
-        "Copied provider data retains provider lineage and is not independent CRM corroboration."
+        "Copied provider data retains provider lineage and is not independent CRM corroboration.",
+        "Use detail=summary for a VIN-only task; full remains the compatible default. Unsupported coverage and provider diagnostics do not invalidate a ROW VIN."
       ],
       "example": {
         "identifier": "WVWZZZ1KZAW000001",
         "live_vpic": false,
-        "live_wmi": false
+        "live_wmi": false,
+        "detail": "summary"
       },
       "invalid_example": {
         "identifier": null
@@ -4528,8 +4535,9 @@
       },
       "outputs": [
         "Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.",
-        "vehicle_profile/field_statuses(observed или disputed)/provenance/variants/model_year_candidates/family_candidates",
-        "input_binding/conflicts/missing_fields/parts_lookup_readiness; спорное поле исключается из profile"
+        "vehicle_profile/field_statuses(candidate/supported/observed/disputed)/provenance/variants/model_year_candidates/family_candidates",
+        "input_binding/conflicts/missing_fields/parts_lookup_readiness; спорное поле исключается из profile",
+        "manufacturer_country remains separate from country; model-year alternatives include diagnostics.model_year.candidate_years; input evidence strength/binding/lineage is preserved."
       ],
       "errors": [
         "invalid_input для неверной формы results/evidence/alternatives",

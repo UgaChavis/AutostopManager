@@ -22,7 +22,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 {"identifier":null,"results":[{"evidence":[{"declares_oem":true,"document_kind":"official_epc","fetched_at":"2026-01-01T00:00:00Z","locator":"https://example.com/oem","method":"document_read","primary_lineage":"DEMO official OEM document","provider":"manufacturer","scope":"family","version":"demo-v1"}],"input_binding":{"identifier_kind":"vin","identifier_sha256":"0702c3dcffd51cfab2e949d7b8b634ae759219e92e7e4ee7549ea2cf9671ce5b","version":1},"vehicle_profile":{"make":"Volkswagen"}}]}
 ```
 
-Выход: Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.; vehicle_profile/field_statuses(observed или disputed)/provenance/variants/model_year_candidates/family_candidates; input_binding/conflicts/missing_fields/parts_lookup_readiness; спорное поле исключается из profile.
+Выход: Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.; vehicle_profile/field_statuses(candidate/supported/observed/disputed)/provenance/variants/model_year_candidates/family_candidates; input_binding/conflicts/missing_fields/parts_lookup_readiness; спорное поле исключается из profile; manufacturer_country remains separate from country; model-year alternatives include diagnostics.model_year.candidate_years; input evidence strength/binding/lineage is preserved..
 Ошибки и неполнота: invalid_input для неверной формы results/evidence/alternatives; partial при missing/conflicts; failed outcome, provider mismatch и upstream conflicts не становятся наблюдаемыми фактами.
 
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.

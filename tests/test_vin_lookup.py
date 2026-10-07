@@ -95,6 +95,50 @@ def test_build_lookup_plan_honors_no_live_vpic(monkeypatch):
     assert plan["steps"]
 
 
+@pytest.mark.parametrize("make", ["VAG", "Volkswagen", "Volkswagen Group", "VW", "Audi", "Skoda", "SEAT", "Cupra"])
+def test_vag_lookup_uses_existing_universal_source_without_unrelated_epc(make):
+    plan = build_lookup_plan("XW8ZZZ5N" + "0" * 9, make_hint=make, live_vpic=False)
+    assert [route["source_name"] for route in plan["catalog_routes"]] == ["PARTSAPI.RU"]
+    assert all("MAN" not in action and "BMW" not in action for action in plan["next_actions"])
+    assert plan["oem_candidates"] == []
+    assert plan["fitment_confidence"]["level"] == "blocked"
+
+
+@pytest.mark.parametrize("make", [None, "Unregistered brand"])
+def test_unknown_make_vin_plan_has_only_explicit_universal_routes(make):
+    plan = build_lookup_plan("XW8" + "0" * 14, make_hint=make, live_vpic=False)
+    assert {route["source_name"] for route in plan["catalog_routes"]} == {"PARTSAPI.RU", "Parts-Catalogs API"}
+    assert not any(route["requires_login"] for route in plan["catalog_routes"])
+    assert all("MAN" not in action and "BMW" not in action for action in plan["next_actions"])
+
+
+@pytest.mark.parametrize(
+    "make,expected,excluded",
+    [
+        ("MAN", "MAN Service Portal / webMANTIS", "BMW AIR/ETK via AOS"),
+        ("BMW", "BMW AIR/ETK via AOS", "MAN Service Portal / webMANTIS"),
+        ("Toyota", "Toyota Japan EPC Help", "MAN Service Portal / webMANTIS"),
+    ],
+)
+def test_vin_fallback_preserves_matching_brand_routes(monkeypatch, make, expected, excluded):
+    monkeypatch.setattr("autostop_manager.vin_lookup.sources_for_make", lambda _make: [])
+    plan = build_lookup_plan("WBA" + "0" * 14, make_hint=make, live_vpic=False)
+    names = {route["source_name"] for route in plan["catalog_routes"]}
+    assert expected in names
+    assert excluded not in names
+
+
+def test_vin_plan_rejects_explicit_brand_conflict_even_in_mapped_sources(monkeypatch):
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.sources_for_make",
+        lambda _make: [{"name": "BMW AIR/ETK via AOS", "brands": ["MAN"], "inputs": ["vin"]}],
+    )
+    monkeypatch.setattr("autostop_manager.vin_lookup.sources_for_inputs", lambda *_inputs: [])
+    plan = build_lookup_plan("WBA" + "0" * 14, make_hint="BMW", live_vpic=False)
+    assert plan["catalog_routes"] == []
+    assert not any("Open " in action for action in plan["next_actions"])
+
+
 def test_build_lookup_plan_for_frame_number_returns_japan_routes():
     plan = build_lookup_plan("GXE10-0088644")
     assert plan["identifier"]["kind"] == "frame_number"
@@ -255,6 +299,44 @@ class _FakeResponse:
     def read(self, size: int = -1) -> bytes:
         data = json.dumps(self._payload).encode("utf-8")
         return data[:size] if size >= 0 else data
+
+
+@pytest.mark.parametrize("code,expected", [("1, 7,400,7", ["1", "7", "400"]), (0, ["0"]), (None, [])])
+def test_vpic_empty_result_preserves_safe_reported_diagnostics(monkeypatch, code, expected):
+    vin = "XW8ZZZ5N" + "0" * 9
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda *_args, **_kwargs: _FakeResponse(
+            {"Results": [{"VIN": vin, "ErrorCode": code, "ErrorText": "Unsupported region for " + vin}]}
+        ),
+    )
+    result = decode_vin_vpic(vin)
+    assert result["ok"] is False
+    assert result["outcome"] == "empty_result"
+    assert result["vehicle"] == {}
+    assert result["identifier_binding"] == {"status": "exact", "verified": True}
+    assert result["error_codes"] == expected
+    assert result["has_error_text"] is True
+    assert result["diagnostics_status"] == ("missing" if code is None else "reported")
+    assert result["coverage"] == "partial_or_unsupported"
+    assert "error_text" not in result
+    diagnostics = {key: result[key] for key in ("error_codes", "has_error_text", "diagnostics_status", "coverage")}
+    assert vin not in json.dumps(diagnostics)
+
+
+def test_vpic_empty_result_diagnostics_do_not_accept_non_numeric_tokens(monkeypatch):
+    vin = "XW8" + "0" * 14
+    monkeypatch.setattr(
+        "autostop_manager.vin_lookup.urlopen",
+        lambda *_args, **_kwargs: _FakeResponse(
+            {"Results": [{"VIN": vin, "ErrorCode": "7," + vin + ",malformed", "ErrorText": ""}]}
+        ),
+    )
+    result = decode_vin_vpic(vin)
+    assert result["error_codes"] == ["7"]
+    assert result["has_error_text"] is False
+    diagnostics = {key: result[key] for key in ("error_codes", "has_error_text", "diagnostics_status", "coverage")}
+    assert vin not in json.dumps(diagnostics)
 
 
 def test_vpic_decode_request_uses_model_year_and_json(monkeypatch):

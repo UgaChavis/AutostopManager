@@ -2286,6 +2286,36 @@ def _partsapi_vin_decode_records(
     return [(payload, identifiers, ()), *records]
 
 
+def _partsapi_us_diagnostic_aliases(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(record)
+    for alias, canonical in (("Error Code", "ErrorCode"), ("Error Text", "ErrorText")):
+        if alias not in normalized:
+            continue
+        value = normalized.pop(alias)
+        if canonical in normalized and (
+            normalized[canonical] != value or type(normalized[canonical]) is not type(value)
+        ):
+            raise ValueError("decodeVINus returned contradictory diagnostic aliases.")
+        normalized[canonical] = value
+    code, text = normalized.get("ErrorCode"), normalized.get("ErrorText")
+    if code is not None and (isinstance(code, bool) or not isinstance(code, (str, int))):
+        raise ValueError("decodeVINus returned malformed diagnostic codes.")
+    if text is not None and not isinstance(text, str):
+        raise ValueError("decodeVINus returned malformed diagnostic text.")
+    return normalized
+
+
+def _partsapi_us_error_codes(value: str | int | None) -> tuple[list[str], bool]:
+    if value in (None, ""):
+        return [], True
+    if len(str(value)) > 4096:
+        return [], False
+    tokens = [token.strip() for token in re.split(r"[,;]", str(value))]
+    valid = len(tokens) <= 64 and all(re.fullmatch(r"[0-9]{1,4}", token) for token in tokens)
+    codes = list(dict.fromkeys(token for token in tokens[:64] if re.fullmatch(r"[0-9]{1,4}", token) and token != "0"))
+    return codes, valid
+
+
 def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[str, Any], bool]:
     if depth > 5 or not isinstance(payload, dict):
         return {}, False
@@ -2299,14 +2329,16 @@ def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[st
                 if key in record and record[key] != row["Value"]:
                     return {}, False
                 record[key] = row["Value"]
+            record = _partsapi_us_diagnostic_aliases(record)
             return record, "ErrorCode" in record and any(key in record for key in ("Make", "Model", "ModelYear"))
         if len(results) == 1 and isinstance(results[0], dict):
-            record = results[0]
+            record = _partsapi_us_diagnostic_aliases(results[0])
             return record, "ErrorCode" in record and "ErrorText" in record
-    if any(key in payload for key in ("Make", "Model", "ErrorCode")):
+    record = _partsapi_us_diagnostic_aliases(payload)
+    if any(key in record for key in ("Make", "Model", "ErrorCode", "ErrorText")):
         marker = " ".join(str(payload.get(key) or "") for key in ("source", "provider", "upstream", "Message"))
         origin = bool(re.search(r"\b(?:NHTSA|vPIC)\b|vpic\.nhtsa\.dot\.gov", marker, re.IGNORECASE))
-        return payload, origin and "ErrorCode" in payload and "ErrorText" in payload
+        return record, origin and "ErrorCode" in record and "ErrorText" in record
     for key in ("data", "result"):
         nested = payload.get(key)
         if isinstance(nested, list) and len(nested) == 1:
@@ -2338,13 +2370,16 @@ def _partsapi_us_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]
 
 
 def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | None) -> dict[str, Any]:
-    record, recognized = _partsapi_us_decode_record(payload)
+    try:
+        record, recognized = _partsapi_us_decode_record(payload)
+    except ValueError:
+        record, recognized = {}, False
     requested = _partsapi_identifier(requested_identifier)
     returned = _partsapi_identifier(record.get("VIN"))
     try:
         identifiers = _partsapi_us_identifiers(payload)
     except ValueError:
-        record, identifiers = {}, ()
+        record, recognized, identifiers = {}, False, ()
     full_vins = [vin for vin in identifiers if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin)]
     matches = None
     if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) and full_vins:
@@ -2368,9 +2403,8 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
         if record.get(key) not in (None, "")
         and str(record[key]).strip().casefold() not in {"not applicable", "null", "unknown"}
     }
-    codes = [
-        code.strip() for code in re.split(r"[,;]", str(record.get("ErrorCode") or "")) if code.strip() not in {"", "0"}
-    ]
+    codes, diagnostics_valid = _partsapi_us_error_codes(record.get("ErrorCode"))
+    recognized = recognized and diagnostics_valid
     missing = [field for field in aliases if field not in facts]
     provenance = {
         "provider": "partsapi_ru",
@@ -2394,7 +2428,7 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
     }
     status = "partial" if facts else "missing"
     outcome = "partial_result" if facts else "empty_result"
-    if facts and not missing and not codes and matches is True:
+    if facts and not missing and not codes and diagnostics_valid and matches is True:
         status, outcome = "complete", "success"
     if not record:
         status, outcome = "unparsed", "unparsed_response"
@@ -2406,8 +2440,13 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
         "missing_fields": missing,
         "provider_diagnostics": {
             "error_codes": codes,
-            "has_errors": bool(codes),
+            "has_errors": bool(codes) or not diagnostics_valid,
             "has_error_text": bool(record.get("ErrorText")),
+            "diagnostics_status": "invalid"
+            if not diagnostics_valid
+            else "reported"
+            if record.get("ErrorCode") not in (None, "")
+            else "missing",
         },
         "provenance": provenance,
         "identifier_matches_request": matches,

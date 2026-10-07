@@ -12,6 +12,7 @@ REGISTRY_PATH = PROJECT_ROOT / "docs" / "agent" / "vin_oem_sources.json"
 
 PARTSOUQ_SOURCE_ID = "partsouq_catalog"
 AMAYAMA_SOURCE_ID = "amayama_catalog"
+_UNIVERSAL_VIN_SOURCE_NAMES = frozenset({"PARTSAPI.RU", "Parts-Catalogs API"})
 PUBLIC_CATALOG_SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
     PARTSOUQ_SOURCE_ID: (
         "partsouq_catalog_manual",
@@ -78,17 +79,13 @@ _MAKE_SOURCE_MAP: dict[str, list[str]] = {
         "BMW Aftersales Online System (AOS)",
         "BMW Technical Information System",
     ],
-    "VAG": [
-        "Volkswagen Group ETKA",
-        "Volkswagen erWin",
-        "Audi erWin",
-    ],
-    "VOLKSWAGEN": ["Volkswagen Group ETKA", "Volkswagen erWin"],
-    "VW": ["Volkswagen Group ETKA", "Volkswagen erWin"],
-    "AUDI": ["Volkswagen Group ETKA", "Audi erWin"],
-    "SKODA": ["Volkswagen Group ETKA", "Volkswagen erWin"],
-    "SEAT": ["Volkswagen Group ETKA", "Volkswagen erWin"],
-    "CUPRA": ["Volkswagen Group ETKA", "Volkswagen erWin"],
+    "VAG": ["PARTSAPI.RU"],
+    "VOLKSWAGEN": ["PARTSAPI.RU"],
+    "VW": ["PARTSAPI.RU"],
+    "AUDI": ["PARTSAPI.RU"],
+    "SKODA": ["PARTSAPI.RU"],
+    "SEAT": ["PARTSAPI.RU"],
+    "CUPRA": ["PARTSAPI.RU"],
     "TOYOTA": ["Toyota Japan EPC Help", "Toyota EPC Mirror", "Toyota Recall Search"],
     "LEXUS": ["Toyota Japan EPC Help", "Toyota EPC Mirror", "Toyota Recall Search"],
     "HONDA": ["Honda EPC Mirror", "Honda Recall Lookup"],
@@ -175,6 +172,31 @@ def sources_for_make(make: str | None) -> list[dict[str, Any]]:
         emitted_source_ids.add(source_id)
         result.append(source)
     return result
+
+
+def source_supports_make(source: dict[str, Any], make: str | None) -> bool:
+    """Keep VIN fallback within declared brand or explicitly universal coverage."""
+    references = {
+        _source_reference_key(reference)
+        for reference in (source.get("source_id"), source.get("name"), *_string_list(source.get("aliases")))
+        if reference
+    }
+    if references & {_source_reference_key(name) for name in _UNIVERSAL_VIN_SOURCE_NAMES}:
+        return True
+    normalized = normalize_make(make)
+    if not normalized:
+        return False
+    brands = _string_list(source.get("brands"))
+    if brands:
+        return normalized in {normalize_make(brand) for brand in brands}
+    # Older registry entries omit brands; only their explicit make mapping
+    # proves routing support. Omitted brands never mean universal coverage.
+    mapped = {
+        _source_reference_key(reference)
+        for name in source_names_for_make(make)
+        for reference in (name, canonical_source_id(name))
+    }
+    return bool(references & mapped)
 
 
 def sources_for_inputs(*inputs: str) -> list[dict[str, Any]]:

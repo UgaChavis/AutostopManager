@@ -1,5 +1,16 @@
 # E2: контракт определения автомобиля
 
+Для одиночного MCP `decode_vehicle_identity` доступен `detail=summary|full` с прежним
+default `full`. Summary формируется после полного decode/проверок и исключает только
+`adapter_status` и `lookup_plan`; остальные поля, включая binding, provenance,
+field_statuses, diagnostics, conflicts, readiness и processing, сохраняются.
+`presentation.omitted_fields` явно показывает исключённые поля. Batch-контракт не меняется.
+
+Сверка готовых результатов сохраняет candidate/supported/observed/disputed, силу и
+привязку исходных свидетельств. Дубли одной primary lineage не повышают статус.
+`manufacturer_country` и `country` раздельны; варианты года из diagnostics и явного
+model_year_candidates объединяются только после проверки пригодности и binding.
+
 `decode_vehicle_identity` и `decode_vehicle_identities` возвращают профиль для исследования автомобиля. Названия инструментов и прежние параметры сохранены. Дополнительно поддерживаются `identifier_type`, `production_year`, `production_date`, `modification`, `trim`, `series`, `options` и `transmission_speeds`. В batch тип идентификатора задаётся на уровне элемента, а характеристики передаются внутри элемента или `crm_context`. Пустые внешние поля (`null`, пустая или пробельная строка) сохраняют заполненные вложенные характеристики; неправильный тип значения возвращает ошибку соответствующей строки.
 
 ## Входы и источники

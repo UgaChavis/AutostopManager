@@ -1225,6 +1225,33 @@ def _year_relationship_conflicts(
     return conflicts
 
 
+def _checked_vpic_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+    raw_codes = result.get("error_codes")
+    if not isinstance(raw_codes, list):
+        raw_code = result.get("error_code")
+        raw_codes = re.split(r"[,;]", raw_code) if isinstance(raw_code, str) and len(raw_code) <= 4096 else [raw_code]
+    codes = []
+    for value in raw_codes[:64]:
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            continue
+        code = str(value).strip()
+        if re.fullmatch(r"[0-9]{1,4}", code) and code != "0" and code not in codes:
+            codes.append(code)
+    status = result.get("diagnostics_status")
+    if status not in ("reported", "missing"):
+        value = result.get("error_code")
+        status = (
+            "reported" if isinstance(value, (str, int)) and not isinstance(value, bool) and value != "" else "missing"
+        )
+    text = result.get("error_text")
+    return {
+        "error_codes": codes,
+        "has_error_text": result.get("has_error_text") is True or (isinstance(text, str) and bool(text.strip())),
+        "diagnostics_status": status,
+        "coverage": "partial_or_unsupported",
+    }
+
+
 def _provider_diagnostics(
     vpic_result: dict[str, Any] | None,
     wmi_result: dict[str, Any] | None,
@@ -1233,10 +1260,22 @@ def _provider_diagnostics(
     for source, result in (("NHTSA vPIC", vpic_result), ("NHTSA vPIC WMI", wmi_result)):
         if result is not None and not result.get("ok"):
             rows.append(
-                {"code": result.get("outcome") or "provider_error", "source": source, "stage": "provider_decode"}
+                {
+                    "code": result.get("outcome") or "provider_error",
+                    "source": source,
+                    "stage": "provider_decode",
+                    **(_checked_vpic_diagnostics(result) if source == "NHTSA vPIC" else {}),
+                }
             )
     if vpic_result and vpic_result.get("ok") and not _vpic_has_clean_diagnostics(vpic_result):
-        rows.append({"code": "provider_partial_evidence", "source": "NHTSA vPIC", "stage": "provider_decode"})
+        rows.append(
+            {
+                "code": "provider_partial_evidence",
+                "source": "NHTSA vPIC",
+                "stage": "provider_decode",
+                **_checked_vpic_diagnostics(vpic_result),
+            }
+        )
     return rows
 
 
@@ -1349,7 +1388,13 @@ def decode_vehicle_identity(
         )
     if diagnostics["frame_query_hint"]:
         warnings.append(f"Try frame query form {diagnostics['frame_query_hint']} in Japan/EPC catalogs.")
-    if diagnostics["check_digit"].get("status") in {"fail", "invalid_characters"}:
+    strict_check_digit = _uses_strict_north_american_vin(profile)
+    diagnostics["check_digit"]["applicability"] = (
+        "required" if strict_check_digit else "not_applicable" if len(normalized) != 17 else "not_established"
+    )
+    if diagnostics["check_digit"].get("status") == "fail" and not strict_check_digit:
+        warnings.append("North-American check-digit applicability is not established; verify ROW identity by OEM/EPC.")
+    elif diagnostics["check_digit"].get("status") in {"fail", "invalid_characters"}:
         warnings.append("VIN requires document/EPC verification before VIN-critical parts orders.")
     if classification.kind == "market_code":
         warnings.append("Identifier is market/JDM-frame-like; do not treat it as a 17-character ISO VIN.")

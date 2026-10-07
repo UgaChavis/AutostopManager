@@ -2964,3 +2964,99 @@ def test_partsapi_supplier_partial_search_retains_counts_and_guards(supplier_loo
     assert result["missing_fields"] == ["brand", "found_via", "product_name"]
     assert result["record_counts"]["article_candidates"] == 1
     assert result["article_candidates"][0]["fitment_evidence"]["fitment_confirmed"] is False
+
+
+@pytest.mark.parametrize("wrapper", ["flat", "results"])
+@pytest.mark.parametrize("marked", [False, True])
+def test_partsapi_us_spaced_diagnostics_preserve_partial_binding_and_origin(supplier_lookup, wrapper, marked):
+    row = {
+        "VIN": "A" * 17,
+        "Make": "TEST",
+        "Model": "TEST MODEL",
+        "Error Code": "1,7;400",
+        "ErrorCode": "1,7;400",
+        "Error Text": "Incomplete synthetic decode",
+        "ErrorText": "Incomplete synthetic decode",
+    }
+    if marked:
+        row["source"] = "NHTSA vPIC"
+    payload = {"Results": [row]} if wrapper == "results" else row
+    before = json.dumps(payload, sort_keys=True)
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["semantic_status"] == "partial"
+    assert result["provider_diagnostics"]["error_codes"] == ["1", "7", "400"]
+    assert result["provider_diagnostics"]["has_error_text"] is True
+    assert result["identifier_matches_request"] is True
+    assert result["provenance"]["upstream"] == ("nhtsa_vpic" if marked or wrapper == "results" else "unknown")
+    assert result["vehicle_profiles"][0]["fitment_confirmed"] is False
+    assert result["requires_fallback"] is True
+    assert json.dumps(payload, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("wrapper", ["flat", "results"])
+@pytest.mark.parametrize("echo", [None, "A" * 17])
+def test_partsapi_us_diagnostics_only_do_not_create_vehicle_identity(supplier_lookup, wrapper, echo):
+    row = {"Error Code": "1,7,400", "Error Text": "No vehicle facts", "source": "NHTSA vPIC"}
+    if echo:
+        row["VIN"] = echo
+    payload = {"Results": [row]} if wrapper == "results" else row
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["semantic_status"] == "missing"
+    assert result["outcome"] == "empty_result"
+    assert result["vehicle_profiles"] == []
+    assert result["provider_diagnostics"]["error_codes"] == ["1", "7", "400"]
+    assert result["identifier_matches_request"] is (True if echo else None)
+    assert result["requires_fallback"] is True
+
+
+@pytest.mark.parametrize("wrapper", ["flat", "results"])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"Error Code": "0", "ErrorCode": "1"},
+        {"Error Text": "first", "ErrorText": "second"},
+        {"Error Code": True},
+        {"Error Code": ["1", "7"]},
+        {"Error Text": {"text": "SENSITIVE_SENTINEL"}},
+    ],
+)
+def test_partsapi_us_conflicting_or_malformed_diagnostics_fail_closed(supplier_lookup, wrapper, fields):
+    row = {"VIN": "A" * 17, "Make": "TEST", **fields}
+    payload = {"Results": [row]} if wrapper == "results" else row
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["outcome"] == "unparsed_response"
+    assert result["vehicle_profiles"] == []
+    assert result["provider_diagnostics"]["error_codes"] == []
+    assert result["provenance"]["upstream"] == "unknown"
+
+
+@pytest.mark.parametrize("code", ["0", "1,7,400,SENSITIVE_SENTINEL", "9" * 4097])
+def test_partsapi_us_diagnostic_codes_are_bounded_and_zero_text_is_not_an_error(supplier_lookup, code):
+    row = {
+        "VIN": "A" * 17,
+        "Make": "TEST",
+        "Model": "TEST MODEL",
+        "ModelYear": "2020",
+        "EngineModel": "TEST ENGINE",
+        "Trim": "TEST TRIM",
+        "Error Code": code,
+        "Error Text": "0 - explanatory text",
+        "source": "NHTSA vPIC",
+    }
+    result = supplier_lookup("decodeVINus", row, identifier="A" * 17)
+    diagnostics = result["provider_diagnostics"]
+    assert diagnostics["error_codes"] == (["1", "7", "400"] if code.startswith("1,") else [])
+    assert "SENSITIVE_SENTINEL" not in json.dumps(diagnostics)
+    assert diagnostics["has_errors"] is (code != "0")
+    assert diagnostics["has_error_text"] is True
+    assert result["semantic_status"] == ("complete" if code == "0" else "partial")
+
+
+@pytest.mark.parametrize("outer_foreign", [False, True])
+def test_partsapi_us_spaced_diagnostics_cannot_hide_foreign_vin(supplier_lookup, outer_foreign):
+    row = {"VIN": "A" * 17 if outer_foreign else "B" * 17, "Make": "TEST", "Error Code": "0", "Error Text": "OK"}
+    payload = {"Results": [row], **({"VIN": "B" * 17} if outer_foreign else {})}
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["outcome"] == "identifier_mismatch"
+    assert result["identifier_matches_request"] is False
+    assert result["vehicle_profiles"] == []

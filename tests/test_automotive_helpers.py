@@ -50,6 +50,35 @@ def test_independent_vpic_reads_only_one_selected_endpoint(monkeypatch):
     assert len(calls) == 1
 
 
+def test_independent_vpic_empty_response_keeps_checked_safe_diagnostics(monkeypatch):
+    monkeypatch.setattr(
+        identity.vin_lookup,
+        "decode_vin_vpic",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "outcome": "empty_result",
+            "vehicle": {},
+            "identifier_binding": {"status": "exact", "verified": True},
+            "error_codes": ["7", "400", VIN, "7"],
+            "error_text": "Unsupported " + VIN,
+            "has_error_text": True,
+            "diagnostics_status": "reported",
+            "coverage": "partial_or_unsupported",
+        },
+    )
+    row = identity.decode_vin_vpic(VIN)
+    assert row["outcome"] == "empty" and row["data"]["vehicle_profile"] == {}
+    assert row["data"]["diagnostics"] == {
+        "error_codes": ["7", "400"],
+        "has_error_text": True,
+        "diagnostics_status": "reported",
+        "coverage": "partial_or_unsupported",
+    }
+    assert row["data"]["input_binding"] == binding(VIN)
+    assert row["execution"]["network_calls"] == 1
+    assert VIN not in str(row)
+
+
 def test_wmi_is_not_model_identity(monkeypatch):
     monkeypatch.setattr(
         identity.vin_lookup,
@@ -456,6 +485,170 @@ def test_reconciliation_keeps_upstream_alternatives_and_provider_context_lineage
     assert not _independent_values({}, context)["engine"]
     copied = decode_vehicle_identity(VIN, crm_context=context, live_vpic=False, live_wmi=False)
     assert not _independent_values(copied, {})["engine"]
+
+
+def test_reconciliation_preserves_composite_candidate_levels_origins_years_and_country(forbidden_network):
+    profile = {
+        "make": "DEMO",
+        "manufacturer": "Demo manufacturer",
+        "market": "EU",
+        "country": "Country A",
+        "manufacturer_country": "Country B",
+    }
+    origins = [
+        {
+            "field": field,
+            "value": value,
+            "source": "local WMI hint",
+            "strength": "candidate",
+            "bound": False,
+            "source_kind": "local_hint",
+            "depends_on": ["local_registry"],
+            "independent": True,
+            "raw_value": value,
+            "normalization": {"method": "local_rules"},
+        }
+        for field, value in profile.items()
+    ]
+    ready = {
+        "ok": True,
+        "input_binding": binding(VIN),
+        "vehicle_profile": profile,
+        "field_statuses": {field: {"status": "candidate"} for field in profile},
+        "field_evidence": origins,
+        "diagnostics": {"model_year": {"candidate_years": [1981, 2011]}},
+        "model_year_candidates": [2011],
+        "scope": "family",
+    }
+    before = deepcopy(ready)
+    merged = identity.reconcile_vehicle_identity(VIN, [ready])["data"]
+    assert merged["vehicle_profile"] == profile
+    assert all(merged["field_statuses"][field] == "candidate" for field in profile)
+    assert merged["model_year_candidates"] == [2011, 1981]
+    assert merged["diagnostics"]["model_year"]["candidate_years"] == [2011, 1981]
+    assert "model_year" not in merged["vehicle_profile"]
+    assert merged["variants"][0]["scope"] == "family"
+    assert merged["variants"][0]["diagnostics"] == ready["diagnostics"]
+    for field in profile:
+        origin = merged["provenance"][field][0]
+        assert origin == {
+            **next(row for row in origins if row["field"] == field),
+            "primary_lineage": "autostop_local_vehicle_rules",
+            "result_index": 0,
+        }
+    assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
+    assert ready == before
+
+
+def test_reconciliation_repeated_wmi_primary_source_stays_candidate(forbidden_network):
+    def source(lineage):
+        return result(
+            "demo",
+            "partial",
+            {
+                "wmi": VIN[:3],
+                "input_binding": None,
+                "vehicle_profile": {"make": "DEMO", "engine": "UNSAFE"},
+                "diagnostics": {"model_year": {"candidate_years": [2011]}},
+                "field_statuses": {"make": {"status": "candidate"}},
+                "field_evidence": [
+                    {
+                        "field": "make",
+                        "value": "DEMO",
+                        "source": lineage,
+                        "source_kind": "local_hint",
+                        "strength": "candidate",
+                        "bound": False,
+                    }
+                ],
+            },
+        )
+
+    merged = identity.reconcile_vehicle_identity(VIN, [source("NHTSA vPIC WMI"), source("nhtsa_vpic_via_corgi")])[
+        "data"
+    ]
+    assert merged["field_statuses"]["make"] == "candidate"
+    assert "engine" not in merged["vehicle_profile"]
+    assert merged["model_year_candidates"] == []
+    assert {row["primary_lineage"] for row in merged["provenance"]["make"]} == {"nhtsa_vpic"}
+    assert all(row["strength"] == "candidate" and row["bound"] is False for row in merged["provenance"]["make"])
+    assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
+
+
+def test_reconciliation_keeps_supported_origin_and_child_variant_lineage_scope(forbidden_network):
+    child = {
+        "profile": {"engine": "E2"},
+        "source_lineage": "vininfo_local_rules",
+        "scope": "decoded_fields",
+        "model_year_candidates": [1981, 2011],
+    }
+    origin = {
+        "field": "engine",
+        "value": "E1",
+        "primary_lineage": "nhtsa_vpic",
+        "strength": "supported",
+        "source_kind": "provider",
+        "bound": True,
+        "depends_on": [],
+        "independent": True,
+    }
+    ready = result(
+        "demo",
+        "partial",
+        {
+            "input_binding": binding(VIN),
+            "vehicle_profile": {"engine": "E1"},
+            "scope": "family",
+            "field_statuses": {"engine": {"status": "supported"}},
+            "field_evidence": [origin],
+            "variants": [child],
+            "family_candidates": [child],
+        },
+    )
+    merged = identity.reconcile_vehicle_identity(VIN, [ready])["data"]
+    assert merged["field_statuses"]["engine"] == "supported"
+    assert merged["provenance"]["engine"][0] == {**origin, "result_index": 0}
+    assert merged["variants"].count({**child, "result_index": 0}) == 1
+    assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
+
+
+@pytest.mark.parametrize("failure", ["provider_error", "mismatch", "disputed"])
+def test_reconciliation_failed_or_foreign_results_do_not_supply_years_or_variants(forbidden_network, failure):
+    rejected = result(
+        "demo",
+        "partial",
+        {
+            "input_binding": binding(VIN),
+            "vehicle_profile": {"engine": "UNSAFE"},
+            "model_year_candidates": [1981],
+            "diagnostics": {"model_year": {"candidate_years": [2011]}},
+            "variants": [{"profile": {"engine": "UNSAFE"}, "source_lineage": "rejected_source"}],
+        },
+    )
+    if failure == "provider_error":
+        rejected["ok"], rejected["outcome"] = False, "provider_error"
+    elif failure == "mismatch":
+        rejected["data"]["input_binding"] = binding(OTHER_VIN)
+    else:
+        rejected["data"]["field_statuses"] = {"engine": {"status": "disputed"}}
+    accepted = result(
+        "demo",
+        "partial",
+        {
+            "input_binding": binding(VIN),
+            "vehicle_profile": {"make": "DEMO"},
+            "model_year_candidates": [2020],
+        },
+    )
+    merged = identity.reconcile_vehicle_identity(VIN, [rejected, accepted])["data"]
+    assert "engine" not in merged["vehicle_profile"]
+    assert merged["model_year_candidates"] == [2020]
+    assert merged["diagnostics"]["model_year"]["candidate_years"] == [2020]
+    assert all(item["result_index"] == 1 for item in merged["variants"])
+    assert merged["conflicts"]
+    if failure == "disputed":
+        assert merged["field_statuses"]["engine"] == "disputed"
+    assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
 
 
 @pytest.mark.parametrize(
