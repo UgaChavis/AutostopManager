@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from decimal import Decimal
 from typing import Any
 
@@ -230,7 +231,7 @@ def prepare_action_contract(
     normalized_domain = DOMAIN_ALIASES.get(str(domain or "").strip().casefold(), str(domain or "").strip().casefold())
     normalized_action = str(action or "").strip().casefold()
     normalized_target = str(target_id or "").strip()
-    changes = dict(planned_changes) if isinstance(planned_changes, dict) else {}
+    changes = deepcopy(planned_changes) if isinstance(planned_changes, dict) else {}
     changes = _normalize_store_planned_changes(normalized_action, changes)
     intent = str(owner_intent or "").strip()
     key = str(idempotency_key or "").strip()

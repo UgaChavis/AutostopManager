@@ -12,6 +12,7 @@ from .automotive_contracts import (
     catalog_ref,
     content_digest,
     finite_number,
+    identity_errors,
     invalid,
     result,
     source_metadata_errors,
@@ -124,6 +125,9 @@ def resolve_catalog_group(
     rows = tree.get("rows")
     if not isinstance(rows, list) or len(rows) > MAX_ROWS or any(not isinstance(row, dict) for row in rows):
         return invalid("resolve_catalog_group", "tree.rows")
+    evidence = tree.get("evidence", [])
+    if not isinstance(evidence, list) or len(evidence) > MAX_ROWS or any(not isinstance(row, dict) for row in evidence):
+        return invalid("resolve_catalog_group", "tree.evidence")
     selected = _tree_node_resolution(rows, normalize_part_intent(intent), intent, selected_node_id)
     digest = content_digest(rows)
     nodes = [
@@ -143,7 +147,7 @@ def resolve_catalog_group(
         "success" if selected["category_queryable"] else "partial",
         {**selected, "nodes": nodes, "tree_sha256": digest},
         missing_fields=[] if selected["category_queryable"] else ["catalog_group"],
-        evidence=tree.get("evidence") or [],
+        evidence=evidence,
     )
 
 
@@ -368,6 +372,18 @@ def assess_part_fitment(
         return invalid("assess_part_fitment", "vehicle_part_criteria_evidence_scope")
     if len(evidence) > MAX_ROWS or any(not isinstance(row, dict) for row in evidence):
         return invalid("assess_part_fitment", "evidence")
+    identity_data = vehicle["data"] if isinstance(vehicle.get("data"), dict) else vehicle
+    upstream_errors = identity_errors(vehicle, identity_data)
+    if upstream_errors:
+        return result(
+            "assess_part_fitment",
+            "partial",
+            {"state": "conflict", "scope": scope, "part": part, "checked_conditions": []},
+            evidence=evidence,
+            conflicts=upstream_errors,
+            missing_fields=["usable_vehicle_identity"],
+        )
+    vehicle = identity_data
     profile: dict[str, Any] = (
         vehicle["vehicle_profile"] if isinstance(vehicle.get("vehicle_profile"), dict) else vehicle
     )

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -25,6 +24,36 @@ UNITS = {
 }
 
 
+def _labor_structure_valid(row: dict[str, Any]) -> bool:
+    operation_id = row.get("operation_id")
+    if operation_id is not None and (isinstance(operation_id, bool) or not isinstance(operation_id, (str, int))):
+        return False
+    for field in ("included_operations", "overlaps_with"):
+        values = row.get(field, [])
+        if not isinstance(values, list) or any(
+            isinstance(value, bool) or not isinstance(value, (str, int)) or value == "" for value in values
+        ):
+            return False
+    if "overlap_resolved" in row and not isinstance(row["overlap_resolved"], bool):
+        return False
+    source = row.get("source")
+    return source is None or isinstance(source, (dict, str))
+
+
+def _has_labor_source(source: Any) -> bool:
+    if isinstance(source, str):
+        return bool(source.strip())
+    return isinstance(source, dict) and any(
+        isinstance(source.get(key), str) and source[key].strip()
+        for key in ("provider", "primary_lineage", "source", "name", "locator", "url")
+    )
+
+
+def _operation_key(row: dict[str, Any], fallback: str | int) -> str:
+    value = row.get("operation_id")
+    return str(fallback if value is None or value == "" else value)
+
+
 def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | None, index: int) -> dict[str, Any]:
     raw_time = next(
         (row[key] for key in ("workTime", "raw_time", "time", "hours", "labor_hours", "norm_hours") if key in row), None
@@ -42,10 +71,10 @@ def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | N
         for field, value in (("operation_name", operation), ("unit", factor), ("time", number), ("source", provenance))
         if value is None or value == ""
     ]
+    if not _has_labor_source(provenance) and "source" not in missing:
+        missing.append("source")
     return {
-        "operation_id": str(
-            row.get("operation_id") or "labor-" + content_digest({"index": index, "operation": operation})[:16]
-        ),
+        "operation_id": _operation_key(row, "labor-" + content_digest({"index": index, "operation": operation})[:16]),
         "operation_name": operation,
         "raw_time": raw_time,
         "raw_unit": raw_unit,
@@ -67,6 +96,8 @@ def normalize_labor_time(
         return invalid("normalize_labor_time", "rows")
     if source is not None and not isinstance(source, dict):
         return invalid("normalize_labor_time", "source")
+    if any(not _labor_structure_valid(row) for row in rows):
+        return invalid("normalize_labor_time", "rows.structure")
     normalized = [_labor_row(row, unit, source, index) for index, row in enumerate(rows)]
     missing = [f"rows[{index}].{field}" for index, row in enumerate(normalized) for field in row["missing_fields"]]
     overlaps = [
@@ -155,37 +186,12 @@ def collect_work_price_evidence(
                 continue
             attempts.append(attempt)
             for row in found.get("results", []):
-                snippet = " ".join(str(row.get(key) or "") for key in ("title", "snippet"))
-                source = {
-                    "provider": "public_web",
-                    "primary_lineage": row.get("source"),
-                    "locator": row.get("url"),
-                    "scope": "public_price_snippet",
-                    "method": "public_search",
-                    "fetched_at": datetime.now(UTC).isoformat(),
-                }
+                parsed, source = research.parse_public_work_evidence(row, query, operations, kind)
                 evidence.append(source)
                 if kind == "labor_prices":
-                    includes_parts, labor_only = research._labor_only_flags(snippet)
-                    for price in research._prices_from_text(snippet):
-                        observations.append(
-                            {
-                                "operation_name": research._operation_name_for_query(query, operations),
-                                "price_rub": price,
-                                "labor_only": labor_only,
-                                "includes_parts": includes_parts,
-                                "source": source,
-                            }
-                        )
+                    observations.extend(parsed)
                 else:
-                    for low, high in research._hours_from_text(snippet):
-                        labor.append(
-                            {
-                                "operation_name": research._operation_name_for_query(query, operations),
-                                "range_hours": [low, high],
-                                "source": source,
-                            }
-                        )
+                    labor.extend(parsed)
     data = {
         "observations": observations,
         "labor": labor,
@@ -273,6 +279,8 @@ def calculate_work_price(
         return invalid("calculate_work_price", "policy_version_basis_rate")
     if not isinstance(sample, list) or len(sample) > MAX_ROWS or any(not isinstance(row, dict) for row in sample):
         return invalid("calculate_work_price", "observations")
+    if any(not _labor_structure_valid(row) for row in labor):
+        return invalid("calculate_work_price", "labor.structure")
     if unknown_costs is not None and (
         not isinstance(unknown_costs, list) or any(not isinstance(row, str) for row in unknown_costs)
     ):
@@ -283,7 +291,7 @@ def calculate_work_price(
     seen: set[str] = set()
     included = {str(operation) for row in labor for operation in row.get("included_operations", [])}
     for index, row in enumerate(labor):
-        key = str(row.get("operation_id") or row.get("operation_name") or index)
+        key = _operation_key(row, row.get("operation_name") or index)
         if key in seen or key in included:
             exclusions.append({"operation_id": key, "reason": "duplicate_or_included_operation"})
             continue

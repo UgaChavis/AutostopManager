@@ -636,3 +636,237 @@ def test_norms_direct_category_ids_use_actual_provider_names(monkeypatch, forbid
     zero = partsapi_catalog_lookup(**options)
     assert zero["outcome"] == "configured_unverified"
     assert zero["attempt_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"ok": False, "outcome": "provider_error"},
+        {"conflicts": [{"field": "make", "code": "disputed"}]},
+        {"field_statuses": {"engine": "disputed"}},
+        {"field_statuses": {"engine": {"status": "disputed"}}},
+        {"conflicts": False},
+    ],
+)
+@pytest.mark.parametrize("envelope", [False, True])
+def test_bound_fitment_never_promotes_failed_or_disputed_identity(forbidden_network, change, envelope):
+    vehicle = {"input_binding": binding(VIN), "vehicle_profile": {"engine": "E1"}, **change}
+    if envelope:
+        vehicle = {"data": vehicle, "outcome": "partial"}
+    source = {
+        "provider": "DEMO",
+        "primary_lineage": "DEMO",
+        "method": "epc",
+        "locator": "https://example.com/epc",
+        "fetched_at": "2026-01-01T00:00:00Z",
+        "document_kind": "official_epc",
+        "fitment_assertion": True,
+        "part_number": "DEMO1",
+        "brand": "DEMO",
+        "scope": "exact_identifier",
+        "identifier_binding": binding(VIN),
+    }
+    row = parts.assess_part_fitment(
+        vehicle, {"number": "DEMO1", "brand": "DEMO"}, {"engine": "E1"}, [source], "exact_identifier"
+    )
+    assert row["data"]["state"] == "conflict"
+    assert row["outcome"] == "partial" and row["conflicts"]
+    assert row["execution"]["network_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("included_operations", None),
+        ("included_operations", False),
+        ("included_operations", "B"),
+        ("included_operations", [False]),
+        ("overlaps_with", 1),
+        ("overlaps_with", {}),
+        ("overlap_resolved", 0),
+        ("overlap_resolved", None),
+    ],
+)
+def test_labor_structure_is_validated_before_normalization_or_calculation(forbidden_network, field, value):
+    row = {"operation_name": "DEMO", "hours": 1, field: value}
+    assert labor.normalize_labor_time([row], source={"provider": "DEMO"})["outcome"] == "invalid_input"
+    assert (
+        labor.calculate_work_price([row], {"basis": "hourly_rate", "version": "1"}, hourly_rate=1000)["outcome"]
+        == "invalid_input"
+    )
+
+
+@pytest.mark.parametrize("source", [False, 0, 1, 1.5, []])
+def test_labor_provenance_rejects_scalars_instead_of_asserting_success(forbidden_network, source):
+    assert (
+        labor.normalize_labor_time([{"operation_name": "DEMO", "hours": 1, "source": source}])["outcome"]
+        == "invalid_input"
+    )
+
+
+@pytest.mark.parametrize("source", [None, {}, {"provider": None}, ""])
+def test_empty_labor_provenance_remains_partial_without_requiring_new_metadata(forbidden_network, source):
+    row = labor.normalize_labor_time([{"operation_name": "DEMO", "hours": 1, "source": source}])
+    assert row["outcome"] == "partial" and row["missing_fields"] == ["rows[0].source"]
+    minimal = labor.normalize_labor_time([{"operation_name": "DEMO", "hours": 1}], source={"provider": "autonorms"})
+    assert minimal["outcome"] == "success"
+
+
+@pytest.mark.parametrize("hours,total,outcome", [(0, 0, "success"), (False, None, "partial"), (None, None, "partial")])
+def test_zero_labor_is_known_but_boolean_and_null_do_not_become_zero(forbidden_network, hours, total, outcome):
+    row = labor.calculate_work_price(
+        [{"operation_name": "DEMO", "hours": hours}], {"basis": "hourly_rate", "version": "1"}, hourly_rate=1000
+    )
+    assert row["outcome"] == outcome and row["data"]["total"] == total
+
+
+def test_reconciliation_retains_field_origins_from_legacy_ready_identity(forbidden_network):
+    from autostop_manager.vehicle_identity import decode_vehicle_identity
+
+    ready = decode_vehicle_identity(
+        VIN,
+        crm_context={"make": "DEMO", "model": "MODEL", "engine": "E1", "source_summary": "PartsAPI"},
+        live_vpic=False,
+        live_wmi=False,
+    )
+    row = identity.reconcile_vehicle_identity(VIN, [ready])
+    for field in ("make", "model", "engine"):
+        assert {origin["primary_lineage"] for origin in row["data"]["provenance"][field]} == {"partsapi_ru"}
+        assert not any(origin["independent"] for origin in row["data"]["provenance"][field])
+
+
+def test_mixed_summary_never_assigns_all_sources_to_each_field(forbidden_network):
+    ready = result(
+        "demo",
+        "success",
+        {"input_binding": binding(VIN), "vehicle_profile": {"engine": "E1"}},
+        evidence=[{"primary_lineage": "partsapi_ru"}, {"primary_lineage": "nhtsa_vpic"}],
+    )
+    row = identity.reconcile_vehicle_identity(VIN, [ready])
+    assert row["data"]["provenance"]["engine"] == [
+        {"value": "E1", "primary_lineage": None, "independent": False, "result_index": 0}
+    ]
+
+
+@pytest.mark.parametrize("source", [{"provider": "DEMO"}, ["DEMO"]])
+def test_structured_unknown_primary_source_does_not_crash_or_become_a_fact(forbidden_network, source):
+    ready = result(
+        "demo",
+        "success",
+        {"input_binding": binding(VIN), "vehicle_profile": {"engine": "E1"}},
+        evidence=[{"primary_lineage": source}],
+    )
+    row = identity.reconcile_vehicle_identity(VIN, [ready])
+    assert row["data"]["provenance"]["engine"][0]["primary_lineage"] is None
+    assert row["data"]["provenance"]["engine"][0]["independent"] is False
+
+
+def test_zero_operation_id_matches_included_references_and_boolean_id_is_rejected(forbidden_network):
+    normalized = labor.normalize_labor_time(
+        [{"operation_id": 0, "operation_name": "DEMO", "hours": 1}], source={"provider": "DEMO"}
+    )
+    assert normalized["data"]["labor"][0]["operation_id"] == "0"
+    rows = [{"operation_id": "A", "hours": 2, "included_operations": [0]}, {"operation_id": 0, "hours": 1}]
+    priced = labor.calculate_work_price(rows, {"basis": "hourly_rate", "version": "1"}, hourly_rate=1000)
+    assert priced["data"]["total"] == 2000
+    assert priced["data"]["exclusions"] == [{"operation_id": "0", "reason": "duplicate_or_included_operation"}]
+    rows[1]["operation_id"] = False
+    assert (
+        labor.calculate_work_price(rows, {"basis": "hourly_rate", "version": "1"}, hourly_rate=1000)["outcome"]
+        == "invalid_input"
+    )
+
+
+@pytest.mark.parametrize("evidence", [[None], None, False, {}, ["source"], [{}] * 501])
+def test_catalog_group_rejects_malformed_evidence_before_result_construction(forbidden_network, evidence):
+    tree = {
+        "rows": [{"NODE_3_STR_ID": "18", "NODE_3_TEXT": "масляный фильтр"}],
+        "modification": REF,
+        "evidence": evidence,
+    }
+    row = parts.resolve_catalog_group(tree, "масляный фильтр", REF, 18)
+    assert row["outcome"] == "invalid_input"
+    assert row["missing_fields"] == ["tree.evidence"]
+    assert row["execution"]["network_calls"] == 0
+
+
+def test_catalog_group_keeps_existing_evidence_without_requiring_new_metadata(forbidden_network):
+    evidence = {"source": "legacy PartsAPI tree", "method": "getSearchTree", "legacy_locator": "provided tree"}
+    tree = {
+        "rows": [{"NODE_3_STR_ID": "18", "NODE_3_TEXT": "масляный фильтр"}],
+        "modification": REF,
+        "evidence": [evidence],
+    }
+    row = parts.resolve_catalog_group(tree, "масляный фильтр", REF, 18)
+    assert row["outcome"] == "success"
+    assert len(row["evidence"]) == 1
+    assert all(row["evidence"][0][key] == value for key, value in evidence.items())
+    assert tree["evidence"] == [evidence]
+    tree.pop("evidence")
+    assert parts.resolve_catalog_group(tree, "масляный фильтр", REF, 18)["evidence"] == []
+
+
+@pytest.mark.parametrize("independent", [False, True])
+def test_acquisition_to_legacy_price_preserves_metadata_and_source_independence(
+    monkeypatch, forbidden_network, independent
+):
+    from autostop_manager import work_pricing, work_pricing_research as research
+
+    def search(query, **kwargs):
+        return {
+            "results": [
+                {
+                    "source": f"sto-{index if independent else 0}.example",
+                    "url": f"https://sto-{index if independent else 0}.example/prices",
+                    "title": "Замена масла",
+                    "snippet": f"Красноярск, только работа {1000 + 100 * index} руб. Норматив времени 1.5 часа.",
+                }
+                for index in range(3)
+            ]
+        }
+
+    monkeypatch.setattr(research, "_ddg_search", search)
+    evidence = labor.collect_work_price_evidence(["замена масла"], {"make": "DEMO"}, max_queries=4)
+    quote = work_pricing._normalize_quote(evidence["data"]["observations"][0])
+    hours = work_pricing._normalize_labor_time_row(evidence["data"]["labor"][0])
+    assert quote["source"] == "sto-0.example" and quote["city_region"] == "Красноярск"
+    assert quote["captured_at"] == quote["evidence_source"]["fetched_at"]
+    assert hours["valid_input"] and hours["public_source"] and hours["range_hours"] == [1.5, 1.5]
+    estimated = work_pricing.estimate_repair_work_cost(
+        work_items=["замена масла"], make="DEMO", price_evidence=evidence
+    )
+    operation = estimated["operation_estimates"][0]
+    if independent:
+        assert operation["pricing_method"] == "krasnoyarsk_market_mean"
+        assert estimated["autostop_price_rub"] is not None
+    else:
+        assert operation["pricing_method"] != "krasnoyarsk_market_mean"
+        assert estimated["autostop_price_rub"] is None
+    assert estimated["labor_time_sample"]["valid_count"] > 0
+
+
+def test_acquired_labor_range_survives_legacy_normalization_and_estimate(monkeypatch, forbidden_network):
+    from autostop_manager import work_pricing, work_pricing_research as research
+
+    monkeypatch.setattr(
+        research,
+        "_ddg_search",
+        lambda query, **kwargs: {
+            "results": [
+                {
+                    "source": f"sto-{index}.example",
+                    "url": f"https://sto-{index}.example/norms",
+                    "snippet": "Красноярск, замена масла 1-3 нормо-часа",
+                }
+                for index in range(2)
+            ]
+        },
+    )
+    acquired = labor.collect_work_price_evidence(["замена масла"], {"make": "DEMO"}, max_queries=4)
+    normalized = work_pricing._normalize_labor_time_row(acquired["data"]["labor"][0])
+    assert normalized["hours"] == 2 and normalized["range_hours"] == [1, 3]
+    estimated = work_pricing.estimate_repair_work_cost(
+        work_items=["замена масла"], make="DEMO", price_evidence=acquired
+    )
+    assert estimated["labor_time_range_hours"] == [1, 3]
+    assert estimated["operation_estimates"][0]["labor_time_analysis"]["range_hours"] == [1, 3]

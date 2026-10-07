@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
-from os.path import normpath
+import os
 from pathlib import Path
 import re
+import stat
 
 from .document_links import local_document_link_target
 
 BLOCKED_PARTS = frozenset({"archive", "archives", "archived", "draft", "drafts", "history", "reports"})
 AUTOMOTIVE_CATALOG = "docs/agent/automotive_tools.json"
 MAX_ISSUES = 64
+MAX_INSTRUCTION_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,24 @@ class InventoryIssue:
 class InstructionInventory:
     paths: tuple[Path, ...]
     issues: tuple[InventoryIssue, ...]
+    # One operation shares the graph's exact bytes with audit/hash consumers.
+    contents: dict[Path, bytes] = field(default_factory=dict)
+    unavailable: dict[Path, str] = field(default_factory=dict)
+
+
+def read_instruction_bytes(path: Path) -> bytes:
+    """Bound reads before allocation and reject special files without blocking."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("instruction_not_regular")
+        if info.st_size > MAX_INSTRUCTION_BYTES:
+            raise ValueError("instruction_too_large")
+        content = stream.read(MAX_INSTRUCTION_BYTES + 1)
+    if len(content) > MAX_INSTRUCTION_BYTES:
+        raise ValueError("instruction_too_large")
+    return content
 
 
 def retired_instruction(path: Path, root: Path) -> bool:
@@ -67,9 +87,10 @@ def collect_instruction_inventory(
     pending = [(path, label(path)) for path in sorted(seeds)]
     found: set[Path] = set()
     visited: set[Path] = set()
+    contents: dict[Path, bytes] = {}
+    unavailable: dict[Path, str] = {}
     while pending:
         candidate, source = pending.pop()
-        candidate = Path(normpath(candidate))
         if candidate in visited:
             continue
         visited.add(candidate)
@@ -79,7 +100,10 @@ def collect_instruction_inventory(
         if retired_instruction(candidate, root):
             issue("retired", source, candidate)
             continue
+        path = candidate
         try:
+            # Resolve the original path: collapsing '..' first changes symlink
+            # traversal and can turn an outside target into an approved file.
             path = candidate.resolve()
             if not path.is_relative_to(root):
                 issue("outside", source, candidate)
@@ -88,22 +112,27 @@ def collect_instruction_inventory(
                 issue("retired", source, candidate)
                 continue
             if not path.is_file():
+                unavailable[path] = "unavailable"
                 issue("missing", source, candidate)
                 continue
+            if path not in contents:
+                contents[path] = read_instruction_bytes(path)
             if candidate == catalog:
-                refs = _automotive_references(path)
+                refs = _automotive_references(contents[path])
                 pending.extend((root / ref, AUTOMOTIVE_CATALOG) for ref in refs)
             if path in found:
                 continue
             found.add(path)
             if path.suffix != ".md" or path.name in {"A4.md", "A5.md"} or not follow_links:
                 continue
-            text = path.read_text(encoding="utf-8")
-        except (OSError, RuntimeError, UnicodeError, ValueError):
-            issue("unreadable", source, candidate)
+            text = contents[path].decode("utf-8")
+        except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+            too_large = isinstance(exc, ValueError) and str(exc) == "instruction_too_large"
+            unavailable[path] = "too_large" if too_large else "unavailable"
+            issue("too_large" if too_large else "unreadable", source, candidate)
             continue
         pending.extend(_linked_instructions(path, text, root, issue))
-    return InstructionInventory(tuple(sorted(found)), tuple(issues))
+    return InstructionInventory(tuple(sorted(found)), tuple(issues), contents, unavailable)
 
 
 def _linked_instructions(
@@ -123,7 +152,7 @@ def _linked_instructions(
             continue
         if destination is None:
             continue
-        target = Path(normpath(path.parent / destination))
+        target = path.parent / destination
         # Absolute external entrypoints are validated by each consumer's
         # allowlist, but their content is never part of the project graph.
         if Path(destination).is_absolute() and not target.is_relative_to(root):
@@ -133,8 +162,8 @@ def _linked_instructions(
     return targets
 
 
-def _automotive_references(catalog: Path) -> list[str]:
-    payload = json.loads(catalog.read_text(encoding="utf-8"))
+def _automotive_references(content: bytes) -> list[str]:
+    payload = json.loads(content.decode("utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("tools"), list):
         raise ValueError("instruction_catalog_invalid")
     refs: list[str] = []

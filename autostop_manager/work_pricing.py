@@ -8,7 +8,7 @@ from statistics import median
 from typing import Any
 
 from .config import get_db_path
-from .work_pricing_research import collect_public_work_pricing_research
+from .work_pricing_research import collect_public_work_pricing_research, legacy_work_evidence_row
 
 ROUNDING_STEP_RUB = 100
 KRASNOYARSK_MARKUP = 1.45
@@ -333,6 +333,7 @@ def _labor_time_rows(source_json: Any) -> list[dict[str, Any]]:
 
 
 def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
+    row = legacy_work_evidence_row(row)
     source = str(row.get("source") or row.get("source_name") or "").strip()
     city_region = str(row.get("city") or row.get("region") or row.get("city_region") or "").strip()
     operation_name = str(row.get("operation_name") or row.get("operation") or row.get("work_item") or "").strip()
@@ -355,6 +356,11 @@ def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append("labor_only_not_confirmed")
 
     return {
+        **(
+            {"evidence_source": row["evidence_source"], "public_source": row.get("public_source")}
+            if "evidence_source" in row
+            else {}
+        ),
         "source": source,
         "city_region": city_region,
         "operation_name": operation_name,
@@ -410,6 +416,7 @@ def _coerce_first_hours(*values: Any) -> tuple[float | None, list[float] | None]
 
 
 def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
+    row = legacy_work_evidence_row(row)
     source = str(row.get("source") or row.get("source_name") or "").strip()
     city_region = str(row.get("city") or row.get("region") or row.get("city_region") or "").strip()
     operation_name = str(row.get("operation_name") or row.get("operation") or row.get("work_item") or "").strip()
@@ -417,9 +424,12 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
     confidence = _normalize_key(str(row.get("confidence") or "low"))
     public_source = _parse_bool(row.get("public_source"))
     official = _parse_bool(row.get("official"))
-    hours, hours_range = _coerce_first_hours(
-        row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours")
-    )
+    if "range_hours" in row:
+        hours, hours_range = _coerce_hours(row["range_hours"])
+    else:
+        hours, hours_range = _coerce_first_hours(
+            row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours")
+        )
 
     reasons: list[str] = []
     if not source:
@@ -432,6 +442,7 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append("public_source_not_confirmed")
 
     return {
+        **({"evidence_source": row["evidence_source"]} if "evidence_source" in row else {}),
         "source": source,
         "city_region": city_region,
         "operation_name": operation_name,

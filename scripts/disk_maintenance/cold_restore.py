@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shutil
+import stat
 import uuid
 from pathlib import Path
 
@@ -12,6 +14,21 @@ from .util import MaintenanceError, no_symlink_ancestors, private_directory
 
 
 OWNER_UID = 0
+
+
+def _remove_staging(staging: Path, identity: tuple[int, int]) -> None:
+    private_directory(staging.parent)
+    try:
+        info = staging.lstat()
+    except FileNotFoundError:
+        # A successful rename, including one followed by an fsync error, has
+        # already moved this path. Never remove its published destination.
+        return
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != OWNER_UID or (info.st_dev, info.st_ino) != identity:
+        raise MaintenanceError("cold_staging_changed")
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise MaintenanceError("cold_staging_cleanup_unsupported")
+    shutil.rmtree(staging)
 
 
 def _publish(staging: Path, target: Path) -> None:
@@ -58,13 +75,32 @@ def restore(policy: dict, revision: str, approval: str, *, output: Path | None, 
             destination = output
         if destination is None:
             raise MaintenanceError("cold_restore_mode_invalid")
-        result = cold_cas.restore_root(Path(record["bundle_dir"]), approval, record["root_id"], destination,
-                                       expected_revision=revision, floor_bytes=6 * 1024**3)
-        # Originals, aliases and services are unchanged in private-output mode.
-        _, root = cold_registry.attest(record)
-        cold_cas.verify_tree(destination, root)
+        result = cold_cas.restore_root(
+            Path(record["bundle_dir"]),
+            approval,
+            record["root_id"],
+            destination,
+            expected_revision=revision,
+            floor_bytes=6 * 1024**3,
+        )
+        staging_identity = None
         if activate:
-            _publish(destination, target)
-            cold_cas.verify_tree(target, root)
-        core.health(policy)
+            info = destination.lstat()
+            staging_identity = (info.st_dev, info.st_ino)
+        try:
+            # Originals, aliases and services are unchanged in private-output mode.
+            _, root = cold_registry.attest(record)
+            cold_cas.verify_tree(destination, root)
+            if activate:
+                _publish(destination, target)
+                cold_cas.verify_tree(target, root)
+            core.health(policy)
+        except BaseException as error:
+            if staging_identity is not None:
+                try:
+                    _remove_staging(destination, staging_identity)
+                except (MaintenanceError, OSError) as cleanup_error:
+                    error.add_note("cold_staging_cleanup_failed")
+                    raise error from cleanup_error
+            raise
         return {**result, "activated_original_path": activate, "application_restart": False}

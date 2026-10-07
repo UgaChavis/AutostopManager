@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -9,6 +10,36 @@ from autostop_manager.action_contract import EXECUTOR_TOOLS, INVENTORY_EXECUTOR_
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_action_contract_detaches_nested_changes_from_caller():
+    changes = {
+        "title": "Synthetic card",
+        "deadline": {"total_seconds": 60},
+        "tags": ["synthetic"],
+    }
+    arguments = {
+        "domain": "crm",
+        "action": "create_card",
+        "owner_intent": "Create only a synthetic card in this contract preview",
+        "idempotency_key": "synthetic-nested-contract",
+    }
+    contract = prepare_action_contract(**arguments, planned_changes=changes)
+    snapshot = copy.deepcopy(contract)
+    assert contract["ok"] is True
+
+    changes["deadline"]["total_seconds"] = 120
+    changes["tags"].append("caller-added")
+    assert contract == snapshot
+    assert prepare_action_contract(**arguments, planned_changes=changes)["contract_id"] != contract["contract_id"]
+
+    contract["planned_changes"]["deadline"]["total_seconds"] = 180
+    contract["planned_changes"]["tags"].append("contract-added")
+    assert changes == {
+        "title": "Synthetic card",
+        "deadline": {"total_seconds": 120},
+        "tags": ["synthetic", "caller-added"],
+    }
 
 
 def _completion_act_form(*, basis: str = "") -> dict:

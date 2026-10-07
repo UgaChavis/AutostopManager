@@ -238,13 +238,20 @@ def test_module_documentation_rejects_drift_from_operation_ownership(catalog, mo
         validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
 
 
-def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypatch):
+@pytest.mark.parametrize("literal,card_links_elsewhere", [("code", False), ("code", True), ("html", True)])
+def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypatch, literal, card_links_elsewhere):
     registry, schemas = catalog
     reference = "docs/agent/modules/E14.md"
     text = read_document(ROOT, reference)
     start = text.index("| Инструмент / карточка |")
     end = text.index("\n\n", start)
-    text = text[:start] + "```markdown\n" + text[start:end] + "\n```" + text[end:]
+    table = text[start:end]
+    opening, closing = ("```markdown", "```") if literal == "code" else ("<!--", "-->")
+    text = text[:start] + opening + "\n" + table + "\n" + closing + text[end:]
+    if card_links_elsewhere:
+        text += "\n" + "\n".join(
+            line.split(" | ")[0].removeprefix("| ") for line in table.splitlines() if line.startswith("| [")
+        )
     original = read_document
     monkeypatch.setattr(
         "autostop_manager.automotive_catalog.read_document",
@@ -252,6 +259,20 @@ def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypat
     )
     with pytest.raises(ValueError, match="module_tool_table_not_visible"):
         validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
+
+
+def test_module_table_card_links_accept_document_line_annotations(catalog, monkeypatch):
+    registry, schemas = catalog
+    reference = "docs/agent/modules/E14.md"
+    original = read_document
+    text = original(ROOT, reference).replace(
+        "../tools/manager-recommend-automotive-sources.md)", "../tools/manager-recommend-automotive-sources.md:0002)"
+    )
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["ok"]
 
 
 @pytest.mark.parametrize(

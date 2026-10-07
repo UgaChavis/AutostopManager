@@ -34,7 +34,12 @@ from .config import (
     get_automation_control_socket_path,
     get_automation_runtime_identity,
 )
-from .diagnostics import instruction_paths
+from .diagnostics import (
+    instruction_inventory_snapshot,
+    instruction_paths as instruction_paths,
+    inventory_instruction_paths,
+)
+from .instruction_inventory import InstructionInventory
 
 
 AUTOMATION_CONTROL_PROTOCOL = "autostop.manager.automation-control.v1"
@@ -113,21 +118,24 @@ class AutomationControlService:
         self.readiness_provider = readiness_provider
 
     @staticmethod
-    def _instruction_hashes() -> list[dict[str, str]]:
+    def _instruction_hashes(inventory: InstructionInventory | None = None) -> list[dict[str, str]]:
         results = []
         labels = {path: label for label, path in INSTRUCTION_FILES}
-        paths = (*labels, *sorted(set(instruction_paths(PROJECT_ROOT)).difference(labels)))
+        root = PROJECT_ROOT.resolve()
+        inventory = inventory if inventory is not None else instruction_inventory_snapshot(root, required_paths=labels)
+        paths = (*labels, *sorted(set(inventory_instruction_paths(root, inventory)).difference(labels)))
         for relative_path in paths:
             label = labels.get(relative_path, relative_path.removesuffix(".md").replace("/", ":"))
-            path = PROJECT_ROOT / relative_path
+            path = root / relative_path
             try:
-                if not path.resolve().is_relative_to(PROJECT_ROOT.resolve()):
+                path = path.resolve()
+                if not path.is_relative_to(root):
                     raise OSError("instruction_outside_project")
-                content = path.read_bytes()
+                digest = inventory.unavailable.get(path, "unavailable")
+                if path not in inventory.unavailable and path in inventory.contents:
+                    digest = hashlib.sha256(inventory.contents[path]).hexdigest()
             except (OSError, RuntimeError):
                 digest = "unavailable"
-            else:
-                digest = hashlib.sha256(content).hexdigest() if len(content) <= 1024 * 1024 else "too_large"
             results.append({"label": label, "path_label": relative_path, "sha256": digest})
         return results
 
@@ -177,6 +185,12 @@ class AutomationControlService:
 
     def _execution_packet(self, data: Mapping[str, Any], checks: Mapping[str, Any]) -> dict[str, Any]:
         identity = get_automation_runtime_identity()
+        inventory = instruction_inventory_snapshot(PROJECT_ROOT, required_paths=(path for _, path in INSTRUCTION_FILES))
+        hashes = self._instruction_hashes(inventory)
+        instruction_ready = not inventory.issues and all(
+            item["sha256"] not in {"unavailable", "too_large"} for item in hashes
+        )
+        dependencies = {**checks, "instruction_navigation": "ready" if instruction_ready else "degraded"}
         now = utc_now()
         jobs = []
         for raw_job in data.get("jobs", []):
@@ -223,8 +237,8 @@ class AutomationControlService:
                 "version": identity["crm_version"],
                 "revision": identity["crm_revision"],
             },
-            "instruction_hashes": self._instruction_hashes(),
-            "dependencies": dict(checks),
+            "instruction_hashes": hashes,
+            "dependencies": dependencies,
             "controller": {
                 **dict(data.get("controller", {})),
                 "global_hold": dict(data.get("global_hold", {})),
@@ -248,6 +262,8 @@ class AutomationControlService:
             ready = ready and bool(provided.get("ready"))
         ready = ready and not bool(dict(data.get("global_hold", {})).get("enabled"))
         packet = self._execution_packet(data, checks)
+        checks["instruction_navigation"] = packet["dependencies"]["instruction_navigation"]
+        ready = ready and checks["instruction_navigation"] == "ready"
         if any(isinstance(job, Mapping) and job.get("reconcile_state") != "in_sync" for job in data.get("jobs", [])):
             checks["job_reconciliation"] = "pending"
             ready = False

@@ -117,17 +117,74 @@ def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict
     for row in (envelope, data):
         if row.get("ok") is False or row.get("outcome") not in (None, "success", "partial"):
             errors.append({"field": "vehicle_identity", "code": "failed_ready_identity"})
-        supplied = row.get("conflicts") or []
+        supplied = row.get("conflicts", [])
         if not isinstance(supplied, list) or any(not isinstance(item, dict) for item in supplied):
             errors.append({"field": "vehicle_identity", "code": "invalid_identity_conflicts"})
         else:
             errors.extend(item for item in supplied if item not in errors)
+        statuses = row.get("field_statuses")
+        if isinstance(statuses, dict):
+            for field, status in statuses.items():
+                if (status.get("status") if isinstance(status, dict) else status) == "disputed":
+                    errors.append({"field": field, "code": "disputed_ready_identity"})
     provider_binding = data.get("identifier_binding")
     if provider_binding is not None and (
         not isinstance(provider_binding, dict) or provider_binding.get("status") not in ("exact", "bound", "matched")
     ):
         errors.append({"field": "identifier", "code": "provider_identifier_unverified"})
     return errors
+
+
+def field_origins(envelope: dict[str, Any], field: str, value: Any) -> list[dict[str, Any]]:
+    """Prefer evidence for this value over a result's unrelated source summary."""
+    from .vehicle_identity import identity_values_agree
+
+    data = envelope["data"] if isinstance(envelope.get("data"), dict) else envelope
+    origins: list[dict[str, Any]] = []
+    for row in (envelope,) if data is envelope else (envelope, data):
+        for key in ("field_evidence", "evidence"):
+            supplied = row.get(key)
+            if isinstance(supplied, list):
+                origins.extend(item for item in supplied if isinstance(item, dict) and item.get("field") == field)
+    matched = [item for item in origins if identity_values_agree(field, item.get("value"), value)]
+    if matched:
+        return matched
+    provenance = data.get("provenance")
+    if isinstance(provenance, dict) and isinstance(provenance.get(field), list):
+        matched = [
+            item
+            for item in provenance[field]
+            if isinstance(item, dict) and identity_values_agree(field, item.get("value"), value)
+        ]
+        if matched:
+            return matched
+    declared = data.get("field_provenance")
+    if isinstance(declared, dict) and isinstance(declared.get(field), str):
+        return [{"value": value, "primary_lineage": declared[field], "independent": False}]
+    supplied = envelope.get("evidence") or envelope.get("evidence_sources") or []
+    # A mixed result does not establish which primary source supplied this field.
+    known = {
+        origin
+        for item in supplied
+        if isinstance(item, dict)
+        for origin in (item.get("primary_lineage") or item.get("provider") or item.get("source"),)
+        if isinstance(origin, str) and origin.strip()
+    }
+    return [{"value": value, "primary_lineage": next(iter(known)) if len(known) == 1 else None, "independent": False}]
+
+
+def primary_lineage(origin: dict[str, Any]) -> str | None:
+    """Canonical aliases share one origin; opaque combined labels stay unverified."""
+    value = origin.get("primary_lineage") or origin.get("provider") or origin.get("source")
+    if not isinstance(value, str) or not value.strip() or "+" in value:
+        return None
+    value = value.strip()
+    lower = value.casefold()
+    if lower in {"local wmi hint", "local wmi hints", "local platform rule", "local_family_rule", "local_wmi_hint"}:
+        return "autostop_local_vehicle_rules"
+    if lower in {"nhtsa vpic", "nhtsa vpic wmi", "nhtsa_vpic_via_corgi"}:
+        return "nhtsa_vpic"
+    return value
 
 
 def source_metadata_errors(source: dict[str, Any]) -> list[str]:

@@ -15,7 +15,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .document_links import local_document_link_target
-from .markdown_links import visible_markdown_links
+from .markdown_links import visible_markdown_links, visible_markdown_table_row_lines
 
 REGISTRY_VERSION = "autostop.automotive-tools.v1"
 BUNDLE_VERSION = "autostop.automotive-tools.bundle.v1"
@@ -113,13 +113,17 @@ def _module_documentation(root: Path, module: dict[str, Any], tools: dict[str, d
     seen: set[Path] = set()
     # These curated operation tables have one fixed row format; ordinary links
     # above use the shared CommonMark parser, including reference-style links.
-    for line in text.splitlines():
+    visible_rows = visible_markdown_table_row_lines(text)
+    for index, line in enumerate(lines):
         row = re.fullmatch(r"\| \[([^\]]+)\]\(([^)]+)\) \| ([^|]+) \| ([^|]+) \|", line)
         if row is None:
             continue
-        target = (document.parent / row[2]).resolve()
-        if target not in references:
+        if index not in visible_rows:
             raise ValueError(f"module_tool_table_not_visible:{code}")
+        reference = local_document_link_target(row[2])
+        if reference is None:
+            raise ValueError(f"module_tool_table_ownership_mismatch:{code}")
+        target = (document.parent / reference).resolve()
         tool = expected.get(target)
         if tool is None or target in seen:
             raise ValueError(f"module_tool_table_ownership_mismatch:{code}")

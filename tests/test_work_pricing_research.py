@@ -133,6 +133,24 @@ def test_labor_only_flags_require_explicit_snippet_evidence():
     assert research._labor_only_flags("Замена масла от 3 000 руб.") == (None, False)
 
 
+def test_city_is_observed_in_snippet_and_never_inferred_from_query():
+    operations = [{"normalized_name": "замена масла"}]
+    query = "замена масла Красноярск цена"
+    row = {"source": "sto.example", "url": "https://sto.example/prices", "snippet": "Только работа 1000 руб."}
+    parsed, _ = research.parse_public_work_evidence(row, query, operations, "labor_prices")
+    assert parsed[0]["city"] == ""
+    row["snippet"] += " Красноярск и Санкт-Петербург."
+    parsed, _ = research.parse_public_work_evidence(row, query, operations, "labor_prices")
+    assert parsed[0]["city"] == ""
+    row["snippet"] = "Санкт-Петербург, только работа 1000 руб."
+    parsed, source = research.parse_public_work_evidence(row, query, operations, "labor_prices")
+    assert parsed[0]["city"] == "Санкт-Петербург"
+    adapted = research.legacy_work_evidence_row(parsed[0])
+    assert adapted["source"] == "sto.example"
+    assert adapted["evidence_source"] == source
+    assert adapted["captured_at"] == source["fetched_at"] and adapted["public_source"] is True
+
+
 def test_public_research_preserves_unknown_and_parts_included_quotes(monkeypatch):
     def fake_search(_query, *, timeout_seconds):
         assert timeout_seconds == 2
@@ -191,6 +209,65 @@ def test_quote_deduplication_keeps_conflicting_parts_evidence_conservative():
             "labor_only": False,
         }
     ]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("location", ["city", "locator"])
+def test_quote_deduplication_never_transfers_labor_only_between_cities_or_pages(reverse, location):
+    base = {"source": "sto.example", "operation_name": "замена масла", "price_rub": 2500}
+    kras = {
+        **base,
+        "city": "Красноярск",
+        "evidence_source": {"locator": "https://sto.example/kras"},
+        "includes_parts": None,
+        "labor_only": False,
+    }
+    spb = {
+        **base,
+        "city": "Санкт-Петербург",
+        "evidence_source": {"locator": "https://sto.example/spb"},
+        "includes_parts": False,
+        "labor_only": True,
+    }
+    if location == "city":
+        spb["evidence_source"] = kras["evidence_source"]
+    else:
+        spb["city"] = kras["city"]
+    rows = [spb, kras] if reverse else [kras, spb]
+    deduped = research._dedupe_quote_rows(rows)
+    assert deduped == rows
+    assert len({row["source"] for row in deduped}) == 1
+    assert kras["labor_only"] is False and kras["includes_parts"] is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_identical_legacy_quotes_still_merge_conservatively_in_both_orders(reverse):
+    base = {"source": "sto.example", "operation_name": "замена масла", "price_rub": 2500}
+    labor_only = {**base, "includes_parts": False, "labor_only": True}
+    includes_parts = {**base, "includes_parts": True, "labor_only": False}
+    rows = [includes_parts, labor_only] if reverse else [labor_only, includes_parts]
+    assert research._dedupe_quote_rows(rows) == [includes_parts]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("location", ["city", "locator"])
+def test_labor_time_deduplication_retains_city_and_page_provenance(reverse, location):
+    base = {
+        "source": "sto.example",
+        "operation_name": "замена масла",
+        "hours": 1.5,
+        "city": "Красноярск",
+        "evidence_source": {"locator": "https://sto.example/kras"},
+    }
+    other = (
+        {**base, location: "Санкт-Петербург"}
+        if location == "city"
+        else {**base, "evidence_source": {"locator": "https://sto.example/spb"}}
+    )
+    rows = [other, base] if reverse else [base, other]
+    fields = ("source", "operation_name", "hours")
+    assert research._dedupe_rows(rows, fields) == rows
+    assert research._dedupe_rows([base, dict(base)], fields) == [base]
 
 
 def test_research_warns_when_prices_exist_but_none_are_confirmed_labor_only(monkeypatch):
