@@ -8,7 +8,9 @@ import re
 from typing import Any, Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from .bounded_http_read import urlopen as bounded_urlopen
 
 from .vin_sources import (
     AMAYAMA_SOURCE_ID,
@@ -337,6 +339,10 @@ _VPIC_BASE_URL = "https://vpic.nhtsa.dot.gov/api/vehicles/"
 MAX_VPIC_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
+def urlopen(request: Request, timeout: float = 8.0) -> Any:
+    return bounded_urlopen(request, timeout=timeout, maximum=MAX_VPIC_RESPONSE_BYTES, follow_redirects=True)
+
+
 def _finite_number(value: int | float) -> bool:
     try:
         return math.isfinite(value)
@@ -391,6 +397,10 @@ def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None =
 
 
 def _vpic_failure_details(exc: BaseException) -> tuple[str, bool]:
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_busy":
+        return "provider_busy", False
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_unavailable":
+        return "provider_executor_unavailable", False
     if isinstance(exc, HTTPError):
         if int(exc.code) == 429:
             return "provider_throttled", True

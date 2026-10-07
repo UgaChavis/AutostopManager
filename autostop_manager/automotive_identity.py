@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from . import vin_lookup
 from .automotive_contracts import (
@@ -187,7 +187,7 @@ def _field_level(
         statuses = row.get("field_statuses")
         declared = statuses.get(field) if isinstance(statuses, dict) else None
     declared = declared.get("status") if isinstance(declared, dict) else declared
-    if isinstance(declared, str) and declared in {"candidate", "supported", "disputed", "missing"}:
+    if isinstance(declared, str) and declared in {"candidate", "supported", "observed", "disputed", "missing"}:
         return "candidate" if wmi and declared == "supported" else declared
     if wmi:
         return "candidate"
@@ -241,20 +241,148 @@ def _reconciliation_years(data: dict[str, Any]) -> tuple[list[Any], str | None]:
     return years, None
 
 
+def _present_reconciliation_summary(response: dict[str, Any], identifier: str) -> dict[str, Any]:
+    """Keep reusable root origins; variants reference their existing source records."""
+    private_payload_keys = {"payload", "raw_payload", "raw_response", "provider_payload", "raw_body", "body_html"}
+
+    def public_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: public_value(item) for key, item in value.items() if key not in private_payload_keys}
+        if isinstance(value, list):
+            return [public_value(item) for item in value]
+        if isinstance(value, str) and identifier:
+            return value.replace(identifier, "[identifier-redacted]")
+        return value
+
+    compact = public_value(response)
+    data = compact["data"]
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for field, origins in data.get("provenance", {}).items():
+        for index, origin in enumerate(origins):
+            candidates.append((origin, {"path": "data.provenance", "field": field, "index": index}))
+    for index, origin in enumerate(compact.get("evidence", [])):
+        candidates.append((origin, {"path": "evidence", "index": index}))
+    additional: list[dict[str, Any]] = []
+
+    def origin_reference(origin: dict[str, Any]) -> dict[str, Any]:
+        for stored, reference in candidates:
+            same_field = origin.get("field") and origin.get("field") == stored.get("field")
+            if stored == origin or (
+                same_field and all(key in stored and stored[key] == value for key, value in origin.items())
+            ):
+                return dict(reference)
+        reference = {"path": "data.source_evidence", "index": len(additional)}
+        additional.append(origin)
+        candidates.append((origin, reference))
+        return dict(reference)
+
+    def compact_variant(variant: dict[str, Any]) -> dict[str, Any]:
+        projected = dict(variant)
+        for key in ("field_evidence", "evidence"):
+            origins = projected.get(key)
+            if isinstance(origins, list) and all(isinstance(origin, dict) for origin in origins):
+                projected.pop(key)
+                projected[key + "_refs"] = [origin_reference(origin) for origin in origins]
+        provenance = projected.get("provenance")
+        if isinstance(provenance, dict) and all(
+            isinstance(origins, list) and all(isinstance(origin, dict) for origin in origins)
+            for origins in provenance.values()
+        ):
+            projected.pop("provenance")
+            projected["provenance_refs"] = {
+                field: [origin_reference(origin) for origin in origins] for field, origins in provenance.items()
+            }
+        return projected
+
+    variants = data.get("variants", [])
+    data["variants"] = [compact_variant(variant) for variant in variants]
+    data.pop("family_candidates", None)
+    data["family_candidate_refs"] = list(range(len(variants)))
+    if additional:
+        data["source_evidence"] = additional
+    compact["presentation"] = {
+        "detail": "summary",
+        "family_candidates_ref": "data.variants",
+        "origin_references": "path, optional field, index",
+    }
+    return compact
+
+
+def _expand_reconciliation_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """Resolve only our variant references; reusable root provenance stays plain."""
+    data = row["data"] if isinstance(row.get("data"), dict) else row
+    if "family_candidate_refs" not in data:
+        return row
+
+    def resolve(reference: Any) -> dict[str, Any]:
+        if not isinstance(reference, dict) or set(reference) - {"path", "field", "index"}:
+            raise ValueError("invalid_summary_origin_reference")
+        path, index = reference.get("path"), reference.get("index")
+        if path == "data.provenance":
+            if not isinstance(reference.get("field"), str):
+                raise ValueError("invalid_summary_origin_reference")
+            records = (data.get("provenance") or {}).get(reference["field"])
+        elif path == "data.source_evidence":
+            records = data.get("source_evidence")
+        elif path == "evidence":
+            records = row.get("evidence")
+        else:
+            raise ValueError("invalid_summary_origin_reference")
+        if not isinstance(records, list) or type(index) is not int or not 0 <= index < len(records):
+            raise ValueError("invalid_summary_origin_reference")
+        origin = records[index]
+        if not isinstance(origin, dict):
+            raise ValueError("invalid_summary_origin_reference")
+        return dict(origin)
+
+    variants = data.get("variants")
+    if not isinstance(variants, list) or any(not isinstance(variant, dict) for variant in variants):
+        raise ValueError("invalid_summary_variants")
+    expanded = []
+    for variant in variants:
+        item = dict(variant)
+        for key in ("field_evidence", "evidence"):
+            references = item.pop(key + "_refs", None)
+            if references is not None:
+                if not isinstance(references, list):
+                    raise ValueError("invalid_summary_origin_reference")
+                item[key] = [resolve(reference) for reference in references]
+        references = item.pop("provenance_refs", None)
+        if references is not None:
+            if not isinstance(references, dict) or any(not isinstance(values, list) for values in references.values()):
+                raise ValueError("invalid_summary_origin_reference")
+            item["provenance"] = {
+                field: [resolve(reference) for reference in values] for field, values in references.items()
+            }
+        expanded.append(item)
+    indices = data["family_candidate_refs"]
+    if not isinstance(indices, list) or any(
+        type(index) is not int or not 0 <= index < len(expanded) for index in indices
+    ):
+        raise ValueError("invalid_summary_family_reference")
+    data = {**data, "variants": expanded, "family_candidates": [expanded[index] for index in indices]}
+    data.pop("family_candidate_refs")
+    return {**row, "data": data} if isinstance(row.get("data"), dict) else data
+
+
 def reconcile_vehicle_identity(
     identifier: str,
     results: list[dict[str, Any]],
     context: dict[str, Any] | None = None,
     identifier_type: str = "auto",
+    detail: Literal["summary", "full"] = "full",
 ) -> dict[str, Any]:
     prepared = validate_identity_input(identifier, context, identifier_type=identifier_type)
     if (
-        not prepared["ok"]
+        detail not in {"summary", "full"}
+        or not prepared["ok"]
         or not isinstance(results, list)
         or len(results) > MAX_ROWS
         or any(not isinstance(row, dict) for row in results)
     ):
-        return invalid("reconcile_vehicle_identity", "identifier_or_results")
+        return invalid(
+            "reconcile_vehicle_identity", "detail" if detail not in {"summary", "full"} else "identifier_or_results"
+        )
     expected = binding(identifier, identifier_type)
     values: dict[str, list[dict[str, Any]]] = {field: [] for field in FIELDS}
     levels: dict[str, list[str]] = {field: [] for field in FIELDS}
@@ -265,6 +393,10 @@ def reconcile_vehicle_identity(
     evidence: list[dict[str, Any]] = []
     year_candidates: list[Any] = []
     for index, row in enumerate(results):
+        try:
+            row = _expand_reconciliation_summary(row)
+        except (ValueError, AttributeError):
+            return invalid("reconcile_vehicle_identity", "results.summary_references")
         data: dict[str, Any] = row["data"] if isinstance(row.get("data"), dict) else row
         upstream_errors = identity_errors(row, data)
         if upstream_errors:
@@ -367,7 +499,7 @@ def reconcile_vehicle_identity(
         "confidence": 0.0,
     }
     data["parts_lookup_readiness"] = build_parts_lookup_readiness(data)
-    return result(
+    response = result(
         "reconcile_vehicle_identity",
         "partial" if conflicts or missing else "success",
         data,
@@ -376,6 +508,7 @@ def reconcile_vehicle_identity(
         warnings=warnings,
         evidence=evidence,
     )
+    return _present_reconciliation_summary(response, prepared["identifier"]) if detail == "summary" else response
 
 
 def compare_vehicle_modifications(context: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:

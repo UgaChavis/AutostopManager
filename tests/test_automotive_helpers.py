@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import json
 from copy import deepcopy
 
 import pytest
@@ -538,6 +539,135 @@ def test_reconciliation_preserves_composite_candidate_levels_origins_years_and_c
         }
     assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
     assert ready == before
+
+
+@pytest.mark.parametrize("strength", ["candidate", "supported"])
+@pytest.mark.parametrize("wmi", [False, True])
+def test_reconciliation_preserves_declared_observed_without_strength_upgrade(forbidden_network, strength, wmi):
+    data = {
+        "input_binding": None if wmi else binding(VIN),
+        "vehicle_profile": {"make": "DEMO"},
+        "field_statuses": {"make": {"status": "observed"}},
+        "field_evidence": [{"field": "make", "value": "DEMO", "strength": strength, "bound": not wmi}],
+    }
+    if wmi:
+        data["wmi"] = VIN[:3]
+    merged = identity.reconcile_vehicle_identity(VIN, [result("demo", "partial", data)])
+    assert merged["data"]["field_statuses"]["make"] == "observed"
+    assert merged["data"]["provenance"]["make"][0]["strength"] == strength
+    assert not merged["data"]["parts_lookup_readiness"]["exact_applicability_confirmed"]
+
+
+def _rich_reconciliation_fixture():
+    profile = {"make": "DEMO", "model": "Demo model", "engine": "E1", "transmission": "Manual", "market": "EU"}
+    origins = [
+        {
+            "field": field,
+            "value": value,
+            "source": "NHTSA vPIC",
+            "primary_lineage": "nhtsa_vpic",
+            "strength": "candidate",
+            "bound": False,
+            "source_kind": "provider",
+            "depends_on": ["caller.model_year"],
+            "independent": False,
+            "raw_value": value,
+            "normalization": {"method": "synthetic", "notes": ["bounded fixture"] * 4},
+        }
+        for field, value in profile.items()
+    ]
+    orphan = {"field": "unused_metadata", "value": "Demo source note", "source": "Demo source"}
+    return result(
+        "demo",
+        "partial",
+        {
+            "input_binding": binding(VIN),
+            "vehicle_profile": profile,
+            "field_statuses": {field: {"status": "candidate"} for field in profile},
+            "field_evidence": origins,
+            "provenance": {field: [origin] for field, origin in zip(profile, origins, strict=True)},
+            "diagnostics": {"model_year": {"candidate_years": [1981, 2011]}},
+            "scope": "family",
+            "variants": [{"profile": {"engine": "E2"}, "scope": "family", "field_evidence": [orphan]}],
+        },
+        evidence=[{"provider": "nhtsa_vpic", "primary_lineage": "nhtsa_vpic", "scope": "basic_vehicle"}],
+    )
+
+
+def test_reconciliation_summary_keeps_reusable_origins_years_and_compact_variants(forbidden_network):
+    ready = _rich_reconciliation_fixture()
+    before = deepcopy(ready)
+    full = identity.reconcile_vehicle_identity(VIN, [ready])
+    explicit_full = identity.reconcile_vehicle_identity(VIN, [ready], detail="full")
+    summary = identity.reconcile_vehicle_identity(VIN, [ready], detail="summary")
+    assert full == explicit_full
+    assert "presentation" not in full
+    for key in (
+        "input_binding",
+        "vehicle_profile",
+        "field_statuses",
+        "provenance",
+        "diagnostics",
+        "model_year_candidates",
+    ):
+        assert summary["data"][key] == full["data"][key]
+    assert summary["evidence"] == full["evidence"]
+    assert summary["data"]["model_year_candidates"] == [1981, 2011]
+    assert "family_candidates" not in summary["data"]
+    assert summary["data"]["family_candidate_refs"] == list(range(len(summary["data"]["variants"])))
+    assert "field_evidence" not in summary["data"]["variants"][0]
+    assert "provenance" not in summary["data"]["variants"][0]
+    assert summary["data"]["source_evidence"] == [ready["data"]["variants"][0]["field_evidence"][0]]
+    prepared, errors = ready_identity(summary, VIN)
+    assert errors == [] and prepared["provenance"] == full["data"]["provenance"]
+    reused = identity.reconcile_vehicle_identity(VIN, [summary])
+    assert reused["data"]["vehicle_profile"] == full["data"]["vehicle_profile"]
+    assert reused["data"]["field_statuses"] == full["data"]["field_statuses"]
+    assert reused["data"]["provenance"] == full["data"]["provenance"]
+    assert reused["data"]["model_year_candidates"] == [1981, 2011]
+    assert any(
+        variant.get("field_evidence") == summary["data"]["source_evidence"] for variant in reused["data"]["variants"]
+    )
+
+    def size(value):
+        return len(json.dumps(value, separators=(",", ":")).encode())
+
+    assert size(summary) <= size(full) * 0.65
+    assert ready == before
+
+
+@pytest.mark.parametrize("failure", ["foreign", "provider_error", "conflict"])
+def test_reconciliation_summary_applies_binding_and_conflict_guards_before_projection(forbidden_network, failure):
+    ready = _rich_reconciliation_fixture()
+    if failure == "foreign":
+        ready["data"]["input_binding"] = binding(OTHER_VIN)
+    elif failure == "provider_error":
+        ready["ok"], ready["outcome"] = False, "provider_error"
+    else:
+        ready["data"]["field_statuses"]["engine"]["status"] = "disputed"
+    full = identity.reconcile_vehicle_identity(VIN, [ready])
+    summary = identity.reconcile_vehicle_identity(VIN, [ready], detail="summary")
+    assert summary["data"]["input_binding"] == full["data"]["input_binding"]
+    assert summary["conflicts"] == full["conflicts"]
+    assert summary["data"]["vehicle_profile"] == {}
+    assert summary["data"]["variants"] == []
+    assert summary["data"]["model_year_candidates"] == []
+    assert not summary["data"]["parts_lookup_readiness"]["exact_applicability_confirmed"]
+
+
+def test_reconciliation_summary_drops_private_payloads_and_rejects_invalid_references(forbidden_network):
+    ready = _rich_reconciliation_fixture()
+    ready["data"]["variants"][0]["raw_payload"] = {"private_data": "PRIVATE_FIXTURE_SENTINEL", "vin": VIN}
+    full = identity.reconcile_vehicle_identity(VIN, [ready], detail="full")
+    summary = identity.reconcile_vehicle_identity(VIN, [ready], detail="summary")
+    assert "PRIVATE_FIXTURE_SENTINEL" in json.dumps(full)
+    assert "PRIVATE_FIXTURE_SENTINEL" not in json.dumps(summary)
+    assert VIN not in json.dumps(summary)
+    summary["data"]["variants"][0]["field_evidence_refs"][0]["path"] = "payload"
+    rejected = identity.reconcile_vehicle_identity(VIN, [summary])
+    assert rejected["outcome"] == "invalid_input"
+    assert rejected["data"] == {}
+    assert identity.reconcile_vehicle_identity(VIN, [ready], detail="invalid")["outcome"] == "invalid_input"
 
 
 def test_reconciliation_repeated_wmi_primary_source_stays_candidate(forbidden_network):

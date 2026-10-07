@@ -14,9 +14,10 @@ import os
 import re
 import time
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from .bounded_http_read import urlopen as bounded_urlopen
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .partsapi_methods import PARTSAPI_SHOP_METHODS
@@ -59,7 +60,15 @@ def _clamp_timeout(timeout: Any, *, default: float = 20.0) -> float:
 
 def urlopen(request: Request, timeout: float = 20.0) -> Any:
     """Keep credentials on their origin and bound each provider request."""
-    return _NO_REDIRECT_OPENER.open(request, timeout=_clamp_timeout(timeout))
+    request_timeout = _clamp_timeout(timeout)
+    try:
+        allocated_timeout = float(timeout)
+    except (TypeError, ValueError):
+        allocated_timeout = request_timeout
+    # An already allocated remaining budget must never be extended to the public minimum.
+    if math.isfinite(allocated_timeout) and allocated_timeout > 0:
+        request_timeout = min(request_timeout, allocated_timeout)
+    return bounded_urlopen(request, timeout=request_timeout, maximum=MAX_PROVIDER_RESPONSE_BYTES)
 
 
 def _read_response_bytes(response: Any, *, maximum: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
@@ -1547,6 +1556,10 @@ def _partsapi_http_error_payload(exc: HTTPError) -> dict[str, Any]:
 
 def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
     """Return a safe, machine-readable failure class and retry decision."""
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_busy":
+        return "provider_busy", False, "Provider HTTP transport capacity is busy."
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_unavailable":
+        return "provider_executor_unavailable", False, "Provider HTTP transport is unavailable."
     if isinstance(exc, HTTPError):
         code = int(exc.code)
         payload = _partsapi_http_error_payload(exc)

@@ -11,6 +11,14 @@ field_statuses, diagnostics, conflicts, readiness и processing, сохраня�
 `manufacturer_country` и `country` раздельны; варианты года из diagnostics и явного
 model_year_candidates объединяются только после проверки пригодности и binding.
 
+Для `reconcile_vehicle_identity` также доступен `detail=summary|full`, default `full`.
+Summary сохраняет профиль, binding, статусы, конфликты, пропуски и обычные root
+provenance/evidence. Повторные свидетельства вариантов представлены ссылками на
+`data.provenance`, `evidence` или `data.source_evidence`; `family_candidate_refs`
+ссылается на `data.variants`. Повторная сверка разворачивает только эти разрешённые
+ссылки, отклоняет повреждённые ссылки и заново проверяет привязку и конфликты.
+Сокращение выполняется после проверки; сырой provider payload исключается.
+
 `decode_vehicle_identity` и `decode_vehicle_identities` возвращают профиль для исследования автомобиля. Названия инструментов и прежние параметры сохранены. Дополнительно поддерживаются `identifier_type`, `production_year`, `production_date`, `modification`, `trim`, `series`, `options` и `transmission_speeds`. В batch тип идентификатора задаётся на уровне элемента, а характеристики передаются внутри элемента или `crm_context`. Пустые внешние поля (`null`, пустая или пробельная строка) сохраняют заполненные вложенные характеристики; неправильный тип значения возвращает ошибку соответствующей строки.
 
 ## Входы и источники

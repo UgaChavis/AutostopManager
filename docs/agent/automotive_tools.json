@@ -4527,26 +4527,30 @@
         "identifier",
         "results",
         "context",
-        "identifier_type"
+        "identifier_type",
+        "detail"
       ],
       "defaults": {
         "context": null,
-        "identifier_type": "auto"
+        "identifier_type": "auto",
+        "detail": "full"
       },
       "outputs": [
         "Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.",
         "vehicle_profile/field_statuses(candidate/supported/observed/disputed)/provenance/variants/model_year_candidates/family_candidates",
         "input_binding/conflicts/missing_fields/parts_lookup_readiness; спорное поле исключается из profile",
-        "manufacturer_country remains separate from country; model-year alternatives include diagnostics.model_year.candidate_years; input evidence strength/binding/lineage is preserved."
+        "manufacturer_country remains separate from country; model-year alternatives include diagnostics.model_year.candidate_years; input evidence strength/binding/lineage is preserved.",
+        "detail=summary сохраняет профиль, binding, статусы, годы, конфликты и root provenance/evidence; повторное происхождение вариантов представлено ссылками, family_candidate_refs ссылается на variants."
       ],
       "errors": [
-        "invalid_input для неверной формы results/evidence/alternatives",
+        "invalid_input для неверной формы results/evidence/alternatives, detail и повреждённых summary references",
         "partial при missing/conflicts; failed outcome, provider mismatch и upstream conflicts не становятся наблюдаемыми фактами"
       ],
       "limitations": [
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
         "До500 переданных результатов, network_calls=0; input_binding должен совпадать с identifier (WMI ограничен manufacturer-family).",
-        "Сохраняются child variants/model_year_candidates и исходная lineage, включая профиль провайдера, переданный как context."
+        "Сохраняются child variants/model_year_candidates и исходная lineage, включая профиль провайдера, переданный как context.",
+        "Default full совместим с прежним ответом. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям."
       ],
       "example": {
         "identifier": "WVWZZZ1KZAW000001",
@@ -4574,7 +4578,8 @@
               }
             ]
           }
-        ]
+        ],
+        "detail": "summary"
       },
       "invalid_example": {
         "identifier": null,
