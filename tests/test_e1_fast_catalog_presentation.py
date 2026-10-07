@@ -83,9 +83,10 @@ def test_status_full_preserves_both_compact_channels_and_summary_bounds(tools, m
     }
     monkeypatch.setattr(mcp_tools, "_catalog_provider_status", lambda **_kwargs: payload)
     full = tools["catalog_provider_status"]()
-    assert full.structuredContent == payload
-    assert json.loads(full.content[0].text) == payload
-    assert full.content[0].text == json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    assert {key: value for key, value in full.structuredContent.items() if key != "tool_execution"} == payload
+    assert full.structuredContent["tool_execution"]["tool"] == "catalog_provider_status"
+    assert json.loads(full.content[0].text) == full.structuredContent
+    assert full.content[0].text == json.dumps(full.structuredContent, separators=(",", ":"), ensure_ascii=False)
     summary = tools["catalog_provider_status"](detail="summary").structuredContent
     assert len(summary["providers"]) == 25
     assert len(summary["providers"][0]["capabilities"]) == 25
@@ -112,6 +113,42 @@ def test_summary_keeps_safe_directory_preview_without_raw_secrets():
     assert "secret" not in str(summary) and "A" * 17 not in str(summary)
     normalized = present_catalog({**payload, "vehicle_profiles": [{"make": "TEST"}]}, "summary")
     assert "data_preview" not in normalized
+
+
+def test_summary_omits_schema_noise_but_preserves_oe_and_failure_evidence():
+    payload = {
+        "ok": True,
+        "request_plan": {
+            "ok": False,
+            "configured": False,
+            "partsapi_method": "getArticle",
+            "missing_env_names": ["PARTSAPI_ARTICLE_KEY"],
+            "params": {"SUP_ID": 42},
+            "redacted_url": "https://example.invalid?key=***",
+            "credential_env_any_of": ["PARTSAPI_ARTICLE_KEY"],
+        },
+        "catalog_binding": {"fitment_confirmed": False},
+        "article_candidates": [
+            {"raw_keys": ["OEM_NUMBERS"], "oe_references": [{"part_number": str(n)} for n in range(30)]}
+        ],
+    }
+    summary = present_catalog(payload, "summary")
+    assert summary["request_plan"] == {
+        "ok": False,
+        "configured": False,
+        "partsapi_method": "getArticle",
+        "missing_env_names": ["PARTSAPI_ARTICLE_KEY"],
+    }
+    assert "raw_keys" not in summary["article_candidates"][0]
+    assert len(summary["article_candidates"][0]["oe_references"]) == 25
+    assert summary["presentation"]["lists"]["article_candidates[0].oe_references"] == {
+        "total": 30,
+        "returned": 25,
+        "truncated": True,
+    }
+    assert summary["catalog_binding"]["fitment_confirmed"] is False
+    assert present_catalog(payload, "full") is payload
+    assert "raw_keys" in payload["article_candidates"][0]
 
 
 class Response:

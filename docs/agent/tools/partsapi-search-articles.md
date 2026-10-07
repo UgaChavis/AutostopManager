@@ -24,11 +24,12 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: article_candidates с номером, брендом и article ID; готовность getArticle и поддерживаемые article-ID операции указаны отдельно; в summary сохраняются counts и обрезка, без raw payload.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
+- searchArticles не возвращает SUP_ID по своему контракту. Для полного getArticle нужен supplier ID из связанного getArticles либо подтверждённого входа; из названия бренда его не выводи. При ART_ID доступны article_criteria, getArticleMedia и article_crosses.
 
 Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.

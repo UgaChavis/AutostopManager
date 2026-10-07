@@ -26,6 +26,7 @@ from .web_research_gateway import (
     SEARCH_WEB_MULTI_CAPABILITY,
     CapabilityWebResearchGatewayAdapter,
     WebResearchGateway,
+    _compact_execution,
 )
 
 
@@ -89,6 +90,8 @@ def _capability_failure(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     mime = body.get("content_type")
     if isinstance(mime, str) and re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", mime):
         result["content_type"] = mime
+    if execution := _compact_execution(body.get("execution")):
+        result["execution"] = execution
     return result
 
 
@@ -221,7 +224,9 @@ class LoopbackCrmMcpWebResearchTransport:
                             "name": capability,
                             "arguments": arguments,
                             "schema_hash": schema_hash,
-                            "allow_large_output": False,
+                            # The producer already bounds and guards public text.
+                            # Generic raw compaction would cut this field at 4000.
+                            "allow_large_output": capability == FETCH_PAGE_EXCERPT_CAPABILITY,
                         },
                         read_timeout_seconds=timedelta(seconds=timeout_seconds),
                     )

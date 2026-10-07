@@ -2876,8 +2876,85 @@ def _partsapi_article_embedded_criteria(value: Any) -> list[dict[str, Any]]:
     return criteria
 
 
+def _partsapi_article_followups(
+    candidates: list[dict[str, Any]], operation: str | None, request_parameters: dict[str, Any] | None
+) -> None:
+    from .vin_lookup import normalize_part_number
+
+    params = request_parameters or {}
+    requested_number = normalize_part_number(str(params.get("ART_NUM") or ""))
+    requested_supplier = _partsapi_car_number(params.get("SUP_ID"))
+    requested_brand = str(params.get("brand") or "").strip().casefold()
+    matching_brands = {
+        str(candidate.get("brand") or "").strip().casefold()
+        for candidate in candidates
+        if normalize_part_number(str(candidate.get("part_number") or "")) == requested_number
+    }
+    for candidate in candidates:
+        supplier = _partsapi_car_number(candidate.get("supplier_id"))
+        candidate["supplier_id_source"] = "provider_response" if isinstance(supplier, int) else None
+        candidate["supplier_id"] = supplier if isinstance(supplier, int) else None
+        brand = str(candidate.get("brand") or "").strip().casefold()
+        bound = (
+            operation == "article"
+            and requested_number
+            and normalize_part_number(str(candidate.get("part_number") or "")) == requested_number
+            and len(matching_brands) == 1
+            and brand
+            and (not requested_brand or brand == requested_brand)
+        )
+        if candidate["supplier_id"] is None and bound and isinstance(requested_supplier, int):
+            candidate["supplier_id"] = requested_supplier
+            candidate["supplier_id_source"] = "request_parameters"
+        candidate["get_article_ready"] = bool(candidate.get("part_number") and candidate["supplier_id"])
+        candidate["missing_for_get_article"] = [
+            field for field in ("part_number", "supplier_id") if not candidate.get(field)
+        ]
+        candidate["article_id_operations"] = (
+            ["article_criteria", "getArticleMedia", "article_crosses"]
+            if isinstance(_partsapi_car_number(candidate.get("article_id")), int)
+            else []
+        )
+        if candidate["supplier_id"] is None:
+            candidate["supplier_id_resolution"] = "linked_getArticles"
+
+
+def _partsapi_catalog_completeness(operation: str, candidates: list[dict[str, Any]], outcome: str) -> dict[str, Any]:
+    required = {
+        "search_articles": ("article_id", "part_number", "brand", "product_name", "found_via"),
+        "articles": ("article_id", "part_number", "brand", "supplier_id", "product_group", "product_group_id"),
+        "article": ("article_id", "part_number", "brand"),
+        "getCars": (
+            "tecdoc_car_id",
+            "make",
+            "model",
+            "modification",
+            "vehicle_type",
+            "displacement_cc",
+            "power_kw_from",
+            "power_hp_from",
+            "engine_type",
+            "production_date_from",
+        ),
+    }.get(operation)
+    if required is None:
+        return {}
+    missing = {field for candidate in candidates for field in required if candidate.get(field) in (None, "")}
+    if operation == "article":
+        missing.update(
+            field
+            for field, raw_key in (("criteria", "ARTICLE_CRITERIA"), ("oe_references", "OEM_NUMBERS"))
+            if any(raw_key not in candidate["raw_keys"] for candidate in candidates)
+        )
+    return {
+        "completeness": "complete" if candidates and not missing and outcome == "success" else "partial",
+        "completeness_scope": "catalog_response",
+        "missing_fields": sorted(missing),
+    }
+
+
 def extract_partsapi_article_candidates(
-    *, payload: Any, operation: str | None = "search_articles"
+    *, payload: Any, operation: str | None = "search_articles", request_parameters: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     candidates = []
     seen: set[tuple[str | None, str | None, str | None]] = set()
@@ -2922,6 +2999,7 @@ def extract_partsapi_article_candidates(
                 criteria=_partsapi_article_embedded_criteria(item.get("ARTICLE_CRITERIA")),
                 supersession={"superseded": item.get("SUPERSEDED"), "superseded_by": item.get("SUPERSEDED BY")},
             )
+    _partsapi_article_followups(candidates, operation, request_parameters)
     return candidates
 
 
@@ -3267,7 +3345,9 @@ def partsapi_catalog_lookup(
         else []
     )
     article_candidates = (
-        extract_partsapi_article_candidates(payload=payload, operation=operation)
+        extract_partsapi_article_candidates(
+            payload=payload, operation=operation, request_parameters={**params, "brand": brand}
+        )
         if operation
         in {
             "search_articles",
@@ -3395,6 +3475,9 @@ def partsapi_catalog_lookup(
         "retryable": False,
         "requires_fallback": outcome
         in {"empty_result", "unparsed_response", "identifier_mismatch", "identifier_unverified"},
+        **_partsapi_catalog_completeness(
+            operation, vehicle_profiles if operation == "getCars" else article_candidates, outcome
+        ),
         **us_semantics,
     }
 

@@ -49,6 +49,7 @@ from .j1_research import (
     start_research,
 )
 from .listing_executor import run_listing_request
+from .mcp_telemetry import instrument_manager_tools
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
     search_partsapi_category_index,
@@ -1422,6 +1423,7 @@ def register_manager_tools(  # noqa: C901
     if include_tools is not None:
         server.tool = original_tool
     _preserve_listing_scalar_inputs(server)
+    instrument_manager_tools(server)
 
 
 def register_manager_memory_tools(
@@ -1437,3 +1439,4 @@ def register_manager_memory_tools(
     register_manager_tools(server, store=state, store_client=store_client, include_tools=include_tools)
     if include_tools is not None:
         register_crm_workflow_tools(server, state, include_tools)
+        instrument_manager_tools(server)

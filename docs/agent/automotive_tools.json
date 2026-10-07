@@ -674,9 +674,9 @@
         "lang_id": 16
       },
       "outputs": [
-        "source/parser/outcome и raw payload",
-        "специализированные profiles/tree/article/labor данные только для распознанных методов",
-        "generic payload сохраняется без выдуманных нормализованных полей"
+        "article_candidates с номером, брендом и article ID",
+        "готовность getArticle и поддерживаемые article-ID операции указаны отдельно",
+        "в summary сохраняются counts и обрезка, без raw payload"
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -686,7 +686,8 @@
       "limitations": [
         "Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.",
         "API method отличается от facade operation; key назначает сервер, secrets не принимаются.",
-        "TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические."
+        "TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.",
+        "searchArticles не возвращает SUP_ID по своему контракту. Для полного getArticle нужен supplier ID из связанного getArticles либо подтверждённого входа; из названия бренда его не выводи. При ART_ID доступны article_criteria, getArticleMedia и article_crosses."
       ],
       "example": {
         "operation": "search_articles",
@@ -890,7 +891,9 @@
         "Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.",
         "API method отличается от facade operation; key назначает сервер, secrets не принимаются.",
         "TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.",
-        "OE references are not directed supersession and do not confirm VIN fitment; the aftermarket article number remains separate."
+        "OE references are not directed supersession and do not confirm VIN fitment; the aftermarket article number remains separate.",
+        "SUP_ID берётся из связанного getArticles/подтверждённого входа; searchArticles его не обещает. Если ID сохранён из запроса, supplier_id_source явно отмечает происхождение; это не поле ответа провайдера и не VIN-применимость.",
+        "completeness_scope=catalog_response описывает полноту каталожных полей, а не точность комплектации автомобиля."
       ],
       "example": {
         "operation": "article",
@@ -3523,8 +3526,9 @@
       },
       "outputs": [
         "Legacy flat web gateway: ok/schema/capability/read_only/url/final_url/domain/title/excerpt/links/access_flags/requires_human/status_code/mode/vin_redacted.",
-        "Failure returns ok=false and error={code,retryable}; no canonical automotive data/evidence/execution envelope.",
-        "Known HTTP status, content_type, requested/effective chars, extraction_method and truncated; explicit PDF uses the existing guarded static extractor."
+        "Failure returns ok=false and error={code,retryable}; no canonical automotive data/evidence envelope.",
+        "Known HTTP status, content_type, requested/effective chars, extraction_method and truncated; explicit PDF uses the existing guarded static extractor.",
+        "excerpt_limit_chars, extracted_chars/received_chars/delivered_chars и execution сохраняют фактические ограничения; отсутствие счётчика не означает ноль сетевых вызовов"
       ],
       "errors": [
         "web_page_url_invalid for unsafe/invalid URL; gateway/configuration/response errors and browser_render_failed remain distinct with retryable.",

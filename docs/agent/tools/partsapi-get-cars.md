@@ -17,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"operation":"getCars","dry_run":true,"provider_parameters":{"makeId":42,"carType":"PC","modelId":42}}
+{"dry_run":true,"operation":"getCars","provider_parameters":{"carType":"PC","makeId":42,"modelId":42}}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json

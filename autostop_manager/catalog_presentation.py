@@ -135,8 +135,16 @@ def present_catalog(payload: dict[str, Any], detail: CatalogDetail = "full") -> 
         if isinstance(value, dict):
             output = {}
             for key, nested in value.items():
-                if key in {"payload", "raw_payload", "raw_response"}:
+                if key in {"payload", "raw_payload", "raw_response", "raw_keys"}:
                     continue
+                if key == "request_plan" and isinstance(nested, dict):
+                    # Configuration details and echoed inputs remain available in full.
+                    # Summary retains failures needed to choose a supported next call.
+                    nested = {
+                        field: nested[field]
+                        for field in ("ok", "configured", "partsapi_method", "missing_env_names", "error")
+                        if field in nested
+                    }
                 if key == "operation_status" and isinstance(nested, dict):
                     nested = [
                         {

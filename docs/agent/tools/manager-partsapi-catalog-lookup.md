@@ -9,13 +9,13 @@
 Вызов: native Manager MCP `partsapi_catalog_lookup`.
 
 Входы: `operation`, `identifier`, `registration_number`, `part_number`, `article_id`, `supplier_id`, `provider_parameters`, `brand`, `category`, `vehicle_type`, `type_id`, `lang`, `lang_id`, `make_name_seo`, `model_id`, `motor_id`, `top_category_id`, `sub_category_id`, `car_id`, `timeout`, `max_attempts`, `dry_run`, `catalog_context`, `detail`.
-Defaults: `{"identifier":null,"registration_number":null,"part_number":null,"article_id":null,"supplier_id":null,"provider_parameters":null,"brand":null,"category":null,"vehicle_type":null,"type_id":null,"lang":null,"lang_id":null,"make_name_seo":null,"model_id":null,"motor_id":null,"top_category_id":null,"sub_category_id":null,"car_id":null,"timeout":20.0,"max_attempts":1,"dry_run":false,"catalog_context":null,"detail":"full"}`.
+Defaults: `{"article_id":null,"brand":null,"car_id":null,"catalog_context":null,"category":null,"detail":"full","dry_run":false,"identifier":null,"lang":null,"lang_id":null,"make_name_seo":null,"max_attempts":1,"model_id":null,"motor_id":null,"part_number":null,"provider_parameters":null,"registration_number":null,"sub_category_id":null,"supplier_id":null,"timeout":20.0,"top_category_id":null,"type_id":null,"vehicle_type":null}`.
 Обязательные facade поля: `operation`.
 Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"operation":"search_articles","part_number":"DEMO-ARTICLE-001","dry_run":true,"detail":"summary"}
+{"detail":"summary","dry_run":true,"operation":"search_articles","part_number":"DEMO-ARTICLE-001"}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json

@@ -14,6 +14,7 @@ import socket
 import stat
 import struct
 from collections import deque
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from typing import Any
 from uuid import UUID
 
 from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN, MAX_INBOUND_MONITOR_EVENTS
+from autostop_manager.mcp_contract import manager_session_schema_evidence
 
 LOGGER = logging.getLogger(__name__)
 
@@ -184,7 +186,7 @@ class AppServer:
             self.disconnected.set()
             raise TransportLost("codex_disconnected") from exc
 
-    async def request(self, method: str, params: dict[str, Any]) -> Any:
+    async def request(self, method: str, params: dict[str, Any] | None) -> Any:
         self.sequence += 1
         ident = self.sequence
         future = asyncio.get_running_loop().create_future()
@@ -198,6 +200,58 @@ class AppServer:
                 future.cancel()
             elif not future.cancelled():
                 future.exception()  # Consume a concurrent disconnect after send failure.
+
+    async def manager_mcp_schema_status(
+        self,
+        expected_schemas: Mapping[str, Any],
+        *,
+        declarations: Mapping[str, Any] | None = None,
+        server_name: str = "autostopmanager",
+    ) -> dict[str, Any]:
+        """Read this thread's MCP schema; no reload, turn or private data output."""
+        schemas: dict[str, Any] = {}
+        connected, tools_error = False, False
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _ in range(20):
+            page = await self.request(
+                "mcpServerStatus/list",
+                {
+                    "threadId": self.config.thread_id,
+                    "serverName": server_name,
+                    "detail": "toolsAndAuthOnly",
+                    "cursor": cursor,
+                },
+            )
+            if not isinstance(page, dict) or not isinstance(page.get("data"), list):
+                tools_error = True
+                break
+            for row in page["data"]:
+                if not isinstance(row, dict) or row.get("name") != server_name:
+                    continue
+                connected = row.get("runtimeStatus") == "connected"
+                tools_error = tools_error or bool(row.get("toolsError"))
+                tools = row.get("tools")
+                if isinstance(tools, dict):
+                    for tool in tools.values():
+                        if isinstance(tool, dict) and isinstance(tool.get("name"), str):
+                            schemas[tool["name"]] = tool.get("inputSchema")
+            cursor = page.get("nextCursor")
+            if cursor is None:
+                break
+            if not isinstance(cursor, str) or cursor in seen:
+                tools_error = True
+                break
+            seen.add(cursor)
+        else:
+            tools_error = True
+        return manager_session_schema_evidence(
+            expected_schemas,
+            schemas,
+            connected=connected,
+            tools_error=tools_error,
+            declarations=declarations,
+        )
 
     async def _read(self, websocket: Any, generation: int) -> None:
         from websockets.exceptions import WebSocketException

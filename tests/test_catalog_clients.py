@@ -2814,3 +2814,153 @@ def test_restored_partsapi_total_attempt_budget_is_bounded(monkeypatch):
     )
     assert result["attempt_count"] == 3
     assert sum(timeouts) <= 60.0
+
+
+@pytest.fixture
+def supplier_lookup(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    _configure_partsapi_test_keys(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def run(operation, rows, **kwargs):
+        monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_args, **_kwargs: _FakeResponse(rows))
+        return partsapi_catalog_lookup(operation=operation, **kwargs)
+
+    return run
+
+
+def _supplier_article_row(**fields):
+    return {
+        "ART_ID": 123,
+        "ART_ARTICLE_NR": "TEST-100",
+        "ART_SUP_BRAND": "TEST BRAND",
+        "ART_PRODUCT_NAME": "Brake disc",
+        "FOUND_VIA": "IAMNumber",
+        **fields,
+    }
+
+
+def test_partsapi_supplier_search_contract_exposes_supported_id_followup(supplier_lookup):
+    result = supplier_lookup("search_articles", [_supplier_article_row()], part_number="TEST-100")
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] is None and candidate["supplier_id_source"] is None
+    assert candidate["get_article_ready"] is False
+    assert candidate["missing_for_get_article"] == ["supplier_id"]
+    assert candidate["supplier_id_resolution"] == "linked_getArticles"
+    assert candidate["article_id_operations"] == ["article_criteria", "getArticleMedia", "article_crosses"]
+    assert result["completeness"] == "complete" and result["completeness_scope"] == "catalog_response"
+    assert result["missing_fields"] == []
+    followup = partsapi_catalog_lookup(
+        operation="article_criteria", article_id=str(candidate["article_id"]), dry_run=True
+    )
+    assert followup["ok"] is True and followup["attempt_count"] == 0
+    assert followup["request_plan"]["params"] == {"ART_ID": "123", "LANG": 16}
+    assert candidate["fitment_evidence"]["fitment_confirmed"] is False
+
+
+def test_partsapi_supplier_get_articles_keeps_documented_id(supplier_lookup):
+    result = supplier_lookup(
+        "articles",
+        [_supplier_article_row(SUP_ID="7", PRODUCT_GROUP="Brake disc", PT_ID=8)],
+        type_id="42",
+        category="18",
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] == 7 and candidate["supplier_id_source"] == "provider_response"
+    assert candidate["get_article_ready"] is True and candidate["missing_for_get_article"] == []
+    assert result["completeness"] == "complete"
+    assert result["catalog_binding"]["fitment_confirmed"] is False
+
+
+def test_partsapi_supplier_article_inherits_only_matching_request_parameters(supplier_lookup):
+    result = supplier_lookup(
+        "article",
+        [_supplier_article_row(ARTICLE_CRITERIA="Diameter [mm]: 300", OEM_NUMBERS="TEST OEM: A123")],
+        provider_parameters={"ART_NUM": "test 100", "SUP_ID": 42, "LANG": 16},
+        brand="TEST BRAND",
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] == 42 and candidate["supplier_id_source"] == "request_parameters"
+    assert candidate["get_article_ready"] is True
+    assert result["completeness"] == "complete" and result["missing_fields"] == []
+    assert "SUP_ID" not in candidate["raw_keys"]
+    assert result["oem_candidates"] == []
+    assert candidate["oe_references"][0]["fitment_confirmed"] is False
+
+
+@pytest.mark.parametrize("fields", [{"ART_ARTICLE_NR": "FOREIGN-200"}, {"ART_SUP_BRAND": "FOREIGN BRAND"}])
+def test_partsapi_supplier_article_mismatched_return_never_inherits_id(supplier_lookup, fields):
+    result = supplier_lookup(
+        "article", [_supplier_article_row(**fields)], part_number="TEST-100", supplier_id=42, brand="TEST BRAND"
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] is None and candidate["supplier_id_source"] is None
+    assert candidate["get_article_ready"] is False
+    assert result["completeness"] == "partial"
+    assert candidate["missing_for_get_article"] == ["supplier_id"]
+
+
+def test_partsapi_supplier_article_ambiguous_brand_return_does_not_inherit_id(supplier_lookup):
+    result = supplier_lookup(
+        "article",
+        [_supplier_article_row(), _supplier_article_row(ART_ID=124, ART_SUP_BRAND="OTHER BRAND")],
+        part_number="TEST-100",
+        supplier_id=42,
+    )
+    assert result["record_counts"]["article_candidates"] == 2
+    assert all(candidate["supplier_id"] is None for candidate in result["article_candidates"])
+
+
+@pytest.mark.parametrize("supplier", [True, 0, -1, "unknown", "1.5"])
+def test_partsapi_supplier_invalid_response_id_does_not_enable_get_article(supplier):
+    candidate = extract_partsapi_article_candidates(payload=[_supplier_article_row(SUP_ID=supplier)])[0]
+    assert candidate["supplier_id"] is None and candidate["get_article_ready"] is False
+
+
+def test_partsapi_supplier_article_missing_details_are_partial(supplier_lookup):
+    result = supplier_lookup("article", [_supplier_article_row()], part_number="TEST-100", supplier_id=42)
+    assert result["completeness"] == "partial"
+    assert result["missing_fields"] == ["criteria", "oe_references"]
+    assert result["outcome"] == "success" and result["record_counts"]["article_candidates"] == 1
+
+
+def test_partsapi_supplier_article_explicit_empty_details_are_known_response(supplier_lookup):
+    row = _supplier_article_row(ARTICLE_CRITERIA=None, OEM_NUMBERS=None)
+    row.pop("ART_PRODUCT_NAME")  # Fresh getArticle omits this optional field.
+    result = supplier_lookup("article", [row], part_number="TEST-100", supplier_id=42)
+    assert result["completeness"] == "complete" and result["missing_fields"] == []
+    assert result["article_candidates"][0]["oe_references"] == []
+    assert result["article_candidates"][0]["fitment_evidence"]["fitment_confirmed"] is False
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_partsapi_supplier_get_cars_completeness_is_catalog_only(supplier_lookup, partial):
+    row = {
+        "CAR_ID": 123,
+        "MAKE_NAME": "TEST",
+        "MODEL_NAME": "TEST SUV",
+        "CAR_NAME": "TEST 2.0",
+        "CAR_TYPES": "PC",
+        "CAPACITY": "1998/2.0 l",
+        "POWER_KW": "150.0000",
+        "POWER_PS": "204.0000",
+        "ENGINE_TYPE": "Petrol Engine",
+        "YEAR_START": "Sat, 01 Dec 2007 00:00:00 GMT",
+        "YEAR_END": "",
+    }
+    if partial:
+        row["CAPACITY"] = "unknown"
+    result = supplier_lookup("getCars", [row], provider_parameters={"carType": "PC", "makeId": 42, "modelId": 43})
+    assert result["completeness"] == ("partial" if partial else "complete")
+    assert result["completeness_scope"] == "catalog_response"
+    assert result["missing_fields"] == (["displacement_cc"] if partial else [])
+    assert result["vehicle_profiles"][0]["fitment_confirmed"] is False
+    assert result["vehicle_profiles"][0]["independent_vehicle_confirmation"] is False
+
+
+def test_partsapi_supplier_partial_search_retains_counts_and_guards(supplier_lookup):
+    result = supplier_lookup("search_articles", [{"ART_ID": 123, "ART_ARTICLE_NR": "TEST-100"}], part_number="TEST-100")
+    assert result["completeness"] == "partial"
+    assert result["missing_fields"] == ["brand", "found_via", "product_name"]
+    assert result["record_counts"]["article_candidates"] == 1
+    assert result["article_candidates"][0]["fitment_evidence"]["fitment_confirmed"] is False

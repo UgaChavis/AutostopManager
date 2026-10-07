@@ -9,7 +9,7 @@
 Вызов: native Manager MCP `search_web_multi`.
 
 Входы: `query`, `limit`, `allowed_domains`, `providers`.
-Defaults: `{"limit":5,"allowed_domains":null,"providers":null}`.
+Defaults: `{"allowed_domains":null,"limit":5,"providers":null}`.
 Обязательные facade поля: `query`.
 Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
 

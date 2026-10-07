@@ -85,6 +85,7 @@ def test_pdf_uses_existing_guarded_static_reader_without_browser(monkeypatch):
             "error": {"code": "unsupported_media", "retryable": False},
             "status_code": 200,
             "content_type": "application/pdf",
+            "execution": {"scope": "page_http", "network_request_count": 1, "elapsed_ms": 7},
         }
     )
     result = adapter.fetch_page_excerpt(url="https://example.com/disc", max_chars=40)
@@ -96,6 +97,9 @@ def test_pdf_uses_existing_guarded_static_reader_without_browser(monkeypatch):
     assert result["requested_chars"] == result["effective_chars"] == 40
     assert result["acquisition_method"] == "guarded_static_pdf"
     assert result["extraction_method"] == "pdf_text"
+    assert result["upstream_execution"]["network_request_count"] == 1
+    assert result["upstream_execution"]["scope"] == "page_http"
+    assert "execution" not in result  # The full PDF stage's HTTP count is unknown.
 
 
 def test_search_zero_with_success_is_empty_and_all_failures_are_unavailable():
@@ -124,3 +128,73 @@ def test_legacy_page_does_not_fabricate_live_acquisition_or_status():
     )
     assert result["status_code"] == 0
     assert result["acquisition_method"] == "unknown"
+    assert "extracted_chars" not in result
+    assert "execution" not in result
+
+
+def test_page_sizes_preserve_bounded_limit_and_do_not_count_redaction_as_truncation():
+    result = normalize_web_page_response(
+        {
+            "ok": True,
+            "excerpt": "x" * 12000,
+            "extracted_chars": 12000,
+            "effective_chars": 8000,
+            "execution": {"scope": "page_http", "network_request_count": 2, "reused": False},
+        },
+        capability="fetch_page_excerpt",
+        url="https://example.com/disc",
+        max_chars=20000,
+    )
+    assert result["delivered_chars"] == result["excerpt_limit_chars"] == 8000
+    assert result["received_chars"] == result["extracted_chars"] == 12000
+    assert result["truncated"] is True
+    assert result["execution"]["network_request_count"] == 2
+    assert result["execution"]["completeness"] == "partial"
+    result = normalize_web_page_response(
+        {"ok": True, "excerpt": "  Brake    disc  "},
+        capability="fetch_page_excerpt",
+        url="https://example.com/disc",
+        max_chars=100,
+    )
+    assert result["delivered_chars"] == 10
+    assert result["truncated"] is False
+
+
+def test_legacy_compaction_marker_is_incomplete_even_if_producer_flag_is_false():
+    result = normalize_web_page_response(
+        {"ok": True, "excerpt": "x" * 4000 + "...<truncated>", "truncated": False},
+        capability="fetch_page_excerpt",
+        url="https://example.com/disc",
+        max_chars=8000,
+    )
+    assert result["received_chars"] == result["delivered_chars"] == 4014
+    assert result["excerpt_limit_chars"] == 8000
+    assert result["truncated"] is True
+    assert "extracted_chars" not in result
+
+
+def test_search_keeps_measured_counts_without_copying_unknown_execution_fields():
+    result = normalize_web_research_response(
+        {
+            "results": [],
+            "providers": [
+                {"provider": "brave", "status": "skipped", "network_request_count": 0},
+                {"provider": "searxng", "status": "success", "network_request_count": 1, "elapsed_ms": 8},
+            ],
+            "execution": {
+                "scope": "provider_http",
+                "attempt_count": 2,
+                "provider_network_attempt_count": 1,
+                "network_request_count": 1,
+                "completeness": "complete",
+                "reused": False,
+                "private_error": "must not escape",
+            },
+        },
+        query="brake disc",
+        limit=3,
+    )
+    assert result["execution"]["attempt_count"] == 2
+    assert result["execution"]["provider_network_attempt_count"] == 1
+    assert result["providers"][0]["network_request_count"] == 0
+    assert "private_error" not in result["execution"]

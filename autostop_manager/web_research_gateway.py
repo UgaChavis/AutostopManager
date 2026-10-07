@@ -288,6 +288,9 @@ def _compact_provider_attempts(value: Any) -> list[dict[str, Any]]:
                 attempt[field] = max(0, min(int(row[field]), 599 if field == "status_code" else _MAX_LIMIT))
         if isinstance(row.get("retryable"), bool):
             attempt["retryable"] = row["retryable"]
+        for field in ("network_request_count", "elapsed_ms"):
+            if type(row.get(field)) is int and 0 <= row[field] <= 1000000:
+                attempt[field] = row[field]
         code = row.get("error_code")
         if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
             attempt["error_code"] = code
@@ -296,6 +299,24 @@ def _compact_provider_attempts(value: Any) -> list[dict[str, Any]]:
             attempt["reason"] = reason
         attempts.append(attempt)
     return attempts
+
+
+def _compact_execution(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    execution: dict[str, Any] = {}
+    for field in ("attempt_count", "provider_network_attempt_count", "network_request_count", "elapsed_ms"):
+        if type(value.get(field)) is int and 0 <= value[field] <= 1000000:
+            execution[field] = value[field]
+    if value.get("scope") in {"provider_http", "page_http", "guarded_static_pdf"}:
+        execution["scope"] = value["scope"]
+    if value.get("completeness") in {"complete", "partial", "unavailable"}:
+        execution["completeness"] = value["completeness"]
+    if value.get("completeness_scope") in {"bounded_provider_cascade", "static_text_excerpt"}:
+        execution["completeness_scope"] = value["completeness_scope"]
+    if type(value.get("reused")) is bool:
+        execution["reused"] = value["reused"]
+    return execution
 
 
 def _compact_results(raw_results: Any, *, allowed_domains: Sequence[str], limit: int) -> list[dict[str, Any]]:
@@ -488,6 +509,8 @@ def normalize_web_research_response(
         vin_redacted=redacted or bool(data.get("vin_redacted")),
     )
     response["acquisition_method"] = "search_index"
+    if execution := _compact_execution(data.get("execution")):
+        response["execution"] = execution
     response["outcome"] = (
         "results_found"
         if response["results"]
@@ -549,6 +572,8 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
             "web_page_gateway_failed",
         }
         result["acquisition_method"] = "unavailable"
+        if execution := _compact_execution(envelope.get("execution")):
+            result["execution"] = execution
         return result
     data = envelope.get("data") if isinstance(envelope.get("data"), Mapping) else envelope
     if not isinstance(data, Mapping) or data.get("ok") is not True:
@@ -557,9 +582,14 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
     if not final_url:
         return _page_failure(capability, code="web_page_response_invalid")
     title, title_redacted = _public_page_text(data.get("title"), limit=200)
+    bounded_chars = _bounded_int(max_chars, default=2500, minimum=1, maximum=8000)
+    raw_effective = data.get("effective_chars")
+    if type(raw_effective) is int and raw_effective > 0:
+        bounded_chars = min(bounded_chars, raw_effective)
+    raw_excerpt = str(data.get("excerpt") or "")
     excerpt, excerpt_redacted = _public_page_text(
         data.get("excerpt"),
-        limit=_bounded_int(max_chars, default=2500, minimum=1, maximum=8000),
+        limit=bounded_chars,
     )
     raw_flags = data.get("access_flags")
     flags = [
@@ -579,7 +609,7 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
         links.append({"url": link_url, "text": link_text, "domain": _result_hostname(link_url)})
     raw_status = data.get("status_code")
     status_code = raw_status if type(raw_status) is int and 0 <= raw_status <= 599 else 0
-    return {
+    result = {
         "ok": True,
         "schema": WEB_RESEARCH_GATEWAY_SCHEMA,
         "capability": capability,
@@ -599,8 +629,13 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
         "requested_chars": _bounded_int(
             data.get("requested_chars", max_chars), default=2500, minimum=1, maximum=100000
         ),
-        "effective_chars": _bounded_int(max_chars, default=2500, minimum=1, maximum=8000),
-        "truncated": bool(data.get("truncated")) or len(str(data.get("excerpt") or "")) > len(excerpt),
+        "effective_chars": bounded_chars,
+        "excerpt_limit_chars": bounded_chars,
+        "received_chars": len(raw_excerpt),
+        "delivered_chars": len(excerpt),
+        "truncated": bool(data.get("truncated"))
+        or raw_excerpt.endswith("...<truncated>")
+        or len(" ".join(raw_excerpt.split())) > bounded_chars,
         "extraction_method": _compact(data.get("extraction_method"), limit=40),
         "acquisition_method": data.get("acquisition_method")
         if data.get("acquisition_method")
@@ -608,6 +643,13 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
         else "unknown",
         "retrieved_at": _compact(data.get("retrieved_at"), limit=40),
     }
+    if type(data.get("extracted_chars")) is int and 0 <= data["extracted_chars"] <= 2000000:
+        result["extracted_chars"] = data["extracted_chars"]
+    if execution := _compact_execution(data.get("execution")):
+        execution["completeness"] = "partial" if result["truncated"] else "complete"
+        execution["completeness_scope"] = "static_text_excerpt"
+        result["execution"] = execution
+    return result
 
 
 class CapabilityWebResearchGatewayAdapter:
@@ -733,6 +775,7 @@ class CapabilityWebResearchGatewayAdapter:
             and result.get("status_code") == 200
             and result.get("content_type") == "application/pdf"
         ):
+            upstream_execution = result.get("execution")
             try:
                 from .j1_fetch import fetch_document
 
@@ -754,6 +797,7 @@ class CapabilityWebResearchGatewayAdapter:
                             "status_code": 200,
                             "content_type": "application/pdf",
                             "truncated": len(text) > bounded_chars,
+                            "extracted_chars": len(text),
                             "extraction_method": fetched.get("extraction_method"),
                             "acquisition_method": "guarded_static_pdf",
                             "retrieved_at": datetime.now(UTC).isoformat(),
@@ -784,8 +828,12 @@ class CapabilityWebResearchGatewayAdapter:
                     url=safe_url,
                     max_chars=bounded_chars,
                 )
+            if isinstance(upstream_execution, Mapping):
+                # This stage counts only the first HTML-reader request, not
+                # unknown requests or retries inside the guarded PDF reader.
+                result["upstream_execution"] = dict(upstream_execution)
         result["requested_chars"] = _bounded_int(max_chars, default=2500, minimum=1, maximum=100000)
-        result["effective_chars"] = bounded_chars
+        result.setdefault("effective_chars", bounded_chars)
         return result
 
     def fetch_page_excerpt(self, *, url: str, max_chars: int = 2500) -> dict[str, Any]:

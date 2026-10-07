@@ -9,13 +9,13 @@
 Вызов: native Manager MCP `catalog_provider_status`.
 
 Входы: `stage`, `detail`.
-Defaults: `{"stage":null,"detail":"full"}`.
+Defaults: `{"detail":"full","stage":null}`.
 Обязательные facade поля: нет; ограничения конкретной операции всё равно применяются.
 Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"stage":"oem_catalog","detail":"summary"}
+{"detail":"summary","stage":"oem_catalog"}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json

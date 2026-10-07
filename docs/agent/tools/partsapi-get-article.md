@@ -17,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"operation":"article","dry_run":true,"part_number":"DEMO-ARTICLE-001","supplier_id":"42"}
+{"dry_run":true,"operation":"article","part_number":"DEMO-ARTICLE-001","supplier_id":"42"}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json
@@ -31,5 +31,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 - OE references are not directed supersession and do not confirm VIN fitment; the aftermarket article number remains separate.
+- SUP_ID берётся из связанного getArticles/подтверждённого входа; searchArticles его не обещает. Если ID сохранён из запроса, supplier_id_source явно отмечает происхождение; это не поле ответа провайдера и не VIN-применимость.
+- completeness_scope=catalog_response описывает полноту каталожных полей, а не точность комплектации автомобиля.
 
 Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
