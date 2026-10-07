@@ -189,6 +189,68 @@ def _hours_from_text(text: str) -> list[tuple[float, float]]:
     return values[:3]
 
 
+def _observed_city(snippet: str) -> str:
+    cities = []
+    if re.search(r"\bкрасноярск\w*", snippet, re.I):
+        cities.append("Красноярск")
+    if re.search(r"\b(?:санкт[- ]петербург\w*|спб)\b", snippet, re.I):
+        cities.append("Санкт-Петербург")
+    return cities[0] if len(cities) == 1 else ""
+
+
+def parse_public_work_evidence(
+    row: dict[str, Any], query: str, operations: list[dict[str, Any]], kind: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """One snippet parser for both acquisition paths; the query is not city evidence."""
+    snippet = " ".join(_clean_text(row.get(key)) for key in ("title", "snippet"))
+    observed_at = datetime.now(UTC).isoformat()
+    source = {
+        "provider": "public_web",
+        "primary_lineage": row.get("source") or _safe_source_from_url(str(row.get("url") or "")),
+        "locator": row.get("url"),
+        "scope": "public_price_snippet" if kind == "labor_prices" else "public_labor_time_snippet",
+        "method": "public_search",
+        "fetched_at": observed_at,
+    }
+    common = {
+        "operation_name": _operation_name_for_query(query, operations),
+        "source": source,
+        "city": _observed_city(snippet),
+        "captured_at": observed_at,
+        "confidence": "low",
+        "capture_method": "public_search_snippet",
+        "public_source": True,
+        "official": False,
+        "evidence": snippet[:180],
+    }
+    if kind == "labor_prices":
+        includes_parts, labor_only = _labor_only_flags(snippet)
+        rows = [
+            {**common, "price_rub": price, "includes_parts": includes_parts, "labor_only": labor_only}
+            for price in _prices_from_text(snippet)
+        ]
+    else:
+        rows = [
+            {**common, "hours": round((low + high) / 2, 2), "range_hours": [low, high]}
+            for low, high in _hours_from_text(snippet)
+        ]
+    return rows, source
+
+
+def legacy_work_evidence_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep structured provenance while adapting the legacy source-string contract."""
+    source = row.get("source")
+    if not isinstance(source, dict):
+        return row
+    return {
+        **row,
+        "source": source.get("primary_lineage") or source.get("provider") or "",
+        "evidence_source": source,
+        "captured_at": row.get("captured_at") or source.get("fetched_at"),
+        "public_source": row.get("public_source", source.get("provider") == "public_web"),
+    }
+
+
 def collect_public_work_pricing_research(
     *,
     vehicle_context: dict[str, Any],
@@ -221,7 +283,6 @@ def collect_public_work_pricing_research(
     if labor_time_policy != "public_only":
         result["warnings"].append("Only public_only labor-time policy is supported in this implementation.")
 
-    today = datetime.now(UTC).date().isoformat()
     searches = 0
     for query_type, query_list in (("labor_prices", queries["labor_prices"]), ("labor_times", queries["labor_times"])):
         for query in query_list:
@@ -249,42 +310,10 @@ def collect_public_work_pricing_research(
 
             rows_found = 0
             for row in search["results"]:
-                snippet = " ".join(part for part in (row.get("title"), row.get("snippet")) if part)
-                if query_type == "labor_prices":
-                    includes_parts, labor_only = _labor_only_flags(snippet)
-                    for price in _prices_from_text(snippet):
-                        result["quotes"].append(
-                            {
-                                "source": row.get("source") or "public_web_search",
-                                "city": "",
-                                "operation_name": _operation_name_for_query(query, operations),
-                                "price_rub": price,
-                                "includes_parts": includes_parts,
-                                "labor_only": labor_only,
-                                "captured_at": today,
-                                "confidence": "low",
-                                "capture_method": "public_search_snippet",
-                            }
-                        )
-                        rows_found += 1
-                else:
-                    for start, end in _hours_from_text(snippet):
-                        hours = round((start + end) / 2, 2)
-                        result["labor_time_sample"].append(
-                            {
-                                "source": row.get("source") or "public_web_search",
-                                "operation_name": _operation_name_for_query(query, operations),
-                                "hours": hours,
-                                "range_hours": [start, end],
-                                "captured_at": today,
-                                "confidence": "low",
-                                "public_source": True,
-                                "official": False,
-                                "capture_method": "public_search_snippet",
-                                "evidence": snippet[:180],
-                            }
-                        )
-                        rows_found += 1
+                parsed, _ = parse_public_work_evidence(row, query, operations, query_type)
+                target = "quotes" if query_type == "labor_prices" else "labor_time_sample"
+                result[target].extend(legacy_work_evidence_row(item) for item in parsed)
+                rows_found += len(parsed)
             checked["rows_found"] = rows_found
             result["sources_checked"].append(checked)
 
@@ -306,11 +335,22 @@ def _operation_name_for_query(query: str, operations: list[dict[str, Any]]) -> s
     return _clean_text(operations[0].get("normalized_name") or operations[0].get("input")) if operations else ""
 
 
+def _observation_location(row: dict[str, Any]) -> tuple[str, str]:
+    supplied = row.get("evidence_source")
+    if not isinstance(supplied, dict):
+        supplied = row.get("source")
+    source = supplied if isinstance(supplied, dict) else {}
+    city = str(row.get("city") or row.get("city_region") or row.get("region") or "").strip().casefold()
+    locator = str(row.get("locator") or row.get("url") or source.get("locator") or "").strip()
+    return city, locator
+
+
 def _dedupe_rows(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> list[dict[str, Any]]:
     seen: set[tuple[str, ...]] = set()
     result: list[dict[str, Any]] = []
     for row in rows:
         key = tuple(str(row.get(field, "")).casefold() for field in fields)
+        key += _observation_location(row)
         if key in seen:
             continue
         seen.add(key)
@@ -323,6 +363,7 @@ def _dedupe_quote_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_key: dict[tuple[str, ...], dict[str, Any]] = {}
     for row in rows:
         key = tuple(str(row.get(field, "")).casefold() for field in fields)
+        key += _observation_location(row)
         existing = by_key.get(key)
         if existing is None:
             existing = dict(row)

@@ -58,6 +58,36 @@ def test_actual_registration_matches_independent_ast_and_all_provider_methods(ca
     assert {module["element_id"] for module in registry["modules"]} == {f"E{i}" for i in range(1, 16)}
 
 
+@pytest.mark.parametrize("fault", ["provider_reference", "provider_identity", "native_classification"])
+def test_export_rejects_broken_provider_navigation_and_contradictory_native_classification(catalog, fault):
+    registry, schemas = catalog
+    broken = deepcopy(registry)
+    if fault == "provider_reference":
+        broken["providers"][0]["reference"] = "docs/agent/references/missing-provider.md"
+        error = "invalid_instruction_ref"
+    elif fault == "provider_identity":
+        broken["providers"][0]["provider_id"] = "undeclared-provider"
+        error = "undeclared_provider_id"
+    else:
+        item = next(item for item in broken["native_inventory"] if item["classification"] == "active")
+        item["classification"] = "outside"
+        error = "native_classification_mismatch"
+    with pytest.raises(ValueError, match=error):
+        build_bundle(ROOT, broken, schemas, PARTSAPI_OPERATIONS, "a" * 40)
+
+
+def test_mixed_partsapi_facade_remains_active_with_outside_operations(catalog):
+    registry, schemas = catalog
+    tools = {tool["tool_id"]: tool for tool in registry["tools"]}
+    item = next(item for item in registry["native_inventory"] if item["tool_name"] == "partsapi_catalog_lookup")
+    assert {tools[tool_id]["classification"] for tool_id in item["tool_ids"]} == {"active", "outside"}
+    assert item["classification"] == "active"
+    assert (
+        build_bundle(ROOT, registry, schemas, PARTSAPI_OPERATIONS, "a" * 40)["native_inventory"]
+        == registry["native_inventory"]
+    )
+
+
 @pytest.mark.parametrize(
     "mutation,error",
     [
@@ -238,13 +268,20 @@ def test_module_documentation_rejects_drift_from_operation_ownership(catalog, mo
         validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
 
 
-def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypatch):
+@pytest.mark.parametrize("literal,card_links_elsewhere", [("code", False), ("code", True), ("html", True)])
+def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypatch, literal, card_links_elsewhere):
     registry, schemas = catalog
     reference = "docs/agent/modules/E14.md"
     text = read_document(ROOT, reference)
     start = text.index("| Инструмент / карточка |")
     end = text.index("\n\n", start)
-    text = text[:start] + "```markdown\n" + text[start:end] + "\n```" + text[end:]
+    table = text[start:end]
+    opening, closing = ("```markdown", "```") if literal == "code" else ("<!--", "-->")
+    text = text[:start] + opening + "\n" + table + "\n" + closing + text[end:]
+    if card_links_elsewhere:
+        text += "\n" + "\n".join(
+            line.split(" | ")[0].removeprefix("| ") for line in table.splitlines() if line.startswith("| [")
+        )
     original = read_document
     monkeypatch.setattr(
         "autostop_manager.automotive_catalog.read_document",
@@ -252,6 +289,20 @@ def test_module_operation_table_inside_code_is_not_navigation(catalog, monkeypat
     )
     with pytest.raises(ValueError, match="module_tool_table_not_visible"):
         validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
+
+
+def test_module_table_card_links_accept_document_line_annotations(catalog, monkeypatch):
+    registry, schemas = catalog
+    reference = "docs/agent/modules/E14.md"
+    original = read_document
+    text = original(ROOT, reference).replace(
+        "../tools/manager-recommend-automotive-sources.md)", "../tools/manager-recommend-automotive-sources.md:0002)"
+    )
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["ok"]
 
 
 @pytest.mark.parametrize(

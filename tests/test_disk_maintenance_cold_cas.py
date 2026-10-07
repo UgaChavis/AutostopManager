@@ -283,6 +283,30 @@ def test_native_cold_keeper_preserves_historical_tuples_and_hot_current_previous
     assert Path(record["path"]) in inventory._protected_paths(policy)
 
 
+@pytest.mark.parametrize("kind", ["broken_symlink", "directory_symlink", "file"])
+def test_cold_keeper_rejects_present_non_directory_before_tree_walk(bundle, tmp_path, monkeypatch, kind):
+    policy, record, _ = registry_fixture(bundle, tmp_path)
+    historical = Path(record["path"])
+    other = tmp_path / "other-runtime"
+    if kind == "file":
+        historical.write_bytes(b"synthetic regular file")
+    else:
+        if kind == "directory_symlink":
+            other.mkdir(mode=0o700)
+            (other / "sentinel").write_bytes(b"synthetic other runtime")
+        historical.symlink_to(other, target_is_directory=True)
+
+    def forbidden_tree_walk(*_args, **_kwargs):
+        pytest.fail("A present non-directory must be rejected without following its target")
+
+    monkeypatch.setattr(cas, "verify_tree", forbidden_tree_walk)
+    with pytest.raises(MaintenanceError, match="cold_tree_kind_mismatch"):
+        cold_registry.verify(policy, full=True)
+    assert historical.lstat()
+    if kind == "directory_symlink":
+        assert (other / "sentinel").read_bytes() == b"synthetic other runtime"
+
+
 @pytest.mark.parametrize(
     "change,error",
     [
@@ -425,3 +449,144 @@ def test_locked_hydration_approval_and_atomic_activation_never_replace_existing_
     with pytest.raises(MaintenanceError, match="cold_activation_refused"):
         cold_restore._publish(staging, raced)
     assert (raced / "sentinel").read_bytes() == b"existing target" and staging.exists()
+
+
+@pytest.fixture
+def locked_restore(bundle, tmp_path, monkeypatch):
+    policy, record, _ = registry_fixture(bundle, tmp_path)
+    state = tmp_path / "restore-state"
+    state.mkdir(mode=0o700)
+    policy.update(state_root=str(state), locks={"cleanup": str(tmp_path / "cleanup.lock")})
+    monkeypatch.setattr(core, "locked", lambda _: nullcontext())
+    monkeypatch.setattr(core, "native_locks", lambda _: nullcontext())
+    monkeypatch.setattr(core, "health", lambda _: {"ok": True})
+    return policy, record, state
+
+
+@pytest.mark.parametrize("failure", ["attest", "verify", "publish"])
+def test_failed_activation_removes_only_owned_unpublished_hydration(locked_restore, monkeypatch, failure):
+    policy, record, state = locked_restore
+    target = Path(record["path"])
+    error = "cold_activation_refused" if failure == "publish" else "synthetic_posthydrate_failure"
+    if failure == "publish":
+        publish = cold_restore._publish
+
+        def raced_publish(staging, destination):
+            destination.mkdir(mode=0o700)
+            (destination / "sentinel").write_bytes(b"raced target must survive")
+            publish(staging, destination)
+
+        monkeypatch.setattr(cold_restore, "_publish", raced_publish)
+    else:
+        calls = 0
+        module, name = (cold_registry, "attest") if failure == "attest" else (cas, "verify_tree")
+        original = getattr(module, name)
+
+        def fail_after_hydration(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise MaintenanceError(error)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, fail_after_hydration)
+
+    with pytest.raises(MaintenanceError, match=error):
+        cold_restore.restore(policy, record["revision"], record["manifest_sha256"], output=None, activate=True)
+    assert list(state.iterdir()) == []
+    assert cas.verify_bundle(Path(record["bundle_dir"]), record["manifest_sha256"])["ok"]
+    if failure == "publish":
+        assert (target / "sentinel").read_bytes() == b"raced target must survive"
+    else:
+        assert not target.exists()
+
+
+@pytest.mark.parametrize("activate", [False, True])
+def test_posthydrate_health_failure_preserves_user_output_or_published_runtime(
+    locked_restore, tmp_path, monkeypatch, activate
+):
+    policy, record, state = locked_restore
+    checks = 0
+
+    def fail_health_after_restore(_policy):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise MaintenanceError("synthetic_postrestore_health_failure")
+        return {"ok": True}
+
+    monkeypatch.setattr(core, "health", fail_health_after_restore)
+    destination = Path(record["path"]) if activate else tmp_path / "owner-output"
+    with pytest.raises(MaintenanceError, match="synthetic_postrestore_health_failure"):
+        cold_restore.restore(
+            policy,
+            record["revision"],
+            record["manifest_sha256"],
+            output=None if activate else destination,
+            activate=activate,
+        )
+    root = cas.load_bundle(Path(record["bundle_dir"]), record["manifest_sha256"])["roots"][0]
+    assert cas.verify_tree(destination, root)["ok"]
+    assert list(state.iterdir()) == []
+
+
+def test_publication_error_after_rename_preserves_published_runtime(locked_restore, monkeypatch):
+    policy, record, state = locked_restore
+    publish = cold_restore._publish
+
+    def fail_after_rename(staging, destination):
+        publish(staging, destination)
+        raise MaintenanceError("synthetic_postrename_failure")
+
+    monkeypatch.setattr(cold_restore, "_publish", fail_after_rename)
+    with pytest.raises(MaintenanceError, match="synthetic_postrename_failure"):
+        cold_restore.restore(policy, record["revision"], record["manifest_sha256"], output=None, activate=True)
+    root = cas.load_bundle(Path(record["bundle_dir"]), record["manifest_sha256"])["roots"][0]
+    assert cas.verify_tree(Path(record["path"]), root)["ok"]
+    assert list(state.iterdir()) == []
+
+
+@pytest.mark.parametrize("replacement", ["directory", "symlink"])
+def test_staging_cleanup_refuses_replaced_directory_or_symlink(tmp_path, replacement):
+    staging = tmp_path / "owned-staging"
+    staging.mkdir(mode=0o700)
+    before = staging.lstat()
+    retained = tmp_path / "retained-staging"
+    staging.rename(retained)
+    if replacement == "directory":
+        staging.mkdir(mode=0o700)
+        (staging / "sentinel").write_bytes(b"replacement must survive")
+    else:
+        staging.symlink_to(retained, target_is_directory=True)
+    with pytest.raises(MaintenanceError, match="cold_staging_changed"):
+        cold_restore._remove_staging(staging, (before.st_dev, before.st_ino))
+    assert retained.is_dir()
+    if replacement == "symlink":
+        assert staging.is_symlink()
+    else:
+        assert (staging / "sentinel").read_bytes() == b"replacement must survive"
+
+
+def test_staging_cleanup_failure_preserves_original_error_and_retains_copy(locked_restore, monkeypatch):
+    policy, record, state = locked_restore
+    attest = cold_registry.attest
+    calls = 0
+
+    def fail_after_hydration(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise MaintenanceError("synthetic_posthydrate_failure")
+        return attest(*args, **kwargs)
+
+    def fail_cleanup(*_args):
+        raise OSError("synthetic cleanup failure")
+
+    monkeypatch.setattr(cold_registry, "attest", fail_after_hydration)
+    monkeypatch.setattr(cold_restore, "_remove_staging", fail_cleanup)
+    with pytest.raises(MaintenanceError, match="synthetic_posthydrate_failure") as caught:
+        cold_restore.restore(policy, record["revision"], record["manifest_sha256"], output=None, activate=True)
+    assert isinstance(caught.value.__cause__, OSError)
+    assert caught.value.__notes__ == ["cold_staging_cleanup_failed"]
+    assert len(list(state.iterdir())) == 1
+    assert not Path(record["path"]).exists()

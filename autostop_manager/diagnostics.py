@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from os.path import normpath
+from collections.abc import Iterable
 import re
 import subprocess
 from pathlib import Path
@@ -10,7 +10,13 @@ from typing import Any
 
 from .config import PROJECT_ROOT
 from .document_links import local_document_link_target
-from .instruction_inventory import InstructionInventory, InventoryIssue, collect_instruction_inventory
+from .instruction_inventory import (
+    InstructionInventory,
+    InventoryIssue,
+    collect_instruction_inventory,
+    read_instruction_bytes,
+    retired_instruction,
+)
 
 MODULE_PARENTS: dict[str, str | None] = {
     "A1": None,
@@ -113,8 +119,28 @@ def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
         # Telegram's owner-control lane intentionally imports without Manager
         # site packages. Only this path-list helper may use seed/card discovery.
         inventory = collect_instruction_inventory(root, required_paths=names, follow_links=False)
-    names.update(path.relative_to(root).as_posix() for path in inventory.paths if path.suffix == ".md")
+    return inventory_instruction_paths(root, inventory)
+
+
+def inventory_instruction_paths(root: Path, inventory: InstructionInventory) -> tuple[str, ...]:
+    """Keep failed active targets visible rather than silently dropping their hashes."""
+    root = root.resolve()
+    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
+    names.update(
+        path.relative_to(root).as_posix()
+        for path in (*inventory.paths, *inventory.unavailable)
+        if path.suffix == ".md" and path.is_relative_to(root)
+    )
     return (*TEXT_DOCUMENTS, *sorted(names.difference(TEXT_DOCUMENTS)))
+
+
+def instruction_inventory_snapshot(root: Path, *, required_paths: Iterable[str] = ()) -> InstructionInventory:
+    """A strict operation snapshot; audit/readiness never use parser-free fallback."""
+    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS) | set(required_paths)
+    try:
+        return collect_instruction_inventory(root, required_paths=names)
+    except (ModuleNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
+        return InstructionInventory((), (InventoryIssue("unavailable", "AGENTS.md", "AGENTS.md"),))
 
 
 def _document_links(text: str) -> list[str]:
@@ -128,7 +154,7 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
     target = local_document_link_target(link)
     if target is None:
         return None
-    candidate = Path(normpath(document.parent / target))
+    candidate = document.parent / target
     document_name = document.relative_to(root).as_posix()
     if not check_external_links and not candidate.is_relative_to(root):
         allowed_external = document_name in {
@@ -178,14 +204,12 @@ def _codex_skill_entrypoint(path: Path, *, resolve_roots: bool = False) -> bool:
     return False
 
 
-def _audit_instruction_paths(root: Path) -> tuple[tuple[str, ...], list[str]]:
+def _audit_instruction_paths(
+    root: Path, inventory: InstructionInventory | None = None
+) -> tuple[tuple[str, ...], list[str]]:
     """Return a complete graph or explicit bounded errors; never use the fallback."""
     warnings: list[str] = []
-    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
-    try:
-        inventory = collect_instruction_inventory(root, required_paths=names)
-    except (ModuleNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
-        inventory = InstructionInventory((), (InventoryIssue("unavailable", "AGENTS.md", "AGENTS.md"),))
+    inventory = inventory if inventory is not None else instruction_inventory_snapshot(root)
     if inventory.issues:
         warnings.append("instruction_inventory_mismatch")
     for item in inventory.issues:
@@ -193,23 +217,32 @@ def _audit_instruction_paths(root: Path) -> tuple[tuple[str, ...], list[str]]:
             warnings.append(f"document_link_invalid:{item.source}")
         else:
             warnings.append(f"document_unreadable:{item.target}")
-    names.update(path.relative_to(root).as_posix() for path in inventory.paths if path.suffix == ".md")
-    return (*TEXT_DOCUMENTS, *sorted(names.difference(TEXT_DOCUMENTS))), warnings
+    return inventory_instruction_paths(root, inventory), warnings
 
 
 def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool = True) -> dict[str, Any]:
     """Validate source documents without opening or creating a Manager database."""
     root = root.resolve()
-    paths, warnings = _audit_instruction_paths(root)
+    inventory = instruction_inventory_snapshot(root)
+    paths, warnings = _audit_instruction_paths(root, inventory)
     size = 0
     detail_size = 0
     linked_paths: dict[str, set[Path]] = {}
     for name in paths:
         path = root / name
         try:
-            if not path.resolve().is_relative_to(root):
+            resolved_path = path.resolve()
+            if (
+                not resolved_path.is_relative_to(root)
+                or retired_instruction(path, root)
+                or retired_instruction(resolved_path, root)
+                or resolved_path in inventory.unavailable
+            ):
                 raise ValueError("outside_project")
-            text = path.read_text(encoding="utf-8")
+            content = inventory.contents.get(resolved_path)
+            if content is None:
+                content = read_instruction_bytes(resolved_path)
+            text = content.decode("utf-8")
             if name in TEXT_DOCUMENTS:
                 size += len(text.encode())
             else:

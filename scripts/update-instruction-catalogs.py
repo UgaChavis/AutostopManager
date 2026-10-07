@@ -17,6 +17,7 @@ sys.path.insert(0, str(PROJECT))
 
 from autostop_manager.instruction_inventory import (  # noqa: E402
     collect_instruction_inventory,
+    read_instruction_bytes,
     require_instruction_inventory,
 )
 
@@ -45,7 +46,7 @@ def link(label, path, project):
 
 
 def metadata(path):
-    text = path.read_text(encoding="utf-8")
+    text = read_instruction_bytes(path).decode("utf-8")
     header = text.split("---", 2)[1] if text.startswith("---") else ""
     values = {}
     for key in ("name", "description"):
@@ -59,8 +60,8 @@ def metadata(path):
     return values
 
 
-def title(path):
-    text = path.read_text(encoding="utf-8")
+def title(path, content=None):
+    text = (read_instruction_bytes(path) if content is None else content).decode("utf-8")
     match = re.search(r"^#\s+(.+)$", text, re.M)
     return match.group(1).strip() if match else path.stem
 
@@ -71,6 +72,11 @@ def project_documents(project):
 
 
 def installed_skill_root(package, codex, config):
+    location = _installed_skill_location(package, codex, config)
+    return location[0] if location is not None else None
+
+
+def _installed_skill_location(package, codex, config):
     """Resolve installation metadata before inspecting skill files in its cache."""
     caches = codex / "plugins/cache"
     remote = caches / "openai-curated-remote" / package
@@ -122,7 +128,7 @@ def installed_skill_root(package, codex, config):
     root = (version / skill_path).resolve()
     if not root.is_relative_to(version) or not root.is_dir():
         raise ValueError("Missing or outside-package skills: " + str(manifest))
-    return root
+    return root, version
 
 
 def selected_skills(project, codex):
@@ -131,16 +137,23 @@ def selected_skills(project, codex):
     disabled_selectors = [s for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)]
     disabled = {Path(s["path"]).resolve() for s in disabled_selectors if s.get("path")}
     disabled_names = {s["name"] for s in disabled_selectors if s.get("name")}
-    roots = [("AutoStop Manager", project / ".agents/skills"), ("Codex", codex / "skills/.system")]
+    roots = [
+        ("AutoStop Manager", project / ".agents/skills", (project / ".agents/skills").resolve()),
+        ("Codex", codex / "skills/.system", (codex / "skills/.system").resolve()),
+    ]
     for package in PACKAGES:
-        root = installed_skill_root(package, codex, config)
-        if root is not None:
-            roots.append((package, root))
+        location = _installed_skill_location(package, codex, config)
+        if location is not None:
+            roots.append((package, *location))
     result = []
-    for group, root in roots:
+    for group, root, boundary in roots:
         for path in sorted(root.glob("*/SKILL.md")):
             if path.resolve() in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
                 continue
+            # Validate each entry, not just the manifest's skills directory;
+            # a symlink may otherwise read another installed version or host file.
+            if not path.resolve().is_relative_to(boundary):
+                raise ValueError("Outside-package skill: " + str(path))
             info = metadata(path)
             name = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
             if disabled_names.intersection({name, info["name"]}):
@@ -153,7 +166,8 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
     project = project.resolve()
     day = day or datetime.now(UTC).strftime("%Y-%m-%d")
     skills = selected_skills(project, codex)
-    project_paths = project_documents(project)
+    inventory = collect_instruction_inventory(project)
+    project_paths = require_instruction_inventory(inventory)
     external = [s for s in skills if not s["path"].is_relative_to(project)]
     documents = len(project_paths) + len(external)
     a4 = [
@@ -194,7 +208,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         project / "docs/agent/modules/A5.md": a5[0].removeprefix("# "),
     }
     for path in project_paths:
-        document_title = generated_titles[path] if path in generated_titles else title(path)
+        document_title = generated_titles[path] if path in generated_titles else title(path, inventory.contents[path])
         a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(document_title) + " |")
     a5.extend(["", "## Внешние и системные навыки Codex", "", "| Пакет | Вход |", "| --- | --- |"])
     for s in external:

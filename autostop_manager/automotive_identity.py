@@ -13,8 +13,10 @@ from .automotive_contracts import (
     binding,
     context_field_evidence,
     finite_number,
+    field_origins,
     identity_errors,
     invalid,
+    primary_lineage,
     result,
 )
 from .vehicle_identity import identity_values_agree
@@ -223,7 +225,15 @@ def reconcile_vehicle_identity(
             if profile.get(field) not in (None, "") and (
                 not wmi or field in {"make", "manufacturer", "country", "vehicle_type"}
             ):
-                values[field].append({"value": profile[field], "primary_lineage": lineage, "result_index": index})
+                for origin in field_origins(row, field, profile[field]):
+                    values[field].append(
+                        {
+                            "value": profile[field],
+                            "primary_lineage": primary_lineage(origin),
+                            "independent": origin.get("independent") is True,
+                            "result_index": index,
+                        }
+                    )
         evidence.extend(supplied_evidence)
     context_origins = {row["field"]: row for row in context_field_evidence(context or {})}
     for field, value in prepared["context"].items():

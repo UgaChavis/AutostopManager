@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from decimal import Decimal
 from typing import Any
 
@@ -211,6 +212,45 @@ DEADLINE_PART_MAXIMUMS = {
 }
 
 
+def _valid_json_tree(value: Any) -> bool:
+    pending = [(value, False)]
+    ancestors: set[int] = set()
+    while pending:
+        current, leaving = pending.pop()
+        if leaving:
+            ancestors.remove(id(current))
+            continue
+        kind = type(current)
+        if kind in (type(None), bool, int, str):
+            continue
+        if kind is float:
+            if not math.isfinite(current):
+                return False
+            continue
+        if kind not in (dict, list) or id(current) in ancestors:
+            return False
+        if kind is dict and any(type(key) is not str for key in current):
+            return False
+        ancestors.add(id(current))
+        pending.append((current, True))
+        pending.extend((child, False) for child in (current.values() if kind is dict else current))
+    return True
+
+
+def _snapshot_planned_changes(value: Any) -> tuple[dict[str, Any], bool]:
+    if value is None:
+        return {}, True
+    if type(value) is not dict or not _valid_json_tree(value):
+        return {}, False
+    try:
+        snapshot = deepcopy(value)
+        # Also reject inputs that Python cannot encode as canonical UTF-8 JSON.
+        json.dumps(snapshot, ensure_ascii=False, sort_keys=True, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        return {}, False
+    return snapshot, True
+
+
 def prepare_action_contract(
     *,
     domain: str,
@@ -230,7 +270,7 @@ def prepare_action_contract(
     normalized_domain = DOMAIN_ALIASES.get(str(domain or "").strip().casefold(), str(domain or "").strip().casefold())
     normalized_action = str(action or "").strip().casefold()
     normalized_target = str(target_id or "").strip()
-    changes = dict(planned_changes) if isinstance(planned_changes, dict) else {}
+    changes, valid_changes_json = _snapshot_planned_changes(planned_changes)
     changes = _normalize_store_planned_changes(normalized_action, changes)
     intent = str(owner_intent or "").strip()
     key = str(idempotency_key or "").strip()
@@ -247,7 +287,7 @@ def prepare_action_contract(
         exact_target_id_required and not owner_collection_create
     ) or normalized_domain in FINANCIAL_DOMAINS
 
-    blockers: list[str] = []
+    blockers: list[str] = [] if valid_changes_json else ["invalid_planned_changes_json"]
     warnings: list[str] = []
     if not normalized_domain:
         blockers.append("missing_domain")
@@ -724,7 +764,7 @@ def _valid_completion_act_form(value: Any) -> bool:
     for item in items:
         if not isinstance(item, dict) or set(item) != {*item_limits, "section"}:
             return False
-        if item.get("section") not in {"works", "materials", "manual"}:
+        if not isinstance(item.get("section"), str) or item["section"] not in {"works", "materials", "manual"}:
             return False
         if any(
             not isinstance(item.get(field), str) or len(item[field]) > limit for field, limit in item_limits.items()

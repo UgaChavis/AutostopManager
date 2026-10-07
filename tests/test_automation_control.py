@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sqlite3
 import stat
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from autostop_manager import automation_control
+from autostop_manager import diagnostics, instruction_inventory
 from autostop_manager.automation_control import (
     AUTOMATION_CONTROL_PROTOCOL,
     AutomationControlClient,
@@ -218,7 +221,7 @@ def test_templates_and_instruction_hashes_cover_unavailable_and_oversized_files(
     large = tmp_path / "large.txt"
     large.write_bytes(b"x" * (1024 * 1024 + 1))
     monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(automation_control, "instruction_paths", lambda _root: ())
+    monkeypatch.setattr(automation_control, "inventory_instruction_paths", lambda _root, _inventory: ())
     monkeypatch.setattr(
         automation_control,
         "INSTRUCTION_FILES",
@@ -240,7 +243,7 @@ def test_instruction_hashes_report_symlink_loop_as_unavailable(monkeypatch, tmp_
     loop = tmp_path / "loop.md"
     loop.symlink_to(loop.name)
     monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(automation_control, "instruction_paths", lambda _root: ("loop.md",))
+    monkeypatch.setattr(automation_control, "inventory_instruction_paths", lambda _root, _inventory: ("loop.md",))
     monkeypatch.setattr(automation_control, "INSTRUCTION_FILES", (("cycle", "loop.md"),))
 
     assert AutomationControlService._instruction_hashes() == [
@@ -261,6 +264,200 @@ def test_instruction_hashes_ignore_unlinked_drafts_and_keep_the_existing_shape(m
     assert "docs/live.md" in {item["path_label"] for item in hashes}
     assert "docs/drafts/old.md" not in {item["path_label"] for item in hashes}
     assert all(set(item) == {"label", "path_label", "sha256"} for item in hashes)
+
+
+def instruction_project(root: Path) -> None:
+    for name in {
+        *diagnostics.TEXT_DOCUMENTS,
+        *diagnostics.REFERENCE_DOCUMENTS,
+        *(p for _, p in automation_control.INSTRUCTION_FILES),
+    }:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Synthetic instruction\n")
+
+
+def instruction_readiness_service() -> AutomationControlService:
+    # Exercise packet assembly without a registry, timer controller or service.
+    service = object.__new__(AutomationControlService)
+    service.store = SimpleNamespace(technical_execution_state=lambda **_kwargs: {})
+    service.readiness_provider = None
+    return service
+
+
+def test_instruction_hashes_share_graph_bytes_and_refresh_between_operations(monkeypatch, tmp_path):
+    instruction_project(tmp_path)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    original = instruction_inventory.read_instruction_bytes
+    calls = []
+
+    def counted(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(instruction_inventory, "read_instruction_bytes", counted)
+    hashes = AutomationControlService._instruction_hashes()
+    assert len(calls) == len(hashes) == len(set(calls))
+    assert all(item["sha256"] == hashlib.sha256(b"# Synthetic instruction\n").hexdigest() for item in hashes)
+    (tmp_path / "AGENTS.md").write_text("# Changed\n")
+    refreshed = {item["path_label"]: item["sha256"] for item in AutomationControlService._instruction_hashes()}
+
+    assert refreshed["AGENTS.md"] == hashlib.sha256(b"# Changed\n").hexdigest()
+    assert calls.count(tmp_path / "AGENTS.md") == 2
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_missing_active_card_keeps_unavailable_hash_and_degrades_readiness(monkeypatch, tmp_path, declared):
+    instruction_project(tmp_path)
+    card = "docs/agent/tools/card.md"
+    path = tmp_path / card
+    path.parent.mkdir(parents=True)
+    path.write_text("# Synthetic card\n")
+    if declared:
+        (tmp_path / instruction_inventory.AUTOMOTIVE_CATALOG).write_text(
+            json.dumps({"tools": [{"instruction_ref": card}]})
+        )
+    else:
+        (tmp_path / "AGENTS.md").write_text(f"[Card]({card})\n")
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    service = instruction_readiness_service()
+    data = {"readiness": {"ready": True, "checks": {"registry": "ready"}}}
+    assert service._readiness_from_status(data)["ready"] is True
+    path.unlink()
+
+    result = service._readiness_from_status(data)
+    hashes = {item["path_label"]: item["sha256"] for item in result["execution_packet"]["instruction_hashes"]}
+
+    assert hashes[card] == "unavailable"
+    assert result["ready"] is False
+    assert result["checks"] == {"registry": "ready", "instruction_navigation": "degraded"}
+    assert result["warnings"] == ["instruction_navigation"]
+    assert result["execution_packet"]["dependencies"] == result["checks"]
+
+
+@pytest.mark.parametrize("fault", ["parser", "utf8", "missing_json", "retired"])
+def test_instruction_errors_degrade_only_instruction_readiness(monkeypatch, tmp_path, fault):
+    instruction_project(tmp_path)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    if fault == "parser":
+
+        def unavailable_parser(*_args, **_kwargs):
+            raise ModuleNotFoundError("Synthetic absent parser", name="markdown_it")
+
+        monkeypatch.setattr(diagnostics, "collect_instruction_inventory", unavailable_parser)
+    elif fault == "utf8":
+        (tmp_path / "AGENTS.md").write_bytes(b"\xff")
+    else:
+        target = "docs/drafts/old.md" if fault == "retired" else "docs/missing.json"
+        (tmp_path / "AGENTS.md").write_text(f"[Target]({target})\n")
+    service = instruction_readiness_service()
+
+    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}})
+
+    assert result["ready"] is False
+    assert result["checks"] == {"registry": "ready", "instruction_navigation": "degraded"}
+    assert result["warnings"] == ["instruction_navigation"]
+
+
+@pytest.mark.parametrize("leaf", ["docs/agent/modules/A4.md", "docs/agent/modules/A5.md", "docs/schema.json"])
+def test_instruction_readiness_rejects_invalid_encoding_in_text_leaves(monkeypatch, tmp_path, leaf):
+    instruction_project(tmp_path)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "AGENTS.md").write_text(f"[Leaf]({leaf})\n")
+    (tmp_path / leaf).write_bytes(b"\xff")
+    service = instruction_readiness_service()
+
+    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}})
+
+    assert result["ready"] is False
+    assert result["checks"] == {"registry": "ready", "instruction_navigation": "degraded"}
+    hashes = {item["path_label"]: item["sha256"] for item in result["execution_packet"]["instruction_hashes"]}
+    if leaf.endswith(".md"):
+        assert hashes[leaf] == "unavailable"
+
+
+@pytest.mark.parametrize("failure", [OSError, ValueError, RuntimeError])
+def test_readiness_provider_failure_preserves_fresh_local_packet(monkeypatch, tmp_path, failure):
+    instruction_project(tmp_path)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    service = instruction_readiness_service()
+    technical = iter([{"runs": {"total_count": 1}}, {"runs": {"total_count": 2}}])
+    service.store = SimpleNamespace(technical_execution_state=lambda **_kwargs: next(technical))
+    service.readiness_provider = lambda: {"ready": True, "checks": {"external_probe": "ready"}}
+    baseline = {"readiness": {"ready": True, "checks": {"registry": "ready"}}}
+    before = service._readiness_from_status({**baseline, "generated_at": "before"})
+    assert before["ready"]
+    (tmp_path / "AGENTS.md").write_text("# Fresh instructions\n")
+
+    def failed():
+        raise failure("PRIVATE-PROVIDER-DETAIL")
+
+    service.readiness_provider = failed
+    after = service._readiness_from_status({**baseline, "generated_at": "after"})
+
+    assert after["ready"] is False
+    assert after["checks"] == {
+        "registry": "ready",
+        "readiness_provider": "unavailable",
+        "instruction_navigation": "ready",
+    }
+    assert after["warnings"] == ["readiness_provider"]
+    packet = after["execution_packet"]
+    assert packet["generated_at"] == "after" and packet["runs"]["total_count"] == 2
+    assert packet["dependencies"] == after["checks"]
+    hashes = {item["path_label"]: item["sha256"] for item in packet["instruction_hashes"]}
+    assert hashes["AGENTS.md"] == hashlib.sha256(b"# Fresh instructions\n").hexdigest()
+    assert "external_probe" not in after["checks"]
+    assert "PRIVATE-PROVIDER-DETAIL" not in json.dumps(after)
+
+
+@pytest.mark.parametrize(
+    "provided",
+    [
+        None,
+        [],
+        False,
+        {"ready": 1},
+        {"ready": "yes"},
+        {"ready": True, "checks": None},
+        {"ready": True, "checks": []},
+        {"ready": True, "checks": {"external_probe": []}},
+    ],
+)
+def test_malformed_readiness_provider_preserves_status_and_fails_closed(monkeypatch, tmp_path, provided):
+    instruction_project(tmp_path)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    service = instruction_readiness_service()
+    service.readiness_provider = lambda: provided
+
+    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}})
+
+    assert result["ready"] is False
+    assert result["checks"]["registry"] == "ready"
+    assert result["checks"]["readiness_provider"] == "unavailable"
+    assert result["execution_packet"]["dependencies"] == result["checks"]
+
+
+def test_failed_readiness_provider_rejects_enable_with_existing_error_and_preserves_job(tmp_path):
+    store = AutomationStore(tmp_path / "synthetic.sqlite3")
+    job = store.seed_defaults()["job"]
+    service = instruction_readiness_service()
+    service.store = store
+
+    def failed():
+        raise OSError("PRIVATE-PROVIDER-DETAIL")
+
+    service.readiness_provider = failed
+    with pytest.raises(AutomationError, match="automation_not_ready"):
+        _write_request(
+            service,
+            "set_enabled",
+            {"job_id": job["job_id"], "enabled": True},
+            key="failed-provider-enable",
+            revision=job["revision"],
+        )
+    unchanged = store.status(job_id=job["job_id"])["jobs"][0]
+    assert unchanged["desired_state"] == "off" and unchanged["revision"] == job["revision"]
 
 
 def test_readiness_reports_reconciliation_and_blocked_delivery(monkeypatch, tmp_path):
@@ -311,6 +508,7 @@ def test_readiness_reports_reconciliation_and_blocked_delivery(monkeypatch, tmp_
     assert readiness["checks"] == {
         "registry": "ready",
         "external_probe": "unavailable",
+        "instruction_navigation": "ready",
         "job_reconciliation": "pending",
         "system_timer_reconciliation": "degraded",
         "outbox_delivery": "blocked",

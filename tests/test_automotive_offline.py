@@ -109,6 +109,53 @@ def test_no_preparation_or_decoder_switching_when_runtime_missing(tmp_path, monk
         assert offline.corgi_decode("1HGCM82633A123456")["outcome"] == "dependency_missing"
 
 
+@pytest.mark.parametrize("decoder", [offline.vininfo_decode, offline.corgi_decode])
+def test_invalid_runtime_resolution_is_configuration_failure_without_worker(tmp_path, monkeypatch, decoder):
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop.name)
+    monkeypatch.setenv("AUTOSTOP_AUTOMOTIVE_OFFLINE_RUNTIME", str(loop))
+    with patch.object(offline.subprocess, "run", side_effect=AssertionError("invalid runtime must not run")):
+        row = decoder("AAA00000000000000")
+    assert row["outcome"] == "configuration_missing" and row["execution"]["network_calls"] == 0
+
+
+@pytest.mark.parametrize("node", [None, [], "invalid", 1])
+def test_malformed_node_metadata_is_configuration_failure_without_worker(runtime, node):
+    root, manifest = runtime
+    manifest["node"] = node
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    with patch.object(offline.subprocess, "run", side_effect=AssertionError("invalid node must not run")):
+        row = offline.corgi_decode("AAA00000000000000")
+    assert row["outcome"] == "configuration_missing"
+
+
+def test_unreadable_node_digest_is_structured_configuration_failure(runtime):
+    original = offline._sha256
+
+    def unreadable(path):
+        if path == Path(sys.executable):
+            raise OSError("synthetic unreadable node")
+        return original(path)
+
+    with (
+        patch.object(offline, "_sha256", side_effect=unreadable),
+        patch.object(offline.subprocess, "run", side_effect=AssertionError("unreadable node must not run")),
+    ):
+        assert offline.corgi_decode("AAA00000000000000")["outcome"] == "configuration_missing"
+
+
+@pytest.mark.parametrize("decoder", [offline.vininfo_decode, offline.corgi_decode])
+@pytest.mark.parametrize("reason", [True, {}, ["decoder failure"], 0])
+def test_malformed_worker_error_returns_parse_error_instead_of_native_exception(runtime, decoder, reason):
+    payload = {"vehicle_profile": {"make": "DEMO", "manufacturer": "DEMO"}, "error": reason}
+    with patch.object(
+        offline.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+    ) as call:
+        row = decoder("AAA00000000000000")
+    assert row["outcome"] == "parse_error" and row["warnings"] == ["parse_error"]
+    assert call.call_count == 1 and row["execution"]["network_calls"] == 0
+
+
 def test_provider_runtime_dependencies_are_independent(runtime):
     root, _ = runtime
     (root / "vpic.lite.db").unlink()

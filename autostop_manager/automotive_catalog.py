@@ -15,7 +15,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .document_links import local_document_link_target
-from .markdown_links import visible_markdown_links
+from .markdown_links import visible_markdown_links, visible_markdown_table_row_lines
 
 REGISTRY_VERSION = "autostop.automotive-tools.v1"
 BUNDLE_VERSION = "autostop.automotive-tools.bundle.v1"
@@ -113,13 +113,17 @@ def _module_documentation(root: Path, module: dict[str, Any], tools: dict[str, d
     seen: set[Path] = set()
     # These curated operation tables have one fixed row format; ordinary links
     # above use the shared CommonMark parser, including reference-style links.
-    for line in text.splitlines():
+    visible_rows = visible_markdown_table_row_lines(text)
+    for index, line in enumerate(lines):
         row = re.fullmatch(r"\| \[([^\]]+)\]\(([^)]+)\) \| ([^|]+) \| ([^|]+) \|", line)
         if row is None:
             continue
-        target = (document.parent / row[2]).resolve()
-        if target not in references:
+        if index not in visible_rows:
             raise ValueError(f"module_tool_table_not_visible:{code}")
+        reference = local_document_link_target(row[2])
+        if reference is None:
+            raise ValueError(f"module_tool_table_ownership_mismatch:{code}")
+        target = (document.parent / reference).resolve()
         tool = expected.get(target)
         if tool is None or target in seen:
             raise ValueError(f"module_tool_table_ownership_mismatch:{code}")
@@ -135,6 +139,24 @@ def _module_documentation(root: Path, module: dict[str, Any], tools: dict[str, d
         raise ValueError(f"module_tool_table_coverage_mismatch:{code}")
 
 
+def _native_classification(name: str, item: dict[str, Any], tools: dict[str, dict[str, Any]]) -> None:
+    classifications = {tools[tool_id]["classification"] for tool_id in item["tool_ids"]}
+    if classifications and (
+        ("active" in classifications) != (item["classification"] == "active")
+        or item["classification"] not in classifications
+    ):
+        raise ValueError(f"native_classification_mismatch:{name}")
+
+
+def _provider_registry(root: Path, providers: list[dict[str, Any]]) -> set[str]:
+    identifiers = {provider["provider_id"] for provider in providers}
+    if len(identifiers) != len(providers):
+        raise ValueError("duplicate_provider_id")
+    for provider in providers:
+        read_document(root, provider["reference"])
+    return identifiers
+
+
 def validate_registry(
     root: Path,
     registry: dict[str, Any],
@@ -148,9 +170,7 @@ def validate_registry(
         raise ValueError("module_map_incomplete")
     if len({m["module_key"] for m in modules.values()}) != 15:
         raise ValueError("duplicate_module_key")
-    providers = [p["provider_id"] for p in registry["providers"]]
-    if len(providers) != len(set(providers)):
-        raise ValueError("duplicate_provider_id")
+    providers = _provider_registry(root, registry["providers"])
     tools = {t["tool_id"]: t for t in registry["tools"]}
     if len(tools) != len(registry["tools"]):
         raise ValueError("duplicate_tool_id")
@@ -162,6 +182,8 @@ def validate_registry(
     covered_methods: dict[str, str] = {}
     native_ids: dict[str, list[str]] = {}
     for tool in tools.values():
+        if tool["provider_id"] not in providers:
+            raise ValueError(f"undeclared_provider_id:{tool['tool_id']}")
         read_document(root, tool["instruction_ref"])
         read_document(root, tool["reference"])
         if tool["classification"] == "active" and tool["primary_module"] not in modules:
@@ -193,6 +215,7 @@ def validate_registry(
     for name, item in inventory.items():
         if item["tool_ids"] != sorted(native_ids.get(name, [])):
             raise ValueError(f"native_ownership_mismatch:{name}")
+        _native_classification(name, item, tools)
         read_document(root, item["reference"])
     for module in modules.values():
         _module_documentation(root, module, tools)

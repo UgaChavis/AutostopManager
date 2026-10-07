@@ -154,10 +154,13 @@ def _sha256(path: Path) -> str:
 
 def _runtime(provider: str) -> tuple[Path | None, dict[str, Any], str | None]:
     configured = os.environ.get("AUTOSTOP_AUTOMOTIVE_OFFLINE_RUNTIME", RUNTIME_DEFAULT)
-    root = Path(configured).resolve()
-    manifest_path = root / "manifest.json"
-    if not manifest_path.is_file():
-        return None, {}, "dependency_missing"
+    try:
+        root = Path(configured).resolve()
+        manifest_path = root / "manifest.json"
+        if not manifest_path.is_file():
+            return None, {}, "dependency_missing"
+    except (OSError, RuntimeError, ValueError):
+        return None, {}, "configuration_missing"
     try:
         if manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
             return None, {}, "configuration_missing"
@@ -189,7 +192,7 @@ def _runtime(provider: str) -> tuple[Path | None, dict[str, Any], str | None]:
                 return None, {}, outcome
             if _sha256(path) != expected:
                 return None, {}, "configuration_missing"
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
         return None, {}, "configuration_missing"
     return root, manifest, None
 
@@ -213,8 +216,11 @@ def _worker(command: list[str], payload: dict[str, Any], timeout: float) -> tupl
         return {}, "parse_error"
     if not isinstance(decoded, dict):
         return {}, "parse_error"
-    if completed.returncode != 0 or decoded.get("error"):
-        return {}, decoded.get("error", "parse_error")
+    reported_error = decoded.get("error")
+    if reported_error is not None and not isinstance(reported_error, str):
+        return {}, "parse_error"
+    if completed.returncode != 0 or reported_error:
+        return {}, reported_error or "parse_error"
     if not isinstance(decoded.get("vehicle_profile"), dict):
         return {}, "parse_error"
     return decoded, None
@@ -292,10 +298,17 @@ def corgi_decode(identifier: str, model_year: int | None = None, timeout_seconds
         return result(tool_id, error or "dependency_missing", {}, missing_fields=["prepared_offline_runtime"])
     if not (root / "vpic.lite.db").is_file():
         return result(tool_id, "database_missing", {}, missing_fields=["vpic_database"])
-    node = manifest.get("node", {}).get("executable")
-    if not isinstance(node, str) or not Path(node).is_absolute() or not Path(node).is_file():
-        return result(tool_id, "dependency_missing", {}, missing_fields=["node_runtime"])
-    if _sha256(Path(node)) != manifest["node"].get("sha256"):
+    node_metadata = manifest.get("node", {})
+    if not isinstance(node_metadata, dict):
+        return result(tool_id, "configuration_missing", {}, warnings=["invalid_node_runtime_metadata"])
+    node = node_metadata.get("executable")
+    try:
+        if not isinstance(node, str) or not Path(node).is_absolute() or not Path(node).is_file():
+            return result(tool_id, "dependency_missing", {}, missing_fields=["node_runtime"])
+        node_digest = _sha256(Path(node))
+    except (OSError, RuntimeError, ValueError):
+        return result(tool_id, "configuration_missing", {}, warnings=["node_runtime_unreadable"])
+    if node_digest != node_metadata.get("sha256"):
         return result(tool_id, "configuration_missing", {}, warnings=["node_runtime_hash_mismatch"])
     worker = Path(__file__).resolve().parent.parent / "scripts" / "automotive-corgi-worker.mjs"
     decoded, error = _worker(

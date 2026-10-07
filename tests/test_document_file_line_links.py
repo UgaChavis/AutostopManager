@@ -232,6 +232,46 @@ def test_public_audit_keeps_file_line_containment_and_symlink_guards(
 
 
 @pytest.mark.parametrize("check_external_links", [False, True])
+@pytest.mark.parametrize("suffix", ["md", "py:12"])
+def test_audit_resolves_symlink_before_parent_traversal(
+    navigation_project: Path, check_external_links: bool, suffix: str
+) -> None:
+    outside = navigation_project.parent / "outside"
+    (outside / "child").mkdir(parents=True)
+    (navigation_project / "docs/jump").symlink_to(outside / "child", target_is_directory=True)
+    filename = "target." + suffix.split(":")[0]
+    write_document(outside / filename, "synthetic outside target\n")
+    write_document(navigation_project / "docs" / filename, "synthetic inside shadow\n")
+    module_name = diagnostics.MODULE_DOCUMENTS["D1"]
+    module = navigation_project / module_name
+    module.write_text(module.read_text() + f"\n[Target](../../jump/../target.{suffix})\n")
+
+    report = diagnostics.audit_documentation(navigation_project, check_external_links=check_external_links)
+
+    assert report["ok"] is False
+    assert f"document_link_invalid:{module_name}" in report["warnings"]
+
+
+def test_audit_does_not_read_required_module_aliased_to_retired_content(navigation_project, monkeypatch):
+    module = navigation_project / diagnostics.MODULE_DOCUMENTS["A3"]
+    target = write_document(navigation_project / "docs/drafts/old.md", "# A3\n")
+    module.unlink()
+    module.symlink_to(target)
+    original = diagnostics.read_instruction_bytes
+
+    def guarded(path):
+        assert path != target, "Retired content must not be read by the audit fallback"
+        return original(path)
+
+    monkeypatch.setattr(diagnostics, "read_instruction_bytes", guarded)
+
+    report = diagnostics.audit_documentation(navigation_project, check_external_links=False)
+
+    assert report["ok"] is False
+    assert "instruction_inventory_mismatch" in report["warnings"]
+
+
+@pytest.mark.parametrize("check_external_links", [False, True])
 def test_public_audit_keeps_exact_m2_journal_allowlist(
     navigation_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check_external_links: bool
 ) -> None:
