@@ -2,7 +2,8 @@
 
 Поиск сущностей Store
 
-Основной модуль: E9; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E9](../modules/E9.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: store; первичная база: AutoStop Store authoritative offer context. Исполнение: network_read.
 
 Вызов: native Manager MCP `store_search`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"entity":"store_part","limit":5,"query":"DEMO деталь"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"entity":null}
 ```

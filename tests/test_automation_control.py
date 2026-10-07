@@ -248,6 +248,21 @@ def test_instruction_hashes_report_symlink_loop_as_unavailable(monkeypatch, tmp_
     ]
 
 
+def test_instruction_hashes_ignore_unlinked_drafts_and_keep_the_existing_shape(monkeypatch, tmp_path):
+    (tmp_path / "AGENTS.md").write_text("[Current](docs/live.md)\n")
+    (tmp_path / "docs/drafts").mkdir(parents=True)
+    (tmp_path / "docs/live.md").write_text("# Current technical instructions\n")
+    (tmp_path / "docs/drafts/old.md").write_bytes(b"\xff")
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(automation_control, "INSTRUCTION_FILES", (("A2", "AGENTS.md"),))
+
+    hashes = AutomationControlService._instruction_hashes()
+
+    assert "docs/live.md" in {item["path_label"] for item in hashes}
+    assert "docs/drafts/old.md" not in {item["path_label"] for item in hashes}
+    assert all(set(item) == {"label", "path_label", "sha256"} for item in hashes)
+
+
 def test_readiness_reports_reconciliation_and_blocked_delivery(monkeypatch, tmp_path):
     store = AutomationStore(tmp_path / "manager.sqlite3")
     store.initialize()

@@ -2,7 +2,8 @@
 
 Вызвать getPartWeight; PartsAPI getPartWeight; use provider_parameters with the documented API parameter names.
 
-Основной модуль: E9; ссылки: E10. Состояние реализации: implemented.
+Основной модуль: [E9](../modules/E9.md); другие модули: [E10](../modules/E10.md).
+Классификация: active. Состояние реализации: implemented.
 Источник: partsapi_ru; первичная база: declared_by_provider; VIN/TecDoc/maintenance/AUTONORMS namespaces. Исполнение: network_read.
 
 Вызов: native Manager MCP `partsapi_catalog_lookup`.
@@ -18,9 +19,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"operation":"getPartWeight","provider_parameters":{"brand":"DEMO","number":"DEMO"}}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"operation":"getArticle"}
+{"operation":[]}
 ```
 
 Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.

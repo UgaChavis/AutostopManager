@@ -2,7 +2,8 @@
 
 Статус и результаты vendor task Drom
 
-Основной модуль: E10; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E10](../modules/E10.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: webbee; первичная база: Drom listings via Webbee. Исполнение: job_read.
 
 Вызов: native Manager MCP `drom_get_parts_search`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"task_id":1,"uid":"DEMO"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"task_id":null,"uid":"DEMO"}
 ```

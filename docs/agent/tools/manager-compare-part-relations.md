@@ -2,7 +2,8 @@
 
 Типы связей и конфликты номеров
 
-Основной модуль: E5; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E5](../modules/E5.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `compare_part_relations`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"relations":[{"evidence":[{"declares_oem":true,"document_kind":"official_epc","fetched_at":"2026-01-01T00:00:00Z","locator":"https://example.com/oem","method":"document_read","primary_lineage":"DEMO official OEM document","provider":"manufacturer","scope":"family","version":"demo-v1"}],"from":{"brand":"DEMO","number":"DEMO-OLD"},"to":{"brand":"DEMO","number":"DEMO-NEW"},"type":"cross"}]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"relations":null}
 ```

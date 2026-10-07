@@ -2,7 +2,8 @@
 
 Необязательный несетевой план источников
 
-Основной модуль: E4; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E4](../modules/E4.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 
 Вызов: native Manager MCP `plan_oem_parts_providers`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"WVWZZZ1KZAW000001","requested_part":"передние колодки 1 комплект"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null,"requested_part":"передние колодки 1 комплект"}
 ```

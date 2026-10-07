@@ -2,7 +2,8 @@
 
 Оценка переданной выборки Avito
 
-Основной модуль: E11; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E11](../modules/E11.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `assess_avito_price_sample`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"listings":[],"part_number":"DEMO-ARTICLE-001"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"listings":[],"part_number":null}
 ```

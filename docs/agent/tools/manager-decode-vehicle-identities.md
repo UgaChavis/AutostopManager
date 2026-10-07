@@ -2,7 +2,8 @@
 
 Составная расшифровка списка
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
 
 Вызов: native Manager MCP `decode_vehicle_identities`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"items":[{"identifier":"WVWZZZ1KZAW000001","make":"Volkswagen"}],"live_vpic":false}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"items":null}
 ```

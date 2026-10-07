@@ -15,8 +15,10 @@ PROJECT = Path(__file__).resolve().parents[1]
 # through a venv whose editable install points at another checkout.
 sys.path.insert(0, str(PROJECT))
 
-from autostop_manager.document_links import local_document_link_target  # noqa: E402
-from autostop_manager.markdown_links import visible_markdown_links  # noqa: E402
+from autostop_manager.instruction_inventory import (  # noqa: E402
+    collect_instruction_inventory,
+    require_instruction_inventory,
+)
 
 CODEX = Path("/root/.codex")
 PACKAGES = (
@@ -29,7 +31,6 @@ PACKAGES = (
     "plugin-management",
     "visualize",
 )
-BLOCKED_PARTS = {"archive", "archives", "archived", "draft", "drafts"}
 
 
 def cell(value):
@@ -66,32 +67,7 @@ def title(path):
 
 def project_documents(project):
     """Follow explicit project links, never generated catalogs or external caches."""
-    seeds = {project / "AGENTS.md"}
-    seeds.update(p for p in (project / "docs/agent/modules").glob("*.md") if re.fullmatch(r"[A-Z]\d+", p.stem))
-    seeds.update((project / ".agents/skills").glob("*/SKILL.md"))
-    pending = sorted(seeds)
-    found = set()
-    while pending:
-        path = pending.pop().resolve()
-        if path in found:
-            continue
-        if not path.is_relative_to(project) or not path.is_file():
-            raise ValueError("Missing or outside-project instruction: " + str(path))
-        if set(path.relative_to(project).parts) & BLOCKED_PARTS or path.name.endswith("-draft.md"):
-            raise ValueError("Retired instruction is still linked: " + str(path))
-        found.add(path)
-        if path.suffix != ".md" or path.name in {"A4.md", "A5.md"}:
-            continue
-        text = path.read_text(encoding="utf-8")
-        for target_link in visible_markdown_links(text):
-            destination = local_document_link_target(target_link)
-            if destination is None:
-                continue
-            target = path.parent / destination
-            target = target.resolve()
-            if target.is_relative_to(project) and target.suffix in {".md", ".json"}:
-                pending.append(target)
-    return sorted(found)
+    return require_instruction_inventory(collect_instruction_inventory(project))
 
 
 def installed_skill_root(package, codex, config):

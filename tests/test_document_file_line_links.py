@@ -260,6 +260,9 @@ def test_direct_catalog_cli_uses_helper_from_its_source_tree(tmp_path: Path) -> 
         write_document(project / "docs/agent/modules" / name, "# Initial catalog\n")
     write_document(project / "autostop_manager/__init__.py", '"""Isolated source tree."""\n')
     shutil.copyfile(ROOT / "autostop_manager/document_links.py", project / "autostop_manager/document_links.py")
+    shutil.copyfile(
+        ROOT / "autostop_manager/instruction_inventory.py", project / "autostop_manager/instruction_inventory.py"
+    )
     markdown_helper = ROOT / "autostop_manager/markdown_links.py"
     if markdown_helper.is_file():
         shutil.copyfile(markdown_helper, project / "autostop_manager/markdown_links.py")

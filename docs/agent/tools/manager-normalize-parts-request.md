@@ -2,7 +2,8 @@
 
 Сохранить все позиции запроса
 
-Основной модуль: E3; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E3](../modules/E3.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `normalize_parts_request`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"text":"передние колодки 1 комплект; задний левый амортизатор 1 шт; неизвестная прокладка 2 шт"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"text":null}
 ```

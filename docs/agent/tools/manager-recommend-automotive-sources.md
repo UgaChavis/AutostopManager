@@ -2,7 +2,8 @@
 
 Маршруты исследования и покрытия источников
 
-Основной модуль: E15; ссылки: E14. Состояние реализации: implemented.
+Основной модуль: [E15](../modules/E15.md); другие модули: [E14](../modules/E14.md).
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 
 Вызов: native Manager MCP `recommend_automotive_sources`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"brand":"Audi","data_type":"recalls","include_licensed":false}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"brand":null}
+{"brand":[]}
 ```
 
 Выход: Legacy flat: ok/brand/matched_brand_key/data_type/matched_data_type_key/include_licensed/sources/open_dataset_endpoints/warnings/rules.; sources preserve source_id/name/category/access/legal_ingestion_status/url/requires_license/citation and brand/data-type match..

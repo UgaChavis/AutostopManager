@@ -2,7 +2,8 @@
 
 Оценка переданной рыночной выборки
 
-Основной модуль: E11; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E11](../modules/E11.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `assess_part_market`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"article":"DEMO","observations":[]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"article":null,"observations":[]}
 ```
@@ -27,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Pure assessment of supplied observations: no network, Store, CRM or experience reads.
 - Public retail, procurement, used/contract and offer classes stay distinct; never infer fitment or buy a part from a median.
 
-Подробный контракт: [справочник](../references/market-listings.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/part-market.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.

@@ -2,7 +2,8 @@
 
 Составной ограниченный поиск каталоговых кандидатов
 
-Основной модуль: E4; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E4](../modules/E4.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: partsapi_ru; первичная база: declared_by_provider; VIN/TecDoc/maintenance/AUTONORMS namespaces. Исполнение: composed.
 
 Вызов: native Manager MCP `resolve_vin_oem_parts`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"identifier":"WVWZZZ1KZAW000001","live_vpic":false,"requested_part":"передние колодки 1 комплект"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"dry_run":true,"identifier":null,"requested_part":"передние колодки 1 комплект"}
 ```

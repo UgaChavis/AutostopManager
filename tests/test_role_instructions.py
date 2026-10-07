@@ -262,6 +262,7 @@ def test_catalog_script_uses_its_own_checkout_with_an_isolated_interpreter(tmp_p
         "scripts/update-instruction-catalogs.py",
         "autostop_manager/__init__.py",
         "autostop_manager/markdown_links.py",
+        "autostop_manager/instruction_inventory.py",
     ):
         write(project / name, (ROOT / name).read_text())
     document_links = ROOT / "autostop_manager/document_links.py"

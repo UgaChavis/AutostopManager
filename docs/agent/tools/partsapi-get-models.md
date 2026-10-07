@@ -2,7 +2,8 @@
 
 Вызвать getModels; PartsAPI getModels; use provider_parameters with the documented API parameter names.
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: partsapi_ru; первичная база: declared_by_provider; VIN/TecDoc/maintenance/AUTONORMS namespaces. Исполнение: network_read.
 
 Вызов: native Manager MCP `partsapi_catalog_lookup`.
@@ -18,9 +19,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"operation":"getModels","provider_parameters":{"carType":"PC","lang":16,"makeId":42}}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"operation":"getArticle"}
+{"operation":[]}
 ```
 
 Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.

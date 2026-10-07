@@ -175,7 +175,7 @@
       "input_notes": [
         "Наблюдения с URL/временем/изделием/сегментом/валютой и primary lineage."
       ],
-      "reference": "docs/agent/references/market-listings.md"
+      "reference": "docs/agent/references/part-market.md"
     },
     {
       "element_id": "E12",
@@ -350,7 +350,7 @@
         "identifier": "WVWZZZ1KZAW000001"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -397,7 +397,7 @@
         "registration_number": "А000АА000"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -444,7 +444,7 @@
         "part_number": "DEMO-ARTICLE-001"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -493,7 +493,7 @@
         "brand": "DEMO"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -543,7 +543,7 @@
         "part_number": "DEMO-ARTICLE-001"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -595,7 +595,7 @@
         "part_number": "DEMO-ARTICLE-001"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -645,7 +645,7 @@
         "article_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -694,7 +694,7 @@
         "part_number": "DEMO-ARTICLE-001"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -746,7 +746,7 @@
         "type_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -796,7 +796,7 @@
         "type_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -848,7 +848,7 @@
         "category": "18"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -899,7 +899,7 @@
         "supplier_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -952,7 +952,7 @@
         "article_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -996,7 +996,7 @@
         "dry_run": true
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1043,7 +1043,7 @@
         "make_name_seo": "demo"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1090,7 +1090,7 @@
         "model_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1141,7 +1141,7 @@
         "sub_category_id": "0"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1188,7 +1188,7 @@
         "car_id": "42"
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1237,7 +1237,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1290,7 +1290,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1343,7 +1343,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1397,7 +1397,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1448,7 +1448,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1497,7 +1497,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1550,7 +1550,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1599,7 +1599,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1650,7 +1650,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1703,7 +1703,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1752,7 +1752,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1797,7 +1797,7 @@
         "provider_parameters": {}
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1846,7 +1846,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1895,7 +1895,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1944,7 +1944,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -1993,7 +1993,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2042,7 +2042,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2093,7 +2093,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2142,7 +2142,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2191,7 +2191,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2244,7 +2244,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2297,7 +2297,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2348,7 +2348,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2397,7 +2397,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2446,7 +2446,7 @@
         }
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -2800,7 +2800,7 @@
       "invalid_example": {
         "query": null
       },
-      "reference": "docs/agent/references/partsapi.md",
+      "reference": "docs/agent/references/offline-catalogs.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "search_offline_parts_catalogs"
@@ -2861,7 +2861,7 @@
       ],
       "example": {},
       "invalid_example": {
-        "candidates": null
+        "candidates": {}
       },
       "reference": "docs/agent/references/partsapi.md",
       "invocation": {
@@ -3258,7 +3258,7 @@
         "article": null,
         "observations": []
       },
-      "reference": "docs/agent/references/market-listings.md",
+      "reference": "docs/agent/references/part-market.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "assess_part_market"
@@ -3384,7 +3384,7 @@
         "use_internal_experience": false
       },
       "invalid_example": {
-        "vehicle": null
+        "vehicle": []
       },
       "reference": "docs/agent/references/work-pricing.md",
       "invocation": {
@@ -3446,7 +3446,7 @@
         "system": "engine"
       },
       "invalid_example": {
-        "vin": null
+        "vin": []
       },
       "reference": "docs/agent/references/automotive-sources.md",
       "invocation": {
@@ -3929,7 +3929,7 @@
       ],
       "example": {},
       "invalid_example": {
-        "stage": null
+        "stage": []
       },
       "reference": "docs/agent/references/manager-runtime.md",
       "invocation": {
@@ -3980,7 +3980,7 @@
         "include_licensed": false
       },
       "invalid_example": {
-        "brand": null
+        "brand": []
       },
       "reference": "docs/agent/references/web-research.md",
       "invocation": {
@@ -4113,7 +4113,7 @@
         "dry_run": true
       },
       "invalid_example": {
-        "operation": "getArticle"
+        "operation": []
       },
       "reference": "docs/agent/references/manager-runtime.md",
       "invocation": {
@@ -5837,7 +5837,7 @@
       ],
       "example": {},
       "invalid_example": {
-        "query": null
+        "query": []
       },
       "reference": "docs/agent/references/manager-runtime.md",
       "invocation": {
@@ -6133,7 +6133,7 @@
         "operation": "status"
       },
       "invalid_example": {
-        "operation": "__invalid__"
+        "operation": []
       },
       "reference": "docs/agent/references/manager-runtime.md",
       "invocation": {
@@ -6215,7 +6215,7 @@
       ],
       "example": {},
       "invalid_example": {
-        "path": null
+        "path": []
       },
       "reference": "docs/agent/references/manager-runtime.md",
       "invocation": {

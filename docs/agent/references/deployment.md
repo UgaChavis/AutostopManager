@@ -1,6 +1,6 @@
 # Выпуск и восстановление AutoStop Manager
 
-Выпуск и перезапуск выполняются по текущему явному поручению. Сохраняй исходники, рабочие изменения и историю; проверяй опубликованную и установленную ревизии отдельно. Границы хостов: [host-operations.md](host-operations.md).
+Выпуск и перезапуск выполняются по текущему явному поручению. Сохраняй исходники, рабочие изменения и историю; проверяй опубликованную и установленную ревизии отдельно. До действий выбери физический installed snapshot по `REVISION` для live-контракта и checkout/worktree по HEAD/diff для подготовки выпуска; не подменяй один корень другим. Границы хостов: [host-operations.md](host-operations.md).
 
 ## Публикация исходников
 
@@ -21,10 +21,11 @@ Store выпускается отдельно через его GitHub `Deploy V
 
 ## Native MCP и подключённый Codex
 
-Проверь active `autostop-manager-mcp.service`; cwd его `MainPID` должен совпадать с `/opt/autostop-manager-releases/current`. Probe запускай из `/tmp` с активным `PYTHONPATH`, чтобы checkout не подменил импорт:
+Проверь active `autostop-manager-mcp.service`; cwd его `MainPID` должен совпадать с физическим target `/opt/autostop-manager-releases/current`. Probe запускай из `/tmp` с активным `PYTHONPATH`, чтобы checkout не подменил импорт:
 
 ```bash
-env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
+manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
+env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
 ```
 
 Требуются handshake, все страницы `tools/list`, manifest/schema и annotation parity, безопасные вызовы. `--store-check` читает health/capabilities и не более одного заказа через `store_search(entity="store_order", limit=1)` без pagination и записи. Проверяй `checks.store_order_search.ok=true`; `store_order_sample_empty` означает доступ без образца для проверки полей. Отчёт не сохраняет ID, поля или raw provider errors.
@@ -37,7 +38,7 @@ env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /opt/Auto
 
 ## Новый вход в роль M2
 
-После стабильной приёмки выпуска и обновления технического состояния создай новый ephemeral Codex thread с обычным cwd `/opt/AutostopManager` и поручением работать инженером M2. Сохрани штатные базовые инструкции. Ограничь проверку чтением: `AGENTS.md`, A1, M1, M2, состояние M2, индекс и последняя сводка по индексу. Переписка, клиентские кейсы, секреты, изменяющие инструменты и запуск исполнителей в этот smoke не входят.
+После стабильной приёмки выпуска и обновления технического состояния создай новый ephemeral Codex thread с обычным cwd `/opt/AutostopManager` и поручением работать инженером M2. Сохрани штатные базовые инструкции. Передай явный физический installed root с `REVISION` и отдельный source root с HEAD/diff, без изменения cwd или копирования runtime. Ограничь проверку чтением installed `AGENTS.md`, A1, M1, M2 и постоянных состояния M2, индекса и последней сводки по индексу. Переписка, клиентские кейсы, секреты, изменяющие инструменты, journal start/append и запуск исполнителей в этот smoke не входят.
 
 Приёмка требует фактических завершённых чтений и совпадения SHA-256 всех семи файлов с независимым срезом до и после хода, а также живого `tools/list` с текущим schema fingerprint и annotations. Ответ агента без этих receipts не подтверждает загрузку. Сохраняй только технические hashes, статусы и ограничения; polling делай порциями до 60 секунд, после хода отпишись от ephemeral thread.
 
@@ -47,6 +48,6 @@ env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /opt/Auto
 
 Standalone изменения выполняй одной опубликованной ревизией с сохранённым rollback. `scripts/install-manager-mcp.sh --activate` допустим только в таком явно заданном scope, не после успешного coordinated deploy.
 
-Для work Telegram останови duty и соблюдай порядок [telegram-runtime.md](telegram-runtime.md), включая `scripts/install-codex-wake.sh`; до включения проверь CRM/MCP, voice, systemd и версии без сообщений клиентам. Personal Telegram имеет отдельный release/session.
+Для work Telegram останови duty и соблюдай порядок [telegram-runtime.md](telegram-runtime.md), включая обязательный `scripts/deploy_telegram_bridge.sh --account work --no-start <revision>` и `scripts/install-codex-wake.sh`; до включения проверь CRM/MCP, voice, systemd и версии без сообщений клиентам. Personal Telegram имеет отдельный release/session; его deploy запрещает `--no-start`.
 
 Для Automation используй один release-attempt key: quiescent hold → online registry backup в root-owned `0700` → снимки unit/timer drop-ins/duty → install active immutable release under hold → scheduler/socket/readiness, пять timers, CRM/Telegram smoke → release hold. На ошибке сохраняй hold и паузу work, восстанавливай компоненты штатным rollback с независимой проверкой. Сохраняй volumes, uploads и registry. Старый registry нельзя восстановить поверх новых операций без отдельного решения о state recovery.

@@ -2,7 +2,8 @@
 
 Сверить переданные результаты
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `reconcile_vehicle_identity`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"identifier":"WVWZZZ1KZAW000001","results":[{"evidence":[{"declares_oem":true,"document_kind":"official_epc","fetched_at":"2026-01-01T00:00:00Z","locator":"https://example.com/oem","method":"document_read","primary_lineage":"DEMO official OEM document","provider":"manufacturer","scope":"family","version":"demo-v1"}],"input_binding":{"identifier_kind":"vin","identifier_sha256":"0702c3dcffd51cfab2e949d7b8b634ae759219e92e7e4ee7549ea2cf9671ce5b","version":1},"vehicle_profile":{"make":"Volkswagen"}}]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"identifier":null,"results":[{"evidence":[{"declares_oem":true,"document_kind":"official_epc","fetched_at":"2026-01-01T00:00:00Z","locator":"https://example.com/oem","method":"document_read","primary_lineage":"DEMO official OEM document","provider":"manufacturer","scope":"family","version":"demo-v1"}],"input_binding":{"identifier_kind":"vin","identifier_sha256":"0702c3dcffd51cfab2e949d7b8b634ae759219e92e7e4ee7549ea2cf9671ce5b","version":1},"vehicle_profile":{"make":"Volkswagen"}}]}
 ```

@@ -2,7 +2,8 @@
 
 Вызвать gosnomer2vin; VIN lookup by Russian vehicle registration number; identity lead that must be verified before writes.
 
-Основной модуль: E2; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E2](../modules/E2.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: partsapi_ru; первичная база: declared_by_provider; VIN/TecDoc/maintenance/AUTONORMS namespaces. Исполнение: network_read.
 
 Вызов: native Manager MCP `partsapi_catalog_lookup`.
@@ -18,9 +19,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"operation":"plate_to_vin","registration_number":"А000АА000"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"operation":"getArticle"}
+{"operation":[]}
 ```
 
 Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.

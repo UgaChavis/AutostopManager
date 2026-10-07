@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from os.path import normpath
 import re
 import subprocess
@@ -11,6 +10,7 @@ from typing import Any
 
 from .config import PROJECT_ROOT
 from .document_links import local_document_link_target
+from .instruction_inventory import InstructionInventory, InventoryIssue, collect_instruction_inventory
 
 MODULE_PARENTS: dict[str, str | None] = {
     "A1": None,
@@ -102,10 +102,18 @@ ROLE_JOURNAL_ENTRIES = {ROLE_JOURNAL_ROOT / "current-state.md", ROLE_JOURNAL_ROO
 
 
 def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
-    """Include every current Markdown document and missing required instructions."""
+    """Return current Markdown instructions and missing required entrypoints."""
+    root = root.resolve()
     names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
-    for directory in (root / "docs", root / ".agents/skills"):
-        names.update(str(path.relative_to(root)) for path in directory.rglob("*.md"))
+    try:
+        inventory = collect_instruction_inventory(root, required_paths=names)
+    except ModuleNotFoundError as exc:
+        if exc.name != "markdown_it":
+            raise
+        # Telegram's owner-control lane intentionally imports without Manager
+        # site packages. Only this path-list helper may use seed/card discovery.
+        inventory = collect_instruction_inventory(root, required_paths=names, follow_links=False)
+    names.update(path.relative_to(root).as_posix() for path in inventory.paths if path.suffix == ".md")
     return (*TEXT_DOCUMENTS, *sorted(names.difference(TEXT_DOCUMENTS)))
 
 
@@ -170,40 +178,32 @@ def _codex_skill_entrypoint(path: Path, *, resolve_roots: bool = False) -> bool:
     return False
 
 
-def _automotive_instruction_inventory(root: Path) -> set[str]:
+def _audit_instruction_paths(root: Path) -> tuple[tuple[str, ...], list[str]]:
+    """Return a complete graph or explicit bounded errors; never use the fallback."""
+    warnings: list[str] = []
+    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
     try:
-        catalog = json.loads((root / "docs/agent/automotive_tools.json").read_text())
-        return {tool["instruction_ref"] for tool in catalog["tools"]}
-    except (OSError, ValueError, KeyError, TypeError):
-        # The independent catalogue checker reports the exact malformed field.
-        # Missing declared cards also fail the existing inventory comparison.
-        return set()
-
-
-def _e1_plan_inventory(root: Path) -> set[str]:
-    plan = "docs/agent/drafts/e1-modernization-implementation-plan.md"
-    return {plan} if (root / plan).is_file() else set()
+        inventory = collect_instruction_inventory(root, required_paths=names)
+    except (ModuleNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
+        inventory = InstructionInventory((), (InventoryIssue("unavailable", "AGENTS.md", "AGENTS.md"),))
+    if inventory.issues:
+        warnings.append("instruction_inventory_mismatch")
+    for item in inventory.issues:
+        if item.code in {"missing", "outside", "retired", "invalid_link", "document_link_line_invalid"}:
+            warnings.append(f"document_link_invalid:{item.source}")
+        else:
+            warnings.append(f"document_unreadable:{item.target}")
+    names.update(path.relative_to(root).as_posix() for path in inventory.paths if path.suffix == ".md")
+    return (*TEXT_DOCUMENTS, *sorted(names.difference(TEXT_DOCUMENTS))), warnings
 
 
 def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool = True) -> dict[str, Any]:
     """Validate source documents without opening or creating a Manager database."""
     root = root.resolve()
-    warnings: list[str] = []
-    actual = {"AGENTS.md"}
-    actual.update(str(p.relative_to(root)) for p in (root / "docs").rglob("*.md"))
-    actual.update(str(p.relative_to(root)) for p in (root / ".agents/skills").rglob("*.md"))
-    references = {str(p.relative_to(root)) for p in (root / "docs/agent/references").rglob("*.md")}
-    for skill in SKILL_DOCUMENTS:
-        directory = (root / skill).parent
-        references.update(str(p.relative_to(root)) for p in directory.rglob("*.md") if p.name != "SKILL.md")
-    references.update(_automotive_instruction_inventory(root))
-    references.update(_e1_plan_inventory(root))
-    if actual != set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS) | references:
-        warnings.append("instruction_inventory_mismatch")
+    paths, warnings = _audit_instruction_paths(root)
     size = 0
     detail_size = 0
     linked_paths: dict[str, set[Path]] = {}
-    paths = instruction_paths(root)
     for name in paths:
         path = root / name
         try:
@@ -238,7 +238,7 @@ def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool
                 else:
                     if resolved is not None:
                         linked_paths[name].add(resolved)
-        except (OSError, RuntimeError, UnicodeError, ValueError):
+        except (ModuleNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
             warnings.append(f"document_unreadable:{name}")
     required_links = [("AGENTS.md", MODULE_DOCUMENTS["A1"])]
     required_links.extend(

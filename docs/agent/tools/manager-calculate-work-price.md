@@ -2,7 +2,8 @@
 
 Расчёт по явной ставке и политике
 
-Основной модуль: E13; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E13](../modules/E13.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
 
 Вызов: native Manager MCP `calculate_work_price`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"hourly_rate":1000,"labor":[{"hours":2,"operation_id":"demo","operation_name":"DEMO работа"}],"policy":{"basis":"hourly_rate","currency":"RUB","version":"demo-v1"},"unknown_costs":["диагностика"]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"hourly_rate":1000,"labor":null,"policy":{"basis":"hourly_rate","currency":"RUB","version":"demo-v1"},"unknown_costs":["диагностика"]}
 ```

@@ -2,7 +2,8 @@
 
 Поиск подготовленных локальных каталогов
 
-Основной модуль: E4; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E4](../modules/E4.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: offline_catalog; первичная база: locally prepared licensed document. Исполнение: local_read.
 
 Вызов: native Manager MCP `search_offline_parts_catalogs`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"query":"DEMO деталь"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"query":null}
 ```
@@ -27,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Reads selected local catalogue files; no network request.
 - A file hit is a candidate only; preserve catalogue/locator and verify market, modification, dimensions and OE applicability independently.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/offline-catalogs.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.

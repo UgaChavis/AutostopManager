@@ -2,7 +2,8 @@
 
 Ограниченный текст публичной страницы
 
-Основной модуль: E15; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: network_read.
 
 Вызов: native Manager MCP `fetch_page_excerpt`.
@@ -16,7 +17,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"max_chars":1200,"url":"https://example.com/"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"url":null}
 ```

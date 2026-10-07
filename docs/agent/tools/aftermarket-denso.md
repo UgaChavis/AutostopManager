@@ -2,7 +2,8 @@
 
 Известный номер → изделие и OE references
 
-Основной модуль: E4; ссылки: E5, E6. Состояние реализации: implemented.
+Основной модуль: [E4](../modules/E4.md); другие модули: [E5](../modules/E5.md), [E6](../modules/E6.md).
+Классификация: active. Состояние реализации: implemented.
 Источник: denso; первичная база: DENSO public catalog. Исполнение: network_read.
 
 Вызов: native Manager MCP `public_aftermarket_catalog_lookup`.
@@ -17,7 +18,7 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"dry_run":true,"part_number":"DEMO-ARTICLE-001","provider":"denso"}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"part_number":"DEMO-ARTICLE-001","provider":null}
 ```

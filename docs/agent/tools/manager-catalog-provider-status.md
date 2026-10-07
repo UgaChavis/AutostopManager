@@ -2,7 +2,8 @@
 
 Необязательная справка о конфигурации
 
-Основной модуль: E1; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E1](../modules/E1.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 
 Вызов: native Manager MCP `catalog_provider_status`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"stage":null}
+{"stage":[]}
 ```
 
 Выход: Legacy flat JSON payload: ok/stage/providers/stage_matrix/configured_count/live_callable_count/missing_provider_ids/disabled_provider_ids.; Native MCP publishes this JSON as structuredContent and text; providers contain configuration/capability metadata without secrets..

@@ -55,8 +55,37 @@ def test_documents_fit_budget_and_cover_operational_skills():
     }
 
 
+def test_audit_and_path_listing_ignore_unlinked_drafts_and_history(docs):
+    before = diagnostics.instruction_paths(docs)
+    for name in (
+        "docs/agent/drafts/e1-modernization-implementation-plan.md",
+        "docs/old-roadmap.md",
+        "docs/archive/old.md",
+    ):
+        path = docs / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xff")
+
+    assert diagnostics.instruction_paths(docs) == before
+    assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
+def test_audit_rejects_an_active_link_to_a_draft(docs):
+    target = docs / "docs/agent/drafts/old.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Historical instructions\n")
+    module = docs / diagnostics.MODULE_DOCUMENTS["D1"]
+    module.write_text(module.read_text() + "\n[Old](../drafts/old.md)\n")
+
+    report = diagnostics.audit_documentation(docs, check_external_links=False)
+
+    assert report["ok"] is False
+    assert "document_link_invalid:docs/agent/modules/D1.md" in report["warnings"]
+    assert "docs/agent/drafts/old.md" not in diagnostics.instruction_paths(docs)
+
+
 @pytest.mark.parametrize(
-    "fault", ["missing", "empty", "link", "outside", "large", "extra", "reference_missing", "name", "description"]
+    "fault", ["missing", "empty", "link", "outside", "large", "reference_missing", "name", "description"]
 )
 def test_document_checks_fail_on_broken_instructions(docs, fault):
     path = docs / "AGENTS.md"
@@ -70,8 +99,6 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
         path.write_text("[bad](../elsewhere.md)")
     elif fault == "large":
         path.write_text("x" * (diagnostics.INSTRUCTION_BUDGET_BYTES + 1))
-    elif fault == "extra":
-        (docs / "docs/agent/extra.md").write_text("# extra")
     elif fault == "reference_missing":
         (docs / diagnostics.REFERENCE_DOCUMENTS[0]).unlink()
     else:

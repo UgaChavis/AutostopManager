@@ -2,7 +2,8 @@
 
 Публичные recalls/TSB и технические routes
 
-Основной модуль: E14; ссылки: нет. Состояние реализации: implemented.
+Основной модуль: [E14](../modules/E14.md); другие модули: нет.
+Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: network_read.
 
 Вызов: native Manager MCP `lookup_public_automotive_evidence`.
@@ -16,9 +17,9 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 ```json
 {"make":"Audi","system":"engine","topics":["fluids"]}
 ```
-Отрицательный вход:
+Вход, отклоняемый схемой до исполнения инструмента:
 ```json
-{"vin":null}
+{"vin":[]}
 ```
 
 Выход: Legacy flat: ok/input_context/evidence[]/warnings/missing_context/confidence/rules.; Evidence retains source-specific recall/TSB metadata or official fluid-reference routes; input_context VIN is redacted..

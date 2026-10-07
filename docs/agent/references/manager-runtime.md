@@ -8,9 +8,9 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 
 Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `j1_research_start`, `j1_research_add_queries`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
 
-Source-команды запускай из checkout/worktree с `/opt/AutostopManager/.venv/bin/python`. Production probe — из `/tmp` с `PYTHONSAFEPATH=1` и `PYTHONPATH=/opt/autostop-manager-releases/current`: текущая директория не должна подменять installed imports. Сверяй фактический manifest, не фиксированное историческое число tools.
+Перед live-операцией разреши `readlink -f /opt/autostop-manager-releases/current`, прочитай `REVISION` и используй документы/manifest этого физического snapshot. Для разработки зафиксируй путь checkout/worktree, `git rev-parse HEAD` и `git status --short`; source-команды используют его собственную `.venv/bin/python`. При смешанной задаче укажи оба корня и ревизии; выбирать инструкции можно абсолютными путями без смены cwd и runtime-копий. Для imports production probe запускается из `/tmp` с `PYTHONSAFEPATH=1` и `PYTHONPATH`, равным выбранному физическому snapshot: cwd не должен подменять installed imports. Сверяй фактический manifest, не историческое число tools.
 
-`codex mcp list` показывает config, а не declarations текущего хода. После разрешённой активации вызови App Server `config/mcpServer/reload` с `params: null`; в новом ходе проверь `mcpServerStatus/list` и endpoint tools/list. Подтверждение reload само не доказывает вызов. Установка и rollback: [deployment.md](deployment.md).
+`codex mcp list` показывает config, endpoint `tools/list` — схемы сервера, а declarations текущего хода — доступные клиенту инструменты; эти срезы могут различаться. После разрешённой активации вызови App Server `config/mcpServer/reload` с `params: null`; в новом ходе проверь `mcpServerStatus/list` и endpoint tools/list. Reload не является read-only и ради аудита не выполняется. Его подтверждение само не доказывает вызов. Установка и rollback: [deployment.md](deployment.md).
 
 Для content-free проверки существующего work Telegram чата используй `WakeConfig.load()` и `AppServer` из active bridge release. Root-only `wake.json` даёт thread ID; его не выводи. Через `mcpServerStatus/list` передавай `threadId`, `detail="toolsAndAuthOnly"` и последовательно `cursor=nextCursor`; проверь у `autostopmanager` `runtimeStatus="connected"`, отсутствие `toolsError` и текущие схемы. Для `search_offline_parts_catalogs` required — `query`, properties включают `query`, `limit`, `brand`, `catalog_id`. Приём безопасной проверки — status; reload является изменением и выполняется после deploy. Схему App Server уточняй через `codex app-server generate-json-schema --out <temporary-dir> --experimental`.
 
@@ -70,7 +70,7 @@ Source-команды запускай из checkout/worktree с `/opt/AutostopM
 | `scripts/attest-j1-browser-stack.sh` | Создаёт release-bound marker после topology probe. |
 | `scripts/install-telegram-bridge.sh` | Account release: `--account personal|work --revision <commit>`. |
 | `scripts/provision-telegram-transcription-model.sh` | Подготавливает voice model: `--account work --revision <commit>`. |
-| `scripts/deploy_telegram_bridge.sh` | Меняет release/service: `--account personal|work [--no-start] [revision]`. |
+| `scripts/deploy_telegram_bridge.sh` | Меняет release/service: work требует `--account work --no-start [revision]`; personal — `--account personal [revision]`, `--no-start` для него запрещён. |
 | `scripts/install-codex-wake.sh` | Меняет unit/chat/config с backup/rollback; без аргументов. |
 | `scripts/authorize-telegram-account.sh` | Интерактивная авторизация `--account personal|work`. |
 | `scripts/set-work-telegram-duty.sh` | `--status` read-only; `--enable|--disable` меняют duty. |
@@ -81,7 +81,7 @@ Source-команды запускай из checkout/worktree с `/opt/AutostopM
 | `scripts/sync_offline_parts_catalog_release.py` | `--verify-only` read-only; иначе pinned download/import/OCR до maintenance. |
 | `scripts/remove-learning-hooks.py` | Dry-run по умолчанию; `--apply` меняет Codex config с backup только при необходимой legacy migration. |
 | `scripts/update-instruction-catalogs.py` | Без флагов записывает A4/A5 по действующим проектным инструкциям и manifest установленных выбранных пакетов; `--check` сравнивает без записи. Отключённые навыки пропускаются по имени или пути. Пакет без навыков не подменяется старым кешем; несколько версий требуют выбора актуальной. Число выбранных входов может отличаться от числа включённых навыков текущего сеанса. |
-| `scripts/m2-journal.py` | `start` создаёт текущую ISO-неделю UTC и восстанавливает прерванную запись; `append --record PRIVATE_JSON` дополняет журнал и обновляет состояние/сводку/индекс. Запись по UUID повторяется без дублирования; постоянные файлы находятся вне релизов и Git. Формат и порядок — [M2](../modules/M2.md). |
+| `scripts/m2-journal.py` | `start` и `append --record PRIVATE_JSON` пишут журнал вне Git и обновляют указатели; `state` полностью заменяет текущее состояние. `validate(record)` проверяет без записи. UUID/idempotency, [формат](m2-journal-record.schema.json) и порядок — [M2](../modules/M2.md). |
 
 Units в `deploy/systemd/`: Manager MCP, scheduler, J1 static/browser, work/personal Telegram, Codex wake/start. `systemctl is-active` показывает процесс, не правильность его контракта. Службы и backup: [host-operations.md](host-operations.md); Telegram/G1: [telegram-runtime.md](telegram-runtime.md).
 
