@@ -1,7 +1,5 @@
 # manager.reconcile_vehicle_identity — Сверить переданные результаты
 
-Сверить переданные результаты
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `identifier`, `results`, `context`, `identifier_type`, `detail`.
 Defaults: `{"context":null,"detail":"full","identifier_type":"auto"}`.
 Обязательные facade поля: `identifier`, `results`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Сохраняются child variants/model_year_candidates и исходная lineage, включая профиль провайдера, переданный как context.
 - Default full совместим с прежним ответом. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям.
 
-Подробный контракт: [справочник](../references/vehicle-identity.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/vehicle-identity.md).

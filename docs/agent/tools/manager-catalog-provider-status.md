@@ -1,7 +1,5 @@
 # manager.catalog_provider_status — Необязательная справка о конфигурации
 
-Необязательная справка о конфигурации
-
 Основной модуль: [E1](../modules/E1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
@@ -11,7 +9,7 @@
 Входы: `stage`, `detail`.
 Defaults: `{"detail":"full","stage":null}`.
 Обязательные facade поля: нет; ограничения конкретной операции всё равно применяются.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Configured PartsAPI keys and live_callable capability remain configured_unverified until a selected live response; no secrets are returned.
 - stage accepts identity/oem_catalog/catalog_cross/aftermarket_catalog/procurement_price/market_price/market_listing or null; detail accepts summary/full.
 
-Подробный контракт: [справочник](../references/manager-runtime.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/manager-runtime.md).

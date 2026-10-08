@@ -13,7 +13,7 @@ api_method: `FindEAN13`.
 Входы: `provider_parameters.brand`, `provider_parameters.number`.
 Defaults: `{}`.
 Обязательные facade поля: `operation`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -31,4 +31,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

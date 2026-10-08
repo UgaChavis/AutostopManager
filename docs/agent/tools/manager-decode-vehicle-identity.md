@@ -1,7 +1,5 @@
 # manager.decode_vehicle_identity — Расшифровать автомобиль составным способом
 
-Расшифровать автомобиль составным способом
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
@@ -11,7 +9,7 @@
 Входы: `identifier`, `vehicle`, `make`, `model`, `model_year`, `engine`, `transmission`, `drivetrain`, `market`, `source_confidence`, `live_vpic`, `live_wmi`, `production_year`, `production_date`, `modification`, `trim`, `series`, `options`, `transmission_speeds`, `identifier_type`, `detail`.
 Defaults: `{"detail":"full","drivetrain":null,"engine":null,"identifier_type":"auto","live_vpic":true,"live_wmi":true,"make":null,"market":null,"model":null,"model_year":null,"modification":null,"options":null,"production_date":null,"production_year":null,"series":null,"source_confidence":null,"transmission":null,"transmission_speeds":null,"trim":null,"vehicle":null}`.
 Обязательные facade поля: `identifier`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Copied provider data retains provider lineage and is not independent CRM corroboration.
 - Use detail=summary for a VIN-only task; full remains the compatible default. Unsupported coverage and provider diagnostics do not invalidate a ROW VIN.
 
-Подробный контракт: [справочник](../references/vehicle-identity.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/vehicle-identity.md).

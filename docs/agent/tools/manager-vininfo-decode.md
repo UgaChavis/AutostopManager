@@ -1,7 +1,5 @@
 # manager.vininfo_decode — Локальная структурная расшифровка VINinfo
 
-Локальная структурная расшифровка VINinfo
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: vininfo; первичная база: VINinfo BSD local structural and brand tables. Исполнение: local_read.
@@ -11,7 +9,7 @@
 Входы: `identifier`.
 Defaults: `{}`.
 Обязательные facade поля: `identifier`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - Только подготовленный attested VINinfo runtime, network_calls=0; decode не устанавливает пакеты и не скачивает базы.
 
-Подробный контракт: [справочник](../references/automotive-offline.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/automotive-offline.md).

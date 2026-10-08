@@ -1,7 +1,5 @@
 # manager.avito_read_listing — Чтение одного объявления Avito
 
-Чтение одного объявления Avito
-
 Основной модуль: [E10](../modules/E10.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: reefapi; первичная база: Avito listings via ReefAPI. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `ad_id`, `dry_run`.
 Defaults: `{"dry_run":false}`.
 Обязательные facade поля: `ad_id`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Price, condition, delivery and completeness are listing observations; seller confirmation and vehicle fitment remain separate.
 - ad_id accepts a numeric ID of 6–20 digits or supported public Avito listing URL; the synthetic ID example is only a dry-run request.
 
-Подробный контракт: [справочник](../references/market-listings.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/market-listings.md).

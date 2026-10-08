@@ -1,7 +1,5 @@
 # manager.decode_wmi_local — Локальные WMI hints
 
-Локальные WMI hints
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
@@ -11,7 +9,7 @@
 Входы: `wmi`.
 Defaults: `{}`.
 Обязательные facade поля: `wmi`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - Локальный versioned registry, network_calls=0; hints рынка/типа не являются фактами конкретного VIN.
 
-Подробный контракт: [справочник](../references/automotive-offline.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/automotive-offline.md).

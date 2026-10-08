@@ -1,7 +1,5 @@
 # manager.j1_research_add_queries — Добавить запросы в текущий бюджет J1
 
-Добавить запросы в текущий бюджет J1
-
 Основной модуль: [E15](../modules/E15.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: job_write.
@@ -11,7 +9,7 @@
 Входы: `job_id`, `queries`.
 Defaults: `{}`.
 Обязательные facade поля: `job_id`, `queries`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.
 - Writes additional de-identified queries to the local job; the worker may then acquire new public pages.
 
-Подробный контракт: [справочник](../references/web-research.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/web-research.md).

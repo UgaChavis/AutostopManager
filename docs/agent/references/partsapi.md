@@ -91,4 +91,4 @@ GetNormsModels.makeNameSEO берётся из GetNormsMakes, не TecDoc make I
 
 ## Проверки исходников
 
-CI и release gates требуют общее покрытие проекта не ниже 82% и отдельное покрытие ветвей E2 не ниже 82%. Для E2 суммируются покрытые и все ветви `catalog_clients.py`, `vin_oem_resolver.py`, `vin_parts_benchmark.py` из полного прогона тестов. Проверка — `scripts/check-e2-branch-coverage.py`; отсутствие данных по файлу или измерения ветвей останавливает gate.
+CI и release gates требуют общее покрытие проекта не ниже 82% и отдельное покрытие каталожных ветвей не ниже 82%. Этот gate сохраняет историческое имя E2 и скрипт `scripts/check-e2-branch-coverage.py`; он суммирует покрытые и все ветви `catalog_clients.py`, `vin_oem_resolver.py`, `vin_parts_benchmark.py` из полного прогона тестов, а не только инструменты нынешнего модуля E2. Отсутствие данных по файлу или измерения ветвей останавливает gate.

@@ -12,7 +12,7 @@ provider: `denso`.
 Входы: `provider`, `part_number`, `page_size`, `country`, `include_detail`, `dry_run`.
 Defaults: `{"country":"europe","dry_run":false,"include_detail":true,"page_size":5}`.
 Обязательные facade поля: `provider`, `part_number`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +29,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Selected public aftermarket catalogue read; dry_run=true only produces a request plan.
 - Product vehicle lists, OE references and cross references are candidates and do not confirm a VIN-specific original part or stock.
 
-Подробный контракт: [справочник](../references/public-aftermarket-catalogs.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/public-aftermarket-catalogs.md).

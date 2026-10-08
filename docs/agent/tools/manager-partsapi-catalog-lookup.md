@@ -1,7 +1,5 @@
 # manager.partsapi_catalog_lookup — Один выбранный PartsAPI метод
 
-Один выбранный PartsAPI метод
-
 Основной модуль: [E1](../modules/E1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: partsapi_ru; первичная база: declared_by_provider; VIN/TecDoc/maintenance/AUTONORMS namespaces. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `operation`, `identifier`, `registration_number`, `part_number`, `article_id`, `supplier_id`, `provider_parameters`, `brand`, `category`, `vehicle_type`, `type_id`, `lang`, `lang_id`, `make_name_seo`, `model_id`, `motor_id`, `top_category_id`, `sub_category_id`, `car_id`, `timeout`, `max_attempts`, `dry_run`, `catalog_context`, `detail`.
 Defaults: `{"article_id":null,"brand":null,"car_id":null,"catalog_context":null,"category":null,"detail":"full","dry_run":false,"identifier":null,"lang":null,"lang_id":null,"make_name_seo":null,"max_attempts":1,"model_id":null,"motor_id":null,"part_number":null,"provider_parameters":null,"registration_number":null,"sub_category_id":null,"supplier_id":null,"timeout":20.0,"top_category_id":null,"type_id":null,"vehicle_type":null}`.
 Обязательные facade поля: `operation`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - TecDoc article, cross or OE-reference rows are not original VIN-specific OEM evidence; paid/quota requests require an explicitly selected live branch.
 - type_id is a string, for example "42". Full normalization and conflict checks run before summary truncation; detail=full remains the compatible default.
 
-Подробный контракт: [справочник](../references/manager-runtime.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/manager-runtime.md).

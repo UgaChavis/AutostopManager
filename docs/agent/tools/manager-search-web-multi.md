@@ -1,7 +1,5 @@
 # manager.search_web_multi — Публичный поиск
 
-Публичный поиск
-
 Основной модуль: [E15](../modules/E15.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `query`, `limit`, `allowed_domains`, `providers`.
 Defaults: `{"allowed_domains":null,"limit":5,"providers":null}`.
 Обязательные facade поля: `query`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - A hit/snippet is a lead; verify its primary document before exact technical or fitment conclusions.
 - For a short part crosscheck begin with two queries and two target pages; expand only for a concrete missing fact.
 
-Подробный контракт: [справочник](../references/web-research.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/web-research.md).

@@ -1,7 +1,5 @@
 # manager.decode_vehicle_batch — Список через один выбранный decoder
 
-Список через один выбранный decoder
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
@@ -11,7 +9,7 @@
 Входы: `items`, `decoder`, `deadline_seconds`.
 Defaults: `{"deadline_seconds":30}`.
 Обязательные facade поля: `items`, `decoder`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - decoder: decode_vin_vpic/decode_wmi_vpic/decode_wmi_local/decode_frame_local/vin_brand_details/vininfo_decode/corgi_decode. До500 строк, deadline_seconds в [0.1,120].
 - Один явно выбранный decoder, без fallback. Network только для vPIC. Отмена останавливает следующие строки; уже выданный sync read ограничен transport timeout.
 
-Подробный контракт: [справочник](../references/vehicle-identity.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/vehicle-identity.md).

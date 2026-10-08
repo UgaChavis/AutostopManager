@@ -13,7 +13,7 @@ api_method: `decodeVINus`.
 Входы: `provider_parameters.vin`.
 Defaults: `{}`.
 Обязательные facade поля: `operation`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -32,4 +32,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 - Repeated transports of one primary source are not independent evidence; partial diagnostics and an unverified VIN close exact fitment.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

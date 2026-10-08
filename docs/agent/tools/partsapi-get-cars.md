@@ -13,7 +13,7 @@ api_method: `getCars`.
 Входы: `provider_parameters.makeId`, `provider_parameters.carType`, `provider_parameters.modelId`.
 Defaults: `{}`.
 Обязательные facade поля: `operation`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -32,4 +32,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 - CAPACITY units and YEAR_START/YEAR_END are retained; conflicting aliases or incomplete profiles do not establish an exact vehicle.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

@@ -13,7 +13,7 @@ api_method: `searchArticles`.
 Входы: `part_number`.
 Defaults: `{"lang_id":16}`.
 Обязательные facade поля: `operation`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -32,4 +32,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 - searchArticles не возвращает SUP_ID по своему контракту. Для полного getArticle нужен supplier ID из связанного getArticles либо подтверждённого входа; из названия бренда его не выводи. При ART_ID доступны article_criteria, getArticleMedia и article_crosses.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

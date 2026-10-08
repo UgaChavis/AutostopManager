@@ -1,7 +1,5 @@
 # manager.lookup_public_automotive_evidence — Публичные recalls/TSB и технические routes
 
-Публичные recalls/TSB и технические routes
-
 Основной модуль: [E14](../modules/E14.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `vin`, `make`, `model`, `model_year`, `topics`, `system`, `include_tsb`, `limit`, `timeout`.
 Defaults: `{"include_tsb":false,"limit":10,"make":null,"model":null,"model_year":null,"system":null,"timeout":12.0,"topics":null,"vin":null}`.
 Обязательные facade поля: нет; ограничения конкретной операции всё равно применяются.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - A model/year recall is not an open VIN campaign; TSB metadata is not a diagnosis or service procedure.
 - Official fluid approval routes do not supply VIN/unit-specific capacity, level temperature or repair procedure.
 
-Подробный контракт: [справочник](../references/automotive-sources.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/automotive-sources.md).

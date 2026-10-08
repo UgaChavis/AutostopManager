@@ -1,7 +1,5 @@
 # manager.normalize_parts_request — Сохранить все позиции запроса
 
-Сохранить все позиции запроса
-
 Основной модуль: [E3](../modules/E3.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `text`, `items`.
 Defaults: `{"items":null,"text":""}`.
 Обязательные facade поля: нет; ограничения конкретной операции всё равно применяются.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Маркировка/EAN/наименование сами не становятся OEM.
 - Pure; маркировка/EAN/наименование не становятся OEM. Сохраняется supplied item_id; иначе deterministic ID зависит от текста и позиции.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

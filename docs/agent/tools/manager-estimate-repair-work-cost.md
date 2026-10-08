@@ -1,7 +1,5 @@
 # manager.estimate_repair_work_cost — Составная оценка стоимости работ
 
-Составная оценка стоимости работ
-
 Основной модуль: [E13](../modules/E13.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: composed.
@@ -11,7 +9,7 @@
 Входы: `vehicle`, `vin`, `chassis`, `make`, `model`, `year`, `engine`, `transmission`, `work_items`, `complaint`, `city`, `quotes_json`, `auto_research`, `labor_time_policy`, `use_internal_experience`, `price_evidence`, `internal_experience_json`.
 Defaults: `{"auto_research":true,"chassis":null,"city":"Красноярск","complaint":null,"engine":null,"internal_experience_json":null,"labor_time_policy":"public_only","make":null,"model":null,"price_evidence":null,"quotes_json":null,"transmission":null,"use_internal_experience":true,"vehicle":null,"vin":null,"work_items":null,"year":null}`.
 Обязательные facade поля: нет; ограничения конкретной операции всё равно применяются.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Bound ready price_evidence reuses supplied observations/labor and avoids hidden collection; auto_research=false plus use_internal_experience=false disables both acquisition branches.
 - No CRM write. Public work prices, labor-time evidence, overlap adjustments and final pricing policy are separate claims; missing evidence lowers confidence.
 
-Подробный контракт: [справочник](../references/work-pricing.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/work-pricing.md).

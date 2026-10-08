@@ -1,7 +1,5 @@
 # manager.corgi_decode — Локальная подготовленная vPIC DB Corgi
 
-Локальная подготовленная vPIC DB Corgi
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: corgi; первичная база: NHTSA vPIC DB via Corgi; same lineage as online vPIC. Исполнение: local_read.
@@ -11,7 +9,7 @@
 Входы: `identifier`, `model_year`, `timeout_seconds`.
 Defaults: `{"model_year":null,"timeout_seconds":10}`.
 Обязательные facade поля: `identifier`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Attested локальная vPIC DB и worker без download/fallback; network_calls=0.
 - Переданный model_year имеет provenance explicit_model_year; Corgi и online vPIC — одна первичная база.
 
-Подробный контракт: [справочник](../references/automotive-offline.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/automotive-offline.md).

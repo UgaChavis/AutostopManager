@@ -1,7 +1,5 @@
 # manager.compare_vehicle_modifications — Сравнить готовые модификации
 
-Сравнить готовые модификации
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `context`, `candidates`.
 Defaults: `{}`.
 Обязательные facade поля: `context`, `candidates`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - Pure: не запрашивает каталог и не подтверждает конкретный VIN; selected появляется только для одного оставшегося candidate.
 
-Подробный контракт: [справочник](../references/vehicle-identity.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/vehicle-identity.md).

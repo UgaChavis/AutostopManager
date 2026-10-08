@@ -1,7 +1,5 @@
 # manager.store_entity_context — Точный контекст сущности Store
 
-Точный контекст сущности Store
-
 Основной модуль: [E9](../modules/E9.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: store; первичная база: AutoStop Store authoritative offer context. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `entity`, `entity_id`, `detail`.
 Defaults: `{"detail":"summary"}`.
 Обязательные facade поля: `entity`, `entity_id`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Use the live Store response for offer/stock/order claims; this operation makes no reservation, order or payment.
 - Replace the synthetic entity_id with an ID returned by Store; the example does not assert an existing record.
 
-Подробный контракт: [справочник](../references/store-api.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/store-api.md).

@@ -1,7 +1,5 @@
 # manager.vin_brand_details — Локальные брендовые варианты
 
-Локальные брендовые варианты
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
@@ -11,7 +9,7 @@
 Входы: `identifier`, `context`.
 Defaults: `{"context":null}`.
 Обязательные facade поля: `identifier`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - Ограниченные VAG family rules Audi/Volkswagen/Skoda; поле model становится model_family, engine/options/date остаются неизвестными.
 
-Подробный контракт: [справочник](../references/automotive-offline.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/automotive-offline.md).

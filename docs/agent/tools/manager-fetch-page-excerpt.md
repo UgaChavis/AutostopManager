@@ -1,7 +1,5 @@
 # manager.fetch_page_excerpt — Ограниченный текст публичной страницы
 
-Ограниченный текст публичной страницы
-
 Основной модуль: [E15](../modules/E15.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `url`, `max_chars`.
 Defaults: `{"max_chars":2500}`.
 Обязательные facade поля: `url`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Reads one bounded public page through installed CRM WebResearchGatewayV1 (E15); max_chars is bounded at 8000.
 - No login/captcha bypass; access_flags/requires_human report blocked content. A public page is evidence, not automatic fitment or repair authorization.
 
-Подробный контракт: [справочник](../references/web-research.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/web-research.md).

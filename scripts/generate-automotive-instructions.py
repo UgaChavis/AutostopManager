@@ -31,13 +31,17 @@ def render_card(tool: dict[str, Any], schemas: dict[str, Any]) -> str:
     lines = [
         f"# {tool['tool_id']} — {tool['title']}",
         "",
-        tool["purpose"],
-        "",
-        f"Основной модуль: {module_link(tool['primary_module'])}; другие модули: {', '.join(module_link(code) for code in tool['also_used_in']) or 'нет'}.",
-        f"Классификация: {tool['classification']}. Состояние реализации: {tool['implementation_state']}.",
-        f"Источник: {tool['provider_id']}; первичная база: {tool['primary_data_source']}. Исполнение: {tool['execution_kind']}.",
-        "",
     ]
+    if tool["purpose"].strip() != tool["title"].strip():
+        lines.extend([tool["purpose"], ""])
+    lines.extend(
+        [
+            f"Основной модуль: {module_link(tool['primary_module'])}; другие модули: {', '.join(module_link(code) for code in tool['also_used_in']) or 'нет'}.",
+            f"Классификация: {tool['classification']}. Состояние реализации: {tool['implementation_state']}.",
+            f"Источник: {tool['provider_id']}; первичная база: {tool['primary_data_source']}. Исполнение: {tool['execution_kind']}.",
+            "",
+        ]
+    )
     if invocation:
         lines.append(f"Вызов: native Manager MCP `{invocation['tool_name']}`.")
         for key in ("operation", "api_method", "provider"):
@@ -57,9 +61,7 @@ def render_card(tool: dict[str, Any], schemas: dict[str, Any]) -> str:
             + (", ".join(f"`{f}`" for f in required) or "нет; ограничения конкретной операции всё равно применяются")
             + "."
         )
-        lines.append(
-            "Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle."
-        )
+        lines.append("Текущая inputSchema и проверка версии — [D1](../modules/D1.md).")
         lines.extend(
             [
                 "",
@@ -87,7 +89,7 @@ def render_card(tool: dict[str, Any], schemas: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            f"Подробный контракт: [справочник]({reference}). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.",
+            f"Подробный контракт: [справочник]({reference}).",
             "",
         ]
     )

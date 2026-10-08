@@ -1,7 +1,5 @@
 # manager.assess_part_fitment — Применимость по готовым evidence
 
-Применимость по готовым evidence
-
 Основной модуль: [E6](../modules/E6.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `vehicle`, `part`, `criteria`, `evidence`, `scope`.
 Defaults: `{"scope":"modification"}`.
 Обязательные facade поля: `vehicle`, `part`, `criteria`, `evidence`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - exact_identifier требует matching valid input_binding; modification требует matching typed TecDoc catalog_ref (numeric ID/carType). evidence.conditions проверяются вместе с criteria; отсутствующее/невалидное условие не supported.
 - production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

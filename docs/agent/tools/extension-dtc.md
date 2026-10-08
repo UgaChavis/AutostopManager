@@ -14,4 +14,4 @@ Roadmap: внешний лицензированный источник с пр�
 - Источник ещё не подключён; не выполнять выдуманный invocation.
 - Лицензия/credentials/покрытие — внешняя activation dependency, покупка не входит в текущую задачу.
 
-Подробный контракт: [справочник](../references/automotive-sources.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/automotive-sources.md).

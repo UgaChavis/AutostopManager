@@ -11,7 +11,7 @@
 Входы: `operation_id`, `mode`, `target_id`, `path_parameters`, `query`, `body`, `form`, `files`, `owner_intent`, `idempotency_key`, `correlation_id`, `expected_revision`, `expected_contract_id`, `prepare_for_mode`, `dry_run_proof`, `allow_binary_response`.
 Defaults: `{"allow_binary_response":false,"body":null,"correlation_id":"","dry_run_proof":null,"expected_contract_id":null,"expected_revision":null,"files":null,"form":null,"idempotency_key":"","mode":"dry_run","owner_intent":"","path_parameters":null,"prepare_for_mode":"dry_run","query":null,"target_id":""}`.
 Обязательные facade поля: `operation_id`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
 
-Подробный контракт: [справочник](../references/manager-runtime.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/manager-runtime.md).

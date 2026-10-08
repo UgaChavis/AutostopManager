@@ -13,7 +13,7 @@ api_method: `getArticle`.
 Входы: `part_number`, `supplier_id`.
 Defaults: `{"lang_id":16}`.
 Обязательные facade поля: `operation`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -34,4 +34,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - SUP_ID берётся из связанного getArticles/подтверждённого входа; searchArticles его не обещает. Если ID сохранён из запроса, supplier_id_source явно отмечает происхождение; это не поле ответа провайдера и не VIN-применимость.
 - completeness_scope=catalog_response описывает полноту каталожных полей, а не точность комплектации автомобиля.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

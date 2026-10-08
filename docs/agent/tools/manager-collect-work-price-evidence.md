@@ -1,7 +1,5 @@
 # manager.collect_work_price_evidence — Отдельное получение ценовых свидетельств
 
-Отдельное получение ценовых свидетельств
-
 Основной модуль: [E13](../modules/E13.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
@@ -11,7 +9,7 @@
 Входы: `work_items`, `vehicle_context`, `city`, `sources`, `aggregate_evidence`, `deadline_seconds`, `max_queries`.
 Defaults: `{"aggregate_evidence":null,"city":"Красноярск","deadline_seconds":20,"max_queries":4,"sources":null,"vehicle_context":null}`.
 Обязательные facade поля: `work_items`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - sources: public_web(default) и provided_aggregate; aggregate_evidence обязателен для provided_aggregate, тогда network_calls=0 без public_web.
 - context только make/model/year/engine/transmission/vehicle_class; VIN/контакты запрещены для публичного поиска. max_queries1..4, deadline_seconds [0.1,60], timeout отдельного HTTP<=4s.
 
-Подробный контракт: [справочник](../references/work-pricing.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/work-pricing.md).

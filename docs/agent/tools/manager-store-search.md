@@ -1,7 +1,5 @@
 # manager.store_search — Поиск сущностей Store
 
-Поиск сущностей Store
-
 Основной модуль: [E9](../modules/E9.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: store; первичная база: AutoStop Store authoritative offer context. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `entity`, `query`, `filters`, `cursor`, `limit`.
 Defaults: `{"cursor":null,"filters":null,"limit":25,"query":""}`.
 Обязательные facade поля: `entity`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - entity is one of store_part/store_order/store_quote_request/store_batch/store_warehouse_operation/store_marketplace_listing/store_state/store_sourcing_offer.
 - Use the live Store response for offer/stock/order claims; this operation makes no reservation, order or payment.
 
-Подробный контракт: [справочник](../references/store-api.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/store-api.md).

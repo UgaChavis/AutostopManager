@@ -1,7 +1,5 @@
 # manager.decode_wmi_vpic — Только WMI endpoint vPIC
 
-Только WMI endpoint vPIC
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: vpic; первичная база: NHTSA manufacturer-reported vPIC. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `wmi`, `timeout_seconds`.
 Defaults: `{"timeout_seconds":8}`.
 Обязательные facade поля: `wmi`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - Один выбранный WMI endpoint; модель/двигатель не восстанавливаются из WMI.
 
-Подробный контракт: [справочник](../references/vehicle-identity.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/vehicle-identity.md).

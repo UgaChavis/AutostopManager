@@ -14,7 +14,21 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 
 Для content-free проверки существующего work Telegram чата используй `WakeConfig.load()` и `AppServer` из active bridge release. Root-only `wake.json` даёт thread ID; его не выводи. `AppServer.manager_mcp_schema_status(expected_schemas, declarations=...)` использует `threadId`, `serverName="autostopmanager"`, `detail="toolsAndAuthOnly"` и все страницы `cursor=nextCursor`. Передай input schemas из endpoint и отдельно реально доступные клиенту declarations; без последних результат явно `model_declarations_unverified`. `runtimeStatus="connected"` и `toolsError=null` могут сопровождать cached catalog, поэтому сами по себе обновление не доказывают. При `model_declarations_stale` не подгоняй аргументы под старую схему. Для уже разрешённого bounded вызова доступен существующий App Server `mcpServer/tool/call` с `threadId`, `server`, `tool`, `arguments`, либо обычный MCP SDK через актуальный endpoint; это обход cached declaration, а не доказательство её обновления. Схему локального App Server уточняй через `codex app-server generate-json-schema --out <temporary-dir> --experimental`. Не перезапускай daemon ради schema mismatch.
 
-Каждый выполненный Manager MCP tool, включая отдельные E8 search/excerpt/browser calls, получает `tool_execution`: случайный технический `call_id`, `started_at`, `ended_at`, `wall_ms`, отдельные backend/processing elapsed и известные network/attempt counts. Неизвестные backend значения — `null`, существующий `execution` сохраняется; технический outcome ограничен `ok/error/unknown`, доменный outcome остаётся в исходном ответе. Безопасные `mcp_tool_start`/`mcp_tool_end` JSON events пишутся только в stderr/journal, без аргументов, URL, клиентских идентификаторов, хешей, provider payload и текста исключений. Это время внутри инструмента; полный ход Codex измеряется по внешним `task_started` → `task_complete` (или явно указанным user-message → final границам), включая чтение инструкций и финальный ответ.
+Каждый выполненный Manager MCP tool, включая отдельные E15 search/excerpt/browser calls, получает `tool_execution`: случайный технический `call_id`, `started_at`, `ended_at`, `wall_ms`, отдельные backend/processing elapsed и известные network/attempt counts. Неизвестные backend значения — `null`, существующий `execution` сохраняется; технический outcome ограничен `ok/error/unknown`, доменный outcome остаётся в исходном ответе. Безопасные `mcp_tool_start`/`mcp_tool_end` JSON events пишутся только в stderr/journal, без аргументов, URL, клиентских идентификаторов, хешей, provider payload и текста исключений. Это время внутри инструмента; полный ход Codex измеряется по внешним `task_started` → `task_complete` (или явно указанным user-message → final границам), включая чтение инструкций и финальный ответ.
+
+## Ограничения выполнения
+
+Выбранные блокирующие read-команды из [BLOCKING_READ_TOOLS](../../../autostop_manager/mcp_read_executor.py)
+исполняются вне event loop: общий пул
+на процесс — два workers и два ожидающих вызова, максимум 60 секунд ожидания.
+Busy/timeout возвращают безопасные `error`, `stage`, `adapter_started` и
+`adapter_may_continue`, без автоматического повтора. Отмена ожидания не доказывает
+остановку потока; его слот удерживается до реального завершения. Статические
+правила и сверка готовых данных остаются локальными вызовами.
+
+Синхронные vPIC и каталожные HTTP-чтения имеют общий deadline для заголовков
+и тела, лимит размера и два transport workers на процесс. Незавершённый DNS
+cleanup удерживает слот после timeout; `provider_transport_busy` не повторяется.
 
 ## CLI
 
@@ -51,7 +65,7 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 | --- | --- |
 | `scripts/doctor.sh` | Wrapper передаёт аргументы в `doctor`; обычный режим read-only, `--full` требует одноразовой среды. |
 | `scripts/release-gates.sh` | Локальные проверки с disposable данными, не deploy. |
-| `scripts/check-e2-branch-coverage.py` | Читает coverage JSON; требует 82% ветвей E2, не меняет данные. |
+| `scripts/check-e2-branch-coverage.py` | Читает coverage JSON; требует 82% ветвей исторического E2 gate для catalog_clients/vin_oem_resolver/benchmark, не меняет данные. |
 | `scripts/check-automotive-catalog.py` | Disposable state: сверяет registry, exact native schemas, все 43 PartsAPI и MD references; providers не вызывает. |
 | `scripts/generate-automotive-instructions.py` | Создаёт operation MD из registry/schema; `--check` сравнивает без записи. |
 | `scripts/export-automotive-tools.py` | `--revision EXACT_PUBLISHED_SHA --output PATH`: экспорт immutable Git snapshot в self-contained CRM bundle; сеть и business state не используются. |

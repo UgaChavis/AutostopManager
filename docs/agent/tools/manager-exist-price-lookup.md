@@ -1,7 +1,5 @@
 # manager.exist_price_lookup — Публичная цена Exist
 
-Публичная цена Exist
-
 Основной модуль: [E9](../modules/E9.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: exist; первичная база: Exist public retail. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `part_number`, `brand`, `pid`, `office_id`, `max_candidates`, `max_offers`, `include_more_offers`, `dry_run`.
 Defaults: `{"brand":null,"dry_run":false,"include_more_offers":false,"max_candidates":5,"max_offers":10,"office_id":905,"pid":null}`.
 Обязательные facade поля: `part_number`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Exist office 905 is a public retail benchmark, not a procurement offer, stock reservation or confirmed delivery.
 - dry_run=true is a request plan only; live response does not establish vehicle fitment.
 
-Подробный контракт: [справочник](../references/store-api.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/store-api.md).

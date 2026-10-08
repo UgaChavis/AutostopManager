@@ -1,7 +1,5 @@
 # manager.drom_get_parts_search — Статус и результаты vendor task Drom
 
-Статус и результаты vendor task Drom
-
 Основной модуль: [E10](../modules/E10.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: webbee; первичная база: Drom listings via Webbee. Исполнение: job_read.
@@ -11,7 +9,7 @@
 Входы: `task_id`, `uid`.
 Defaults: `{}`.
 Обязательные facade поля: `task_id`, `uid`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Reads external Webbee job status/results; pending and completed remain distinct.
 - Replace synthetic task_id/uid with the exact pair from drom_start_parts_search; listing availability and fitment need independent confirmation.
 
-Подробный контракт: [справочник](../references/market-listings.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/market-listings.md).

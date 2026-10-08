@@ -1,7 +1,5 @@
 # manager.calculate_work_price — Расчёт по явной ставке и политике
 
-Расчёт по явной ставке и политике
-
 Основной модуль: [E13](../modules/E13.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `labor`, `policy`, `hourly_rate`, `observations`, `unknown_costs`.
 Defaults: `{"hourly_rate":null,"observations":null,"unknown_costs":null}`.
 Обязательные facade поля: `labor`, `policy`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - public_observations требует matching operation_name, finite price_rub, labor_only=true и includes_parts=false. Неизвестный явный range_hours не заменяется hours.
 - Duplicate/included operations исключаются; overlap требует явного overlap_resolved. No network/experience/CRM reads.
 
-Подробный контракт: [справочник](../references/work-pricing.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/work-pricing.md).

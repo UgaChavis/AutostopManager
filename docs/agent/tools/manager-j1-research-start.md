@@ -1,7 +1,5 @@
 # manager.j1_research_start — Начать bounded исследование J1
 
-Начать bounded исследование J1
-
 Основной модуль: [E15](../modules/E15.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: job_write.
@@ -11,7 +9,7 @@
 Входы: `objective`, `queries`, `max_pages`, `automotive_context`, `profile`.
 Defaults: `{"automotive_context":null,"max_pages":300,"profile":"general","queries":null}`.
 Обязательные facade поля: `objective`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Writes a durable local public-research job; a background worker later searches/fetches public pages.
 - queued is not completed evidence. Supply nonempty queries or a valid automotive profile/context; starting a second active job is refused.
 
-Подробный контракт: [справочник](../references/web-research.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/web-research.md).

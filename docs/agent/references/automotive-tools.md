@@ -21,7 +21,6 @@ invalid_example обязан отвергаться facade inputSchema до ис
 .venv/bin/python scripts/generate-automotive-instructions.py --check
 .venv/bin/python scripts/check-automotive-catalog.py
 .venv/bin/python scripts/update-instruction-catalogs.py --check
-./scripts/release-gates.sh
 ```
 
 После публикации Manager и подтверждённого exact target SHA:
@@ -37,7 +36,7 @@ Hash — SHA256 canonical JSON excluding source_revision/content_hash (ensure_as
 В bundle входят тексты/хеши, registry, native_schemas, origins и migration map.
 
 CRM committed pin: src/minimal_kanban/web_app_assets/source/automotive_tool_catalog.json.
-Поставить export после checked Manager publication, повторить CRM local gates и exact merged CI.
+Добавить export после публикации Manager; объём проверок и выпуск определяются поручением и [deployment](deployment.md).
 Открытие окна не обращается к providers и не читает Manager checkout.
 Coordinated deploy сравнивает installed Manager REVISION и CRM pin/hash.
 Порядок schema→Manager producer→CRM pinned consumer; Store API не меняется.
@@ -56,20 +55,25 @@ Source Git SHA и content hash раздельны; миграция E-кодов
 Полный release backup сохраняет statuses; portable graph template их не переносит.
 Graph replace/layout/upsert/reroute сохраняют map, новая catalog revision не стирает старые IDs.
 
-## Миграция и выпуск
+## Согласование инструкций и выпуск
 
-CRM scripts/migrate_e1_structure.py готовит graph из полного fresh private snapshot и exact bundle.
-Не-E elements/relations/canvas сохраняются; E relations remap перечислены в migration receipt.
-Conflict409 требует нового snapshot/preview и rebuild; устаревший replace не повторяется.
-Preview не меняет persisted state, apply выполняется guarded CRM API/Gateway, затем полный readback.
+Исходные правила хранятся по прежним путям: AGENTS, модули, навыки, карточки и справочники.
+A2 соответствует AGENTS.md, остальные узлы — модульным Markdown по ID.
+Автомобильный bundle и сохранённые тексты конструктора обновляются из опубликованного источника.
+Для длинного A5 сохраняй короткую ссылку на полный указатель без зафиксированных количества файлов и SHA.
+
+CRM scripts/sync_manager_structure_instructions.py готовит тексты, шаблоны и preview
+из технического снимка, Manager root и exact bundle; режим check выявляет расхождения.
+Обновление инструкции сохраняет ID, название, parent, геометрию, связи и tool_statuses.
+Существующий scripts/migrate_e1_structure.py предназначен только для старой карты;
+при обновлении текста его не запускай: он перестраивает E-геометрию.
+Preview не меняет live state; применение — через owner/CAS/idempotency API с независимым readback.
+При конфликте409 перечитай полный граф и заново подготовь текстовые изменения.
 Release/rollback — [deployment](deployment.md); current/previous coherent tuple и business data сохраняются.
 После открытия live writers нельзя вернуть старую DB ради отката UI.
 
 ## Контракт данных
 
-Новые tools возвращают outcome/data/evidence/missing_fields/conflicts/warnings/execution.
-input_binding является односторонним SHA(kind:normalized_identifier), не восстановлением VIN.
+Общие поля результата, происхождение, границы применения и полномочия — [E1](../modules/E1.md).
+input_binding — односторонний SHA(kind:normalized_identifier); в технические отчёты его не сохраняй.
 Reuse проверяет binding/kind и relevant engine/KPP/date/market контекст до provider call.
-Source scope/primary lineage сохраняются; copied data не создают вторую независимую базу.
-Namespace+entity_kind+id+parent/tree binding обязательны для точного catalog reference.
-Pure helpers не читают сеть/CRM/experience; readiness и результат каждой операции различны.

@@ -1,7 +1,5 @@
 # manager.avito_search_listings — Поиск объявлений Avito
 
-Поиск объявлений Avito
-
 Основной модуль: [E10](../modules/E10.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: reefapi; первичная база: Avito listings via ReefAPI. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `query`, `location`, `category`, `page`, `limit`, `price_min`, `price_max`, `delivery_only`, `dry_run`.
 Defaults: `{"category":"zapchasti_i_aksessuary","delivery_only":false,"dry_run":false,"limit":50,"location":"krasnoyarsk","page":1,"price_max":null,"price_min":null}`.
 Обязательные facade поля: `query`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Price, condition, delivery and completeness are listing observations; seller confirmation and vehicle fitment remain separate.
 - One bounded page, up to 50 normalized listings; rejected/deduplicated rows remain counted.
 
-Подробный контракт: [справочник](../references/market-listings.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/market-listings.md).

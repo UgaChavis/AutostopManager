@@ -1,7 +1,5 @@
 # manager.assess_part_market — Оценка переданной рыночной выборки
 
-Оценка переданной рыночной выборки
-
 Основной модуль: [E11](../modules/E11.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `article`, `observations`, `brand`, `target_region`.
 Defaults: `{"brand":null,"target_region":"Красноярск"}`.
 Обязательные facade поля: `article`, `observations`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Pure assessment of supplied observations: no network, Store, CRM or experience reads.
 - Public retail, procurement, used/contract and offer classes stay distinct; never infer fitment or buy a part from a median.
 
-Подробный контракт: [справочник](../references/part-market.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/part-market.md).

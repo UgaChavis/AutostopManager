@@ -1,7 +1,5 @@
 # manager.fetch_page_browser — Изолированное чтение страницы браузером
 
-Изолированное чтение страницы браузером
-
 Основной модуль: [E15](../modules/E15.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `url`, `max_chars`, `wait_ms`.
 Defaults: `{"max_chars":2500,"wait_ms":750}`.
 Обязательные facade поля: `url`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Renders one public page through the attested isolated J1 browser; wait_ms is a compatibility hint and cannot change the fixed execution policy.
 - No login/captcha bypass; bounded excerpt and redacted public text are returned. Example URL is illustrative and was not fetched during catalogue review.
 
-Подробный контракт: [справочник](../references/web-research.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/web-research.md).

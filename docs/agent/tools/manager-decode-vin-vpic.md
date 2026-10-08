@@ -1,7 +1,5 @@
 # manager.decode_vin_vpic — Только VIN endpoint vPIC
 
-Только VIN endpoint vPIC
-
 Основной модуль: [E2](../modules/E2.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: vpic; первичная база: NHTSA manufacturer-reported vPIC. Исполнение: network_read.
@@ -11,7 +9,7 @@
 Входы: `identifier`, `model_year`, `timeout_seconds`, `extended`.
 Defaults: `{"extended":false,"model_year":null,"timeout_seconds":8}`.
 Обязательные facade поля: `identifier`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -30,4 +28,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Один выбранный VIN endpoint; extended явно выбирает расширенный endpoint. WMI/PartsAPI fallback отсутствует.
 - model_year — целое 1900..следующий год UTC; это подсказка, не дата производства.
 
-Подробный контракт: [справочник](../references/vehicle-identity.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/vehicle-identity.md).

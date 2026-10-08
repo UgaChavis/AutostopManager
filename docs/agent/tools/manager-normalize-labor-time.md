@@ -1,7 +1,5 @@
 # manager.normalize_labor_time — Время и scope переданных работ
 
-Время и scope переданных работ
-
 Основной модуль: [E12](../modules/E12.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: pure.
@@ -11,7 +9,7 @@
 Входы: `rows`, `unit`, `source`.
 Defaults: `{"source":null,"unit":null}`.
 Обязательные facade поля: `rows`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -29,4 +27,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - workName/workTime и явные hours/labor_hours/norm_hours поддержаны; unit явно передается для workTime. Поддержаны hours/minutes/seconds и documented aliases.
 - Pure: единица не угадывается, actual длительность не выдается за норматив; metadata overlap передается в calculation.
 
-Подробный контракт: [справочник](../references/partsapi.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/partsapi.md).

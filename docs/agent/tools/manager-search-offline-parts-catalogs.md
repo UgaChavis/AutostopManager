@@ -1,7 +1,5 @@
 # manager.search_offline_parts_catalogs — Поиск подготовленных локальных каталогов
 
-Поиск подготовленных локальных каталогов
-
 Основной модуль: [E4](../modules/E4.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: offline_catalog; первичная база: locally prepared licensed document. Исполнение: local_read.
@@ -11,7 +9,7 @@
 Входы: `query`, `catalog_id`, `brand`, `limit`.
 Defaults: `{"brand":null,"catalog_id":null,"limit":8}`.
 Обязательные facade поля: `query`.
-Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полная inputSchema берётся из регистрации и `tools/list`, в CRM — native_schemas того же bundle.
+Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
@@ -28,4 +26,4 @@ Fingerprint проверяет [manifest](../manager_mcp_catalog.json); полн
 - Reads selected local catalogue files; no network request.
 - A file hit is a candidate only; preserve catalogue/locator and verify market, modification, dimensions and OE applicability independently.
 
-Подробный контракт: [справочник](../references/offline-catalogs.md). Карточка и inputSchema согласованы versioned export; ручной цвет не является результатом проверки.
+Подробный контракт: [справочник](../references/offline-catalogs.md).
