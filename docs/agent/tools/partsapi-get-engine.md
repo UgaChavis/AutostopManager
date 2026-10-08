@@ -24,10 +24,11 @@ Defaults: `{"lang_id":16,"vehicle_type":"PC"}`.
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: source/parser/outcome и характеристики двигателя: числовые поля — числа, диапазоны сохранены; `COOLING_TYPE` и `CYLINDER_CONSTRUCTION` доступны как `cooling_type` и `cylinder_construction`.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
+- Масштаб bore/stroke/compression сохраняется без пересчёта и догадок об единицах; характеристики каталога не подтверждают VIN/OEM fitment.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 

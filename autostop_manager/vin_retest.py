@@ -13,7 +13,7 @@ from typing import Any
 
 OUTCOMES = frozenset(
     "success partial partial_result empty empty_result unsupported invalid_input invalid_operation "
-    "identifier_mismatch unparsed_response parse_error dependency_missing database_missing "
+    "group_match identifier_mismatch unparsed_response parse_error dependency_missing database_missing "
     "configuration_missing configuration_error provider_error provider_timeout provider_http_error "
     "provider_http_5xx provider_auth_error provider_ip_quota_exceeded auth_error quota_error client_error".split()
 )

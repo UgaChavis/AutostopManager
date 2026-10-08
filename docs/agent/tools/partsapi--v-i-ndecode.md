@@ -24,10 +24,11 @@ Defaults: `{"lang":"ru"}`.
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: source/parser/outcome и профиль PartsAPI; `group_match` сохраняет исходный VIN, `identifier_matches_request=false`, `binding_kind=provider_group_reference` и `identifier_semantics=group_representative` для каталожного кандидата.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
+- VIN представителя группы допускается только этим методом по уточнению владельца; не подтверждает заводскую точную спецификацию или VIN/OEM fitment. Полная политика — в справочнике.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
 - TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
 

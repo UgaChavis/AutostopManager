@@ -330,9 +330,8 @@
         "lang": "ru"
       },
       "outputs": [
-        "source/parser/outcome и raw payload",
-        "специализированные profiles/tree/article/labor данные только для распознанных методов",
-        "generic payload сохраняется без выдуманных нормализованных полей"
+        "source/parser/outcome и профиль PartsAPI",
+        "`group_match` сохраняет исходный VIN, `identifier_matches_request=false`, `binding_kind=provider_group_reference` и `identifier_semantics=group_representative` для каталожного кандидата"
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -341,6 +340,7 @@
       ],
       "limitations": [
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
+        "VIN представителя группы допускается только этим методом по уточнению владельца; не подтверждает заводскую точную спецификацию или VIN/OEM fitment. Полная политика — в справочнике.",
         "API method отличается от facade operation; key назначает сервер, secrets не принимаются.",
         "TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические."
       ],
@@ -727,9 +727,8 @@
         "lang_id": 16
       },
       "outputs": [
-        "source/parser/outcome и raw payload",
-        "специализированные profiles/tree/article/labor данные только для распознанных методов",
-        "generic payload сохраняется без выдуманных нормализованных полей"
+        "source/parser/outcome и характеристики двигателя: числовые поля — числа, диапазоны сохранены",
+        "`COOLING_TYPE` и `CYLINDER_CONSTRUCTION` доступны как `cooling_type` и `cylinder_construction`"
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -738,6 +737,7 @@
       ],
       "limitations": [
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
+        "Масштаб bore/stroke/compression сохраняется без пересчёта и догадок об единицах; характеристики каталога не подтверждают VIN/OEM fitment.",
         "API method отличается от facade operation; key назначает сервер, secrets не принимаются.",
         "TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические."
       ],
@@ -4128,13 +4128,14 @@
         "Summary retains normalized evidence and execution measurements, limits collection previews to25 and reports total/returned/truncated; raw payload is not duplicated."
       ],
       "errors": [
-        "outcome includes invalid_operation/invalid_input/credentials_missing/configured_unverified/empty_result/unparsed_response/success/identifier_mismatch/identifier_unverified; failure_class preserves provider_auth_error/provider_ip_quota_exceeded/provider_rejected/transport/parse failures. Dry run attempt_count=0 is not authenticated success."
+        "outcome includes invalid_operation/invalid_input/credentials_missing/configured_unverified/empty_result/unparsed_response/success/group_match/identifier_mismatch/identifier_unverified; failure_class preserves provider_auth_error/provider_ip_quota_exceeded/provider_rejected/transport/parse failures. Dry run attempt_count=0 is not authenticated success."
       ],
       "limitations": [
         "Selected methods validate actual provider IDs/category context before HTTP; supplied typed modification/node refs must match namespace, carType and exact tree hash.",
         "Legacy raw parameters remain compatible but catalog_binding=raw_parameters_unverified and cannot establish an exact category or fitment.",
         "TecDoc article, cross or OE-reference rows are not original VIN-specific OEM evidence; paid/quota requests require an explicitly selected live branch.",
-        "type_id is a string, for example \"42\". Full normalization and conflict checks run before summary truncation; detail=full remains the compatible default."
+        "type_id is a string, for example \"42\". Full normalization and conflict checks run before summary truncation; detail=full remains the compatible default.",
+        "Только VINdecode допускает группового кандидата; пределы `group_match` и getEngine — [PartsAPI](../references/partsapi.md)."
       ],
       "example": {
         "operation": "search_articles",

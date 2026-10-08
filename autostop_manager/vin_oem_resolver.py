@@ -5,7 +5,12 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
+from .automotive_contracts import binding
+from .catalog_clients import (
+    partsapi_catalog_lookup,
+    partsapi_identifier_allows_candidate_lookup,
+    partsapi_is_group_reference,
+)
 from .parts_intent import normalize_part_intent
 from .tecdoc_vehicle_selection import (
     _context_conflicts,
@@ -326,11 +331,34 @@ def _partsapi_identifier_evidence(call: dict[str, Any]) -> dict[str, Any]:
         matches = False
     elif profiles and all(profile.get("identifier_matches_request") is True for profile in profiles):
         matches = True
-    return {
+    evidence = {
         "identifier_matches_request": matches,
         "requires_exact_identifier_confirmation": matches is not True,
         "provider_outcome": call.get("outcome"),
     }
+    if partsapi_is_group_reference(call):
+        evidence.update(
+            binding_kind="provider_group_reference",
+            identifier_semantics="group_representative",
+            evidence_status="catalog_candidate",
+            provider_identifier_is_vehicle_confirmation=False,
+            vin_fitment_confirmed=False,
+        )
+    return evidence
+
+
+def _partsapi_bound_group_response(call: dict[str, Any], identifier: str) -> dict[str, Any]:
+    """Reject reuse of a group receipt belonging to a different request."""
+    if partsapi_is_group_reference(call) and call.get("input_binding") != binding(identifier, "vin"):
+        return {
+            **call,
+            "ok": False,
+            "outcome": "identifier_mismatch",
+            "failure_class": "provider_request_binding_mismatch",
+            "retryable": False,
+            "requires_fallback": True,
+        }
+    return call
 
 
 def _partsapi_year(value: Any) -> int | None:
@@ -345,9 +373,10 @@ def _assess_partsapi_identity_agreement(
     independent_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence = {"matched_fields": [], "conflicting_fields": [], **_partsapi_identifier_evidence(call)}
+    group_reference = partsapi_is_group_reference(call)
     if call.get("dry_run"):
         return {**evidence, "status": "not_checked"}
-    if evidence["identifier_matches_request"] is False:
+    if evidence["identifier_matches_request"] is False and not group_reference:
         return {**evidence, "status": "identifier_mismatch"}
     if not call.get("ok"):
         return {**evidence, "status": "provider_failed", "error": call.get("error")}
@@ -443,8 +472,18 @@ def _assess_partsapi_identity_agreement(
             "matched_fields": matched,
             "conflicting_fields": conflicts,
             "partsapi_profile": vehicle_profile,
-            "blocks_vehicle_lookup": independent_conflict or evidence["identifier_matches_request"] is True,
+            "blocks_vehicle_lookup": independent_conflict
+            or group_reference
+            or evidence["identifier_matches_request"] is True,
             "conflict_scope": "independent_vehicle" if independent_conflict else "provider_response",
+        }
+    if group_reference:
+        return {
+            **evidence,
+            "status": "group_match",
+            "matched_fields": matched,
+            "conflicting_fields": [],
+            "partsapi_profile": vehicle_profile,
         }
     if {"make", "model"}.issubset(matched):
         return {
@@ -478,8 +517,13 @@ def _identity_with_partsapi_agreement(
     can_read = (
         partsapi_identifier_allows_candidate_lookup(call)
         and _partsapi_vehicle_type_allows_candidate_lookup(call, vehicle_type)
-        and agreement["status"] == "matched"
-        and confidence_label in {"medium", "high"}
+        and identity.get("ok") is not False
+        and not identity.get("errors")
+        and (identity.get("identifier_validation") or {}).get("ok") is not False
+        and (
+            agreement["status"] == "group_match"
+            or (agreement["status"] == "matched" and confidence_label in {"medium", "high"})
+        )
         and not known_conflict
     )
     if not _positive_tecdoc_id(_partsapi_vehicle_profile(call).get("tecdoc_car_id")):
@@ -1181,6 +1225,7 @@ def _resolve_vin_oem_parts(
             dry_run=not call_is_live,
             **kwargs,
         )
+        call = _partsapi_bound_group_response(call, classification.normalized)
         # An input/credential rejection did not consume an external request.
         if call_is_live:
             live_calls_used += max(0, int(call.get("attempt_count") or 0))
@@ -1219,11 +1264,14 @@ def _resolve_vin_oem_parts(
     identity_conflict = (
         agreement.get("status") == "conflict" and agreement.get("blocks_vehicle_lookup", True)
     ) or identity_has_blocking_conflicts(identity, scope="vehicle")
+    identity_conflict = identity_conflict or (
+        (identity_call or {}).get("failure_class") == "provider_request_binding_mismatch"
+    )
     can_read_catalog = bool(identity_readiness.get("ready_for_tecdoc_candidate_lookup")) and not identity_conflict
     part_actionable = bool(part_profile.get("recognized")) and not bool(part_profile.get("clarification_required"))
     vehicle_profile = (
         _partsapi_vehicle_profile(identity_call or {})
-        if _partsapi_identifier_evidence(identity_call or {})["identifier_matches_request"] is True
+        if partsapi_identifier_allows_candidate_lookup(identity_call or {})
         else {}
     )
     fallback: dict[str, Any] | None = None

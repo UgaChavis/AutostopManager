@@ -504,19 +504,28 @@ def test_partsapi_vin_correlation_across_response_branches(partsapi_vin_env, mon
     result, resolved, methods = _partsapi_vin_readback(monkeypatch, payload)
     assert result["identifier_matches_request"] is matches
     assert result["requires_exact_identifier_confirmation"] is (matches is not True)
+    group_reference = result.get("binding_kind") == "provider_group_reference"
     assert result["outcome"] == (
-        "identifier_mismatch" if matches is False else "identifier_unverified" if matches is None else "success"
+        "group_match"
+        if group_reference
+        else "identifier_mismatch"
+        if matches is False
+        else "identifier_unverified"
+        if matches is None
+        else "success"
     )
-    assert result["ok"] is (matches is not False)
-    assert result["failure_class"] == ("provider_identifier_mismatch" if matches is False else None)
-    assert result["requires_fallback"] is (matches is not True)
+    assert result["ok"] is (matches is not False or group_reference)
+    assert result["failure_class"] == (
+        "provider_identifier_mismatch" if matches is False and not group_reference else None
+    )
+    assert result["requires_fallback"] is (matches is not True and not group_reference)
     assert result["attempt_count"] == 1
     assert result["retryable"] is False
     assert result["empty_payload"] is False
     assert "B" * 17 not in str(result["vehicle_profiles"])
     assert json.dumps(payload, sort_keys=True) == before
 
-    allowed = matches is True and len(result["vehicle_profiles"]) == 1
+    allowed = (matches is True or group_reference) and len(result["vehicle_profiles"]) == 1
     assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode", "getMakes"])
     assert resolved["tecdoc_vehicle"]["identifier_matches_request"] is matches
 
@@ -1044,12 +1053,12 @@ def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
             "provider": "partsapi_ru",
             "source_operation": "engine_info",
             "raw_keys": ["ENG_CODE", "ENG_ID", "ENG_NAME", "cylinderCapacityCcm", "fuelType", "powerHpFrom"],
-            "engine_id": "15",
+            "engine_id": 15,
             "engine_code": "CZDA",
             "engine_name": "1.4 TSI",
             "fuel_type": "Petrol",
-            "displacement_cc": "1395",
-            "power_hp_from": "150",
+            "displacement_cc": 1395,
+            "power_hp_from": 150,
         }
     ]
 
@@ -2332,8 +2341,9 @@ def test_partsapi_same_prefix_for_different_model_years_keeps_requested_vin(part
     responses = [partsapi_catalog_lookup(operation="vin_decode", identifier=vin) for vin in original_vins]
     assert seen == original_vins
     for vin, result in zip(original_vins, responses, strict=True):
-        assert result["outcome"] == "identifier_mismatch"
-        assert result["failure_class"] == "provider_identifier_mismatch"
+        assert result["outcome"] == "group_match"
+        assert result["ok"] is True
+        assert result["failure_class"] is None
         assert result["redacted_requested_identifier"] == vin[:3] + "***" + vin[-3:]
         profile = result["vehicle_profiles"][0]
         assert profile["redacted_requested_identifier"] == result["redacted_requested_identifier"]

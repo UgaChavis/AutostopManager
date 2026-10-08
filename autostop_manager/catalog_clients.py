@@ -4,6 +4,7 @@ from collections.abc import Callable
 import calendar
 from contextlib import suppress
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
 from html import unescape
@@ -1796,7 +1797,71 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "charge_type": ("CHARGE_TYPE",),
     "timing_drive": ("ENGINE_MANAGEMENT",),
     "engine_layout": ("ENGINE_CONSTRUCTION",),
+    "cooling_type": ("COOLING_TYPE",),
+    "cylinder_construction": ("CYLINDER_CONSTRUCTION",),
 }
+
+
+_PARTSAPI_ENGINE_INTEGER_FIELDS = frozenset(
+    {"engine_id", "tecdoc_car_id", "tecdoc_external_id", "tecrmi_external_id", "cylinders", "valves"}
+)
+_PARTSAPI_ENGINE_NUMBER_FIELDS = _PARTSAPI_ENGINE_INTEGER_FIELDS | {
+    "displacement_cc",
+    "power_hp_from",
+    "power_hp_to",
+    "power_kw_from",
+    "power_kw_to",
+    "torque_nm_from",
+    "torque_nm_to",
+}
+
+
+def _partsapi_engine_number(value: Any, *, integer: bool) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    raw = str(value).strip().replace(",", ".")
+    if not re.fullmatch(r"\+?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", raw):
+        return None
+    try:
+        decimal = Decimal(raw)
+        number = float(decimal)
+    except (InvalidOperation, OverflowError, ValueError):
+        return None
+    if not decimal.is_finite() or not math.isfinite(number) or number <= 0:
+        return None
+    integral = decimal == decimal.to_integral_value()
+    if integer and not integral:
+        return None
+    return int(decimal) if integral else number
+
+
+def _partsapi_engine_profile_numbers(profile: dict[str, Any], item: dict[str, Any]) -> None:
+    issues = {}
+    for field in sorted(_PARTSAPI_ENGINE_NUMBER_FIELDS):
+        values = [item[key] for key in _PARTSAPI_PROFILE_FIELDS[field] if item.get(key) not in (None, "")]
+        if not values:
+            continue
+        numbers = [_partsapi_engine_number(value, integer=field in _PARTSAPI_ENGINE_INTEGER_FIELDS) for value in values]
+        if any(number is None for number in numbers):
+            profile.pop(field, None)
+            issues[field] = "invalid_numeric_value"
+        elif any(number != numbers[0] for number in numbers[1:]):
+            profile.pop(field, None)
+            issues[field] = "conflicting_numeric_aliases"
+        else:
+            profile[field] = numbers[0]
+    for lower, upper in (
+        ("power_hp_from", "power_hp_to"),
+        ("power_kw_from", "power_kw_to"),
+        ("torque_nm_from", "torque_nm_to"),
+    ):
+        if lower in profile and upper in profile and profile[lower] > profile[upper]:
+            profile.pop(lower)
+            profile.pop(upper)
+            issues[lower] = issues[upper] = "invalid_numeric_range"
+    # Diagnostics alone must not turn an otherwise unreadable record into a vehicle profile.
+    if issues and len(profile) > 3:
+        profile["numeric_field_issues"] = issues
 
 
 def _partsapi_profile_values(item: dict[str, Any]) -> dict[str, Any]:
@@ -1824,6 +1889,8 @@ def _partsapi_vehicle_profile_from_item(item: dict[str, Any], *, operation: str 
         "raw_keys": sorted(str(key) for key in item),
     }
     profile.update(_partsapi_profile_values(item))
+    if operation == "engine_info":
+        _partsapi_engine_profile_numbers(profile, item)
     _partsapi_profile_production_boundaries(profile)
 
     identifier = _first_value(item, ("vin", "VIN", "frame", "FRAME"))
@@ -2475,6 +2542,39 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
     }
 
 
+def _partsapi_group_reference_evidence(
+    requested: str, identifiers: tuple[str, ...], descendants: tuple[str, ...], matches: bool | None
+) -> dict[str, Any]:
+    """A single valid representative is a provider claim, never exact identity."""
+    from .automotive_contracts import binding
+
+    values = identifiers + descendants
+    if (
+        matches is not False
+        or re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) is None
+        or len(set(values)) != 1
+        or not all(re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", value) for value in values)
+    ):
+        return {}
+    return {
+        "binding_kind": "provider_group_reference",
+        "identifier_semantics": "group_representative",
+        "input_binding": binding(requested, "vin"),
+        "catalog_candidate_only": True,
+        "independent_vehicle_confirmation": False,
+        "fitment_confirmed": False,
+        "warning": (
+            "PartsAPI returned a group representative VIN; characteristics are catalog candidates "
+            "for the requested VIN, not an exact factory specification or confirmed part fitment."
+        ),
+        "provenance": {
+            "provider": "partsapi_ru",
+            "primary_lineage": "partsapi_ru",
+            "semantics_basis": "owner_clarification",
+        },
+    }
+
+
 def extract_partsapi_vehicle_profiles(
     *,
     payload: Any,
@@ -2548,9 +2648,14 @@ def extract_partsapi_vehicle_profiles(
             profile["provider_identifier_is_vehicle_confirmation"] = False
             profile["vin_prefix_is_vehicle_confirmation"] = False
             profile["requires_exact_identifier_confirmation"] = matches is not True
+            # VINdecode may return a representative of the requested catalog
+            # group (owner-confirmed provider semantics), not an exact VIN echo.
+            # Contradictory or malformed identifiers still fail closed.
+            group_evidence = _partsapi_group_reference_evidence(requested, identifiers, descendants, matches)
+            profile.update(group_evidence)
             if identifiers:
                 profile["redacted_identifier"] = _redact_identifier(identifiers[-1])
-            if matches is not True:
+            if matches is not True and not group_evidence:
                 profile["warning"] = (
                     "Provider returned a different identifier; do not use this vehicle for the requested VIN."
                     if matches is False
@@ -2568,8 +2673,50 @@ def extract_partsapi_vehicle_profiles(
     return profiles
 
 
+def partsapi_is_group_reference(call: dict[str, Any]) -> bool:
+    """Recognize only this provider/method's explicitly bound single catalog group."""
+    from .automotive_contracts import valid_binding
+
+    profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
+    if (
+        call.get("provider") != "partsapi_ru"
+        or call.get("operation") != "vin_decode"
+        or call.get("ok") is not True
+        or call.get("dry_run")
+        or call.get("outcome") != "group_match"
+        or call.get("identifier_matches_request") is not False
+        or call.get("binding_kind") != "provider_group_reference"
+        or call.get("identifier_semantics") != "group_representative"
+        or len(profiles) != 1
+    ):
+        return False
+    profile = profiles[0]
+    provenance = profile.get("provenance")
+    return (
+        profile.get("provider") == "partsapi_ru"
+        and profile.get("source_operation") == "vin_decode"
+        and profile.get("identifier_matches_request") is False
+        and profile.get("binding_kind") == "provider_group_reference"
+        and profile.get("identifier_semantics") == "group_representative"
+        and profile.get("catalog_candidate_only") is True
+        and profile.get("independent_vehicle_confirmation") is False
+        and profile.get("fitment_confirmed") is False
+        and profile.get("provider_identifier_is_vehicle_confirmation") is False
+        and profile.get("vin_prefix_is_vehicle_confirmation") is False
+        and isinstance(provenance, dict)
+        and provenance.get("provider") == "partsapi_ru"
+        and provenance.get("primary_lineage") == "partsapi_ru"
+        and provenance.get("semantics_basis") == "owner_clarification"
+        and valid_binding(call.get("input_binding"))
+        and call["input_binding"]["identifier_kind"] == "vin"
+        and profile.get("input_binding") == call.get("input_binding")
+    )
+
+
 def partsapi_identifier_allows_candidate_lookup(call: dict[str, Any]) -> bool:
-    """Use a VINdecode car ID only for a response bound to the full requested VIN."""
+    """Allow exact echoes or the scoped representative group for catalog research."""
+    if partsapi_is_group_reference(call):
+        return True
     profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
     if not call.get("ok") or call.get("dry_run") or call.get("outcome") != "success" or len(profiles) != 1:
         return False
@@ -3478,14 +3625,35 @@ def partsapi_catalog_lookup(
     outcome = "empty_result" if empty_payload else "unparsed_response" if no_expected_records else "success"
     identifier_evidence: dict[str, Any] = {}
     if operation == "vin_decode" and vehicle_profiles:
+        from .automotive_contracts import binding
+
         matches = [profile.get("identifier_matches_request") for profile in vehicle_profiles]
         confirmation = False if False in matches else True if all(value is True for value in matches) else None
+        group_reference = confirmation is False and all(
+            profile.get("binding_kind") == "provider_group_reference" for profile in vehicle_profiles
+        )
         identifier_evidence = {
             "identifier_matches_request": confirmation,
             "requires_exact_identifier_confirmation": confirmation is not True,
+            "input_binding": binding(str(input_values.get("identifier") or ""), "vin"),
         }
+        identifier_evidence.update(
+            {
+                "binding_kind": "provider_group_reference",
+                "identifier_semantics": "group_representative",
+                "catalog_binding": {
+                    **base["catalog_binding"],
+                    "status": "group_match",
+                    "basis": "provider_group_reference",
+                },
+            }
+            if group_reference
+            else {}
+        )
         outcome = (
-            "identifier_mismatch"
+            "group_match"
+            if group_reference
+            else "identifier_mismatch"
             if confirmation is False
             else "identifier_unverified"
             if confirmation is None

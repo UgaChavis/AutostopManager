@@ -21,11 +21,12 @@ Defaults: `{"article_id":null,"brand":null,"car_id":null,"catalog_context":null,
 ```
 
 Выход: Legacy flat adapter: ok/provider/operation/partsapi_method/docs_url/role/quota_cost_estimate/request_plan/privacy/catalog_binding.; outcome/failure_class/retryable/requires_fallback/attempt_count/max_attempts/attempts/payload/response_shape/empty_payload/record_counts.; vehicle_profiles/oem_candidates/cross_candidates/article_candidates/autonorms_rows/fill_volumes/search_tree_rows/article_criteria_rows; sensitive identifiers are redacted.; Summary retains normalized evidence and execution measurements, limits collection previews to25 and reports total/returned/truncated; raw payload is not duplicated..
-Ошибки и неполнота: outcome includes invalid_operation/invalid_input/credentials_missing/configured_unverified/empty_result/unparsed_response/success/identifier_mismatch/identifier_unverified; failure_class preserves provider_auth_error/provider_ip_quota_exceeded/provider_rejected/transport/parse failures. Dry run attempt_count=0 is not authenticated success..
+Ошибки и неполнота: outcome includes invalid_operation/invalid_input/credentials_missing/configured_unverified/empty_result/unparsed_response/success/group_match/identifier_mismatch/identifier_unverified; failure_class preserves provider_auth_error/provider_ip_quota_exceeded/provider_rejected/transport/parse failures. Dry run attempt_count=0 is not authenticated success..
 
 - Selected methods validate actual provider IDs/category context before HTTP; supplied typed modification/node refs must match namespace, carType and exact tree hash.
 - Legacy raw parameters remain compatible but catalog_binding=raw_parameters_unverified and cannot establish an exact category or fitment.
 - TecDoc article, cross or OE-reference rows are not original VIN-specific OEM evidence; paid/quota requests require an explicitly selected live branch.
 - type_id is a string, for example "42". Full normalization and conflict checks run before summary truncation; detail=full remains the compatible default.
+- Только VINdecode допускает группового кандидата; пределы `group_match` и getEngine — [PartsAPI](../references/partsapi.md).
 
 Подробный контракт: [справочник](../references/manager-runtime.md).
