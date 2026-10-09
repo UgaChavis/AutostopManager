@@ -538,7 +538,9 @@ def _part_row(
     native_id = node.attrs.get("id") or f"{position}:{raw_number or image}"
     notes = _cell_text(cells, headers, "notes")
     raw_conditions = _space(
-        " ".join(_cell_text(cells, headers, key) for key in ("conditions", "production", "transmission", "engine"))
+        " ".join(
+            _cell_text(cells, headers, key) for key in ("conditions", "production", "transmission", "engine", "notes")
+        )
     )
     row: dict[str, Any] = {
         "id": native_id,

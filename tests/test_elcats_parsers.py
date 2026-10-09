@@ -24,6 +24,36 @@ def _fixture(name: str, url: str, *, operation: str = "models", entry: dict | No
     return parse_catalog_html((_FIXTURES / name).read_text(), url=url, operation=operation, entry=entry or _VW)
 
 
+@pytest.mark.parametrize(
+    ("notes", "pr_codes", "unparsed"),
+    [
+        ("PR:2E4", ["2E4"], False),
+        ("PR:2E4; not for LHD; 2010 - 2018", None, True),
+        ("not for LHD", None, True),
+        ("2010 - 2018", None, True),
+        ("PR:2E4 AND NOT PR:1ZE", None, True),
+        ("303X28", None, False),
+    ],
+)
+def test_part_remarks_keep_parsed_and_unresolved_conditions(notes, pr_codes, unparsed):
+    html = (
+        "<table><tr><th>Код детали</th><th>Наименование</th><th>Примечание</th></tr>"
+        f"<tr><td>DEMO100</td><td>Brake pad</td><td>{notes}</td></tr></table>"
+    )
+    response = parse_catalog_html(
+        html, url="https://elcats.ru/vw/Parts.aspx?Mdl=DEMO&SubId=PAD", operation="list_parts", entry=_VW
+    )
+    row = response["rows"][0]
+    assert row["notes"] == row["raw_conditions"] == notes
+    assert bool(row["unparsed_conditions"]) is unparsed
+    assert bool(row["unparsed_restrictions"]) is unparsed
+    if pr_codes is not None:
+        assert row["conditions"]["pr_codes"]["all_of"] == pr_codes
+    else:
+        assert row["conditions"] == {}
+    assert row["confirmed"] is False
+
+
 def test_inventory_registers_all_57_passenger_routes_and_preserves_providers() -> None:
     registry = json.loads(_REGISTRY.read_text())
     entries = registry["entries"]

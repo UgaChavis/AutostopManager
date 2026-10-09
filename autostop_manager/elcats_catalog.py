@@ -11,7 +11,7 @@ import re
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .automotive_contracts import identity_errors, public_oem_catalog_ref, result
+from .automotive_contracts import _public_ref_identity, identity_errors, public_oem_catalog_ref, result
 from .elcats_number_ocr import read_number_ocr
 from .parts_intent import normalize_part_intent
 from .public_catalog_http import CatalogReadError, PublicCatalogReader, safe_catalog_url
@@ -323,6 +323,48 @@ class _Navigation:
                 self.warnings.append("vehicle_model_not_found:" + entry["id"])
         return selected
 
+    def child(self, entry: dict[str, Any], parent: dict[str, Any], row: dict[str, Any], kind: str) -> dict[str, Any]:
+        node = dict(row)
+        node["unparsed_conditions"] = list(dict.fromkeys(row.get("unparsed_conditions", [])))
+        node["inherited_restrictions"] = list(
+            dict.fromkeys([*parent.get("inherited_restrictions", []), *row.get("inherited_restrictions", [])])
+        )
+        node["inherited_conditions"] = [
+            *parent.get("inherited_conditions", []),
+            *row.get("inherited_conditions", []),
+        ]
+        for coordinate, value in parent.get("placement_context", {}).items():
+            node.setdefault(coordinate, value)
+        reference = _ref(entry, self.profile, row, kind, parent)
+        reference["inherited_restrictions"] = list(
+            dict.fromkeys(
+                [
+                    *node["inherited_restrictions"],
+                    *node["unparsed_conditions"],
+                    *row.get("unparsed_restrictions", []),
+                ]
+            )
+        )
+        reference["inherited_conditions"] = [
+            *node["inherited_conditions"],
+            *(
+                [
+                    {
+                        "conditions": row["conditions"],
+                        "raw_conditions": row.get("raw_conditions"),
+                        "source_url": self.evidence[-1]["locator"],
+                        "binding": kind,
+                        "catalog_ref": _public_ref_identity(reference),
+                    }
+                ]
+                if row.get("conditions")
+                else []
+            ),
+        ]
+        reference["placement_context"] = {key: node[key] for key in ("axle", "side", "inner_outer") if node.get(key)}
+        node["catalog_ref"] = reference
+        return node
+
     def children(self, entry: dict[str, Any], parent: dict[str, Any], operation: str) -> list[dict[str, Any]]:
         url = _ref_url(entry, parent, self.profile)
         parsed = self.page(entry, url, operation)
@@ -336,10 +378,9 @@ class _Navigation:
                 "name": parameters.get("Title") or "catalog_single_diagram",
                 "entity_kind": "diagram",
             }
-            return [{**row, "catalog_ref": _ref(entry, self.profile, row, "diagram", parent)}]
+            return [self.child(entry, parent, row, "diagram")]
         nodes = []
         for row in parsed.get("rows", []):
-            node = dict(row)
             kind = row.get("entity_kind", expected)
             if kind == "selection":
                 kind = expected
@@ -349,19 +390,7 @@ class _Navigation:
                 kind == "part" and parent["entity_kind"] != "diagram"
             ):
                 raise CatalogReadError("unsupported_catalog_hierarchy")
-            node["catalog_ref"] = _ref(entry, self.profile, row, kind, parent)
-            node["unparsed_conditions"] = list(dict.fromkeys(row.get("unparsed_conditions", [])))
-            node["inherited_restrictions"] = [
-                *parent.get("inherited_restrictions", []),
-                *row.get("inherited_restrictions", []),
-            ]
-            node["inherited_conditions"] = [
-                *parent.get("inherited_conditions", []),
-                *row.get("inherited_conditions", []),
-            ]
-            for coordinate, value in parent.get("placement_context", {}).items():
-                node.setdefault(coordinate, value)
-            nodes.append(node)
+            nodes.append(self.child(entry, parent, row, kind))
         return nodes
 
     def candidate(self, entry: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
@@ -444,21 +473,6 @@ class _Navigation:
                         else:
                             self.candidates.append(self.candidate(entry, node))
                 elif _group_matches(node, self.intent) and not _placement_conflict(node, self.intent):
-                    node["catalog_ref"]["inherited_restrictions"] = [
-                        *node.get("inherited_restrictions", []),
-                        *node.get("unparsed_conditions", []),
-                    ]
-                    node["catalog_ref"]["inherited_conditions"] = [
-                        *node.get("inherited_conditions", []),
-                        *(
-                            [{"conditions": node["conditions"], "raw_conditions": node.get("raw_conditions")}]
-                            if node.get("conditions")
-                            else []
-                        ),
-                    ]
-                    node["catalog_ref"]["placement_context"] = {
-                        key: node[key] for key in ("axle", "side", "inner_outer") if node.get(key)
-                    }
                     if depth < 5:
                         next_op = "list_parts" if kind == "diagram" else "list_diagrams"
                         queue.append((node["catalog_ref"], next_op, depth + 1))

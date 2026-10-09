@@ -147,6 +147,42 @@ def test_deep_encoding_is_not_a_privacy_bypass() -> None:
     assert not network.safe_url("https://example.org/?vin=" + encoded, scope())
 
 
+@pytest.mark.parametrize("encoding", ["percent", "entity"])
+@pytest.mark.parametrize("layers", [1, 3])
+def test_layered_unicode_foreign_vin_is_blocked_before_search_or_document_http(
+    monkeypatch: pytest.MonkeyPatch, encoding: str, layers: int
+) -> None:
+    def encode(value: str) -> str:
+        encoded = "".join(chr(ord(char) + 0xFEE0) for char in value)
+        for layer in range(layers):
+            if encoding == "percent":
+                encoded = quote(encoded, safe="")
+            elif layer == 0:
+                encoded = "".join(f"&#{ord(char)};" for char in encoded)
+            else:
+                encoded = encoded.replace("&", "&#38;")
+        return encoded
+
+    authorized = scope()
+    foreign, target = encode(OTHER), encode(VIN)
+    assert not network.safe_query(foreign, authorized)
+    assert network.safe_query(target, authorized)
+    urls = [
+        "https://example.org/report/" + quote(foreign, safe=""),
+        "https://example.org/?vin=" + quote(foreign, safe=""),
+    ]
+    assert all(not network.safe_url(url, authorized) for url in urls)
+    assert network.safe_url("https://example.org/?vin=" + quote(target, safe=""), authorized)
+    calls = fake_transport(monkeypatch, [])
+    monkeypatch.setenv("AUTOSTOP_J1_SEARXNG_URL", "http://127.0.0.1:8890")
+    result = network.search_vin(foreign, authorized)
+    assert not result["ok"] and result["errors"] == [{"provider": "policy", "error": "unsafe_query"}]
+    for url in urls:
+        with pytest.raises(ValueError, match=r"^unsafe_url$"):
+            network.request_vin(url, authorized, max_bytes=100)
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -311,10 +347,16 @@ def test_redirect_robots_denial_blocks_followup(monkeypatch: pytest.MonkeyPatch)
     assert len(calls) == 1
 
 
-def test_robots_disallow_and_unavailable_are_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = fake_transport(monkeypatch, [Response(body=b"User-agent: *\nDisallow: /report\n")], robots=False)
-    with pytest.raises(ValueError, match=r"^robots_disallowed$"):
-        network.request_vin("https://example.org/report", scope(), max_bytes=100)
+@pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf"])
+def test_robots_disallow_and_unavailable_are_fail_closed(monkeypatch: pytest.MonkeyPatch, prefix: bytes) -> None:
+    calls = fake_transport(
+        monkeypatch,
+        [Response(body=prefix + b"User-agent: *\nDisallow: /report\n"), Response(body=b"Forbidden source page")],
+        robots=False,
+    )
+    for _ in range(2):
+        with pytest.raises(ValueError, match=r"^robots_disallowed$"):
+            network.request_vin("https://example.org/report", scope(), max_bytes=100)
     assert [call["target"] for call in calls] == ["/robots.txt"]
 
 

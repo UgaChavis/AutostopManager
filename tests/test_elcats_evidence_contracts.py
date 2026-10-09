@@ -16,6 +16,7 @@ from autostop_manager.automotive_contracts import (
     same_oem_catalog_ref,
     validate_catalog_context,
 )
+from autostop_manager.elcats_parsers import parse_catalog_html
 
 BINDING = {"version": 1, "identifier_kind": "vin", "identifier_sha256": "a" * 64}
 PART = {"number": "DEMO100", "brand": "DEMO"}
@@ -129,6 +130,70 @@ def test_transport_fields_do_not_change_semantic_identity():
     ]
     assert parts.assess_part_fitment(_vehicle(ref), PART, {}, [source])["data"]["state"] == "supported"
     assert not same_oem_catalog_ref(ref, {**routed, "entry_id": "other-brand-entry"})
+
+
+@pytest.mark.parametrize("provider", PUBLIC_OEM_CATALOG_NAMESPACES)
+def test_public_and_tecdoc_ref_comparisons_are_symmetrically_false(provider):
+    ref = _ref(provider)
+    assert oem_catalog_ref(ref) and oem_catalog_ref(TECDOC_REF)
+    assert same_oem_catalog_ref(ref, TECDOC_REF) is False
+    assert same_oem_catalog_ref(TECDOC_REF, ref) is False
+
+
+@pytest.mark.parametrize("provider", PUBLIC_OEM_CATALOG_NAMESPACES)
+@pytest.mark.parametrize("public_source", [True, False])
+def test_mixed_public_tecdoc_refs_leave_oem_and_fitment_unknown(provider, public_source):
+    ref = _ref(provider)
+    source_ref, vehicle_ref = (ref, TECDOC_REF) if public_source else (TECDOC_REF, ref)
+    source = _primary(source_ref, provider=source_ref["provider"])
+    capture = parts.capture_oem_evidence("DEMO100", source, "modification", vehicle_ref, "DEMO")
+    assert capture["outcome"] == "partial"
+    assert capture["data"]["candidate"]["oem_confirmed"] is False
+    assert "source_vehicle_catalog_mismatch" in capture["missing_fields"]
+    vehicle = {"vehicle_profile": ref["vehicle_context"], "catalog_ref": vehicle_ref}
+    assessed = parts.assess_part_fitment(vehicle, PART, {}, [source])
+    assert assessed["outcome"] == "partial" and assessed["data"]["state"] == "unknown"
+    assert "evidence[0].source_vehicle_catalog_mismatch" in assessed["missing_fields"]
+    assert assessed["execution"]["network_calls"] == capture["execution"]["network_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    ("notes", "profile", "state"),
+    [
+        ("PR:2E4", {}, "unknown"),
+        ("PR:2E4", {"pr_codes": ["1ZE"], "pr_codes_complete": True}, "rejected"),
+        ("not for LHD", {}, "unknown"),
+        ("2010 - 2018", {}, "unknown"),
+        ("PR:2E4; not for LHD; 2010 - 2018", {}, "unknown"),
+    ],
+)
+def test_parsed_remarks_restrict_fitment_even_with_independent_primary_evidence(notes, profile, state):
+    ref = _ref()
+    html = (
+        "<table><tr><th>Код детали</th><th>Наименование</th><th>Примечание</th></tr>"
+        f"<tr><td>DEMO100</td><td>Brake pad</td><td>{notes}</td></tr></table>"
+    )
+    parsed = parse_catalog_html(
+        html, url="https://elcats.ru/vw/Parts.aspx?Mdl=DEMO&SubId=PAD", operation="list_parts", entry={"brand": "DEMO"}
+    )["rows"][0]
+    public = _primary(
+        ref,
+        provider="elcats_catalog",
+        document_kind="public_catalog_page",
+        fitment_assertion=False,
+        conditions=parsed["conditions"],
+        raw_conditions=parsed["raw_conditions"],
+        unparsed_conditions=parsed["unparsed_conditions"],
+        unparsed_restrictions=parsed["unparsed_restrictions"],
+        notes=parsed["notes"],
+    )
+    assessed = parts.assess_part_fitment(_vehicle(ref, **profile), PART, {}, [_primary(ref), public])
+    assert assessed["data"]["state"] == state
+    assert assessed["execution"]["network_calls"] == 0
+    if state == "unknown":
+        assert assessed["missing_fields"]
+    else:
+        assert assessed["conflicts"][0]["field"] == "pr_codes"
 
 
 def test_parent_chain_cannot_cross_provider_entry_vehicle_or_entity_kind():

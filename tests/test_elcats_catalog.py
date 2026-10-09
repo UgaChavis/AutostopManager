@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import time
 from typing import Any, ClassVar
@@ -8,8 +9,8 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from autostop_manager import elcats_catalog as catalog
-from autostop_manager.automotive_contracts import public_oem_catalog_ref
+from autostop_manager import automotive_parts, elcats_catalog as catalog
+from autostop_manager.automotive_contracts import public_oem_catalog_ref, same_oem_catalog_ref
 from autostop_manager.public_catalog_http import CatalogImage, CatalogPage, CatalogReadError
 
 
@@ -110,6 +111,88 @@ def test_independent_operations_reuse_native_parent_refs(fixture_catalog):
     assert len(parts["data"]["candidates"]) == 2
     lookup = catalog.elcats_catalog_query("lookup_candidates", deepcopy(IDENTITY), deepcopy(PART), modification)
     assert len(lookup["data"]["candidates"]) == 1
+
+
+@pytest.mark.parametrize("restriction", ["PR:2E4", "PR:2E4; 2010 - 2018"])
+def test_sequential_refs_preserve_parent_conditions_placement_and_fitment_uncertainty(
+    fixture_catalog, monkeypatch, restriction
+):
+    read = FixtureReader.read
+
+    def restricted_page(self, url, *, route_guard=None):
+        page = read(self, url, route_guard=route_guard)
+        html = page.text
+        path = urlsplit(url).path
+        if path == "/Group.aspx":
+            html = html.replace(
+                ">ТОРМОЗНАЯ СИСТЕМА</a></td></tr>",
+                f">ТОРМОЗНАЯ СИСТЕМА</a></td><td>{restriction}</td></tr>",
+            )
+        elif path == "/Unit.aspx":
+            html = (
+                '<table><tr><td><a href="/Parts.aspx?Model=a922235a-0c56-4344-8b2b-853bd0515df1&Unit=DEMO">'
+                "ПЕРЕДНИЕ ТОРМОЗА</a></td><td>лев.</td></tr></table>"
+            )
+        elif path == "/Parts.aspx":
+            html = (
+                "<table><tr><th>Код детали</th><th>Наименование</th></tr>"
+                "<tr><td>DEMO100</td><td>PAD SET-BRAKE</td></tr></table>"
+            )
+        return CatalogPage(page.url, html, page.status)
+
+    monkeypatch.setattr(FixtureReader, "read", restricted_page)
+    modification = json.loads(json.dumps(_selected()))
+    groups = catalog.elcats_catalog_query("list_groups", deepcopy(IDENTITY), catalog_ref=modification)
+    group = next(node for node in groups["data"]["nodes"] if node["name"] == "ТОРМОЗНАЯ СИСТЕМА")
+    group_ref = json.loads(json.dumps(group["catalog_ref"]))
+    assert public_oem_catalog_ref(group_ref, entity_kind="group")
+    clause = group_ref["inherited_conditions"][0]
+    assert clause["conditions"]["pr_codes"]["all_of"] == ["2E4"]
+    assert restriction in clause["raw_conditions"]
+    assert clause["source_url"] == groups["evidence"][0]["locator"]
+    assert clause["binding"] == "group"
+    assert public_oem_catalog_ref(clause["catalog_ref"], entity_kind="group")
+    assert same_oem_catalog_ref(clause["catalog_ref"], group_ref)
+    if "2010" in restriction:
+        assert group_ref["inherited_restrictions"]
+    diagrams = catalog.elcats_catalog_query("list_diagrams", deepcopy(IDENTITY), catalog_ref=group_ref)
+    diagram = diagrams["data"]["nodes"][0]
+    diagram_ref = json.loads(json.dumps(diagram["catalog_ref"]))
+    assert public_oem_catalog_ref(diagram_ref, entity_kind="diagram")
+    assert diagram_ref["inherited_conditions"] == group_ref["inherited_conditions"]
+    assert diagram_ref["inherited_restrictions"] == group_ref["inherited_restrictions"]
+    assert diagram_ref["placement_context"] == {"axle": "front", "side": "left"}
+    response = catalog.elcats_catalog_query("list_parts", deepcopy(IDENTITY), catalog_ref=diagram_ref)
+    candidate = json.loads(json.dumps(response["data"]["candidates"][0]))
+    assert public_oem_catalog_ref(candidate["catalog_ref"], entity_kind="part")
+    assert candidate["inherited_conditions"] == diagram_ref["inherited_conditions"]
+    assert candidate["inherited_restrictions"] == diagram_ref["inherited_restrictions"]
+    assert candidate["axle"] == "front" and candidate["side"] == "left"
+    assert candidate["source"]["inherited_conditions"] == candidate["inherited_conditions"]
+    assert candidate["oem_confirmed"] is candidate["fitment_confirmed"] is False
+    lookup = catalog.elcats_catalog_query("lookup_candidates", deepcopy(IDENTITY), deepcopy(PART))
+    lookup_candidate = lookup["data"]["candidates"][0]
+    for field in ("inherited_conditions", "inherited_restrictions", "axle", "side"):
+        assert candidate[field] == lookup_candidate[field]
+    primary = {
+        "provider": "demo_manufacturer",
+        "primary_lineage": "demo_manufacturer",
+        "method": "supplied_document",
+        "locator": "https://example.com/epc",
+        "fetched_at": "2026-01-01T00:00:00Z",
+        "document_kind": "official_epc",
+        "fitment_assertion": True,
+        "part_number": "DEMO100",
+        "brand": "SsangYong",
+        "scope": "modification",
+        "catalog_ref": modification,
+    }
+    vehicle = {**deepcopy(IDENTITY), "catalog_ref": modification}
+    assessed = automotive_parts.assess_part_fitment(vehicle, candidate, {}, [primary, candidate["source"]])
+    assert assessed["data"]["state"] == "unknown"
+    assert "part.inherited_conditions" in assessed["missing_fields"]
+    assert "evidence[1].inherited_conditions" in assessed["missing_fields"]
+    assert assessed["execution"]["network_calls"] == 0
 
 
 @pytest.mark.parametrize("budget", [1, 2, 3, 4])
@@ -282,6 +365,9 @@ def test_one_diagram_redirect_keeps_valid_parent_chain_and_actual_route(fixture_
     modification = _selected()
     groups = catalog.elcats_catalog_query("list_groups", deepcopy(IDENTITY), catalog_ref=modification)
     group = groups["data"]["nodes"][0]["catalog_ref"]
+    group["inherited_restrictions"] = ["PR:2E4; 2010 - 2018"]
+    group["inherited_conditions"] = [{"conditions": {"pr_codes": {"all_of": ["2E4"]}}, "binding": "group"}]
+    group["placement_context"] = {"axle": "front"}
     actual = "https://ssangyong.exist.ru/Parts.aspx?Model=a922235a-0c56-4344-8b2b-853bd0515df1&Unit=single&Title=BRAKES"
 
     def page(self, entry, url, operation):
@@ -293,3 +379,6 @@ def test_one_diagram_redirect_keeps_valid_parent_chain_and_actual_route(fixture_
     reference = response["data"]["nodes"][0]["catalog_ref"]
     assert public_oem_catalog_ref(reference, entity_kind="diagram")
     assert reference["parameters"]["Unit"] == "single" and reference["parent_ref"] == group
+    assert reference["inherited_restrictions"] == group["inherited_restrictions"]
+    assert reference["inherited_conditions"] == group["inherited_conditions"]
+    assert reference["placement_context"] == group["placement_context"]

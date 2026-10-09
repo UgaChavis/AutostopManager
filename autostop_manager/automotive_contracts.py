@@ -347,6 +347,8 @@ def same_oem_catalog_ref(left: Any, right: Any) -> bool:
         not isinstance(kind, str)
         or not oem_catalog_ref(left, entity_kind=kind)
         or not oem_catalog_ref(right, entity_kind=kind)
+        or left.get("provider") != right.get("provider")
+        or left.get("namespace") != right.get("namespace")
     ):
         return False
     if left.get("provider") == "partsapi_ru":
