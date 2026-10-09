@@ -15,8 +15,10 @@ from typing import Any
 import pytest
 
 from autostop_manager import j1_vin_documents as documents
+from test_j1_vin_evidence import Sandbox, sandbox as sandbox
 
 _PYTHON = str(Path(sys.executable).resolve())
+_FORMAT_TAGS = ["b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]
 
 
 def _pdf(page_count: int) -> bytes:
@@ -394,6 +396,184 @@ def test_html_nested_button_closes_intervening_hidden_block(tmp_path: Path) -> N
     body = b"<button hidden><div hidden>Hidden block<button>Visible control</button></div><p>Visible tail</p>"
     result = documents.extract_content(body, "text/html", "", tmp_path)
     assert result["pages"][0]["text"] == "Visible control\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize("own_hidden", [False, True])
+def test_html_nested_anchor_reconstruction_distinguishes_own_and_inherited_hidden(
+    tmp_path: Path, tag: str, own_hidden: bool
+) -> None:
+    attribute = " hidden" if own_hidden else ""
+    body = f"<a hidden><{tag}{attribute}>Hidden prefix<a>1HGCM82673A000000</a></{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is not own_hidden
+    assert "Hidden prefix" not in text and "Visible tail" in text and not result["truncated"]
+    if own_hidden:
+        assert "html_formatting_reconstruction" in result["limitations"]
+
+
+@pytest.mark.parametrize("tag", ["a", *_FORMAT_TAGS])
+@pytest.mark.parametrize("own_block_hidden", [False, True])
+def test_html_formatting_end_preserves_independently_hidden_block_and_releases_inheritance(
+    tmp_path: Path, tag: str, own_block_hidden: bool
+) -> None:
+    formatting_attr = "" if own_block_hidden else " hidden"
+    block_attr = " hidden" if own_block_hidden else ""
+    body = f"<{tag}{formatting_attr}>Prefix<div{block_attr}></{tag}>1HGCM82673A000000</div><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is not own_block_hidden
+    assert "Visible tail" in text and "html_formatting_reconstruction" in result["limitations"]
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize(
+    "prefix,close,finish",
+    [
+        ("<p>", "</p>", "</{tag}>"),
+        ("<p>", "<p>", "</{tag}></p>"),
+        ("<ul><li>", "</li><li>", "</li></{tag}></ul>"),
+        ("<ul><li>", "<li>", "</{tag}></ul>"),
+        ("<div>", "</div>", "</{tag}>"),
+        ("<button>", "<button>", "</button></{tag}>"),
+        ("<button>", "</button>", "</{tag}>"),
+    ],
+)
+def test_html_hidden_formatting_survives_block_list_and_button_reconstruction(
+    tmp_path: Path, tag: str, prefix: str, close: str, finish: str
+) -> None:
+    body = prefix + f"<{tag} hidden>Hidden prefix" + close + "1HGCM82673A000000" + finish.format(tag=tag)
+    result = documents.extract_content((body + "<p>Visible tail</p>").encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+    assert "html_formatting_reconstruction" in result["limitations"] and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize("ancestor", ["p", "div", "button"])
+def test_html_reconstruction_discards_only_inherited_hidden_after_ancestor_end(
+    tmp_path: Path, tag: str, ancestor: str
+) -> None:
+    body = f"<{ancestor} hidden><{tag}>Hidden prefix</{ancestor}>1HGCM82673A000000</{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize("marker", ["td", "th", "caption", "template", "object", "applet", "marquee"])
+def test_html_formatting_markers_clear_hidden_context_after_their_end(tmp_path: Path, tag: str, marker: str) -> None:
+    table = marker in {"td", "th", "caption"}
+    prefix = "<table><tr>" if marker in {"td", "th"} else "<table>" if table else ""
+    suffix = "</tr></table>" if marker in {"td", "th"} else "</table>" if table else ""
+    body = prefix + f"<{marker}><{tag} hidden>Hidden prefix</{marker}>" + suffix
+    body += f"1HGCM82673A000000</{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["b", "em", "strong"])
+def test_html_formatting_marker_suspends_and_restores_prior_hidden_reconstruction(tmp_path: Path, tag: str) -> None:
+    body = (
+        f"<p><{tag} hidden>Hidden prefix</p><table><tr><td>Visible cell 1HGCM82673A000000</td></tr></table>"
+        f"Hidden after table</{tag}><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "Visible cell 1HGCM82673A000000" in text and "Visible tail" in text
+    assert "Hidden" not in text and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["b", "em", "strong", "code"])
+@pytest.mark.parametrize("outer_hidden", [False, True])
+def test_html_duplicate_formatting_end_closes_the_inner_reconstructed_identity(
+    tmp_path: Path, tag: str, outer_hidden: bool
+) -> None:
+    outer_attr = " hidden" if outer_hidden else ""
+    inner_attr = "" if outer_hidden else " hidden"
+    body = (
+        f"<{tag}{outer_attr}><p><{tag}{inner_attr}>Hidden prefix</p></{tag}>"
+        f"<table><tr><td>1HGCM82673A000000</td></tr></table></{tag}><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is not outer_hidden
+    assert "Hidden prefix" not in text and "Visible tail" in text and not result["truncated"]
+    assert "html_formatting_reconstruction" in result["limitations"]
+
+
+def test_html_new_anchor_clears_a_predecessor_already_removed_from_the_stack(tmp_path: Path) -> None:
+    body = b"<p><a hidden>Hidden prefix</p><a>1HGCM82673A000000</a><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["a", "button"])
+def test_xhtml_nested_controls_preserve_xml_hidden_ancestry(tmp_path: Path, tag: str) -> None:
+    body = (
+        f'<html xmlns="http://www.w3.org/1999/xhtml"><body><{tag} hidden=""><{tag}>1HGCM82673A000000</{tag}>'
+        f"</{tag}><p>Visible tail</p></body></html>"
+    )
+    result = documents.extract_content(body.encode(), "application/xhtml+xml", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+def test_xhtml_selfclosing_hidden_formatting_does_not_start_html_reconstruction(tmp_path: Path) -> None:
+    body = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><b hidden=""/>1HGCM82673A000000<p>Visible tail</p></body></html>'
+    result = documents.extract_content(body, "application/xhtml+xml", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail"
+    assert "html_formatting_reconstruction" not in result["limitations"]
+
+
+def test_html_formatting_bookkeeping_stays_bounded_and_balanced(tmp_path: Path) -> None:
+    parser = documents._VisibleHTML()
+    parser.feed("<div><b>Public</b><em hidden>Hidden</em></div>" * 1000)
+    parser.close()
+    assert not parser.structure_limited and not parser.stack and not parser.hidden
+    assert not parser._formatting and not parser._visibility and not parser._own_hidden
+    assert not parser._closed_details and not parser._details_summary_seen and not parser._summary_nodes
+    limited = documents._VisibleHTML()
+    limited.feed("<p><b hidden>Hidden prefix</p>" * 600 + "1HGCM82673A000000")
+    limited.close()
+    assert limited.structure_limited and limited.hidden and limited.truncated
+    assert len(limited.stack) <= 512 and len(limited._formatting) <= 512 and len(limited._visibility) <= 512
+    assert "1HGCM82673A000000" not in "".join(limited.parts)
+
+
+@pytest.mark.parametrize(
+    "hidden_source",
+    [
+        "<a><div hidden></a><a>1HGCM82673A000000</a></div>",
+        "<a hidden><em hidden>Hidden<a>1HGCM82673A000000</a></em>",
+        "<b hidden><p><b>Hidden prefix</p></b><table><tr><td>1HGCM82673A000000</td></tr></table></b>",
+    ],
+)
+def test_html_reconstruction_limit_survives_save_and_document_read_without_false_vin_binding(
+    sandbox: Sandbox, hidden_source: str
+) -> None:
+    from autostop_manager import j1_vin_research as api, j1_vin_store as store, j1_vin_worker as worker
+    from test_j1_vin_evidence import _claim, _document, _record, _start
+
+    job = _start()
+    document = _document(job, vin=None)
+    result = documents.extract_content(
+        (hidden_source + "<p>Engine Alpha; power 100 kW; transmission Manual.</p>").encode(),
+        "text/html",
+        "https://example.org/synthetic",
+        sandbox.root,
+    )
+    with store.connect(job, transaction=True) as conn:
+        current = store.metadata(conn)
+        worker._save_document(
+            conn, current, {"id": document["document_id"], "url": document["url"], "title": "Synthetic source"}, result
+        )
+        store.write_metadata(conn, current)
+    readback = api.research_document(job, document["document_id"])
+    assert "html_formatting_reconstruction" in readback["limitations"]
+    assert readback["match_evidence_id"] is None
+    recorded = _record(job, [_claim(readback)], finalize=True)
+    assert not recorded["ok"] and recorded["error"]["code"] == "vin_match_evidence_required"
+    assert api.research_report(job)["claims"] == []
 
 
 def test_html_definition_scope_retains_hidden_ancestors_and_nested_lists(tmp_path: Path) -> None:

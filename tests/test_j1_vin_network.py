@@ -984,6 +984,77 @@ def test_ddg_hidden_nested_anchor_cannot_replace_a_visible_outer_result(monkeypa
 
 
 @pytest.mark.parametrize(
+    "tag", ["b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]
+)
+@pytest.mark.parametrize("own_hidden", [False, True])
+def test_ddg_anchor_reconstruction_keeps_only_independently_hidden_formatting(
+    monkeypatch: pytest.MonkeyPatch, tag: str, own_hidden: bool
+) -> None:
+    attribute = " hidden" if own_hidden else ""
+    body = (
+        f'<a hidden><{tag}{attribute}>Hidden prefix<a class="result__a" href="https://example.org/reference">'
+        f"Source title</a></{tag}><p>Provider unavailable</p>"
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    if own_hidden:
+        assert (result["ok"], result["result_class"], result["results"]) == (False, "error", [])
+        assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+    else:
+        assert result["ok"] and len(result["results"]) == 1
+        assert result["results"][0]["url"] == "https://example.org/reference"
+        assert result["results"][0]["title"] == "Source title"
+
+
+def test_ddg_formatting_end_cannot_remove_a_separate_hidden_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<a><div hidden></a><a class="result__a" href="https://example.org/hidden">Hidden source</a></div>'
+        "<p>Provider unavailable</p>"
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert (result["ok"], result["result_class"], result["results"]) == (False, "error", [])
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_formatting_end_releases_inherited_hidden_without_hiding_a_visible_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        '<a hidden><div></a><a class="result__a" href="https://example.org/visible">Visible source</a></div>'
+        '<div class="result__snippet">Visible snippet</div>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and len(result["results"]) == 1
+    row = result["results"][0]
+    assert (row["url"], row["title"], row["snippet"]) == (
+        "https://example.org/visible",
+        "Visible source",
+        "Visible snippet",
+    )
+
+
+@pytest.mark.parametrize("tag", ["b", "em", "strong", "code"])
+@pytest.mark.parametrize("outer_hidden", [False, True])
+def test_ddg_duplicate_formatting_end_cannot_remove_a_same_tag_hidden_ancestor(
+    monkeypatch: pytest.MonkeyPatch, tag: str, outer_hidden: bool
+) -> None:
+    outer_attr = " hidden" if outer_hidden else ""
+    inner_attr = "" if outer_hidden else " hidden"
+    body = (
+        f"<{tag}{outer_attr}><p><{tag}{inner_attr}>Hidden prefix</p></{tag}><table><tr><td>"
+        '<a class="result__a" href="https://example.org/reference">Source title</a>'
+        f"</td></tr></table></{tag}><p>Provider unavailable</p>"
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    if outer_hidden:
+        assert (result["ok"], result["result_class"], result["results"]) == (False, "error", [])
+        assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+    else:
+        assert result["ok"] and len(result["results"]) == 1
+        assert result["results"][0]["url"] == "https://example.org/reference"
+        assert result["results"][0]["title"] == "Source title"
+
+
+@pytest.mark.parametrize(
     "opening,closing",
     [
         ("<template>", "</template>"),

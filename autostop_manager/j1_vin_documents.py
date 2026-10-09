@@ -148,6 +148,11 @@ _ANCHOR_SCOPE_BOUNDARIES = _LI_SCOPE_BOUNDARIES | _P_CLOSING_STARTS | _FOREIGN_T
 _BUTTON_SCOPE_BOUNDARIES = frozenset(
     {"html", "table", "td", "th", "caption", "applet", "object", "marquee", "select", "svg", "math"}
 )
+_FORMATTING_TAGS = frozenset(
+    {"a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
+)
+_FORMATTING_MARKERS = frozenset({"applet", "caption", "marquee", "object", "td", "th", "template"})
+_FORMATTING_BLOCKS = _P_CLOSING_STARTS | _LI_SCOPE_BOUNDARIES
 
 
 def _first_attributes(attrs: list[tuple[str, str | None]]) -> dict[str, str | None]:
@@ -178,7 +183,13 @@ def _bounded_timeout(default: float, remaining: float | None) -> float:
 
 
 class _HTMLVisibility(HTMLParser):
-    """Track bounded HTML visibility without collecting or budgeting text."""
+    """Track bounded visibility, including conservative formatting recovery.
+
+    The active formatting list keeps only node identities and their own hidden
+    state, not a DOM. HTML may reconstruct these nodes after an ancestor closes;
+    inherited hidden attributes do not survive reconstruction. Crossed block
+    ancestry is preserved rather than exposed by a formatting end tag.
+    """
 
     def __init__(self, *, xhtml: bool = False) -> None:
         super().__init__(convert_charrefs=True)
@@ -187,6 +198,12 @@ class _HTMLVisibility(HTMLParser):
         self.xhtml = xhtml
         self._closed_details: set[int] = set()
         self._details_summary_seen: set[int] = set()
+        self._summary_nodes: set[int] = set()
+        self._own_hidden: set[int] = set()
+        self._visibility: dict[int, bool] = {}
+        self._formatting: list[tuple[tuple[str, bool], bool]] = []
+        self._formatting_hidden = 0
+        self.formatting_limited = False
 
     def set_cdata_mode(self, elem: str, *, escapable: bool = False) -> None:
         # Normalize RCDATA across Python versions: the document consumer
@@ -197,16 +214,90 @@ class _HTMLVisibility(HTMLParser):
 
     @property
     def hidden(self) -> bool:
-        return self.structure_limited or bool(
-            self.stack and (self.stack[-1][1] or id(self.stack[-1]) in self._closed_details)
+        return (
+            self.structure_limited
+            or self._formatting_hidden > 0
+            or bool(self.stack and (self._visibility[id(self.stack[-1])] or id(self.stack[-1]) in self._closed_details))
         )
+
+    def _forget_node(self, node: tuple[str, bool]) -> None:
+        key = id(node)
+        self._closed_details.discard(key)
+        self._details_summary_seen.discard(key)
+        self._summary_nodes.discard(key)
+        self._own_hidden.discard(key)
+        self._visibility.pop(key, None)
+
+    def _recompute_visibility(self) -> None:
+        parent: tuple[str, bool] | None = None
+        inherited = self._formatting_hidden > 0
+        for node in self.stack:
+            if parent is not None:
+                inherited = self._visibility[id(parent)] or (
+                    id(parent) in self._closed_details and id(node) not in self._summary_nodes
+                )
+            self._visibility[id(node)] = inherited or id(node) in self._own_hidden
+            parent = node
+
+    def _clear_formatting_marker(self, node: tuple[str, bool]) -> None:
+        for index in range(len(self._formatting) - 1, -1, -1):
+            if self._formatting[index][0] is node:
+                del self._formatting[index:]
+                self._formatting_hidden = 0
+                for active, own_hidden in reversed(self._formatting):
+                    if active[0] in _FORMATTING_MARKERS:
+                        break
+                    self._formatting_hidden += own_hidden
+                return
+
+    def _formatting_node(self, tag: str) -> tuple[str, bool] | None:
+        for node, _own_hidden in reversed(self._formatting):
+            if node[0] in _FORMATTING_MARKERS:
+                break
+            if node[0] == tag:
+                return node
+        return None
+
+    def _forget_formatting(self, tag: str, target: tuple[str, bool] | None = None) -> None:
+        for index in range(len(self._formatting) - 1, -1, -1):
+            node, own_hidden = self._formatting[index]
+            if node[0] in _FORMATTING_MARKERS:
+                return
+            if node[0] == tag and (target is None or node is target):
+                del self._formatting[index]
+                if own_hidden:
+                    self._formatting_hidden -= 1
+                    self._recompute_visibility()
+                return
+
+    def _track_formatting(self, node: tuple[str, bool], own_hidden: bool) -> None:
+        if self.xhtml or node[0] not in _FORMATTING_TAGS | _FORMATTING_MARKERS:
+            return
+        if len(self._formatting) >= 512:
+            self.structure_limited = True
+            return
+        own_hidden = own_hidden and node[0] in _FORMATTING_TAGS
+        self._formatting.append((node, own_hidden))
+        if node[0] in _FORMATTING_MARKERS:
+            self._formatting_hidden = 0
+            self._recompute_visibility()
+        else:
+            self._formatting_hidden += own_hidden
 
     def _close_stack_from(self, index: int) -> list[tuple[str, bool]]:
         closed = self.stack[index:]
         del self.stack[index:]
+        before = self._formatting_hidden
         for node in closed:
-            self._closed_details.discard(id(node))
-            self._details_summary_seen.discard(id(node))
+            if node[0] in _FORMATTING_MARKERS:
+                self._clear_formatting_marker(node)
+            self._forget_node(node)
+        if before != self._formatting_hidden:
+            self._recompute_visibility()
+        if self._formatting:
+            closed_ids = {id(node) for node in closed}
+            if any(own and id(node) in closed_ids for node, own in self._formatting):
+                self.formatting_limited = True
         return closed
 
     def _foreign_content(self) -> bool:
@@ -223,13 +314,16 @@ class _HTMLVisibility(HTMLParser):
                 return not any(node[0] in integrations for node in self.stack[index + 1 :])
         return False
 
-    def _element_hidden(self, tag: str, values: dict[str, str | None]) -> bool:
+    def _inherited_hidden(self, tag: str) -> bool:
         parent_hidden = self.hidden
         if tag == "summary" and self.stack:
             parent = self.stack[-1]
             if id(parent) in self._closed_details and id(parent) not in self._details_summary_seen:
                 self._details_summary_seen.add(id(parent))
-                parent_hidden = parent[1]
+                parent_hidden = self._visibility[id(parent)] or self._formatting_hidden > 0
+        return parent_hidden
+
+    def _element_own_hidden(self, tag: str, values: dict[str, str | None]) -> bool:
         style = re.sub(r"\s+", "", (values.get("style") or "").lower())
         return (
             tag in _HIDDEN_TAGS
@@ -240,7 +334,6 @@ class _HTMLVisibility(HTMLParser):
             or "visibility:hidden" in style
             or (tag == "input" and (values.get("type") or "").lower() == "hidden")
             or (tag == "dialog" and "open" not in values)
-            or parent_hidden
         )
 
     def _close_in_scope(self, tags: set[str], boundaries: set[str] | frozenset[str]) -> None:
@@ -250,14 +343,18 @@ class _HTMLVisibility(HTMLParser):
         for index in range(len(self.stack) - 1, -1, -1):
             tag = self.stack[index][0]
             if tag in tags:
+                if tag in _FORMATTING_TAGS:
+                    self._forget_formatting(tag, self.stack[index])
                 self._close_stack_from(index)
                 return
-            if tag in boundaries or tag in _HIDDEN_TAGS or (tag in _MATH_METADATA_TAGS and self.stack[index][1]):
+            if (
+                tag in boundaries
+                or tag in _HIDDEN_TAGS
+                or (tag in _MATH_METADATA_TAGS and self._visibility[id(self.stack[index])])
+            ):
                 return
 
-    def _start_element(self, tag: str, attrs: list[tuple[str, str | None]]) -> bool | None:
-        if self.structure_limited:
-            return None
+    def _repair_start(self, tag: str) -> None:
         if tag not in _HEAD_CONTENT_TAGS and tag not in {"html", "head"}:
             self._close_in_scope({"head"}, {"html"})
         if tag in _P_CLOSING_STARTS:
@@ -277,6 +374,7 @@ class _HTMLVisibility(HTMLParser):
             # Inline nested links close the previous link. Block descendants
             # require the browser's adoption-agency algorithm; keep those
             # conservative rather than exposing a hidden block by popping it.
+            self._forget_formatting("a")
             self._close_in_scope({"a"}, _ANCHOR_SCOPE_BOUNDARIES)
         elif tag == "button":
             self._close_in_scope({"button"}, _BUTTON_SCOPE_BOUNDARIES)
@@ -287,30 +385,83 @@ class _HTMLVisibility(HTMLParser):
         elif tag in {"thead", "tbody", "tfoot"}:
             self._close_in_scope({"tr"}, {"table", "thead", "tbody", "tfoot"})
             self._close_in_scope({"thead", "tbody", "tfoot"}, {"table"})
+
+    def _start_element(self, tag: str, attrs: list[tuple[str, str | None]]) -> bool | None:
+        if self.structure_limited:
+            return None
+        if not self.xhtml:
+            self._repair_start(tag)
         if len(self.stack) >= 512:
             self.structure_limited = True
             return None
         values = _first_attributes(attrs)
-        hidden = self._element_hidden(tag, values)
+        summary_allowed = bool(
+            tag == "summary"
+            and self.stack
+            and id(self.stack[-1]) in self._closed_details
+            and id(self.stack[-1]) not in self._details_summary_seen
+        )
+        inherited = self._inherited_hidden(tag)
+        own_hidden = self._element_own_hidden(tag, values)
+        hidden = own_hidden or inherited
         if tag not in _VOID_TAGS:
             node = (tag, hidden)
             self.stack.append(node)
+            self._visibility[id(node)] = hidden
+            if own_hidden:
+                self._own_hidden.add(id(node))
+            if summary_allowed:
+                self._summary_nodes.add(id(node))
             if tag == "details" and "open" not in values:
                 self._closed_details.add(id(node))
+            self._track_formatting(node, own_hidden)
+            hidden = self._visibility[id(node)]
         if not self.xhtml and tag in _RAW_TEXT_TAGS and not self._foreign_content():
             # Normalize modes across HTMLParser versions, including nonvoid
             # slash tokens that do not get its automatic raw-text mode switch.
             self.set_cdata_mode(tag)
-        return hidden
+        return None if self.structure_limited else hidden
+
+    def _end_formatting(self, tag: str) -> list[tuple[str, bool]]:
+        active = self._formatting_node(tag)
+        if active is not None and not any(node is active for node in self.stack):
+            # A reconstructed inner entry may have the same tag as a still
+            # open outer node. End only that entry, never its physical ancestor.
+            self.formatting_limited = True
+            self._forget_formatting(tag, active)
+            return []
+        for index in range(len(self.stack) - 1, -1, -1):
+            node = self.stack[index]
+            current = node[0]
+            if node is active or (active is None and current == tag):
+                self._forget_formatting(tag, node)
+                if any(child[0] in _FORMATTING_BLOCKS for child in self.stack[index + 1 :]):
+                    # Adoption can leave the block open while removing or
+                    # cloning its formatting ancestor. Preserve the block's
+                    # own visibility; never discard a hidden block here.
+                    self.formatting_limited = True
+                    del self.stack[index]
+                    self._forget_node(node)
+                    self._recompute_visibility()
+                    return [node]
+                return self._close_stack_from(index)
+            if current in _HIDDEN_TAGS | _FORMATTING_MARKERS | {"table", "select"} or (
+                current in _MATH_METADATA_TAGS and self._visibility[id(node)]
+            ):
+                return []
+        self._forget_formatting(tag)
+        return []
 
     def _end_element(self, tag: str) -> list[tuple[str, bool]]:
         if self.structure_limited:
             return []
+        if not self.xhtml and tag in _FORMATTING_TAGS:
+            return self._end_formatting(tag)
         for index in range(len(self.stack) - 1, -1, -1):
             current = self.stack[index][0]
             if current == tag:
                 return self._close_stack_from(index)
-            if current in _HIDDEN_TAGS or (current in _MATH_METADATA_TAGS and self.stack[index][1]):
+            if current in _HIDDEN_TAGS or (current in _MATH_METADATA_TAGS and self._visibility[id(self.stack[index])]):
                 break
         return []
 
@@ -442,6 +593,8 @@ def _html_content(body: bytes, content_type: str, timeout_seconds: float | None 
         limitations.append("text_limit")
     if parser.structure_limited:
         limitations.append("html_structure_limit")
+    if parser.formatting_limited:
+        limitations.append("html_formatting_reconstruction")
     return {
         "ok": True,
         "kind": "html",
