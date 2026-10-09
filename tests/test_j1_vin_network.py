@@ -536,6 +536,149 @@ def test_ddg_is_fallback_only_and_requires_selected_engine(monkeypatch: pytest.M
     assert result["providers"][-1]["reason"] == "primary_results"
 
 
+@pytest.mark.parametrize(
+    "recipient",
+    [
+        "https://example.org/search",
+        "https://duckduckgo.com.example.org/search",
+        "http://html.duckduckgo.com/html/",
+        "https://html.duckduckgo.com:80/html/",
+        "https://lite.duckduckgo.com/html/",
+    ],
+)
+def test_ddg_redirect_recipient_is_checked_before_robots_dns_or_get(
+    monkeypatch: pytest.MonkeyPatch, recipient: str
+) -> None:
+    calls = fake_transport(
+        monkeypatch,
+        [
+            Response(302, headers={"Location": recipient + "?q=" + VIN}),
+            Response(body=b'<div class="no-results">Empty</div>'),
+        ],
+    )
+    dns: list[str] = []
+    robots: list[str] = []
+
+    def resolve(host: str, _port: int) -> str:
+        dns.append(host)
+        return "93.184.216.34"
+
+    def policy(url: str, *_args: Any) -> tuple[bool, float]:
+        robots.append(url)
+        return True, 0.0
+
+    monkeypatch.setattr(network, "_public_address", resolve)
+    monkeypatch.setattr(network, "_robots_policy", policy)
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "search_recipient_disallowed"}]
+    assert not result["ok"] and result["result_class"] == "error"
+    assert dns == ["html.duckduckgo.com"] and len(robots) == 1 and len(calls) == 1
+    assert VIN not in json.dumps(result)
+
+
+@pytest.mark.parametrize("recipient", ["html.duckduckgo.com", "duckduckgo.com:443", "www.duckduckgo.com"])
+def test_ddg_fixed_https_redirects_keep_robots_and_scoped_query(
+    monkeypatch: pytest.MonkeyPatch, recipient: str
+) -> None:
+    location = "https://" + recipient + "/html/?q=" + VIN
+    calls = fake_transport(
+        monkeypatch,
+        [
+            Response(302, headers={"Location": location}),
+            Response(body=b'<a class="result__a" href="https://example.org/manual">Manual</a>'),
+        ],
+    )
+    checked: list[str] = []
+
+    def policy(url: str, *_args: Any) -> tuple[bool, float]:
+        checked.append(url)
+        return True, 0.0
+
+    monkeypatch.setattr(network, "_robots_policy", policy)
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["ok"] and result["errors"] == []
+    assert [row["url"] for row in result["results"]] == ["https://example.org/manual"]
+    assert len(calls) == 2 and calls[1]["host"] == urlsplit(location).hostname
+    assert all(VIN in call["target"] for call in calls)
+    assert checked == ["https://html.duckduckgo.com/html/?q=" + VIN, location]
+
+
+def test_search_recipient_restriction_does_not_limit_scoped_static_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
+    location = "https://example.net/document/" + VIN
+    calls = fake_transport(
+        monkeypatch, [Response(302, headers={"Location": location}), Response(body=b"Public document")]
+    )
+    result = network.request_vin("https://example.org/document/" + VIN, scope("duckduckgo"), max_bytes=100)
+    assert result[2:] == (b"Public document", location)
+    assert [call["host"] for call in calls] == ["example.org", "example.net"]
+    assert all(VIN in call["target"] for call in calls)
+
+
+def test_search_recipient_guard_requires_selected_engine_before_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_transport(monkeypatch, [])
+    with pytest.raises(ValueError, match=r"^search_recipient_disallowed$"):
+        network.request_vin(
+            "https://html.duckduckgo.com/html/?q=" + VIN,
+            scope("bing"),
+            max_bytes=100,
+            search_engine="duckduckgo",
+        )
+    assert calls == []
+
+
+def test_ddg_redirect_keeps_robots_denial_before_followup_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_transport(monkeypatch, [Response(302, headers={"Location": "/blocked?q=" + VIN})])
+    monkeypatch.setattr(network, "_robots_policy", lambda url, *_args: ("/blocked" not in url, 0.0))
+    with pytest.raises(ValueError, match=r"^redirect_robots_disallowed$"):
+        network._duckduckgo_search(VIN, scope("duckduckgo"))
+    assert len(calls) == 1
+
+
+def test_ddg_search_keeps_private_dns_denial_before_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_transport(monkeypatch, [])
+    monkeypatch.setattr(network, "_public_address", lambda *_args: "127.0.0.1")
+    with pytest.raises(ValueError, match=r"^unsafe_dns_answer$"):
+        network._duckduckgo_search(VIN, scope("duckduckgo"))
+    assert calls == []
+
+
+@pytest.mark.parametrize("guard", ["deadline", "expiry", "cancel"])
+def test_ddg_redirect_keeps_deadline_expiry_and_cancellation_guards(
+    monkeypatch: pytest.MonkeyPatch, guard: str
+) -> None:
+    clock = [100.0]
+    active = [True]
+    authorized = network.VinScope(VIN, "test", time.time() + 60, ("duckduckgo",), lambda: active[0])
+    monkeypatch.setattr(network.time, "monotonic", lambda: clock[0])
+
+    class StoppingResponse(Response):
+        def getheaders(self) -> list[tuple[str, str]]:
+            if guard == "deadline":
+                clock[0] += 11
+            elif guard == "expiry":
+                monkeypatch.setattr(network.time, "time", lambda: authorized.expires_at + 1)
+            else:
+                active[0] = False
+            return [("Location", "/followup?q=" + VIN)]
+
+    calls = fake_transport(monkeypatch, [StoppingResponse(302)])
+    expected = "fetch_timeout" if guard == "deadline" else "scope_expired"
+    with pytest.raises((TimeoutError, ValueError), match="^" + expected + "$"):
+        network._duckduckgo_search(VIN, authorized)
+    assert len(calls) == 1 and calls[0]["closed"]
+
+
+def test_ddg_robots_redirect_keeps_fixed_https_recipient_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_transport(
+        monkeypatch,
+        [Response(302, headers={"Location": "http://html.duckduckgo.com/robots.txt"}), Response(404)],
+        robots=False,
+    )
+    with pytest.raises(ValueError, match=r"^robots_disallowed$"):
+        network._duckduckgo_search(VIN, scope("duckduckgo"))
+    assert len(calls) == 1 and calls[0]["target"] == "/robots.txt"
+
+
 def test_searxng_loopback_request_has_only_selected_recipient(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOSTOP_J1_SEARXNG_URL", "http://127.0.0.1:8890")
     calls = fake_transport(monkeypatch, [Response(body=b'{"results": []}')])
@@ -597,6 +740,121 @@ def test_ddg_unknown_or_incomplete_http_200_is_error_not_empty(monkeypatch: pyte
     assert (result["ok"], result["result_class"], result["results"]) == (False, "error", [])
     assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
     assert result["providers"][0]["outcome"] == "error" and len(calls) == 1
+
+
+@pytest.mark.parametrize("classes", ["result__advert", "not-result__a", "result__a-placeholder"])
+def test_ddg_no_results_does_not_export_anchors_with_similar_classes(
+    monkeypatch: pytest.MonkeyPatch, classes: str
+) -> None:
+    body = (
+        f'<div class="no-results">No results</div><a class="{classes}" href="https://example.org/advert">Advert</a>'
+    ).encode()
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["ok"] and result["result_class"] == "empty"
+    assert result["results"] == [] and result["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "incomplete",
+    ['<a class="result__a">Missing URL</a>', '<a class="result__a" href="https://example.org/manual">Unfinished'],
+)
+def test_ddg_incomplete_anchor_cannot_lend_result_state_to_unrelated_link(
+    monkeypatch: pytest.MonkeyPatch, incomplete: str
+) -> None:
+    body = (incomplete + '<a class="result__advert" href="https://example.org/advert">Advert</a>').encode()
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert not result["ok"] and result["results"] == []
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+@pytest.mark.parametrize(
+    "opening,closing",
+    [
+        ("<template>", "</template>"),
+        ("<noscript>", "</noscript>"),
+        ("<svg>", "</svg>"),
+        ("<script>", "</script>"),
+        ("<style>", "</style>"),
+        ("<div hidden>", "</div>"),
+        ('<div aria-hidden="true">', "</div>"),
+        ('<div style="DISPLAY: none">', "</div>"),
+        ('<div style="visibility: hidden">', "</div>"),
+    ],
+)
+def test_ddg_hidden_markers_and_links_are_parse_failure_not_empty(
+    monkeypatch: pytest.MonkeyPatch, opening: str, closing: str
+) -> None:
+    body = (
+        "<html>" + opening + '<div class="no-results">No results</div>'
+        '<a class="result__a" href="https://example.org/template">Template link</a>'
+        + closing
+        + "<body><h1>Service unavailable</h1></body></html>"
+    ).encode()
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert not result["ok"] and result["result_class"] == "error" and result["results"] == []
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_head_metadata_does_not_recognize_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = b'<html><head><meta class="no-results"></head><body>Service unavailable</body></html>'
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert not result["ok"] and result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_unmatched_ends_do_not_expose_template_markers(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        b'<html><div><template></div><div class="no-results">No results</div>'
+        b'<a class="result__a" href="https://example.org/hidden">Hidden</a></template></div>'
+        b"<body>Service unavailable</body></html>"
+    )
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert not result["ok"] and result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_visible_result_text_excludes_hidden_nodes_and_preserves_nested_snippet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        b"<html><head><title>Public search</title><body>"
+        b'<a class="extra result__a" href="https://example.org/manual">Public <span hidden>secret title</span>title</a>'
+        b'<div class="result__snippet">Public <div hidden>secret snippet</div>snippet <span>tail</span></div>'
+        b'<template><a class="result__a" href="https://example.org/template">secret template</a></template>'
+        b"</body></html>"
+    )
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["ok"] and result["errors"] == [] and len(result["results"]) == 1
+    row = result["results"][0]
+    assert (row["url"], row["title"], row["snippet"]) == (
+        "https://example.org/manual",
+        "Public title",
+        "Public snippet tail",
+    )
+    assert "secret" not in json.dumps(result)
+
+
+def test_ddg_visibility_is_independent_of_document_text_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from autostop_manager import j1_vin_documents as documents
+
+    monkeypatch.setattr(documents, "MAX_TEXT_BYTES", 1)
+    fake_transport(
+        monkeypatch, [Response(body=b'<a class="result__a" href="https://example.org/manual">Public title</a>')]
+    )
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["ok"] and result["results"][0]["title"] == "Public title"
+
+
+def test_ddg_real_nesting_limit_is_parse_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = b'<a class="result__a" href="https://example.org/manual">Manual</a>' + b"<div>" * 600
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert not result["ok"] and result["results"] == []
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
 
 
 def test_ddg_explicit_no_results_is_successful_empty(monkeypatch: pytest.MonkeyPatch) -> None:

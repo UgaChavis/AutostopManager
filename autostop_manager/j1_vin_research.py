@@ -181,6 +181,7 @@ def j1_research_vin(vin: str, idempotency_key: str) -> dict[str, Any]:
     _check_key(idempotency_key)
     queries = [f'"{normalized}"', f'"{normalized[:3]}" VIN manufacturer', f'"{normalized[:8]}" VIN identification']
     job_id = store.create(normalized, idempotency_key, queries)
+    store.reconcile_failed_job(job_id)
     with store.connect(job_id) as conn:
         return _read_status(conn)
 

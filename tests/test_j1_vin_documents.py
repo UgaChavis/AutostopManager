@@ -118,6 +118,67 @@ def test_html_optional_end_tags_preserve_large_flat_documents(
     assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
 
 
+@pytest.mark.parametrize("head_end", ["", "</head>"])
+@pytest.mark.parametrize("body_text", ["<body><p>{text}</p></body>", "<p>{text}</p>", "{text}"])
+def test_html_body_closes_optional_head_without_hiding_visible_vin(
+    tmp_path: Path, head_end: str, body_text: str
+) -> None:
+    visible = "VISIBLE VIN 1HGCM82673A000000"
+    body = (
+        f"<html><head><title>Public document</title><meta charset=utf-8>{head_end}"
+        + body_text.format(text=visible)
+        + "</html>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == visible
+    assert result["title"] == "Public document" and not result["truncated"]
+
+
+def test_html_optional_definition_ends_preserve_flat_terms_and_tail(tmp_path: Path) -> None:
+    body = (
+        "<dl>"
+        + "".join(f"<dt>TERM {number}<dd>VALUE {number}" for number in range(700))
+        + "</dl><p>AFTER DEFINITIONS VIN 1HGCM82673A000000</p>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert text.count("TERM ") == 700 and text.count("VALUE ") == 700
+    assert "AFTER DEFINITIONS VIN 1HGCM82673A000000" in text
+    assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+def test_html_definition_scope_retains_hidden_ancestors_and_nested_lists(tmp_path: Path) -> None:
+    body = (
+        b"<dl hidden><dt>secret term<dd>secret value<dt>secret next term<dd>secret next value</dl>"
+        b"<dl><dt hidden>secret sibling<dd>visible value"
+        b"<dl hidden><dt>secret nested term<dd>secret nested value</dl>"
+        b"<dt>visible term<dd>visible next value</dl>"
+        b"<template><dl><dt>secret template term<dd>secret template value</dl></template>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "secret" not in text
+    assert all(value in text for value in ("visible value", "visible term", "visible next value"))
+    assert not result["truncated"]
+
+
+def test_html_definition_optional_ends_keep_real_nesting_limit(tmp_path: Path) -> None:
+    body = ("<p>visible before</p>" + "<dl><dd>" * 300 + "ignored deep text" + "</dl>" * 300).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "visible before"
+    assert result["truncated"] and "html_structure_limit" in result["limitations"]
+
+
+def test_html_implicit_head_and_unmatched_end_tags_do_not_escape_hidden_contexts(tmp_path: Path) -> None:
+    body = (
+        b"<div hidden><head><meta><body><p>secret ancestor</p></body></div>"
+        b"<div><template></div><head><meta><body><p>secret template</p></body></template></div>"
+        b"<p>visible after</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "visible after" and not result["truncated"]
+
+
 def test_html_optional_end_tags_keep_hidden_ancestors_and_close_hidden_siblings(tmp_path: Path) -> None:
     body = (
         b"<ul hidden><li>secret ancestor one<li>secret ancestor two</ul>"

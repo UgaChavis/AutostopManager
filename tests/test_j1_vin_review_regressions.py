@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import time
@@ -19,6 +21,13 @@ from autostop_manager import j1_vin_worker as worker
 
 VIN = "1HGCM82673A000000"
 QUOTE = "Engine Alpha; shared public details."
+
+
+def _request_key(prefix: str) -> str:
+    # Preserve UUID entropy without incidental phone or 17-character VIN runs.
+    encoded = uuid4().hex.translate(str.maketrans("0123456789abcdef", "abcdefghijklmnop"))
+    nonce = "i".join(encoded[index : index + 8] for index in range(0, 32, 8))
+    return f"{prefix}-{nonce}"
 
 
 @pytest.fixture
@@ -44,7 +53,7 @@ def sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
 
 
 def _start(*, completed: bool = True) -> str:
-    result = api.j1_research_vin(VIN, "start-" + uuid4().hex)
+    result = api.j1_research_vin(VIN, _request_key("start"))
     assert result["ok"], result
     job = result["job_id"]
     if completed:
@@ -104,7 +113,7 @@ def _record(job: str, identifier: str, *, basis: list[str] | None = None) -> dic
         "match_evidence_id": document["match_evidence_id"],
         "support": "corroborated" if basis else "single_source",
     }
-    return api.j1_research_record_facts(job, api.research_status(job)["revision"], [fact], "facts-" + uuid4().hex, True)
+    return api.j1_research_record_facts(job, api.research_status(job)["revision"], [fact], _request_key("facts"), True)
 
 
 @pytest.mark.parametrize("addition", ["query", "ocr"])
@@ -209,6 +218,99 @@ def test_failure_with_available_storage_is_terminal_without_read_repair(sandbox,
         current = store.metadata(conn)
         assert current["collection_status"] == "failed" and not current["inflight"]
         assert current["stop_reason"] == "vin_storage_unavailable"
+
+
+def test_start_receipt_replay_recovers_a_failed_worker(sandbox, monkeypatch) -> None:
+    key = _request_key("replay")
+    initial = api.j1_research_vin(VIN, key)
+    assert initial["ok"]
+    job = initial["job_id"]
+    capacity = store.check_capacity
+    full = False
+
+    def check(*args: Any, **kwargs: Any) -> None:
+        if full:
+            raise store.VinJobError("vin_storage_unavailable")
+        capacity(*args, **kwargs)
+
+    def search(*_args: Any) -> dict[str, Any]:
+        nonlocal full
+        full = True
+        return {"ok": True, "results": [], "providers": [], "errors": []}
+
+    monkeypatch.setattr(store, "check_capacity", check)
+    monkeypatch.setattr(worker, "search_vin", search)
+    worker.run_job(job)
+    full = False
+    replay = api.j1_research_vin(VIN, key)
+    assert replay["ok"] and replay["job_id"] == job
+    assert replay["collection_status"] == "failed" and not replay["network_inflight"]
+    assert replay["stop_reason"] == "vin_storage_unavailable"
+    with general._db(readonly=True) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+
+def test_profile_lookup_error_cannot_complete_vin_job_as_generic_research(sandbox, monkeypatch) -> None:
+    job = _start(completed=False)
+    original = general._db
+    failed = False
+
+    class ProfileFailure:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self.conn = conn
+
+        def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+            nonlocal failed
+            if sql.startswith("SELECT profile FROM jobs") and not failed:
+                failed = True
+                raise sqlite3.OperationalError("synthetic transient profile lookup failure")
+            return self.conn.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.conn, name)
+
+    @contextmanager
+    def unreliable(*args: Any, **kwargs: Any) -> Iterator[Any]:
+        with original(*args, **kwargs) as conn:
+            yield ProfileFailure(conn) if kwargs.get("readonly") else conn
+
+    monkeypatch.setattr(general, "_db", unreliable)
+    monkeypatch.setattr(general.signal, "signal", lambda *_args: None)
+    general.run_worker(once=True)
+    assert failed
+    with general._db(readonly=True) as conn:
+        assert conn.execute("SELECT status FROM jobs WHERE id=?", (job,)).fetchone()[0] == "failed"
+    assert api.research_status(job)["collection_status"] == "failed"
+
+
+@pytest.mark.parametrize("explicit_limitations", [True, False])
+def test_clipped_ocr_preserves_existing_and_new_document_limitations(
+    sandbox, monkeypatch, explicit_limitations
+) -> None:
+    job = _start()
+    identifier = _pdf(job, "Original extraction")
+    with store.connect(job, transaction=True) as conn:
+        conn.execute("UPDATE documents SET limitations='[\"original_text_limit\"]' WHERE id=?", (identifier,))
+    assert api.research_document(job, identifier, page=1, ocr=True)["ok"]
+    monkeypatch.setattr(
+        worker,
+        "ocr_pages",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "truncated": True,
+            "limitations": ["page_text_limit"] if explicit_limitations else [],
+            "pages": [{"page": 1, "text": f"VIN {VIN}. {QUOTE} Clipped OCR.", "truncated": True}],
+        },
+    )
+    worker.run_job(job)
+    fact = _record(job, identifier)
+    assert fact["ok"], fact
+    report = api.research_report(job)
+    expected = "page_text_limit" if explicit_limitations else "ocr_text_limit"
+    assert set(report["sources"][0]["limitations"]) == {"original_text_limit", expected}
+    assert report["stop_reason"] == "ocr_text_limit"
+    document = api.research_document(job, identifier, page=1)
+    assert set(document["limitations"]) == {"original_text_limit", expected}
 
 
 @pytest.mark.parametrize("retained_pages_differ", [False, True])

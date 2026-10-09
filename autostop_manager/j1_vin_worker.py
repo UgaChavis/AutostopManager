@@ -413,12 +413,20 @@ def _collect_ocr(job_id: str, operation: dict[str, Any], current: dict[str, Any]
         updated, allowed = _finish_operation(conn, charged)
         pages = result.get("pages", []) if allowed else []
         if pages:
+            limitations = set(json.loads(doc["limitations"]))
+            ocr_limitations = {code for item in result.get("limitations", []) if (code := _diagnostic(item, ""))}
+            clipped = result.get("truncated") or any(page.get("truncated") for page in pages)
+            if clipped and not ocr_limitations:
+                ocr_limitations.add("ocr_text_limit")
+            limitations.update(ocr_limitations)
             conn.execute(
-                "UPDATE documents SET version=version+1,method='pdf_ocr',status='fetched' WHERE id=?",
-                (operation["document_id"],),
+                "UPDATE documents SET version=version+1,method='pdf_ocr',status='fetched',limitations=? WHERE id=?",
+                (json.dumps(sorted(limitations)), operation["document_id"]),
             )
             api.ingest_pages(conn, updated, operation["document_id"], pages, replace=False)
             _refresh_duplicates(conn, operation["document_id"])
+            if clipped and updated["stop_reason"] in {"", "initial_collection_complete"}:
+                updated["stop_reason"] = "ocr_text_limit"
         reason = "" if result.get("ok") and allowed else _diagnostic(result.get("error"), "ocr_failed")
         conn.execute(
             "UPDATE ocr_requests SET status=?,error=? WHERE document_id=? AND page=?",

@@ -26,6 +26,12 @@ VIN = "1HGCM82673A000000"
 OTHER_VIN = "WVWZZZ1JZXW000000"
 
 
+def _request_key(prefix: str) -> str:
+    encoded = uuid4().hex.translate(str.maketrans("0123456789abcdef", "abcdefghijklmnop"))
+    nonce = "i".join(encoded[index : index + 8] for index in range(0, 32, 8))
+    return f"{prefix}-{nonce}"
+
+
 @dataclass
 class Sandbox:
     root: Path
@@ -57,7 +63,7 @@ def sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Sandbox
 
 
 def _start(*, fields: list[str] | None = None, complete: bool = True) -> str:
-    result = api.j1_research_vin(VIN, f"start-{uuid4().hex}")
+    result = api.j1_research_vin(VIN, _request_key("start"))
     assert result["ok"], result
     job = result["job_id"]
     with store.connect(job, transaction=True) as conn:
@@ -136,7 +142,7 @@ def _claim(document: dict[str, Any], **changes: Any) -> dict[str, Any]:
 def _record(job: str, facts: list[dict[str, Any]], **changes: Any) -> dict[str, Any]:
     options = {
         "expected_revision": api.research_status(job)["revision"],
-        "idempotency_key": f"facts-{uuid4().hex}",
+        "idempotency_key": _request_key("facts"),
         "finalize": False,
     }
     options.update(changes)
@@ -308,7 +314,7 @@ def test_report_reads_one_snapshot_during_concurrent_writes(sandbox: Sandbox, ch
                 job,
                 expected_revision=before["revision"],
                 facts=[second],
-                idempotency_key=f"facts-{uuid4().hex}",
+                idempotency_key=_request_key("facts"),
                 finalize=False,
             )
             assert result["ok"], result
@@ -366,7 +372,7 @@ def test_revision_and_idempotency_conflicts_do_not_append_or_replay_mutations(sa
     document = _document(job)
     claim = _claim(document)
     revision = api.research_status(job)["revision"]
-    key = f"facts-{uuid4().hex}"
+    key = _request_key("facts")
     first = _record(job, [claim], expected_revision=revision, idempotency_key=key, finalize=True)
     assert first["ok"]
     assert _record(job, [claim], expected_revision=revision, idempotency_key=key, finalize=True) == first
@@ -584,7 +590,7 @@ def test_expired_job_cannot_accept_claims_and_removes_ephemeral_evidence(sandbox
         current["expires_at"] = time.time() - 1
         store.write_metadata(conn, current)
     result = api.j1_research_record_facts(
-        job, expected_revision=0, facts=[_claim(document)], idempotency_key=f"expired-{uuid4().hex}"
+        job, expected_revision=0, facts=[_claim(document)], idempotency_key=_request_key("expired")
     )
     assert not result["ok"] and result["error"]["code"] in {"vin_job_expired", "vin_ephemeral_state_lost"}
     assert not (sandbox.root / job).exists()

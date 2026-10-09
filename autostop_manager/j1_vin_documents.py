@@ -43,6 +43,9 @@ _VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 )
 _HIDDEN_TAGS = frozenset({"script", "style", "template", "noscript", "svg", "head", "title"})
+_HEAD_CONTENT_TAGS = frozenset(
+    {"base", "basefont", "bgsound", "link", "meta", "noframes", "noscript", "script", "style", "template", "title"}
+)
 _P_CLOSING_STARTS = frozenset(
     {
         "address",
@@ -112,6 +115,7 @@ _LI_SCOPE_BOUNDARIES = (_P_CLOSING_STARTS - {"address", "div", "p", "li"}) | fro
         "xmp",
     }
 )
+_DL_SCOPE_BOUNDARIES = _LI_SCOPE_BOUNDARIES - {"dt", "dd"}
 
 
 def _failure(kind: str, method: str, error: str) -> dict[str, Any]:
@@ -133,16 +137,17 @@ def _bounded_timeout(default: float, remaining: float | None) -> float:
     return min(default, float(remaining))
 
 
-class _VisibleHTML(HTMLParser):
+class _HTMLVisibility(HTMLParser):
+    """Track bounded HTML visibility without collecting or budgeting text."""
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[tuple[str, bool]] = []
-        self.parts: list[str] = []
-        self.title_parts: list[str] = []
-        self.remaining = MAX_TEXT_BYTES
-        self.title_remaining = 1024
-        self.truncated = False
         self.structure_limited = False
+
+    @property
+    def hidden(self) -> bool:
+        return self.structure_limited or bool(self.stack and self.stack[-1][1])
 
     def _close_in_scope(self, tags: set[str], boundaries: set[str] | frozenset[str]) -> None:
         # HTMLParser emits tokens rather than a browser DOM.  Omitted end tags
@@ -156,15 +161,19 @@ class _VisibleHTML(HTMLParser):
             if tag in boundaries or tag in _HIDDEN_TAGS:
                 return
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def _start_element(self, tag: str, attrs: list[tuple[str, str | None]]) -> bool | None:
         if self.structure_limited:
-            return
+            return None
+        if tag not in _HEAD_CONTENT_TAGS and tag not in {"html", "head"}:
+            self._close_in_scope({"head"}, {"html"})
         if tag in _P_CLOSING_STARTS:
             self._close_in_scope(
                 {"p"}, {"html", "table", "td", "th", "caption", "button", "applet", "object", "marquee"}
             )
         if tag == "li":
             self._close_in_scope({"li"}, _LI_SCOPE_BOUNDARIES)
+        elif tag in {"dt", "dd"}:
+            self._close_in_scope({"dt", "dd"}, _DL_SCOPE_BOUNDARIES)
         elif tag in {"td", "th"}:
             self._close_in_scope({"td", "th"}, {"tr", "table", "thead", "tbody", "tfoot"})
         elif tag == "tr":
@@ -174,8 +183,7 @@ class _VisibleHTML(HTMLParser):
             self._close_in_scope({"thead", "tbody", "tfoot"}, {"table"})
         if len(self.stack) >= 512:
             self.structure_limited = True
-            self.truncated = True
-            return
+            return None
         values = dict(attrs)
         style = re.sub(r"\s+", "", (values.get("style") or "").lower())
         hidden = (
@@ -188,22 +196,56 @@ class _VisibleHTML(HTMLParser):
         )
         if tag not in _VOID_TAGS:
             self.stack.append((tag, hidden))
-        if not hidden and tag in {"p", "br", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "hr"}:
-            self._append("\n")
+        return hidden
+
+    def _end_element(self, tag: str) -> list[tuple[str, bool]]:
+        if self.structure_limited:
+            return []
+        for index in range(len(self.stack) - 1, -1, -1):
+            current = self.stack[index][0]
+            if current == tag:
+                closed = self.stack[index:]
+                del self.stack[index:]
+                return closed
+            if current in _HIDDEN_TAGS:
+                break
+        return []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._start_element(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        self._end_element(tag)
+
+    def handle_data(self, data: str) -> None:
+        if not self.structure_limited and self.stack and self.stack[-1][0] == "head" and data.strip():
+            self._close_in_scope({"head"}, {"html"})
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
         if tag not in _VOID_TAGS:
             self.handle_endtag(tag)
 
+
+class _VisibleHTML(_HTMLVisibility):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.title_parts: list[str] = []
+        self.remaining = MAX_TEXT_BYTES
+        self.title_remaining = 1024
+        self.truncated = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        hidden = self._start_element(tag, attrs)
+        if hidden is None:
+            self.truncated = True
+        elif not hidden and tag in {"p", "br", "div", "li", "dt", "dd", "tr", "td", "th", "h1", "h2", "h3", "h4", "hr"}:
+            self._append("\n")
+
     def handle_endtag(self, tag: str) -> None:
-        if self.structure_limited:
-            return
-        for index in range(len(self.stack) - 1, -1, -1):
-            if self.stack[index][0] == tag:
-                del self.stack[index:]
-                break
-        if tag in {"p", "div", "li", "tr"} and not (self.stack and self.stack[-1][1]):
+        self._end_element(tag)
+        if tag in {"p", "div", "li", "dt", "dd", "tr"} and not self.hidden:
             self._append("\n")
 
     def _append(self, text: str) -> None:
@@ -215,11 +257,12 @@ class _VisibleHTML(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.structure_limited:
             return
+        super().handle_data(data)
         if any(tag == "title" for tag, _hidden in self.stack):
             part, _clipped = _clip_text(data, self.title_remaining)
             self.title_parts.append(part)
             self.title_remaining -= len(part.encode("utf-8"))
-        if not (self.stack and self.stack[-1][1]):
+        if not self.hidden:
             self._append(data)
 
 

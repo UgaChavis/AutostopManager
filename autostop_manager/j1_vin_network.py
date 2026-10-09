@@ -26,9 +26,11 @@ from urllib.robotparser import RobotFileParser
 
 from . import j1_fetch
 from .j1_sources import classify_source, discovery_domain
+from .j1_vin_documents import _HTMLVisibility, _VOID_TAGS
 
 _VIN_TOKEN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 _ENGINES = frozenset({"bing", "yahoo", "duckduckgo"})
+_DDG_SEARCH_HOSTS = frozenset({"html.duckduckgo.com", "duckduckgo.com", "www.duckduckgo.com"})
 _SECRET_FIELD = re.compile(
     r"(?i)\b(?:api[_-]?key|key|(?:access|refresh)[_-]?token|token|password|passwd|secret|authorization|auth|sid|session(?:[_-]?id)?|cookie)\s*[:=]\s*[^\s&]+"
 )
@@ -265,7 +267,21 @@ def _rate_limit(origin: str, delay: float, scope: VinScope, deadline: float) -> 
     _remaining(scope, deadline)
 
 
-def _robots_policy(url: str, scope: VinScope, deadline: float) -> tuple[bool, float]:
+def _require_search_recipient(url: str, scope: VinScope, engine: str | None) -> None:
+    if engine is None:
+        return
+    parsed = urlsplit(url)
+    if (
+        engine != "duckduckgo"
+        or engine not in scope.allowed_engines
+        or parsed.scheme != "https"
+        or parsed.hostname not in _DDG_SEARCH_HOSTS
+        or parsed.port not in {None, 443}
+    ):
+        raise ValueError("search_recipient_disallowed")
+
+
+def _robots_policy(url: str, scope: VinScope, deadline: float, search_engine: str | None = None) -> tuple[bool, float]:
     _remaining(scope, deadline)
     parsed = urlsplit(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -276,7 +292,12 @@ def _robots_policy(url: str, scope: VinScope, deadline: float) -> tuple[bool, fl
         return (available and (parser is None or parser.can_fetch(j1_fetch.USER_AGENT, url))), delay
     try:
         status, _, body, _ = _request_scoped(
-            origin + "/robots.txt", scope, max_bytes=250_000, deadline=deadline, check_robots=False
+            origin + "/robots.txt",
+            scope,
+            max_bytes=250_000,
+            deadline=deadline,
+            check_robots=False,
+            search_engine=search_engine,
         )
         if status == 404:
             policy: tuple[RobotFileParser | None, bool, float] = (None, True, 1.0)
@@ -304,6 +325,7 @@ def _request_scoped(
     max_bytes: int,
     deadline: float,
     check_robots: bool,
+    search_engine: str | None = None,
 ) -> tuple[int, dict[str, str], bytes, str]:
     current = safe_url(url, scope)
     if not current:
@@ -311,13 +333,16 @@ def _request_scoped(
         raise ValueError("unsafe_url")
     for hop in range(4):
         _remaining(scope, deadline)
+        # Search query recipients are fixed independently of the public source
+        # URLs that scoped static document fetches may follow.
+        _require_search_recipient(current, scope, search_engine)
         if max_bytes > j1_fetch.MAX_PDF_BYTES:
             classification = classify_source(current)
             if classification.source_tier not in {"A", "B"} or not classification.source_basis.startswith("registry:"):
                 raise ValueError("large_document_source_untrusted")
         parsed = urlsplit(current)
         if check_robots:
-            allowed, delay = _robots_policy(current, scope, deadline)
+            allowed, delay = _robots_policy(current, scope, deadline, search_engine)
             if not allowed:
                 raise ValueError("redirect_robots_disallowed" if hop else "robots_disallowed")
             _rate_limit(f"{parsed.scheme}://{parsed.netloc}", delay, scope, deadline)
@@ -355,6 +380,7 @@ def _request_scoped(
                 if not next_url:
                     _require_active(scope)
                     raise ValueError("unsafe_redirect")
+                _require_search_recipient(next_url, scope, search_engine)
                 if not check_robots and (
                     urlsplit(next_url).netloc != parsed.netloc or not j1_fetch.public_url(next_url)
                 ):
@@ -382,7 +408,7 @@ def _request_scoped(
 
 
 def request_vin(
-    url: str, scope: VinScope, *, max_bytes: int, timeout: float = 10.0
+    url: str, scope: VinScope, *, max_bytes: int, timeout: float = 10.0, search_engine: str | None = None
 ) -> tuple[int, dict[str, str], bytes, str]:
     """GET a scoped public document with DNS pinning, robots and total deadline."""
 
@@ -398,7 +424,9 @@ def request_vin(
     _require_active(scope)
     deadline = time.monotonic() + timeout
     try:
-        return _request_scoped(url, scope, max_bytes=max_bytes, deadline=deadline, check_robots=True)
+        return _request_scoped(
+            url, scope, max_bytes=max_bytes, deadline=deadline, check_robots=True, search_engine=search_engine
+        )
     except TimeoutError:
         raise TimeoutError("fetch_timeout") from None
     except (OSError, http.client.HTTPException):
@@ -418,6 +446,7 @@ def request_vin(
             "unsupported_content_encoding",
             "too_many_redirects",
             "large_document_source_untrusted",
+            "search_recipient_disallowed",
         }
         raise ValueError(str(exc) if str(exc) in allowed else "fetch_failed") from None
 
@@ -502,51 +531,87 @@ def _clean_metadata(value: object, scope: VinScope, limit: int) -> str:
     return clean.replace(marker, scope.vin)[:limit]
 
 
-class _DDGLinks(j1_fetch._DDGLinks):
+class _DDGLinks(_HTMLVisibility):
     def __init__(self, scope: VinScope) -> None:
         super().__init__()
         self.scope = scope
+        self.rows: list[dict[str, str]] = []
+        self._href = ""
+        self._title: list[str] = []
+        self._link_node: tuple[str, bool] | None = None
+        self._snippet: list[str] = []
+        self._snippet_node: tuple[str, bool] | None = None
         self._snippet_row: int | None = None
         self.has_result_links = False
         self.has_no_results = False
-        self._result_link = False
+
+    def _drop_closed_captures(self) -> None:
+        if self._link_node is not None and not any(node is self._link_node for node in self.stack):
+            self._href = ""
+            self._title = []
+            self._link_node = None
+        if self._snippet_node is not None and not any(node is self._snippet_node for node in self.stack):
+            self._snippet = []
+            self._snippet_node = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            # A new anchor terminates an unfinished sibling; it cannot borrow
+            # that sibling's result classification or title.
+            self._close_in_scope({"a"}, {"html", "table", "td", "th", "caption"})
+        hidden = self._start_element(tag, attrs)
+        self._drop_closed_captures()
         classes = set((dict(attrs).get("class") or "").split())
         if tag == "a" and "result__a" in classes:
             self._snippet_row = None
-            self._result_link = True
+        if hidden is None or hidden:
+            return
+        if tag == "a" and "result__a" in classes:
+            self._href = str(dict(attrs).get("href") or "")
+            self._title = []
+            self._link_node = self.stack[-1] if self._href else None
+        if "result__snippet" in classes and tag not in _VOID_TAGS:
+            self._snippet_node = self.stack[-1]
+            self._snippet = []
         if classes & {"no-results", "result--no-result"}:
             self.has_no_results = True
-        super().handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "a" and self._href:
+        closed = self._end_element(tag)
+        if closed and tag == "a" and closed[0] is self._link_node:
             # Recognition precedes privacy filtering: a real results page can
             # contain only URLs that this VIN scope is forbidden to export.
-            self.has_result_links |= self._result_link
+            self.has_result_links = True
             href = html.unescape(self._href)
-            parsed = urlsplit(href)
-            if parsed.hostname in {"duckduckgo.com", "www.duckduckgo.com"}:
-                href = unquote(parse_qs(parsed.query).get("uddg", [""])[0])
+            try:
+                parsed = urlsplit(href)
+                if parsed.hostname in {"duckduckgo.com", "www.duckduckgo.com"}:
+                    href = unquote(parse_qs(parsed.query).get("uddg", [""])[0])
+            except ValueError:
+                href = ""
             url = safe_url(href, self.scope)
             if url and len(self.rows) < j1_fetch.MAX_SEARCH_RESULTS:
                 self.rows.append({"url": url, "title": " ".join(self._title), "snippet": "", "source": "duckduckgo"})
                 self._snippet_row = len(self.rows) - 1
-            self._href = ""
-            self._result_link = False
-        if self._snippet_tag and tag == self._snippet_tag:
-            if self._snippet_row is not None:
-                self.rows[self._snippet_row]["snippet"] = " ".join(self._snippet)
-            self._snippet_tag = ""
-            self._snippet = []
+        if closed and closed[0] is self._snippet_node and self._snippet_row is not None:
+            self.rows[self._snippet_row]["snippet"] = " ".join(self._snippet)
+        self._drop_closed_captures()
+
+    def handle_data(self, data: str) -> None:
+        super().handle_data(data)
+        if self.hidden:
+            return
+        if self._link_node is not None:
+            self._title.append(data)
+        if self._snippet_node is not None:
+            self._snippet.append(data)
 
 
 def _duckduckgo_search(query: str, scope: VinScope) -> list[dict[str, Any]]:
     if "duckduckgo" not in scope.allowed_engines or not safe_query(query, scope):
         raise ValueError("unsafe_query")
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
-    status, _, body, _ = request_vin(url, scope, max_bytes=MAX_SEARCH_BYTES)
+    status, _, body, _ = request_vin(url, scope, max_bytes=MAX_SEARCH_BYTES, search_engine="duckduckgo")
     if status != 200:
         raise _http_error(status)
     text = body.decode("utf-8", "replace")
@@ -555,7 +620,7 @@ def _duckduckgo_search(query: str, scope: VinScope) -> list[dict[str, Any]]:
     parser = _DDGLinks(scope)
     parser.feed(text)
     parser.close()
-    if not (parser.has_result_links or parser.has_no_results):
+    if parser.structure_limited or not (parser.has_result_links or parser.has_no_results):
         raise _ProviderError("parse_failed")
     return parser.rows
 
@@ -615,7 +680,14 @@ def _error_record(provider: str, exc: BaseException) -> dict[str, Any]:
     elif isinstance(exc, (OSError, http.client.HTTPException)):
         code = "transport_error"
     else:
-        allowed = {"scope_expired", "unsafe_query", "robots_disallowed", "document_too_large", "unsafe_dns_answer"}
+        allowed = {
+            "scope_expired",
+            "unsafe_query",
+            "robots_disallowed",
+            "document_too_large",
+            "unsafe_dns_answer",
+            "search_recipient_disallowed",
+        }
         code = str(exc) if str(exc) in allowed else "provider_error"
     return {"provider": provider, "error": code}
 

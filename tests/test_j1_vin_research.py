@@ -22,6 +22,12 @@ VIN = "Z94K241BBKR000000"
 FOREIGN = "1HGCM82673A000000"
 
 
+def _request_key() -> str:
+    encoded = uuid4().hex.translate(str.maketrans("0123456789abcdef", "abcdefghijklmnop"))
+    nonce = "i".join(encoded[index : index + 8] for index in range(0, 32, 8))
+    return "start-" + nonce
+
+
 @pytest.fixture
 def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
     with tempfile.TemporaryDirectory(prefix="autostop-j1-vin-collector-", dir="/dev/shm") as directory:
@@ -44,7 +50,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
 
 
 def start() -> str:
-    result = api.j1_research_vin(VIN, "start-" + uuid4().hex)
+    result = api.j1_research_vin(VIN, _request_key())
     assert result["ok"], result
     return result["job_id"]
 

@@ -148,8 +148,10 @@ def is_vin_job(job_id: str) -> bool:
         with general._db(readonly=True) as conn:
             row = conn.execute("SELECT profile FROM jobs WHERE id=?", (job_id,)).fetchone()
             return row is not None and row[0] == PROFILE
-    except (OSError, sqlite3.Error):
-        return False
+    except (OSError, sqlite3.Error) as exc:
+        # An unavailable routing lookup must never select the generic collector
+        # for a VIN job and silently complete its otherwise pending work.
+        raise VinJobError("vin_store_unavailable") from exc
 
 
 def set_stub(job_id: str, status: str, reason: str = "") -> None:
