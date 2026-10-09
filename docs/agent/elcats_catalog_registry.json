@@ -1,0 +1,2746 @@
+{
+  "version": "elcats-passenger-v1.0.0",
+  "registry_version": "elcats-passenger-v1.0.0",
+  "source_url": "https://www.elcats.ru/",
+  "captured_at": "2026-10-09T07:56:44Z",
+  "scope": "All 57 passenger-section catalog entries, including Japancats and SsangYong Exist links. Commercial, truck and motorcycle catalogs excluded.",
+  "access_policy": "Observe current robots.txt, valid TLS and public navigation only. Registry readiness is evidence, not permission to bypass access restrictions.",
+  "entries": [
+    {
+      "id": "elcats_abarth",
+      "brand": "Abarth",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/abarth/",
+      "published_url": "https://www.elcats.ru/abarth/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "fiat_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_alfaromeo",
+      "brand": "Alfa Romeo",
+      "aliases": [
+        "ALFA ROMEO"
+      ],
+      "entry_url": "https://www.elcats.ru/alfaromeo/",
+      "published_url": "https://www.elcats.ru/alfaromeo/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "fiat_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_audi",
+      "brand": "Audi",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/audi/",
+      "published_url": "https://www.elcats.ru/audi/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "vag_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/audi/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_baic",
+      "brand": "BAIC",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/baic/",
+      "published_url": "https://www.elcats.ru/baic/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_bmw",
+      "brand": "BMW",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/bmw/",
+      "published_url": "https://www.elcats.ru/bmw/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "bmw_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/bmw/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_bosch",
+      "brand": "Bosch",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/bosch/",
+      "published_url": "https://www.elcats.ru/bosch/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "component_catalog",
+      "vehicle_scope": "passenger",
+      "scope_flags": [
+        "component_catalog_not_vehicle_manufacturer_oem"
+      ],
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_buick",
+      "brand": "Buick",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/gm/buick/",
+      "published_url": "https://www.elcats.ru/gm/buick/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_byd",
+      "brand": "BYD",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/byd/",
+      "published_url": "https://www.elcats.ru/byd/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_cadillac",
+      "brand": "Cadillac",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/gm/cadillac/",
+      "published_url": "https://www.elcats.ru/gm/cadillac/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_chery",
+      "brand": "Chery",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/chery/",
+      "published_url": "https://www.elcats.ru/chery/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_chevrolet",
+      "brand": "Chevrolet",
+      "aliases": [
+        "CHEVROLET"
+      ],
+      "entry_url": "https://www.elcats.ru/chevrolet/",
+      "published_url": "https://www.elcats.ru/chevrolet/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_chevrolet",
+      "brand": "Chevrolet",
+      "aliases": [
+        "CHEVROLET USA"
+      ],
+      "entry_url": "https://www.elcats.ru/gm/chevrolet/",
+      "published_url": "https://www.elcats.ru/gm/chevrolet/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "catalog_variant": "USA",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_chrysler",
+      "brand": "Chrysler",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/chrysler/",
+      "published_url": "https://www.elcats.ru/chrysler/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_citroen",
+      "brand": "Citroen",
+      "aliases": [
+        "Citroën"
+      ],
+      "entry_url": "https://www.elcats.ru/citroen/",
+      "published_url": "https://www.elcats.ru/citroen/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "psa_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_daewoo",
+      "brand": "Daewoo",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/daewoo/",
+      "published_url": "https://www.elcats.ru/daewoo/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_daihatsu",
+      "brand": "Daihatsu",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Daihatsu/",
+      "published_url": "https://www.japancats.ru/Daihatsu/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_faw",
+      "brand": "FAW",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/faw/",
+      "published_url": "https://www.elcats.ru/faw/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_fiat",
+      "brand": "Fiat",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/fiat/",
+      "published_url": "https://www.elcats.ru/fiat/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "fiat_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/fiat/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_ford",
+      "brand": "Ford",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/ford/",
+      "published_url": "https://www.elcats.ru/ford/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_geely",
+      "brand": "Geely",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/geely/",
+      "published_url": "https://www.elcats.ru/geely/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "geely_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/geely/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_gmc",
+      "brand": "GMC",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/gm/gmc/",
+      "published_url": "https://www.elcats.ru/gm/gmc/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_haval",
+      "brand": "Haval",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/haval/",
+      "published_url": "https://www.elcats.ru/haval/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_honda",
+      "brand": "Honda",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Honda/",
+      "published_url": "https://www.japancats.ru/Honda/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_postback",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "market_coverage": [
+        "Europe"
+      ],
+      "market_coverage_note": "Published catalog scope; other markets not confirmed.",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt",
+          "https://www.japancats.ru/Honda/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_hummer",
+      "brand": "Hummer",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/gm/hummer/",
+      "published_url": "https://www.elcats.ru/gm/hummer/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_hyundai",
+      "brand": "Hyundai",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/hyundai/",
+      "published_url": "https://www.elcats.ru/hyundai/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "hyundai_kia_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/hyundai/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_infiniti",
+      "brand": "Infiniti",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Infiniti/",
+      "published_url": "https://www.japancats.ru/Infiniti/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_jaguar",
+      "brand": "Jaguar",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/jaguar/",
+      "published_url": "https://www.elcats.ru/jaguar/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_jeep",
+      "brand": "Jeep",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/jeep/",
+      "published_url": "https://www.elcats.ru/jeep/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_kia",
+      "brand": "Kia",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/kia/",
+      "published_url": "https://www.elcats.ru/kia/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "hyundai_kia_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/kia/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_kiaold",
+      "brand": "Kia",
+      "aliases": [
+        "KIA (старая версия)"
+      ],
+      "entry_url": "https://www.elcats.ru/kiaold/",
+      "published_url": "https://www.elcats.ru/kiaold/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "hyundai_kia_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "catalog_variant": "legacy",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_lancia",
+      "brand": "Lancia",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/lancia/",
+      "published_url": "https://www.elcats.ru/lancia/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "fiat_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_landrover",
+      "brand": "Land Rover",
+      "aliases": [
+        "LAND ROVER"
+      ],
+      "entry_url": "https://www.elcats.ru/landrover/",
+      "published_url": "https://www.elcats.ru/landrover/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_lexus",
+      "brand": "Lexus",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Lexus/",
+      "published_url": "https://www.japancats.ru/Lexus/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_lifan",
+      "brand": "Lifan",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/lifan/",
+      "published_url": "https://www.elcats.ru/lifan/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_mazda",
+      "brand": "Mazda",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Mazda/",
+      "published_url": "https://www.japancats.ru/Mazda/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_postback",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "market_coverage": [
+        "Europe"
+      ],
+      "market_coverage_note": "Published catalog scope; other markets not confirmed.",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt",
+          "https://www.japancats.ru/Mazda/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_mercedes",
+      "brand": "Mercedes-Benz",
+      "aliases": [
+        "MERCEDES",
+        "Mercedes"
+      ],
+      "entry_url": "https://www.elcats.ru/mercedes/",
+      "published_url": "https://www.elcats.ru/mercedes/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "mercedes_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/mercedes/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_mgrover",
+      "brand": "MG Rover",
+      "aliases": [
+        "MG ROVER"
+      ],
+      "entry_url": "https://www.elcats.ru/mgrover/",
+      "published_url": "https://www.elcats.ru/mgrover/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_mini",
+      "brand": "Mini",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/mini/",
+      "published_url": "https://www.elcats.ru/mini/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "bmw_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_mitsubishi",
+      "brand": "Mitsubishi",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Mitsubishi/",
+      "published_url": "https://www.japancats.ru/Mitsubishi/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_nissan",
+      "brand": "Nissan",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Nissan/",
+      "published_url": "https://www.japancats.ru/Nissan/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt",
+          "https://www.japancats.ru/Nissan/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_opel",
+      "brand": "Opel",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/opel/",
+      "published_url": "https://www.elcats.ru/opel/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_peugeot",
+      "brand": "Peugeot",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/peugeot/",
+      "published_url": "https://www.elcats.ru/peugeot/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "psa_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/peugeot/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_pontiac",
+      "brand": "Pontiac",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/gm/pontiac/",
+      "published_url": "https://www.elcats.ru/gm/pontiac/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_porsche",
+      "brand": "Porsche",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/porsche/",
+      "published_url": "https://www.elcats.ru/porsche/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_renault",
+      "brand": "Renault",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/renault/",
+      "published_url": "https://www.elcats.ru/renault/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_saab",
+      "brand": "Saab",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/saab/",
+      "published_url": "https://www.elcats.ru/saab/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_gm_saturn",
+      "brand": "Saturn",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/gm/saturn/",
+      "published_url": "https://www.elcats.ru/gm/saturn/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_seat",
+      "brand": "Seat",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/seat/",
+      "published_url": "https://www.elcats.ru/seat/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "vag_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_skoda",
+      "brand": "Skoda",
+      "aliases": [
+        "Škoda"
+      ],
+      "entry_url": "https://www.elcats.ru/skoda/",
+      "published_url": "https://www.elcats.ru/skoda/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "vag_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_smart",
+      "brand": "Smart",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/smart/",
+      "published_url": "https://www.elcats.ru/smart/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "exist_ssangyong",
+      "brand": "SsangYong",
+      "aliases": [
+        "SSANG YONG",
+        "Ssang Yong",
+        "KGM"
+      ],
+      "entry_url": "https://ssangyong.exist.ru/",
+      "published_url": "http://ssangyong.exist.ru/",
+      "provider": "exist_ssangyong_catalog",
+      "namespace": "exist_ssangyong_epc",
+      "parser_family": "ssangyong_public_get",
+      "readiness": "working",
+      "reason": "public profile-to-part candidate lookup and dual-PSM OCR verified; identifier/OEM/fitment unverified; source restrictions preserved",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts",
+        "rendered_number_evidence",
+        "number_image"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "parser_implemented",
+      "access_availability": "public_available",
+      "live_verification": "profile_to_oem_candidate_verified",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "candidate_lookup_verified",
+        "checked_at": "2026-10-09T08:21:37.233585Z",
+        "source_urls": [
+          "https://ssangyong.exist.ru/robots.txt",
+          "https://ssangyong.exist.ru/",
+          "https://ssangyong.exist.ru/Group.aspx?Model=A922235A-0C56-4344-8B2B-853BD0515DF1&Title=ACTYON",
+          "https://ssangyong.exist.ru/Unit.aspx?Model=a922235a-0c56-4344-8b2b-853bd0515df1&Group=4&SubGroup=8&Title=%D0%A8%D0%90%D0%A1%D0%A1%D0%98+%28%D0%A2%D0%9E%D0%A0%D0%9C%D0%9E%D0%97%D0%9D%D0%90%D0%AF+%D0%A1%D0%98%D0%A1%D0%A2%D0%95%D0%9C%D0%90%29",
+          "https://ssangyong.exist.ru/Parts.aspx?Model=a922235a-0c56-4344-8b2b-853bd0515df1&Unit=6b0573dd-4620-4a66-9b88-cb8b199e4668&Title=%D0%9F%D0%95%D0%A0%D0%95%D0%94%D0%9D%D0%98%D0%95+%D0%A2%D0%9E%D0%A0%D0%9C%D0%9E%D0%97%D0%90",
+          "https://ssangyong.exist.ru/PCode.ashx?Code=DAzWLutl5OcL3%2b6VFquE%2fQ%3d%3d",
+          "https://ssangyong.exist.ru/Group.aspx?Model=F10B0F5A-895B-4A3F-8377-71B48104CD37&Title=KYRON",
+          "https://ssangyong.exist.ru/Unit.aspx?Model=f10b0f5a-895b-4a3f-8377-71b48104cd37&Group=4&SubGroup=8&Title=%D0%A8%D0%90%D0%A1%D0%A1%D0%98+%28%D0%A2%D0%9E%D0%A0%D0%9C%D0%9E%D0%97%D0%9D%D0%90%D0%AF+%D0%A1%D0%98%D0%A1%D0%A2%D0%95%D0%9C%D0%90%29",
+          "https://ssangyong.exist.ru/Parts.aspx?Model=f10b0f5a-895b-4a3f-8377-71b48104cd37&Unit=13c6fccf-eca9-4823-b9e6-b8f952b7c769&Title=%D0%9F%D0%95%D0%A0%D0%95%D0%94%D0%9D%D0%98%D0%95+%D0%A2%D0%9E%D0%A0%D0%9C%D0%9E%D0%97%D0%90"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": true,
+        "parts_verified": true,
+        "number_extraction_verified": true,
+        "robots": {
+          "url": "https://ssangyong.exist.ru/robots.txt",
+          "status_code": 404,
+          "allowed": true,
+          "rule": null,
+          "state": "not_published"
+        },
+        "evidence_note": "ACTYON manual public navigation and KYRON full read-only facade profile+front brake pads candidate probe verified. Number images use local dual-PSM OCR, remain identifier/OEM/fitment unverified. All production/option/modification restrictions retained. No VIN/auth/price/private API calls.",
+        "image_sample": {
+          "source_url": "https://ssangyong.exist.ru/PCode.ashx?Code=DAzWLutl5OcL3%2b6VFquE%2fQ%3d%3d",
+          "actual_format": "png",
+          "declared_content_type": "image/jpeg",
+          "width": 82,
+          "height": 16,
+          "number_manual_read": "48130091A0",
+          "ocr_sample": {
+            "method": "offline_tesseract_psm7_psm13",
+            "first_text": "48130091A0",
+            "second_text": "48130091A0",
+            "first_confidence": 90.272255,
+            "second_confidence": 44.519897,
+            "agreement": true,
+            "identifier_verified": false
+          },
+          "checked_at": "2026-10-09",
+          "fixture": "tests/fixtures/elcats/ssangyong_pad_number.png",
+          "sha256": "69c49274eab4134932c2d7c712536ecd09510fd253a42119d7f61618e1eb2d28"
+        },
+        "candidate_lookup_verified": true,
+        "identifier_verified": false,
+        "oem_verified": false,
+        "fitment_verified": false,
+        "candidate_probe": {
+          "operation": "lookup_candidates",
+          "vehicle_profile": {
+            "make": "SsangYong",
+            "model": "Kyron"
+          },
+          "part_name": "передние тормозные колодки",
+          "finished_at": "2026-10-09T08:21:37.237976Z",
+          "first_page_fetched_at": "2026-10-09T08:21:30.320347Z",
+          "last_page_fetched_at": "2026-10-09T08:21:37.233585Z",
+          "network_calls": 12,
+          "request_budget": 12,
+          "coverage_complete": true,
+          "normalized_number": "48130091A0",
+          "position": "2",
+          "raw_conditions": "ПЕРЕДНИЕ ТОРМОЗА 08.2005 - ...",
+          "identifier_verified": false,
+          "oem_confirmed": false,
+          "fitment_confirmed": false,
+          "sanitized_trace_sha256": "84cd724665c0c15fcd7e0f9ad3516c949898acde6a20aa6be6a52bc5c6f73500",
+          "note": "Fresh-import final full facade candidate probe; inherited_conditions is a list. Covers one public model/part case, not all SsangYong variants or exact VIN applicability."
+        }
+      },
+      "ocr_required": true
+    },
+    {
+      "id": "japancats_subaru",
+      "brand": "Subaru",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Subaru/",
+      "published_url": "https://www.japancats.ru/Subaru/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt",
+          "https://www.japancats.ru/Subaru/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_suzuki",
+      "brand": "Suzuki",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Suzuki/",
+      "published_url": "https://www.japancats.ru/Suzuki/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "japancats_toyota",
+      "brand": "Toyota",
+      "aliases": [],
+      "entry_url": "https://www.japancats.ru/Toyota/",
+      "published_url": "https://www.japancats.ru/Toyota/",
+      "provider": "japancats_catalog",
+      "namespace": "japancats_epc",
+      "parser_family": "japancats_tree",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.japancats.ru/robots.txt",
+          "https://www.japancats.ru/Toyota/"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.japancats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_vw",
+      "brand": "Volkswagen",
+      "aliases": [
+        "VW"
+      ],
+      "entry_url": "https://www.elcats.ru/vw/",
+      "published_url": "https://www.elcats.ru/vw/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "vag_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "known_template_parser",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "prior_public_sample_then_policy_denied",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt",
+          "https://www.elcats.ru/vw/",
+          "https://www.elcats.ru/vw/Parts.aspx?Mdl=21e8aabc-90b2-434b-9893-63e86f4e8e62&SubId=3A200C7E",
+          "https://www.elcats.ru/vw/Parts.aspx?Mdl=181ef4be-6708-4504-a641-fa6cb5587dd0&SubId=1CD01168"
+        ],
+        "root_status_code": 200,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation.",
+        "prior_parts_sample_verified": true
+      }
+    },
+    {
+      "id": "elcats_volvo",
+      "brand": "Volvo",
+      "aliases": [],
+      "entry_url": "https://www.elcats.ru/volvo/",
+      "published_url": "https://www.elcats.ru/volvo/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    },
+    {
+      "id": "elcats_zaz",
+      "brand": "ZAZ",
+      "aliases": [
+        "ZAZ CHANCE"
+      ],
+      "entry_url": "https://www.elcats.ru/zaz/",
+      "published_url": "https://www.elcats.ru/zaz/",
+      "provider": "elcats_catalog",
+      "namespace": "elcats_epc",
+      "parser_family": "generic_public_get",
+      "readiness": "robots_disallowed",
+      "reason": "robots_disallowed: published User-agent:* Disallow:/; automated navigation disabled",
+      "capabilities": [
+        "models",
+        "groups",
+        "diagrams",
+        "parts"
+      ],
+      "required_profile_fields": [
+        "make",
+        "model"
+      ],
+      "implementation_state": "generic_public_get_parser_not_commissioned",
+      "access_availability": "robots_disallowed",
+      "live_verification": "not_commissioned",
+      "data_kind": "vehicle_oem_mirror",
+      "vehicle_scope": "passenger",
+      "verification": {
+        "status": "access_policy_checked",
+        "checked_at": "2026-10-09",
+        "source_urls": [
+          "https://www.elcats.ru/robots.txt"
+        ],
+        "root_status_code": null,
+        "public_navigation_verified": false,
+        "parts_verified": false,
+        "number_extraction_verified": false,
+        "robots": {
+          "url": "https://www.elcats.ru/robots.txt",
+          "status_code": 200,
+          "allowed": false,
+          "rule": "User-agent: *; Disallow: /",
+          "state": "disallow_all"
+        },
+        "evidence_note": "All automated catalog GET stopped after robots.txt policy discovery. Root/template observations predate that discovery; they do not commission automatic access or verify this brand's full navigation."
+      }
+    }
+  ]
+}

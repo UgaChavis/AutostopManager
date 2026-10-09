@@ -790,20 +790,27 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
     assert control_annotations.readOnlyHint is False
     assert control_annotations.destructiveHint is True
 
+    def assert_response(result, expected, tool_name):
+        assert {key: value for key, value in result.items() if key != "tool_execution"} == expected
+        trace = result["tool_execution"]
+        assert trace["tool"] == tool_name and trace["call_id"]
+        assert trace["wall_ms"] >= 0 and trace["started_at"] <= trace["ended_at"]
+        assert trace["outcome"] == ("ok" if expected["ok"] else "error")
+        assert "unsafe_detail" not in json.dumps(trace)
+
     status = server.tools["manager_automations"](operation="status", job_id="job-1", include_archived=True)
-    assert status["tool_execution"]["tool"] == "manager_automations"
-    assert {key: value for key, value in status.items() if key != "tool_execution"} == {
-        "ok": True,
-        "operation": "status",
-        "payload": {"job_id": "job-1", "include_archived": True},
-    }
+    assert_response(
+        status,
+        {"ok": True, "operation": "status", "payload": {"job_id": "job-1", "include_archived": True}},
+        "manager_automations",
+    )
     templates = server.tools["manager_automations"](operation="templates")
     assert templates["payload"] == {}
-    readiness = server.tools["manager_automations"](operation="readiness")
-    assert {key: value for key, value in readiness.items() if key != "tool_execution"} == {
-        "ok": False,
-        "error": "automation_control_unavailable",
-    }
+    assert_response(
+        server.tools["manager_automations"](operation="readiness"),
+        {"ok": False, "error": "automation_control_unavailable"},
+        "manager_automations",
+    )
 
     created = server.tools["manager_automation_control"](
         operation="create_from_template",
@@ -817,18 +824,22 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
         idempotency_key="archive-job-0001",
         expected_revision=7,
     )
-    assert {key: value for key, value in conflict.items() if key != "tool_execution"} == {
-        "ok": False,
-        "error": "automation_revision_conflict",
-        "job_id": "job-1",
-        "revision": 8,
-        "expected_revision": 7,
-        "current_revision": 8,
-    }
-    run_now = server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"})
-    assert {key: value for key, value in run_now.items() if key != "tool_execution"} == {
-        "ok": False,
-        "error": "automation_control_failed",
-    }
+    assert_response(
+        conflict,
+        {
+            "ok": False,
+            "error": "automation_revision_conflict",
+            "job_id": "job-1",
+            "revision": 8,
+            "expected_revision": 7,
+            "current_revision": 8,
+        },
+        "manager_automation_control",
+    )
+    assert_response(
+        server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"}),
+        {"ok": False, "error": "automation_control_failed"},
+        "manager_automation_control",
+    )
     assert calls[-2]["expected_revision"] == 7
     assert calls[-2]["idempotency_key"] == "archive-job-0001"

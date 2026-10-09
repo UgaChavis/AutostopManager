@@ -227,9 +227,18 @@ def test_native_async_control_finishes_while_the_provider_worker_is_held(native_
         assert len(worker_threads) == 1
         assert worker_threads[0] != threading.get_ident()
         release.set()
-        provider_result = (await task).structuredContent
-        assert provider_result["tool_execution"]["tool"] == name
-        assert {key: value for key, value in provider_result.items() if key != "tool_execution"} == {"ok": True}
+        completed = await task
+        assert completed.isError is False
+        payload = completed.structuredContent
+        assert isinstance(payload, dict)
+        assert {key: value for key, value in payload.items() if key != "tool_execution"} == {"ok": True}
+        trace = payload["tool_execution"]
+        assert trace["tool"] == name
+        assert trace["outcome"] == "ok"
+        assert isinstance(trace["call_id"], str)
+        assert trace["wall_ms"] >= 0
+        assert trace["network_calls"] is None
+        assert "query" not in trace and "ad_id" not in trace
 
     try:
         asyncio.run(run())

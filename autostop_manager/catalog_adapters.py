@@ -148,6 +148,42 @@ PROVIDERS: tuple[CatalogProvider, ...] = (
         aliases=PUBLIC_CATALOG_SOURCE_ALIASES[AMAYAMA_SOURCE_ID],
     ),
     CatalogProvider(
+        source_id="elcats_catalog",
+        name="Elcats public catalog",
+        stage="oem_catalog",
+        access_mode="public_site_read_only",
+        env_names=("AUTOSTOP_ELCATS_ENABLED",),
+        capabilities=("resolve_vehicle", "list_groups", "list_diagrams", "list_parts", "lookup_candidates"),
+        priority="medium",
+        role="Read-only public HTML catalog adapter using an already decoded vehicle profile and scoped diagram references.",
+        limits="Not an official API. Each published brand route remains visible in the local matrix; enabling the flag does not override robots, authentication, challenges, unsupported structures or unverified applicability.",
+        docs_url="https://www.elcats.ru/",
+    ),
+    CatalogProvider(
+        source_id="japancats_catalog",
+        name="Japancats public catalog",
+        stage="oem_catalog",
+        access_mode="public_site_read_only",
+        env_names=("AUTOSTOP_ELCATS_ENABLED",),
+        capabilities=("resolve_vehicle", "list_groups", "list_diagrams", "list_parts", "lookup_candidates"),
+        priority="medium",
+        role="Separate Japancats public HTML lineage for routes linked by the Elcats directory; never relabeled as Elcats.",
+        limits="No official API or universal full-VIN promise. Per-brand readiness and robots policy are checked before catalog reads; a redirect or candidate does not prove exact fitment.",
+        docs_url="https://www.japancats.ru/",
+    ),
+    CatalogProvider(
+        source_id="exist_ssangyong_catalog",
+        name="Exist Ssangyong public catalog",
+        stage="oem_catalog",
+        access_mode="public_site_read_only",
+        env_names=("AUTOSTOP_ELCATS_ENABLED",),
+        capabilities=("resolve_vehicle", "list_groups", "list_diagrams", "list_parts", "lookup_candidates"),
+        priority="medium",
+        role="Separate public Ssangyong catalog lineage linked by the Elcats directory, using the supplied model/configuration profile.",
+        limits="Ssangyong catalog evidence is separate from Exist retail prices. Flag and verified route capabilities limit reads; no silent defaults or automatic exact-VIN fitment.",
+        docs_url="https://ssangyong.exist.ru/",
+    ),
+    CatalogProvider(
         source_id="euroauto_catalog",
         name="EuroAuto public catalog",
         stage="market_price",
@@ -249,6 +285,7 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
         }
     load_runtime_env()
     providers = []
+    elcats_status: dict[str, Any] | None = None
     for provider in PROVIDERS:
         if stage and provider.stage != stage:
             continue
@@ -279,6 +316,12 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
                 "local_rules",
             },
         }
+        if provider.source_id in {"elcats_catalog", "japancats_catalog", "exist_ssangyong_catalog"}:
+            if elcats_status is None:
+                from .elcats_catalog import elcats_catalog_status
+
+                elcats_status = elcats_catalog_status()
+            _apply_elcats_provider_status(row, elcats_status)
         if provider.source_id == "partsapi_ru":
             operation_status = {
                 operation: partsapi_operation_status(operation) for operation in sorted(PARTSAPI_OPERATIONS)
@@ -332,6 +375,82 @@ def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
             provider["source_id"] for provider in providers if provider.get("activation_status") == "disabled"
         ],
     }
+
+
+def _apply_elcats_provider_status(row: dict[str, Any], status: dict[str, Any]) -> None:
+    """Expose local route readiness without probing or upgrading blocked sources."""
+    entries = [entry for entry in status.get("entries", []) if entry.get("provider") == row["source_id"]]
+    navigation_ready = [
+        entry
+        for entry in entries
+        if entry.get("readiness") in {"working", "partial_rendered_numbers"}
+        and entry.get("access_availability", "public_available") == "public_available"
+        and entry.get("verification", {}).get("public_navigation_verified") is True
+    ]
+    parts_ready = [entry for entry in navigation_ready if entry.get("verification", {}).get("parts_verified") is True]
+    numbers_ready = [
+        entry for entry in parts_ready if entry.get("verification", {}).get("number_extraction_verified") is True
+    ]
+    identifier_ready = [
+        entry for entry in numbers_ready if entry.get("verification", {}).get("identifier_verified") is True
+    ]
+    oem_ready = [entry for entry in numbers_ready if entry.get("verification", {}).get("oem_verified") is True]
+    fitment_ready = [entry for entry in parts_ready if entry.get("verification", {}).get("fitment_verified") is True]
+    operation_capabilities = {
+        "resolve_vehicle": "models",
+        "list_groups": "groups",
+        "list_diagrams": "diagrams",
+        "list_parts": "parts",
+        "lookup_candidates": "parts",
+    }
+    enabled = status.get("enabled") is True
+    live_operations = [
+        operation
+        for operation in row["capabilities"]
+        if enabled
+        and any(
+            operation_capabilities[operation] in entry.get("capabilities", [])
+            for entry in (parts_ready if operation in {"list_parts", "lookup_candidates"} else navigation_ready)
+        )
+    ]
+    blocked_reasons = sorted(
+        {str(entry.get("reason") or entry.get("readiness")) for entry in entries if entry not in navigation_ready}
+    )
+    row.update(
+        {
+            "enabled": enabled,
+            "configured": enabled,
+            "authorization_status": "public_read_only" if enabled else "not_configured",
+            "activation_status": "disabled" if not enabled else "unverified" if live_operations else "unavailable",
+            "disabled_reason": "feature_disabled"
+            if not enabled
+            else None
+            if live_operations
+            else "no_verified_catalog_routes",
+            "readiness_basis": "local_registry_and_feature_flag; no network probe",
+            "registry_version": status.get("registry_version"),
+            "catalog_entries": entries,
+            "catalog_count": len(entries),
+            "verified_navigation_route_count": len(navigation_ready),
+            "verified_parts_route_count": len(parts_ready),
+            "verified_number_extraction_route_count": len(numbers_ready),
+            "oem_number_extraction_available": enabled and bool(numbers_ready),
+            "candidate_number_extraction_available": enabled and bool(numbers_ready),
+            "identifier_verified_route_count": len(identifier_ready),
+            "oem_verified_route_count": len(oem_ready),
+            "fitment_verified_route_count": len(fitment_ready),
+            "candidate_evidence_only": bool(numbers_ready) and not identifier_ready,
+            "ocr_required": any(entry.get("ocr_required") is True for entry in numbers_ready),
+            "partial_operations": [
+                operation
+                for operation in live_operations
+                if operation in {"list_parts", "lookup_candidates"} and not numbers_ready
+            ],
+            "blocked_reasons": blocked_reasons,
+            "live_callable_now": bool(live_operations),
+            "live_operations": live_operations,
+        }
+    )
 
 
 def _provider_stage_matrix(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -648,6 +648,8 @@ def test_stage1_migrates_legacy_cache_additively(tmp_path: Path) -> None:
     ("status", "body", "expected_allowed", "expected_delay"),
     [
         (200, b"User-agent: *\nDisallow: /private\nCrawl-delay: 4", False, 4.0),
+        (200, b"\xef\xbb\xbfUser-agent: *\nDisallow: /\n", False, 1.0),
+        (200, b"\xef\xbb\xbfUser-agent: *\nDisallow: /other\n", True, 1.0),
         (404, b"", True, 1.0),
         (503, b"", False, 1.0),
     ],

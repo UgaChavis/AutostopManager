@@ -8,8 +8,9 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import pytest
 
-from autostop_manager import automotive_identity, automotive_labor, automotive_parts
+from autostop_manager import automotive_identity, automotive_labor, automotive_parts, elcats_catalog
 from autostop_manager.automotive_catalog import build_bundle, content_hash, read_document, validate_registry
+from autostop_manager.automotive_contracts import public_oem_catalog_ref
 from autostop_manager.catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES, PARTSAPI_OPERATIONS, partsapi_catalog_lookup
 from autostop_manager.mcp_tools import register_manager_tools
 from autostop_manager.storage import StoreState
@@ -172,11 +173,16 @@ def test_catalog_rejects_signature_and_provider_contract_drift(catalog, target, 
         validate_registry(ROOT, broken, schemas, PARTSAPI_OPERATIONS)
 
 
-@pytest.mark.parametrize("target,selector", [("partsapi.getArticle", "operation"), ("aftermarket.mann", "provider")])
+@pytest.mark.parametrize(
+    "target,selector",
+    [("partsapi.getArticle", "operation"), ("aftermarket.mann", "provider"), ("elcats.list_parts", "operation")],
+)
 def test_catalog_rejects_example_for_a_different_provider_selector(catalog, target, selector):
     registry, schemas = catalog
     broken = deepcopy(registry)
-    next(row for row in broken["tools"] if row["tool_id"] == target)["example"][selector] = "wrong"
+    next(row for row in broken["tools"] if row["tool_id"] == target)["example"][selector] = (
+        "resolve_vehicle" if target == "elcats.list_parts" else "wrong"
+    )
     with pytest.raises(ValueError, match="example_selector_mismatch"):
         validate_registry(ROOT, broken, schemas, PARTSAPI_OPERATIONS)
 
@@ -388,6 +394,66 @@ def test_pure_helper_documentation_examples_execute_without_acquisition(catalog,
         assert response["execution"]["network_calls"] == 0, tool["tool_id"]
         tested.append(name)
     assert len(tested) == 10
+
+
+@pytest.mark.parametrize(
+    "operation,kind",
+    [
+        ("resolve_vehicle", None),
+        ("list_groups", "modification"),
+        ("list_diagrams", "group"),
+        ("list_parts", "diagram"),
+        ("lookup_candidates", "modification"),
+    ],
+)
+def test_elcats_documentation_examples_validate_native_refs_without_catalog_reads(
+    catalog, monkeypatch, operation, kind
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("public catalog example attempted acquisition")
+
+    monkeypatch.setattr("socket.socket", forbidden)
+    monkeypatch.setattr(elcats_catalog, "PublicCatalogReader", forbidden)
+    monkeypatch.setattr(elcats_catalog, "elcats_catalog_query", forbidden)
+    registry, schemas = catalog
+    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["ok"]
+    example = next(tool["example"] for tool in registry["tools"] if tool["tool_id"] == "elcats." + operation)
+    profile, conflicts, missing = elcats_catalog._profile(example["vehicle_identity"])
+    assert not conflicts and not missing
+    if kind is None:
+        assert "catalog_ref" not in example
+        return
+    reference = example["catalog_ref"]
+    assert public_oem_catalog_ref(reference, entity_kind=kind, vehicle_profile=profile)
+    entry = next(entry for entry in elcats_catalog.elcats_catalog_entries() if entry["id"] == reference["entry_id"])
+    assert elcats_catalog._ref_url(entry, reference, profile).startswith("https://www.elcats.ru/vw/")
+
+
+@pytest.mark.parametrize("fault", ["wrong_kind", "missing_entry", "wrong_path", "unbound_context", "missing_parent"])
+def test_elcats_catalog_gate_rejects_schema_valid_semantic_reference_errors(catalog, monkeypatch, fault):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("semantic validation attempted acquisition")
+
+    monkeypatch.setattr("socket.socket", forbidden)
+    monkeypatch.setattr(elcats_catalog, "PublicCatalogReader", forbidden)
+    monkeypatch.setattr(elcats_catalog, "elcats_catalog_query", forbidden)
+    registry, schemas = catalog
+    broken = deepcopy(registry)
+    reference = next(tool["example"] for tool in broken["tools"] if tool["tool_id"] == "elcats.list_parts")[
+        "catalog_ref"
+    ]
+    if fault == "wrong_kind":
+        reference["entity_kind"] = "model"
+    elif fault == "missing_entry":
+        reference.pop("entry_id")
+    elif fault == "wrong_path":
+        reference["path"] = "/demo"
+    elif fault == "unbound_context":
+        reference["vehicle_context"]["input_binding"] = "a" * 64
+    else:
+        reference.pop("parent_ref")
+    with pytest.raises(ValueError, match="invalid_elcats_example_reference"):
+        validate_registry(ROOT, broken, schemas, PARTSAPI_OPERATIONS)
 
 
 def test_all_provider_documentation_examples_pass_dry_run_without_http(catalog, monkeypatch):

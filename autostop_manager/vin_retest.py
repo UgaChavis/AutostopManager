@@ -41,7 +41,7 @@ def checked_metrics(value: Any) -> dict[str, Any]:
     metrics = {}
     valid: bool | re.Match[str] | None
     for key in METRIC_FIELDS:
-        item = value.get(key)
+        item: Any = value.get(key)
         if key == "call_id":
             valid = isinstance(item, str) and re.fullmatch(
                 r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", item
