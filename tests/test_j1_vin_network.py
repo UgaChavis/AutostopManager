@@ -907,6 +907,83 @@ def test_ddg_incomplete_anchor_cannot_lend_result_state_to_unrelated_link(
 
 
 @pytest.mark.parametrize(
+    "attribute", ["hidden", "style='display:none'", "aria-hidden='true'", "style='visibility:hidden'"]
+)
+def test_ddg_nested_anchor_cannot_export_a_separately_hidden_block(
+    monkeypatch: pytest.MonkeyPatch, attribute: str
+) -> None:
+    body = (
+        f'<a hidden><div {attribute}>Hidden block<a class="result__a" href="https://example.org/hidden">'
+        "Hidden source</a></div></a><p>Provider unavailable</p>"
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert (result["ok"], result["result_class"], result["results"]) == (False, "error", [])
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_hidden_nested_result_keeps_the_following_visible_result_and_snippet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        '<a hidden><div hidden><a class="result__a" href="https://example.org/hidden">Hidden source</a></div></a>'
+        '<a class="result__a" href="https://example.org/visible">Visible source</a>'
+        '<div class="result__snippet">Visible snippet</div>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["result_class"] == "results" and result["errors"] == []
+    assert len(result["results"]) == 1
+    row = result["results"][0]
+    assert (row["url"], row["title"], row["snippet"]) == (
+        "https://example.org/visible",
+        "Visible source",
+        "Visible snippet",
+    )
+
+
+@pytest.mark.parametrize(
+    "opening,closing",
+    [
+        ("<a hidden>Hidden predecessor", ""),
+        ("<a hidden><span hidden>Hidden inline", "</span>"),
+        ("<a hidden>Hidden predecessor</a>", ""),
+    ],
+)
+def test_ddg_inline_or_explicit_anchor_close_keeps_the_visible_result(
+    monkeypatch: pytest.MonkeyPatch, opening: str, closing: str
+) -> None:
+    body = (
+        opening
+        + '<a class="result__a" href="https://example.org/visible">Visible source</a>'
+        + closing
+        + '<div class="result__snippet">Visible snippet</div>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["result_class"] == "results" and len(result["results"]) == 1
+    row = result["results"][0]
+    assert (row["url"], row["title"], row["snippet"]) == (
+        "https://example.org/visible",
+        "Visible source",
+        "Visible snippet",
+    )
+
+
+def test_ddg_hidden_nested_anchor_cannot_replace_a_visible_outer_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<a class="result__a" href="https://example.org/visible">Visible source<div hidden>Hidden block'
+        '<a class="result__a" href="https://example.org/hidden">Hidden source</a></div></a>'
+        '<div class="result__snippet">Visible snippet</div>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["result_class"] == "results" and len(result["results"]) == 1
+    row = result["results"][0]
+    assert (row["url"], row["title"], row["snippet"]) == (
+        "https://example.org/visible",
+        "Visible source",
+        "Visible snippet",
+    )
+
+
+@pytest.mark.parametrize(
     "opening,closing",
     [
         ("<template>", "</template>"),

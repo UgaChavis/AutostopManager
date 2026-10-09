@@ -555,10 +555,6 @@ class _DDGLinks(_HTMLVisibility):
             self._snippet_node = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "a":
-            # A new anchor terminates an unfinished sibling; it cannot borrow
-            # that sibling's result classification or title.
-            self._close_in_scope({"a"}, {"html", "table", "td", "th", "caption"})
         hidden = self._start_element(tag, attrs)
         self._drop_closed_captures()
         values = _first_attributes(attrs)
