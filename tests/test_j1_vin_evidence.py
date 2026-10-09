@@ -399,6 +399,111 @@ def test_ocr_version_invalidates_old_claims_and_current_report_keeps_history(san
     assert report["analysis_status"] == "ready_partial"
 
 
+def _document_storage_snapshot(job: str, document_id: str) -> tuple[Any, ...]:
+    with store.connect(job) as conn:
+        document = tuple(
+            conn.execute("SELECT version,method,status FROM documents WHERE id=?", (document_id,)).fetchone()
+        )
+        pages = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT page,text,match_evidence_id FROM pages WHERE document_id=? ORDER BY page", (document_id,)
+            )
+        ]
+        index = [
+            tuple(row)
+            for row in conn.execute("SELECT page,text FROM pages_fts WHERE document_id=? ORDER BY page", (document_id,))
+        ]
+        return document, pages, index
+
+
+@pytest.mark.parametrize("unit", ["x ", "я"])
+def test_queued_ocr_cannot_grow_a_document_beyond_aggregate_utf8_limit(sandbox: Sandbox, unit: str) -> None:
+    job = _start()
+    text = unit * (256 * 1024 // len(unit.encode("utf-8")))
+    assert len(text.encode("utf-8")) == 256 * 1024
+    document = _document(
+        job, pages=[{"page": page, "text": text} for page in range(1, 9)] + [{"page": 9, "text": ""}], pdf=True
+    )
+    before = _document_storage_snapshot(job, document["document_id"])
+    sandbox.monkeypatch.setattr(
+        worker, "ocr_pages", lambda *_args, **_kwargs: {"ok": True, "pages": [{"page": 9, "text": unit}]}
+    )
+    queued = api.research_document(job, document["document_id"], page=9, ocr=True)
+    assert queued["ok"] and queued["ocr_status"] == "queued"
+    queue_revision = api.research_status(job)["revision"]
+    general.run_worker(once=True)
+    with store.connect(job) as conn:
+        request = conn.execute(
+            "SELECT status,error FROM ocr_requests WHERE document_id=? AND page=9", (document["document_id"],)
+        ).fetchone()
+        assert tuple(request) == ("failed", "document_text_limit_reached")
+    assert _document_storage_snapshot(job, document["document_id"]) == before
+    status = api.research_status(job)
+    assert status["revision"] == queue_revision
+    assert status["collection_status"] == "completed" and not status["network_inflight"]
+    assert status["stop_reason"] == "document_text_limit_reached"
+    report = api.research_report(job)
+    assert report["unknown_fields"] == ["engine"] and report["analysis_status"] == "draft"
+    with general._db() as conn:
+        stub = conn.execute("SELECT status,error FROM jobs WHERE id=?", (job,)).fetchone()
+        assert tuple(stub) == ("completed", "document_text_limit_reached")
+
+
+def test_at_limit_ocr_replaces_existing_page_without_double_counting(sandbox: Sandbox) -> None:
+    job = _start()
+    text = "x " * (128 * 1024)
+    document = _document(job, pages=[{"page": page, "text": text} for page in range(1, 9)], pdf=True)
+    sandbox.monkeypatch.setattr(
+        worker,
+        "ocr_pages",
+        lambda *_args, **_kwargs: {"ok": True, "pages": [{"page": 1, "text": "y " * (128 * 1024)}]},
+    )
+    queued = api.research_document(job, document["document_id"], page=1, ocr=True)
+    assert queued["ok"] and queued["ocr_status"] == "queued"
+    general.run_worker(once=True)
+    current = api.research_document(job, document["document_id"], page=1)
+    assert current["document_revision"] == document["document_revision"] + 1
+    with store.connect(job) as conn:
+        assert tuple(
+            conn.execute(
+                "SELECT status,error FROM ocr_requests WHERE document_id=? AND page=1", (document["document_id"],)
+            ).fetchone()
+        ) == ("done", "")
+        assert (
+            conn.execute(
+                "SELECT SUM(length(CAST(text AS BLOB))) FROM pages WHERE document_id=?", (document["document_id"],)
+            ).fetchone()[0]
+            == 2 * 1024 * 1024
+        )
+        assert conn.execute(
+            "SELECT text FROM pages WHERE document_id=? AND page=1", (document["document_id"],)
+        ).fetchone()[0] == "y " * (128 * 1024)
+        assert (
+            conn.execute(
+                "SELECT SUM(length(CAST(text AS BLOB))) FROM pages_fts WHERE document_id=?", (document["document_id"],)
+            ).fetchone()[0]
+            == 2 * 1024 * 1024
+        )
+
+
+def test_normalization_expansion_is_rejected_before_replacing_saved_evidence(sandbox: Sandbox) -> None:
+    job = _start()
+    document = _document(job)
+    before = _document_storage_snapshot(job, document["document_id"])
+    revision = api.research_status(job)["revision"]
+    raw = "\ufdfa" * (256 * 1024 // 3)
+    assert len(raw.encode("utf-8")) < 256 * 1024
+    assert len(api._safe_text(raw, 2 * 1024 * 1024).encode("utf-8")) > 2 * 1024 * 1024
+    with pytest.raises(store.VinJobError, match="document_text_limit_reached"):
+        with store.connect(job, transaction=True) as conn:
+            current = store.metadata(conn)
+            api.ingest_pages(conn, current, document["document_id"], [{"page": 1, "text": raw}])
+            store.write_metadata(conn, current)
+    assert _document_storage_snapshot(job, document["document_id"]) == before
+    assert api.research_status(job)["revision"] == revision
+
+
 def test_expired_job_cannot_accept_claims_and_removes_ephemeral_evidence(sandbox: Sandbox) -> None:
     job = _start()
     document = _document(job)

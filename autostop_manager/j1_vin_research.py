@@ -707,9 +707,7 @@ def ingest_pages(
 
     if len(pages) > 1000 or sum(len(str(item.get("text", "")).encode("utf-8")) for item in pages) > 2 * 1024 * 1024:
         raise store.VinJobError("document_text_limit_reached")
-    if replace:
-        conn.execute("DELETE FROM pages WHERE document_id=?", (document_id,))
-        conn.execute("DELETE FROM pages_fts WHERE document_id=?", (document_id,))
+    prepared: list[tuple[int, str, str]] = []
     for item in pages:
         page = item.get("page")
         raw = item.get("text")
@@ -719,6 +717,25 @@ def ingest_pages(
         matched = any(re.sub(r"[ ._/\\-]", "", m.group()).upper() == current["vin"] for m in matches)
         evidence = uuid4().hex if proof_allowed and matched else ""
         text = _safe_text(raw, 2 * 1024 * 1024)
+        prepared.append((page, text, evidence))
+    incoming = {page: text for page, text, _ in prepared}
+    retained_bytes = 0
+    if not replace:
+        retained_bytes = sum(
+            row[1]
+            for row in conn.execute(
+                "SELECT page,length(CAST(text AS BLOB)) FROM pages WHERE document_id=?", (document_id,)
+            )
+            if row[0] not in incoming
+        )
+    if retained_bytes + sum(len(text.encode("utf-8")) for text in incoming.values()) > 2 * 1024 * 1024:
+        raise store.VinJobError("document_text_limit_reached")
+    # Validate the whole sanitized corpus before changing either storage or FTS.
+    # OCR replaces selected pages; unchanged pages still consume the same cap.
+    if replace:
+        conn.execute("DELETE FROM pages WHERE document_id=?", (document_id,))
+        conn.execute("DELETE FROM pages_fts WHERE document_id=?", (document_id,))
+    for page, text, evidence in prepared:
         conn.execute("DELETE FROM pages_fts WHERE document_id=? AND page=?", (document_id, page))
         conn.execute(
             "INSERT OR REPLACE INTO pages(document_id,page,text,match_evidence_id) VALUES(?,?,?,?)",

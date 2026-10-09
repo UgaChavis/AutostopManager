@@ -122,7 +122,7 @@ def _next_operation(job_id: str) -> tuple[str, dict[str, Any], dict[str, Any]] |
                 current["operation_started_at"] = time.time()
                 store.write_metadata(conn, current)
                 return table, dict(row), current
-            _finish_state(current, status="completed", reason="initial_collection_complete")
+            _finish_state(current, status="completed", reason=current["stop_reason"] or "initial_collection_complete")
         store.write_metadata(conn, current)
         return None
 
@@ -420,6 +420,8 @@ def _operation_failed(job_id: str, table: str, operation: dict[str, Any], starte
     with store.connect(job_id, transaction=True) as conn:
         current, _ = _finish_operation(conn, time.monotonic() - started)
         conn.execute(f"UPDATE {table} SET status='failed',error=? WHERE rowid=?", (code, operation["operation_rowid"]))
+        if code == "document_text_limit_reached":
+            current["stop_reason"] = code
         store.write_metadata(conn, current)
 
 
@@ -452,6 +454,7 @@ def run_job(job_id: str) -> None:
                     "robots_disallowed",
                     "redirect_robots_disallowed",
                     "document_too_large",
+                    "document_text_limit_reached",
                     "unsupported_content_encoding",
                     "too_many_redirects",
                     "large_document_source_untrusted",

@@ -96,7 +96,9 @@ Status/results/report и чтение документа без OCR остают
 Static fetch допускает URL с целевым VIN только в рамках этой job. Проверки применяются
 к запросу, URL и redirects; DNS/private-network, robots и rate limits сохраняются.
 VIN-bearing browser URLs запрещены. Обезличенные страницы могут использовать прежний browser,
-когда его release-bound attestation готова; без browser статический путь остаётся доступным.
+когда его release-bound attestation готова и worker имеет доступ к renderer socket.
+Доступ проверяется от имени службы при активации; наличие attestation само по себе его не подтверждает.
+Без browser статический путь остаётся доступным.
 Login, cookies и CAPTCHA не обходятся. 401/403/429, timeout, parse failure и пустая выдача различаются.
 
 Лимиты одной job: 12 суммарных запросов, 60 документов, 6 browser-страниц, 12 OCR-страниц,
@@ -126,9 +128,12 @@ OCR использует cached PDF без новой сети, меняет д�
 Перед работой runtime проверяет tmpfs, ёмкость и права, а не только feature flag.
 Worker restart сохраняет tmpfs и повторно проверяет срок. После host reboot потеря оснований
 возвращает `vin_ephemeral_state_lost`; из постоянного stub нельзя восстановить VIN или продолжить сеть.
-Expiry удаляет job DB, FTS, WAL и временные PDF/browser/OCR-файлы вместе с приватным каталогом.
-VIN, его хэш, VIN-bearing URLs и пользовательские результаты не попадают в Manager memory,
-общие backups, долговременные logs, fixtures, Git и PR.
+Expiry удаляет job DB, FTS и временные PDF/OCR-файлы вместе с приватным каталогом.
+Browser profile/cache/DOM находятся в отдельном tmpfs renderer и удаляются после каждого render.
+В собственных хранилищах и телеметрии Manager/J1 VIN, его хэш, VIN-bearing URLs и результаты
+не попадают в Manager memory, общие backups, долговременные logs, fixtures, Git и PR.
+Журналирование SearXNG и правила host swap/backups проверяются при отдельном развёртывании;
+срок хранения запросов внешними поисковыми сервисами этот контракт не контролирует.
 
 Общий приватный файл `/etc/autostop-j1-vin.env` задаёт флаг одинаково для Manager MCP и J1 worker.
 Значение по умолчанию — выключено. Units/installers используют общий RuntimeDirectory с `0700`,
