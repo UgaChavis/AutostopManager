@@ -96,6 +96,65 @@ def test_html_structure_and_text_are_bounded(monkeypatch: pytest.MonkeyPatch, tm
     assert nested["pages"][0]["text"] == ""
 
 
+@pytest.mark.parametrize(
+    "prefix,element,suffix",
+    [
+        ("<ul>", "<li>", "</ul>"),
+        ("<table><tbody>", "<tr><td>", "</table>"),
+        ("<table><tr>", "<td>", "</table>"),
+        ("<table><tr>", "<th>", "</table>"),
+        ("", "<p>", ""),
+    ],
+)
+def test_html_optional_end_tags_preserve_large_flat_documents(
+    tmp_path: Path, prefix: str, element: str, suffix: str
+) -> None:
+    body = prefix + "".join(f"{element}PUBLIC ROW {number}" for number in range(700)) + suffix
+    body += "<p>AFTER DOCUMENT 1HGCM82673A000000</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert text.count("PUBLIC ROW") == 700 and "PUBLIC ROW 699" in text
+    assert "AFTER DOCUMENT 1HGCM82673A000000" in text
+    assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+def test_html_optional_end_tags_keep_hidden_ancestors_and_close_hidden_siblings(tmp_path: Path) -> None:
+    body = (
+        b"<ul hidden><li>secret ancestor one<li>secret ancestor two</ul>"
+        b"<ul><li hidden>secret item<template><li>secret template</li></template><li>visible item</ul>"
+        b"<p hidden>secret paragraph<div>visible block</div>"
+        b"<table hidden><tr><td>secret table one<tr><td>secret table two</table>"
+        b"<table><tr hidden><td>secret cell<tr><td>visible cell</table>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "secret" not in text
+    assert all(part in text for part in ("visible item", "visible block", "visible cell"))
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("boundary", ["button", "section", "fieldset", "select"])
+def test_html_list_optional_end_tag_does_not_escape_hidden_special_elements(tmp_path: Path, boundary: str) -> None:
+    body = (
+        f"<ul><li>visible before<{boundary} hidden>secret before<li>secret nested</li>"
+        f"</{boundary}><li>visible after</ul>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "secret" not in text and "visible before" in text and "visible after" in text
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("nested,closing", [("<ul><li>", "</li></ul>"), ("<table><tr><td>", "</td></tr></table>")])
+def test_html_optional_end_tags_do_not_collapse_real_nested_structures(
+    tmp_path: Path, nested: str, closing: str
+) -> None:
+    body = "<p>visible before</p>" + nested * 300 + "ignored deep text" + closing * 300 + "<p>ignored after</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "visible before"
+    assert result["truncated"] and "html_structure_limit" in result["limitations"]
+
+
 def test_real_pdf_page_456_survives_50k_and_private_parent(tmp_path: Path) -> None:
     if not shutil.which("pdftotext"):
         pytest.skip("poppler is not installed")

@@ -43,6 +43,75 @@ _VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 )
 _HIDDEN_TAGS = frozenset({"script", "style", "template", "noscript", "svg", "head", "title"})
+_P_CLOSING_STARTS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "dd",
+        "details",
+        "dialog",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hgroup",
+        "hr",
+        "li",
+        "main",
+        "menu",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "search",
+        "section",
+        "table",
+        "ul",
+    }
+)
+_LI_SCOPE_BOUNDARIES = (_P_CLOSING_STARTS - {"address", "div", "p", "li"}) | frozenset(
+    {
+        "applet",
+        "body",
+        "button",
+        "caption",
+        "center",
+        "colgroup",
+        "dir",
+        "frameset",
+        "html",
+        "iframe",
+        "listing",
+        "marquee",
+        "noembed",
+        "noframes",
+        "object",
+        "plaintext",
+        "select",
+        "summary",
+        "textarea",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "xmp",
+    }
+)
 
 
 def _failure(kind: str, method: str, error: str) -> dict[str, Any]:
@@ -75,9 +144,34 @@ class _VisibleHTML(HTMLParser):
         self.truncated = False
         self.structure_limited = False
 
+    def _close_in_scope(self, tags: set[str], boundaries: set[str] | frozenset[str]) -> None:
+        # HTMLParser emits tokens rather than a browser DOM.  Omitted end tags
+        # close siblings, but must not cross nested lists/tables or hidden
+        # parsing contexts and accidentally expose their contents.
+        for index in range(len(self.stack) - 1, -1, -1):
+            tag = self.stack[index][0]
+            if tag in tags:
+                del self.stack[index:]
+                return
+            if tag in boundaries or tag in _HIDDEN_TAGS:
+                return
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self.structure_limited:
             return
+        if tag in _P_CLOSING_STARTS:
+            self._close_in_scope(
+                {"p"}, {"html", "table", "td", "th", "caption", "button", "applet", "object", "marquee"}
+            )
+        if tag == "li":
+            self._close_in_scope({"li"}, _LI_SCOPE_BOUNDARIES)
+        elif tag in {"td", "th"}:
+            self._close_in_scope({"td", "th"}, {"tr", "table", "thead", "tbody", "tfoot"})
+        elif tag == "tr":
+            self._close_in_scope({"tr"}, {"table", "thead", "tbody", "tfoot"})
+        elif tag in {"thead", "tbody", "tfoot"}:
+            self._close_in_scope({"tr"}, {"table", "thead", "tbody", "tfoot"})
+            self._close_in_scope({"thead", "tbody", "tfoot"}, {"table"})
         if len(self.stack) >= 512:
             self.structure_limited = True
             self.truncated = True
@@ -94,7 +188,7 @@ class _VisibleHTML(HTMLParser):
         )
         if tag not in _VOID_TAGS:
             self.stack.append((tag, hidden))
-        if not hidden and tag in {"p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "hr"}:
+        if not hidden and tag in {"p", "br", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "hr"}:
             self._append("\n")
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:

@@ -247,6 +247,68 @@ def connect(job_id: str, *, transaction: bool = False) -> Iterator[sqlite3.Conne
         conn.close()
 
 
+def _failed_worker_info(job_id: str) -> tuple[str, float] | None:
+    if not general._db_path().is_file():
+        return None
+    with general._db(readonly=True) as conn:
+        row = conn.execute(
+            "SELECT status,error,updated_at FROM jobs WHERE id=? AND profile=?", (job_id, PROFILE)
+        ).fetchone()
+    if row is None or row["status"] != "failed":
+        return None
+    reason = row["error"]
+    reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,64}", reason) else "vin_collection_failed"
+    return reason, datetime.fromisoformat(row["updated_at"]).timestamp()
+
+
+def _reconcile_failed_worker(job_id: str) -> None:
+    failure = _failed_worker_info(job_id)
+    if failure is None:
+        return
+    reason, failed_at = failure
+    with connect(job_id) as conn:
+        current = metadata(conn)
+        if current["collection_status"] in {"failed", "cancelled"} and not current["inflight"]:
+            return
+    with connect(job_id, transaction=True) as conn:
+        current = metadata(conn)
+        if current["inflight"]:
+            # Recovery may happen much later; idle time after the failure
+            # marker is not active collection time and must not consume budget.
+            elapsed = max(0.0, failed_at - current["operation_started_at"])
+            current["used_seconds"] += min(elapsed, max(0.0, MAX_SECONDS - current["used_seconds"]))
+        current.update(collection_status="failed", inflight=False, operation_started_at=0.0, stop_reason=reason)
+        for table in ("queries", "documents", "ocr_requests"):
+            conn.execute(f"UPDATE {table} SET status='failed',error=? WHERE status='running'", (reason,))
+        write_metadata(conn, current)
+
+
+def reconcile_failed_job(job_id: str) -> None:
+    """Recover stopped worker state once storage is available, without network.
+
+    The queue's failed marker is written only after the worker stops. A full
+    tmpfs may prevent that terminal update in the private DB; retain the marker
+    and apply the same capacity-checked update before the next API operation.
+    """
+
+    if _failed_worker_info(job_id) is not None:
+        with start_lock():
+            _reconcile_failed_worker(job_id)
+
+
+def fail_worker(job_id: str, reason: str) -> None:
+    """Publish a terminal marker and attempt bounded private-state recovery."""
+
+    try:
+        with start_lock():
+            # Exclude enqueue while publishing failure and reconciling. Keep
+            # this pointer if the private transaction cannot commit on tmpfs.
+            set_stub(job_id, "failed", reason)
+            _reconcile_failed_worker(job_id)
+    except (OSError, ValueError, sqlite3.Error, VinJobError):
+        set_stub(job_id, "failed", reason)
+
+
 def _fallback_expiry(path: Path) -> float:
     """A damaged job may use its de-identified queue creation time for cleanup."""
     if general._db_path().is_file():

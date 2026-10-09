@@ -67,6 +67,8 @@ def _safe_api(function: Callable[..., dict[str, Any]]) -> Callable[..., dict[str
         job_id = candidate if isinstance(candidate, str) and store.IDENTIFIER.fullmatch(candidate) else ""
         try:
             store.prune()
+            if job_id:
+                store.reconcile_failed_job(job_id)
             return function(*args, **kwargs)
         except store.VinJobError as exc:
             if job_id and exc.code in {"vin_job_expired", "vin_ephemeral_state_lost"}:
@@ -659,6 +661,8 @@ def j1_research_record_facts(
 @_safe_api
 def research_report(job_id: str) -> dict[str, Any]:
     with store.connect(job_id) as conn:
+        # Keep metadata, evidence, sources and budget on the same read snapshot.
+        conn.execute("BEGIN")
         current = store.metadata(conn)
         claims = _claims(conn)
         covered = {

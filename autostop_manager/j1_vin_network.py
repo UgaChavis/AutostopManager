@@ -507,14 +507,24 @@ class _DDGLinks(j1_fetch._DDGLinks):
         super().__init__()
         self.scope = scope
         self._snippet_row: int | None = None
+        self.has_result_links = False
+        self.has_no_results = False
+        self._result_link = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "a" and "result__a" in str(dict(attrs).get("class") or ""):
+        classes = set((dict(attrs).get("class") or "").split())
+        if tag == "a" and "result__a" in classes:
             self._snippet_row = None
+            self._result_link = True
+        if classes & {"no-results", "result--no-result"}:
+            self.has_no_results = True
         super().handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "a" and self._href:
+            # Recognition precedes privacy filtering: a real results page can
+            # contain only URLs that this VIN scope is forbidden to export.
+            self.has_result_links |= self._result_link
             href = html.unescape(self._href)
             parsed = urlsplit(href)
             if parsed.hostname in {"duckduckgo.com", "www.duckduckgo.com"}:
@@ -524,6 +534,7 @@ class _DDGLinks(j1_fetch._DDGLinks):
                 self.rows.append({"url": url, "title": " ".join(self._title), "snippet": "", "source": "duckduckgo"})
                 self._snippet_row = len(self.rows) - 1
             self._href = ""
+            self._result_link = False
         if self._snippet_tag and tag == self._snippet_tag:
             if self._snippet_row is not None:
                 self.rows[self._snippet_row]["snippet"] = " ".join(self._snippet)
@@ -539,12 +550,13 @@ def _duckduckgo_search(query: str, scope: VinScope) -> list[dict[str, Any]]:
     if status != 200:
         raise _http_error(status)
     text = body.decode("utf-8", "replace")
-    if re.search(r"(?:anomaly-modal|id=[\"']challenge-form)", text, re.I):
+    if re.search(r"(?:anomaly-modal|id\s*=\s*[\"'](?:challenge-form|anomaly-form)[\"'])", text, re.I):
         raise _ProviderError("requires_human")
-    if not re.search(r"<(?:html|a|div)\b", text, re.I):
-        raise _ProviderError("parse_failed")
     parser = _DDGLinks(scope)
     parser.feed(text)
+    parser.close()
+    if not (parser.has_result_links or parser.has_no_results):
+        raise _ProviderError("parse_failed")
     return parser.rows
 
 

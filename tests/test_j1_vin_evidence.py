@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
+from threading import Event
 import time
 from typing import Any
 from uuid import uuid4
@@ -275,6 +279,74 @@ def test_conflicting_values_are_retained_and_never_auto_resolved(sandbox: Sandbo
     assert {claim["value"] for claim in report["claims"]} == {"Alpha", "Beta"}
     assert report["conflicts"][0]["requires_agent_review"]
     assert set(report["conflicts"][0]["claim_ids"]) == {first["claim_id"], second["claim_id"]}
+
+
+@pytest.mark.parametrize("checkpoint", ["_claims", "_budget"])
+def test_report_reads_one_snapshot_during_concurrent_writes(sandbox: Sandbox, checkpoint: str) -> None:
+    job = _start()
+    alpha = _document(job)
+    beta = _document(job, "Engine Beta; power 120 kW.")
+    assert _record(job, [_claim(alpha)], finalize=True)["ok"]
+    before = api.research_report(job)
+    assert before["analysis_status"] == "ready" and before["finalized_revision"] == before["revision"]
+    second = _claim(beta, value="Beta", quote="Engine Beta; power 120 kW.")
+    start_write, commit_attempted, write_finished = Event(), Event(), Event()
+    original_connect = store.connect
+    original_read = getattr(api, checkpoint)
+
+    @contextmanager
+    def traced_connect(job_id: str, *, transaction: bool = False) -> Iterator[sqlite3.Connection]:
+        with original_connect(job_id, transaction=transaction) as conn:
+            if transaction:
+                conn.set_trace_callback(lambda sql: commit_attempted.set() if sql.strip().upper() == "COMMIT" else None)
+            yield conn
+
+    def concurrent_write() -> tuple[dict[str, Any], dict[str, Any]]:
+        assert start_write.wait(3), "The report must reach the selected read checkpoint"
+        try:
+            result = api.j1_research_record_facts(
+                job,
+                expected_revision=before["revision"],
+                facts=[second],
+                idempotency_key=f"facts-{uuid4().hex}",
+                finalize=False,
+            )
+            assert result["ok"], result
+            added = _document(job, "An additional independent source.")
+            return result, added
+        finally:
+            write_finished.set()
+
+    def interleaved_read(*args: Any, **kwargs: Any) -> Any:
+        start_write.set()
+        assert commit_attempted.wait(3), "The background writer must attempt to commit during the report"
+        # DELETE journals hold the writer at COMMIT until the snapshot closes.
+        # Bound this wait so the report can finish and release its read lock.
+        write_finished.wait(0.5)
+        return original_read(*args, **kwargs)
+
+    with sandbox.monkeypatch.context() as patch:
+        patch.setattr(store, "connect", traced_connect)
+        patch.setattr(api, checkpoint, interleaved_read)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(concurrent_write)
+            try:
+                report = api.research_report(job)
+            finally:
+                start_write.set()
+            written, added = pending.result(timeout=5)
+
+    assert report == before
+    assert written["revision"] == before["revision"] + 1 and written["analysis_status"] == "draft"
+    after = api.research_report(job)
+    assert after["revision"] == before["revision"] + 2
+    assert after["finalized_revision"] == before["finalized_revision"] < after["revision"]
+    assert after["analysis_status"] == "draft"
+    assert {claim["value"] for claim in after["claims"]} == {"Alpha", "Beta"}
+    assert after["conflicts"] and after["unknown_fields"] == []
+    assert added["document_id"] in {source["document_id"] for source in after["sources"]}
+    assert len(after["sources"]) == before["budget"]["documents"]["used"] + 1
+    assert after["budget"]["documents"]["used"] == len(after["sources"])
 
 
 @pytest.mark.parametrize("status,inflight", [("queued", False), ("running", False), ("completed", True)])

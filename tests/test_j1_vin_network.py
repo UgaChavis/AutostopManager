@@ -578,6 +578,79 @@ def test_ddg_parser_does_not_attach_unsafe_result_snippet_to_safe_source() -> No
     assert parser.rows[0]["snippet"] == "safe snippet"
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not HTML",
+        b"<html><body><h1>Service temporarily unavailable</h1></body></html>",
+        b'<html><body><form id="consent">Accept cookies to continue</form></body></html>',
+        b'<html><div class="results" id="links"></div></html>',
+        b'<html><div class="result--no-result-placeholder">No results found</div></html>',
+        b'<html><!-- <div class="no-results">No results found</div> --></html>',
+        b'<a class="result__a" href="https://example.org/report">Incomplete result',
+        b'<a class="result__a">Missing result URL</a>',
+    ],
+)
+def test_ddg_unknown_or_incomplete_http_200_is_error_not_empty(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+    calls = fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert (result["ok"], result["result_class"], result["results"]) == (False, "error", [])
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+    assert result["providers"][0]["outcome"] == "error" and len(calls) == 1
+
+
+def test_ddg_explicit_no_results_is_successful_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<html><body><div id="links" class="results">'
+        '<div class="result results_links result--no-result"><div class="result__body">'
+        '<div class="no-results__container"><span class="no-results">No results found for '
+        f"<strong>{VIN}</strong></span></div></div></div></div></body></html>"
+    ).encode()
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert (result["ok"], result["result_class"], result["results"], result["errors"]) == (True, "empty", [], [])
+    assert result["providers"] == [{"provider": "duckduckgo", "outcome": "empty"}]
+
+
+def test_ddg_recognized_results_preserve_links_and_snippets(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<html><body><div class="results"><div class="result results_links">'
+        f'<a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Freport">{VIN}</a>'
+        '<a class="result__snippet" href="https://example.org/report">Public report snippet</a>'
+        "</div></div></body></html>"
+    ).encode()
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["ok"] and result["result_class"] == "results" and result["errors"] == []
+    assert len(result["results"]) == 1
+    row = result["results"][0]
+    assert (row["url"], row["title"], row["snippet"]) == ("https://example.org/report", VIN, "Public report snippet")
+    assert result["providers"] == [{"provider": "duckduckgo", "outcome": "results"}]
+
+
+def test_ddg_recognition_is_independent_of_result_privacy_filtering(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = f'<a class="result__a" href="https://example.org/{OTHER}">Foreign VIN report</a>'.encode()
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert (result["ok"], result["result_class"], result["results"], result["errors"]) == (True, "empty", [], [])
+    assert OTHER not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'<html><div class="anomaly-modal__modal">Bot challenge</div></html>',
+        b'<html><form id = "challenge-form">Choose images</form></html>',
+        b"<html><form ID='anomaly-form'>Verify you are human</form></html>",
+    ],
+)
+def test_ddg_known_captcha_is_requires_human(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+    fake_transport(monkeypatch, [Response(body=body)])
+    result = network.search_vin(VIN, scope("duckduckgo"))
+    assert result["ok"] is False and result["result_class"] == "error"
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "requires_human"}]
+
+
 def test_expired_or_unsafe_search_has_no_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden(*_args: object) -> Any:
         raise AssertionError("provider_called")

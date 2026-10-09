@@ -302,18 +302,10 @@ def _save_document(
     conn: sqlite3.Connection, current: dict[str, Any], operation: dict[str, Any], result: dict[str, Any]
 ) -> None:
     pages = result.get("pages", [])
-    digest = api.content_digest(pages) if any(p.get("text", "").strip() for p in pages) else ""
-    duplicate = (
-        conn.execute(
-            "SELECT id FROM documents WHERE status='fetched' AND digest=? AND id<>? LIMIT 1", (digest, operation["id"])
-        ).fetchone()
-        if digest
-        else None
-    )
     classification = classify_source(result.get("url", operation["url"]))
     conn.execute(
         """UPDATE documents SET status='fetched',final_url=?,title=?,kind=?,method=?,source_class=?,source_tier=?,source_basis=?,
-           retrieved_at=?,duplicate_of=?,digest=?,raw_file=?,limitations=?,page_count=?,error='' WHERE id=?""",
+           retrieved_at=?,raw_file=?,limitations=?,page_count=?,error='' WHERE id=?""",
         (
             result.get("url", operation["url"]),
             api._safe_text(result.get("title") or operation["title"], 300),
@@ -323,8 +315,6 @@ def _save_document(
             classification.source_tier,
             classification.source_basis,
             time.time(),
-            duplicate[0] if duplicate else "",
-            digest,
             result.get("raw_file", ""),
             json.dumps(result.get("limitations", [])),
             result.get("page_count", len(pages)),
@@ -334,6 +324,27 @@ def _save_document(
     api.ingest_pages(
         conn, current, operation["id"], pages, proof_allowed=result.get("extraction_method") != "browser_dom"
     )
+    _refresh_duplicates(conn, operation["id"])
+
+
+def _refresh_duplicates(conn: sqlite3.Connection, document_id: str) -> None:
+    pages = [
+        dict(row)
+        for row in conn.execute("SELECT page,text FROM pages WHERE document_id=? ORDER BY page", (document_id,))
+    ]
+    digest = api.content_digest(pages) if any(page["text"].strip() for page in pages) else ""
+    conn.execute("UPDATE documents SET digest=? WHERE id=?", (digest, document_id))
+    # Rebuild direct links to the first current copy in each cluster. OCR can
+    # change the primary document, so updating only its own link is insufficient.
+    primary: dict[str, str] = {}
+    for row in conn.execute("SELECT id,status,digest,duplicate_of FROM documents ORDER BY rowid"):
+        duplicate = ""
+        if row["status"] == "fetched" and row["digest"]:
+            duplicate = primary.setdefault(row["digest"], row["id"])
+            if duplicate == row["id"]:
+                duplicate = ""
+        if duplicate != row["duplicate_of"]:
+            conn.execute("UPDATE documents SET duplicate_of=? WHERE id=?", (duplicate, row["id"]))
 
 
 def queue_ocr(job_id: str, document_id: str, page: int) -> dict[str, Any]:
@@ -407,6 +418,7 @@ def _collect_ocr(job_id: str, operation: dict[str, Any], current: dict[str, Any]
                 (operation["document_id"],),
             )
             api.ingest_pages(conn, updated, operation["document_id"], pages, replace=False)
+            _refresh_duplicates(conn, operation["document_id"])
         reason = "" if result.get("ok") and allowed else _diagnostic(result.get("error"), "ocr_failed")
         conn.execute(
             "UPDATE ocr_requests SET status=?,error=? WHERE document_id=? AND page=?",
@@ -469,7 +481,9 @@ def run_job(job_id: str) -> None:
             if current["collection_status"] == "running":
                 current["collection_status"] = "queued"
                 store.write_metadata(conn, current)
-        store.set_stub(job_id, current["collection_status"], current["stop_reason"])
+            # Publish while the private state is locked, just like enqueue.
+            # Publishing after commit could overwrite a newly queued request.
+            store.set_stub(job_id, current["collection_status"], current["stop_reason"])
     except (OSError, ValueError, sqlite3.Error, store.VinJobError) as exc:
         code = exc.code if isinstance(exc, store.VinJobError) else "vin_collection_failed"
-        store.set_stub(job_id, "failed", code)
+        store.fail_worker(job_id, code)
