@@ -229,7 +229,14 @@ def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
         "automotive_context": None,
         "profile": "general",
     }
-    assert calls[3][1] == {"job_id": "job-1", "document_id": "doc-1", "offset": 100, "max_chars": 500}
+    assert calls[3][1] == {
+        "job_id": "job-1",
+        "document_id": "doc-1",
+        "offset": 100,
+        "max_chars": 500,
+        "page": None,
+        "ocr": False,
+    }
     assert calls[4][1] == {"job_id": "job-1"}
 
 
@@ -407,6 +414,9 @@ def test_effectful_manager_tools_advertise_their_actual_effects(tmp_path):
 
     expected = {
         "j1_research_start": (False, False, True),
+        "j1_research_document": (False, True, False),
+        "j1_research_vin": (False, True, True),
+        "j1_research_record_facts": (False, True, False),
         "j1_research_add_queries": (False, False, True),
         "store_digest": (False, False, False),
         "store_management_action": (True, True, False),

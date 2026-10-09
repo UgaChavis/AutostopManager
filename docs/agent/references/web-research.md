@@ -6,6 +6,12 @@
 
 Короткий запрос: `search_web_multi` → `fetch_page_excerpt`; JS-страница — `fetch_page_browser` при готовом browser. Исследование: `j1_research_start` → status → results/document порциями → report (`autostop.j1.report.v1`). `add_queries/cancel` меняют только точную временную job, затем требуется status readback.
 
+Актуальная автомобильная карта публичного поиска — [E15](../modules/E15.md); E8 описывает масла и жидкости.
+Порученное исследование одного VIN — самостоятельный `j1_research_vin` в том же MCP, независимо от
+E2/E4 и decoder API. Исключение действует только в его job; общий search/fetch/browser и обычный J1
+сохраняют запрет VIN. Текущий агент извлекает и записывает цитируемые утверждения через
+`j1_research_record_facts`, затем фиксирует анализ. [Подробный контракт](j1-vin-research.md).
+
 Для простой сверки детали ориентир — два разных запроса и две целевые страницы;
 следующий вызов должен устранять конкретную неоднозначность. Пустая выдача отличается
 от ошибки провайдера, неизвестной разметки и challenge. Challenge не обходится.
@@ -27,11 +33,20 @@ snippet и шаблон динамического OE-раздела не под
 
 Automotive context: `make`, `model`, `year`, `engine`, `system`, `symptom`, `dtc`, `part_number`; полный VIN, контакты и секреты не передаются. Automotive profile — до 12 запросов/60 страниц; общий — 30/300. Лимиты: 50 000 символов документа, cache 250 МБ/семь дней. `canonical_url` удаляет только tracking; дубли не индексируются. Sources: A — OEM/регулятор/TSB, B — component manufacturer, C — catalog, D — форум/контекст. D не доказательство; частота оценивается лишь по измеримой совокупности A/B, иначе `not_measured`. Отчёт различает `exact/analog/general`, доступ, confidence и gaps.
 
-`start` создаёт job в `AUTOSTOP_J1_CACHE_DIR` и читает сеть. Status/results/document/report read-only; jobs не являются долговременной customer memory. Локальный `search_offline_parts_catalogs` — отдельное чтение файлов, не J1: [offline-catalogs.md](offline-catalogs.md).
+Обычный `start` создаёт job в `AUTOSTOP_J1_CACHE_DIR`; сеть затем читает worker.
+Отдельная VIN-job хранит приватные основания в tmpfs. Status/results/report read-only.
+Document по умолчанию читает; `ocr=true` у VIN-job ставит дедуплицированную OCR-задачу по cached PDF,
+меняет временное состояние документа/анализа и не вызывает сеть. Поэтому whole-tool annotations:
+readOnly=false, destructive=false, idempotent=true, openWorld=false.
+Jobs не являются долговременной customer memory. Локальный `search_offline_parts_catalogs` — отдельное чтение файлов, не J1: [offline-catalogs.md](offline-catalogs.md).
 
 ## Runtime и guards
 
 Static search использует loopback `AUTOSTOP_J1_SEARXNG_URL`, может иметь fallback. Fetch HTML/PDF соблюдает robots/rate limits и URL/privacy guards. Static J1 работает без browser. Browser использует Unix socket renderer и отдельный egress proxy; запрещены login/cookies/CAPTCHA. Проверяются Docker networks, DNS/private-address guards, socket и SHA-bound marker `root:root 0600`. Отсутствие prerequisite отключает browser path; marker вручную не создаётся.
+
+VIN-mode допускает только scoped static fetch с исходным VIN. URL с VIN в browser запрещён;
+обезличенные страницы могут использовать прежний attested browser. Наличие feature flag или
+инструмента в `tools/list` не подтверждает runtime readiness, доступность источников или качество расшифровки.
 
 `autostop-j1.service` — static worker, root-only `/var/cache/autostop-j1`; `autostop-j1-browser.service` — one-shot renderer/proxy stack. Active/exited не доказывает container health. CLI `j1_research --help`: worker (`--once`), probe; `j1_browser_verify --help`: probe, attest, release-root/socket/marker. Worker и attest меняют состояние; attest вызывается штатной service после topology check. Installers/start/restart — только разрешённый [выпуск](deployment.md).
 
