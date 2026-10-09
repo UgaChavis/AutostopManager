@@ -58,6 +58,8 @@ def _provider_method(tool: dict[str, Any], operations: dict[str, dict[str, Any]]
         raise ValueError("invalid_aftermarket_provider")
     if name == "public_aftermarket_catalog_lookup" and tool["example"].get("provider") != invocation["provider"]:
         raise ValueError("example_selector_mismatch")
+    if name == "elcats_catalog_query" and tool["example"].get("operation") != operation:
+        raise ValueError("example_selector_mismatch")
     return None
 
 
@@ -76,8 +78,42 @@ def _native_parameters(tool: dict[str, Any], schema: dict[str, Any]) -> None:
 def _documentation_examples(tool: dict[str, Any], schema: dict[str, Any]) -> None:
     validator = Draft202012Validator(schema)
     validator.validate(tool["example"])
+    if tool["invocation"]["tool_name"] == "elcats_catalog_query":
+        _elcats_documentation_example(tool["example"])
     if validator.is_valid(tool["invalid_example"]):
         raise ValueError(f"invalid_example_accepted_by_schema:{tool['tool_id']}")
+
+
+def _elcats_documentation_example(example: dict[str, Any]) -> None:
+    """Check public-catalog semantics using pure validators, never the facade."""
+    from .automotive_contracts import public_oem_catalog_ref, valid_binding
+    from .elcats_catalog import _part, _profile, _ref_url, elcats_catalog_entries
+    from .public_catalog_http import CatalogReadError
+
+    identity = example["vehicle_identity"]
+    data = identity["data"] if isinstance(identity.get("data"), dict) else identity
+    profile, conflicts, missing = _profile(identity)
+    if conflicts or missing or (data.get("input_binding") is not None and not valid_binding(data["input_binding"])):
+        raise ValueError("invalid_elcats_example_profile")
+    if example["operation"] == "lookup_candidates":
+        intent, missing = _part(example.get("part_request_item"))
+        if intent is None or missing:
+            raise ValueError("invalid_elcats_example_part")
+    reference = example.get("catalog_ref")
+    kind = {"list_groups": "modification", "list_diagrams": "group", "list_parts": "diagram"}.get(example["operation"])
+    if reference is None:
+        if kind is not None:
+            raise ValueError("invalid_elcats_example_reference")
+        return
+    if not public_oem_catalog_ref(reference, entity_kind=kind or reference.get("entity_kind"), vehicle_profile=profile):
+        raise ValueError("invalid_elcats_example_reference")
+    entry = next((entry for entry in elcats_catalog_entries() if entry["id"] == reference["entry_id"]), None)
+    if entry is None:
+        raise ValueError("invalid_elcats_example_reference")
+    try:
+        _ref_url(entry, reference, profile)
+    except CatalogReadError as exc:
+        raise ValueError("invalid_elcats_example_reference") from exc
 
 
 def _documented_invocation(tool: dict[str, Any]) -> str:

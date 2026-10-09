@@ -88,7 +88,11 @@ def test_catalog_provider_status_native_transport_preserves_both_json_channels_c
     assert len(result.content) == 1
     text = result.content[0].text
     parsed = json.loads(text)
-    assert parsed == result.structuredContent == json.loads(json.dumps(original, ensure_ascii=False))
+    structured = dict(result.structuredContent)
+    execution = structured.pop("tool_execution")
+    assert execution["tool"] == "catalog_provider_status"
+    assert execution["call_id"] and execution["wall_ms"] >= 0
+    assert parsed == structured == json.loads(json.dumps(original, ensure_ascii=False))
     assert text == json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
     assert len(text.encode()) < len(json.dumps(parsed, ensure_ascii=False, indent=2).encode())
 
@@ -268,7 +272,7 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
         }
     assert report["checks"]["native_ping"]["ok"] is True
     assert report["checks"]["tools_list"]["ok"] is True
-    assert report["checks"]["tools_list"]["tool_count"] == 67
+    assert report["checks"]["tools_list"]["tool_count"] == 68
     assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 5
     assert report["checks"]["tools_list"]["annotation_mismatch_tools"] == []
     assert report["checks"]["catalog_provider_status"]["ok"] is True

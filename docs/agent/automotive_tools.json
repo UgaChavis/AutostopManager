@@ -61,7 +61,8 @@
         "Ручной цвет сообщает ввод в работу, а пригодность ответа проверяется отдельно."
       ],
       "input_notes": [
-        "TecDoc carId+carType+tree binding; articles использует strId из этого дерева."
+        "TecDoc carId+carType+tree binding; articles использует strId из этого дерева.",
+        "Elcats operations accept a ready vehicle_identity and bound provider/namespace catalog_ref; whole brand matrix and access restrictions remain visible."
       ],
       "reference": "docs/agent/references/partsapi.md"
     },
@@ -307,6 +308,21 @@
       "provider_id": "corgi",
       "primary_data_source": "NHTSA vPIC DB via Corgi; same lineage as online vPIC",
       "reference": "docs/agent/references/manager-runtime.md"
+    },
+    {
+      "provider_id": "elcats_catalog",
+      "primary_data_source": "Elcats public HTML catalog; per-route lineage and readiness",
+      "reference": "docs/agent/references/elcats.md"
+    },
+    {
+      "provider_id": "japancats_catalog",
+      "primary_data_source": "Japancats public HTML catalog; per-route lineage and readiness",
+      "reference": "docs/agent/references/elcats.md"
+    },
+    {
+      "provider_id": "exist_ssangyong_catalog",
+      "primary_data_source": "Exist Ssangyong public HTML catalog; per-route lineage and readiness",
+      "reference": "docs/agent/references/elcats.md"
     }
   ],
   "tools": [
@@ -6391,6 +6407,491 @@
       },
       "reference": "docs/agent/references/vehicle-identity.md",
       "invocation": null
+    },
+    {
+      "tool_id": "elcats.resolve_vehicle",
+      "primary_module": "E4",
+      "also_used_in": [
+        "E15"
+      ],
+      "classification": "active",
+      "title": "Elcats: модификация из готового профиля",
+      "purpose": "Сопоставить известный профиль с опубликованной маркой и модификациями без повторного decode.",
+      "provider_id": "elcats_catalog",
+      "primary_data_source": "Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API",
+      "execution_kind": "network_read",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/tools/elcats-resolve-vehicle.md",
+      "input_fields": [
+        "operation",
+        "vehicle_identity",
+        "part_request_item",
+        "catalog_ref",
+        "page_budget"
+      ],
+      "defaults": {
+        "part_request_item": null,
+        "catalog_ref": null,
+        "page_budget": 12
+      },
+      "outputs": [
+        "Envelope: tool_id/outcome/data/evidence/missing_fields/conflicts/warnings/execution; actual provider/namespace and source URL remain explicit.",
+        "Modification/group/diagram/part candidates and linked catalog refs; observed dates/options/position/quantity/supersession remain distinct.",
+        "execution preserves actual page calls, deadline/budget, partial/truncation and reuse; catalog rows do not claim exact VIN fitment."
+      ],
+      "errors": [
+        "invalid_input or conflicting/unbound reference before catalog reads; unknown profile fields and ambiguous modifications remain explicit.",
+        "feature_disabled/robots_disallowed/not_commissioned/auth/challenge/unsupported_structure/empty/parse/provider/transport remain distinct; denied access is not absence of parts."
+      ],
+      "limitations": [
+        "Default-disabled AUTOSTOP_ELCATS_ENABLED; local route matrix includes every published brand and its actual readiness. Enabling the flag does not override robots restrictions.",
+        "Public HTML adapter, not an official API or universal full-VIN EPC. Japancats and Exist Ssangyong retain separate provider/namespace lineage.",
+        "Synchronous selected operation: page_budget default 12, max 24, total deadline 45 seconds. No decoder, hidden supplier fallback or browser/proxy/login bypass.",
+        "Already supplied profile/ref can be reused; model year is not production date, unknown options/engine/transmission/market never receive silent defaults.",
+        "Synthetic example validates input and reference contracts only; do not execute documentation examples. Public catalog evidence remains an OEM candidate until the required fitment evidence is available.",
+        "Robots, redirects and public number images count against the same page budget. Optional local dual-PSM OCR remains unverified evidence, never exact fitment."
+      ],
+      "example": {
+        "operation": "resolve_vehicle",
+        "vehicle_identity": {
+          "vehicle_profile": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "scope": "family"
+        },
+        "page_budget": 2
+      },
+      "invalid_example": {
+        "operation": "resolve_vehicle",
+        "vehicle_identity": []
+      },
+      "reference": "docs/agent/references/elcats.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "elcats_catalog_query",
+        "operation": "resolve_vehicle"
+      }
+    },
+    {
+      "tool_id": "elcats.list_groups",
+      "primary_module": "E4",
+      "also_used_in": [],
+      "classification": "active",
+      "title": "Elcats: группы связанного каталога",
+      "purpose": "Получить группы выбранной модификации по связанному catalog_ref.",
+      "provider_id": "elcats_catalog",
+      "primary_data_source": "Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API",
+      "execution_kind": "network_read",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/tools/elcats-list-groups.md",
+      "input_fields": [
+        "operation",
+        "vehicle_identity",
+        "part_request_item",
+        "catalog_ref",
+        "page_budget"
+      ],
+      "defaults": {
+        "part_request_item": null,
+        "catalog_ref": null,
+        "page_budget": 12
+      },
+      "outputs": [
+        "Envelope: tool_id/outcome/data/evidence/missing_fields/conflicts/warnings/execution; actual provider/namespace and source URL remain explicit.",
+        "Modification/group/diagram/part candidates and linked catalog refs; observed dates/options/position/quantity/supersession remain distinct.",
+        "execution preserves actual page calls, deadline/budget, partial/truncation and reuse; catalog rows do not claim exact VIN fitment."
+      ],
+      "errors": [
+        "invalid_input or conflicting/unbound reference before catalog reads; unknown profile fields and ambiguous modifications remain explicit.",
+        "feature_disabled/robots_disallowed/not_commissioned/auth/challenge/unsupported_structure/empty/parse/provider/transport remain distinct; denied access is not absence of parts."
+      ],
+      "limitations": [
+        "Default-disabled AUTOSTOP_ELCATS_ENABLED; local route matrix includes every published brand and its actual readiness. Enabling the flag does not override robots restrictions.",
+        "Public HTML adapter, not an official API or universal full-VIN EPC. Japancats and Exist Ssangyong retain separate provider/namespace lineage.",
+        "Synchronous selected operation: page_budget default 12, max 24, total deadline 45 seconds. No decoder, hidden supplier fallback or browser/proxy/login bypass.",
+        "Already supplied profile/ref can be reused; model year is not production date, unknown options/engine/transmission/market never receive silent defaults.",
+        "Synthetic example validates input and reference contracts only; do not execute documentation examples. Public catalog evidence remains an OEM candidate until the required fitment evidence is available.",
+        "Robots, redirects and public number images count against the same page budget. Optional local dual-PSM OCR remains unverified evidence, never exact fitment."
+      ],
+      "example": {
+        "operation": "list_groups",
+        "vehicle_identity": {
+          "vehicle_profile": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "scope": "family"
+        },
+        "page_budget": 2,
+        "catalog_ref": {
+          "provider": "elcats_catalog",
+          "namespace": "elcats_epc",
+          "entry_id": "elcats_vw",
+          "entity_kind": "modification",
+          "id": "DEMO-MODEL",
+          "vehicle_context": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "path": "/vw/Groups.aspx",
+          "parameters": {
+            "Mdl": "DEMO"
+          }
+        }
+      },
+      "invalid_example": {
+        "operation": "list_groups",
+        "vehicle_identity": []
+      },
+      "reference": "docs/agent/references/elcats.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "elcats_catalog_query",
+        "operation": "list_groups"
+      }
+    },
+    {
+      "tool_id": "elcats.list_diagrams",
+      "primary_module": "E4",
+      "also_used_in": [],
+      "classification": "active",
+      "title": "Elcats: схемы выбранной группы",
+      "purpose": "Получить схемы конкретной группы с сохранением provider/namespace/parent.",
+      "provider_id": "elcats_catalog",
+      "primary_data_source": "Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API",
+      "execution_kind": "network_read",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/tools/elcats-list-diagrams.md",
+      "input_fields": [
+        "operation",
+        "vehicle_identity",
+        "part_request_item",
+        "catalog_ref",
+        "page_budget"
+      ],
+      "defaults": {
+        "part_request_item": null,
+        "catalog_ref": null,
+        "page_budget": 12
+      },
+      "outputs": [
+        "Envelope: tool_id/outcome/data/evidence/missing_fields/conflicts/warnings/execution; actual provider/namespace and source URL remain explicit.",
+        "Modification/group/diagram/part candidates and linked catalog refs; observed dates/options/position/quantity/supersession remain distinct.",
+        "execution preserves actual page calls, deadline/budget, partial/truncation and reuse; catalog rows do not claim exact VIN fitment."
+      ],
+      "errors": [
+        "invalid_input or conflicting/unbound reference before catalog reads; unknown profile fields and ambiguous modifications remain explicit.",
+        "feature_disabled/robots_disallowed/not_commissioned/auth/challenge/unsupported_structure/empty/parse/provider/transport remain distinct; denied access is not absence of parts."
+      ],
+      "limitations": [
+        "Default-disabled AUTOSTOP_ELCATS_ENABLED; local route matrix includes every published brand and its actual readiness. Enabling the flag does not override robots restrictions.",
+        "Public HTML adapter, not an official API or universal full-VIN EPC. Japancats and Exist Ssangyong retain separate provider/namespace lineage.",
+        "Synchronous selected operation: page_budget default 12, max 24, total deadline 45 seconds. No decoder, hidden supplier fallback or browser/proxy/login bypass.",
+        "Already supplied profile/ref can be reused; model year is not production date, unknown options/engine/transmission/market never receive silent defaults.",
+        "Synthetic example validates input and reference contracts only; do not execute documentation examples. Public catalog evidence remains an OEM candidate until the required fitment evidence is available.",
+        "Robots, redirects and public number images count against the same page budget. Optional local dual-PSM OCR remains unverified evidence, never exact fitment."
+      ],
+      "example": {
+        "operation": "list_diagrams",
+        "vehicle_identity": {
+          "vehicle_profile": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "scope": "family"
+        },
+        "page_budget": 2,
+        "catalog_ref": {
+          "provider": "elcats_catalog",
+          "namespace": "elcats_epc",
+          "entry_id": "elcats_vw",
+          "entity_kind": "group",
+          "id": "DEMO-GROUP",
+          "vehicle_context": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "path": "/vw/SubGroups.aspx",
+          "parameters": {
+            "Mdl": "DEMO",
+            "Group": "DEMO-GROUP"
+          },
+          "parent_ref": {
+            "provider": "elcats_catalog",
+            "namespace": "elcats_epc",
+            "entry_id": "elcats_vw",
+            "entity_kind": "modification",
+            "id": "DEMO-MODEL",
+            "vehicle_context": {
+              "make": "Volkswagen",
+              "model": "Golf",
+              "production_date": "2010-01",
+              "engine": "DEMO-ENGINE",
+              "transmission": "DEMO-GEARBOX",
+              "market": "Europe"
+            },
+            "path": "/vw/Groups.aspx",
+            "parameters": {
+              "Mdl": "DEMO"
+            }
+          }
+        }
+      },
+      "invalid_example": {
+        "operation": "list_diagrams",
+        "vehicle_identity": []
+      },
+      "reference": "docs/agent/references/elcats.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "elcats_catalog_query",
+        "operation": "list_diagrams"
+      }
+    },
+    {
+      "tool_id": "elcats.list_parts",
+      "primary_module": "E4",
+      "also_used_in": [
+        "E6"
+      ],
+      "classification": "active",
+      "title": "Elcats: номера и условия на схеме",
+      "purpose": "Прочитать строки схемы: OEM-кандидаты, позиции, количества и ограничения.",
+      "provider_id": "elcats_catalog",
+      "primary_data_source": "Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API",
+      "execution_kind": "network_read",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/tools/elcats-list-parts.md",
+      "input_fields": [
+        "operation",
+        "vehicle_identity",
+        "part_request_item",
+        "catalog_ref",
+        "page_budget"
+      ],
+      "defaults": {
+        "part_request_item": null,
+        "catalog_ref": null,
+        "page_budget": 12
+      },
+      "outputs": [
+        "Envelope: tool_id/outcome/data/evidence/missing_fields/conflicts/warnings/execution; actual provider/namespace and source URL remain explicit.",
+        "Modification/group/diagram/part candidates and linked catalog refs; observed dates/options/position/quantity/supersession remain distinct.",
+        "execution preserves actual page calls, deadline/budget, partial/truncation and reuse; catalog rows do not claim exact VIN fitment."
+      ],
+      "errors": [
+        "invalid_input or conflicting/unbound reference before catalog reads; unknown profile fields and ambiguous modifications remain explicit.",
+        "feature_disabled/robots_disallowed/not_commissioned/auth/challenge/unsupported_structure/empty/parse/provider/transport remain distinct; denied access is not absence of parts."
+      ],
+      "limitations": [
+        "Default-disabled AUTOSTOP_ELCATS_ENABLED; local route matrix includes every published brand and its actual readiness. Enabling the flag does not override robots restrictions.",
+        "Public HTML adapter, not an official API or universal full-VIN EPC. Japancats and Exist Ssangyong retain separate provider/namespace lineage.",
+        "Synchronous selected operation: page_budget default 12, max 24, total deadline 45 seconds. No decoder, hidden supplier fallback or browser/proxy/login bypass.",
+        "Already supplied profile/ref can be reused; model year is not production date, unknown options/engine/transmission/market never receive silent defaults.",
+        "Synthetic example validates input and reference contracts only; do not execute documentation examples. Public catalog evidence remains an OEM candidate until the required fitment evidence is available.",
+        "Robots, redirects and public number images count against the same page budget. Optional local dual-PSM OCR remains unverified evidence, never exact fitment."
+      ],
+      "example": {
+        "operation": "list_parts",
+        "vehicle_identity": {
+          "vehicle_profile": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "scope": "family"
+        },
+        "page_budget": 2,
+        "catalog_ref": {
+          "provider": "elcats_catalog",
+          "namespace": "elcats_epc",
+          "entry_id": "elcats_vw",
+          "entity_kind": "diagram",
+          "id": "DEMO-DIAGRAM",
+          "vehicle_context": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "path": "/vw/Parts.aspx",
+          "parameters": {
+            "Mdl": "DEMO",
+            "Group": "DEMO-GROUP",
+            "Sub": "DEMO-DIAGRAM"
+          },
+          "parent_ref": {
+            "provider": "elcats_catalog",
+            "namespace": "elcats_epc",
+            "entry_id": "elcats_vw",
+            "entity_kind": "group",
+            "id": "DEMO-GROUP",
+            "vehicle_context": {
+              "make": "Volkswagen",
+              "model": "Golf",
+              "production_date": "2010-01",
+              "engine": "DEMO-ENGINE",
+              "transmission": "DEMO-GEARBOX",
+              "market": "Europe"
+            },
+            "path": "/vw/SubGroups.aspx",
+            "parameters": {
+              "Mdl": "DEMO",
+              "Group": "DEMO-GROUP"
+            },
+            "parent_ref": {
+              "provider": "elcats_catalog",
+              "namespace": "elcats_epc",
+              "entry_id": "elcats_vw",
+              "entity_kind": "modification",
+              "id": "DEMO-MODEL",
+              "vehicle_context": {
+                "make": "Volkswagen",
+                "model": "Golf",
+                "production_date": "2010-01",
+                "engine": "DEMO-ENGINE",
+                "transmission": "DEMO-GEARBOX",
+                "market": "Europe"
+              },
+              "path": "/vw/Groups.aspx",
+              "parameters": {
+                "Mdl": "DEMO"
+              }
+            }
+          }
+        }
+      },
+      "invalid_example": {
+        "operation": "list_parts",
+        "vehicle_identity": []
+      },
+      "reference": "docs/agent/references/elcats.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "elcats_catalog_query",
+        "operation": "list_parts"
+      }
+    },
+    {
+      "tool_id": "elcats.lookup_candidates",
+      "primary_module": "E4",
+      "also_used_in": [
+        "E6",
+        "E15"
+      ],
+      "classification": "active",
+      "title": "Elcats: кандидаты по названию детали",
+      "purpose": "Ограниченно найти схемы и строки для названия детали; сохранить альтернативы и недостающие условия.",
+      "provider_id": "elcats_catalog",
+      "primary_data_source": "Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API",
+      "execution_kind": "network_read",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/tools/elcats-lookup-candidates.md",
+      "input_fields": [
+        "operation",
+        "vehicle_identity",
+        "part_request_item",
+        "catalog_ref",
+        "page_budget"
+      ],
+      "defaults": {
+        "part_request_item": null,
+        "catalog_ref": null,
+        "page_budget": 12
+      },
+      "outputs": [
+        "Envelope: tool_id/outcome/data/evidence/missing_fields/conflicts/warnings/execution; actual provider/namespace and source URL remain explicit.",
+        "Modification/group/diagram/part candidates and linked catalog refs; observed dates/options/position/quantity/supersession remain distinct.",
+        "execution preserves actual page calls, deadline/budget, partial/truncation and reuse; catalog rows do not claim exact VIN fitment."
+      ],
+      "errors": [
+        "invalid_input or conflicting/unbound reference before catalog reads; unknown profile fields and ambiguous modifications remain explicit.",
+        "feature_disabled/robots_disallowed/not_commissioned/auth/challenge/unsupported_structure/empty/parse/provider/transport remain distinct; denied access is not absence of parts."
+      ],
+      "limitations": [
+        "Default-disabled AUTOSTOP_ELCATS_ENABLED; local route matrix includes every published brand and its actual readiness. Enabling the flag does not override robots restrictions.",
+        "Public HTML adapter, not an official API or universal full-VIN EPC. Japancats and Exist Ssangyong retain separate provider/namespace lineage.",
+        "Synchronous selected operation: page_budget default 12, max 24, total deadline 45 seconds. No decoder, hidden supplier fallback or browser/proxy/login bypass.",
+        "Already supplied profile/ref can be reused; model year is not production date, unknown options/engine/transmission/market never receive silent defaults.",
+        "Synthetic example validates input and reference contracts only; do not execute documentation examples. Public catalog evidence remains an OEM candidate until the required fitment evidence is available.",
+        "Robots, redirects and public number images count against the same page budget. Optional local dual-PSM OCR remains unverified evidence, never exact fitment."
+      ],
+      "example": {
+        "operation": "lookup_candidates",
+        "vehicle_identity": {
+          "vehicle_profile": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "scope": "family"
+        },
+        "page_budget": 2,
+        "part_request_item": {
+          "raw": "передние тормозные колодки",
+          "axle": "front",
+          "position": "front",
+          "quantity": null
+        },
+        "catalog_ref": {
+          "provider": "elcats_catalog",
+          "namespace": "elcats_epc",
+          "entry_id": "elcats_vw",
+          "entity_kind": "modification",
+          "id": "DEMO-MODEL",
+          "vehicle_context": {
+            "make": "Volkswagen",
+            "model": "Golf",
+            "production_date": "2010-01",
+            "engine": "DEMO-ENGINE",
+            "transmission": "DEMO-GEARBOX",
+            "market": "Europe"
+          },
+          "path": "/vw/Groups.aspx",
+          "parameters": {
+            "Mdl": "DEMO"
+          }
+        }
+      },
+      "invalid_example": {
+        "operation": "lookup_candidates",
+        "vehicle_identity": []
+      },
+      "reference": "docs/agent/references/elcats.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "elcats_catalog_query",
+        "operation": "lookup_candidates"
+      }
     }
   ],
   "native_inventory": [
@@ -6577,6 +7078,18 @@
         "manager.drom_start_parts_search"
       ],
       "reference": "docs/agent/references/manager-runtime.md"
+    },
+    {
+      "tool_name": "elcats_catalog_query",
+      "classification": "active",
+      "tool_ids": [
+        "elcats.list_diagrams",
+        "elcats.list_groups",
+        "elcats.list_parts",
+        "elcats.lookup_candidates",
+        "elcats.resolve_vehicle"
+      ],
+      "reference": "docs/agent/references/elcats.md"
     },
     {
       "tool_name": "estimate_repair_work_cost",

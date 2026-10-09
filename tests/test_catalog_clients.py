@@ -2689,11 +2689,11 @@ def test_partsapi_engine_list_is_a_successful_profile(monkeypatch):
     profile = result["vehicle_profiles"][0]
     assert profile["engine"] == profile["engine_code"] == "TEST-ENGINE"
     assert profile["tecdoc_car_id"] == 123
-    assert profile["displacement_cc"] == "2000.000"
+    assert profile["displacement_cc"] == 2000
     assert profile["cylinders"] == 4
     assert profile["valves"] == 16
-    assert profile["power_kw_from"] == "150.000"
-    assert profile["torque_nm_from"] == "300.000"
+    assert profile["power_kw_from"] == 150
+    assert profile["torque_nm_from"] == 300
     assert profile["timing_drive"] == "Test timing drive"
 
 

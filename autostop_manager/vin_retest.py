@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, cast
 
 OUTCOMES = frozenset(
     "success partial partial_result empty empty_result unsupported invalid_input invalid_operation "
@@ -39,8 +39,9 @@ def checked_metrics(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     metrics = {}
+    valid: bool | re.Match[str] | None
     for key in METRIC_FIELDS:
-        item = value.get(key)
+        item: Any = value.get(key)
         if key == "call_id":
             valid = isinstance(item, str) and re.fullmatch(
                 r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", item
@@ -70,11 +71,11 @@ def response_body(response: Any) -> dict[str, Any]:
 
 
 def technical_summary(payload: dict[str, Any]) -> dict[str, Any]:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    data = cast(dict[str, Any], payload.get("data")) if isinstance(payload.get("data"), dict) else payload
     outcome = payload.get("outcome", payload.get("status"))
-    execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
-    processing = payload.get("processing") if isinstance(payload.get("processing"), dict) else {}
-    fields = data.get("field_statuses") if isinstance(data.get("field_statuses"), dict) else {}
+    execution = cast(dict[str, Any], payload.get("execution")) if isinstance(payload.get("execution"), dict) else {}
+    processing = cast(dict[str, Any], payload.get("processing")) if isinstance(payload.get("processing"), dict) else {}
+    fields = cast(dict[str, Any], data.get("field_statuses")) if isinstance(data.get("field_statuses"), dict) else {}
     statuses = {}
     for field, value in fields.items():
         status = value.get("status") if isinstance(value, dict) else value
@@ -88,7 +89,9 @@ def technical_summary(payload: dict[str, Any]) -> dict[str, Any]:
     diagnostics = data.get("provider_diagnostics") or data.get("diagnostics") or {}
     codes = diagnostics.get("error_codes", []) if isinstance(diagnostics, dict) else []
     codes = codes[:64] if isinstance(codes, list) else []
-    provider_errors = data.get("provider_errors") if isinstance(data.get("provider_errors"), list) else []
+    provider_errors = (
+        cast(list[Any], data.get("provider_errors")) if isinstance(data.get("provider_errors"), list) else []
+    )
     for error in provider_errors[:64]:
         if isinstance(error, dict):
             extra = error.get("error_codes")
@@ -163,7 +166,7 @@ async def run_retest(
         rows.append(row)
 
     parts = {"timeout": min(12, timeout_seconds), "max_attempts": 1, **detail("partsapi_catalog_lookup")}
-    operations = [
+    operations: list[tuple[str, str, dict[str, Any]]] = [
         ("inspect", "inspect_vehicle_identifier", {"identifier": identifier, "identifier_type": "vin"}),
         (
             "identity",

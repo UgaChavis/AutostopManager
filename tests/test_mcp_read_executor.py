@@ -12,7 +12,8 @@ from autostop_manager.listing_executor import BoundedListingExecutor, ListingExe
 from autostop_manager.mcp_telemetry import instrument_manager_tools
 
 
-def test_native_blocking_reads_overlap_keep_heartbeat_and_preserve_schema(monkeypatch):
+@pytest.mark.parametrize("tool_name", ["partsapi_catalog_lookup", "elcats_catalog_query"])
+def test_native_blocking_reads_overlap_keep_heartbeat_and_preserve_schema(monkeypatch, tool_name):
     pool = BoundedListingExecutor(max_workers=2, max_waiting_calls=0, timeout_seconds=2)
     monkeypatch.setattr(executor_module, "_EXECUTOR", pool)
     release = threading.Event()
@@ -26,9 +27,9 @@ def test_native_blocking_reads_overlap_keep_heartbeat_and_preserve_schema(monkey
         assert release.wait(2)
         return {"ok": True, "operation": operation, "provider_parameters": provider_parameters}
 
-    server.tool(name="partsapi_catalog_lookup")(read)
+    server.tool(name=tool_name)(read)
     server.tool(name="inspect_vehicle_identifier")(lambda identifier: {"ok": True})
-    tool = server._tool_manager._tools["partsapi_catalog_lookup"]
+    tool = server._tool_manager._tools[tool_name]
     parameters, metadata = tool.parameters, tool.fn_metadata
     instrument_manager_tools(server)
     first_wrapper = tool.fn
