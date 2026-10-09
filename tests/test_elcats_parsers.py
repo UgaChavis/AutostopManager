@@ -120,6 +120,64 @@ def test_ssangyong_public_chain_keeps_models_groups_and_diagrams_distinct() -> N
     assert parse_qs(urlsplit(front["url"]).query)["Unit"] == [front["id"]]
 
 
+def test_same_navigation_url_keeps_distinct_row_restrictions_and_deduplicates_identical_rows() -> None:
+    def row(notes):
+        return (
+            f'<table><tr><td><a href="Groups.aspx?Mdl=DEMO&amp;Title=Golf">Golf</a></td><td>{notes}</td></tr></table>'
+        )
+
+    left = row("PR:2E4; лев.")
+    right = row("PR:1ZE; прав.")
+    result = parse_catalog_html(left + right + left, url="https://www.elcats.ru/vw/", operation="models", entry=_VW)
+    rows = result["rows"]
+    assert len(rows) == 2 and rows[0]["url"] == rows[1]["url"]
+    assert [r["conditions"]["pr_codes"]["all_of"] for r in rows] == [["2E4"], ["1ZE"]]
+    assert [r["side"] for r in rows] == ["left", "right"]
+
+
+def test_image_and_caption_navigation_still_deduplicate_identical_metadata() -> None:
+    target = "Parts.aspx?Mdl=DEMO&amp;SubId=PAD"
+    html = (
+        f'<table><tr><td><a href="{target}"><img alt="Front brake" src="diagram.png"></a></td>'
+        f'<td><a href="{target}">Front brake</a></td><td>PR:2E4</td></tr></table>'
+    )
+    result = parse_catalog_html(
+        html, url="https://www.elcats.ru/vw/Subgroup.aspx?Mdl=DEMO", operation="list_diagrams", entry=_VW
+    )
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["conditions"]["pr_codes"]["all_of"] == ["2E4"]
+
+
+def test_long_navigation_context_retains_published_conditions_and_placement() -> None:
+    notes = "published note " * 35 + "; PR:2E4; 2010 - 2018; лев."
+    assert len(notes) > 500
+    html = f'<table><tr><td><a href="Groups.aspx?Mdl=DEMO&amp;Title=Golf">Golf</a></td><td>{notes}</td></tr></table>'
+    row = parse_catalog_html(html, url="https://www.elcats.ru/vw/", operation="models", entry=_VW)["rows"][0]
+    assert notes in row["notes"] and notes in row["raw_conditions"]
+    assert row["conditions"]["pr_codes"]["all_of"] == ["2E4"]
+    assert row["side"] == "left" and row["unparsed_restrictions"]
+
+
+def test_truncated_navigation_context_is_unresolved_and_distinct_sibling_rows_survive() -> None:
+    from autostop_manager.elcats_parsers import _MAX_NAVIGATION_CONTEXT_CHARS
+
+    prefix = "PR:2E4; лев.; " + "published note " * 600
+    assert len(prefix) > _MAX_NAVIGATION_CONTEXT_CHARS
+    html = "".join(
+        '<table><tr><td><a href="Groups.aspx?Mdl=DEMO&amp;Title=Golf">Golf</a></td>'
+        f"<td>{prefix}; {tail}</td></tr></table>"
+        for tail in ("PR:1ZE; прав.", "2010 - 2018")
+    )
+    rows = parse_catalog_html(html, url="https://www.elcats.ru/vw/", operation="models", entry=_VW)["rows"]
+    assert len(rows) == 2
+    for row in rows:
+        assert len(row["raw_conditions"]) == len(row["notes"]) == _MAX_NAVIGATION_CONTEXT_CHARS
+        assert row["conditions"] == {} and "side" not in row
+        assert "navigation_row_context_truncated" in row["unparsed_conditions"]
+        assert row["unparsed_conditions"] == row["unparsed_restrictions"]
+    assert rows[0]["unparsed_conditions"] != rows[1]["unparsed_conditions"]
+
+
 def test_ssangyong_masked_number_is_not_price_identifier_or_image_token() -> None:
     result = _fixture(
         "ssangyong_parts.html", "https://ssangyong.exist.ru/Parts.aspx?Model=model&Unit=unit&Title=front", entry=_SSANG
