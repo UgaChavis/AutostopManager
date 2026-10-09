@@ -26,6 +26,7 @@ from .automotive_parts import (
 
 
 def register_automotive_tools(server: Any) -> None:
+    from .elcats_catalog import elcats_catalog_query
     from .automotive_offline import (
         corgi_decode,
         decode_frame_local,
@@ -35,6 +36,11 @@ def register_automotive_tools(server: Any) -> None:
     )
 
     tools = (
+        (
+            elcats_catalog_query,
+            "Read one selected public catalog operation using a supplied vehicle profile and bound catalog references. Elcats, Japancats and Ssangyong remain distinct providers; default-disabled and robots/access restrictions are enforced. No VIN decode, hidden provider fallback or fitment assertion.",
+            True,
+        ),
         (inspect_vehicle_identifier, "Inspect identifier format without network or substitutions.", False),
         (decode_vin_vpic, "Call only the selected vPIC VIN endpoint once. No WMI or PartsAPI fallback.", True),
         (decode_wmi_vpic, "Call only vPIC WMI; manufacturer hints do not prove model or engine.", True),

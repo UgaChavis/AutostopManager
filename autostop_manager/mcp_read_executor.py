@@ -24,6 +24,7 @@ BLOCKING_READ_TOOLS = frozenset(
         "resolve_vin_oem_parts",
         "search_offline_parts_catalogs",
         "lookup_public_automotive_evidence",
+        "elcats_catalog_query",
     }
 )
 _EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=60)

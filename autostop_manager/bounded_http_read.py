@@ -14,7 +14,7 @@ import math
 import threading
 import time
 from email.message import Message
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
@@ -61,7 +61,10 @@ async def _fetch(request: Request, *, deadline: float, maximum: int, follow_redi
                 if time.monotonic() >= deadline:
                     raise TimeoutError("provider_total_deadline_exceeded")
                 async with client.stream(
-                    request.get_method(), request.full_url, content=request.data, headers=dict(request.header_items())
+                    request.get_method(),
+                    request.full_url,
+                    content=cast(Any, request.data),
+                    headers=dict(request.header_items()),
                 ) as response:
                     headers = Message()
                     for key, value in response.headers.multi_items():

@@ -13,6 +13,16 @@ from .vin_lookup import classify_identifier
 
 SCHEMA_VERSION = "autostop.automotive-result.v1"
 MAX_ROWS = 500
+PUBLIC_OEM_CATALOG_NAMESPACES = {
+    "elcats_catalog": "elcats_epc",
+    "japancats_catalog": "japancats_epc",
+    "exist_ssangyong_catalog": "exist_ssangyong_epc",
+}
+_PUBLIC_OEM_PARENT_KINDS = {
+    "group": {"modification", "group"},
+    "diagram": {"group"},
+    "part": {"diagram"},
+}
 
 
 def result(
@@ -223,6 +233,125 @@ def catalog_ref(value: Any, *, namespace: str, entity_kind: str) -> bool:
         and int(value["id"]) > 0
         and (namespace != "tecdoc" or value.get("carType") in ("PC", "CV", "Motorcycle"))
     )
+
+
+def _public_vehicle_context(value: Any) -> bool:
+    if not isinstance(value, dict) or len(value) > 64:
+        return False
+    if any(not isinstance(value.get(field), str) or not value[field].strip() for field in ("make", "model")):
+        return False
+    private_fields = {"vin", "frame", "frame_number", "identifier", "registration_number", "license_plate"}
+    if any(not isinstance(key, str) or key.casefold() in private_fields for key in value):
+        return False
+    try:
+        return len(json.dumps(value, allow_nan=False)) <= 16384
+    except (TypeError, ValueError, RecursionError):
+        return False
+
+
+def _public_context_matches(context: dict[str, Any], profile: dict[str, Any]) -> bool:
+    from .vehicle_identity import identity_values_agree
+
+    if any(profile.get(field) in (None, "") for field in ("make", "model")):
+        return False
+    for field, value in context.items():
+        actual = profile.get(field)
+        if value in (None, "", []):
+            continue
+        if actual in (None, "", []):
+            return False
+        if isinstance(value, list) and isinstance(actual, list):
+            if sorted(map(str, value)) != sorted(map(str, actual)):
+                return False
+        elif not identity_values_agree(field, value, actual):
+            return False
+    return True
+
+
+def public_oem_catalog_ref(
+    value: Any,
+    *,
+    entity_kind: str = "modification",
+    vehicle_profile: dict[str, Any] | None = None,
+    _depth: int = 0,
+) -> bool:
+    """Validate native public-catalog refs without interpreting their IDs as TecDoc IDs."""
+    if (
+        not isinstance(value, dict)
+        or _depth > 8
+        or not isinstance(entity_kind, str)
+        or entity_kind not in {"modification", *_PUBLIC_OEM_PARENT_KINDS}
+    ):
+        return False
+    provider = value.get("provider")
+    if (
+        not isinstance(provider, str)
+        or provider not in PUBLIC_OEM_CATALOG_NAMESPACES
+        or value.get("namespace") != PUBLIC_OEM_CATALOG_NAMESPACES[provider]
+        or value.get("entity_kind") != entity_kind
+    ):
+        return False
+    if any(
+        not isinstance(value.get(field), str)
+        or not value[field].strip()
+        or len(value[field]) > 2048
+        or any(ord(character) < 32 for character in value[field])
+        for field in ("id", "entry_id")
+    ):
+        return False
+    context = value.get("vehicle_context")
+    if not isinstance(context, dict) or not _public_vehicle_context(context):
+        return False
+    if vehicle_profile is not None and (
+        not isinstance(vehicle_profile, dict) or not _public_context_matches(context, vehicle_profile)
+    ):
+        return False
+    parent = value.get("parent_ref")
+    if entity_kind == "modification":
+        return parent is None
+    if (
+        not isinstance(parent, dict)
+        or not isinstance(parent.get("entity_kind"), str)
+        or parent["entity_kind"] not in _PUBLIC_OEM_PARENT_KINDS[entity_kind]
+    ):
+        return False
+    if any(parent.get(field) != value.get(field) for field in ("provider", "namespace", "entry_id", "vehicle_context")):
+        return False
+    return public_oem_catalog_ref(parent, entity_kind=parent["entity_kind"], _depth=_depth + 1)
+
+
+def oem_catalog_ref(
+    value: Any, *, entity_kind: str = "modification", vehicle_profile: dict[str, Any] | None = None
+) -> bool:
+    """OEM capture/fitment dispatcher; PartsAPI directory validators stay unchanged."""
+    return catalog_ref(value, namespace="tecdoc", entity_kind=entity_kind) or public_oem_catalog_ref(
+        value, entity_kind=entity_kind, vehicle_profile=vehicle_profile
+    )
+
+
+def _public_ref_identity(value: dict[str, Any]) -> dict[str, Any]:
+    identity = {
+        key: value[key] for key in ("provider", "namespace", "entity_kind", "id", "entry_id", "vehicle_context")
+    }
+    if value.get("parent_ref") is not None:
+        identity["parent_ref"] = _public_ref_identity(value["parent_ref"])
+    return identity
+
+
+def same_oem_catalog_ref(left: Any, right: Any) -> bool:
+    """Transport routes do not change a native ref's semantic vehicle/catalog identity."""
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    kind = left.get("entity_kind")
+    if (
+        not isinstance(kind, str)
+        or not oem_catalog_ref(left, entity_kind=kind)
+        or not oem_catalog_ref(right, entity_kind=kind)
+    ):
+        return False
+    if left.get("provider") == "partsapi_ru":
+        return left == right
+    return _public_ref_identity(left) == _public_ref_identity(right)
 
 
 def _directory_context(operation: str, params: dict[str, Any], context: dict[str, Any]) -> list[str] | None:

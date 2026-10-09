@@ -30,6 +30,9 @@ _CONFIDENCE_LABELS = {"high", "medium", "low", "blocked"}
 _APPLICABILITY_STATUSES = {"catalog_evidence_found", "not_checked", "check_failed", "not_found", "rejected"}
 _NONPUBLIC_ACCESS_TOKENS = ("login", "registration", "subscription", "paid", "mixed")
 _E8_AUTHORIZED_PART_SOURCES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("elcats_catalog", "oem_catalog"): ("elcats.ru",),
+    ("japancats_catalog", "oem_catalog"): ("japancats.ru",),
+    ("exist_ssangyong_catalog", "oem_catalog"): ("ssangyong.exist.ru",),
     ("partsouq_catalog", "oem_catalog"): ("partsouq.com",),
     ("amayama_catalog", "oem_catalog"): ("amayama.com",),
     ("emex_public", "price_catalog"): ("emex.ru",),

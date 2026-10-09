@@ -12,6 +12,13 @@
 Безопасные HTTP/transport причины и upstream `retryable=false` сохраняются до Manager;
 старая generic ошибка остаётся с неизвестной причиной, не предполагаемым404.
 
+Elcats/Japancats имеют зафиксированный robots запрет: E8 и общий CRM HTTP/browser
+reader блокируют их каталожные страницы до DNS/HTTP. J1 учитывает UTF-8 BOM в robots
+и также прекращает чтение запрещённого источника. Не меняй reader/provider/proxy
+ради обхода такого отказа. Публичные snippets сохраняют область ссылки; ordinary
+robots.txt читается только для проверки политики. Источники и optional local OCR
+номерных изображений — [Elcats](elcats.md).
+
 Excerpt сообщает известный HTTP-статус, content type, способ извлечения, запрошенный
 и эффективный размер, обрезку. Явный PDF-ответ может перейти в существующий bounded
 static J1 reader без browser или большой research job. На404 этот путь не запускается.
