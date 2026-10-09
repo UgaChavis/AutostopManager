@@ -8,10 +8,11 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .automotive_contracts import identity_errors, public_oem_catalog_ref, result
+from .automotive_contracts import MAX_ROWS, _public_ref_identity, identity_errors, public_oem_catalog_ref, result
 from .elcats_number_ocr import read_number_ocr
 from .parts_intent import normalize_part_intent
 from .public_catalog_http import CatalogReadError, PublicCatalogReader, safe_catalog_url
@@ -268,7 +269,11 @@ class _Navigation:
     def page(self, entry: dict[str, Any], url: str, operation: str) -> dict[str, Any]:
         from .elcats_parsers import parse_catalog_html
 
+        if time.monotonic() >= self.reader.deadline:
+            raise CatalogReadError("catalog_deadline_exceeded")
         page = self.reader.read(_route(entry, url), route_guard=lambda target: _route(entry, target))
+        if time.monotonic() >= self.reader.deadline:
+            raise CatalogReadError("catalog_deadline_exceeded")
         parsed = parse_catalog_html(page.text, url=page.url, operation=operation, entry=entry)
         self.evidence.append(
             {
@@ -290,18 +295,23 @@ class _Navigation:
         return parsed
 
     def vehicles(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
-        queue = [(entry["entry_url"], 0)]
+        queue: list[tuple[str, int, dict[str, Any]]] = [(entry["entry_url"], 0, {})]
         seen = set()
         selected = []
+        branches = 0
         while queue:
-            url, depth = queue.pop(0)
-            if url in seen:
+            url, depth, selection = queue.pop(0)
+            key = (url, self.context_key(selection))
+            if key in seen:
                 continue
-            seen.add(url)
+            seen.add(key)
             parsed = self.page(entry, url, "resolve_vehicle")
             rows = parsed.get("rows", [])
             if parsed.get("page_kind") in {"groups", "group", "diagrams"}:
-                selected.append(_ref(entry, self.profile, {"url": url}, "modification", None))
+                node = self.child(
+                    entry, None, {"url": self.evidence[-1]["locator"]}, "modification", selection=selection
+                )
+                selected.append(node["catalog_ref"])
                 continue
             matching = [row for row in rows if _model_matches(row, self.profile)]
             if depth and not matching:
@@ -310,18 +320,120 @@ class _Navigation:
                 matching = [row for row in rows if row.get("entity_kind") in {"modification", "selection"}]
                 matching = [row for row in matching if _context_matches(row, self.profile)]
             for row in matching:
+                if branches >= MAX_ROWS:
+                    self.errors.append("vehicle_selection_branch_budget")
+                    self.pending.append(
+                        {"entry_id": entry["id"], "url": url, "reason": "vehicle_selection_branch_budget"}
+                    )
+                    break
+                branches += 1
                 destination = _route(entry, row["url"])
                 if row.get("page_kind") in {"groups", "group"} or entry["provider"] == "exist_ssangyong_catalog":
-                    selected.append(_ref(entry, self.profile, row, "modification", None))
+                    node = self.child(entry, None, row, "modification", selection=selection)
+                    selected.append(node["catalog_ref"])
                 elif depth < 2:
-                    queue.append((destination, depth + 1))
+                    _node, context = self.carry(row, selection, binding="vehicle_selection")
+                    queue.append((destination, depth + 1, context))
                 else:
+                    self.errors.append("vehicle_selection_depth")
                     self.pending.append(
                         {"entry_id": entry["id"], "url": destination, "reason": "vehicle_selection_depth"}
                     )
             if not matching:
                 self.warnings.append("vehicle_model_not_found:" + entry["id"])
         return selected
+
+    @staticmethod
+    def context_key(context: dict[str, Any]) -> str:
+        state = {
+            key: context.get(key, {}) if key == "placement_context" else context.get(key, [])
+            for key in ("inherited_conditions", "inherited_restrictions", "placement_context")
+        }
+        return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
+
+    def carry(
+        self,
+        row: dict[str, Any],
+        inherited: dict[str, Any],
+        *,
+        binding: str,
+        reference: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        node = dict(row)
+        configuration = row.get("vehicle_context", {})
+        conditions = {
+            key: configuration[key]
+            for key in _PROFILE_FIELDS
+            if key not in {"make", "model", "pr_codes", "pr_codes_complete"}
+            and configuration.get(key) not in (None, "", [])
+        }
+        conditions.update(row.get("conditions", {}))
+        node["conditions"] = conditions
+        node["unparsed_conditions"] = list(dict.fromkeys(row.get("unparsed_conditions", [])))
+        node["inherited_restrictions"] = list(
+            dict.fromkeys([*inherited.get("inherited_restrictions", []), *row.get("inherited_restrictions", [])])
+        )
+        node["inherited_conditions"] = [
+            *inherited.get("inherited_conditions", []),
+            *row.get("inherited_conditions", []),
+        ]
+        for coordinate, value in inherited.get("placement_context", {}).items():
+            node.setdefault(coordinate, value)
+        context: dict[str, Any] = {}
+        context["inherited_restrictions"] = list(
+            dict.fromkeys(
+                [
+                    *node["inherited_restrictions"],
+                    *node["unparsed_conditions"],
+                    *row.get("unparsed_restrictions", []),
+                ]
+            )
+        )
+        context["inherited_conditions"] = [
+            *node["inherited_conditions"],
+            *(
+                [
+                    {
+                        "conditions": conditions,
+                        "raw_conditions": row.get("raw_conditions"),
+                        "unparsed_conditions": list(
+                            dict.fromkeys([*node["unparsed_conditions"], *row.get("unparsed_restrictions", [])])
+                        ),
+                        "source_url": self.evidence[-1]["locator"],
+                        "binding": binding,
+                        **(
+                            {"catalog_ref": _public_ref_identity(reference)}
+                            if reference is not None
+                            else {
+                                "selection_url": row.get("url"),
+                                "row_id": row.get("id"),
+                                "scope": "family",
+                                "identifier_verified": False,
+                            }
+                        ),
+                    }
+                ]
+                if conditions or node["unparsed_conditions"] or row.get("unparsed_restrictions")
+                else []
+            ),
+        ]
+        context["placement_context"] = {key: node[key] for key in ("axle", "side", "inner_outer") if node.get(key)}
+        return node, context
+
+    def child(
+        self,
+        entry: dict[str, Any],
+        parent: dict[str, Any] | None,
+        row: dict[str, Any],
+        kind: str,
+        *,
+        selection: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        reference = _ref(entry, self.profile, row, kind, parent)
+        node, context = self.carry(row, parent or selection or {}, binding=kind, reference=reference)
+        reference.update(context)
+        node["catalog_ref"] = reference
+        return node
 
     def children(self, entry: dict[str, Any], parent: dict[str, Any], operation: str) -> list[dict[str, Any]]:
         url = _ref_url(entry, parent, self.profile)
@@ -336,10 +448,9 @@ class _Navigation:
                 "name": parameters.get("Title") or "catalog_single_diagram",
                 "entity_kind": "diagram",
             }
-            return [{**row, "catalog_ref": _ref(entry, self.profile, row, "diagram", parent)}]
+            return [self.child(entry, parent, row, "diagram")]
         nodes = []
         for row in parsed.get("rows", []):
-            node = dict(row)
             kind = row.get("entity_kind", expected)
             if kind == "selection":
                 kind = expected
@@ -349,19 +460,7 @@ class _Navigation:
                 kind == "part" and parent["entity_kind"] != "diagram"
             ):
                 raise CatalogReadError("unsupported_catalog_hierarchy")
-            node["catalog_ref"] = _ref(entry, self.profile, row, kind, parent)
-            node["unparsed_conditions"] = list(dict.fromkeys(row.get("unparsed_conditions", [])))
-            node["inherited_restrictions"] = [
-                *parent.get("inherited_restrictions", []),
-                *row.get("inherited_restrictions", []),
-            ]
-            node["inherited_conditions"] = [
-                *parent.get("inherited_conditions", []),
-                *row.get("inherited_conditions", []),
-            ]
-            for coordinate, value in parent.get("placement_context", {}).items():
-                node.setdefault(coordinate, value)
-            nodes.append(node)
+            nodes.append(self.child(entry, parent, row, kind))
         return nodes
 
     def candidate(self, entry: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
@@ -420,10 +519,16 @@ class _Navigation:
     def lookup(self, entry: dict[str, Any], modifications: list[dict[str, Any]]) -> None:
         assert self.intent is not None
         queue = [(modification, "list_groups", 0) for modification in modifications]
+        scheduled = len(queue)
         seen = set()
         while queue:
             reference, operation, depth = queue.pop(0)
-            key = (reference["path"], json.dumps(reference["parameters"], sort_keys=True), operation)
+            key = (
+                reference["path"],
+                json.dumps(reference["parameters"], sort_keys=True),
+                operation,
+                self.context_key(reference),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -444,22 +549,14 @@ class _Navigation:
                         else:
                             self.candidates.append(self.candidate(entry, node))
                 elif _group_matches(node, self.intent) and not _placement_conflict(node, self.intent):
-                    node["catalog_ref"]["inherited_restrictions"] = [
-                        *node.get("inherited_restrictions", []),
-                        *node.get("unparsed_conditions", []),
-                    ]
-                    node["catalog_ref"]["inherited_conditions"] = [
-                        *node.get("inherited_conditions", []),
-                        *(
-                            [{"conditions": node["conditions"], "raw_conditions": node.get("raw_conditions")}]
-                            if node.get("conditions")
-                            else []
-                        ),
-                    ]
-                    node["catalog_ref"]["placement_context"] = {
-                        key: node[key] for key in ("axle", "side", "inner_outer") if node.get(key)
-                    }
                     if depth < 5:
+                        if scheduled >= MAX_ROWS:
+                            self.errors.append("navigation_branch_budget")
+                            self.pending.append(
+                                {"catalog_ref": node["catalog_ref"], "reason": "navigation_branch_budget"}
+                            )
+                            break
+                        scheduled += 1
                         next_op = "list_parts" if kind == "diagram" else "list_diagrams"
                         queue.append((node["catalog_ref"], next_op, depth + 1))
                     else:

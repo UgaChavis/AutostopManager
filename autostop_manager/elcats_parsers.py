@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -26,6 +27,7 @@ _FUNCTION = re.compile(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{", re
 _ACTION = re.compile(r"(?:\.action\s*=\s*|\.attr\s*\(\s*['\"]action['\"]\s*,\s*)(['\"])([^'\"]+)\1", re.I)
 _ASSIGNMENT = re.compile(r"document\.forms\s*\[\s*\d+\s*\]\.(\w+)\.value\s*=\s*([^;]+);", re.I)
 _PART_NUMBER = re.compile(r"(?=.*\d)[A-Za-z0-9][A-Za-z0-9 ._/-]{2,47}\Z")
+_MAX_NAVIGATION_CONTEXT_CHARS = 8192
 _PR = re.compile(r"\bPR\s*:\s*([A-Z0-9]{3}(?:\s*[,/]\s*[A-Z0-9]{3})*)(?![A-Z0-9])", re.I)
 _RESTRICTION = re.compile(
     r"\bPR\s*:|\b\d{2}[./]\d{2}(?:[./]\d{2,4})?\b|\b(?:19|20)\d{2}\s*[-–]|"
@@ -340,7 +342,8 @@ def _navigation_rows(root: _Node, *, url: str, page_kind: str) -> tuple[list[dic
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     functions = _functions(root)
-    seen: set[str] = set()
+    seen: set[bytes] = set()
+    contexts: dict[_Node, tuple[str, str | None]] = {}
     for anchor in _nodes(root, "a"):
         href = anchor.attrs.get("href", "")
         if href.lower().startswith("javascript:"):
@@ -351,9 +354,8 @@ def _navigation_rows(root: _Node, *, url: str, page_kind: str) -> tuple[list[dic
         if not mapped:
             continue
         target, params = mapped
-        if target in seen or not params:
+        if not params:
             continue
-        seen.add(target)
         label = anchor.text() or anchor.attrs.get("title", "")
         if not label:
             label = next((n.attrs.get("title") or n.attrs.get("alt", "") for n in _nodes(anchor, "img")), "")
@@ -363,7 +365,19 @@ def _navigation_rows(root: _Node, *, url: str, page_kind: str) -> tuple[list[dic
             warnings.append("published_navigation_without_label")
             continue
         context = _closest(anchor, "tr")
-        context_text = context.text() if context and len(context.text()) < 500 else label
+        if context is not None:
+            if context not in contexts:
+                context_text = context.text()
+                digest = (
+                    hashlib.sha256(context_text.encode()).hexdigest()
+                    if len(context_text) > _MAX_NAVIGATION_CONTEXT_CHARS
+                    else None
+                )
+                contexts[context] = (context_text[:_MAX_NAVIGATION_CONTEXT_CHARS], digest)
+            context_text, truncated_digest = contexts[context]
+        else:
+            context_text = label
+            truncated_digest = None
         row: dict[str, Any] = {
             "id": _native_id(params, target),
             "label": label,
@@ -375,7 +389,21 @@ def _navigation_rows(root: _Node, *, url: str, page_kind: str) -> tuple[list[dic
             "notes": context_text if context_text != label else "",
         }
         _row_restrictions(row, context_text)
+        if truncated_digest:
+            row["conditions"] = {}
+            row["unparsed_conditions"] = [
+                "navigation_row_context_truncated",
+                "navigation_row_context_sha256:" + truncated_digest,
+                context_text,
+            ]
+            row["unparsed_restrictions"] = row["unparsed_conditions"].copy()
+            for coordinate in ("axle", "side", "inner_outer"):
+                row.pop(coordinate, None)
         _model_context(row, anchor, page_kind=page_kind)
+        key = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).digest()
+        if key in seen:
+            continue
+        seen.add(key)
         if not _commercial_selection(params, label):
             rows.append(row)
         else:
@@ -538,7 +566,9 @@ def _part_row(
     native_id = node.attrs.get("id") or f"{position}:{raw_number or image}"
     notes = _cell_text(cells, headers, "notes")
     raw_conditions = _space(
-        " ".join(_cell_text(cells, headers, key) for key in ("conditions", "production", "transmission", "engine"))
+        " ".join(
+            _cell_text(cells, headers, key) for key in ("conditions", "production", "transmission", "engine", "notes")
+        )
     )
     row: dict[str, Any] = {
         "id": native_id,

@@ -96,10 +96,11 @@ def _require_active(scope: VinScope) -> None:
 
 def _decoded(value: str) -> str:
     decoded = unicodedata.normalize("NFKC", value)
-    # Each decoding pass shortens escaped input; the bounded input length also
-    # bounds work, including identifiers encoded more than 64 times.
+    # Bound work by the normalized input length, including identifiers encoded
+    # more than 64 times. Decoding can expose escaped compatibility characters,
+    # so normalize again before checking whether another pass is needed.
     for _ in range(len(decoded) + 1):
-        next_value = html.unescape(unquote(decoded))
+        next_value = unicodedata.normalize("NFKC", html.unescape(unquote(decoded)))
         if next_value == decoded:
             break
         decoded = next_value
@@ -303,7 +304,7 @@ def _robots_policy(url: str, scope: VinScope, deadline: float, search_engine: st
             policy: tuple[RobotFileParser | None, bool, float] = (None, True, 1.0)
         elif status == 200:
             parser = RobotFileParser()
-            parser.parse(body.decode("utf-8", "replace").splitlines())
+            parser.parse(body.decode("utf-8-sig", "replace").splitlines())
             crawl_delay = parser.crawl_delay(j1_fetch.USER_AGENT) or parser.crawl_delay("*") or 1.0
             policy = (parser, True, min(max(float(crawl_delay), 1.0), 30.0))
         else:

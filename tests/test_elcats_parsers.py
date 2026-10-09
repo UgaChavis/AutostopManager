@@ -24,6 +24,36 @@ def _fixture(name: str, url: str, *, operation: str = "models", entry: dict | No
     return parse_catalog_html((_FIXTURES / name).read_text(), url=url, operation=operation, entry=entry or _VW)
 
 
+@pytest.mark.parametrize(
+    ("notes", "pr_codes", "unparsed"),
+    [
+        ("PR:2E4", ["2E4"], False),
+        ("PR:2E4; not for LHD; 2010 - 2018", None, True),
+        ("not for LHD", None, True),
+        ("2010 - 2018", None, True),
+        ("PR:2E4 AND NOT PR:1ZE", None, True),
+        ("303X28", None, False),
+    ],
+)
+def test_part_remarks_keep_parsed_and_unresolved_conditions(notes, pr_codes, unparsed):
+    html = (
+        "<table><tr><th>Код детали</th><th>Наименование</th><th>Примечание</th></tr>"
+        f"<tr><td>DEMO100</td><td>Brake pad</td><td>{notes}</td></tr></table>"
+    )
+    response = parse_catalog_html(
+        html, url="https://elcats.ru/vw/Parts.aspx?Mdl=DEMO&SubId=PAD", operation="list_parts", entry=_VW
+    )
+    row = response["rows"][0]
+    assert row["notes"] == row["raw_conditions"] == notes
+    assert bool(row["unparsed_conditions"]) is unparsed
+    assert bool(row["unparsed_restrictions"]) is unparsed
+    if pr_codes is not None:
+        assert row["conditions"]["pr_codes"]["all_of"] == pr_codes
+    else:
+        assert row["conditions"] == {}
+    assert row["confirmed"] is False
+
+
 def test_inventory_registers_all_57_passenger_routes_and_preserves_providers() -> None:
     registry = json.loads(_REGISTRY.read_text())
     entries = registry["entries"]
@@ -88,6 +118,64 @@ def test_ssangyong_public_chain_keeps_models_groups_and_diagrams_distinct() -> N
     assert front["entity_kind"] == "diagram"
     assert front["id"] == "6b0573dd-4620-4a66-9b88-cb8b199e4668"
     assert parse_qs(urlsplit(front["url"]).query)["Unit"] == [front["id"]]
+
+
+def test_same_navigation_url_keeps_distinct_row_restrictions_and_deduplicates_identical_rows() -> None:
+    def row(notes):
+        return (
+            f'<table><tr><td><a href="Groups.aspx?Mdl=DEMO&amp;Title=Golf">Golf</a></td><td>{notes}</td></tr></table>'
+        )
+
+    left = row("PR:2E4; лев.")
+    right = row("PR:1ZE; прав.")
+    result = parse_catalog_html(left + right + left, url="https://www.elcats.ru/vw/", operation="models", entry=_VW)
+    rows = result["rows"]
+    assert len(rows) == 2 and rows[0]["url"] == rows[1]["url"]
+    assert [r["conditions"]["pr_codes"]["all_of"] for r in rows] == [["2E4"], ["1ZE"]]
+    assert [r["side"] for r in rows] == ["left", "right"]
+
+
+def test_image_and_caption_navigation_still_deduplicate_identical_metadata() -> None:
+    target = "Parts.aspx?Mdl=DEMO&amp;SubId=PAD"
+    html = (
+        f'<table><tr><td><a href="{target}"><img alt="Front brake" src="diagram.png"></a></td>'
+        f'<td><a href="{target}">Front brake</a></td><td>PR:2E4</td></tr></table>'
+    )
+    result = parse_catalog_html(
+        html, url="https://www.elcats.ru/vw/Subgroup.aspx?Mdl=DEMO", operation="list_diagrams", entry=_VW
+    )
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["conditions"]["pr_codes"]["all_of"] == ["2E4"]
+
+
+def test_long_navigation_context_retains_published_conditions_and_placement() -> None:
+    notes = "published note " * 35 + "; PR:2E4; 2010 - 2018; лев."
+    assert len(notes) > 500
+    html = f'<table><tr><td><a href="Groups.aspx?Mdl=DEMO&amp;Title=Golf">Golf</a></td><td>{notes}</td></tr></table>'
+    row = parse_catalog_html(html, url="https://www.elcats.ru/vw/", operation="models", entry=_VW)["rows"][0]
+    assert notes in row["notes"] and notes in row["raw_conditions"]
+    assert row["conditions"]["pr_codes"]["all_of"] == ["2E4"]
+    assert row["side"] == "left" and row["unparsed_restrictions"]
+
+
+def test_truncated_navigation_context_is_unresolved_and_distinct_sibling_rows_survive() -> None:
+    from autostop_manager.elcats_parsers import _MAX_NAVIGATION_CONTEXT_CHARS
+
+    prefix = "PR:2E4; лев.; " + "published note " * 600
+    assert len(prefix) > _MAX_NAVIGATION_CONTEXT_CHARS
+    html = "".join(
+        '<table><tr><td><a href="Groups.aspx?Mdl=DEMO&amp;Title=Golf">Golf</a></td>'
+        f"<td>{prefix}; {tail}</td></tr></table>"
+        for tail in ("PR:1ZE; прав.", "2010 - 2018")
+    )
+    rows = parse_catalog_html(html, url="https://www.elcats.ru/vw/", operation="models", entry=_VW)["rows"]
+    assert len(rows) == 2
+    for row in rows:
+        assert len(row["raw_conditions"]) == len(row["notes"]) == _MAX_NAVIGATION_CONTEXT_CHARS
+        assert row["conditions"] == {} and "side" not in row
+        assert "navigation_row_context_truncated" in row["unparsed_conditions"]
+        assert row["unparsed_conditions"] == row["unparsed_restrictions"]
+    assert rows[0]["unparsed_conditions"] != rows[1]["unparsed_conditions"]
 
 
 def test_ssangyong_masked_number_is_not_price_identifier_or_image_token() -> None:
