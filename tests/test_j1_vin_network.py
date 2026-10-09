@@ -742,6 +742,143 @@ def test_ddg_unknown_or_incomplete_http_200_is_error_not_empty(monkeypatch: pyte
     assert result["providers"][0]["outcome"] == "error" and len(calls) == 1
 
 
+def _synthetic_ddg_html(monkeypatch: pytest.MonkeyPatch, body: str) -> dict[str, Any]:
+    fake_transport(monkeypatch, [Response(body=body.encode())])
+    authorized = network.VinScope(OTHER, "synthetic-html-review", time.time() + 60, ("duckduckgo",))
+    return network.search_vin(OTHER, authorized)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        '<input type="hidden" class="no-results">',
+        '<meta class="no-results">',
+        '<img class="no-results">',
+        '<br class="result--no-result">',
+        '<textarea class="no-results">Control value</textarea>',
+    ],
+)
+def test_ddg_intrinsic_nontext_markers_do_not_turn_outage_into_empty(
+    monkeypatch: pytest.MonkeyPatch, marker: str
+) -> None:
+    result = _synthetic_ddg_html(monkeypatch, "<html><body>" + marker + "<h1>Unavailable</h1></body></html>")
+    assert not result["ok"] and result["results"] == [] and result["result_class"] == "error"
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+@pytest.mark.parametrize("tag", ["div", "span", "p", "strong"])
+def test_ddg_visible_text_markers_still_recognize_empty(monkeypatch: pytest.MonkeyPatch, tag: str) -> None:
+    result = _synthetic_ddg_html(monkeypatch, f'<{tag} class="no-results">No results found</{tag}>')
+    assert result["ok"] and result["result_class"] == "empty" and result["results"] == [] and result["errors"] == []
+
+
+@pytest.mark.parametrize("tag", ["iframe", "noembed", "noframes", "canvas", "datalist", "dialog", "audio", "video"])
+def test_ddg_intrinsic_hidden_fallback_does_not_enter_snippet(monkeypatch: pytest.MonkeyPatch, tag: str) -> None:
+    body = (
+        '<a class="result__a" href="https://example.org/manual">Public title</a>'
+        f'<div class="result__snippet">Public <{tag}>hidden fallback</{tag}>tail</div>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["errors"] == [] and len(result["results"]) == 1
+    assert result["results"][0]["snippet"] == "Public tail"
+
+
+def test_ddg_closed_details_marker_is_not_empty_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = '<details><summary>Search options</summary><div class="no-results">Hidden empty</div></details><h1>Unavailable</h1>'
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert not result["ok"] and result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+@pytest.mark.parametrize("tag", ["template", "iframe", "script", "style"])
+def test_ddg_html_nonvoid_slash_does_not_release_hidden_markers(monkeypatch: pytest.MonkeyPatch, tag: str) -> None:
+    body = (
+        f'<{tag}/><div class="no-results">Hidden empty</div>'
+        '<a class="result__a" href="https://example.org/hidden">Hidden result</a>'
+        f"</{tag}><p>Visible tail</p>"
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert not result["ok"] and result["results"] == []
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_foreign_integration_point_does_not_release_template_slash(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<math><mtext><template/><div class="no-results">Hidden empty</div>'
+        '<a class="result__a" href="https://example.org/hidden">Hidden result</a>'
+        "</template></mtext></math><h1>Unavailable</h1>"
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert not result["ok"] and result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+@pytest.mark.parametrize("tag", ["script", "style", "iframe"])
+def test_ddg_slash_rawtext_keeps_visible_result_after_matching_end(monkeypatch: pytest.MonkeyPatch, tag: str) -> None:
+    body = f'<{tag}/><{tag}></{tag}><a class="result__a" href="https://example.org/visible">Visible title</a>'
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["errors"] == []
+    assert [row["url"] for row in result["results"]] == ["https://example.org/visible"]
+
+
+@pytest.mark.parametrize(
+    "style,visible", [('style="display:none" style=""', False), ('style="" style="display:none"', True)]
+)
+def test_ddg_duplicate_style_keeps_first_visibility(monkeypatch: pytest.MonkeyPatch, style: str, visible: bool) -> None:
+    body = f'<a class="result__a" href="https://example.org/manual" {style}>Title</a>'
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert len(result["results"]) == int(visible)
+    assert result["ok"] is visible
+
+
+@pytest.mark.parametrize(
+    "classes,is_result",
+    [('class="result__advert" class="result__a"', False), ('class="result__a" class="result__advert"', True)],
+)
+def test_ddg_duplicate_class_keeps_first_classification(
+    monkeypatch: pytest.MonkeyPatch, classes: str, is_result: bool
+) -> None:
+    body = '<div class="no-results">Empty</div>' + f'<a {classes} href="https://example.org/manual">Title</a>'
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["errors"] == []
+    assert len(result["results"]) == int(is_result)
+
+
+@pytest.mark.parametrize(
+    "first,second,expected",
+    [
+        ("https://example.org/first", "https://example.org/second", ["https://example.org/first"]),
+        ("https://127.0.0.1/private", "https://example.org/second", []),
+        ("https://example.org/first", "https://127.0.0.1/private", ["https://example.org/first"]),
+    ],
+)
+def test_ddg_duplicate_href_filters_only_first_destination(
+    monkeypatch: pytest.MonkeyPatch, first: str, second: str, expected: list[str]
+) -> None:
+    result = _synthetic_ddg_html(monkeypatch, f'<a class="result__a" href="{first}" href="{second}">Title</a>')
+    assert result["ok"] and result["errors"] == []
+    assert [row["url"] for row in result["results"]] == expected
+
+
+def test_ddg_textarea_pseudo_tags_are_literal_control_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<textarea><a class="result__a" href="https://example.org/control">Control</a>'
+        '<div class="no-results">Control empty</div></textarea><h1>Unavailable</h1>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert not result["ok"] and result["results"] == []
+    assert result["errors"] == [{"provider": "duckduckgo", "error": "parse_failed"}]
+
+
+def test_ddg_textarea_control_value_does_not_enter_result_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        '<a class="result__a" href="https://example.org/manual">Public <textarea>Control title</textarea>title</a>'
+        '<div class="result__snippet">Public <textarea>Control snippet</textarea>tail</div>'
+    )
+    result = _synthetic_ddg_html(monkeypatch, body)
+    assert result["ok"] and result["errors"] == [] and len(result["results"]) == 1
+    assert result["results"][0]["title"] == "Public title"
+    assert result["results"][0]["snippet"] == "Public tail"
+
+
 @pytest.mark.parametrize("classes", ["result__advert", "not-result__a", "result__a-placeholder"])
 def test_ddg_no_results_does_not_export_anchors_with_similar_classes(
     monkeypatch: pytest.MonkeyPatch, classes: str

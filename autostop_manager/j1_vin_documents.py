@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from html import unescape
 from html.parser import HTMLParser
 import math
 import os
@@ -42,7 +43,29 @@ _PDF_OUTPUT_BYTES = MAX_TEXT_BYTES + 64 * 1024
 _VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 )
-_HIDDEN_TAGS = frozenset({"script", "style", "template", "noscript", "svg", "head", "title"})
+_HIDDEN_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "template",
+        "noscript",
+        "svg",
+        "head",
+        "title",
+        "iframe",
+        "noembed",
+        "noframes",
+        "canvas",
+        "datalist",
+        "audio",
+        "video",
+    }
+)
+_RAW_TEXT_TAGS = frozenset(
+    {"script", "style", "iframe", "noembed", "noframes", "noscript", "xmp", "plaintext", "textarea", "title"}
+)
+_RCDATA_TAGS = frozenset({"textarea", "title"})
+_FOREIGN_TAGS = frozenset({"svg", "math"})
 _HEAD_CONTENT_TAGS = frozenset(
     {"base", "basefont", "bgsound", "link", "meta", "noframes", "noscript", "script", "style", "template", "title"}
 )
@@ -118,6 +141,14 @@ _LI_SCOPE_BOUNDARIES = (_P_CLOSING_STARTS - {"address", "div", "p", "li"}) | fro
 _DL_SCOPE_BOUNDARIES = _LI_SCOPE_BOUNDARIES - {"dt", "dd"}
 
 
+def _first_attributes(attrs: list[tuple[str, str | None]]) -> dict[str, str | None]:
+    """HTML keeps the first occurrence of each attribute, including empty ones."""
+    values: dict[str, str | None] = {}
+    for name, value in attrs:
+        values.setdefault(name, value)
+    return values
+
+
 def _failure(kind: str, method: str, error: str) -> dict[str, Any]:
     return {"ok": False, "kind": kind, "extraction_method": method, "pages": [], "error": error}
 
@@ -140,14 +171,67 @@ def _bounded_timeout(default: float, remaining: float | None) -> float:
 class _HTMLVisibility(HTMLParser):
     """Track bounded HTML visibility without collecting or budgeting text."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, xhtml: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[tuple[str, bool]] = []
         self.structure_limited = False
+        self.xhtml = xhtml
+        self._closed_details: set[int] = set()
+        self._details_summary_seen: set[int] = set()
+
+    def set_cdata_mode(self, elem: str, *, escapable: bool = False) -> None:
+        # Normalize RCDATA across Python versions: the document consumer
+        # decodes it exactly once; older HTMLParser has no escapable argument.
+        if self.xhtml and elem in _RCDATA_TAGS:
+            return
+        super().set_cdata_mode(elem)
 
     @property
     def hidden(self) -> bool:
-        return self.structure_limited or bool(self.stack and self.stack[-1][1])
+        return self.structure_limited or bool(
+            self.stack and (self.stack[-1][1] or id(self.stack[-1]) in self._closed_details)
+        )
+
+    def _close_stack_from(self, index: int) -> list[tuple[str, bool]]:
+        closed = self.stack[index:]
+        del self.stack[index:]
+        for node in closed:
+            self._closed_details.discard(id(node))
+            self._details_summary_seen.discard(id(node))
+        return closed
+
+    def _foreign_content(self) -> bool:
+        for index in range(len(self.stack) - 1, -1, -1):
+            root = self.stack[index][0]
+            if root in _FOREIGN_TAGS:
+                integrations = (
+                    {"foreignobject", "desc", "title"}
+                    if root == "svg"
+                    else {"mi", "mo", "mn", "ms", "mtext", "annotation-xml"}
+                )
+                # Treat integration points conservatively as HTML: a template
+                # slash must not expose its contents inside a foreign root.
+                return not any(node[0] in integrations for node in self.stack[index + 1 :])
+        return False
+
+    def _element_hidden(self, tag: str, values: dict[str, str | None]) -> bool:
+        parent_hidden = self.hidden
+        if tag == "summary" and self.stack:
+            parent = self.stack[-1]
+            if id(parent) in self._closed_details and id(parent) not in self._details_summary_seen:
+                self._details_summary_seen.add(id(parent))
+                parent_hidden = parent[1]
+        style = re.sub(r"\s+", "", (values.get("style") or "").lower())
+        return (
+            tag in _HIDDEN_TAGS
+            or "hidden" in values
+            or (values.get("aria-hidden") or "").lower() == "true"
+            or "display:none" in style
+            or "visibility:hidden" in style
+            or (tag == "input" and (values.get("type") or "").lower() == "hidden")
+            or (tag == "dialog" and "open" not in values)
+            or parent_hidden
+        )
 
     def _close_in_scope(self, tags: set[str], boundaries: set[str] | frozenset[str]) -> None:
         # HTMLParser emits tokens rather than a browser DOM.  Omitted end tags
@@ -156,7 +240,7 @@ class _HTMLVisibility(HTMLParser):
         for index in range(len(self.stack) - 1, -1, -1):
             tag = self.stack[index][0]
             if tag in tags:
-                del self.stack[index:]
+                self._close_stack_from(index)
                 return
             if tag in boundaries or tag in _HIDDEN_TAGS:
                 return
@@ -184,18 +268,17 @@ class _HTMLVisibility(HTMLParser):
         if len(self.stack) >= 512:
             self.structure_limited = True
             return None
-        values = dict(attrs)
-        style = re.sub(r"\s+", "", (values.get("style") or "").lower())
-        hidden = (
-            tag in _HIDDEN_TAGS
-            or "hidden" in values
-            or (values.get("aria-hidden") or "").lower() == "true"
-            or "display:none" in style
-            or "visibility:hidden" in style
-            or bool(self.stack and self.stack[-1][1])
-        )
+        values = _first_attributes(attrs)
+        hidden = self._element_hidden(tag, values)
         if tag not in _VOID_TAGS:
-            self.stack.append((tag, hidden))
+            node = (tag, hidden)
+            self.stack.append(node)
+            if tag == "details" and "open" not in values:
+                self._closed_details.add(id(node))
+        if not self.xhtml and tag in _RAW_TEXT_TAGS and not self._foreign_content():
+            # Normalize modes across HTMLParser versions, including nonvoid
+            # slash tokens that do not get its automatic raw-text mode switch.
+            self.set_cdata_mode(tag)
         return hidden
 
     def _end_element(self, tag: str) -> list[tuple[str, bool]]:
@@ -204,9 +287,7 @@ class _HTMLVisibility(HTMLParser):
         for index in range(len(self.stack) - 1, -1, -1):
             current = self.stack[index][0]
             if current == tag:
-                closed = self.stack[index:]
-                del self.stack[index:]
-                return closed
+                return self._close_stack_from(index)
             if current in _HIDDEN_TAGS:
                 break
         return []
@@ -218,18 +299,34 @@ class _HTMLVisibility(HTMLParser):
         self._end_element(tag)
 
     def handle_data(self, data: str) -> None:
-        if not self.structure_limited and self.stack and self.stack[-1][0] == "head" and data.strip():
+        if (
+            not self.xhtml
+            and not self.structure_limited
+            and self.stack
+            and self.stack[-1][0] == "head"
+            and data.strip()
+        ):
             self._close_in_scope({"head"}, {"html"})
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        foreign = tag in _FOREIGN_TAGS or self._foreign_content()
         self.handle_starttag(tag, attrs)
-        if tag not in _VOID_TAGS:
+        # HTML ignores '/' on nonvoid tags; foreign content and XHTML retain it.
+        if tag not in _VOID_TAGS and (self.xhtml or foreign):
             self.handle_endtag(tag)
+
+    def close(self) -> None:
+        super().close()
+        if self.cdata_elem and self.rawdata:
+            # Older HTMLParser versions retain an unterminated raw/RCDATA tail
+            # at EOF. Consumers still apply visibility and their own byte limits.
+            tail, self.rawdata = self.rawdata, ""
+            self.handle_data(tail)
 
 
 class _VisibleHTML(_HTMLVisibility):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, xhtml: bool = False) -> None:
+        super().__init__(xhtml=xhtml)
         self.parts: list[str] = []
         self.title_parts: list[str] = []
         self.remaining = MAX_TEXT_BYTES
@@ -258,6 +355,8 @@ class _VisibleHTML(_HTMLVisibility):
         if self.structure_limited:
             return
         super().handle_data(data)
+        if not self.xhtml and self.stack and self.stack[-1][0] in _RCDATA_TAGS:
+            data = unescape(data)
         if any(tag == "title" for tag, _hidden in self.stack):
             part, _clipped = _clip_text(data, self.title_remaining)
             self.title_parts.append(part)
@@ -275,7 +374,7 @@ def _html_content(body: bytes, content_type: str) -> dict[str, Any]:
         decoded = body.decode(charset, "replace")
     except LookupError:
         decoded = body.decode("utf-8", "replace")
-    parser = _VisibleHTML()
+    parser = _VisibleHTML(xhtml=content_type.split(";", 1)[0].strip().lower() == "application/xhtml+xml")
     parser.feed(decoded)
     parser.close()
     text = re.sub(r"[ \t]+", " ", "".join(parser.parts))

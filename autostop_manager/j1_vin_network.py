@@ -26,7 +26,7 @@ from urllib.robotparser import RobotFileParser
 
 from . import j1_fetch
 from .j1_sources import classify_source, discovery_domain
-from .j1_vin_documents import _HTMLVisibility, _VOID_TAGS
+from .j1_vin_documents import _first_attributes, _HTMLVisibility, _VOID_TAGS
 
 _VIN_TOKEN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 _ENGINES = frozenset({"bing", "yahoo", "duckduckgo"})
@@ -561,19 +561,20 @@ class _DDGLinks(_HTMLVisibility):
             self._close_in_scope({"a"}, {"html", "table", "td", "th", "caption"})
         hidden = self._start_element(tag, attrs)
         self._drop_closed_captures()
-        classes = set((dict(attrs).get("class") or "").split())
+        values = _first_attributes(attrs)
+        classes = set((values.get("class") or "").split())
         if tag == "a" and "result__a" in classes:
             self._snippet_row = None
         if hidden is None or hidden:
             return
         if tag == "a" and "result__a" in classes:
-            self._href = str(dict(attrs).get("href") or "")
+            self._href = str(values.get("href") or "")
             self._title = []
             self._link_node = self.stack[-1] if self._href else None
         if "result__snippet" in classes and tag not in _VOID_TAGS:
             self._snippet_node = self.stack[-1]
             self._snippet = []
-        if classes & {"no-results", "result--no-result"}:
+        if tag not in _VOID_TAGS and tag != "textarea" and classes & {"no-results", "result--no-result"}:
             self.has_no_results = True
 
     def handle_endtag(self, tag: str) -> None:
@@ -599,7 +600,7 @@ class _DDGLinks(_HTMLVisibility):
 
     def handle_data(self, data: str) -> None:
         super().handle_data(data)
-        if self.hidden:
+        if self.hidden or (self.stack and self.stack[-1][0] == "textarea"):
             return
         if self._link_node is not None:
             self._title.append(data)

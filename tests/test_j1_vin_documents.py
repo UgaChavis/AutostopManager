@@ -87,6 +87,117 @@ def test_html_visible_text_title_charset_and_unredacted_vin(tmp_path: Path, capl
     assert fallback["pages"][0]["text"] == "Fallback"
 
 
+@pytest.mark.parametrize("tag", ["iframe", "noembed", "noframes", "canvas", "datalist", "dialog", "audio", "video"])
+def test_html_intrinsic_hidden_fallback_cannot_supply_visible_vin(tmp_path: Path, tag: str) -> None:
+    body = (f"<p>Public general document</p><{tag}>1HGCM82673A000000</{tag}><p>Visible tail</p>").encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Public general document\nVisible tail"
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["object", "applet"])
+def test_html_visible_fallback_is_retained(tmp_path: Path, tag: str) -> None:
+    result = documents.extract_content(f"<{tag}>1HGCM82673A000000</{tag}>".encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000"
+
+
+@pytest.mark.parametrize("tag", ["details", "dialog"])
+@pytest.mark.parametrize("opened", [False, True])
+def test_html_disclosure_visibility_retains_summary_and_open_content(tmp_path: Path, tag: str, opened: bool) -> None:
+    attribute = " open" if opened else ""
+    summary = "<summary>Public summary</summary>" if tag == "details" else ""
+    body = f"<{tag}{attribute}>{summary}<p>1HGCM82673A000000</p></{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is opened
+    assert ("Public summary" in text) is (tag == "details")
+    assert "Visible tail" in text and not result["truncated"]
+
+
+def test_html_closed_details_exposes_only_first_direct_summary(tmp_path: Path) -> None:
+    body = (
+        b"<details><summary>Public summary</summary><summary>1HGCM82673A000000</summary>"
+        b"<div><summary>1HGCM82673A000000</summary></div></details><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Public summary\nVisible tail"
+
+
+@pytest.mark.parametrize(
+    "style,visible", [('style="display:none" style=""', False), ('style="" style="display:none"', True)]
+)
+def test_html_duplicate_attributes_keep_first_visibility_value(tmp_path: Path, style: str, visible: bool) -> None:
+    body = f"<p {style}>1HGCM82673A000000</p><p>Visible tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert ("1HGCM82673A000000" in result["pages"][0]["text"]) is visible
+    assert "Visible tail" in result["pages"][0]["text"]
+
+
+@pytest.mark.parametrize("tag", ["template", "iframe", "script", "style", "noembed", "noframes", "canvas", "datalist"])
+def test_html_nonvoid_slash_preserves_hidden_context(tmp_path: Path, tag: str) -> None:
+    body = f"<{tag}/>1HGCM82673A000000</{tag}><p>Visible tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["script", "style", "iframe", "noembed", "noframes"])
+def test_html_slash_rawtext_does_not_create_nested_contexts(tmp_path: Path, tag: str) -> None:
+    body = f"<{tag}/><{tag}>1HGCM82673A000000</{tag}><p>Visible tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+
+
+@pytest.mark.parametrize("content_type,visible", [("text/html", False), ("application/xhtml+xml", True)])
+def test_html_nonvoid_slash_keeps_xhtml_semantics(tmp_path: Path, content_type: str, visible: bool) -> None:
+    result = documents.extract_content(b"<template/><p>Visible tail</p>", content_type, "", tmp_path)
+    assert result["pages"][0]["text"] == ("Visible tail" if visible else "")
+
+
+@pytest.mark.parametrize("tag", ["svg", "math"])
+def test_html_foreign_selfclosing_elements_preserve_following_text(tmp_path: Path, tag: str) -> None:
+    result = documents.extract_content(f"<{tag}/><p>Visible tail</p>".encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+
+
+def test_html_foreign_integration_point_does_not_release_template_slash(tmp_path: Path) -> None:
+    body = b"<math><mtext><template/>1HGCM82673A000000</template>Visible content</mtext></math><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible content\nVisible tail"
+
+
+@pytest.mark.parametrize("slash", ["", "/"])
+def test_html_rcdata_retains_literal_control_text_and_decodes_entities_once(tmp_path: Path, slash: str) -> None:
+    body = (
+        f"<head><title{slash}>Public &amp;amp; title</title></head><body>"
+        f"<textarea{slash}>&lt;a hidden&gt;1HGCM82673A000000&lt;/a&gt; &amp;amp;</textarea><p>Visible &amp;amp; tail</p></body>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["title"] == "Public &amp; title"
+    assert result["pages"][0]["text"] == "<a hidden>1HGCM82673A000000</a> &amp;\nVisible &amp; tail"
+
+
+def test_xhtml_title_and_control_entities_are_decoded_once(tmp_path: Path) -> None:
+    body = b"<head><title>A &amp;amp; B</title></head><textarea>&lt;a&gt;CONTROL&lt;/a&gt; &amp;amp;</textarea>"
+    result = documents.extract_content(body, "application/xhtml+xml", "", tmp_path)
+    assert result["title"] == "A &amp; B"
+    assert result["pages"][0]["text"] == "<a>CONTROL</a> &amp;"
+
+
+def test_html_unterminated_rcdata_keeps_literal_text_and_title_at_eof(tmp_path: Path) -> None:
+    body = b"<textarea>Visible &amp; literal <a>1HGCM82673A000000</a>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible & literal <a>1HGCM82673A000000</a>"
+    title = documents.extract_content(b"<head><title>Public &amp;amp; title", "text/html", "", tmp_path)
+    assert title["title"] == "Public &amp; title" and title["pages"][0]["text"] == ""
+
+
+@pytest.mark.parametrize("tag", ["script", "iframe", "template", "noscript"])
+def test_html_unterminated_hidden_context_does_not_leak_at_eof(tmp_path: Path, tag: str) -> None:
+    body = f"<p>Public general document</p><{tag}>1HGCM82673A000000<p>Hidden tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Public general document"
+
+
 def test_html_structure_and_text_are_bounded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(documents, "MAX_TEXT_BYTES", 16)
     result = documents.extract_content(b"<p>" + "ж".encode() * 50 + b"</p>", "text/html", "", tmp_path)
