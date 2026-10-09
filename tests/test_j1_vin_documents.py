@@ -159,6 +159,13 @@ def test_html_foreign_selfclosing_elements_preserve_following_text(tmp_path: Pat
     assert result["pages"][0]["text"] == "Visible tail"
 
 
+@pytest.mark.parametrize("foreign", ["<svg><title/></svg>", "<svg><g><title/></g></svg>"])
+def test_html_foreign_selfclosing_title_preserves_visible_tail(tmp_path: Path, foreign: str) -> None:
+    result = documents.extract_content((foreign + "<p>Visible tail</p>").encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+    assert not result["truncated"]
+
+
 def test_html_foreign_integration_point_does_not_release_template_slash(tmp_path: Path) -> None:
     body = b"<math><mtext><template/>1HGCM82673A000000</template>Visible content</mtext></math><p>Visible tail</p>"
     result = documents.extract_content(body, "text/html", "", tmp_path)

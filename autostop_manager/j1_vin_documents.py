@@ -314,6 +314,10 @@ class _HTMLVisibility(HTMLParser):
         # HTML ignores '/' on nonvoid tags; foreign content and XHTML retain it.
         if tag not in _VOID_TAGS and (self.xhtml or foreign):
             self.handle_endtag(tag)
+            if self.cdata_elem == tag:
+                # A foreign integration point may have entered raw mode during
+                # start handling; an immediate close must restore HTML parsing.
+                self.clear_cdata_mode()
 
     def close(self) -> None:
         super().close()
