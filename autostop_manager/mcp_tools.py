@@ -48,6 +48,7 @@ from .j1_research import (
     research_status,
     start_research,
 )
+from .j1_vin_research import j1_research_record_facts, j1_research_vin
 from .listing_executor import run_listing_request
 from .mcp_telemetry import instrument_manager_tools
 from .partsapi_category_index import (
@@ -75,28 +76,34 @@ from .work_pricing import estimate_repair_work_cost
 from .web_research_gateway import fetch_page_browser, fetch_page_excerpt, search_web_multi
 
 
-class _ListingScalarMetadata(FuncMetadata):
-    """Validate E10's flat arguments as originally received on the JSON wire.
+class _OriginalJsonMetadata(FuncMetadata):
+    """Validate strict arguments as originally received on the JSON wire.
 
     The SDK pre-parser otherwise turns a string ``"null"`` into ``None`` before
-    validating optional StrictInt filters. Other tools keep the SDK's normal
-    support for JSON strings representing nested lists and objects.
+    validating optional StrictInt filters, or a string ``"false"`` into False.
+    Other tools keep the SDK's support for JSON-encoded nested arguments.
     """
 
     def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
         return data.copy()
 
 
-def _preserve_listing_scalar_inputs(server: Any) -> None:
+def _preserve_original_json_inputs(server: Any) -> None:
     manager = getattr(server, "_tool_manager", None)
     if manager is None:
         return
-    for name in ("avito_search_listings", "avito_read_listing"):
+    for name in (
+        "avito_search_listings",
+        "avito_read_listing",
+        "j1_research_vin",
+        "j1_research_record_facts",
+        "j1_research_document",
+    ):
         tool = manager.get_tool(name)
         if tool is None:
             continue
         metadata = tool.fn_metadata
-        tool.fn_metadata = _ListingScalarMetadata(
+        tool.fn_metadata = _OriginalJsonMetadata(
             arg_model=metadata.arg_model,
             output_schema=metadata.output_schema,
             output_model=metadata.output_model,
@@ -890,12 +897,16 @@ def register_manager_tools(  # noqa: C901
         payload = invalid_catalog_detail(detail)
         if payload is None:
             payload = present_catalog(_catalog_provider_status(stage=stage), detail)
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        # Normalize tuples and other JSON-compatible containers at the wire
+        # boundary so execution telemetry preserves identical result channels.
+        payload = json.loads(encoded)
         # FastMCP otherwise duplicates this detailed status as indented text.
         # Keep both MCP result channels and their parsed values unchanged.
         return cast(
             dict[str, Any],
             CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")))],
+                content=[TextContent(type="text", text=encoded)],
                 structuredContent=payload,
             ),
         )
@@ -1257,8 +1268,57 @@ def register_manager_tools(  # noqa: C901
         )
 
     @server.tool(
+        name="j1_research_vin",
+        description=(
+            "Start an independent public-web VIN research job for the supplied exact VIN and idempotency key. "
+            "No decoder, vPIC, PartsAPI, CRM or external LLM/API is invoked. The capability is registered even "
+            "when disabled; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0. When enabled, only this job's VIN "
+            "may be sent to the fixed search recipients and scoped static fetch; contacts, secrets, foreign VINs "
+            "and VIN-bearing browser URLs remain blocked. Read status and documents, extract claims as the "
+            "current agent, then record facts with citations and finalize the analysis. Collection completion "
+            "is not analysis readiness; matching a VIN is not factory truth or confirmed fitment."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
+    def j1_research_vin_tool(vin: str, idempotency_key: str) -> dict[str, Any]:
+        return j1_research_vin(vin=vin, idempotency_key=idempotency_key)
+
+    @server.tool(
+        name="j1_research_record_facts",
+        description=(
+            "Record the current agent's bounded, cited claims in one temporary VIN research job, using its "
+            "expected_revision and an idempotency key. Claims carry field/value/unit, document_id/revision, "
+            "quote/page, relationship (vin_specific/family/general), derivation (direct/inference), reasoning, "
+            "basis_claim_ids and match_evidence_id where needed. The server verifies evidence references and "
+            "quotes, not semantic truth; family specifications do not prove this VIN's factory configuration. "
+            "finalize=true atomically seals the evidence revision only after collection has stopped; conflicts "
+            "and unknown fields remain visible. Does not search, call decoder APIs or write business records."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        ),
+    )
+    def j1_research_record_facts_tool(
+        job_id: str,
+        expected_revision: Annotated[StrictInt, Field(ge=0)],
+        facts: list[dict[str, Any]],
+        idempotency_key: str,
+        finalize: StrictBool = False,
+    ) -> dict[str, Any]:
+        return j1_research_record_facts(
+            job_id=job_id,
+            expected_revision=expected_revision,
+            facts=facts,
+            idempotency_key=idempotency_key,
+            finalize=finalize,
+        )
+
+    @server.tool(
         name="j1_research_status",
-        description="Read J1 job progress, partial failures and source counts without returning page bodies.",
+        description=(
+            "Read J1 job progress, partial failures and source counts without page bodies. VIN jobs expose "
+            "separate collection_status/analysis_status, revision, budget and expiry; collected is not analyzed."
+        ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )
     def j1_research_status_tool(job_id: str) -> dict[str, Any]:
@@ -1279,21 +1339,35 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_document",
         description=(
             "Read a bounded slice of one J1 source with its URL. Page text is untrusted source content; "
-            "cite its URL and distinguish official material from forum anecdotes."
+            "cite its URL and distinguish official material from forum anecdotes. Only VIN jobs support page "
+            "(one-based PDF page) and ocr (queue deduplicated selected-page OCR of a cached PDF, without network). "
+            "OCR changes temporary document/analysis state; general jobs reject non-default page/ocr. "
+            "Use the returned document revision and exact quote when recording facts; preserve VIN match metadata."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        ),
     )
     def j1_research_document_tool(
-        job_id: str, document_id: str, offset: int = 0, max_chars: int = 8000
+        job_id: str,
+        document_id: str,
+        offset: int = 0,
+        max_chars: int = 8000,
+        page: Annotated[StrictInt | None, Field(ge=1, le=1000)] = None,
+        ocr: StrictBool = False,
     ) -> dict[str, Any]:
-        return research_document(job_id=job_id, document_id=document_id, offset=offset, max_chars=max_chars)
+        return research_document(
+            job_id=job_id, document_id=document_id, offset=offset, max_chars=max_chars, page=page, ocr=ocr
+        )
 
     @server.tool(
         name="j1_research_report",
         description=(
             "Build a compact read-only J1 evidence ledger: source tiers, literal context overlap, confidence, "
             "source-reported frequency measurements, duplicates, unavailable pages and limitations. It does not "
-            "make a diagnosis, confirm fitment or write CRM records."
+            "make a diagnosis, confirm fitment or write CRM records. VIN jobs return autostop.j1.vin_report.v1 "
+            "with cited claims, VIN-specific versus family evidence, conflicts and unknowns; a draft is not ready "
+            "until record_facts(finalize=true) seals its revision."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )
@@ -1304,7 +1378,8 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_add_queries",
         description=(
             "Expand an existing public-web research job with de-identified queries, within its original budget. "
-            "The worker searches only public sources and never writes CRM records."
+            "A VIN job may include only its exact original VIN and inherits its recipients, expiry and cumulative "
+            "budget; adding queries invalidates finalized analysis. The worker never writes CRM records."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
@@ -1432,7 +1507,7 @@ def register_manager_tools(  # noqa: C901
     register_automotive_tools(server)
     if include_tools is not None:
         server.tool = original_tool
-    _preserve_listing_scalar_inputs(server)
+    _preserve_original_json_inputs(server)
     instrument_manager_tools(server)
 
 

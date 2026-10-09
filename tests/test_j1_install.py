@@ -29,7 +29,12 @@ def test_j1_worker_unit_shares_mcp_cache_owner_and_is_cache_scoped() -> None:
     assert "TasksMax=32" in unit
     assert "Environment=AUTOSTOP_J1_SEARXNG_URL=http://127.0.0.1:8890" in unit
     assert "ExecStart=/usr/bin/python3 -m autostop_manager.j1_research worker" in unit
-    assert "EnvironmentFile=" not in unit
+    assert "EnvironmentFile=-/etc/autostop-j1-vin.env" in unit
+    assert "Environment=AUTOSTOP_J1_VIN_RESEARCH_ENABLED=0" in unit
+    assert "RuntimeDirectoryMode=0700" in unit
+    assert "RuntimeDirectoryPreserve=yes" in unit
+    assert " /run/autostop-j1-vin" in unit
+    assert "EnvironmentFile=/opt/AutostopManager/.env" not in unit
     assert "ReadWritePaths=/opt/AutostopManager" not in unit
 
 

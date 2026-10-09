@@ -24,6 +24,24 @@ BROWSER_CHECK_TIMEOUT_SECONDS = 90.0
 # only reads or previews. Check the serialized live annotations as well as the
 # input schemas so an older deployment cannot silently advertise them as reads.
 EFFECTFUL_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
+    "j1_research_document": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "j1_research_vin": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+    "j1_research_record_facts": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
     "j1_research_start": {
         "readOnlyHint": False,
         "destructiveHint": False,

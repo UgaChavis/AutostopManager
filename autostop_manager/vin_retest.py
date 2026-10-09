@@ -50,11 +50,12 @@ def checked_metrics(value: Any) -> dict[str, Any]:
             valid = isinstance(item, str) and len(item) <= 40
             if valid:
                 try:
-                    valid = datetime.fromisoformat(item.replace("Z", "+00:00")).tzinfo is not None
+                    valid = datetime.fromisoformat(cast(str, item).replace("Z", "+00:00")).tzinfo is not None
                 except ValueError:
                     valid = False
         else:
-            valid = type(item) in {int, float} and math.isfinite(item) and item >= 0
+            number = cast(int | float, item)
+            valid = type(item) in {int, float} and math.isfinite(number) and number >= 0
         if valid:
             metrics[key] = item
     return metrics
