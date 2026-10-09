@@ -60,12 +60,49 @@ cleanup удерживает слот после timeout; `provider_transport_bu
 
 | Команда | Назначение и эффект |
 | --- | --- |
+| `vehicle-tool`, `e4` | Один выбранный независимый VIN/frame/WMI инструмент; JSON аргументы через stdin, до 5 MiB. `e4` — исторический CLI alias, не текущий модуль каталогов E4. Использует действующие сигнатуры automotive tools, без повторной регистрации MCP, собственного runtime или неявного fallback. |
 | `knowledge-sync`, `knowledge-audit` | Read-only аудит документов; название sync не означает запись. `--project-only` проверяет проект без наличия локально установленных файлов Codex. Требуются `ok=true`, отсутствие warnings. |
 | `doctor` | Локальная диагностика; `--project-only` проверяет проект без внешних файлов Codex, `--integrations` читает live dependencies. `--full` создаёт тестовый workflow и требует одноразовых CRM/Store, не рабочую среду. |
 | `store-conductor-release-gate` | Read-only проверка постоянного Store conductor state; disposable DB не заменяет этот gate перед выпуском. |
 | `store-checkpoint-status` | Read-only checkpoint: `--stream store_digest|store_bootstrap`. |
 | `store-checkpoint-reset` | Запись: `--stream`, `--expected-state-version`, `--confirm-rebaseline`, `--reason cursor_generation_mismatch|cursor_ahead_after_store_restore|operator_verified_rebaseline`. Сначала сверка Store/state, потом независимый status. |
 | `mcp-probe` | Handshake, manifest, annotations и bounded проверки. `--url`, `--timeout` (0..90], `--provider-failure-check`, `--store-check`, `--browser-check`; браузер читает example.com без сохранения текста в отчёт. |
+
+### Независимые VIN-команды
+
+`python -m autostop_manager.cli vehicle-tool TOOL` читает один JSON object из stdin;
+допустим `--input -`. Файл, пакетный shell dispatch и произвольное имя Python-функции
+не принимаются. Имена и аргументы соответствуют текущим independent automotive
+functions: `inspect_vehicle_identifier`, `decode_vin_vpic`, `decode_wmi_vpic`,
+`decode_wmi_local`, `vininfo_decode`, `corgi_decode`, `vin_brand_details`,
+`decode_frame_local`, `reconcile_vehicle_identity`, `decode_vehicle_batch`.
+Контракты входов — [E2](../modules/E2.md) и текущие operation cards.
+
+Запрос ограничен 5 MiB UTF-8 и глубиной JSON 64; лишние/пропущенные параметры, неверные типы,
+duplicate keys и nonfinite JSON отклоняются до вызова backend. CLI не приводит
+числовые строки или bool к числам. Ответ сохраняет действующий automotive result;
+ошибки CLI содержат безопасный код без исходных аргументов и текста исключения.
+Exit code: 0 при `ok=true`, иначе 1. `--help` не импортирует MCP, Store или декодеры.
+Только явно выбранные online tools читают свой источник; локальный вызов и
+reconciliation не добавляют сеть, базу Manager, установку пакетов или fallback.
+
+Для подготовки VINinfo/Corgi сначала читай
+`scripts/prepare-automotive-offline.py --help`: новый `--output PATH`, pinned
+артефакты и отдельное поручение на подготовку. Проверка —
+`scripts/check-automotive-offline.py --runtime EXACT_PATH`.
+CLI не создаёт старый E4 cache и не предоставляет `e4-decoders prepare/status`;
+`AUTOSTOP_AUTOMOTIVE_OFFLINE_RUNTIME` выбирает уже подготовленный attested runtime.
+
+### Замещение исторического PR67
+
+| Возможность PR67 | Действующий путь выпуска |
+| --- | --- |
+| Десять отдельных VIN-инструментов и MCP registration | Текущие `automotive_identity`/`automotive_offline`; одна регистрация в `automotive_mcp`, современные схемы сохранены. |
+| JSON stdin CLI `e4 TOOL` | `vehicle-tool TOOL` и исторический alias `e4`, с современными аргументами; alias не меняет назначение модуля E4 «Каталоги». |
+| Observation v1 и `identity_observations` | Действующие связанные automotive results, `reconcile_vehicle_identity` и готовый `vehicle_identity`; повторный decode не нужен. |
+| Optional E4 cache, package installation и подготовка | Отдельные pinned prepare/check scripts, manifest, workers и attested offline runtime; второго decoder runtime нет. |
+| Старые E4-инструкции, MCP count и CI optional setup | Актуальные E2/E4, manifest и release gates; устаревшие схемы и регистрация не возвращаются. |
+| Старые partial-VIN/batch параметры и inspection diagnostics | Сохранены текущие native сигнатуры и диагностика составного `decode_vehicle_identity`; CLI не расширяет источник или текущий batch контракт. |
 
 ## Эффекты инструментов
 
