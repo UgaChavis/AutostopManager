@@ -13,7 +13,7 @@ import re
 import threading
 from collections.abc import Callable, Mapping
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from mcp import ClientSession
@@ -75,7 +75,7 @@ def _capability_failure(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     code = error.get("code") if isinstance(error, Mapping) else None
     valid = isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code)
     result = _failure(
-        code if valid else "crm_mcp_capability_failed",
+        cast(str, code) if valid else "crm_mcp_capability_failed",
         retryable=bool(error.get("retryable", True)) if isinstance(error, Mapping) else True,
     )
     result["cause_unknown"] = (

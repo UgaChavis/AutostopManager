@@ -171,16 +171,23 @@ def test_native_e10_schema_bounds_and_read_only_annotations_are_preserved(native
     assert tools["assess_avito_price_sample"].annotations.openWorldHint is False
 
 
-def test_scalar_preparser_is_scoped_to_two_e10_tools_and_preserves_other_tools(native_server):
+def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_tools(native_server):
     server = build_server()
     tools = server._tool_manager._tools
-    assert len(tools) == 67
+    protected = {
+        "avito_search_listings",
+        "avito_read_listing",
+        "j1_research_vin",
+        "j1_research_record_facts",
+        "j1_research_document",
+    }
     for name, tool in tools.items():
-        if name in {"avito_search_listings", "avito_read_listing"}:
-            assert isinstance(tool.fn_metadata, mcp_tools._ListingScalarMetadata)
+        if name in protected:
+            assert isinstance(tool.fn_metadata, mcp_tools._OriginalJsonMetadata)
             assert tool.fn_metadata.pre_parse_json({"price_min": "null"}) == {"price_min": "null"}
         else:
             assert type(tool.fn_metadata) is FuncMetadata
+    assert protected <= tools.keys()
     assessment = tools["assess_avito_price_sample"]
     assert assessment.fn_metadata.pre_parse_json({"listings": "[]"}) == {"listings": []}
 
@@ -220,7 +227,9 @@ def test_native_async_control_finishes_while_the_provider_worker_is_held(native_
         assert len(worker_threads) == 1
         assert worker_threads[0] != threading.get_ident()
         release.set()
-        assert (await task).structuredContent == {"ok": True}
+        provider_result = (await task).structuredContent
+        assert provider_result["tool_execution"]["tool"] == name
+        assert {key: value for key, value in provider_result.items() if key != "tool_execution"} == {"ok": True}
 
     try:
         asyncio.run(run())

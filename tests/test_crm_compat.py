@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import inspect
+import json
 
 from mcp.server.fastmcp import FastMCP
 import pytest
 
 from autostop_manager.mcp_tools import register_manager_memory_tools
+from autostop_manager.mcp_contract import MANAGER_MCP_CATALOG_PATH
 from autostop_manager.storage import StoreState
 
 # Matches minimal_kanban.mcp.agent_gateway_support.MANAGER_GATEWAY_DEPENDENCY_NAMES.
@@ -53,7 +55,8 @@ def test_crm_import_signature_and_selective_registration(crm, tmp_path):
     assert not (tmp_path / "crm.sqlite3").exists()
     plain = FastMCP("native-compatible")
     register_manager_memory_tools(plain, store=StoreState(tmp_path / "plain.sqlite3"))
-    assert len(plain._tool_manager._tools) == 67
+    manifest = json.loads(MANAGER_MCP_CATALOG_PATH.read_text())
+    assert set(plain._tool_manager._tools) == set(manifest["expected_tool_names"])
     assert "agent_bootstrap" not in plain._tool_manager._tools
     limited = FastMCP("limited")
     register_manager_memory_tools(limited, include_tools={"workflow_status"})

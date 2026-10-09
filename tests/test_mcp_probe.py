@@ -21,10 +21,12 @@ from autostop_manager.catalog_adapters import CATALOG_STAGES, catalog_provider_s
 import autostop_manager.web_research_gateway as web_gateway
 import autostop_manager.store_api as store_api
 from autostop_manager.mcp_probe import (
+    EFFECTFUL_TOOL_ANNOTATIONS,
     SYNTHETIC_IDENTIFIER,
     async_probe_manager_mcp,
     classify_transport_exception,
 )
+from autostop_manager.mcp_contract import MANAGER_MCP_CATALOG_PATH
 from autostop_manager.mcp_server import build_server
 
 
@@ -88,7 +90,11 @@ def test_catalog_provider_status_native_transport_preserves_both_json_channels_c
     assert len(result.content) == 1
     text = result.content[0].text
     parsed = json.loads(text)
-    assert parsed == result.structuredContent == json.loads(json.dumps(original, ensure_ascii=False))
+    assert parsed == result.structuredContent
+    assert parsed["tool_execution"]["tool"] == "catalog_provider_status"
+    assert {key: value for key, value in parsed.items() if key != "tool_execution"} == json.loads(
+        json.dumps(original, ensure_ascii=False)
+    )
     assert text == json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
     assert len(text.encode()) < len(json.dumps(parsed, ensure_ascii=False, indent=2).encode())
 
@@ -268,8 +274,9 @@ def test_native_manager_mcp_transport_probe_uses_only_synthetic_redacted_data(
         }
     assert report["checks"]["native_ping"]["ok"] is True
     assert report["checks"]["tools_list"]["ok"] is True
-    assert report["checks"]["tools_list"]["tool_count"] == 67
-    assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 5
+    manifest = json.loads(MANAGER_MCP_CATALOG_PATH.read_text(encoding="utf-8"))
+    assert report["checks"]["tools_list"]["tool_count"] == manifest["expected_tool_count"]
+    assert report["checks"]["tools_list"]["effectful_annotations_checked"] == len(EFFECTFUL_TOOL_ANNOTATIONS)
     assert report["checks"]["tools_list"]["annotation_mismatch_tools"] == []
     assert report["checks"]["catalog_provider_status"]["ok"] is True
     assert report["checks"]["catalog_provider_status"]["stage"] == "catalog_cross"

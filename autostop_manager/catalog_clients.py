@@ -2403,7 +2403,7 @@ def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[st
     if isinstance(results, list) and results:
         variables = [row for row in results if isinstance(row, dict) and "Variable" in row and "Value" in row]
         if len(variables) == len(results):
-            record = {}
+            record: dict[str, Any] = {}
             for row in variables:
                 key = str(row["Variable"]).replace(" ", "")
                 if key in record and record[key] != row["Value"]:

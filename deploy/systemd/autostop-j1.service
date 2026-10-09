@@ -15,6 +15,12 @@ Environment=PYTHONSAFEPATH=1
 Environment=PYTHONPATH=/opt/autostop-manager-releases/current
 Environment=AUTOSTOP_J1_CACHE_DIR=/var/cache/autostop-j1
 Environment=AUTOSTOP_J1_SEARXNG_URL=http://127.0.0.1:8890
+Environment=AUTOSTOP_J1_VIN_RESEARCH_ENABLED=0
+Environment=AUTOSTOP_J1_VIN_CACHE_DIR=/run/autostop-j1-vin
+EnvironmentFile=-/etc/autostop-j1-vin.env
+RuntimeDirectory=autostop-j1-vin
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 CacheDirectory=autostop-j1
 CacheDirectoryMode=0700
 UMask=0077
@@ -42,7 +48,7 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/cache/autostop-j1
+ReadWritePaths=/var/cache/autostop-j1 /run/autostop-j1-vin
 MemoryMax=384M
 TasksMax=32
 LimitNOFILE=512

@@ -719,7 +719,20 @@ def _provider_coverage(conn: sqlite3.Connection, job_id: str) -> list[dict[str, 
     ]
 
 
+def _vin_api(job_id: str) -> Any:
+    from .j1_vin_store import is_vin_job
+
+    if is_vin_job(job_id):
+        from . import j1_vin_research
+
+        return j1_vin_research
+    return None
+
+
 def research_status(job_id: str) -> dict[str, Any]:
+    vin = _vin_api(job_id)
+    if vin is not None:
+        return vin.research_status(job_id)
     if not _valid_id(job_id):
         return _error("job_id_invalid")
     try:
@@ -865,6 +878,9 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int = 20) -> dict[str, Any]:
+    vin = _vin_api(job_id)
+    if vin is not None:
+        return vin.research_results(job_id, query, cursor, limit)
     if not _valid_id(job_id):
         return _error("job_id_invalid")
     if type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 50:
@@ -917,7 +933,19 @@ def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int =
         return _error("j1_store_unavailable", job_id=job_id)
 
 
-def research_document(job_id: str, document_id: str, offset: int = 0, max_chars: int = 8000) -> dict[str, Any]:
+def research_document(
+    job_id: str,
+    document_id: str,
+    offset: int = 0,
+    max_chars: int = 8000,
+    page: int | None = None,
+    ocr: bool = False,
+) -> dict[str, Any]:
+    vin = _vin_api(job_id)
+    if vin is not None:
+        return vin.research_document(job_id, document_id, offset, max_chars, page, ocr)
+    if page is not None or ocr is not False:
+        return _error("vin_page_mode_required", job_id=job_id)
     if not _valid_id(job_id) or not _valid_id(document_id):
         return _error("identifier_invalid")
     if type(offset) is not int or offset < 0 or type(max_chars) is not int or not 1 <= max_chars <= 8000:
@@ -1203,6 +1231,9 @@ def _report_limitations(
 
 def research_report(job_id: str) -> dict[str, Any]:
     """Build a read-only evidence ledger from a retained J1 research job."""
+    vin = _vin_api(job_id)
+    if vin is not None:
+        return vin.research_report(job_id)
 
     if not _valid_id(job_id):
         return _report_error("job_id_invalid")
@@ -1320,6 +1351,9 @@ def research_report(job_id: str) -> dict[str, Any]:
 
 
 def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
+    vin = _vin_api(job_id)
+    if vin is not None:
+        return vin.research_add_queries(job_id, queries)
     if not _valid_id(job_id):
         return _error("job_id_invalid")
     clean_queries = _validated_queries(queries)
@@ -1366,6 +1400,9 @@ def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
 
 
 def research_cancel(job_id: str) -> dict[str, Any]:
+    vin = _vin_api(job_id)
+    if vin is not None:
+        return vin.research_cancel(job_id)
     if not _valid_id(job_id):
         return _error("job_id_invalid")
     try:
@@ -1459,8 +1496,16 @@ def _discovery_metadata(row: dict[str, Any], url: str, canonical_url: str) -> tu
 
 def _work_job(job_id: str) -> None:
     """Do one bounded unit at a time so cancellation is observed promptly."""
+    if _vin_api(job_id) is not None:
+        from .j1_vin_worker import run_job
+
+        run_job(job_id)
+        return
 
     while not _STOP:
+        from .j1_vin_store import prune as prune_vin
+
+        prune_vin()
         with _db() as conn:
             job = conn.execute("SELECT status,max_pages FROM jobs WHERE id=?", (job_id,)).fetchone()
             if job is None or job["status"] != "running":
@@ -1685,7 +1730,13 @@ def _run_locked_worker(*, once: bool) -> None:
         conn.execute("UPDATE documents SET status='pending' WHERE status='running'")
         conn.commit()
     last_prune = 0.0
+    last_vin_prune = -60.0
     while not _STOP:
+        if time.monotonic() - last_vin_prune >= 60:
+            from .j1_vin_store import prune as prune_vin
+
+            prune_vin()
+            last_vin_prune = time.monotonic()
         with _db() as conn:
             if time.monotonic() - last_prune > 3600:
                 _prune(conn)
@@ -1738,10 +1789,17 @@ def probe() -> dict[str, Any]:
             "schema": SCHEMA,
             "cache_ready": True,
             "search_configured": bool(searxng),
+            "vin_research": _vin_runtime_status(),
             **browser,
         }
     except (OSError, sqlite3.Error):
         return _error("j1_store_unavailable")
+
+
+def _vin_runtime_status() -> dict[str, Any]:
+    from .j1_vin_store import runtime_status
+
+    return runtime_status()
 
 
 def main() -> None:

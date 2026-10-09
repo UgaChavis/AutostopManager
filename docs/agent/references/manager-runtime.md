@@ -6,7 +6,7 @@
 
 Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateless Streamable HTTP. `build_server()` регистрирует инструменты и до открытия порта проверяет имена/fingerprint. CRM Gateway — отдельный MCP; его инструменты не входят в Manager manifest. Актуальная input schema берётся из всех страниц живого `tools/list`, а source fingerprint — из manifest; при изменении сигнатуры обновляй оба вместе с кодом.
 
-Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `j1_research_start`, `j1_research_add_queries`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
+Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `j1_research_start`, `j1_research_document`, `j1_research_vin`, `j1_research_record_facts`, `j1_research_add_queries`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
 
 Перед live-операцией разреши `readlink -f /opt/autostop-manager-releases/current`, прочитай `REVISION` и используй документы/manifest этого физического snapshot. Для разработки зафиксируй путь checkout/worktree, `git rev-parse HEAD` и `git status --short`; source-команды используют его собственную `.venv/bin/python`. При смешанной задаче укажи оба корня и ревизии; выбирать инструкции можно абсолютными путями без смены cwd и runtime-копий. Для imports production probe запускается из `/tmp` с `PYTHONSAFEPATH=1` и `PYTHONPATH`, равным выбранному физическому snapshot: cwd не должен подменять installed imports. Сверяй фактический manifest, не историческое число tools.
 
@@ -17,6 +17,30 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 Каждый выполненный Manager MCP tool, включая отдельные E15 search/excerpt/browser calls, получает `tool_execution`: случайный технический `call_id`, `started_at`, `ended_at`, `wall_ms`, отдельные backend/processing elapsed и известные network/attempt counts. Неизвестные backend значения — `null`, существующий `execution` сохраняется; технический outcome ограничен `ok/error/unknown`, доменный outcome остаётся в исходном ответе. Безопасные `mcp_tool_start`/`mcp_tool_end` JSON events пишутся только в stderr/journal, без аргументов, URL, клиентских идентификаторов, хешей, provider payload и текста исключений. Это время внутри инструмента; полный ход Codex измеряется по внешним `task_started` → `task_complete` (или явно указанным user-message → final границам), включая чтение инструкций и финальный ответ.
 
 ## Ограничения выполнения
+
+Самостоятельный [VIN-режим J1](j1-vin-research.md) использует существующий worker и отдельное
+приватное tmpfs-хранилище; сбор не блокирует MCP до завершения исследования.
+`j1_research_vin`/`j1_research_record_facts` всегда зарегистрированы, оба effectful и idempotent;
+только старт имеет `openWorldHint=true`. Общий J1/E15 VIN не принимает.
+`j1_research_document` добавляет `page`/`ocr`; у обычной job прежние defaults сохраняются,
+а активные page/OCR отклоняются. OCR ставится в worker-очередь и меняет временные revision/draft,
+поэтому document имеет readOnly=false/idempotent=true/openWorld=false; новая сеть не нужна.
+Источник данных не может менять job scope или получателей.
+
+Флаг `AUTOSTOP_J1_VIN_RESEARCH_ENABLED=0` — значение по умолчанию. При отдельно порученной активации
+Manager MCP и J1 worker читают один приватный `/etc/autostop-j1-vin.env`.
+Оба используют root-owned `0700` RuntimeDirectory `/run/autostop-j1-vin`, preserve=yes и shared
+ReadWritePaths. Runtime требует tmpfs и лимит 128 MiB; постоянная J1 DB содержит только обезличенный stub.
+Restart worker сохраняет срок, host reboot возвращает `vin_ephemeral_state_lost` и не восстанавливает VIN.
+`j1_vin_store.runtime_status()` — content-free локальная проверка enabled/готовности/сроков,
+без старта поискового задания; общий J1 probe включает эту проверку.
+Существование каталога, feature flag и зелёный source test не заменяют runtime-проверку.
+
+Приёмка нового маршрута: отдельные состояния сбор/анализ, чтение цитируемой страницы,
+запись claims с server-derived match evidence, отсутствие decoder API, финализация общей ревизии,
+честные family/unknown/conflicts и expiry приватных данных. Для проверки источников нужен
+отдельно разрешённый bounded случай; обязательные CI-тесты используют синтетические fixtures.
+Изменение units/installers в Git не устанавливает службы. Граница PR/CI и выпуска — [deployment](deployment.md).
 
 Выбранные блокирующие read-команды из [BLOCKING_READ_TOOLS](../../../autostop_manager/mcp_read_executor.py)
 исполняются вне event loop: общий пул
@@ -73,6 +97,7 @@ cleanup удерживает слот после timeout; `provider_transport_bu
 | `scripts/check-automotive-offline.py` | `--runtime EXACT_PATH`: реальные public/synthetic positive/negative offline probes; данные клиентов не читает. |
 | `scripts/automotive-vininfo-worker.py` | Внутренний bounded Python worker; public decoder читает VIN по stdin и attested package path; сеть запрещена. |
 | `scripts/automotive-corgi-worker.mjs` | Внутренний Node worker; stdin и readonly pinned SQLite; сеть/download/fallback отсутствуют. |
+| `scripts/vin-retest.py` | Только отдельно порученный live read-only benchmark: VIN из stdin, `--output-dir PRIVATE_PATH`, `--timeout SECONDS`, необязательный `--full-control`; сохраняет обезличенный receipt. Не является частью самостоятельного J1 VIN-исследования. |
 | `scripts/install-manager-mcp.sh` | Runtime installer: `--activate [--replace-unit]`. |
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate|--activate-under-hold`, `--replace-unit`, `--release-attempt-key`. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |

@@ -6,6 +6,28 @@
 
 В отдельном worktree запускай `./scripts/release-gates.sh` с одноразовыми данными; минимальная coverage — 82%. Влей актуальный `origin/AutostopManager` в feature branch без переписывания истории, повтори gates, опубликуй и merge зелёного PR. Подтверди точный remote SHA через `git ls-remote`. CRM сохраняет свой Python registrar и guarded ledger; они не входят в native Manager MCP.
 
+Если поручение ограничено готовым PR и зелёным CI, остановись на этой границе: merge,
+установка/включение J1 VIN и серверный выпуск требуют отдельного объёма поручения.
+Исходники новой функции, units/installers и обновлённые инструкции не доказывают работающий runtime.
+
+## Отдельная активация VIN-исследования J1
+
+Самостоятельный [VIN-режим](j1-vin-research.md) по умолчанию выключен,
+но два новых инструмента включены в source manifest и регистрируются при любом значении флага.
+При разрешённом будущем выпуске сохранить прежний SHA и конфигурацию; общий приватный
+`/etc/autostop-j1-vin.env` должен задавать одинаковый флаг Manager MCP и J1 worker.
+До включения проверить root-owned `0700` tmpfs `/run/autostop-j1-vin`, 128 MiB budget,
+согласованные RuntimeDirectory/Preserve/ReadWritePaths и локальный VIN runtime status.
+Worker restart не должен удалять действующую job; после host reboot ожидается
+`vin_ephemeral_state_lost`, без восстановления полного VIN из постоянного stub.
+
+После штатной активации сверить installed SHA, все страницы `tools/list`, schemas/annotations,
+состояния сбора/анализа и полный отдельно порученный цикл до финализации/expiry.
+VIN-bearing browser URLs остаются запрещены; прежняя browser-аттестация нужна лишь для
+обезличенных страниц. При отказе выключить способность и остановить дальнейшую сеть VIN-jobs
+в рамках разрешённого rollback; возвращать код без проверки runtime недостаточно.
+Эта инструкция сама не поручает активацию, merge или изменение CRM/Store/VPN.
+
 ## Согласованный серверный выпуск
 
 1. Выполни `.venv/bin/python -m autostop_manager.cli store-conductor-release-gate` на постоянном Store-состоянии; разберись с заблокированными legacy runs. Запусти `scripts/remove-learning-hooks.py` в dry-run; `--apply` используй только для требуемой legacy migration, сохраняя backup.

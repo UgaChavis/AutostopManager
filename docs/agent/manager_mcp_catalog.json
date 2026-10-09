@@ -1,7 +1,7 @@
 {
   "format": "mcp_surface_manifest_v1",
   "source": "Native AutoStopManager MCP source registration; CRM Gateway is a separate CRM-only surface and must not advertise this registry; fingerprint=sha256(canonical sorted [{name,inputSchema}]); not deployed",
-  "expected_tool_count": 67,
+  "expected_tool_count": 69,
   "expected_tool_names": [
     "assess_avito_price_sample",
     "assess_part_fitment",
@@ -36,10 +36,12 @@
     "j1_research_add_queries",
     "j1_research_cancel",
     "j1_research_document",
+    "j1_research_record_facts",
     "j1_research_report",
     "j1_research_results",
     "j1_research_start",
     "j1_research_status",
+    "j1_research_vin",
     "lookup_original_parts",
     "lookup_public_automotive_evidence",
     "manager_automation_control",
@@ -71,6 +73,6 @@
     "vin_brand_details",
     "vininfo_decode"
   ],
-  "schema_fingerprint": "54ab1fc4657c23c493e6d0b4143edcf47c5e1760085e564a36ba5b745b608945",
-  "verified_at": "2026-10-07"
+  "schema_fingerprint": "a98736cd332914aac03e28f32502e33fefc63e23f547671f57623a3935ed6f0c",
+  "verified_at": "2026-10-09"
 }

@@ -229,7 +229,14 @@ def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
         "automotive_context": None,
         "profile": "general",
     }
-    assert calls[3][1] == {"job_id": "job-1", "document_id": "doc-1", "offset": 100, "max_chars": 500}
+    assert calls[3][1] == {
+        "job_id": "job-1",
+        "document_id": "doc-1",
+        "offset": 100,
+        "max_chars": 500,
+        "page": None,
+        "ocr": False,
+    }
     assert calls[4][1] == {"job_id": "job-1"}
 
 
@@ -407,6 +414,9 @@ def test_effectful_manager_tools_advertise_their_actual_effects(tmp_path):
 
     expected = {
         "j1_research_start": (False, False, True),
+        "j1_research_document": (False, True, False),
+        "j1_research_vin": (False, True, True),
+        "j1_research_record_facts": (False, True, False),
         "j1_research_add_queries": (False, False, True),
         "store_digest": (False, False, False),
         "store_management_action": (True, True, False),
@@ -781,14 +791,16 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
     assert control_annotations.destructiveHint is True
 
     status = server.tools["manager_automations"](operation="status", job_id="job-1", include_archived=True)
-    assert status == {
+    assert status["tool_execution"]["tool"] == "manager_automations"
+    assert {key: value for key, value in status.items() if key != "tool_execution"} == {
         "ok": True,
         "operation": "status",
         "payload": {"job_id": "job-1", "include_archived": True},
     }
     templates = server.tools["manager_automations"](operation="templates")
     assert templates["payload"] == {}
-    assert server.tools["manager_automations"](operation="readiness") == {
+    readiness = server.tools["manager_automations"](operation="readiness")
+    assert {key: value for key, value in readiness.items() if key != "tool_execution"} == {
         "ok": False,
         "error": "automation_control_unavailable",
     }
@@ -805,7 +817,7 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
         idempotency_key="archive-job-0001",
         expected_revision=7,
     )
-    assert conflict == {
+    assert {key: value for key, value in conflict.items() if key != "tool_execution"} == {
         "ok": False,
         "error": "automation_revision_conflict",
         "job_id": "job-1",
@@ -813,7 +825,8 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
         "expected_revision": 7,
         "current_revision": 8,
     }
-    assert server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"}) == {
+    run_now = server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"})
+    assert {key: value for key, value in run_now.items() if key != "tool_execution"} == {
         "ok": False,
         "error": "automation_control_failed",
     }

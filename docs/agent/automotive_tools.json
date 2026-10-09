@@ -3655,6 +3655,106 @@
       }
     },
     {
+      "primary_module": "E15",
+      "also_used_in": [],
+      "classification": "active",
+      "provider_id": "public_web",
+      "primary_data_source": "primary URL lineage must be preserved",
+      "execution_kind": "job_write",
+      "implementation_state": "implemented",
+      "reference": "docs/agent/references/j1-vin-research.md",
+      "tool_id": "manager.j1_research_vin",
+      "title": "Самостоятельное VIN-исследование J1",
+      "purpose": "Исследование одного VIN без предварительного декодера",
+      "instruction_ref": "docs/agent/tools/manager-j1-research-vin.md",
+      "input_fields": [
+        "vin",
+        "idempotency_key"
+      ],
+      "defaults": {},
+      "outputs": [
+        "schema=autostop.j1.vin_research.v1: job_id, collection_status, analysis_status, revision, expiry and cumulative budget."
+      ],
+      "errors": [
+        "ok=false/error.code: vin_research_disabled, invalid VIN/key, scope/runtime/budget/job errors; no network on rejected input."
+      ],
+      "limitations": [
+        "Always registered but disabled by default; enabling requires an explicitly authorized runtime change.",
+        "One exact VIN/job/recipient/TTL scope. No E2/E4 prerequisite, automatic decoder fallback, decoder API, CRM/Store or external LLM.",
+        "Collection is not analysis; the current agent reads documents and records cited claims before finalize.",
+        "12 queries/60 documents/6 de-identified browser pages/12 OCR pages/300 active worker seconds/24h TTL; private state only in checked tmpfs.",
+        "VIN PDF limit: 24 MiB only for explicit server-registry A/B sources; otherwise 8 млн байт. Extracted text is limited to 2 MiB and 1000 pages."
+      ],
+      "example": {
+        "vin": "1HGCM82673A000000",
+        "idempotency_key": "START_DEMO_0001"
+      },
+      "invalid_example": {
+        "vin": null,
+        "idempotency_key": "START_DEMO_0001"
+      },
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "j1_research_vin"
+      }
+    },
+    {
+      "primary_module": "E15",
+      "also_used_in": [],
+      "classification": "active",
+      "provider_id": "public_web",
+      "primary_data_source": "primary URL lineage must be preserved",
+      "execution_kind": "job_write",
+      "implementation_state": "implemented",
+      "reference": "docs/agent/references/j1-vin-research.md",
+      "tool_id": "manager.j1_research_record_facts",
+      "title": "Основания VIN-исследования J1",
+      "purpose": "Запись цитируемых утверждений и атомарная финализация анализа",
+      "instruction_ref": "docs/agent/tools/manager-j1-research-record-facts.md",
+      "input_fields": [
+        "job_id",
+        "expected_revision",
+        "facts",
+        "idempotency_key",
+        "finalize"
+      ],
+      "defaults": {
+        "finalize": false
+      },
+      "outputs": [
+        "schema=autostop.j1.vin_research.v1: accepted claims, common revision and analysis_status; conflicts/unknowns retained.",
+        "VIN-bearing source_url is masked in returned claims; the raw original stays in private tmpfs for worker provenance."
+      ],
+      "errors": [
+        "ok=false/error.code: vin_research_disabled, evidence/quote/revision/basis/match validation, collection not stopped, idempotency/scope/expiry failures."
+      ],
+      "limitations": [
+        "Always registered; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0 and rejects this write with vin_research_disabled before recording facts or finalizing analysis. Independent expiry cleanup still applies.",
+        "Effectful temporary-state write, idempotent, no network and no business writes.",
+        "Each claim cites a same-job document revision and exact quote; inference requires basis_claim_ids.",
+        "vin_specific requires server-derived match_evidence_id before redaction. VIN binding is not semantic or factory truth.",
+        "finalize=true requires the collection to have actually stopped and seals the common evidence revision. New documents, claims or OCR invalidate finality.",
+        "support=corroborated requires current basis_claim_ids with matching field/value/unit/relationship and at least two distinct content clusters across the new claim and its matching bases; duplicate_of copies count once. Otherwise fact_corroboration_basis_required; this check does not certify semantic truth or independent data origin."
+      ],
+      "example": {
+        "job_id": "00000000000000000000000000000000",
+        "expected_revision": 0,
+        "facts": [],
+        "idempotency_key": "FACTS_DEMO_0001",
+        "finalize": true
+      },
+      "invalid_example": {
+        "job_id": "00000000000000000000000000000000",
+        "expected_revision": -1,
+        "facts": [],
+        "idempotency_key": "FACTS_DEMO_0001"
+      },
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "j1_research_record_facts"
+      }
+    },
+    {
       "tool_id": "manager.j1_research_status",
       "primary_module": "E15",
       "also_used_in": [],
@@ -3672,15 +3772,18 @@
       "defaults": {},
       "outputs": [
         "Legacy flat schema=autostop.j1.research.v1: ok/job_id/status/objective/created_at/updated_at/max_pages/profile/automotive_context/query_plan.",
-        "pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error."
+        "pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error.",
+        "VIN jobs: schema=autostop.j1.vin_research.v1; collection_status/analysis_status/revision/expiry, budget and counts. Collection completion is separate from finalized analysis."
       ],
       "errors": [
-        "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable; worker errors remain in job status/error."
+        "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable; worker errors remain in job status/error.",
+        "VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network."
       ],
       "limitations": [
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
-        "Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.",
-        "Reads local job state; this operation itself does not search or fetch pages."
+        "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
+        "Reads local job state; this operation itself does not search or fetch pages.",
+        "VIN state exists only in private checked tmpfs; missing state after host reboot is vin_ephemeral_state_lost, never reconstructed from the general stub."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000"
@@ -3718,15 +3821,18 @@
         "limit": 20
       },
       "outputs": [
-        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/query/total/cursor/next_cursor/results[]."
+        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/query/total/cursor/next_cursor/results[].",
+        "VIN jobs: schema=autostop.j1.vin_research.v1; bounded local corpus search results and cursor; quotes/URLs are redacted while document lineage and revision remain available."
       ],
       "errors": [
-        "ok=false/error.code: job_id_invalid/pagination_invalid/query_invalid_or_sensitive/job_not_found/j1_store_unavailable."
+        "ok=false/error.code: job_id_invalid/pagination_invalid/query_invalid_or_sensitive/job_not_found/j1_store_unavailable.",
+        "VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network."
       ],
       "limitations": [
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
-        "Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.",
-        "Reads/searches the saved local job corpus; cursor pagination does not acquire new public pages."
+        "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
+        "Reads/searches the saved local job corpus; cursor pagination does not acquire new public pages.",
+        "Local search does not authorize another network query; use add_queries on the same VIN job and its unchanged budget."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -3750,30 +3856,38 @@
       "purpose": "Документ собственного J1 job",
       "provider_id": "public_web",
       "primary_data_source": "primary URL lineage must be preserved",
-      "execution_kind": "job_read",
+      "execution_kind": "job_write",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-j1-research-document.md",
       "input_fields": [
         "job_id",
         "document_id",
         "offset",
-        "max_chars"
+        "max_chars",
+        "page",
+        "ocr"
       ],
       "defaults": {
         "offset": 0,
-        "max_chars": 8000
+        "max_chars": 8000,
+        "page": null,
+        "ocr": false
       },
       "outputs": [
         "Legacy flat schema=autostop.j1.research.v1: ok/job_id/document_id/url/canonical_url/title/kind/source/source_class/source_basis/source_tier.",
-        "search_snippet/search_rank/search_engines/language/extraction_method/duplicate_of/duplicate/discovered_at/retrieved_at/text/offset/total_chars/next_offset."
+        "search_snippet/search_rank/search_engines/language/extraction_method/duplicate_of/duplicate/discovered_at/retrieved_at/text/offset/total_chars/next_offset.",
+        "VIN jobs expose versioned document/page text, server-derived match_evidence_id and bounded OCR queue state."
       ],
       "errors": [
-        "ok=false/error.code: identifier_invalid/pagination_invalid/document_not_found/j1_store_unavailable."
+        "ok=false/error.code: identifier_invalid/pagination_invalid/document_not_found/j1_store_unavailable.",
+        "VIN page/OCR: unsupported for general jobs; scope, expiry, page and cached-document failures remain explicit."
       ],
       "limitations": [
-        "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
-        "Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.",
-        "Reads a bounded saved document excerpt with primary URL, extraction method and retrieval time; no live page fetch."
+        "job_id/document_id refer to one returned J1 job; synthetic examples demonstrate shape only.",
+        "General J1 remains de-identified; the separate VIN job permits only its original scoped VIN. Source URL lineage stays attached.",
+        "Default document reads saved text; page/ocr options are VIN-only. OCR queues a deduplicated selected cached PDF page without network and changes document/analysis revision.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=true, openWorldHint=false. No factory truth follows from a literal VIN match.",
+        "VIN PDFs: explicit registry A/B sources up to 24 MiB, others up to 8 млн байт. Returned VIN-bearing source URLs are masked; raw originals stay only in private tmpfs for provenance."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -3808,15 +3922,18 @@
       "defaults": {},
       "outputs": [
         "Legacy flat schema=autostop.j1.report.v1: ok/job_id/status/profile/automotive_context/report.",
-        "report contains evidence_confidence/frequency/confirmed/hypotheses/alternative_causes/sources/duplicates/unavailable/limitations/read_only/fitment_confirmed/crm_written."
+        "report contains evidence_confidence/frequency/confirmed/hypotheses/alternative_causes/sources/duplicates/unavailable/limitations/read_only/fitment_confirmed/crm_written.",
+        "VIN jobs: schema=autostop.j1.vin_report.v1; collection_status/analysis_status/revision/finalized_revision/claims/conflicts/unknown_fields/sources/budget/stop_reason."
       ],
       "errors": [
-        "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable, using report schema; unavailable/duplicate documents remain report limitations."
+        "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable, using report schema; unavailable/duplicate documents remain report limitations.",
+        "VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network."
       ],
       "limitations": [
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
-        "Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.",
-        "Read-only report from saved local corpus; hypotheses and source counts are not a fabricated failure frequency or confirmed repair."
+        "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
+        "Read-only report from saved local corpus; hypotheses and source counts are not a fabricated failure frequency or confirmed repair.",
+        "VIN collection completion is not ready analysis; record_facts(finalize=true) seals a quiescent common revision. Later queries, evidence or OCR invalidate finality. Literal VIN match and source counts do not certify factory configuration."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000"
@@ -3848,15 +3965,18 @@
       ],
       "defaults": {},
       "outputs": [
-        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/added/queries_total."
+        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/added/queries_total.",
+        "VIN jobs: schema=autostop.j1.vin_research.v1; added/query total/revision and shared remaining budget."
       ],
       "errors": [
-        "ok=false/error.code: job_id_invalid/queries_invalid_or_sensitive/job_not_found/job_not_extendable/query_limit_reached/j1_busy/j1_store_unavailable."
+        "ok=false/error.code: job_id_invalid/queries_invalid_or_sensitive/job_not_found/job_not_extendable/query_limit_reached/j1_busy/j1_store_unavailable.",
+        "VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network."
       ],
       "limitations": [
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
-        "Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.",
-        "Writes additional de-identified queries to the local job; the worker may then acquire new public pages."
+        "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
+        "Writes additional de-identified queries to the local job; the worker may then acquire new public pages.",
+        "VIN refinements may use only the original VIN, must not reset the 12-query/300-active-second budget and invalidate finalized analysis. No automatic decoder API or alternate VIN."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -3891,15 +4011,18 @@
       ],
       "defaults": {},
       "outputs": [
-        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/status."
+        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/status.",
+        "VIN jobs: schema=autostop.j1.vin_research.v1; updated collection_status and cancellation state; private partial corpus remains until expiry."
       ],
       "errors": [
-        "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable."
+        "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable.",
+        "VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network."
       ],
       "limitations": [
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
-        "Public, de-identified corpus only; no private VIN/contact/CRM/Telegram/secret query. Source URL lineage stays attached to documents.",
-        "Writes cancellation state for this exact local job; retained corpus is separate from job cancellation."
+        "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
+        "Writes cancellation state for this exact local job; retained corpus is separate from job cancellation.",
+        "Cancellation request is not proof that an inflight operation has ended; read collection_status/inflight before finalize. Expiry deletes private evidence and forbids further network."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000"
@@ -6659,6 +6782,14 @@
       "reference": "docs/agent/references/manager-runtime.md"
     },
     {
+      "tool_name": "j1_research_record_facts",
+      "classification": "active",
+      "tool_ids": [
+        "manager.j1_research_record_facts"
+      ],
+      "reference": "docs/agent/references/j1-vin-research.md"
+    },
+    {
       "tool_name": "j1_research_report",
       "classification": "active",
       "tool_ids": [
@@ -6689,6 +6820,14 @@
         "manager.j1_research_status"
       ],
       "reference": "docs/agent/references/manager-runtime.md"
+    },
+    {
+      "tool_name": "j1_research_vin",
+      "classification": "active",
+      "tool_ids": [
+        "manager.j1_research_vin"
+      ],
+      "reference": "docs/agent/references/j1-vin-research.md"
     },
     {
       "tool_name": "lookup_original_parts",

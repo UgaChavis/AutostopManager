@@ -364,7 +364,7 @@ def test_catalog_validation_checks_all_examples_without_calling_their_tools(cata
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", forbidden)
     monkeypatch.setattr("autostop_manager.work_pricing._load_labor_experience", forbidden)
     registry, schemas = catalog
-    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["tools"] == 115
+    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["tools"] == len(registry["tools"])
 
 
 def test_pure_helper_documentation_examples_execute_without_acquisition(catalog, monkeypatch):
