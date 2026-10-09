@@ -96,6 +96,7 @@ cleanup удерживает слот после timeout; `provider_transport_bu
 | `scripts/import_offline_parts_catalogs.py` | `--verify-only` read-only; иначе импорт `--archive ZIP --cache-root PATH`. |
 | `scripts/ocr_offline_parts_catalogs.py` | `--verify-only` read-only; иначе OCR `--cache-root PATH`. |
 | `scripts/sync_offline_parts_catalog_release.py` | `--verify-only` read-only; иначе pinned download/import/OCR до maintenance. |
+| `scripts/vin-retest.py` | Явный read-only benchmark native MCP на localhost: `--output-dir PRIVATE_PATH [--timeout 25] [--full-control]`. Идентификатор читает из stdin и не сохраняет; технический receipt обезличен. Вызывает выбранные диагностические инструменты без CRM/Store-записей. |
 | `scripts/remove-learning-hooks.py` | Dry-run по умолчанию; `--apply` меняет Codex config с backup только при необходимой legacy migration. |
 | `scripts/update-instruction-catalogs.py` | Без флагов записывает A4/A5 по действующим проектным инструкциям и manifest установленных выбранных пакетов; `--check` сравнивает без записи. Отключённые навыки пропускаются по имени или пути. Пакет без навыков не подменяется старым кешем; несколько версий требуют выбора актуальной. Число выбранных входов может отличаться от числа включённых навыков текущего сеанса. |
 | `scripts/m2-journal.py` | `start` и `append --record PRIVATE_JSON` пишут журнал вне Git и обновляют указатели; `state` полностью заменяет текущее состояние. `validate(record)` проверяет без записи. UUID/idempotency, [формат](m2-journal-record.schema.json) и порядок — [M2](../modules/M2.md). |
