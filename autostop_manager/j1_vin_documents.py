@@ -66,6 +66,11 @@ _RAW_TEXT_TAGS = frozenset(
 )
 _RCDATA_TAGS = frozenset({"textarea", "title"})
 _FOREIGN_TAGS = frozenset({"svg", "math"})
+_MATH_METADATA_TAGS = frozenset({"annotation", "annotation-xml"})
+_SELECT_SCOPE_BOUNDARIES = frozenset(
+    {"html", "body", "select", "datalist", "applet", "object", "marquee", "table", "td", "th", "button", "svg", "math"}
+)
+_HTML_FEED_CHARS = 4096
 _HEAD_CONTENT_TAGS = frozenset(
     {"base", "basefont", "bgsound", "link", "meta", "noframes", "noscript", "script", "style", "template", "title"}
 )
@@ -139,6 +144,10 @@ _LI_SCOPE_BOUNDARIES = (_P_CLOSING_STARTS - {"address", "div", "p", "li"}) | fro
     }
 )
 _DL_SCOPE_BOUNDARIES = _LI_SCOPE_BOUNDARIES - {"dt", "dd"}
+_ANCHOR_SCOPE_BOUNDARIES = _LI_SCOPE_BOUNDARIES | _P_CLOSING_STARTS | _FOREIGN_TAGS
+_BUTTON_SCOPE_BOUNDARIES = frozenset(
+    {"html", "table", "td", "th", "caption", "applet", "object", "marquee", "select", "svg", "math"}
+)
 
 
 def _first_attributes(attrs: list[tuple[str, str | None]]) -> dict[str, str | None]:
@@ -224,6 +233,7 @@ class _HTMLVisibility(HTMLParser):
         style = re.sub(r"\s+", "", (values.get("style") or "").lower())
         return (
             tag in _HIDDEN_TAGS
+            or (tag in _MATH_METADATA_TAGS and self._foreign_content())
             or "hidden" in values
             or (values.get("aria-hidden") or "").lower() == "true"
             or "display:none" in style
@@ -242,7 +252,7 @@ class _HTMLVisibility(HTMLParser):
             if tag in tags:
                 self._close_stack_from(index)
                 return
-            if tag in boundaries or tag in _HIDDEN_TAGS:
+            if tag in boundaries or tag in _HIDDEN_TAGS or (tag in _MATH_METADATA_TAGS and self.stack[index][1]):
                 return
 
     def _start_element(self, tag: str, attrs: list[tuple[str, str | None]]) -> bool | None:
@@ -258,6 +268,18 @@ class _HTMLVisibility(HTMLParser):
             self._close_in_scope({"li"}, _LI_SCOPE_BOUNDARIES)
         elif tag in {"dt", "dd"}:
             self._close_in_scope({"dt", "dd"}, _DL_SCOPE_BOUNDARIES)
+        elif tag == "option":
+            self._close_in_scope({"option"}, _SELECT_SCOPE_BOUNDARIES | {"optgroup"})
+        elif tag == "optgroup":
+            self._close_in_scope({"option"}, _SELECT_SCOPE_BOUNDARIES | {"optgroup"})
+            self._close_in_scope({"optgroup"}, _SELECT_SCOPE_BOUNDARIES)
+        elif tag == "a":
+            # Inline nested links close the previous link. Block descendants
+            # require the browser's adoption-agency algorithm; keep those
+            # conservative rather than exposing a hidden block by popping it.
+            self._close_in_scope({"a"}, _ANCHOR_SCOPE_BOUNDARIES)
+        elif tag == "button":
+            self._close_in_scope({"button"}, _BUTTON_SCOPE_BOUNDARIES)
         elif tag in {"td", "th"}:
             self._close_in_scope({"td", "th"}, {"tr", "table", "thead", "tbody", "tfoot"})
         elif tag == "tr":
@@ -288,7 +310,7 @@ class _HTMLVisibility(HTMLParser):
             current = self.stack[index][0]
             if current == tag:
                 return self._close_stack_from(index)
-            if current in _HIDDEN_TAGS:
+            if current in _HIDDEN_TAGS or (current in _MATH_METADATA_TAGS and self.stack[index][1]):
                 break
         return []
 
@@ -328,16 +350,26 @@ class _HTMLVisibility(HTMLParser):
             self.handle_data(tail)
 
 
+class _HTMLDeadlineExceeded(TimeoutError):
+    pass
+
+
 class _VisibleHTML(_HTMLVisibility):
-    def __init__(self, *, xhtml: bool = False) -> None:
+    def __init__(self, *, xhtml: bool = False, deadline: float | None = None) -> None:
         super().__init__(xhtml=xhtml)
+        self.deadline = deadline
         self.parts: list[str] = []
         self.title_parts: list[str] = []
         self.remaining = MAX_TEXT_BYTES
         self.title_remaining = 1024
         self.truncated = False
 
+    def check_deadline(self) -> None:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise _HTMLDeadlineExceeded
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.check_deadline()
         hidden = self._start_element(tag, attrs)
         if hidden is None:
             self.truncated = True
@@ -345,17 +377,20 @@ class _VisibleHTML(_HTMLVisibility):
             self._append("\n")
 
     def handle_endtag(self, tag: str) -> None:
+        self.check_deadline()
         self._end_element(tag)
         if tag in {"p", "div", "li", "dt", "dd", "tr"} and not self.hidden:
             self._append("\n")
 
     def _append(self, text: str) -> None:
+        self.check_deadline()
         part, clipped = _clip_text(text, self.remaining)
         self.parts.append(part)
         self.remaining -= len(part.encode("utf-8"))
         self.truncated |= clipped
 
     def handle_data(self, data: str) -> None:
+        self.check_deadline()
         if self.structure_limited:
             return
         super().handle_data(data)
@@ -369,20 +404,39 @@ class _VisibleHTML(_HTMLVisibility):
             self._append(data)
 
 
-def _html_content(body: bytes, content_type: str) -> dict[str, Any]:
+def _html_content(body: bytes, content_type: str, timeout_seconds: float | None = None) -> dict[str, Any]:
     if len(body) > MAX_HTML_BYTES:
         return _failure("html", "html_text", "document_body_too_large")
+    budget = _bounded_timeout(PDF_TIMEOUT_SECONDS, timeout_seconds)
+    if not budget:
+        return _failure("html", "html_text", "document_timeout")
+    deadline = time.monotonic() + budget
     charset_match = re.search(r"charset\s*=\s*[\"']?([\w.-]+)", content_type, re.I)
     charset = charset_match.group(1) if charset_match else "utf-8"
     try:
         decoded = body.decode(charset, "replace")
     except LookupError:
         decoded = body.decode("utf-8", "replace")
-    parser = _VisibleHTML(xhtml=content_type.split(";", 1)[0].strip().lower() == "application/xhtml+xml")
-    parser.feed(decoded)
-    parser.close()
-    text = re.sub(r"[ \t]+", " ", "".join(parser.parts))
-    text = re.sub(r"\n\s*\n", "\n", text).strip()
+    parser = _VisibleHTML(
+        xhtml=content_type.split(";", 1)[0].strip().lower() == "application/xhtml+xml", deadline=deadline
+    )
+    try:
+        for offset in range(0, len(decoded), _HTML_FEED_CHARS):
+            parser.check_deadline()
+            parser.feed(decoded[offset : offset + _HTML_FEED_CHARS])
+        parser.check_deadline()
+        parser.close()
+        parser.check_deadline()
+        text = "".join(parser.parts)
+        parser.check_deadline()
+        text = re.sub(r"[ \t]+", " ", text)
+        parser.check_deadline()
+        text = re.sub(r"\n\s*\n", "\n", text).strip()
+        parser.check_deadline()
+        title = " ".join("".join(parser.title_parts).split())
+        parser.check_deadline()
+    except _HTMLDeadlineExceeded:
+        return _failure("html", "html_text", "document_timeout")
     limitations = ["static_html_visibility"]
     if parser.truncated:
         limitations.append("text_limit")
@@ -392,7 +446,7 @@ def _html_content(body: bytes, content_type: str) -> dict[str, Any]:
         "ok": True,
         "kind": "html",
         "extraction_method": "html_text",
-        "title": " ".join("".join(parser.title_parts).split()),
+        "title": title,
         "pages": [{"page": 1, "text": text}],
         "page_count": 1,
         "truncated": parser.truncated,
@@ -439,8 +493,30 @@ def _parser_workspace(workspace: Path) -> Iterator[tuple[Path, int]]:
 
 
 def _kill_parser(process: subprocess.Popen[bytes]) -> None:
-    with suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGKILL)
+    try:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    except PermissionError:
+        # The root worker has SETUID/SETGID, not KILL. Its parser is nobody;
+        # change credentials only in a short-lived helper, never in the
+        # threaded worker. Resolve the account before fork and execute only
+        # credential/signal syscalls in the helper, without logs or exec.
+        nobody = pwd.getpwnam("nobody")
+        helper = os.fork()
+        if helper == 0:
+            exit_code = 1
+            try:
+                os.setgroups([])
+                os.setgid(nobody.pw_gid)
+                os.setuid(nobody.pw_uid)
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                exit_code = 0
+            finally:
+                os._exit(exit_code)
+        _pid, status = os.waitpid(helper, 0)
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            raise PermissionError("parser_termination_failed") from None
     process.communicate(timeout=2)
 
 
@@ -602,7 +678,7 @@ def extract_content(
     if media_type in {"", "text/html", "application/xhtml+xml"}:
         if not _bounded_timeout(PDF_TIMEOUT_SECONDS, timeout_seconds):
             return _failure("html", "html_text", "document_timeout")
-        return _html_content(body, content_type)
+        return _html_content(body, content_type, timeout_seconds)
     return _failure("unknown", "none", "unsupported_content_type")
 
 

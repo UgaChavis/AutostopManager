@@ -317,7 +317,10 @@ def _fallback_expiry(path: Path) -> float:
         with general._db(readonly=True) as conn:
             row = conn.execute("SELECT created_at FROM jobs WHERE id=? AND profile=?", (path.name, PROFILE)).fetchone()
         if row:
-            return datetime.fromisoformat(row[0]).timestamp() + RETENTION_SECONDS
+            # Queue timestamps are rounded down to seconds. This upper bound
+            # must cover the precise private creation time; prune still takes
+            # min(valid metadata expiry, this bound), preserving the real TTL.
+            return datetime.fromisoformat(row[0]).timestamp() + RETENTION_SECONDS + 1
     # A fresh directory without a committed stub can be initialization in progress.
     return path.stat().st_mtime + RETENTION_SECONDS
 

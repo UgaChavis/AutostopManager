@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import resource
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -172,6 +173,52 @@ def test_html_foreign_integration_point_does_not_release_template_slash(tmp_path
     assert result["pages"][0]["text"] == "Visible content\nVisible tail"
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        '<annotation encoding="text/plain">1HGCM82673A000000</annotation>',
+        '<annotation-xml encoding="application/xhtml+xml"><div>1HGCM82673A000000</div></annotation-xml>',
+    ],
+)
+def test_html_hidden_math_metadata_cannot_create_vin_match(tmp_path: Path, metadata: str) -> None:
+    from autostop_manager.j1_vin_research import ingest_pages
+
+    body = f"<math><semantics><mi>Visible math</mi>{metadata}</semantics></math><p>Public general document</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible math\nPublic general document"
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute(
+            "CREATE TABLE pages(document_id TEXT,page INTEGER,text TEXT,match_evidence_id TEXT,"
+            "PRIMARY KEY(document_id,page))"
+        )
+        conn.execute("CREATE VIRTUAL TABLE pages_fts USING fts5(document_id UNINDEXED,page UNINDEXED,text)")
+        job = {"vin": "1HGCM82673A000000", "revision": 0, "analysis_status": "draft"}
+        ingest_pages(conn, job, "synthetic-document", result["pages"])
+        assert not conn.execute("SELECT match_evidence_id FROM pages").fetchone()[0]
+
+
+def test_html_math_metadata_scope_keeps_visible_math_and_html_custom_elements(tmp_path: Path) -> None:
+    body = (
+        b"<annotation>Visible custom element</annotation>"
+        b"<math><mtext>Visible math text</mtext><annotation>Hidden metadata</annotation></math>"
+        b"<p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible custom elementVisible math text\nVisible tail"
+    assert not result["truncated"]
+
+
+def test_html_math_metadata_cannot_close_outer_paragraph_or_hidden_context(tmp_path: Path) -> None:
+    body = (
+        b"<p>Public beginning<math><semantics><mi>Visible math</mi>"
+        b"<annotation-xml encoding='application/xhtml+xml'></p><div>1HGCM82673A000000</div>"
+        b"</annotation-xml></semantics></math></p><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert "1HGCM82673A000000" not in result["pages"][0]["text"]
+    assert "Public beginning" in result["pages"][0]["text"] and "Visible tail" in result["pages"][0]["text"]
+
+
 @pytest.mark.parametrize("slash", ["", "/"])
 def test_html_rcdata_retains_literal_control_text_and_decodes_entities_once(tmp_path: Path, slash: str) -> None:
     body = (
@@ -263,6 +310,90 @@ def test_html_optional_definition_ends_preserve_flat_terms_and_tail(tmp_path: Pa
     assert text.count("TERM ") == 700 and text.count("VALUE ") == 700
     assert "AFTER DEFINITIONS VIN 1HGCM82673A000000" in text
     assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+@pytest.mark.parametrize("explicit_ends", [False, True])
+@pytest.mark.parametrize("groups", [False, True])
+def test_html_optional_option_and_optgroup_ends_preserve_flat_choices(
+    tmp_path: Path, explicit_ends: bool, groups: bool
+) -> None:
+    choices = []
+    for number in range(520):
+        prefix = f"<optgroup label='Group {number}'>" if groups else ""
+        suffix = ("</option>" + ("</optgroup>" if groups else "")) if explicit_ends else ""
+        choices.append(f"{prefix}<option>PUBLIC CHOICE {number}{suffix}")
+    body = "<select size='20'>" + "".join(choices) + "</select><p>Visible tail 1HGCM82673A000000</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert text.count("PUBLIC CHOICE ") == 520 and "PUBLIC CHOICE 519" in text
+    assert "Visible tail 1HGCM82673A000000" in text
+    assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+@pytest.mark.parametrize("attribute", ["hidden", "style='display:none'", "aria-hidden='true'"])
+def test_html_omitted_option_end_releases_hidden_sibling(tmp_path: Path, attribute: str) -> None:
+    body = f"<select size='2'><option {attribute}>Hidden choice<option>Visible choice</select><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible choice\nVisible tail"
+    assert not result["truncated"]
+
+
+def test_html_omitted_optgroup_ends_keep_hidden_parent_and_release_hidden_sibling(tmp_path: Path) -> None:
+    body = (
+        b"<select size='4'><optgroup hidden><option>Hidden first<option>Hidden second"
+        b"<optgroup label='Visible group'><option>Visible first<option>Visible second</select>"
+        b"<select hidden><optgroup><option>Hidden select<option>Hidden select sibling</select>"
+        b"<datalist><option>Hidden datalist<option>Hidden datalist sibling</datalist>"
+        b"<p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible firstVisible second\nVisible tail"
+    assert not result["truncated"]
+
+
+def test_html_option_closures_do_not_escape_hidden_template_or_foreign_metadata(tmp_path: Path) -> None:
+    body = (
+        b"<select><option hidden>Hidden first<template><option>Hidden template</option></template>"
+        b"<option>Visible choice</select>"
+        b"<math><annotation-xml><option>Hidden metadata<option>Hidden next metadata</annotation-xml></math>"
+        b"<p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible choice\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["a", "button"])
+@pytest.mark.parametrize("inline", ["", "<span hidden>Hidden inline"])
+def test_html_nested_link_or_button_closes_hidden_predecessor(tmp_path: Path, tag: str, inline: str) -> None:
+    end_inline = "</span>" if inline else ""
+    body = (
+        f"<{tag} hidden>Hidden predecessor{inline}<{tag}>1HGCM82673A000000</{tag}>{end_inline}<p>Visible tail</p>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["a", "button"])
+def test_html_nested_link_or_button_keeps_hidden_ancestors_and_template_scopes(tmp_path: Path, tag: str) -> None:
+    body = (
+        f"<div hidden><{tag}>Hidden ancestor<{tag}>Hidden new control</{tag}></div>"
+        f"<{tag} hidden><template><{tag}>Hidden template</{tag}></template></{tag}>"
+        "<p>Visible tail</p>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+def test_html_nested_link_cannot_expose_a_hidden_block_during_implicit_close(tmp_path: Path) -> None:
+    body = b"<a hidden><div hidden>Hidden block<a>1HGCM82673A000000</a></div></a><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+def test_html_nested_button_closes_intervening_hidden_block(tmp_path: Path) -> None:
+    body = b"<button hidden><div hidden>Hidden block<button>Visible control</button></div><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible control\nVisible tail" and not result["truncated"]
 
 
 def test_html_definition_scope_retains_hidden_ancestors_and_nested_lists(tmp_path: Path) -> None:
@@ -574,6 +705,96 @@ def test_real_parser_deadline_failure_and_file_output_limit(tmp_path: Path) -> N
     assert list(workspace.iterdir()) == []
 
 
+def test_parser_timeout_kills_and_reaps_with_service_capabilities_and_no_new_privs() -> None:
+    if os.geteuid() != 0 or not shutil.which("setpriv"):
+        pytest.skip("capability bounding test requires root and setpriv")
+    script = r"""
+import json, os, signal, subprocess, sys, tempfile, time
+from pathlib import Path
+from autostop_manager import j1_vin_documents as documents
+parent = {line.split(':')[0]: int(line.split()[1], 16)
+          for line in Path('/proc/self/status').read_text().splitlines()
+          if line.startswith(('CapBnd:', 'CapEff:', 'CapAmb:'))}
+created = []
+original = subprocess.Popen
+def record(*args, **kwargs):
+    process = original(*args, **kwargs)
+    status = Path(f'/proc/{process.pid}/status').read_text()
+    created.append((process, {'uid': int(next(line for line in status.splitlines()
+                                            if line.startswith('Uid:')).split()[1]),
+                            'capabilities': {line.split(':')[0]: int(line.split()[1], 16)
+                                             for line in status.splitlines()
+                                             if line.startswith(('CapEff:', 'CapPrm:', 'CapAmb:'))},
+                            'no_new_privs': int(next(line for line in status.splitlines()
+                                                    if line.startswith('NoNewPrivs:')).split()[1])}))
+    return process
+documents.subprocess.Popen = record
+reports = []
+with tempfile.TemporaryDirectory(prefix='j1-vin-timeout-cap-') as raw:
+    workspace = Path(raw)
+    workspace.chmod(0o700)
+    for _ in range(3):
+        started = time.monotonic()
+        with documents._parser_workspace(workspace) as (directory, descriptor):
+            outcome, output = documents._run_parser(
+                [str(Path(sys.executable).resolve()), '-I', '-c', 'import time;time.sleep(0.6)'],
+                directory, descriptor, timeout=0.04, output_limit=4096)
+            process, child = created[-1]
+            try:
+                os.waitpid(process.pid, os.WNOHANG)
+                reaped = False
+            except ChildProcessError:
+                reaped = True
+            reports.append({'outcome': outcome, 'empty': not output, 'child': child,
+                            'returncode': process.returncode, 'reaped': reaped,
+                            'proc_exists': Path(f'/proc/{process.pid}').exists(),
+                            'elapsed': time.monotonic() - started})
+    try:
+        os.waitpid(-1, os.WNOHANG)
+        no_children = False
+    except ChildProcessError:
+        no_children = True
+    # A regressed implementation must also leave no test processes behind;
+    # the recorded assertions above still describe the state at timeout.
+    for process, _child in created:
+        process.wait(timeout=2)
+    print(json.dumps({'parent': parent, 'reports': reports,
+                      'workspace_empty': not list(workspace.iterdir()), 'no_children': no_children}))
+"""
+    result = subprocess.run(
+        [
+            "setpriv",
+            "--no-new-privs",
+            "--bounding-set=-all,+setuid,+setgid",
+            "--inh-caps=-all,+setuid,+setgid",
+            "--ambient-caps=-all,+setuid,+setgid",
+            sys.executable,
+            "-c",
+            script,
+        ],
+        capture_output=True,
+        timeout=15,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "PYTHONPATH": str(Path(documents.__file__).resolve().parents[1]),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "AUTOSTOP_MANAGER_ENV_FILE": "/dev/null",
+        },
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    report = json.loads(result.stdout)
+    assert report["parent"] == {"CapBnd": 0xC0, "CapEff": 0xC0, "CapAmb": 0xC0}
+    assert report["workspace_empty"] and report["no_children"]
+    for item in report["reports"]:
+        assert item["outcome"] == "timeout" and item["empty"]
+        assert item["returncode"] == -9 and item["reaped"] and not item["proc_exists"]
+        assert item["child"]["uid"] != 0 and item["child"]["no_new_privs"] == 1
+        assert item["child"]["capabilities"] == {"CapEff": 0, "CapPrm": 0, "CapAmb": 0}
+        assert item["elapsed"] < 2.0
+
+
 def test_restrict_child_limits_and_groups(monkeypatch: pytest.MonkeyPatch) -> None:
     limits: dict[int, tuple[int, int]] = {}
     monkeypatch.setattr(documents.resource, "setrlimit", lambda kind, values: limits.update({kind: values}))
@@ -688,6 +909,78 @@ def test_pdf_metadata_and_text_share_one_remaining_budget(monkeypatch: pytest.Mo
         b"%PDF synthetic", "application/pdf", "", _workspace(tmp_path), timeout_seconds=0.1
     )
     assert result["ok"] and budgets == pytest.approx([0.1, 0.02])
+
+
+def test_html_positive_budget_stops_real_nested_document(tmp_path: Path) -> None:
+    body = ("<div>" * 450 + "<span>PUBLIC</span>" * 60000 + "</div>" * 450).encode()
+    assert len(body) < documents.MAX_HTML_BYTES
+    started = time.monotonic()
+    result = documents.extract_content(body, "text/html", "", tmp_path, timeout_seconds=0.02)
+    assert result["error"] == "document_timeout" and not result["ok"] and result["pages"] == []
+    assert time.monotonic() - started < 0.5
+
+
+@pytest.mark.parametrize("stage", ["decode", "feed", "close", "normalize"])
+def test_html_one_deadline_includes_decode_feed_eof_and_normalization(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stage: str
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(documents.time, "monotonic", lambda: clock[0])
+    original_feed = documents._VisibleHTML.feed
+    original_close = documents._VisibleHTML.close
+    original_sub = documents.re.sub
+    events: list[str] = []
+
+    def feed(parser: documents._VisibleHTML, data: str) -> None:
+        events.append("feed")
+        original_feed(parser, data)
+        if stage == "feed":
+            clock[0] += 0.2
+
+    def close(parser: documents._VisibleHTML) -> None:
+        events.append("close")
+        if stage == "close":
+            clock[0] += 0.2
+        original_close(parser)
+
+    def sub(pattern: str, replacement: str, text: str) -> str:
+        if pattern == r"[ \t]+":
+            events.append("normalize")
+            if stage == "normalize":
+                clock[0] += 0.2
+        return original_sub(pattern, replacement, text)
+
+    class Body(bytes):
+        def decode(self, *args: Any, **kwargs: Any) -> str:
+            decoded = super().decode(*args, **kwargs)
+            if stage == "decode":
+                clock[0] += 0.2
+            return decoded
+
+    monkeypatch.setattr(documents._VisibleHTML, "feed", feed)
+    monkeypatch.setattr(documents._VisibleHTML, "close", close)
+    monkeypatch.setattr(documents.re, "sub", sub)
+    result = documents.extract_content(
+        Body(b"<textarea>Public &amp; EOF"), "text/html", "", tmp_path, timeout_seconds=0.1
+    )
+    assert result["error"] == "document_timeout" and not result["ok"] and result["pages"] == []
+    assert ("feed" in events) is (stage != "decode")
+    assert ("close" in events) is (stage in {"close", "normalize"})
+    assert ("normalize" in events) is (stage == "normalize")
+
+
+@pytest.mark.parametrize("chunk_chars", [1, 7, 4096])
+def test_html_incremental_budgeted_feed_preserves_one_entity_decode_and_eof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, chunk_chars: int
+) -> None:
+    monkeypatch.setattr(documents, "_HTML_FEED_CHARS", chunk_chars)
+    body = (
+        b"<head><title>Public &amp;amp; title</title></head><p>Visible &amp;amp; body</p>"
+        b"<textarea>Literal &amp;amp; &lt;a&gt;1HGCM82673A000000&lt;/a&gt;"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path, timeout_seconds=1.0)
+    assert result["ok"] and result["title"] == "Public &amp; title"
+    assert result["pages"][0]["text"] == "Visible &amp; body\nLiteral &amp; <a>1HGCM82673A000000</a>"
 
 
 def test_real_pdf_and_ocr_with_service_uid_gid_capabilities_only() -> None:

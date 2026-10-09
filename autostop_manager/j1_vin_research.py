@@ -103,20 +103,37 @@ def scope(
     )
 
 
+def _normalized_sensitive_text(value: str, limit: int) -> str | None:
+    """Expose layered identifiers without changing the caller's literal text."""
+
+    text = value[: max(0, limit * 2)]
+    # Normalization on every pass also catches escaped fullwidth characters
+    # and invisible characters that separate another layer of HTML/URL syntax.
+    for _ in range(16):
+        decoded = unicodedata.normalize("NFKC", html.unescape(unquote(text)))
+        decoded = "".join(char for char in decoded if unicodedata.category(char) != "Cf")
+        # A Unicode compatibility character expands to at most 18 characters.
+        # Keep both the input and intermediate text bounded, failing closed if
+        # source text keeps expanding or the decode layers do not stabilize.
+        if len(decoded) > max(0, limit * 36):
+            return None
+        if decoded == text:
+            return decoded
+        text = decoded
+    return None
+
+
+def _contains_sensitive_text(value: str, limit: int) -> bool:
+    normalized = _normalized_sensitive_text(value, limit)
+    return normalized is None or fetch.contains_sensitive(value) or fetch.contains_sensitive(normalized)
+
+
 def _safe_text(value: Any, limit: int) -> str:
     if not isinstance(value, str):
         return ""
-    text = unicodedata.normalize("NFKC", value[: max(0, limit * 2)])
-    # Decode escaped identifiers before redaction. Deeply layered content is
-    # discarded after a bounded number of passes rather than kept in the FTS.
-    for _ in range(16):
-        decoded = html.unescape(unquote(text))
-        if decoded == text:
-            break
-        text = decoded
-    else:
+    text = _normalized_sensitive_text(value, limit)
+    if text is None:
         return "[redacted encoded source text]"
-    text = "".join(char for char in text if unicodedata.category(char) != "Cf")
     clean = fetch.redact_sensitive(text, limit=limit)
     return "[redacted source text]" if fetch.contains_sensitive(clean) else clean
 
@@ -301,6 +318,9 @@ def research_document(
 
         return queue_ocr(job_id, document_id, page)
     with store.connect(job_id) as conn:
+        # Version, selected text, match evidence and available pages must all
+        # come from one read snapshot while a worker may commit new OCR text.
+        conn.execute("BEGIN")
         return {**_read_document(conn, document_id, page, offset, max_chars), "job_id": job_id}
 
 
@@ -382,7 +402,7 @@ def _value_valid(value: Any) -> bool:
     if type(value) is float and not math.isfinite(value):
         return False
     if type(value) in (str, int, float):
-        return len(str(value)) <= 1000 and bool(str(value).strip()) and not fetch.contains_sensitive(str(value))
+        return len(str(value)) <= 1000 and bool(str(value).strip()) and not _contains_sensitive_text(str(value), 1000)
     return (
         isinstance(value, list)
         and 1 <= len(value) <= 30
@@ -419,7 +439,7 @@ def _validate_claim(conn: sqlite3.Connection, current: dict[str, Any], item: dic
         not isinstance(quote, str)
         or not 1 <= len(quote) <= 2000
         or quote not in text["text"]
-        or fetch.contains_sensitive(quote)
+        or _contains_sensitive_text(quote, 2000)
     ):
         raise store.VinJobError("fact_quote_invalid")
     relationship = item.get("relationship")
@@ -431,7 +451,7 @@ def _validate_claim(conn: sqlite3.Connection, current: dict[str, Any], item: dic
     derivation = item.get("derivation", "direct")
     basis = item.get("basis_claim_ids", [])
     reasoning = item.get("reasoning", "")
-    if not isinstance(reasoning, str) or len(reasoning) > 2000 or fetch.contains_sensitive(reasoning):
+    if not isinstance(reasoning, str) or len(reasoning) > 2000 or _contains_sensitive_text(reasoning, 2000):
         raise store.VinJobError("fact_reasoning_invalid")
     _validate_derivation(conn, derivation, basis, reasoning, value, quote)
     unit = item.get("unit", "")
@@ -439,7 +459,7 @@ def _validate_claim(conn: sqlite3.Connection, current: dict[str, Any], item: dic
     if (
         not isinstance(unit, str)
         or len(unit) > 40
-        or fetch.contains_sensitive(unit)
+        or _contains_sensitive_text(unit, 40)
         or not isinstance(support, str)
         or support not in {"single_source", "hypothesis", "corroborated", "conflicted"}
     ):

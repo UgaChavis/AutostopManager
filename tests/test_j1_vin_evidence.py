@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import sqlite3
 import tempfile
-from threading import Event
+from threading import Event, get_ident
 import time
 from typing import Any
 from uuid import uuid4
@@ -245,6 +245,156 @@ def test_valid_inference_records_basis_and_reasoning_separately(sandbox: Sandbox
     assert retained["support"] == "hypothesis" and "Interpretation" in retained["reasoning"]
 
 
+def _encoded_identifier(value: str, encoding: str) -> str:
+    wide = "".join(chr(ord(char) + 0xFEE0) for char in value)
+    if encoding == "wide":
+        return wide
+    if encoding == "format":
+        return "\u200b".join(value)
+    if encoding == "unicode_combined":
+        return "\u200b".join(wide)
+    if encoding == "html":
+        return f"&#{ord(value[0])};" + value[1:]
+    if encoding == "html_twice":
+        return f"&amp;#{ord(wide[0])};" + wide[1:]
+    if encoding == "percent_html_unicode":
+        return f"%26%23{ord(wide[0])}%3B" + wide[1:]
+    return value
+
+
+@pytest.mark.parametrize("field", ["reasoning", "unit", "value", "list_value"])
+@pytest.mark.parametrize(
+    "encoding", ["plain", "wide", "format", "unicode_combined", "html", "html_twice", "percent_html_unicode"]
+)
+def test_encoded_sensitive_facts_are_rejected_without_writing_receipts_or_partial_batches(
+    sandbox: Sandbox, field: str, encoding: str
+) -> None:
+    job = _start()
+    document = _document(job)
+    basis = _claim(document)
+    assert _record(job, [basis])["ok"]
+    encoded = _encoded_identifier(OTHER_VIN, encoding)
+    changes: dict[str, Any] = {field: encoded}
+    if field in {"value", "list_value"}:
+        changes = {
+            "value": ["Alpha", encoded] if field == "list_value" else encoded,
+            "derivation": "inference",
+            "reasoning": "A synthetic interpretation of the existing basis.",
+            "basis_claim_ids": [basis["claim_id"]],
+        }
+    expected = {
+        "reasoning": "fact_reasoning_invalid",
+        "unit": "fact_support_invalid",
+        "value": "fact_value_invalid",
+        "list_value": "fact_value_invalid",
+    }[field]
+    before = api.research_report(job)
+    key = _request_key("encoded-facts")
+    result = _record(job, [_claim(document), _claim(document, **changes)], idempotency_key=key, finalize=True)
+    _error(result, expected)
+    assert api.research_report(job) == before
+    with store.connect(job) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 1
+        assert conn.execute("SELECT 1 FROM receipts WHERE key=?", (key,)).fetchone() is None
+    # A rejected request has no idempotency receipt, so an ordinary corrected
+    # request may use the same key without inheriting the rejected private data.
+    corrected = _record(job, [_claim(document)], idempotency_key=key)
+    assert corrected["ok"], corrected
+
+
+@pytest.mark.parametrize("field", ["value", "quote"])
+def test_encoded_source_identifiers_cannot_be_used_as_direct_quotes_or_basis(sandbox: Sandbox, field: str) -> None:
+    job = _start()
+    encoded = _encoded_identifier(OTHER_VIN, "html_twice")
+    document = _document(job, text="Engine Alpha; " + encoded)
+    assert OTHER_VIN not in document["text"] and encoded not in document["text"]
+    assert "[redacted]" in document["text"].split("Engine Alpha;", 1)[1]
+    changes = {"quote": "Engine Alpha; " + encoded}
+    if field == "value":
+        changes["value"] = encoded
+    rejected = _claim(document, **changes)
+    _error(_record(job, [rejected]), "fact_value_invalid" if field == "value" else "fact_quote_invalid")
+    _error(
+        _record(
+            job,
+            [
+                _claim(
+                    document,
+                    value="Derived",
+                    quote="Engine Alpha",
+                    derivation="inference",
+                    reasoning="A synthetic inference.",
+                    basis_claim_ids=[rejected["claim_id"]],
+                )
+            ],
+        ),
+        "fact_inference_basis_invalid",
+    )
+    assert api.research_report(job)["claims"] == []
+
+
+@pytest.mark.parametrize("encoding", ["wide", "format", "html_twice"])
+def test_encoded_literal_quote_in_legacy_private_text_is_rejected(sandbox: Sandbox, encoding: str) -> None:
+    job = _start()
+    document = _document(job)
+    quote = "Engine Alpha; " + _encoded_identifier(OTHER_VIN, encoding)
+    # Simulate already-saved ephemeral text from an older collector version.
+    # The quote is literal and current, so its privacy guard must reject it
+    # independently of the ordinary substring/revision checks.
+    with store.connect(job, transaction=True) as conn:
+        conn.execute("UPDATE pages SET text=? WHERE document_id=? AND page=1", (quote, document["document_id"]))
+    rejected = _claim(document, quote=quote)
+    _error(_record(job, [rejected]), "fact_quote_invalid")
+    assert api.research_report(job)["claims"] == []
+
+
+@pytest.mark.parametrize(
+    "encoded", ["qa&commat;example.org", "＋７（９００）１２３－４５－６７", "ｔｏｋｅｎ＝abcdefghijklmno"]
+)
+def test_encoded_contacts_and_secrets_are_not_written_as_reasoning(sandbox: Sandbox, encoded: str) -> None:
+    job = _start()
+    document = _document(job)
+    _error(_record(job, [_claim(document, reasoning=encoded)]), "fact_reasoning_invalid")
+    with store.connect(job) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0] == 0
+
+
+def test_fact_sensitive_normalization_preserves_ordinary_semantics_and_literal_citations(sandbox: Sandbox) -> None:
+    job = _start()
+    text = "Engine Alpha &amp; Beta; power 100 kW; compression １０:１; additive ½."
+    document = _document(job, text=text)
+    quote = document["text"].split("Engine ", 1)[1]
+    basis = _claim(document, value=["Alpha & Beta", "10:1", "1⁄2"], quote=quote, unit="ℓ/100 km")
+    assert _record(job, [basis])["ok"]
+    inferred_value = "β &amp; γ + ½"
+    reasoning = "Co\u200bmparison of １０:１ &amp; ordinary symbols."
+    inferred = _claim(
+        document,
+        value=inferred_value,
+        quote=quote,
+        unit="ℓ/100 km",
+        derivation="inference",
+        reasoning=reasoning,
+        basis_claim_ids=[basis["claim_id"]],
+    )
+    recorded = _record(job, [inferred])
+    assert recorded["ok"], recorded
+    claims = {claim["claim_id"]: claim for claim in api.research_report(job)["claims"]}
+    assert claims[basis["claim_id"]]["quote"] == quote
+    assert claims[basis["claim_id"]]["value"] == basis["value"]
+    for field in ("value", "quote", "reasoning", "unit"):
+        assert claims[inferred["claim_id"]][field] == inferred[field]
+
+
+def test_deeply_encoded_fact_is_rejected_at_the_bounded_normalization_limit(sandbox: Sandbox) -> None:
+    job = _start()
+    document = _document(job)
+    encoded = "&" + "amp;" * 20 + "#87;" + OTHER_VIN[1:]
+    _error(_record(job, [_claim(document, reasoning=encoded)]), "fact_reasoning_invalid")
+    assert api.research_report(job)["claims"] == []
+
+
 def test_inference_becomes_stale_when_its_basis_document_changes(sandbox: Sandbox) -> None:
     job = _start(fields=["engine_code"])
     basis_document = _document(job)
@@ -475,6 +625,104 @@ def test_ocr_version_invalidates_old_claims_and_current_report_keeps_history(san
     assert [claim["evidence_current"] for claim in report["claims"]] == [False, True]
     assert report["unknown_fields"] == [] and report["conflicts"] == []
     assert report["analysis_status"] == "ready_partial"
+
+
+@pytest.mark.parametrize("ocr_page", [1, 2])
+def test_document_read_keeps_one_snapshot_while_real_ocr_worker_commits(sandbox: Sandbox, ocr_page: int) -> None:
+    job = _start()
+    document = _document(job, pdf=True)
+    identifier = document["document_id"]
+    if ocr_page == 2:
+        with store.connect(job, transaction=True) as conn:
+            conn.execute("UPDATE documents SET page_count=2 WHERE id=?", (identifier,))
+    page = 1 if ocr_page == 1 else None
+    before = api.research_document(job, identifier, page=page)
+    sandbox.monkeypatch.setattr(
+        worker,
+        "ocr_pages",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "pages": [{"page": ocr_page, "text": VIN + " Engine Beta; power 120 kW."}],
+        },
+    )
+    assert api.research_document(job, identifier, page=ocr_page, ocr=True)["ocr_status"] == "queued"
+    original_connect = store.connect
+    reader_thread = get_ident()
+    worker_started, worker_finished = Event(), Event()
+    pending: Future[None] | None = None
+    triggered = False
+
+    def collect_ocr() -> None:
+        worker_started.set()
+        try:
+            worker.run_job(job)
+        finally:
+            worker_finished.set()
+
+    class InterleavedCursor:
+        def __init__(self, cursor: sqlite3.Cursor) -> None:
+            self.cursor = cursor
+
+        def fetchone(self) -> sqlite3.Row | None:
+            nonlocal pending, triggered
+            row = self.cursor.fetchone()
+            self.cursor.close()
+            triggered = True
+            pending = executor.submit(collect_ocr)
+            assert worker_started.wait(3), "The real OCR worker must start during the document read"
+            # A DELETE journal holds COMMIT until the reader closes its
+            # snapshot; release that reader after a bounded wait.
+            worker_finished.wait(0.5)
+            return row
+
+    class InterleavedConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self.connection = connection
+
+        def execute(self, sql: str, *args: Any) -> Any:
+            cursor = self.connection.execute(sql, *args)
+            if not triggered and sql == "SELECT * FROM documents WHERE id=?":
+                return InterleavedCursor(cursor)
+            return cursor
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.connection, name)
+
+    @contextmanager
+    def interleaved_connect(*args: Any, **kwargs: Any) -> Iterator[Any]:
+        with original_connect(*args, **kwargs) as conn:
+            yield InterleavedConnection(conn) if get_ident() == reader_thread else conn
+
+    with sandbox.monkeypatch.context() as patch:
+        patch.setattr(store, "connect", interleaved_connect)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            during = api.research_document(job, identifier, page=page)
+            assert pending is not None
+            pending.result(timeout=10)
+    after = api.research_document(job, identifier, page=page)
+    assert triggered and worker_finished.is_set()
+    assert during == before
+    assert after["document_revision"] == before["document_revision"] + 1
+    assert after["extraction_method"] == "pdf_ocr"
+    if ocr_page == 1:
+        assert "Engine Beta" in after["text"] and after["match_evidence_id"] != before["match_evidence_id"]
+    else:
+        assert before["available_pages"] == [1] and after["available_pages"] == [1, 2]
+
+
+def test_document_read_releases_its_snapshot_when_a_page_is_missing(sandbox: Sandbox) -> None:
+    job = _start()
+    document = _document(job)
+    _error(api.research_document(job, document["document_id"], page=2), "document_page_unavailable")
+    # A failed read must close its transaction so another caller can still
+    # replace the document and commit, rather than wait on a leaked snapshot.
+    with store.connect(job, transaction=True) as conn:
+        current = store.metadata(conn)
+        conn.execute("UPDATE documents SET version=version+1 WHERE id=?", (document["document_id"],))
+        api.ingest_pages(conn, current, document["document_id"], [{"page": 2, "text": "Engine Beta."}])
+    after = api.research_document(job, document["document_id"], page=2)
+    assert after["ok"] and after["document_revision"] == document["document_revision"] + 1
+    assert after["text"] == "Engine Beta." and after["available_pages"] == [2]
 
 
 def _document_storage_snapshot(job: str, document_id: str) -> tuple[Any, ...]:

@@ -49,19 +49,28 @@ def start(key: str = "synthetic-start-key", vin: str = VIN) -> str:
     return result["job_id"]
 
 
+def finish(job_id: str, status: str = "completed") -> None:
+    with store.connect(job_id, transaction=True) as connection:
+        current = store.metadata(connection)
+        current.update(collection_status=status, stop_reason="synthetic_collection_complete")
+        connection.execute("UPDATE queries SET status='done'")
+        store.write_metadata(connection, current)
+    store.set_stub(job_id, status)
+
+
 def queue_rows() -> list[dict[str, Any]]:
     with general._db(readonly=True) as connection:
         return [dict(row) for row in connection.execute("SELECT * FROM jobs ORDER BY id")]
 
 
-def assert_disk_deidentified(disk: Path) -> None:
+def assert_disk_deidentified(disk: Path, *, expected_queries: int = 0) -> None:
     needles = (VIN.encode(), OTHER.encode(), hashlib.sha256(VIN.encode()).hexdigest().encode())
     for path in disk.rglob("*"):
         if path.is_file():
             body = path.read_bytes()
             assert all(needle not in body for needle in needles), path.name
     with general._db(readonly=True) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM queries").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM queries").fetchone()[0] == expected_queries
         assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM documents_fts").fetchone()[0] == 0
 
@@ -90,6 +99,197 @@ def test_same_key_reuses_one_job_even_when_concurrent(private_stores) -> None:
         ids = list(executor.map(lambda _number: start(), range(2)))
     assert ids[0] == ids[1]
     assert len(queue_rows()) == 1
+    assert_disk_deidentified(disk)
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
+def test_general_capacity_prune_preserves_live_vin_routing_and_receipt(private_stores, monkeypatch, status) -> None:
+    root, disk = private_stores
+    job_id = start()
+    finish(job_id, status)
+    before = general.research_status(job_id)
+    assert before["ok"] and before["expires_at"] > time.time() + 23 * 3600
+    monkeypatch.setattr(general, "MAX_CORPUS_BYTES", 1)
+
+    with general._db() as connection:
+        general._prune(connection)
+
+    routed = general.research_status(job_id)
+    replay = api.j1_research_vin(VIN, "synthetic-start-key")
+    assert routed["ok"] and routed["collection_status"] == status
+    assert replay["ok"] and replay["job_id"] == job_id
+    assert replay["expires_at"] == before["expires_at"]
+    assert (root / job_id / "research.sqlite3").is_file()
+    assert len(queue_rows()) == 1
+    assert_disk_deidentified(disk)
+
+
+def test_capacity_prune_keeps_active_general_job_and_removes_completed_corpus(private_stores, monkeypatch) -> None:
+    _root, disk = private_stores
+    job_id = start()
+    finish(job_id)
+    completed = general.start_research("Synthetic public corpus", ["synthetic public query"])["job_id"]
+    document_id = "d" * 32
+    with general._db() as connection:
+        connection.execute("UPDATE jobs SET status='completed' WHERE id=?", (completed,))
+        connection.execute(
+            """INSERT INTO documents(id,job_id,url,canonical_url,status,body,created_at) VALUES(?,?,?,?,?,?,?)""",
+            (
+                document_id,
+                completed,
+                "https://example.org/synthetic",
+                "https://example.org/synthetic",
+                "fetched",
+                "public text",
+                general._utcnow(),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO documents_fts(job_id,document_id,title,body) VALUES(?,?,?,?)",
+            (completed, document_id, "Synthetic source", "public text"),
+        )
+        connection.commit()
+    active = general.start_research("Another public question", ["another public query"])["job_id"]
+    monkeypatch.setattr(general, "MAX_CORPUS_BYTES", 1)
+
+    with general._db() as connection:
+        general._prune(connection)
+        assert {row[0] for row in connection.execute("SELECT id FROM jobs")} == {job_id, active}
+        assert connection.execute("SELECT COUNT(*) FROM queries WHERE job_id=?", (completed,)).fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (completed,)).fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM documents_fts WHERE job_id=?", (completed,)).fetchone()[0] == 0
+    assert general.research_status(job_id)["ok"]
+    assert general.research_status(active)["status"] == "queued"
+    assert_disk_deidentified(disk, expected_queries=1)
+
+
+@pytest.mark.parametrize("loss", ["job", "database", "root"])
+def test_capacity_prune_preserves_lost_vin_diagnostic_with_feature_disabled(private_stores, monkeypatch, loss) -> None:
+    root, disk = private_stores
+    job_id = start()
+    finish(job_id)
+    if loss == "database":
+        (root / job_id / "research.sqlite3").unlink()
+    else:
+        shutil.rmtree(root / job_id if loss == "job" else root)
+    monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "0")
+    monkeypatch.setattr(general, "MAX_CORPUS_BYTES", 1)
+    try:
+        with general._db() as connection:
+            general._prune(connection)
+        for read in (general.research_status, general.research_results, general.research_report):
+            result = read(job_id)
+            assert result == store.error("vin_ephemeral_state_lost", job_id)
+        assert api.j1_research_vin(VIN, "synthetic-start-key") == store.error("vin_research_disabled")
+        assert not (root / job_id / "research.sqlite3").exists()
+        assert [(row["id"], row["status"], row["error"]) for row in queue_rows()] == [
+            (job_id, "failed", "vin_ephemeral_state_lost")
+        ]
+        assert_disk_deidentified(disk)
+    finally:
+        # Restore only this fixture's owned root so its normal cleanup can run.
+        if not root.exists():
+            root.mkdir(mode=0o700)
+
+
+def test_capacity_routing_grace_covers_creation_timestamp_roundoff_without_extending_private_ttl(
+    private_stores, monkeypatch
+) -> None:
+    root, disk = private_stores
+    job_id = start()
+    finish(job_id)
+    created = float(int(time.time())) + 0.75
+    expiry = created + store.RETENTION_SECONDS
+    with store.connect(job_id, transaction=True) as connection:
+        current = store.metadata(connection)
+        current.update(created_at=created, expires_at=expiry)
+        store.write_metadata(connection, current)
+    with general._db() as connection:
+        connection.execute(
+            "UPDATE jobs SET created_at=? WHERE id=?",
+            (datetime.fromtimestamp(created, UTC).isoformat(timespec="seconds"), job_id),
+        )
+        connection.commit()
+    clock = [expiry - 0.000001]
+
+    class ClockDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromtimestamp(clock[0], tz)
+
+    monkeypatch.setattr(general, "datetime", ClockDatetime)
+    monkeypatch.setattr(store.time, "time", lambda: clock[0])
+    monkeypatch.setattr(general, "MAX_CORPUS_BYTES", 1)
+    with general._db() as connection:
+        general._prune(connection)
+    assert general.research_status(job_id)["expires_at"] == expiry
+    assert api.j1_research_vin(VIN, "synthetic-start-key")["job_id"] == job_id
+
+    # Routing grace is only for the de-identified pointer: the private corpus
+    # disappears at its original floating-point expiry, even during that grace.
+    clock[0] = expiry
+    store.prune()
+    assert not (root / job_id).exists()
+    assert queue_rows()[0]["error"] == "vin_job_expired"
+    with general._db() as connection:
+        general._prune(connection)
+    assert len(queue_rows()) == 1
+    clock[0] = expiry + 1.1
+    with general._db() as connection:
+        general._prune(connection)
+    assert queue_rows() == []
+    assert_disk_deidentified(disk)
+
+
+@pytest.mark.parametrize("damage", ["malformed", "nonfinite", "extended"])
+def test_queue_fallback_bounds_damaged_metadata_cleanup_with_timestamp_roundoff(
+    private_stores, monkeypatch, damage
+) -> None:
+    root, disk = private_stores
+    job_id = start()
+    finish(job_id)
+    created_at = datetime.fromisoformat(queue_rows()[0]["created_at"]).timestamp()
+    boundary = created_at + store.RETENTION_SECONDS + 1
+    with store.connect(job_id, transaction=True) as connection:
+        current = store.metadata(connection)
+        current["expires_at"] = float("inf") if damage == "nonfinite" else boundary + 3600
+        connection.execute(
+            "UPDATE metadata SET payload=? WHERE id=1", ("{" if damage == "malformed" else json.dumps(current),)
+        )
+    clock = [boundary - 0.000001]
+    monkeypatch.setattr(store.time, "time", lambda: clock[0])
+    store.prune()
+    assert (root / job_id / "research.sqlite3").exists()
+    clock[0] = boundary
+    store.prune()
+    assert not (root / job_id).exists()
+    assert queue_rows()[0]["error"] == ("vin_job_expired" if damage == "extended" else "vin_ephemeral_state_lost")
+    assert_disk_deidentified(disk)
+
+
+def test_default_cache_capacity_reclaims_sqlite_freelist_without_losing_vin_routing(private_stores) -> None:
+    _root, disk = private_stores
+    job_id = start()
+    finish(job_id)
+    if shutil.disk_usage(disk).free < 1024 * 1024 * 1024:
+        pytest.skip("Default-cap synthetic SQLite pressure needs 1 GiB of isolated temporary disk headroom")
+    with general._db() as connection:
+        connection.execute("CREATE TABLE synthetic_pressure(payload BLOB)")
+        connection.execute(
+            "INSERT INTO synthetic_pressure(payload) VALUES(zeroblob(?))", (general.MAX_CORPUS_BYTES + 65536,)
+        )
+        connection.commit()
+        connection.execute("DELETE FROM synthetic_pressure")
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        assert general._cache_size() > general.MAX_CORPUS_BYTES
+        assert connection.execute("PRAGMA freelist_count").fetchone()[0] > 0
+
+        general._prune(connection)
+
+        assert general._cache_size() <= general.MAX_CORPUS_BYTES
+    assert general.research_status(job_id)["ok"]
+    assert api.j1_research_vin(VIN, "synthetic-start-key")["job_id"] == job_id
     assert_disk_deidentified(disk)
 
 

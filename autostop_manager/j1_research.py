@@ -1429,6 +1429,14 @@ def _cache_size() -> int:
     return sum(part.stat().st_size for part in (path, Path(str(path) + "-wal")) if part.exists())
 
 
+def _compact_cache(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.execute("VACUUM")
+    # VACUUM itself writes the compacted database into the WAL. Reconcile it
+    # before the physical DB+WAL capacity check, while this connection is open.
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
 def _prune(conn: sqlite3.Connection) -> None:
     cutoff = (datetime.now(UTC) - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
     expired = [
@@ -1442,20 +1450,37 @@ def _prune(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
     conn.commit()
     if expired:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
+        _compact_cache(conn)
     if _cache_size() <= MAX_CORPUS_BYTES:
         return
+    # Reclaim unused pages and the WAL before evicting retained jobs. In
+    # particular, a private VIN job has only a tiny routing stub in this DB;
+    # deleting it cannot be the way to reclaim an unrelated SQLite freelist.
+    _compact_cache(conn)
+    if _cache_size() <= MAX_CORPUS_BYTES:
+        return
+
+    from .j1_vin_store import PROFILE as vin_profile, RETENTION_SECONDS as vin_retention_seconds
+
+    # VIN receipts live in tmpfs, but every public API and receipt replay needs
+    # this de-identified pointer until that private scope expires. Use queue
+    # creation time only, without entering the private-store/start-lock order.
+    # The queue timestamp is rounded down to seconds; one second of routing
+    # grace covers that roundoff without extending any private data's expiry.
+    vin_cutoff = (datetime.now(UTC) - timedelta(seconds=vin_retention_seconds + 1)).isoformat(timespec="microseconds")
     old = [
         row[0]
-        for row in conn.execute("SELECT id FROM jobs WHERE status NOT IN ('queued','running') ORDER BY created_at")
+        for row in conn.execute(
+            """SELECT id FROM jobs WHERE status NOT IN ('queued','running')
+               AND (profile<>? OR created_at<?) ORDER BY created_at""",
+            (vin_profile, vin_cutoff),
+        )
     ]
     for job_id in old:
         conn.execute("DELETE FROM documents_fts WHERE job_id=?", (job_id,))
         conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
+        _compact_cache(conn)
         if _cache_size() <= MAX_CORPUS_BYTES:
             break
 
