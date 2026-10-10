@@ -14,7 +14,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .document_links import local_document_link_target
+from .document_links import document_source_lines, local_document_link_target
 from .markdown_links import visible_markdown_links, visible_markdown_table_row_lines
 
 REGISTRY_VERSION = "autostop.automotive-tools.v1"
@@ -128,7 +128,7 @@ def _documented_invocation(tool: dict[str, Any]) -> str:
 def _module_documentation(root: Path, module: dict[str, Any], tools: dict[str, dict[str, Any]]) -> None:
     text = read_document(root, module["instruction_ref"])
     code = module["element_id"]
-    lines = text.splitlines()
+    lines = document_source_lines(text)
     if not lines or lines[0] != f"# {code} — {module['title']}":
         raise ValueError(f"module_document_title_mismatch:{code}")
     document = root / module["instruction_ref"]

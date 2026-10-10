@@ -164,6 +164,92 @@ VIN/OEM, свежая robots политика, лицензии, provider availa
 Они не проявляются в текущих исходных текстах, но закрепляются регрессиями перед
 окончательной приёмкой. Unsafe URL, role или cache bypass этот review не подтвердил.
 
+## Итерация 3 — независимый полный review и исправления
+
+Два новых независимых исполнителя полностью перечитали опубликованный Manager
+`da9ac13094c14b5e93b138ce6572870fa4074014`, затем заново проверили исправленный candidate.
+[GitHub CI второй ревизии](https://github.com/UgaChavis/AutostopManager/actions/runs/38037049324)
+прошёл: 5 567 тестов, 84 skipped, покрытие 86%, E2 branch coverage 87,87%.
+Причины всех пропусков опубликованы через `-ra`: 79 проверок требуют root/ownership,
+installer или duty host, пять — локальных OCR/PDF возможностей. Полный локальный набор
+выполнил все эти проверки без пропусков.
+
+### Последние подтверждённые ошибки
+
+- Automotive table validator использовал `splitlines()`, хотя CommonMark source maps
+  считают только CR/LF. Unicode separators в тексте перед таблицей могли создавать
+  ложное `module_tool_table_not_visible`. Теперь применяется общий `document_source_lines`.
+  Одиннадцать регрессий проверяют восемь таких separators и LF/CRLF/CR controls;
+  восемь новых случаев воспроизводили ошибку до исправления.
+- Генератор метаданных скиллов вручную разбирал строки YAML: неверно обрабатывал
+  quoted scalars, folded/literal description и `---` внутри значения. Использован
+  `yaml.safe_load` с закрытым начальным frontmatter и обязательными непустыми строками
+  `name`/`description`. Добавлена явная зависимость `PyYAML>=6.0,<7`.
+  Двадцать два случая проверяют корректный YAML и отказ на malformed, nonmapping,
+  bool/numeric/list/null values и Python object tags. До исправления 20 случаев падали.
+
+Генерируемые A4/A5 и все 122 карточки остаются побайтно воспроизводимыми;
+внешние форматы API, inputSchemas и права доступа не изменены.
+
+### Повторная проверка после последнего исправления
+
+- Проверены 216/216 материалов: 203 Markdown, 12 JSON и один UI YAML.
+  Все 1 483 видимые Markdown-ссылки проверены; ошибок нет. Ручной семантический
+  охват — все 76 активных ручных Markdown; 124 генерируемых файла сверены с источниками.
+  Три historical/draft материала проверены как история. Активный graph — ровно 212 файлов.
+- Один независимый reviewer выполнил 450 профильных тестов и 27 собственных
+  contract scenarios; второй — 408 синтетических тестов с запретом сети и journal writes
+  и 21 маршрутный walkthrough. Оба заново проверили весь реестр после исправлений;
+  новых подтверждённых ошибок нет.
+- Повторно сверены 15 automotive modules, 122 operations, 43 PartsAPI methods,
+  все 70 native inputSchemas и 24 CRM declarations. Native fingerprint сохранён:
+  `acda0e26f25c1fc20842c08af29aad2bab26160fdbde758cd4bfe578ebf1d7a0`.
+- Переносимый каталог: 212/212, пять скиллов, нет orphaned/mismatches.
+  Независимая полная host генерация и повтор координатора: 37 скиллов,
+  244 входа = 212 project + 32 external, выходы побайтно совпадают.
+- Все 528 tracked source файлов сопоставлены с независимым candidate snapshot;
+  отличия от второй ревизии — только пять согласованных файлов реализации и тестов.
+  После этого receipt координатор добавляет данный исторический раздел.
+
+Полный `scripts/release-gates.sh` третьей итерации завершился с exit 0
+и `release_gates_ok=true`: 5 684 теста прошли за 554,01 секунды, пропусков нет,
+покрытие 87%, E2 branch coverage 87,87% (1 021/1 162).
+Ruff, форматирование 232 файлов, mypy для 96 source файлов, doctor,
+automotive registry и обе проверки генераторов прошли.
+Сохраняется одно ранее отмеченное предупреждение fork-теста Python 3.12;
+тест прошёл. Exact опубликованный SHA этой итерации и его GitHub CI
+проверяются после обычного push; они указываются в итоговом отчёте задачи.
+
+### Связанная CRM и подготовка выпуска
+
+Первая CRM итерация опубликована в фактической основной ветке `autostopcrm-v1`:
+[3ca93a6bdb4dd83fbc6eb42777312d22f5ddd780](https://github.com/UgaChavis/AutostopCRM-V1/commit/3ca93a6bdb4dd83fbc6eb42777312d22f5ddd780).
+[Все GitHub CI jobs](https://github.com/UgaChavis/AutostopCRM-V1/actions/runs/38038055175)
+этого SHA прошли. Обязательный `run_checks.ps1 -Profile ci` завершился
+с подтверждённым direct-wait кодом 0: 3 047 runtime тестов и 36 release smoke тестов,
+покрытие 82,11%, documentation/catalog/code health/JS/browser/performance gates прошли.
+Первый запуск того же неизменного source сообщил успешные шаги, но процессная оболочка
+вернула 143; этот результат не принят. Повторный полный запуск проверен по прямому
+коду завершения PowerShell, без изменения source или обхода проверок.
+
+Во второй CRM candidate исправлены прежние открытые случаи: CommonMark audit заменяет
+regex для Markdown, A5 использует относительные ссылки, renderer корректно учитывает
+nested image alt, escaped `!` и HTML comments. Профильные browser tests прошли;
+полный обязательный CRM CI второй итерации выполняется отдельно.
+Каталог candidate привязан к exact Manager SHA второй итерации; окончательная третья
+CRM ревизия должна получить экспорт из опубликованного SHA третьей Manager итерации,
+пройти полный CI и независимый readback. Этот подраздел не объявляет их завершёнными заранее.
+
+Коммиты первой и второй Manager итераций:
+[bb1490d35c9bd258c77b44d236634d1d76da848e](https://github.com/UgaChavis/AutostopManager/commit/bb1490d35c9bd258c77b44d236634d1d76da848e),
+[da9ac13094c14b5e93b138ce6572870fa4074014](https://github.com/UgaChavis/AutostopManager/commit/da9ac13094c14b5e93b138ce6572870fa4074014).
+Третья итерация — коммит, содержащий этот раздел; результат GitHub-only.
+Порядок последующего согласованного выпуска описан в
+[deployment](../agent/references/deployment.md) и
+[automotive-tools](../agent/references/automotive-tools.md).
+Работающие службы, установленный Manager snapshot, сохранённая живая структура CRM
+и исходные пользовательские working copies в этой задаче не обновляются.
+
 ## Полный исходный инвентарь
 
 Статус `active` означает действующий материал документации, а не разрешение исполнить описанную операцию.

@@ -26,6 +26,41 @@ def refresh(project, codex):
     write(project / "docs/agent/modules/A5.md", a5)
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize(
+    "description,expected",
+    [
+        ('"Synthetic --- metadata"', "Synthetic --- metadata"),
+        ("'Quoted: useful --- metadata'", "Quoted: useful --- metadata"),
+        (">\n  First --- row\n  second row", "First --- row second row"),
+        ("|\n  first\n  ---\n  last", "first --- last"),
+        ('"Unicode \\u041c and \\"quotes\\""', 'Unicode М and "quotes"'),
+    ],
+)
+def test_skill_metadata_preserves_yaml_values_and_literal_delimiters(tmp_path, newline, description, expected):
+    source = f"---\nname: sample\ndescription: {description}\n---\n\n# Body\n".replace("\n", newline)
+    path = write(tmp_path / "SKILL.md", source)
+    assert catalogs.metadata(path) == {"name": "sample", "description": expected}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "name: sample\ndescription: unquoted: invalid",
+        "name: sample\ndescription: [one, two]",
+        "name: sample\ndescription: true",
+        "name: 123\ndescription: task",
+        "name: sample",
+        "- name: sample\n- description: task",
+        "name: sample\ndescription: !!python/object:object {}",
+    ],
+)
+def test_skill_metadata_rejects_invalid_yaml_and_non_string_fields(tmp_path, header):
+    path = write(tmp_path / "SKILL.md", f"---\n{header}\n---\n\n# Body\n")
+    with pytest.raises(ValueError, match="skill metadata"):
+        catalogs.metadata(path)
+
+
 @pytest.fixture
 def portable_catalogs(tmp_path):
     project, codex = tmp_path / "project", tmp_path / "codex"

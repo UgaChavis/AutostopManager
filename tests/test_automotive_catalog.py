@@ -312,6 +312,21 @@ def test_module_table_card_links_accept_document_line_annotations(catalog, monke
 
 
 @pytest.mark.parametrize(
+    "separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\n", "\r\n", "\r"]
+)
+def test_module_table_preserves_source_rows_after_literal_unicode_prose(catalog, monkeypatch, separator):
+    registry, schemas = catalog
+    reference = "docs/agent/modules/E14.md"
+    original = read_document
+    text = original(ROOT, reference).replace("\n\n", f"\n\nСправочный текст: начало{separator}конец.\n\n", 1)
+    monkeypatch.setattr(
+        "autostop_manager.automotive_catalog.read_document",
+        lambda root, target: text if target == reference else original(root, target),
+    )
+    assert validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)["ok"]
+
+
+@pytest.mark.parametrize(
     "reference,old,new",
     [
         ("E13", "`calculate_work_price`", "`normalize_labor_time`"),

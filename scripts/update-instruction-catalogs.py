@@ -10,11 +10,14 @@ import re
 import sys
 import tomllib
 
+import yaml
+
 PROJECT = Path(__file__).resolve().parents[1]
 # Use this checkout's shared parsers even when invoked outside the project or
 # through a venv whose editable install points at another checkout.
 sys.path.insert(0, str(PROJECT))
 
+from autostop_manager.document_links import document_source_lines  # noqa: E402
 from autostop_manager.instruction_inventory import (  # noqa: E402
     active_instruction_candidates,
     collect_instruction_inventory,
@@ -49,17 +52,19 @@ def link(label, path, project):
 
 def metadata(path):
     text = read_instruction_bytes(path).decode("utf-8")
-    header = text.split("---", 2)[1] if text.startswith("---") else ""
-    values = {}
-    for key in ("name", "description"):
-        match = re.search(r"^" + key + r":\s*(.*?)(?=\n[a-zA-Z][\w-]*:|\Z)", header, re.M | re.S)
-        value = re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
-        if value[:1] in {'"', "'"} and value[-1:] == value[:1]:
-            value = value[1:-1]
-        values[key] = value.lstrip("> |").strip()
-    if not all(values.values()):
+    lines = document_source_lines(text)
+    end = next((index for index, line in enumerate(lines[1:], 1) if line.rstrip(" \t") == "---"), None)
+    if not lines or lines[0].rstrip(" \t") != "---" or end is None:
         raise ValueError("Incomplete skill metadata: " + str(path))
-    return values
+    try:
+        header = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError:
+        raise ValueError("Invalid skill metadata: " + str(path)) from None
+    if not isinstance(header, dict) or any(
+        not isinstance(header.get(key), str) or not header[key].strip() for key in ("name", "description")
+    ):
+        raise ValueError("Incomplete skill metadata: " + str(path))
+    return {key: re.sub(r"\s+", " ", header[key]).strip() for key in ("name", "description")}
 
 
 def title(path, content=None):
